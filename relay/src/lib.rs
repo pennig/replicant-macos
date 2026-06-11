@@ -1,14 +1,11 @@
 //! Shared plumbing for the relay functions.
 
+use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
 
-/// vercel_runtime::Error is a boxed error; we mirror it so the lib doesn't
-/// need to depend on the runtime crate.
-pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
-
 /// Read a required environment variable, with a useful error message.
-pub fn env_var(name: &str) -> Result<String, BoxError> {
-    std::env::var(name).map_err(|_| format!("missing env var: {name}").into())
+pub fn env_var(name: &str) -> Result<String> {
+    std::env::var(name).map_err(|_| anyhow!("missing env var: {name}"))
 }
 
 /// Verify the `X-Replicant-Space-Signature` header.
@@ -40,7 +37,7 @@ pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 
 /// Check the `Authorization: Bearer <RELAY_CLIENT_TOKEN>` header on requests
 /// from your own clients (the Mac app).
-pub fn authorize_client(auth_header: Option<&str>) -> Result<bool, BoxError> {
+pub fn authorize_client(auth_header: Option<&str>) -> Result<bool> {
     let expected = format!("Bearer {}", env_var("RELAY_CLIENT_TOKEN")?);
     Ok(matches!(
         auth_header,
@@ -58,28 +55,53 @@ pub struct Upstash {
 }
 
 impl Upstash {
-    pub fn from_env() -> Result<Self, BoxError> {
+    pub fn from_env() -> Result<Self> {
         Ok(Self {
-            base: env_var("UPSTASH_REDIS_REST_URL")?,
-            token: env_var("UPSTASH_REDIS_REST_TOKEN")?,
+            base: env_var("KV_REST_API_URL")?,
+            token: env_var("KV_REST_API_TOKEN")?,
             http: reqwest::Client::new(),
         })
     }
 
-    pub async fn command(&self, cmd: &[&str]) -> Result<Value, BoxError> {
+    pub async fn command(&self, cmd: &[&str]) -> Result<Value> {
+        let name = cmd.first().copied().unwrap_or("?");
         let response = self
             .http
             .post(&self.base)
             .bearer_auth(&self.token)
             .json(&cmd)
             .send()
-            .await?;
-        let value: Value = response.json().await?;
+            .await
+            .with_context(|| format!("sending {name} to Upstash"))?;
+        let value: Value = response
+            .json()
+            .await
+            .with_context(|| format!("parsing the Upstash response to {name}"))?;
         if let Some(err) = value.get("error") {
-            return Err(format!("upstash error: {err}").into());
+            bail!("Upstash rejected {name}: {err}");
         }
         Ok(value.get("result").cloned().unwrap_or(Value::Null))
     }
+}
+
+/// Build a JSON response. The error type is anyhow so call sites inside
+/// `handle(...)` compose with `?` and pick up context naturally.
+pub fn respond(status: http::StatusCode, body: Value) -> Result<http::Response<String>> {
+    http::Response::builder()
+        .status(status)
+        .header("content-type", "application/json")
+        .body(body.to_string())
+        .context("building response")
+}
+
+/// Short correlation id pairing a sanitized 500 with its log line.
+/// Not cryptographic — just unique enough to grep for.
+pub fn error_id() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{:08x}", nanos as u32)
 }
 
 pub const EVENT_STREAM_KEY: &str = "replicant:events";

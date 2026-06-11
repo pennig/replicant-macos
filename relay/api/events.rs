@@ -5,23 +5,42 @@
 //! cursor to start from the beginning of the retained log. Polling this
 //! endpoint is free — it never touches the game's rate limits.
 
+use http::request::Parts;
 use http::StatusCode;
-use replicant_relay::{authorize_client, Upstash, EVENT_STREAM_KEY};
+use replicant_relay::{authorize_client, error_id, Upstash, EVENT_STREAM_KEY};
 use serde_json::{json, Value};
-use vercel_runtime::{run, service_fn, Error, Request, Response};
+use vercel_runtime::{run, service_fn, AppState, Error, Request, Response};
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     run(service_fn(handler)).await
 }
 
-async fn handler(req: Request) -> Result<Response<String>, Error> {
-    if req.method() != "GET" {
+/// Runtime-facing shim and ERROR BOUNDARY (see webhook.rs for the pattern).
+/// The GET path never reads the body, so `handle` needs only the metadata.
+async fn handler(req: Request, state: AppState) -> Result<Response<String>, Error> {
+    match handle(req.into_parts().0).await {
+        Ok(response) => Ok(response),
+        Err(err) => {
+            let id = error_id();
+            state
+                .log_context
+                .error(&format!("[{id}] events read failed: {err:#}"));
+            Ok(replicant_relay::respond(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({"error": "internal error", "id": id}),
+            )?)
+        }
+    }
+}
+
+async fn handle(parts: Parts) -> anyhow::Result<Response<String>> {
+    if parts.method != "GET" {
         return respond(StatusCode::METHOD_NOT_ALLOWED, json!({"error": "GET only"}));
     }
 
-    let auth = req
-        .headers()
+    let auth = parts
+        .headers
         .get("authorization")
         .and_then(|v| v.to_str().ok());
     if !authorize_client(auth)? {
@@ -31,10 +50,10 @@ async fn handler(req: Request) -> Result<Response<String>, Error> {
     // --- query params ---------------------------------------------------
     let mut client_cursor: Option<String> = None;
     let mut limit: usize = 100;
-    if let Some(query) = req.uri().query() {
+    if let Some(query) = parts.uri.query() {
         for pair in query.split('&') {
-            let mut parts = pair.splitn(2, '=');
-            match (parts.next(), parts.next()) {
+            let mut kv = pair.splitn(2, '=');
+            match (kv.next(), kv.next()) {
                 (Some("cursor"), Some(v)) if !v.is_empty() => {
                     client_cursor = Some(v.to_string());
                 }
@@ -101,10 +120,63 @@ async fn handler(req: Request) -> Result<Response<String>, Error> {
     )
 }
 
-fn respond(status: StatusCode, body: Value) -> Result<Response<String>, Error> {
-    Ok(Response::builder()
-        .status(status)
-        .header("content-type", "application/json")
-        .header("cache-control", "no-store")
-        .body(body.to_string())?)
+/// Local respond wrapper: same JSON response as the shared helper, plus
+/// `cache-control: no-store` so nothing between the relay and the Mac app
+/// caches a page of the event log.
+fn respond(status: StatusCode, body: Value) -> anyhow::Result<Response<String>> {
+    let mut response = replicant_relay::respond(status, body)?;
+    response.headers_mut().insert(
+        http::header::CACHE_CONTROL,
+        http::HeaderValue::from_static("no-store"),
+    );
+    Ok(response)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parts(method: &str, auth: Option<&str>, query: &str) -> Parts {
+        let mut builder = http::Request::builder()
+            .method(method)
+            .uri(format!("/api/events{query}"));
+        if let Some(auth) = auth {
+            builder = builder.header("authorization", auth);
+        }
+        builder.body(()).unwrap().into_parts().0
+    }
+
+    fn set_token() {
+        std::env::set_var("RELAY_CLIENT_TOKEN", "relay-token");
+    }
+
+    #[tokio::test]
+    async fn missing_or_wrong_token_rejected() {
+        set_token();
+        let missing = handle(parts("GET", None, "")).await.unwrap();
+        assert_eq!(missing.status(), 401);
+        let wrong = handle(parts("GET", Some("Bearer nope"), "")).await.unwrap();
+        assert_eq!(wrong.status(), 401);
+    }
+
+    #[tokio::test]
+    async fn wrong_method_rejected() {
+        set_token();
+        let response = handle(parts("POST", Some("Bearer relay-token"), ""))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 405);
+    }
+
+    /// Full read path against real Upstash; opt-in like the webhook test.
+    #[tokio::test]
+    #[ignore = "requires UPSTASH_* env vars (performs a real Redis read)"]
+    async fn authorized_read_returns_page() {
+        set_token();
+        let response = handle(parts("GET", Some("Bearer relay-token"), "?limit=5"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        assert!(response.body().contains("next_cursor"));
+    }
 }
