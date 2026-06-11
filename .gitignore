@@ -1,0 +1,10 @@
+# Xcode
+xcuserdata/
+*.xcscmblueprint
+
+# SPM
+.build/
+.swiftpm/
+
+# macOS
+.DS_Store
