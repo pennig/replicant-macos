@@ -5,16 +5,17 @@
 //! cursor to start from the beginning of the retained log. Polling this
 //! endpoint is free — it never touches the game's rate limits.
 
+use http::StatusCode;
 use replicant_relay::{authorize_client, Upstash, EVENT_STREAM_KEY};
 use serde_json::{json, Value};
-use vercel_runtime::{run, service_fn, Body, Error, Request, Response, StatusCode};
+use vercel_runtime::{run, service_fn, Error, Request, Response};
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     run(service_fn(handler)).await
 }
 
-async fn handler(req: Request) -> Result<Response<Body>, Error> {
+async fn handler(req: Request) -> Result<Response<String>, Error> {
     if req.method() != "GET" {
         return respond(StatusCode::METHOD_NOT_ALLOWED, json!({"error": "GET only"}));
     }
@@ -100,10 +101,10 @@ async fn handler(req: Request) -> Result<Response<Body>, Error> {
     )
 }
 
-fn respond(status: StatusCode, body: Value) -> Result<Response<Body>, Error> {
+fn respond(status: StatusCode, body: Value) -> Result<Response<String>, Error> {
     Ok(Response::builder()
         .status(status)
         .header("content-type", "application/json")
         .header("cache-control", "no-store")
-        .body(Body::Text(body.to_string()))?)
+        .body(body.to_string())?)
 }
