@@ -125,13 +125,15 @@ public struct UnifiedEvent: Sendable, Identifiable {
         iso8601.date(from: string) ?? iso8601Fractional.date(from: string)
     }
 
-    private static let iso8601: ISO8601DateFormatter = {
+    // Configured once and only ever read from (`date(from:)`), which is
+    // thread-safe on Foundation's formatters.
+    nonisolated(unsafe) private static let iso8601: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
         return formatter
     }()
 
-    private static let iso8601Fractional: ISO8601DateFormatter = {
+    nonisolated(unsafe) private static let iso8601Fractional: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter

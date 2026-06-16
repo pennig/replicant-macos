@@ -22,7 +22,7 @@ struct KeychainClient: Sendable {
 
 extension KeychainClient {
     /// The account key under which the API key is stored.
-    static let apiKeyAccount = "api-key"
+    nonisolated static let apiKeyAccount = "api-key"
 
     enum Failure: Error { case unexpectedStatus(OSStatus) }
 }
@@ -33,7 +33,7 @@ extension KeychainClient: DependencyKey {
     static let liveValue: KeychainClient = {
         let service = "name.pennig.Replicant"
 
-        func query(_ account: String) -> [String: Any] {
+        @Sendable func query(_ account: String) -> [String: Any] {
             [
                 kSecClass as String: kSecClassGenericPassword,
                 kSecAttrService as String: service,

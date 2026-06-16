@@ -1,5 +1,5 @@
 import XCTest
-@testable import ReplicantKit
+@testable import API
 
 final class RateLimitGovernorTests: XCTestCase {
 

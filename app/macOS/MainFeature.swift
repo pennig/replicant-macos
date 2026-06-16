@@ -131,16 +131,28 @@ struct MainView: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        NavigationSplitView {
-            sidebar
-                .navigationSplitViewColumnWidth(min: 220, ideal: 240, max: 300)
-        } content: {
-            content
-                .navigationSplitViewColumnWidth(min: 280, ideal: 320, max: 420)
-        } detail: {
-            detail
+        if store.category?.hasDetail == false {
+            // Content-only category (Event Log): a two-column split view —
+            // sidebar + content, with no detail column at all.
+            NavigationSplitView {
+                sidebar
+                    .navigationSplitViewColumnWidth(min: 220, ideal: 240, max: 300)
+            } detail: {
+                content
+            }
+            .navigationTitle("Replicant")
+        } else {
+            NavigationSplitView {
+                sidebar
+                    .navigationSplitViewColumnWidth(min: 220, ideal: 240, max: 300)
+            } content: {
+                content
+                    .navigationSplitViewColumnWidth(min: 280, ideal: 320, max: 420)
+            } detail: {
+                detail
+            }
+            .navigationTitle("Replicant")
         }
-        .navigationTitle("Replicant")
     }
 
     // — Sidebar: header · grouped categories · footer —
@@ -190,28 +202,19 @@ struct MainView: View {
         }
     }
 
-    // — Detail —
+    // — Detail (three-column categories only) —
     @ViewBuilder private var detail: some View {
-        if let category = store.category, category.hasDetail {
-            if let selection = store.detailSelection {
-                VStack(spacing: 12) {
-                    Image(systemName: category.symbol).font(.system(size: 48)).foregroundStyle(.tint)
-                    Text(selection).font(.title2.bold())
-                    Text("Detail for \(category.title.lowercased()).")
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .navigationTitle(selection)
-            } else {
-                ContentUnavailableView("No Selection", systemImage: "square.dashed")
+        if let category = store.category, let selection = store.detailSelection {
+            VStack(spacing: 12) {
+                Image(systemName: category.symbol).font(.system(size: 48)).foregroundStyle(.tint)
+                Text(selection).font(.title2.bold())
+                Text("Detail for \(category.title.lowercased()).")
+                    .foregroundStyle(.secondary)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .navigationTitle(selection)
         } else {
-            // The Event Log shows content only.
-            ContentUnavailableView(
-                "Event Log",
-                systemImage: "list.bullet.rectangle",
-                description: Text("This category shows content only — there is no detail view.")
-            )
+            ContentUnavailableView("No Selection", systemImage: "square.dashed")
         }
     }
 }

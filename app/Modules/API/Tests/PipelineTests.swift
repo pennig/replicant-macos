@@ -1,5 +1,6 @@
 import XCTest
-@testable import ReplicantKit
+import Utils
+@testable import API
 
 final class PipelineTests: XCTestCase {
 

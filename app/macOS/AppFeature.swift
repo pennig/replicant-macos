@@ -35,7 +35,7 @@ struct AppFeature {
         case sessionRestored(apiKey: String)
     }
 
-    @Dependency(\.keychain) var keychain
+    @Dependency(KeychainClient.self) var keychain
 
     var body: some Reducer<State, Action> {
         Scope(state: \.preferences, action: \.preferences) {
@@ -46,6 +46,7 @@ struct AppFeature {
             case .onAppear:
                 // Restore an existing session if a key is already in the Keychain.
                 guard state.main == nil else { return .none }
+                let keychain = self.keychain
                 return .run { send in
                     if let apiKey = keychain.load(KeychainClient.apiKeyAccount) {
                         await send(.sessionRestored(apiKey: apiKey))
@@ -65,6 +66,7 @@ struct AppFeature {
             case .main(.delegate(.loggedOut)):
                 state.main = nil
                 state.login = LoginFeature.State()
+                let keychain = self.keychain
                 return .run { _ in
                     try? keychain.delete(KeychainClient.apiKeyAccount)
                 }

@@ -43,8 +43,8 @@ plus a client for your relay's event log.
 ```swift
 import ReplicantKit
 
-// ONE governor per API token — the limits are token-scoped. Share it
-// between the generated client and the pipeline's game-log client.
+// ONE governor per API token — the limits are token-scoped. The pipeline
+// reuses this same client for backfill, so the budget is shared automatically.
 let governor = RateLimitGovernor()
 let game = ReplicantSpace.client(apiKey: apiKey, governor: governor)
 
@@ -57,7 +57,7 @@ let pipeline = EventPipeline(
         baseURL: URL(string: "https://your-relay.vercel.app")!,
         clientToken: relayToken
     ),
-    gameLog: GameLogClient(apiKey: apiKey, governor: governor)
+    client: game
 )
 
 let events = await pipeline.start { error in

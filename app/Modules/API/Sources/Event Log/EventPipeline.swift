@@ -42,7 +42,7 @@ public struct UserDefaultsCursorStore: RelayCursorStore {
 public actor EventPipeline {
 
     private let relay: RelayClient
-    private let gameLog: GameLogClient
+    private let client: Client
     private let cursorStore: RelayCursorStore
 
     private var seen: BoundedFingerprintSet
@@ -51,18 +51,20 @@ public actor EventPipeline {
 
     /// - Parameters:
     ///   - relay: client for your Vercel relay.
-    ///   - gameLog: share its governor with your main API client.
+    ///   - client: the generated game API client (from `ReplicantSpace.client`).
+    ///     Backfill reads go through its middleware (auth, rate limiting,
+    ///     logging), so it shares your app's rate-limit budget automatically.
     ///   - cursorStore: where the relay resume-point lives.
     ///   - dedupCapacity: how many recent fingerprints to remember. Should
     ///     comfortably exceed the largest backfill overlap (default: plenty).
     public init(
         relay: RelayClient,
-        gameLog: GameLogClient,
+        client: Client,
         cursorStore: RelayCursorStore = UserDefaultsCursorStore(),
         dedupCapacity: Int = 4096
     ) {
         self.relay = relay
-        self.gameLog = gameLog
+        self.client = client
         self.cursorStore = cursorStore
         self.seen = BoundedFingerprintSet(capacity: dedupCapacity)
     }
@@ -110,30 +112,42 @@ public actor EventPipeline {
     ///   - since: only consider entries after this instant (a 60s overlap
     ///     is applied — dedup absorbs it). Pass nil to take whatever the
     ///     fetched window covers.
-    ///   - maxFetch: upper bound on how far back to reach when `since` is
-    ///     older than the first page (the page size doubles until the window
-    ///     is covered or this cap is hit).
+    ///   - maxFetch: upper bound on how many entries to pull when `since` is
+    ///     older than the first page (paging stops once this cap is hit).
+    ///   - pageSize: entries per request while paging back through the log.
     @discardableResult
     public func backfill(
         replicantCode: String,
         since: Date?,
-        maxFetch: Int = 1000
+        maxFetch: Int = 1000,
+        pageSize: Int = 100
     ) async throws -> Int {
         let cutoff = since?.addingTimeInterval(-60)
 
-        // `latest=true` returns the newest entries; grow the window until it
-        // reaches past `cutoff` (or we hit the cap / the log's beginning).
-        var limit = 100
-        var entries = try await gameLog.latestEvents(replicantCode: replicantCode, limit: limit)
-        if let cutoff {
-            while entries.count >= limit, limit < maxFetch {
-                let oldest = entries
-                    .compactMap { UnifiedEvent.parseTimestamp($0.createdAt) }
-                    .min()
-                if let oldest, oldest <= cutoff { break }
-                limit = min(limit * 2, maxFetch)
-                entries = try await gameLog.latestEvents(replicantCode: replicantCode, limit: limit)
-            }
+        // Page newest-first (`latest` on the first request, then follow
+        // `nextCursor`) until we reach past `cutoff`, hit `maxFetch`, or
+        // reach the log's beginning.
+        var entries: [GameLogEntry] = []
+        var cursor: Int?
+        var isFirstPage = true
+        while entries.count < maxFetch {
+            let page = try await client.eventLog(
+                replicantCode: replicantCode,
+                cursor: cursor,
+                limit: min(pageSize, maxFetch - entries.count),
+                latest: isFirstPage ? true : nil
+            )
+            isFirstPage = false
+            guard !page.entries.isEmpty else { break }
+            entries.append(contentsOf: page.entries)
+
+            guard let cutoff else { break }  // nil `since`: just the newest page
+            let oldest = page.entries
+                .compactMap { UnifiedEvent.parseTimestamp($0.createdAt) }
+                .min()
+            if let oldest, oldest <= cutoff { break }
+            guard let next = page.nextCursor else { break }
+            cursor = next
         }
 
         var recovered = entries
