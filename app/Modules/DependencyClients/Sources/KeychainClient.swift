@@ -11,16 +11,16 @@ import Foundation
 import Security
 
 /// Securely stores small string secrets (the API key) in the Keychain.
-struct KeychainClient: Sendable {
+public struct KeychainClient: Sendable {
     /// Save (or overwrite) the value for the given account key.
-    var save: @Sendable (_ value: String, _ account: String) throws -> Void
+    public var save: @Sendable (_ value: String, _ account: String) throws -> Void
     /// Load the value for the given account key, or `nil` if absent.
-    var load: @Sendable (_ account: String) -> String?
+    public var load: @Sendable (_ account: String) -> String?
     /// Remove the value for the given account key.
-    var delete: @Sendable (_ account: String) throws -> Void
+    public var delete: @Sendable (_ account: String) throws -> Void
 }
 
-extension KeychainClient {
+public extension KeychainClient {
     /// The account key under which the API key is stored.
     nonisolated static let apiKeyAccount = "api-key"
 
@@ -30,7 +30,7 @@ extension KeychainClient {
 // MARK: - Live implementation
 
 extension KeychainClient: DependencyKey {
-    static let liveValue: KeychainClient = {
+    public static let liveValue: KeychainClient = {
         let service = "name.pennig.Replicant"
 
         @Sendable func query(_ account: String) -> [String: Any] {
@@ -74,7 +74,7 @@ extension KeychainClient: DependencyKey {
 
 extension KeychainClient: TestDependencyKey {
     /// An in-memory stand-in so previews and tests never touch the real Keychain.
-    static var testValue: KeychainClient {
+    public static var testValue: KeychainClient {
         let storage = LockIsolated<[String: String]>([:])
         return KeychainClient(
             save: { value, account in storage.withValue { $0[account] = value } },
@@ -83,11 +83,11 @@ extension KeychainClient: TestDependencyKey {
         )
     }
 
-    static let previewValue = testValue
+    public static let previewValue = testValue
 }
 
 extension DependencyValues {
-    var keychain: KeychainClient {
+    public var keychain: KeychainClient {
         get { self[KeychainClient.self] }
         set { self[KeychainClient.self] = newValue }
     }

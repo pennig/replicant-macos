@@ -18,6 +18,7 @@
 //
 
 import SwiftUI
+import UI
 
 // MARK: - Color helpers
 
@@ -370,7 +371,7 @@ public struct FirstLaunchView: View {
         GeometryReader { _ in
             ZStack {
                 CosmicBackground()
-                RingField(origin: logoCenter == .zero ? CGPoint(x: 380, y: 170) : logoCenter, tweaks: tweaks)
+                RingField(origin: logoCenter == .zero ? CGPoint(x: 380, y: 136) : logoCenter, tweaks: tweaks)
                 Starfield()
                 Veil()
                 content

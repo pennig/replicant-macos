@@ -4,16 +4,20 @@ import PackageDescription
 let package = Package(
     name: "ReplicantKit",
     platforms: [
-        .macOS(.v13),
+        .macOS(.v26),
     ],
     products: [
-        .library(name: "API", targets: ["API", "APITests"]),
+        .library(name: "API", targets: ["API"]),
+        .library(name: "DependencyClients", targets: ["DependencyClients"]),
+        .library(name: "LoginFeature", targets: ["LoginFeature"]),
+        .library(name: "UI", targets: ["UI"]),
         .library(name: "Utils", targets: ["Utils"]),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-openapi-generator", from: "1.0.0"),
         .package(url: "https://github.com/apple/swift-openapi-runtime", from: "1.0.0"),
         .package(url: "https://github.com/apple/swift-openapi-urlsession", from: "1.0.0"),
+        .package(url: "https://github.com/pointfreeco/swift-composable-architecture", from: "1.26.0")
     ],
     targets: [
         .target(
@@ -32,6 +36,34 @@ let package = Package(
             name: "APITests",
             dependencies: ["API"],
             path: "API/Tests"
+        ),
+        .target(
+            name: "DependencyClients",
+            dependencies: [
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+            ],
+            path: "DependencyClients/Sources",
+        ),
+        .target(
+            name: "LoginFeature",
+            dependencies: [
+                "DependencyClients",
+                "UI",
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+            ],
+            path: "LoginFeature/Sources",
+        ),
+        .testTarget(
+            name: "LoginFeatureTests",
+            dependencies: ["LoginFeature"],
+            path: "LoginFeature/Tests"
+        ),
+        .target(
+            name: "UI",
+            path: "UI/Sources",
+            resources: [
+                .copy("Colors.xcassets"),
+            ]
         ),
         .target(
             name: "Utils",

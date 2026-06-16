@@ -1,5 +1,5 @@
 //
-//  ReplicantDesignSystem.swift
+//  DesignSystem.swift
 //  Generated from the Replicant dashboard design exploration.
 //
 //  Drop this file + ReplicantColors.xcassets into your app target. Every
@@ -12,7 +12,7 @@
 
 import SwiftUI
 
-private let rcBundle: Bundle = .main
+private let rcBundle: Bundle = .module
 
 // MARK: - Semantic colors
 
@@ -26,6 +26,7 @@ public extension Color {
 
     // Hairlines / separators (carry alpha)
     static let rcSeparator     = Color("Separator",     bundle: rcBundle)
+    static let rcSeparatorStrong = Color("SeparatorStrong", bundle: rcBundle)
     static let rcSeparatorSoft = Color("SeparatorSoft", bundle: rcBundle)
 
     // Text

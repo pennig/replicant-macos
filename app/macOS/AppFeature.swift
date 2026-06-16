@@ -9,6 +9,8 @@
 //
 
 import ComposableArchitecture
+import DependencyClients
+import LoginFeature
 import SwiftUI
 
 /// The two mutually-exclusive top-level states of the app: the user is either
@@ -52,7 +54,7 @@ struct AppFeature {
         case preferences(PreferencesFeature.Action)
     }
 
-    @Dependency(KeychainClient.self) var keychain
+    @Dependency(\.keychain) var keychain
 
     var body: some Reducer<State, Action> {
         Scope(state: \.preferences, action: \.preferences) {

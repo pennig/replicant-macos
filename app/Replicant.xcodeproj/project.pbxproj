@@ -9,18 +9,18 @@
 /* Begin PBXBuildFile section */
 		C9B5305C2FDDD839006F79A8 /* ReplicantApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9B530592FDDD839006F79A8 /* ReplicantApp.swift */; };
 		C9B5305D2FDDD839006F79A8 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C9B530572FDDD839006F79A8 /* Assets.xcassets */; };
-		C9B530662FDDD950006F79A8 /* ReplicantDesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9B530632FDDD93C006F79A8 /* ReplicantDesignSystem.swift */; };
 		C9B530672FDDD950006F79A8 /* ReplicantSplitView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9B530642FDDD93C006F79A8 /* ReplicantSplitView.swift */; };
-		C9B530682FDDD950006F79A8 /* Swatches.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9B530652FDDD93C006F79A8 /* Swatches.swift */; };
-		C9B530692FDDD950006F79A8 /* ReplicantColors.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C9B530622FDDD93C006F79A8 /* ReplicantColors.xcassets */; };
 		C9B5306F2FE095E6006F79A8 /* FirstLaunchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9B5306E2FE095E3006F79A8 /* FirstLaunchView.swift */; };
-		C9B530712FE0A5CC006F79A8 /* KeychainClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9B530702FE0A5CC006F79A8 /* KeychainClient.swift */; };
-		C9B530732FE0A5D9006F79A8 /* LoginFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9B530722FE0A5D9006F79A8 /* LoginFeature.swift */; };
 		C9B530752FE0A5FC006F79A8 /* MainFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9B530742FE0A5FC006F79A8 /* MainFeature.swift */; };
 		C9B530772FE0A60B006F79A8 /* AppFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9B530762FE0A60B006F79A8 /* AppFeature.swift */; };
 		C9B5307A2FE0A6D1006F79A8 /* ComposableArchitecture in Frameworks */ = {isa = PBXBuildFile; productRef = C9B530792FE0A6D1006F79A8 /* ComposableArchitecture */; };
 		C9B5307C2FE0E385006F79A8 /* AccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9B5307B2FE0E385006F79A8 /* AccountView.swift */; };
 		C9B5307E2FE0E38E006F79A8 /* PreferencesFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9B5307D2FE0E38E006F79A8 /* PreferencesFeature.swift */; };
+		C9B530952FE1D3AA006F79A8 /* API in Frameworks */ = {isa = PBXBuildFile; productRef = C9B530942FE1D3AA006F79A8 /* API */; };
+		C9B530972FE1D3AA006F79A8 /* UI in Frameworks */ = {isa = PBXBuildFile; productRef = C9B530962FE1D3AA006F79A8 /* UI */; };
+		C9B530992FE1D3AA006F79A8 /* Utils in Frameworks */ = {isa = PBXBuildFile; productRef = C9B530982FE1D3AA006F79A8 /* Utils */; };
+		C9B5309B2FE1DC5E006F79A8 /* LoginFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C9B5309A2FE1DC5E006F79A8 /* LoginFeature */; };
+		C9B5309D2FE1DEE2006F79A8 /* DependencyClients in Frameworks */ = {isa = PBXBuildFile; productRef = C9B5309C2FE1DEE2006F79A8 /* DependencyClients */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -31,13 +31,8 @@
 		C9B5305F2FDDD93C006F79A8 /* CLAUDE.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = CLAUDE.md; sourceTree = "<group>"; };
 		C9B530602FDDD93C006F79A8 /* DESIGN_SPEC.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = DESIGN_SPEC.md; sourceTree = "<group>"; };
 		C9B530612FDDD93C006F79A8 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
-		C9B530622FDDD93C006F79A8 /* ReplicantColors.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = ReplicantColors.xcassets; sourceTree = "<group>"; };
-		C9B530632FDDD93C006F79A8 /* ReplicantDesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplicantDesignSystem.swift; sourceTree = "<group>"; };
 		C9B530642FDDD93C006F79A8 /* ReplicantSplitView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplicantSplitView.swift; sourceTree = "<group>"; };
-		C9B530652FDDD93C006F79A8 /* Swatches.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Swatches.swift; sourceTree = "<group>"; };
 		C9B5306E2FE095E3006F79A8 /* FirstLaunchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirstLaunchView.swift; sourceTree = "<group>"; };
-		C9B530702FE0A5CC006F79A8 /* KeychainClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainClient.swift; sourceTree = "<group>"; };
-		C9B530722FE0A5D9006F79A8 /* LoginFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginFeature.swift; sourceTree = "<group>"; };
 		C9B530742FE0A5FC006F79A8 /* MainFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainFeature.swift; sourceTree = "<group>"; };
 		C9B530762FE0A60B006F79A8 /* AppFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppFeature.swift; sourceTree = "<group>"; };
 		C9B5307B2FE0E385006F79A8 /* AccountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountView.swift; sourceTree = "<group>"; };
@@ -50,6 +45,11 @@
 			buildActionMask = 2147483647;
 			files = (
 				C9B5307A2FE0A6D1006F79A8 /* ComposableArchitecture in Frameworks */,
+				C9B530972FE1D3AA006F79A8 /* UI in Frameworks */,
+				C9B5309D2FE1DEE2006F79A8 /* DependencyClients in Frameworks */,
+				C9B5309B2FE1DC5E006F79A8 /* LoginFeature in Frameworks */,
+				C9B530992FE1D3AA006F79A8 /* Utils in Frameworks */,
+				C9B530952FE1D3AA006F79A8 /* API in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -59,9 +59,11 @@
 		C922A8AD2FDC493200431320 = {
 			isa = PBXGroup;
 			children = (
+				C9B5305F2FDDD93C006F79A8 /* CLAUDE.md */,
 				C9B5305E2FDDD91C006F79A8 /* sandbox */,
 				C9B5305A2FDDD839006F79A8 /* macOS */,
 				C9B530562FDC9D00006F79A8 /* Modules */,
+				C9B5308D2FE1D2CA006F79A8 /* Frameworks */,
 				C922A8B72FDC493200431320 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -79,8 +81,6 @@
 			children = (
 				C9B530572FDDD839006F79A8 /* Assets.xcassets */,
 				C9B530592FDDD839006F79A8 /* ReplicantApp.swift */,
-				C9B530702FE0A5CC006F79A8 /* KeychainClient.swift */,
-				C9B530722FE0A5D9006F79A8 /* LoginFeature.swift */,
 				C9B530742FE0A5FC006F79A8 /* MainFeature.swift */,
 				C9B530762FE0A60B006F79A8 /* AppFeature.swift */,
 				C9B5307B2FE0E385006F79A8 /* AccountView.swift */,
@@ -93,15 +93,18 @@
 			isa = PBXGroup;
 			children = (
 				C9B5306E2FE095E3006F79A8 /* FirstLaunchView.swift */,
-				C9B5305F2FDDD93C006F79A8 /* CLAUDE.md */,
 				C9B530602FDDD93C006F79A8 /* DESIGN_SPEC.md */,
 				C9B530612FDDD93C006F79A8 /* README.md */,
-				C9B530622FDDD93C006F79A8 /* ReplicantColors.xcassets */,
-				C9B530632FDDD93C006F79A8 /* ReplicantDesignSystem.swift */,
 				C9B530642FDDD93C006F79A8 /* ReplicantSplitView.swift */,
-				C9B530652FDDD93C006F79A8 /* Swatches.swift */,
 			);
 			path = sandbox;
+			sourceTree = "<group>";
+		};
+		C9B5308D2FE1D2CA006F79A8 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -118,12 +121,15 @@
 			buildRules = (
 			);
 			dependencies = (
-				C9B5306B2FDE04BC006F79A8 /* PBXTargetDependency */,
-				C9B5306D2FDE04BC006F79A8 /* PBXTargetDependency */,
 			);
 			name = Replicant;
 			packageProductDependencies = (
 				C9B530792FE0A6D1006F79A8 /* ComposableArchitecture */,
+				C9B530942FE1D3AA006F79A8 /* API */,
+				C9B530962FE1D3AA006F79A8 /* UI */,
+				C9B530982FE1D3AA006F79A8 /* Utils */,
+				C9B5309A2FE1DC5E006F79A8 /* LoginFeature */,
+				C9B5309C2FE1DEE2006F79A8 /* DependencyClients */,
 			);
 			productName = Replicant;
 			productReference = C922A8B62FDC493200431320 /* Replicant.app */;
@@ -171,7 +177,6 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				C9B530692FDDD950006F79A8 /* ReplicantColors.xcassets in Resources */,
 				C9B5305D2FDDD839006F79A8 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -184,31 +189,16 @@
 			buildActionMask = 2147483647;
 			files = (
 				C9B5306F2FE095E6006F79A8 /* FirstLaunchView.swift in Sources */,
-				C9B530662FDDD950006F79A8 /* ReplicantDesignSystem.swift in Sources */,
 				C9B530752FE0A5FC006F79A8 /* MainFeature.swift in Sources */,
-				C9B530732FE0A5D9006F79A8 /* LoginFeature.swift in Sources */,
 				C9B5307C2FE0E385006F79A8 /* AccountView.swift in Sources */,
 				C9B530672FDDD950006F79A8 /* ReplicantSplitView.swift in Sources */,
-				C9B530712FE0A5CC006F79A8 /* KeychainClient.swift in Sources */,
 				C9B530772FE0A60B006F79A8 /* AppFeature.swift in Sources */,
-				C9B530682FDDD950006F79A8 /* Swatches.swift in Sources */,
 				C9B5305C2FDDD839006F79A8 /* ReplicantApp.swift in Sources */,
 				C9B5307E2FE0E38E006F79A8 /* PreferencesFeature.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
-
-/* Begin PBXTargetDependency section */
-		C9B5306B2FDE04BC006F79A8 /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			productRef = C9B5306A2FDE04BC006F79A8 /* API */;
-		};
-		C9B5306D2FDE04BC006F79A8 /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			productRef = C9B5306C2FDE04BC006F79A8 /* Utils */;
-		};
-/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		C922A8BF2FDC493300431320 /* Debug */ = {
@@ -265,7 +255,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MACOSX_DEPLOYMENT_TARGET = 26.5;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -324,7 +314,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MACOSX_DEPLOYMENT_TARGET = 26.5;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				SDKROOT = macosx;
@@ -352,6 +342,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.0;
 				NEW_SETTING = "";
 				PRODUCT_BUNDLE_IDENTIFIER = name.pennig.Replicant;
@@ -385,6 +376,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.0;
 				NEW_SETTING = "";
 				PRODUCT_BUNDLE_IDENTIFIER = name.pennig.Replicant;
@@ -436,18 +428,30 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		C9B5306A2FDE04BC006F79A8 /* API */ = {
-			isa = XCSwiftPackageProductDependency;
-			productName = API;
-		};
-		C9B5306C2FDE04BC006F79A8 /* Utils */ = {
-			isa = XCSwiftPackageProductDependency;
-			productName = Utils;
-		};
 		C9B530792FE0A6D1006F79A8 /* ComposableArchitecture */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = C9B530782FE0A6D1006F79A8 /* XCRemoteSwiftPackageReference "swift-composable-architecture" */;
 			productName = ComposableArchitecture;
+		};
+		C9B530942FE1D3AA006F79A8 /* API */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = API;
+		};
+		C9B530962FE1D3AA006F79A8 /* UI */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = UI;
+		};
+		C9B530982FE1D3AA006F79A8 /* Utils */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = Utils;
+		};
+		C9B5309A2FE1DC5E006F79A8 /* LoginFeature */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = LoginFeature;
+		};
+		C9B5309C2FE1DEE2006F79A8 /* DependencyClients */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = DependencyClients;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

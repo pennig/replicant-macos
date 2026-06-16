@@ -8,30 +8,40 @@
 //
 
 import ComposableArchitecture
+import DependencyClients
 import SwiftUI
+import UI
 
 @Reducer
-struct LoginFeature {
+public struct LoginFeature {
     @ObservableState
-    struct State: Equatable {
-        var apiKey = ""
-        var isSaving = false
-        var revealKey = false
+    public struct State: Equatable {
+        var apiKey: String
+        var isSaving: Bool
+        var revealKey: Bool
+        
+        public init(apiKey: String = "", isSaving: Bool = false, revealKey: Bool = false) {
+            self.apiKey = apiKey
+            self.isSaving = isSaving
+            self.revealKey = revealKey
+        }
     }
 
-    enum Action: BindableAction {
+    public enum Action: BindableAction {
         case binding(BindingAction<State>)
         case delegate(Delegate)
         case loginButtonTapped
 
-        enum Delegate {
+        public enum Delegate {
             case loggedIn(apiKey: String)
         }
     }
 
+    public init() {}
+    
     @Dependency(\.keychain) var keychain
 
-    var body: some Reducer<State, Action> {
+    public var body: some Reducer<State, Action> {
         BindingReducer()
         Reduce { state, action in
             switch action {
@@ -55,10 +65,14 @@ struct LoginFeature {
     }
 }
 
-struct LoginView: View {
+public struct LoginView: View {
     @Bindable var store: StoreOf<LoginFeature>
+    
+    public init(store: StoreOf<LoginFeature>) {
+        self.store = store
+    }
 
-    var body: some View {
+    public var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
             VStack(spacing: 20) {
@@ -66,30 +80,27 @@ struct LoginView: View {
                     Image(systemName: "circle.hexagongrid.circle.fill")
                         .font(.system(size: 48))
                         .foregroundStyle(.tint)
-                    Text("Replicant")
+                    Text("Replicould")
                         .font(.largeTitle.bold())
-                    Text("Paste your API key to sign in.")
-                        .foregroundStyle(.secondary)
+                    HStack(spacing: 0) {
+                        Text("A fun interface for the API-based game,")
+                            .foregroundStyle(.secondary)
+                        Button("replicant.space") {
+                            
+                        }.buttonStyle(RCButtonStyle(.text))
+                    }
                 }
 
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Group {
-                            if store.revealKey {
-                                TextField("rk_live_…", text: $store.apiKey)
-                            } else {
-                                SecureField("rk_live_…", text: $store.apiKey)
-                            }
-                        }
-                        .textFieldStyle(.roundedBorder)
-                        .font(.system(.body, design: .monospaced))
-
-                        Button(store.revealKey ? "Hide" : "Show") {
-                            store.revealKey.toggle()
-                        }
-                        .buttonStyle(.borderless)
-                    }
-
+                VStack(alignment: .leading, spacing: Space.l) {
+                    RCField(
+                        "API Key",
+                        text: $store.apiKey,
+                        placeholder: "e.g. xsPaUKCPJx…",
+                        hint: "paste the key from your account",
+                        mono: true,
+                        secure: true
+                    )
+                    
                     Button {
                         store.send(.loginButtonTapped)
                     } label: {
@@ -97,16 +108,16 @@ struct LoginView: View {
                             ProgressView().controlSize(.small)
                                 .frame(maxWidth: .infinity)
                         } else {
-                            Text("Log in").frame(maxWidth: .infinity)
+                            HStack(spacing: Space.xs) {
+                                Text("Log in")
+                                Image(systemName: "arrow.right")
+                            }
                         }
                     }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                    .disabled(store.apiKey.trimmingCharacters(in: .whitespaces).isEmpty || store.isSaving)
+                    .buttonStyle(RCButtonStyle(.primary, fullWidth: true))
                 }
                 .frame(maxWidth: 360)
             }
-            .padding(40)
         }
     }
 }
