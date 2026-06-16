@@ -40,7 +40,7 @@ struct ReplicantApp: App {
         // preference as the main window.
         Settings {
             PreferencesView(store: store.scope(state: \.preferences, action: \.preferences))
-                .preferredColorScheme(store.preferences.appearance.colorScheme)
+                .applyAppAppearance(store.preferences.appearance)
         }
     }
 }

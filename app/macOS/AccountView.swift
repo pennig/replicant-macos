@@ -28,16 +28,16 @@ struct AccountView: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
-                Section {
+            }
+            .formStyle(.grouped)
+            .navigationTitle("Account")
+            .toolbar {
+                ToolbarItem(placement: .destructiveAction) {
                     Button("Log Out", role: .destructive) {
                         dismiss()
                         store.send(.logoutButtonTapped)
                     }
                 }
-            }
-            .formStyle(.grouped)
-            .navigationTitle("Account")
-            .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
@@ -46,3 +46,12 @@ struct AccountView: View {
         .frame(minWidth: 380, minHeight: 360)
     }
 }
+
+#Preview {
+    AccountView(
+        store: Store(initialState: MainFeature.State(account: .mock, apiKey: "rk_live_0123456789abcdef")) {
+            MainFeature()
+        }
+    )
+}
+

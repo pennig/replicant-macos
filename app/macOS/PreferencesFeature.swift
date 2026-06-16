@@ -7,6 +7,7 @@
 //  the first-launch screen, which is always dark.
 //
 
+import AppKit
 import ComposableArchitecture
 import SwiftUI
 
@@ -49,6 +50,30 @@ enum Appearance: String, CaseIterable, Identifiable {
         case .system: nil
         case .light: .light
         case .dark: .dark
+        }
+    }
+
+    /// The AppKit appearance to force application-wide; `nil` follows the system.
+    var nsAppearance: NSAppearance? {
+        switch self {
+        case .system: nil
+        case .light: NSAppearance(named: .aqua)
+        case .dark: NSAppearance(named: .darkAqua)
+        }
+    }
+}
+
+extension View {
+    /// Drives the appearance preference at the AppKit level by setting
+    /// `NSApp.appearance`. Unlike `preferredColorScheme` — which only flows a
+    /// color scheme through a window's SwiftUI content — this updates every
+    /// window's chrome (traffic lights, title) and every `NavigationSplitView`
+    /// column uniformly and immediately. The first-launch window still pins
+    /// itself dark via its own per-window `preferredColorScheme`, which
+    /// overrides the app-level appearance for that one window.
+    func applyAppAppearance(_ appearance: Appearance) -> some View {
+        onChange(of: appearance, initial: true) { _, appearance in
+            NSApp.appearance = appearance.nsAppearance
         }
     }
 }

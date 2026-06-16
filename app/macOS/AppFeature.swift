@@ -116,6 +116,7 @@ struct MainWindow: View {
     let store: StoreOf<AppFeature>
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
+    @Shared(.appStorage("appearance")) var appearance: Appearance = .system
 
     var body: some View {
         Group {
@@ -123,7 +124,7 @@ struct MainWindow: View {
                 MainView(store: mainStore)
             }
         }
-        .preferredColorScheme(store.preferences.appearance.colorScheme)
+        .applyAppAppearance(appearance)
         .onChange(of: store.isLoggedOut, initial: true) { _, isLoggedOut in
             // Signed out: reopen the login window, then close the main window.
             if isLoggedOut {
