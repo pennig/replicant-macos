@@ -29,7 +29,7 @@ struct LoginFeature {
         }
     }
 
-    @Dependency(KeychainClient.self) var keychain
+    @Dependency(\.keychain) var keychain
 
     var body: some Reducer<State, Action> {
         BindingReducer()

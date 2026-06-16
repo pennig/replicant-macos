@@ -681,7 +681,7 @@ let RD_CMD: [String: String] = [
 enum Sample {
     static let account = AccountInfo(name: "K. Pennig", email: "kell@pennig.name", xp: 128400, replicants: 5)
 
-    static let replicants: [ReplicantInfo] = [
+    @MainActor static let replicants: [ReplicantInfo] = [
         .init(id: "30B93F2F", name: "Sylphrena", host: .vessel, hostName: "Cognition", statusRaw: "travelling",
               travelTo: "TARAZEDAR-BELT-1", travelRemaining: "2h 14m", travelProgress: 0.64,
               location: "CHAMAKUY-BELT-1", xp: 12840, deviceCount: 10, isNPC: true,

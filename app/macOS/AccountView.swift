@@ -30,6 +30,7 @@ struct AccountView: View {
                 }
                 Section {
                     Button("Log Out", role: .destructive) {
+                        dismiss()
                         store.send(.logoutButtonTapped)
                     }
                 }

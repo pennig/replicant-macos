@@ -8,7 +8,6 @@
 //  down on logout.
 //
 
-import AppKit
 import ComposableArchitecture
 import SwiftUI
 
@@ -32,15 +31,19 @@ struct AppFeature {
             if case .loggedOut = appState { true } else { false }
         }
 
-        /// Decide the initial session synchronously by consulting the Keychain,
-        /// so the very first frame is already correct (no logged-out flash).
         init() {
-            @Dependency(KeychainClient.self) var keychain
+            /// Decide the initial session synchronously by consulting the Keychain,
+            /// so the very first frame is already correct (no logged-out flash).
+            @Dependency(\.keychain) var keychain
             if let apiKey = keychain.load(KeychainClient.apiKeyAccount) {
                 appState = .loggedIn(MainFeature.State(account: .mock, apiKey: apiKey))
             } else {
                 appState = .loggedOut(LoginFeature.State())
             }
+        }
+        
+        init(appState: AppState.State) {
+            self.appState = appState
         }
     }
 
@@ -78,41 +81,62 @@ struct AppFeature {
     }
 }
 
-// MARK: - Root view
+// MARK: - Window roots
 
-struct AppView: View {
-    @Bindable var store: StoreOf<AppFeature>
+/// Root of the first-launch window. Renders the sign-in screen (always dark)
+/// and, once authenticated, hands off to the main window before closing itself.
+struct LoginWindow: View {
+    let store: StoreOf<AppFeature>
+    @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismissWindow) private var dismissWindow
 
     var body: some View {
         Group {
-            switch store.scope(state: \.appState, action: \.appState).case {
-            case let .loggedOut(loginStore):
+            if let loginStore = store.scope(state: \.appState.loggedOut, action: \.appState.loggedOut) {
                 LoginView(store: loginStore)
-            case let .loggedIn(mainStore):
-                MainView(store: mainStore)
             }
         }
-        // Drive the whole app's appearance from the persisted preference, with
-        // the first-launch (logged-out) screen pinned to dark. Setting the
-        // application's appearance keeps every window and split-view column
-        // consistent — unlike per-view `preferredColorScheme`, which competes
-        // across windows for the single app-level appearance.
-        .onChange(
-            of: AppearanceSelection(isLoggedOut: store.isLoggedOut, appearance: store.preferences.appearance),
-            initial: true
-        ) { _, selection in
-            NSApp.appearance = selection.resolved
+        .preferredColorScheme(.dark)
+        .toolbarVisibility(.hidden, for: .windowToolbar)
+        .windowResizeBehavior(.disabled)
+        .onChange(of: store.isLoggedOut, initial: true) { _, isLoggedOut in
+            // Authenticated: open the main window, then close the login window.
+            // Open-before-dismiss keeps at least one window alive throughout.
+            if !isLoggedOut {
+                openWindow(id: WindowID.main)
+                dismissWindow(id: WindowID.login)
+            }
         }
     }
 }
 
-/// The resolved app-wide appearance: the first-launch screen is always dark;
-/// otherwise the user's persisted preference wins.
-private struct AppearanceSelection: Equatable {
-    var isLoggedOut: Bool
-    var appearance: Appearance
+/// Root of the signed-in window. Renders the main experience, follows the
+/// appearance preference, and on logout hands back to the login window.
+struct MainWindow: View {
+    let store: StoreOf<AppFeature>
+    @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismissWindow) private var dismissWindow
 
-    var resolved: NSAppearance? {
-        isLoggedOut ? NSAppearance(named: .darkAqua) : appearance.nsAppearance
+    var body: some View {
+        Group {
+            if let mainStore = store.scope(state: \.appState.loggedIn, action: \.appState.loggedIn) {
+                MainView(store: mainStore)
+            }
+        }
+        .preferredColorScheme(store.preferences.appearance.colorScheme)
+        .onChange(of: store.isLoggedOut, initial: true) { _, isLoggedOut in
+            // Signed out: reopen the login window, then close the main window.
+            if isLoggedOut {
+                openWindow(id: WindowID.login)
+                // Use `.destructive` so the window dismisses even while the
+                // Account sheet (which hosts the Log Out button) is still on
+                // screen. The default `.interactive` behavior refuses to close
+                // a window that's showing a modal presentation, which would
+                // otherwise leave the main window stranded behind the sheet.
+                withTransaction(\.dismissBehavior, .destructive) {
+                    dismissWindow(id: WindowID.main)
+                }
+            }
+        }
     }
 }

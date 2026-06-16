@@ -7,7 +7,6 @@
 //  the first-launch screen, which is always dark.
 //
 
-import AppKit
 import ComposableArchitecture
 import SwiftUI
 
@@ -44,12 +43,12 @@ enum Appearance: String, CaseIterable, Identifiable {
         }
     }
 
-    /// The AppKit appearance applied app-wide; `nil` follows the system setting.
-    var nsAppearance: NSAppearance? {
+    /// The color scheme a window adopts; `nil` follows the system setting.
+    var colorScheme: ColorScheme? {
         switch self {
         case .system: nil
-        case .light: NSAppearance(named: .aqua)
-        case .dark: NSAppearance(named: .darkAqua)
+        case .light: .light
+        case .dark: .dark
         }
     }
 }
@@ -59,7 +58,7 @@ struct PreferencesView: View {
 
     var body: some View {
         Form {
-            Picker("Appearance", selection: $store.appearance) {
+            Picker("Appearance", selection: Binding(store.state.$appearance)) {
                 ForEach(Appearance.allCases) { appearance in
                     Text(appearance.label).tag(appearance)
                 }

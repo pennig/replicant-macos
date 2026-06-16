@@ -339,7 +339,7 @@ private struct SubmitButton: View {
 // MARK: - Logo-center reporting (so rings emanate from the mark)
 
 private struct LogoCenterKey: PreferenceKey {
-    static var defaultValue: CGPoint = .zero
+    static let defaultValue: CGPoint = .zero
     static func reduce(value: inout CGPoint, nextValue: () -> CGPoint) { value = nextValue() }
 }
 private extension CGRect { var center: CGPoint { CGPoint(x: midX, y: midY) } }
@@ -503,4 +503,6 @@ public struct FirstLaunchView: View {
 
 #Preview("First launch") {
     FirstLaunchView().frame(width: 760, height: 560)
+        .toolbarVisibility(.hidden, for: .windowToolbar)
+        .windowResizeBehavior(.disabled)
 }
