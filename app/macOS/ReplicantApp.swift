@@ -21,18 +21,10 @@ struct ReplicantApp: App {
             AppView(store: store)
         }
 
-        // The Account window — opened from the sidebar footer.
-        Window("Account", id: ReplicantWindow.account) {
-            AccountWindowRoot(store: store)
-        }
-        .defaultSize(width: 420, height: 360)
-        .windowResizability(.contentSize)
-
         // The Preferences window (⌘,). Applies to every window except the
         // first-launch screen, which is always dark.
         Settings {
             PreferencesView(store: store.scope(state: \.preferences, action: \.preferences))
-                .preferredColorScheme(store.preferences.appearance.colorScheme)
         }
     }
 }

@@ -19,6 +19,8 @@
 		C9B530752FE0A5FC006F79A8 /* MainFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9B530742FE0A5FC006F79A8 /* MainFeature.swift */; };
 		C9B530772FE0A60B006F79A8 /* AppFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9B530762FE0A60B006F79A8 /* AppFeature.swift */; };
 		C9B5307A2FE0A6D1006F79A8 /* ComposableArchitecture in Frameworks */ = {isa = PBXBuildFile; productRef = C9B530792FE0A6D1006F79A8 /* ComposableArchitecture */; };
+		C9B5307C2FE0E385006F79A8 /* AccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9B5307B2FE0E385006F79A8 /* AccountView.swift */; };
+		C9B5307E2FE0E38E006F79A8 /* PreferencesFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9B5307D2FE0E38E006F79A8 /* PreferencesFeature.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -38,6 +40,8 @@
 		C9B530722FE0A5D9006F79A8 /* LoginFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginFeature.swift; sourceTree = "<group>"; };
 		C9B530742FE0A5FC006F79A8 /* MainFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainFeature.swift; sourceTree = "<group>"; };
 		C9B530762FE0A60B006F79A8 /* AppFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppFeature.swift; sourceTree = "<group>"; };
+		C9B5307B2FE0E385006F79A8 /* AccountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountView.swift; sourceTree = "<group>"; };
+		C9B5307D2FE0E38E006F79A8 /* PreferencesFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesFeature.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -79,6 +83,8 @@
 				C9B530722FE0A5D9006F79A8 /* LoginFeature.swift */,
 				C9B530742FE0A5FC006F79A8 /* MainFeature.swift */,
 				C9B530762FE0A60B006F79A8 /* AppFeature.swift */,
+				C9B5307B2FE0E385006F79A8 /* AccountView.swift */,
+				C9B5307D2FE0E38E006F79A8 /* PreferencesFeature.swift */,
 			);
 			path = macOS;
 			sourceTree = "<group>";
@@ -181,11 +187,13 @@
 				C9B530662FDDD950006F79A8 /* ReplicantDesignSystem.swift in Sources */,
 				C9B530752FE0A5FC006F79A8 /* MainFeature.swift in Sources */,
 				C9B530732FE0A5D9006F79A8 /* LoginFeature.swift in Sources */,
+				C9B5307C2FE0E385006F79A8 /* AccountView.swift in Sources */,
 				C9B530672FDDD950006F79A8 /* ReplicantSplitView.swift in Sources */,
 				C9B530712FE0A5CC006F79A8 /* KeychainClient.swift in Sources */,
 				C9B530772FE0A60B006F79A8 /* AppFeature.swift in Sources */,
 				C9B530682FDDD950006F79A8 /* Swatches.swift in Sources */,
 				C9B5305C2FDDD839006F79A8 /* ReplicantApp.swift in Sources */,
+				C9B5307E2FE0E38E006F79A8 /* PreferencesFeature.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

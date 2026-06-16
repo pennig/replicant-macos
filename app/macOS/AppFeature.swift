@@ -3,36 +3,50 @@
 //  Replicant
 //
 //  The root of the app. It owns the whole session lifecycle: it decides whether
-//  to show the first-launch (login) screen or the signed-in main experience,
-//  restores an existing session from the Keychain on launch, and tears the
-//  session down on logout.
+//  to show the first-launch (login) screen or the signed-in main experience
+//  (restored synchronously from the Keychain at launch), and tears the session
+//  down on logout.
 //
 
+import AppKit
 import ComposableArchitecture
 import SwiftUI
 
-/// Identifiers for the auxiliary windows.
-enum ReplicantWindow {
-    static let account = "account"
+/// The two mutually-exclusive top-level states of the app: the user is either
+/// signed out (first-launch screen) or signed in (main experience). Modeling
+/// this as an enum makes the "both nil / both set" states unrepresentable.
+@Reducer
+enum AppState {
+    case loggedOut(LoginFeature)
+    case loggedIn(MainFeature)
 }
 
 @Reducer
 struct AppFeature {
     @ObservableState
-    struct State: Equatable {
-        /// Non-nil while signed out — the first-launch screen.
-        var login: LoginFeature.State? = LoginFeature.State()
-        /// Non-nil while signed in — the main experience.
-        var main: MainFeature.State?
+    struct State {
+        var appState: AppState.State
         var preferences = PreferencesFeature.State()
+
+        var isLoggedOut: Bool {
+            if case .loggedOut = appState { true } else { false }
+        }
+
+        /// Decide the initial session synchronously by consulting the Keychain,
+        /// so the very first frame is already correct (no logged-out flash).
+        init() {
+            @Dependency(KeychainClient.self) var keychain
+            if let apiKey = keychain.load(KeychainClient.apiKeyAccount) {
+                appState = .loggedIn(MainFeature.State(account: .mock, apiKey: apiKey))
+            } else {
+                appState = .loggedOut(LoginFeature.State())
+            }
+        }
     }
 
     enum Action {
-        case login(LoginFeature.Action)
-        case main(MainFeature.Action)
+        case appState(AppState.Action)
         case preferences(PreferencesFeature.Action)
-        case onAppear
-        case sessionRestored(apiKey: String)
     }
 
     @Dependency(KeychainClient.self) var keychain
@@ -41,45 +55,25 @@ struct AppFeature {
         Scope(state: \.preferences, action: \.preferences) {
             PreferencesFeature()
         }
+        Scope(state: \.appState, action: \.appState) {
+            AppState.body
+        }
         Reduce { state, action in
             switch action {
-            case .onAppear:
-                // Restore an existing session if a key is already in the Keychain.
-                guard state.main == nil else { return .none }
-                let keychain = self.keychain
-                return .run { send in
-                    if let apiKey = keychain.load(KeychainClient.apiKeyAccount) {
-                        await send(.sessionRestored(apiKey: apiKey))
-                    }
-                }
-
-            case let .sessionRestored(apiKey):
-                state.login = nil
-                state.main = MainFeature.State(account: .mock, apiKey: apiKey)
+            case let .appState(.loggedOut(.delegate(.loggedIn(apiKey)))):
+                state.appState = .loggedIn(MainFeature.State(account: .mock, apiKey: apiKey))
                 return .none
 
-            case let .login(.delegate(.loggedIn(apiKey))):
-                state.login = nil
-                state.main = MainFeature.State(account: .mock, apiKey: apiKey)
-                return .none
-
-            case .main(.delegate(.loggedOut)):
-                state.main = nil
-                state.login = LoginFeature.State()
+            case .appState(.loggedIn(.delegate(.loggedOut))):
+                state.appState = .loggedOut(LoginFeature.State())
                 let keychain = self.keychain
                 return .run { _ in
                     try? keychain.delete(KeychainClient.apiKeyAccount)
                 }
 
-            case .login, .main, .preferences:
+            case .appState, .preferences:
                 return .none
             }
-        }
-        .ifLet(\.login, action: \.login) {
-            LoginFeature()
-        }
-        .ifLet(\.main, action: \.main) {
-            MainFeature()
         }
     }
 }
@@ -91,39 +85,34 @@ struct AppView: View {
 
     var body: some View {
         Group {
-            if let loginStore = store.scope(state: \.login, action: \.login) {
-                // First-launch window — always dark (LoginView forces it).
+            switch store.scope(state: \.appState, action: \.appState).case {
+            case let .loggedOut(loginStore):
                 LoginView(store: loginStore)
-            } else if let mainStore = store.scope(state: \.main, action: \.main) {
+            case let .loggedIn(mainStore):
                 MainView(store: mainStore)
-                    .preferredColorScheme(store.preferences.appearance.colorScheme)
             }
         }
-        .task { store.send(.onAppear) }
+        // Drive the whole app's appearance from the persisted preference, with
+        // the first-launch (logged-out) screen pinned to dark. Setting the
+        // application's appearance keeps every window and split-view column
+        // consistent — unlike per-view `preferredColorScheme`, which competes
+        // across windows for the single app-level appearance.
+        .onChange(
+            of: AppearanceSelection(isLoggedOut: store.isLoggedOut, appearance: store.preferences.appearance),
+            initial: true
+        ) { _, selection in
+            NSApp.appearance = selection.resolved
+        }
     }
 }
 
-// MARK: - Account window root
-//
-// The Account window shares the root store. It shows account info while signed
-// in, and dismisses itself once the session ends (after logout).
+/// The resolved app-wide appearance: the first-launch screen is always dark;
+/// otherwise the user's persisted preference wins.
+private struct AppearanceSelection: Equatable {
+    var isLoggedOut: Bool
+    var appearance: Appearance
 
-struct AccountWindowRoot: View {
-    @Bindable var store: StoreOf<AppFeature>
-    @Environment(\.dismissWindow) private var dismissWindow
-
-    var body: some View {
-        Group {
-            if let mainStore = store.scope(state: \.main, action: \.main) {
-                AccountView(store: mainStore)
-            } else {
-                ContentUnavailableView("Not Signed In", systemImage: "person.slash")
-            }
-        }
-        .preferredColorScheme(store.preferences.appearance.colorScheme)
-        .frame(minWidth: 380, minHeight: 320)
-        .onChange(of: store.main == nil) { _, signedOut in
-            if signedOut { dismissWindow(id: ReplicantWindow.account) }
-        }
+    var resolved: NSAppearance? {
+        isLoggedOut ? NSAppearance(named: .darkAqua) : appearance.nsAppearance
     }
 }

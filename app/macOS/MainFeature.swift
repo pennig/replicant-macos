@@ -3,8 +3,8 @@
 //  Replicant
 //
 //  The signed-in experience: a three-column NavigationSplitView with a sidebar
-//  (header · grouped categories · footer), per-category content + detail panes,
-//  plus the Account and Preferences surfaces.
+//  (header · grouped categories · footer) and per-category content + detail
+//  panes. The Account sheet lives in AccountView.swift.
 //
 
 import ComposableArchitecture
@@ -90,6 +90,7 @@ struct MainFeature {
         var apiKey: String
         var category: SidebarItem? = .devices
         var detailSelection: String?
+        var isShowingAccount = false
     }
 
     enum Action: BindableAction {
@@ -128,30 +129,34 @@ struct MainFeature {
 
 struct MainView: View {
     @Bindable var store: StoreOf<MainFeature>
-    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        if store.category?.hasDetail == false {
-            // Content-only category (Event Log): a two-column split view —
-            // sidebar + content, with no detail column at all.
-            NavigationSplitView {
-                sidebar
-                    .navigationSplitViewColumnWidth(min: 220, ideal: 240, max: 300)
-            } detail: {
-                content
+        Group {
+            if store.category?.hasDetail == false {
+                // Content-only category (Event Log): a two-column split view —
+                // sidebar + content, with no detail column at all.
+                NavigationSplitView {
+                    sidebar
+                        .navigationSplitViewColumnWidth(min: 220, ideal: 240, max: 300)
+                } detail: {
+                    content
+                }
+                .navigationTitle("Replicant")
+            } else {
+                NavigationSplitView {
+                    sidebar
+                        .navigationSplitViewColumnWidth(min: 220, ideal: 240, max: 300)
+                } content: {
+                    content
+                        .navigationSplitViewColumnWidth(min: 280, ideal: 320, max: 420)
+                } detail: {
+                    detail
+                }
+                .navigationTitle("Replicant")
             }
-            .navigationTitle("Replicant")
-        } else {
-            NavigationSplitView {
-                sidebar
-                    .navigationSplitViewColumnWidth(min: 220, ideal: 240, max: 300)
-            } content: {
-                content
-                    .navigationSplitViewColumnWidth(min: 280, ideal: 320, max: 420)
-            } detail: {
-                detail
-            }
-            .navigationTitle("Replicant")
+        }
+        .sheet(isPresented: $store.isShowingAccount) {
+            AccountView(store: store)
         }
     }
 
@@ -173,7 +178,7 @@ struct MainView: View {
             .listStyle(.sidebar)
             Divider()
             SidebarFooter(account: store.account) {
-                openWindow(id: ReplicantWindow.account)
+                store.isShowingAccount = true
             }
         }
     }
@@ -266,96 +271,5 @@ struct SidebarFooter: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-    }
-}
-
-// MARK: - Account view (shown in its own window)
-
-struct AccountView: View {
-    let store: StoreOf<MainFeature>
-
-    var body: some View {
-        Form {
-            Section("Account") {
-                LabeledContent("Name", value: store.account.name)
-                LabeledContent("Email", value: store.account.email)
-                LabeledContent("Replicants", value: "\(store.account.replicantCount)")
-            }
-            Section("API Key") {
-                Text(store.apiKey)
-                    .font(.system(.body, design: .monospaced))
-                    .textSelection(.enabled)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            Section {
-                Button("Log Out", role: .destructive) {
-                    store.send(.logoutButtonTapped)
-                }
-            }
-        }
-        .formStyle(.grouped)
-        .navigationTitle("Account")
-    }
-}
-
-// MARK: - Preferences
-
-@Reducer
-struct PreferencesFeature {
-    @ObservableState
-    struct State: Equatable {
-        var appearance: Appearance = .system
-    }
-
-    enum Action: BindableAction {
-        case binding(BindingAction<State>)
-    }
-
-    var body: some Reducer<State, Action> {
-        BindingReducer()
-    }
-}
-
-/// The appearance the app windows adopt — except the first-launch window, which
-/// is always dark.
-enum Appearance: String, CaseIterable, Identifiable {
-    case system, light, dark
-
-    var id: String { rawValue }
-
-    var label: String {
-        switch self {
-        case .system: "System"
-        case .light: "Light"
-        case .dark: "Dark"
-        }
-    }
-
-    /// `nil` means "respect the system setting".
-    var colorScheme: ColorScheme? {
-        switch self {
-        case .system: nil
-        case .light: .light
-        case .dark: .dark
-        }
-    }
-}
-
-struct PreferencesView: View {
-    @Bindable var store: StoreOf<PreferencesFeature>
-
-    var body: some View {
-        Form {
-            Picker("Appearance", selection: $store.appearance) {
-                ForEach(Appearance.allCases) { appearance in
-                    Text(appearance.label).tag(appearance)
-                }
-            }
-            .pickerStyle(.inline)
-        }
-        .formStyle(.grouped)
-        .frame(width: 360)
-        .navigationTitle("Preferences")
     }
 }

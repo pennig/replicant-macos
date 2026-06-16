@@ -108,8 +108,6 @@ struct LoginView: View {
             }
             .padding(40)
         }
-        // The first-launch window always uses the dark appearance.
-        .preferredColorScheme(.dark)
     }
 }
 
