@@ -1,0 +1,7 @@
+# swift-openapi-generator configuration.
+# Generates code from the OpenAPI document in this directory at build time.
+generate:
+  - types
+  - client
+accessModifier: public
+namingStrategy: idiomatic
