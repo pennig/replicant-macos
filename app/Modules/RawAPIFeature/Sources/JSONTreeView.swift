@@ -47,7 +47,7 @@ struct JSONTreeNode: Identifiable {
 }
 
 extension EnvironmentValues {
-    /// The expansion state every `JSONTreeDisclosure` adopts on first render.
+    /// The expansion state every `JSONTreeRow` adopts on first render.
     /// Propagates through the whole subtree, so the tree starts either fully
     /// expanded or fully collapsed; thereafter each row tracks its own taps.
     @Entry var jsonInitiallyExpanded: Bool = false
@@ -71,7 +71,7 @@ struct JSONTreeView: View {
         // OutlineListCoordinator. Recursive DisclosureGroups are safe here and,
         // unlike `List(_:children:)`, let each row own its expansion state.
         ScrollView {
-            JSONTreeDisclosure(node: node)
+            JSONTreeRow(node: node, isRoot: true)
                 .environment(\.jsonInitiallyExpanded, true)
                 .environment(expansion)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -81,9 +81,36 @@ struct JSONTreeView: View {
     }
 }
 
-private struct JSONTreeDisclosure: View {
+/// The two JSON container kinds and the bracket pair that delimits each.
+/// Shared by `JSONTreeLabel` (opening bracket + count badge) and `JSONTreeRow`
+/// (the closing-bracket line shown beneath an expanded container's children).
+private enum JSONContainer {
+    case array
+    case object
+
+    /// Non-nil only for `.array` / `.object`; scalars have no bookends.
+    init?(_ value: JSONValue) {
+        switch value {
+        case .array: self = .array
+        case .object: self = .object
+        default: return nil
+        }
+    }
+
+    var bookends: (open: String, close: String) {
+        switch self {
+        case .array: ("[", "]")
+        case .object: ("{", "}")
+        }
+    }
+}
+
+private struct JSONTreeRow: View {
     let node: JSONTreeNode
     var depth: Int = 0
+    // The root row sits flush with no chevron column, and any container at the
+    // root is permanently expanded (there's no control to collapse it).
+    var isRoot: Bool = false
     @State private var isHovered = false
     @Environment(\.jsonInitiallyExpanded) private var initiallyExpanded
     @Environment(JSONExpansionStore.self) private var expansion
@@ -95,18 +122,29 @@ private struct JSONTreeDisclosure: View {
     // render as leaves: no chevron, no tap, and the label shows the empty pair.
     private var hasChildren: Bool { node.children?.isEmpty == false }
 
+    // The root has no chevron and can't be collapsed, so its containers stay
+    // open. Only non-root rows with children are interactive.
+    private var isCollapsible: Bool { hasChildren && !isRoot }
+
     // The store override (set once the user taps) wins; otherwise fall back to
     // the environment's initial state. Lives at the root, so it survives this
-    // row being torn down and rebuilt when an ancestor collapses.
-    private var isExpanded: Bool { expansion.overrides[node.id] ?? initiallyExpanded }
+    // row being torn down and rebuilt when an ancestor collapses. Root
+    // containers ignore the store and stay expanded.
+    private var isExpanded: Bool {
+        if isRoot { return true }
+        return expansion.overrides[node.id] ?? initiallyExpanded
+    }
 
+    private let rowHeight: CGFloat = 24
+    
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             row
-            if isExpanded, let children = node.children {
+            if isExpanded, hasChildren, let children = node.children {
                 ForEach(children) { child in
-                    JSONTreeDisclosure(node: child, depth: depth + 1)
+                    JSONTreeRow(node: child, depth: depth + 1)
                 }
+                closingBracket
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -115,13 +153,15 @@ private struct JSONTreeDisclosure: View {
     @ViewBuilder
     private var row: some View {
         let content = HStack(alignment: .firstTextBaseline, spacing: Space.xs) {
-            chevron
-            JSONTreeRow(node: node, expanded: isExpanded)
+            if !isRoot {
+                chevron
+            }
+            JSONTreeLabel(node: node, expanded: isExpanded)
         }
-        .padding(.leading, CGFloat(depth) * Space.l + Space.xs)
-        .frame(maxWidth: .infinity, minHeight: 24, alignment: .leading)
+        .padding(.leading, isRoot ? 0 : CGFloat(depth) * Space.l + Space.xs)
+        .frame(maxWidth: .infinity, minHeight: rowHeight, alignment: .leading)
 
-        if hasChildren {
+        if isCollapsible {
             // Expandable rows highlight on hover and toggle on a tap anywhere
             // across the full width.
             content
@@ -153,12 +193,33 @@ private struct JSONTreeDisclosure: View {
                 .frame(width: Self.chevronColumn)
         } else {
             // Empty column keeps leaf rows aligned with their siblings' labels.
-            Color.clear.frame(width: Self.chevronColumn, height: 0)
+            Color.clear.frame(width: Self.chevronColumn, height: 1)
+        }
+    }
+    
+    // The closing `]` / `}`, shown on its own line beneath an expanded
+    // container's children and aligned under the opening bracket. Only
+    // containers reach here (scalars have no children), so the lookup is
+    // always non-nil.
+    @ViewBuilder
+    private var closingBracket: some View {
+        if let close = JSONContainer(node.value)?.bookends.close {
+            HStack(alignment: .firstTextBaseline, spacing: Space.xs) {
+                if !isRoot {
+                    // Mirror the opening row's chevron column so brackets align.
+                    Color.clear.frame(width: Self.chevronColumn, height: 1)
+                }
+                Text(close)
+                    .font(.rcMono)
+                    .foregroundStyle(Color.rcTextSecondary)
+            }
+            .padding(.leading, isRoot ? 0 : CGFloat(depth) * Space.l + Space.xs)
+            .frame(maxWidth: .infinity, minHeight: rowHeight, alignment: .leading)
         }
     }
 }
 
-private struct JSONTreeRow: View {
+private struct JSONTreeLabel: View {
     let node: JSONTreeNode
     let expanded: Bool
 
@@ -198,9 +259,9 @@ private struct JSONTreeRow: View {
             .foregroundStyle(Color.rcJSONString)
             .fontWeight(.semibold)
         case .array(let array):
-            ContainerLabel(containerType: .array, count: array.count, expanded: expanded)
+            ContainerLabel(container: .array, count: array.count, expanded: expanded)
         case .object(let object):
-            ContainerLabel(containerType: .object, count: object.count, expanded: expanded)
+            ContainerLabel(container: .object, count: object.count, expanded: expanded)
         }
     }
 
@@ -223,45 +284,37 @@ private struct JSONTreeRow: View {
     }
 }
 
-private extension JSONTreeRow {
-    enum ContainerType {
-        case array
-        case object
-    }
-    
+private extension JSONTreeLabel {
     private struct ContainerLabel: View {
-        let containerType: ContainerType
+        let container: JSONContainer
         let count: Int
         let expanded: Bool
-        
-        var bookends: (String, String) {
-            switch containerType {
-            case .array: ("[", "]")
-            case .object: ("{", "}")
-            }
-        }
-        
+
+        private var bookends: (open: String, close: String) { container.bookends }
+
         var body: some View {
             if count == 0 {
                 // Empty containers are leaves: show the bare pair, no badge.
-                Text("\(bookends.0)\(bookends.1)")
+                Text("\(bookends.open)\(bookends.close)")
                     .foregroundStyle(Color.rcTextSecondary)
             } else {
                 HStack(spacing: Space.xs) {
-                    Text(expanded ? bookends.0 : "\(bookends.0) … \(bookends.1)")
+                    // Expanded containers show only the opening bracket here; the
+                    // closing bracket is rendered as its own row by JSONTreeRow.
+                    Text(expanded ? bookends.open : "\(bookends.open) … \(bookends.close)")
                         .foregroundStyle(Color.rcTextSecondary)
-                    CountBadge(containerType: containerType, count: count)
+                    CountBadge(container: container, count: count)
                 }
             }
         }
     }
-    
+
     private struct CountBadge: View {
-        let containerType: ContainerType
+        let container: JSONContainer
         let count: Int
 
         private var label: LocalizedStringKey {
-            switch containerType {
+            switch container {
             case .array: "^[\(count) item](inflect: true)"
             case .object:  "^[\(count) key](inflect: true)"
             }
@@ -311,4 +364,33 @@ private extension JSONTreeRow {
             ]),
         ])
     ]))).background(Color.rcWindowBackground)
+}
+
+#Preview {
+    JSONTreeView(node: .init(value: .array([
+        .object([
+            "departed_at": .string("2026-05-29T18:45:12Z"),
+            "arrived_at": .string("2026-05-30T07:22:59Z"),
+        ]),
+        .object([
+            "departed_at": .string("2026-05-29T18:45:12Z"),
+            "arrived_at": .string("2026-05-30T07:22:59Z"),
+        ]),
+    ]))).background(Color.rcWindowBackground)
+}
+
+#Preview {
+    VStack {
+        JSONTreeView(node: .init(value: .string("Hello, world!")))
+        Divider()
+        JSONTreeView(node: .init(value: .bool(false)))
+        Divider()
+        JSONTreeView(node: .init(value: .number(12.56)))
+        Divider()
+        JSONTreeView(node: .init(value: .null))
+        Divider()
+        JSONTreeView(node: .init(value: .array([.string("foo"), .string("bar")])))
+        Divider()
+        JSONTreeView(node: .init(value: .object(["foo": .string("bar"), "bar": .null])))
+    }.background(Color.rcWindowBackground)
 }
