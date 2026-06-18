@@ -24,3 +24,99 @@ Look in the `Modules/UI` folder for the Swift package that represents the design
 - Don't introduce new accent colors or gradients beyond the token set.
 - Don't add decorative imagery; this UI is data‑viz forward (gauges, dots, bars).
 - Don't represent a replicant without its host icon (vessel / matrix / hub).
+
+---
+
+## Adding a new SPM module
+
+When asked to add a new module, feature target, or library to this package, follow these steps exactly. The requested module name is referred to as NAME below — preserve the casing provided.
+
+### 1. Create directory structure
+
+    mkdir -p "NAME/Sources"
+    mkdir -p "NAME/Tests"
+
+Create a minimal placeholder if needed to satisfy SPM's non-empty target requirement:
+
+    // NAME.swift (or NAMETests.swift)
+    // This file intentionally left minimal.
+
+### 2. Edit Package.swift (three edits)
+
+Append to the products array:
+
+    .library(
+        name: "NAME",
+        targets: ["NAME"]
+    ),
+
+Append the source target to the targets array:
+
+    .target(
+        name: "NAME",
+        dependencies: [
+            .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+            "UI",
+        ],
+        path: "NAME/Sources"
+    ),
+
+Append the test target to the targets array:
+
+    .testTarget(
+        name: "NAMETests",
+        dependencies: ["NAME"],
+        path: "NAME/Tests"
+    ),
+
+Insert in alphabetical order (case-insensitive) and preserve existing formatting and trailing commas. Do not reorder unrelated targets.
+
+### 3. Wire into the Xcode project
+
+If you have a skill or the Xcode MCP allows you to do this step, leverage that. Otherwise, follow these steps to perform the update manually.
+
+Locate the .pbxproj:
+
+    find . -name "*.xcodeproj" -maxdepth 2
+
+Generate two 24-character UUIDs (UUID_A for the product dependency, UUID_B for the build file):
+
+    uuidgen | tr -d '-' | cut -c1-24
+    uuidgen | tr -d '-' | cut -c1-24
+
+Add to XCSwiftPackageProductDependency:
+
+    UUID_A /* NAME */ = {
+        isa = XCSwiftPackageProductDependency;
+        productName = NAME;
+    };
+
+Add to PBXBuildFile:
+
+    UUID_B /* NAME in Frameworks */ = {
+        isa = PBXBuildFile;
+        productRef = UUID_A /* NAME */;
+    };
+
+Add to the app target's PBXFrameworksBuildPhase files array:
+
+    UUID_B /* NAME in Frameworks */,
+
+Add to the app target's PBXNativeTarget packageProductDependencies array:
+
+    UUID_A /* NAME */,
+
+Verify with:
+
+    grep -c "NAME" *.xcodeproj/project.pbxproj   # expect 4 or more occurrences
+
+### 4. Verify the package resolves
+
+    swift package resolve
+
+If it errors, check that the path: values in Package.swift match the directories created in step 1, and that all dependency names exactly match existing targets.
+
+### Notes
+- `swift-composable-architecture` is already declared as a package dependency — do not add it again.
+- `UI` is an existing target in this package — reference it by string name only, not as a package product.
+- If NAME/Sources or NAME/Tests already exist, skip mkdir and go straight to the Package.swift edits.

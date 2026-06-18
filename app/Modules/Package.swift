@@ -10,6 +10,7 @@ let package = Package(
         .library(name: "API", targets: ["API"]),
         .library(name: "DependencyClients", targets: ["DependencyClients"]),
         .library(name: "LoginFeature", targets: ["LoginFeature"]),
+        .library(name: "RawAPIFeature", targets: ["RawAPIFeature"]),
         .library(name: "UI", targets: ["UI"]),
         .library(name: "Utils", targets: ["Utils"]),
     ],
@@ -57,6 +58,20 @@ let package = Package(
             name: "LoginFeatureTests",
             dependencies: ["LoginFeature"],
             path: "LoginFeature/Tests"
+        ),
+        .target(
+            name: "RawAPIFeature",
+            dependencies: [
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                "UI",
+                "Utils",
+            ],
+            path: "RawAPIFeature/Sources"
+        ),
+        .testTarget(
+            name: "RawAPIFeatureTests",
+            dependencies: ["RawAPIFeature"],
+            path: "RawAPIFeature/Tests"
         ),
         .target(
             name: "UI",

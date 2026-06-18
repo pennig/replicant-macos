@@ -34,6 +34,13 @@ public extension Color {
     static let rcTextSecondary = Color("TextSecondary", bundle: rcBundle)
     static let rcTextTertiary  = Color("TextTertiary",  bundle: rcBundle)
 
+    // JSON syntax highlighting (raw API inspector). Tuned to sit alongside the
+    // amber accent: keys blue, strings green, numbers a redder burnt orange so
+    // they read as distinct from the gold accent.
+    static let rcJSONKey    = Color("JSONKey",    bundle: rcBundle)
+    static let rcJSONString = Color("JSONString", bundle: rcBundle)
+    static let rcJSONNumber = Color("JSONNumber", bundle: rcBundle)
+
     // Accent (amber)
     static let rcAccent        = Color("AccentPrimary", bundle: rcBundle)
     static let rcAccentOnColor = Color("AccentOnColor", bundle: rcBundle) // text/icon on top of accent fills
@@ -172,6 +179,7 @@ public enum Space {
 }
 
 public enum Radius {
+    public static let textBadge: CGFloat = 4   // text badges
     public static let control: CGFloat = 8   // buttons, fields, list rows
     public static let card:    CGFloat = 12  // panels / cards
     public static let window:  CGFloat = 13  // window corners (handled by the OS on macOS)
@@ -185,7 +193,7 @@ public extension Font {
     static let rcBodyEmph     = Font.system(size: 13, weight: .semibold)
     static let rcCaption      = Font.system(size: 11, weight: .medium)
     static let rcSectionLabel = Font.system(size: 11, weight: .bold)            // UPPERCASE + tracking
-    static let rcMono         = Font.system(size: 12, weight: .regular, design: .monospaced) // IDs / codes
+    static let rcMono         = Font.system(size: 13, weight: .regular, design: .monospaced) // IDs / codes
     static let rcMonoSmall    = Font.system(size: 11, weight: .semibold, design: .monospaced)
 }
 
