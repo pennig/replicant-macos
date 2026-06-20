@@ -75,9 +75,8 @@ struct JSONTreeView: View {
                 .environment(\.jsonInitiallyExpanded, true)
                 .environment(expansion)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding()
+                .padding(Space.s)
         }
-        .scrollBounceBehavior(.automatic)
     }
 }
 
@@ -134,8 +133,6 @@ private struct JSONTreeRow: View {
         if isRoot { return true }
         return expansion.overrides[node.id] ?? initiallyExpanded
     }
-
-    private let rowHeight: CGFloat = 24
     
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -159,7 +156,8 @@ private struct JSONTreeRow: View {
             JSONTreeLabel(node: node, expanded: isExpanded)
         }
         .padding(.leading, isRoot ? 0 : CGFloat(depth) * Space.l + Space.xs)
-        .frame(maxWidth: .infinity, minHeight: rowHeight, alignment: .leading)
+        .padding(.vertical, Space.xs)
+        .frame(maxWidth: .infinity, alignment: .leading)
 
         if isCollapsible {
             // Expandable rows highlight on hover and toggle on a tap anywhere
@@ -167,7 +165,7 @@ private struct JSONTreeRow: View {
             content
                 .background(
                     RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
-                        .fill(Color.rcSurfaceRaised)
+                        .fill(.rcSurfaceRaised)
                         .opacity(isHovered ? 1 : 0)
                 )
                 .contentShape(Rectangle())
@@ -188,7 +186,7 @@ private struct JSONTreeRow: View {
         if hasChildren {
             Image(systemName: "chevron.right")
                 .font(.rcCaption)
-                .foregroundStyle(Color.rcTextTertiary)
+                .foregroundStyle(.rcTextTertiary)
                 .rotationEffect(.degrees(isExpanded ? 90 : 0))
                 .frame(width: Self.chevronColumn)
         } else {
@@ -211,10 +209,11 @@ private struct JSONTreeRow: View {
                 }
                 Text(close)
                     .font(.rcMono)
-                    .foregroundStyle(Color.rcTextSecondary)
+                    .foregroundStyle(.rcTextSecondary)
             }
             .padding(.leading, isRoot ? 0 : CGFloat(depth) * Space.l + Space.xs)
-            .frame(maxWidth: .infinity, minHeight: rowHeight, alignment: .leading)
+            .padding(.vertical, Space.xs)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }
@@ -224,15 +223,15 @@ private struct JSONTreeLabel: View {
     let expanded: Bool
 
     var body: some View {
-        HStack(spacing: Space.xs) {
+        HStack(alignment: .firstTextBaseline, spacing: Space.xs) {
             if let key = node.key {
                 if case .index = key {
-                    Text(key.description).foregroundStyle(Color.rcTextTertiary)
+                    Text(key.description).foregroundStyle(.rcTextTertiary)
                 } else {
-                    Text(key.description).foregroundStyle(Color.rcJSONKey)
+                    Text(key.description).foregroundStyle(.rcJSONKey)
                 }
                 Text(":")
-                    .foregroundStyle(Color.rcTextTertiary)
+                    .foregroundStyle(.rcTextTertiary)
             }
             value
         }
@@ -243,20 +242,18 @@ private struct JSONTreeLabel: View {
     private var value: some View {
         switch node.value {
         case .null:
-            scalar(Text("null").italic(), color: Color.rcTextTertiary)
+            scalar(Text("null").italic(), color: .rcTextTertiary)
         case .bool(let bool):
-            scalar(Text(bool ? "true" : "false"), color: Color.rcTextSecondary)
+            scalar(Text(bool ? "true" : "false"), color: .rcTextSecondary)
         case .number(let number):
-            scalar(Text(Self.numberText(number)), color: Color.rcJSONNumber)
+            scalar(Text(Self.numberText(number)), color: .rcJSONNumber)
         case .string(let string):
-            // Quotes are separate, non-selectable Texts so a drag selects only
-            // the content between them.
-            HStack(spacing: 0) {
+            HStack(alignment: .firstTextBaseline, spacing: 0) {
                 Text(verbatim: "\"")
                 Text(string).textSelection(.enabled)
                 Text(verbatim: "\"")
             }
-            .foregroundStyle(Color.rcJSONString)
+            .foregroundStyle(.rcJSONString)
             .fontWeight(.semibold)
         case .array(let array):
             ContainerLabel(container: .array, count: array.count, expanded: expanded)
@@ -296,13 +293,13 @@ private extension JSONTreeLabel {
             if count == 0 {
                 // Empty containers are leaves: show the bare pair, no badge.
                 Text("\(bookends.open)\(bookends.close)")
-                    .foregroundStyle(Color.rcTextSecondary)
+                    .foregroundStyle(.rcTextSecondary)
             } else {
                 HStack(spacing: Space.xs) {
                     // Expanded containers show only the opening bracket here; the
                     // closing bracket is rendered as its own row by JSONTreeRow.
                     Text(expanded ? bookends.open : "\(bookends.open) … \(bookends.close)")
-                        .foregroundStyle(Color.rcTextSecondary)
+                        .foregroundStyle(.rcTextSecondary)
                     CountBadge(container: container, count: count)
                 }
             }
@@ -323,11 +320,11 @@ private extension JSONTreeLabel {
         var body: some View {
             Text(label)
                 .font(.rcMonoSmall)
-                .foregroundStyle(Color.rcTextTertiary)
-                .padding(.vertical, 1)
+                .foregroundStyle(.rcTextTertiary)
+                .padding(.vertical, 2)
                 .padding(.horizontal, Space.xs)
                 .background(
-                    Color.rcSurfaceRaisedStrong,
+                    .rcSurfaceRaised,
                     in: RoundedRectangle(cornerRadius: Radius.textBadge, style: .continuous)
                 )
         }
@@ -342,6 +339,8 @@ private extension JSONTreeLabel {
         "yep": .bool(true),
         "bar": .object([
             "baz": .string("qux"),
+            "bam": .null,
+            "appol": .string("This is a very long string that will wrap into multiple lines if rendered in a view and we should display it properly."),
             "bat": .array([
                 .number(12),
                 .number(14),
@@ -363,7 +362,7 @@ private extension JSONTreeLabel {
                 .number(25),
             ]),
         ])
-    ]))).background(Color.rcWindowBackground)
+    ]))).background(.rcWindowBackground)
 }
 
 #Preview {
@@ -376,7 +375,7 @@ private extension JSONTreeLabel {
             "departed_at": .string("2026-05-29T18:45:12Z"),
             "arrived_at": .string("2026-05-30T07:22:59Z"),
         ]),
-    ]))).background(Color.rcWindowBackground)
+    ]))).background(.rcWindowBackground)
 }
 
 #Preview {
@@ -392,5 +391,5 @@ private extension JSONTreeLabel {
         JSONTreeView(node: .init(value: .array([.string("foo"), .string("bar")])))
         Divider()
         JSONTreeView(node: .init(value: .object(["foo": .string("bar"), "bar": .null])))
-    }.background(Color.rcWindowBackground)
+    }.background(.rcWindowBackground)
 }

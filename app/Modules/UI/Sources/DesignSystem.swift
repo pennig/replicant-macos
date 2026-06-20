@@ -16,50 +16,59 @@ private let rcBundle: Bundle = .module
 
 // MARK: - Semantic colors
 
-public extension Color {
+// Defined on `ShapeStyle where Self == Color` so each token is usable both as a
+// plain `Color` value (`Color.rcAccent`, `let c: Color = .rcAccent`) and in any
+// `ShapeStyle`-expecting API (`.foregroundStyle(.rcAccent)`, `.fill(.rcAccent)`,
+// `.tint(.rcAccent)`). One definition serves both — the way Apple ships `.red`.
+public extension ShapeStyle where Self == Color {
     // Surfaces
-    static let rcWindowBackground    = Color("WindowBackground",    bundle: rcBundle)
-    static let rcContentBackground   = Color("ContentBackground",   bundle: rcBundle)
-    static let rcSidebarBackground   = Color("SidebarBackground",   bundle: rcBundle)
-    static let rcSurfaceRaised       = Color("SurfaceRaised",       bundle: rcBundle)
-    static let rcSurfaceRaisedStrong = Color("SurfaceRaisedStrong", bundle: rcBundle)
+    static var rcWindowBackground:    Color { Color("WindowBackground",    bundle: rcBundle) }
+    static var rcContentBackground:   Color { Color("ContentBackground",   bundle: rcBundle) }
+    static var rcSidebarBackground:   Color { Color("SidebarBackground",   bundle: rcBundle) }
+    static var rcSurfaceRaised:       Color { Color("SurfaceRaised",       bundle: rcBundle) }
+    static var rcSurfaceRaisedStrong: Color { Color("SurfaceRaisedStrong", bundle: rcBundle) }
 
     // Hairlines / separators (carry alpha)
-    static let rcSeparator     = Color("Separator",     bundle: rcBundle)
-    static let rcSeparatorStrong = Color("SeparatorStrong", bundle: rcBundle)
-    static let rcSeparatorSoft = Color("SeparatorSoft", bundle: rcBundle)
+    static var rcSeparator:       Color { Color("Separator",       bundle: rcBundle) }
+    static var rcSeparatorStrong: Color { Color("SeparatorStrong", bundle: rcBundle) }
+    static var rcSeparatorSoft:   Color { Color("SeparatorSoft",   bundle: rcBundle) }
 
     // Text
-    static let rcTextPrimary   = Color("TextPrimary",   bundle: rcBundle)
-    static let rcTextSecondary = Color("TextSecondary", bundle: rcBundle)
-    static let rcTextTertiary  = Color("TextTertiary",  bundle: rcBundle)
+    static var rcTextPrimary:   Color { Color("TextPrimary",   bundle: rcBundle) }
+    static var rcTextSecondary: Color { Color("TextSecondary", bundle: rcBundle) }
+    static var rcTextTertiary:  Color { Color("TextTertiary",  bundle: rcBundle) }
 
     // JSON syntax highlighting (raw API inspector). Tuned to sit alongside the
     // amber accent: keys blue, strings green, numbers a redder burnt orange so
     // they read as distinct from the gold accent.
-    static let rcJSONKey    = Color("JSONKey",    bundle: rcBundle)
-    static let rcJSONString = Color("JSONString", bundle: rcBundle)
-    static let rcJSONNumber = Color("JSONNumber", bundle: rcBundle)
+    static var rcJSONKey:    Color { Color("JSONKey",    bundle: rcBundle) }
+    static var rcJSONString: Color { Color("JSONString", bundle: rcBundle) }
+    static var rcJSONNumber: Color { Color("JSONNumber", bundle: rcBundle) }
 
     // Accent (amber)
-    static let rcAccent        = Color("AccentPrimary", bundle: rcBundle)
-    static let rcAccentOnColor = Color("AccentOnColor", bundle: rcBundle) // text/icon on top of accent fills
-    static let rcAccentMuted   = Color("AccentMuted",   bundle: rcBundle) // selection background
-    static let rcAccentBorder  = Color("AccentBorder",  bundle: rcBundle) // selection hairline
+    static var rcAccent:        Color { Color("AccentPrimary", bundle: rcBundle) }
+    static var rcAccentOnColor: Color { Color("AccentOnColor", bundle: rcBundle) } // text/icon on top of accent fills
+    static var rcAccentMuted:   Color { Color("AccentMuted",   bundle: rcBundle) } // selection background
+    static var rcAccentBorder:  Color { Color("AccentBorder",  bundle: rcBundle) } // selection hairline
 
     // Status taxonomy
-    static let rcStatusReady   = Color("StatusReady",   bundle: rcBundle)
-    static let rcStatusWorking = Color("StatusWorking", bundle: rcBundle)
-    static let rcStatusTransit = Color("StatusTransit", bundle: rcBundle)
-    static let rcStatusSensing = Color("StatusSensing", bundle: rcBundle)
-    static let rcStatusRelay   = Color("StatusRelay",   bundle: rcBundle)
-    static let rcStatusWaiting = Color("StatusWaiting", bundle: rcBundle)
-    static let rcStatusOffline = Color("StatusOffline", bundle: rcBundle)
+    static var rcStatusReady:   Color { Color("StatusReady",   bundle: rcBundle) }
+    static var rcStatusWorking: Color { Color("StatusWorking", bundle: rcBundle) }
+    static var rcStatusTransit: Color { Color("StatusTransit", bundle: rcBundle) }
+    static var rcStatusSensing: Color { Color("StatusSensing", bundle: rcBundle) }
+    static var rcStatusRelay:   Color { Color("StatusRelay",   bundle: rcBundle) }
+    static var rcStatusWaiting: Color { Color("StatusWaiting", bundle: rcBundle) }
+    static var rcStatusOffline: Color { Color("StatusOffline", bundle: rcBundle) }
 
     // Special
-    static let rcNPC         = Color("NPCAccent",  bundle: rcBundle)
-    static let rcDanger      = Color("Danger",     bundle: rcBundle)
-    static let rcDangerMuted = Color("DangerMuted", bundle: rcBundle)
+    static var rcNPC:         Color { Color("NPCAccent",   bundle: rcBundle) }
+    static var rcDanger:      Color { Color("Danger",      bundle: rcBundle) }
+    static var rcDangerMuted: Color { Color("DangerMuted", bundle: rcBundle) }
+
+    // Outcome / semantics (e.g. HTTP response codes): success · warning · error
+    static var rcSuccess: Color { Color("Success", bundle: rcBundle) }
+    static var rcWarning: Color { Color("Warning", bundle: rcBundle) }
+    static var rcError:   Color { Color("Error",   bundle: rcBundle) }
 }
 
 // MARK: - Status taxonomy

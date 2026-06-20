@@ -166,7 +166,7 @@ private struct RCButtonBody: View {
         }
     }
     private var shadowRadius: CGFloat {
-        (kind == .primary || kind == .destructiveProminent) && isEnabled ? 14 : 0
+        (kind == .primary || kind == .destructiveProminent) && isEnabled ? 12 : 0
     }
 }
 
@@ -251,6 +251,242 @@ public struct RCField: View {
     }
 }
 
+// MARK: - Segmented control (sliding glass thumb)
+
+/// Recessed track + raised thumb that slides between options. Generic over any
+/// Hashable option; supply a `label` closure (defaults to `String(describing:)`).
+public struct RCSegmentedControl<Option: Hashable>: View {
+    @Binding public var selection: Option
+    public let options: [Option]
+    public var label: (Option) -> String
+
+    @Namespace private var thumb
+
+    public init(selection: Binding<Option>, options: [Option],
+                label: @escaping (Option) -> String = { String(describing: $0) }) {
+        self._selection = selection
+        self.options = options
+        self.label = label
+    }
+
+    public var body: some View {
+        HStack(spacing: 0) {
+            ForEach(options, id: \.self) { option in
+                Segment(title: label(option),
+                        isOn: option == selection,
+                        thumbNS: thumb) {
+                    withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
+                        selection = option
+                    }
+                }
+            }
+        }
+        .padding(3)
+        .background(
+            RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                .fill(.rcSurfaceRaised)
+                .overlay(
+                    RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                        .strokeBorder(.rcSeparator, lineWidth: 0.5)
+                )
+        )
+        // Keep the control at its intrinsic width so surrounding content
+        // wraps/truncates before any segment compresses.
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    /// One segment — owns its own hover so unselected labels brighten.
+    private struct Segment: View {
+        let title: String
+        let isOn: Bool
+        let thumbNS: Namespace.ID
+        let tap: () -> Void
+        @State private var hover = false
+
+        var body: some View {
+            Text(title)
+                .font(.rcBodyEmph)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+                .foregroundStyle(isOn ? Color.rcAccentOnColor
+                                      : (hover ? Color.rcTextPrimary : Color.rcTextSecondary))
+                .padding(.vertical, 6)
+                .padding(.horizontal, Space.m + 3)
+                .background {
+                    if isOn {
+                        RoundedRectangle(cornerRadius: Radius.control - 1, style: .continuous)
+                            .fill(.rcAccent)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: Radius.control - 1, style: .continuous)
+                                    .strokeBorder(.rcSeparator, lineWidth: 0.5)
+                            )
+                            .shadow(color: .rcAccent.opacity(0.32), radius: 12, y: 6)
+                            .matchedGeometryEffect(id: "thumb", in: thumbNS)
+                    }
+                }
+                .contentShape(Rectangle())
+                .onTapGesture(perform: tap)
+                .onHover { hover = $0 }
+                .animation(.easeOut(duration: 0.12), value: hover)
+        }
+    }
+}
+
+// MARK: - Value select (field-style dropdown — parameterized commands)
+
+/// macOS pop-up button built on a native `Menu` + `Picker`, so the popover is
+/// the system Liquid-Glass surface and the chosen row gets the OS checkmark.
+/// The trigger reads like an `RCField`: leading glyph · mono value · chevron.
+public struct RCValueSelect: View {
+    let title: String
+    let systemImage: String?
+    let options: [String]
+    @Binding var selection: String
+
+    public init(_ title: String, systemImage: String? = nil,
+                options: [String], selection: Binding<String>) {
+        self.title = title; self.systemImage = systemImage
+        self.options = options; self._selection = selection
+    }
+
+    public var body: some View {
+        Menu {
+            Picker(title, selection: $selection) {
+                ForEach(options, id: \.self) { Text($0).tag($0) }
+            }
+            .pickerStyle(.inline)
+        } label: {
+            HStack(spacing: Space.s - 2) {
+                if let systemImage {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 13))
+                        .foregroundStyle(.rcTextTertiary)
+                }
+                Text(selection)
+                    .font(.rcMono)
+                    .foregroundStyle(.rcTextPrimary)
+                Spacer(minLength: Space.xs)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.rcTextSecondary)
+            }
+            .frame(minWidth: 214, minHeight: 36)
+            .padding(.horizontal, Space.m)
+            .background(
+                RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                    .fill(.rcSurfaceRaised)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                            .strokeBorder(.rcSeparator, lineWidth: 1)
+                    )
+            )
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+    }
+}
+
+// MARK: - Entity switcher (ACTIVE REPLICANT picker)
+
+/// Lightweight model for the switcher. `host` drives the leading icon — a
+/// replicant is never drawn without its host glyph (design rule).
+public struct RCReplicant: Identifiable, Hashable {
+    public let id: String        // replicant_code
+    public let name: String
+    public let host: HostKind
+    public let isNPC: Bool
+    public init(id: String, name: String, host: HostKind, isNPC: Bool = false) {
+        self.id = id; self.name = name; self.host = host; self.isNPC = isNPC
+    }
+    /// Subtitle per spec: "<HostLabel>" (· NPC handled with a glyph in the row).
+    var subtitle: String { host.label }
+}
+
+/// The titled ACTIVE-REPLICANT box: host icon · name · subtitle · chevron,
+/// opening a native menu of all replicants. Switches the active entity.
+public struct RCEntitySwitcher: View {
+    let replicants: [RCReplicant]
+    @Binding var selection: RCReplicant
+    var onCommission: (() -> Void)?
+
+    public init(_ replicants: [RCReplicant], selection: Binding<RCReplicant>,
+                onCommission: (() -> Void)? = nil) {
+        self.replicants = replicants; self._selection = selection
+        self.onCommission = onCommission
+    }
+
+    public var body: some View {
+        Menu {
+            ForEach(replicants) { r in
+                Button { selection = r } label: {
+                    Label("\(r.name)  —  \(r.subtitle)", systemImage: r.host.sfSymbol)
+                }
+            }
+            if let onCommission {
+                Divider()
+                Button { onCommission() } label: {
+                    Label("Commission new replicant", systemImage: "plus")
+                }
+            }
+        } label: {
+            HStack(spacing: Space.s + 2) {
+                hostTile(selection.host)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(selection.name)
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(.rcTextPrimary)
+                    HStack(spacing: 5) {
+                        Text(selection.subtitle)
+                            .font(.rcMonoSmall)
+                            .foregroundStyle(.rcTextTertiary)
+                        if selection.isNPC {
+                            Image(systemName: SidebarSymbol.npc)
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(.rcNPC)
+                        }
+                    }
+                }
+                Spacer(minLength: Space.s)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.rcTextSecondary)
+            }
+            .frame(minWidth: 248)
+            .padding(.leading, Space.s + 2).padding(.trailing, Space.m)
+            .padding(.vertical, Space.s)
+            .background(
+                RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                    .fill(.rcSurfaceRaised)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                            .strokeBorder(.rcSeparator, lineWidth: 0.5)
+                    )
+            )
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+    }
+
+    private func hostTile(_ host: HostKind) -> some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                .fill(.rcAccentMuted)
+                .overlay(
+                    RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                        .strokeBorder(.rcAccentBorder, lineWidth: 0.5)
+                )
+            Image(systemName: host.sfSymbol)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(.rcAccent)
+        }
+        .frame(width: 30, height: 30)
+    }
+}
+
 // MARK: - Gallery (living spec — open the #Preview)
 
 public struct RCControlsGalleryView: View {
@@ -275,6 +511,12 @@ public struct RCControlsGalleryView: View {
                 }
                 section("Text fields") {
                     GalleryFields()
+                }
+                section("Segmented control") {
+                    GallerySegments()
+                }
+                section("Dropdowns") {
+                    GalleryDropdowns()
                 }
             }
             .padding(Space.xl)
@@ -342,6 +584,44 @@ private struct GalleryFields: View {
                     hint: "paste the key from your account", mono: true, secure: true)
         }
         .frame(maxWidth: 360)
+    }
+}
+
+private struct GallerySegments: View {
+    @State private var view = "Grid"
+    @State private var range = "Live"
+    var body: some View {
+        HStack(spacing: Space.l) {
+            RCSegmentedControl(selection: $view, options: ["Grid", "List", "Map"])
+            RCSegmentedControl(selection: $range, options: ["Live", "24h"])
+        }
+    }
+}
+
+private struct GalleryDropdowns: View {
+    @State private var destination = "Elysium Shelf"
+    private let stars = ["Tharsis Forge", "Elysium Shelf", "Olympus Rim", "Hellas Basin", "Valles Relay"]
+
+    private let reps = [
+        RCReplicant(id: "B58FCC78", name: "Roy",   host: .vessel),
+        RCReplicant(id: "A21D90F3", name: "Pris",  host: .matrix),
+        RCReplicant(id: "C77E1A2B", name: "Zhora", host: .hub),
+        RCReplicant(id: "D40B5E91", name: "Leon",  host: .vessel, isNPC: true),
+    ]
+    @State private var active = RCReplicant(id: "B58FCC78", name: "Roy", host: .vessel)
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Space.l) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Value select · destination").font(.rcCaption).foregroundStyle(.rcTextTertiary)
+                RCValueSelect("Destination", systemImage: "mappin.and.ellipse",
+                              options: stars, selection: $destination)
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Entity switcher · active replicant").font(.rcCaption).foregroundStyle(.rcTextTertiary)
+                RCEntitySwitcher(reps, selection: $active) {}
+            }
+        }
     }
 }
 
