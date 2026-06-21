@@ -84,6 +84,7 @@ async fn handle(parts: Parts, raw: &[u8], log: &LogContext) -> anyhow::Result<Re
 
     // 3. Append to the durable, capped event log.
     let body_str = std::str::from_utf8(raw).context("webhook body was not utf-8")?;
+    log.debug(&format!("received body: {body_str}"));
     let upstash = Upstash::from_env().context("configuring the Upstash client")?;
     let stream_id = upstash
         .command(&[
@@ -91,6 +92,7 @@ async fn handle(parts: Parts, raw: &[u8], log: &LogContext) -> anyhow::Result<Re
         ])
         .await
         .context("appending the event to the log")?;
+
 
     let kind = payload["event_type"]
         .as_str()
