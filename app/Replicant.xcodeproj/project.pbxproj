@@ -21,6 +21,7 @@
 		C9B530992FE1D3AA006F79A8 /* Utils in Frameworks */ = {isa = PBXBuildFile; productRef = C9B530982FE1D3AA006F79A8 /* Utils */; };
 		C9B5309B2FE1DC5E006F79A8 /* LoginFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C9B5309A2FE1DC5E006F79A8 /* LoginFeature */; };
 		C9B5309D2FE1DEE2006F79A8 /* DependencyClients in Frameworks */ = {isa = PBXBuildFile; productRef = C9B5309C2FE1DEE2006F79A8 /* DependencyClients */; };
+		C9B5309F2FE72B0B006F79A8 /* RawAPIFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C9B5309E2FE72B0B006F79A8 /* RawAPIFeature */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -45,6 +46,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				C9B5307A2FE0A6D1006F79A8 /* ComposableArchitecture in Frameworks */,
+				C9B5309F2FE72B0B006F79A8 /* RawAPIFeature in Frameworks */,
 				C9B530972FE1D3AA006F79A8 /* UI in Frameworks */,
 				C9B5309D2FE1DEE2006F79A8 /* DependencyClients in Frameworks */,
 				C9B5309B2FE1DC5E006F79A8 /* LoginFeature in Frameworks */,
@@ -130,6 +132,7 @@
 				C9B530982FE1D3AA006F79A8 /* Utils */,
 				C9B5309A2FE1DC5E006F79A8 /* LoginFeature */,
 				C9B5309C2FE1DEE2006F79A8 /* DependencyClients */,
+				C9B5309E2FE72B0B006F79A8 /* RawAPIFeature */,
 			);
 			productName = Replicant;
 			productReference = C922A8B62FDC493200431320 /* Replicant.app */;
@@ -334,7 +337,17 @@
 				DEVELOPMENT_TEAM = YZ7V49P2EH;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_INCOMING_NETWORK_CONNECTIONS = NO;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				ENABLE_PREVIEWS = YES;
+				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = NO;
+				ENABLE_RESOURCE_ACCESS_BLUETOOTH = NO;
+				ENABLE_RESOURCE_ACCESS_CALENDARS = NO;
+				ENABLE_RESOURCE_ACCESS_CAMERA = NO;
+				ENABLE_RESOURCE_ACCESS_CONTACTS = NO;
+				ENABLE_RESOURCE_ACCESS_LOCATION = NO;
+				ENABLE_RESOURCE_ACCESS_PRINTING = NO;
+				ENABLE_RESOURCE_ACCESS_USB = NO;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
@@ -368,7 +381,17 @@
 				DEVELOPMENT_TEAM = YZ7V49P2EH;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_INCOMING_NETWORK_CONNECTIONS = NO;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				ENABLE_PREVIEWS = YES;
+				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = NO;
+				ENABLE_RESOURCE_ACCESS_BLUETOOTH = NO;
+				ENABLE_RESOURCE_ACCESS_CALENDARS = NO;
+				ENABLE_RESOURCE_ACCESS_CAMERA = NO;
+				ENABLE_RESOURCE_ACCESS_CONTACTS = NO;
+				ENABLE_RESOURCE_ACCESS_LOCATION = NO;
+				ENABLE_RESOURCE_ACCESS_PRINTING = NO;
+				ENABLE_RESOURCE_ACCESS_USB = NO;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
@@ -452,6 +475,10 @@
 		C9B5309C2FE1DEE2006F79A8 /* DependencyClients */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = DependencyClients;
+		};
+		C9B5309E2FE72B0B006F79A8 /* RawAPIFeature */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = RawAPIFeature;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

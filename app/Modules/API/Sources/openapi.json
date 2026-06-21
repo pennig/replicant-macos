@@ -1480,6 +1480,16 @@
             "type": "string",
             "default": null,
             "nullable": true
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
           }
         },
         "additionalProperties": false
@@ -1532,6 +1542,34 @@
           "stage": {
             "type": "string",
             "nullable": true
+          },
+          "route": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": {}
+            }
+          },
+          "total_time_seconds": {
+            "type": "number"
+          },
+          "total_distance_ly": {
+            "type": "number"
+          },
+          "route_progress_percent": {
+            "type": "number"
+          },
+          "route_eta_seconds": {
+            "type": "number"
+          },
+          "final_destination": {
+            "type": "string"
+          },
+          "final_destination_name": {
+            "type": "string"
+          },
+          "final_arrives_at": {
+            "type": "string"
           }
         },
         "additionalProperties": false
@@ -1838,6 +1876,10 @@
             "items": {
               "type": "string"
             }
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
           }
         },
         "additionalProperties": false
@@ -1903,6 +1945,22 @@
         "additionalProperties": false
       },
       "app_schemas_devices_DeviceTagListResponseSchema": {
+        "type": "object",
+        "properties": {
+          "devices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/app_schemas_devices_DeviceStatusSchema"
+            }
+          },
+          "next_cursor": {
+            "type": "integer",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "app_schemas_devices_AccountDeviceListResponseSchema": {
         "type": "object",
         "properties": {
           "devices": {
@@ -2022,6 +2080,9 @@
             "type": "string"
           },
           "final_destination_name": {
+            "type": "string"
+          },
+          "final_arrives_at": {
             "type": "string"
           },
           "belt": {
@@ -3140,6 +3201,516 @@
           }
         },
         "additionalProperties": false
+      },
+      "app_schemas_device_commands_NoParamSchema": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "additionalProperties": false
+      },
+      "app_schemas_device_commands_TravelSchema": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "destination": {
+            "type": "string",
+            "description": "Star designation or location code"
+          },
+          "via": {
+            "default": "auto",
+            "description": "Route mode: 'auto', 'direct', or list of waypoints"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview the route without initiating travel"
+          }
+        },
+        "required": [
+          "command",
+          "destination"
+        ],
+        "additionalProperties": false
+      },
+      "app_schemas_device_commands_StartMiningSchema": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "resource_type": {
+            "type": "string",
+            "enum": [
+              "structural",
+              "conductive",
+              "silicates",
+              "carbon",
+              "volatiles",
+              "rares"
+            ]
+          },
+          "target": {
+            "type": "string",
+            "default": null,
+            "description": "Resource site designation",
+            "nullable": true
+          }
+        },
+        "required": [
+          "command",
+          "resource_type"
+        ],
+        "additionalProperties": false
+      },
+      "app_schemas_device_commands_RetargetSchema": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "resource_type": {
+            "type": "string",
+            "enum": [
+              "structural",
+              "conductive",
+              "silicates",
+              "carbon",
+              "volatiles",
+              "rares"
+            ]
+          }
+        },
+        "required": [
+          "command",
+          "resource_type"
+        ],
+        "additionalProperties": false
+      },
+      "app_schemas_device_commands_StowSchema": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string",
+            "default": null,
+            "description": "Carrier device code",
+            "nullable": true
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "additionalProperties": false
+      },
+      "app_schemas_device_commands_ConfigureSchema": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "default": null,
+            "description": "'taxi' or 'manual'",
+            "nullable": true
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "additionalProperties": false
+      },
+      "app_schemas_device_commands_CollectResourcesSchema": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "resources": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number"
+            }
+          }
+        },
+        "required": [
+          "command",
+          "resources"
+        ],
+        "additionalProperties": false
+      },
+      "app_schemas_device_commands_DepositResourcesSchema": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "resources": {
+            "type": "object",
+            "default": null,
+            "additionalProperties": {
+              "type": "number"
+            },
+            "nullable": true
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "additionalProperties": false
+      },
+      "app_schemas_device_commands_RepairSchema": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string",
+            "default": null,
+            "nullable": true
+          },
+          "device": {
+            "type": "string",
+            "default": null,
+            "nullable": true
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "additionalProperties": false
+      },
+      "app_schemas_device_commands_EnqueuePrintSchema": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "device_type": {
+            "type": "string",
+            "description": "Device type to print"
+          },
+          "oncomplete": {
+            "type": "object",
+            "default": null,
+            "additionalProperties": {},
+            "nullable": true
+          },
+          "controller": {
+            "type": "string",
+            "default": null,
+            "description": "Controller device code for auto-adopt",
+            "nullable": true
+          }
+        },
+        "required": [
+          "command",
+          "device_type"
+        ],
+        "additionalProperties": false
+      },
+      "app_schemas_device_commands_DequeuePrintSchema": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "index": {
+            "type": "integer",
+            "default": null,
+            "description": "Queue index to remove",
+            "nullable": true
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "additionalProperties": false
+      },
+      "app_schemas_device_commands_AdoptSchema": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "targets": {
+            "default": null,
+            "nullable": true
+          },
+          "target": {
+            "type": "string",
+            "default": null,
+            "nullable": true
+          },
+          "devices": {
+            "default": null,
+            "nullable": true
+          },
+          "device": {
+            "type": "string",
+            "default": null,
+            "nullable": true
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "additionalProperties": false
+      },
+      "app_schemas_device_commands_ReleaseSchema": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "targets": {
+            "default": null,
+            "nullable": true
+          },
+          "target": {
+            "type": "string",
+            "default": null,
+            "nullable": true
+          },
+          "devices": {
+            "default": null,
+            "nullable": true
+          },
+          "device": {
+            "type": "string",
+            "default": null,
+            "nullable": true
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "additionalProperties": false
+      },
+      "app_schemas_device_commands_SetDirectiveSchema": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "directive": {
+            "type": "string",
+            "description": "AMI directive name"
+          },
+          "configuration": {
+            "type": "object",
+            "default": null,
+            "additionalProperties": {},
+            "nullable": true
+          },
+          "notify": {
+            "type": "object",
+            "default": null,
+            "description": "Notification preferences: {webhook: true}",
+            "additionalProperties": {},
+            "nullable": true
+          }
+        },
+        "required": [
+          "command",
+          "directive"
+        ],
+        "additionalProperties": false
+      },
+      "app_schemas_device_commands_ReplicateSchema": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string",
+            "description": "Target device code"
+          },
+          "name": {
+            "type": "string",
+            "default": null,
+            "description": "New replicant name",
+            "nullable": true
+          }
+        },
+        "required": [
+          "command",
+          "target"
+        ],
+        "additionalProperties": false
+      },
+      "app_schemas_device_commands_RenameSchema": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "designation": {
+            "type": "string",
+            "description": "Star or body designation to rename"
+          },
+          "name": {
+            "type": "string",
+            "description": "New name"
+          }
+        },
+        "required": [
+          "command",
+          "designation",
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "app_schemas_device_commands_SetWelcomeMessageSchema": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string",
+            "default": null,
+            "description": "Welcome message body",
+            "nullable": true
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "additionalProperties": false
+      },
+      "app_schemas_device_commands_ChangeOwnerSchema": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string",
+            "description": "Target replicant code"
+          }
+        },
+        "required": [
+          "command",
+          "target"
+        ],
+        "additionalProperties": false
+      },
+      "app_schemas_device_commands_MessageSchema": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "channel": {
+            "type": "string",
+            "description": "BobNet channel name"
+          },
+          "text": {
+            "type": "string",
+            "description": "Message body"
+          }
+        },
+        "required": [
+          "channel",
+          "command",
+          "text"
+        ],
+        "additionalProperties": false
+      },
+      "app_schemas_device_commands_StellarCensusSchema": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "page": {
+            "type": "integer",
+            "default": null,
+            "nullable": true
+          },
+          "per_page": {
+            "type": "integer",
+            "default": null,
+            "nullable": true
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "additionalProperties": false
+      },
+      "app_schemas_device_commands_AttachSchema": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "targets": {
+            "default": null,
+            "nullable": true
+          },
+          "target": {
+            "type": "string",
+            "default": null,
+            "nullable": true
+          },
+          "devices": {
+            "default": null,
+            "nullable": true
+          },
+          "device": {
+            "type": "string",
+            "default": null,
+            "nullable": true
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "additionalProperties": false
+      },
+      "app_schemas_device_commands_DetachSchema": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "targets": {
+            "default": null,
+            "nullable": true
+          },
+          "target": {
+            "type": "string",
+            "default": null,
+            "nullable": true
+          },
+          "devices": {
+            "default": null,
+            "nullable": true
+          },
+          "device": {
+            "type": "string",
+            "default": null,
+            "nullable": true
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "additionalProperties": false
       }
     },
     "responses": {
@@ -3538,7 +4109,54 @@
     },
     "/v1/replicants": {
       "get": {
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "description": "Position in the list to start from",
+            "schema": {
+              "type": "integer",
+              "default": null,
+              "nullable": true
+            },
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "description": "Number of replicants to return (max 100)",
+            "schema": {
+              "type": "integer",
+              "default": 20
+            },
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "latest",
+            "description": "Show latest replicants first. Incompatible with cursor",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "name",
+            "description": "Search by name (partial match)",
+            "schema": {
+              "type": "string",
+              "default": null,
+              "nullable": true
+            },
+            "required": false
+          }
+        ],
         "responses": {
+          "422": {
+            "$ref": "#/components/responses/UNPROCESSABLE_ENTITY"
+          },
           "200": {
             "description": "OK",
             "content": {
@@ -3874,7 +4492,32 @@
     },
     "/v1/replicants/{replicant_code}/stars": {
       "get": {
+        "parameters": [
+          {
+            "in": "query",
+            "name": "page",
+            "description": "Page number (1-based)",
+            "schema": {
+              "type": "integer",
+              "default": 1
+            },
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "per_page",
+            "description": "Items per page (max 100)",
+            "schema": {
+              "type": "integer",
+              "default": 20
+            },
+            "required": false
+          }
+        ],
         "responses": {
+          "422": {
+            "$ref": "#/components/responses/UNPROCESSABLE_ENTITY"
+          },
           "404": {
             "description": "Not Found",
             "content": {
@@ -4160,7 +4803,23 @@
     },
     "/v1/replicants/{replicant_code}/scan/devices": {
       "get": {
+        "parameters": [
+          {
+            "in": "query",
+            "name": "device_type",
+            "description": "Filter by device type",
+            "schema": {
+              "type": "string",
+              "default": null,
+              "nullable": true
+            },
+            "required": false
+          }
+        ],
         "responses": {
+          "422": {
+            "$ref": "#/components/responses/UNPROCESSABLE_ENTITY"
+          },
           "404": {
             "description": "Not Found",
             "content": {
@@ -4203,7 +4862,23 @@
     },
     "/v1/replicants/{replicant_code}/devices": {
       "get": {
+        "parameters": [
+          {
+            "in": "query",
+            "name": "location",
+            "description": "Filter devices by location code",
+            "schema": {
+              "type": "string",
+              "default": null,
+              "nullable": true
+            },
+            "required": false
+          }
+        ],
         "responses": {
+          "422": {
+            "$ref": "#/components/responses/UNPROCESSABLE_ENTITY"
+          },
           "404": {
             "description": "Not Found",
             "content": {
@@ -4418,12 +5093,157 @@
         },
         "tags": [
           "devices"
-        ]
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/app_schemas_device_commands_NoParamSchema"
+                  },
+                  {
+                    "$ref": "#/components/schemas/app_schemas_device_commands_AdoptSchema"
+                  },
+                  {
+                    "$ref": "#/components/schemas/app_schemas_device_commands_AttachSchema"
+                  },
+                  {
+                    "$ref": "#/components/schemas/app_schemas_device_commands_ChangeOwnerSchema"
+                  },
+                  {
+                    "$ref": "#/components/schemas/app_schemas_device_commands_CollectResourcesSchema"
+                  },
+                  {
+                    "$ref": "#/components/schemas/app_schemas_device_commands_ConfigureSchema"
+                  },
+                  {
+                    "$ref": "#/components/schemas/app_schemas_device_commands_DepositResourcesSchema"
+                  },
+                  {
+                    "$ref": "#/components/schemas/app_schemas_device_commands_DequeuePrintSchema"
+                  },
+                  {
+                    "$ref": "#/components/schemas/app_schemas_device_commands_DetachSchema"
+                  },
+                  {
+                    "$ref": "#/components/schemas/app_schemas_device_commands_EnqueuePrintSchema"
+                  },
+                  {
+                    "$ref": "#/components/schemas/app_schemas_device_commands_MessageSchema"
+                  },
+                  {
+                    "$ref": "#/components/schemas/app_schemas_device_commands_ReleaseSchema"
+                  },
+                  {
+                    "$ref": "#/components/schemas/app_schemas_device_commands_RenameSchema"
+                  },
+                  {
+                    "$ref": "#/components/schemas/app_schemas_device_commands_RepairSchema"
+                  },
+                  {
+                    "$ref": "#/components/schemas/app_schemas_device_commands_ReplicateSchema"
+                  },
+                  {
+                    "$ref": "#/components/schemas/app_schemas_device_commands_RetargetSchema"
+                  },
+                  {
+                    "$ref": "#/components/schemas/app_schemas_device_commands_SetDirectiveSchema"
+                  },
+                  {
+                    "$ref": "#/components/schemas/app_schemas_device_commands_SetWelcomeMessageSchema"
+                  },
+                  {
+                    "$ref": "#/components/schemas/app_schemas_device_commands_StartMiningSchema"
+                  },
+                  {
+                    "$ref": "#/components/schemas/app_schemas_device_commands_StellarCensusSchema"
+                  },
+                  {
+                    "$ref": "#/components/schemas/app_schemas_device_commands_StowSchema"
+                  },
+                  {
+                    "$ref": "#/components/schemas/app_schemas_device_commands_TravelSchema"
+                  }
+                ],
+                "discriminator": {
+                  "propertyName": "command",
+                  "mapping": {
+                    "activate": "#/components/schemas/app_schemas_device_commands_NoParamSchema",
+                    "adopt": "#/components/schemas/app_schemas_device_commands_AdoptSchema",
+                    "assemble": "#/components/schemas/app_schemas_device_commands_NoParamSchema",
+                    "attach": "#/components/schemas/app_schemas_device_commands_AttachSchema",
+                    "change_owner": "#/components/schemas/app_schemas_device_commands_ChangeOwnerSchema",
+                    "clear_directive": "#/components/schemas/app_schemas_device_commands_NoParamSchema",
+                    "clear_queue": "#/components/schemas/app_schemas_device_commands_NoParamSchema",
+                    "collect_resources": "#/components/schemas/app_schemas_device_commands_CollectResourcesSchema",
+                    "configure": "#/components/schemas/app_schemas_device_commands_ConfigureSchema",
+                    "deactivate": "#/components/schemas/app_schemas_device_commands_NoParamSchema",
+                    "decommission": "#/components/schemas/app_schemas_device_commands_NoParamSchema",
+                    "deploy": "#/components/schemas/app_schemas_device_commands_NoParamSchema",
+                    "deposit_resources": "#/components/schemas/app_schemas_device_commands_DepositResourcesSchema",
+                    "dequeue_print": "#/components/schemas/app_schemas_device_commands_DequeuePrintSchema",
+                    "detach": "#/components/schemas/app_schemas_device_commands_DetachSchema",
+                    "detonate": "#/components/schemas/app_schemas_device_commands_NoParamSchema",
+                    "enqueue_print": "#/components/schemas/app_schemas_device_commands_EnqueuePrintSchema",
+                    "launch": "#/components/schemas/app_schemas_device_commands_NoParamSchema",
+                    "message": "#/components/schemas/app_schemas_device_commands_MessageSchema",
+                    "prospect": "#/components/schemas/app_schemas_device_commands_NoParamSchema",
+                    "recall": "#/components/schemas/app_schemas_device_commands_NoParamSchema",
+                    "release": "#/components/schemas/app_schemas_device_commands_ReleaseSchema",
+                    "rename": "#/components/schemas/app_schemas_device_commands_RenameSchema",
+                    "repair": "#/components/schemas/app_schemas_device_commands_RepairSchema",
+                    "replicate": "#/components/schemas/app_schemas_device_commands_ReplicateSchema",
+                    "retarget": "#/components/schemas/app_schemas_device_commands_RetargetSchema",
+                    "scan": "#/components/schemas/app_schemas_device_commands_NoParamSchema",
+                    "search": "#/components/schemas/app_schemas_device_commands_NoParamSchema",
+                    "set_directive": "#/components/schemas/app_schemas_device_commands_SetDirectiveSchema",
+                    "set_entry_point": "#/components/schemas/app_schemas_device_commands_NoParamSchema",
+                    "set_welcome_message": "#/components/schemas/app_schemas_device_commands_SetWelcomeMessageSchema",
+                    "start_mining": "#/components/schemas/app_schemas_device_commands_StartMiningSchema",
+                    "stellar_census": "#/components/schemas/app_schemas_device_commands_StellarCensusSchema",
+                    "stow": "#/components/schemas/app_schemas_device_commands_StowSchema",
+                    "system_scan": "#/components/schemas/app_schemas_device_commands_NoParamSchema",
+                    "travel": "#/components/schemas/app_schemas_device_commands_TravelSchema",
+                    "withdraw": "#/components/schemas/app_schemas_device_commands_NoParamSchema"
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/v1/devices/tags/{tag}": {
       "get": {
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "description": "Position in the list to start from",
+            "schema": {
+              "type": "integer",
+              "default": null,
+              "nullable": true
+            },
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "description": "Number of devices to return (max 50)",
+            "schema": {
+              "type": "integer",
+              "default": 10
+            },
+            "required": false
+          }
+        ],
         "responses": {
+          "422": {
+            "$ref": "#/components/responses/UNPROCESSABLE_ENTITY"
+          },
           "404": {
             "description": "Not Found",
             "content": {
@@ -4465,9 +5285,147 @@
         }
       ]
     },
+    "/v1/devices": {
+      "get": {
+        "parameters": [
+          {
+            "in": "query",
+            "name": "replicant_code",
+            "description": "Filter to a single replicant's devices",
+            "schema": {
+              "type": "string",
+              "default": null,
+              "nullable": true
+            },
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "device_type",
+            "description": "Filter by device type",
+            "schema": {
+              "type": "string",
+              "default": null,
+              "nullable": true
+            },
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "location",
+            "description": "Filter by location - a star code (e.g. SOL) filters by system, a specific code (e.g. SOL-1, SOL-3-L4) filters by exact location",
+            "schema": {
+              "type": "string",
+              "default": null,
+              "nullable": true
+            },
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "description": "Device ID cursor for pagination",
+            "schema": {
+              "type": "integer",
+              "default": null,
+              "nullable": true
+            },
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "description": "Number of devices to return (max 50)",
+            "schema": {
+              "type": "integer",
+              "default": 20
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "422": {
+            "$ref": "#/components/responses/UNPROCESSABLE_ENTITY"
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/app_schemas_common_ErrorSchema"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/app_schemas_common_ErrorSchema"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/app_schemas_devices_AccountDeviceListResponseSchema"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/DEFAULT_ERROR"
+          }
+        },
+        "summary": "List all devices on the account with optional filters.",
+        "tags": [
+          "devices"
+        ]
+      }
+    },
     "/v1/devices/{device_code}/logs": {
       "get": {
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "description": "Position in the list to start from",
+            "schema": {
+              "type": "integer",
+              "default": null,
+              "nullable": true
+            },
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "description": "Number of events to return (max 100)",
+            "schema": {
+              "type": "integer",
+              "default": 20
+            },
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "latest",
+            "description": "Show latest events first. Incompatible with cursor",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "required": false
+          }
+        ],
         "responses": {
+          "422": {
+            "$ref": "#/components/responses/UNPROCESSABLE_ENTITY"
+          },
           "404": {
             "description": "Not Found",
             "content": {
@@ -4516,39 +5474,6 @@
             "type": "string",
             "minLength": 1
           }
-        },
-        {
-          "in": "query",
-          "name": "cursor",
-          "description": "Position in the list to start from",
-          "schema": {
-            "type": "integer",
-            "default": null,
-            "nullable": true
-          },
-          "required": false
-        },
-        {
-          "in": "query",
-          "name": "limit",
-          "description": "Number of events to show)",
-          "schema": {
-            "type": "integer",
-            "default": 20,
-            "minimum": 1,
-            "maximum": 100
-          },
-          "required": false
-        },
-        {
-          "in": "query",
-          "name": "latest",
-          "description": "Show latest events. Incompatible with cursor",
-          "schema": {
-            "type": "boolean",
-            "default": false
-          },
-          "required": false
         }
       ]
     },
@@ -4840,7 +5765,65 @@
     },
     "/v1/devices/{device_code}/audit": {
       "get": {
+        "parameters": [
+          {
+            "in": "query",
+            "name": "device_type",
+            "description": "Filter by device type",
+            "schema": {
+              "type": "string",
+              "default": null,
+              "nullable": true
+            },
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "replicant_code",
+            "description": "Filter by replicant code",
+            "schema": {
+              "type": "string",
+              "default": null,
+              "nullable": true
+            },
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "description": "Position in the list to start from",
+            "schema": {
+              "type": "integer",
+              "default": null,
+              "nullable": true
+            },
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "description": "Number of entries to return (max 100)",
+            "schema": {
+              "type": "integer",
+              "default": 20
+            },
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "latest",
+            "description": "Show latest entries first. Incompatible with cursor",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "required": false
+          }
+        ],
         "responses": {
+          "422": {
+            "$ref": "#/components/responses/UNPROCESSABLE_ENTITY"
+          },
           "404": {
             "description": "Not Found",
             "content": {
@@ -4894,7 +5877,23 @@
     },
     "/v1/replicants/{replicant_code}/inventory": {
       "get": {
+        "parameters": [
+          {
+            "in": "query",
+            "name": "location",
+            "description": "Filter to a specific location code",
+            "schema": {
+              "type": "string",
+              "default": null,
+              "nullable": true
+            },
+            "required": false
+          }
+        ],
         "responses": {
+          "422": {
+            "$ref": "#/components/responses/UNPROCESSABLE_ENTITY"
+          },
           "404": {
             "description": "Not Found",
             "content": {
@@ -5056,7 +6055,96 @@
     },
     "/v1/replicants/{replicant_code}/events": {
       "get": {
+        "parameters": [
+          {
+            "in": "query",
+            "name": "device",
+            "description": "Filter by device code",
+            "schema": {
+              "type": "string",
+              "default": null,
+              "nullable": true
+            },
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "event_type",
+            "description": "Filter by event type",
+            "schema": {
+              "type": "string",
+              "default": null,
+              "nullable": true
+            },
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "device_type",
+            "description": "Filter by device type",
+            "schema": {
+              "type": "string",
+              "default": null,
+              "nullable": true
+            },
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "exclude_mining_cycles",
+            "description": "Exclude mining_cycle events",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "exclude_ami_evaluations",
+            "description": "Exclude AMI evaluation events",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "description": "Position in the list to start from",
+            "schema": {
+              "type": "integer",
+              "default": null,
+              "nullable": true
+            },
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "description": "Number of events to return (max 100)",
+            "schema": {
+              "type": "integer",
+              "default": 20
+            },
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "latest",
+            "description": "Show latest events first. Incompatible with cursor",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "required": false
+          }
+        ],
         "responses": {
+          "422": {
+            "$ref": "#/components/responses/UNPROCESSABLE_ENTITY"
+          },
           "404": {
             "description": "Not Found",
             "content": {
@@ -5104,78 +6192,58 @@
             "type": "string",
             "minLength": 1
           }
-        },
-        {
-          "in": "query",
-          "name": "cursor",
-          "description": "Position in the list to start from",
-          "schema": {
-            "type": "integer",
-            "default": null,
-            "nullable": true
-          },
-          "required": false
-        },
-        {
-          "in": "query",
-          "name": "limit",
-          "description": "Number of events to show",
-          "schema": {
-            "type": "integer",
-            "default": 20,
-            "minimum": 1,
-            "maximum": 100
-          },
-          "required": false
-        },
-        {
-          "in": "query",
-          "name": "latest",
-          "description": "Show latest events. Incompatible with cursor",
-          "schema": {
-            "type": "boolean",
-            "default": false
-          },
-          "required": false
-        },
-        {
-          "in": "query",
-          "name": "event_type",
-          "description": "Filter results by type of event.",
-          "schema": {
-            "type": "string",
-            "default": null,
-            "nullable": true
-          },
-          "required": false
-        },
-        {
-          "in": "query",
-          "name": "device_type",
-          "description": "Filter results by type of device.",
-          "schema": {
-            "type": "string",
-            "default": null,
-            "nullable": true
-          },
-          "required": false
-        },
-        {
-          "in": "query",
-          "name": "device",
-          "description": "Filter results to a single device code.",
-          "schema": {
-            "type": "string",
-            "default": null,
-            "nullable": true
-          },
-          "required": false
         }
       ]
     },
     "/v1/messages": {
       "get": {
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "description": "Position in the list to start from",
+            "schema": {
+              "type": "integer",
+              "default": null,
+              "nullable": true
+            },
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "description": "Number of messages to return (max 100)",
+            "schema": {
+              "type": "integer",
+              "default": 20
+            },
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "latest",
+            "description": "Show latest messages first. Incompatible with cursor",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "unread_only",
+            "description": "Only show unread messages",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "required": false
+          }
+        ],
         "responses": {
+          "422": {
+            "$ref": "#/components/responses/UNPROCESSABLE_ENTITY"
+          },
           "200": {
             "description": "OK",
             "content": {
@@ -5264,7 +6332,23 @@
     },
     "/v1/locations/{designation}": {
       "get": {
+        "parameters": [
+          {
+            "in": "query",
+            "name": "replicant",
+            "description": "Replicant code for travel time estimates",
+            "schema": {
+              "type": "string",
+              "default": null,
+              "nullable": true
+            },
+            "required": false
+          }
+        ],
         "responses": {
+          "422": {
+            "$ref": "#/components/responses/UNPROCESSABLE_ENTITY"
+          },
           "409": {
             "description": "Conflict",
             "content": {
@@ -5446,7 +6530,32 @@
     },
     "/v1/locations/{star_designation}/stars": {
       "get": {
+        "parameters": [
+          {
+            "in": "query",
+            "name": "page",
+            "description": "Page number (1-based)",
+            "schema": {
+              "type": "integer",
+              "default": 1
+            },
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "per_page",
+            "description": "Items per page (max 100)",
+            "schema": {
+              "type": "integer",
+              "default": 20
+            },
+            "required": false
+          }
+        ],
         "responses": {
+          "422": {
+            "$ref": "#/components/responses/UNPROCESSABLE_ENTITY"
+          },
           "404": {
             "description": "Not Found",
             "content": {
@@ -5782,7 +6891,43 @@
     },
     "/v1/accounts/events": {
       "get": {
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "description": "Filter by status: active, completed, or all",
+            "schema": {
+              "type": "string",
+              "default": "active"
+            },
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "description": "Position in the list to start from",
+            "schema": {
+              "type": "integer",
+              "default": null,
+              "nullable": true
+            },
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "description": "Number of events to return (max 200)",
+            "schema": {
+              "type": "integer",
+              "default": 50
+            },
+            "required": false
+          }
+        ],
         "responses": {
+          "422": {
+            "$ref": "#/components/responses/UNPROCESSABLE_ENTITY"
+          },
           "401": {
             "description": "Unauthorized",
             "content": {
@@ -5815,7 +6960,22 @@
     },
     "/v1/locations/{location_code}/events": {
       "get": {
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "description": "Filter by status: active, completed, or all",
+            "schema": {
+              "type": "string",
+              "default": "active"
+            },
+            "required": false
+          }
+        ],
         "responses": {
+          "422": {
+            "$ref": "#/components/responses/UNPROCESSABLE_ENTITY"
+          },
           "default": {
             "$ref": "#/components/responses/DEFAULT_ERROR"
           }

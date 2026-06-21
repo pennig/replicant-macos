@@ -10,6 +10,7 @@
 
 import ComposableArchitecture
 import Foundation
+import OSLog
 
 enum RawAPIError: LocalizedError {
     case invalidURL
@@ -38,6 +39,8 @@ extension RawAPIClient {
 
 extension RawAPIClient: DependencyKey {
     static let liveValue = RawAPIClient { request, apiKey in
+        let logger = Logger(subsystem: "space.replicant.raw-api", category: "http")
+        
         // Resolve the relative path against the base. A leading slash would make
         // `appending(path:)` treat it oddly, so normalize it off first.
         let trimmedPath = request.path.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -62,6 +65,12 @@ extension RawAPIClient: DependencyKey {
             urlRequest.httpBody = Data(request.body.utf8)
             urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
+        
+        logger.debug("""
+            → \(request.method.rawValue, privacy: .public) \
+            \(url.absoluteString, privacy: .public) \
+            body: \(request.body, privacy: .public)
+            """)
 
         let clock = ContinuousClock()
         let start = clock.now

@@ -27,6 +27,14 @@ Look in the `Modules/UI` folder for the Swift package that represents the design
 
 ---
 
+## Implementation Notes
+
+- This app targets macOS 26 and newer, so feel free to use the latest SwiftUI and other SDK APIs.
+- When engaging with the backend for implementation or for testing/mocks/previews, you may follow the OpenAPI spec found here: https://api.replicant.space/swagger/openapi.json (last fetched June 21, 2026)
+- While the app is written predominantly in SwiftUI, it's acceptable to wrap AppKit views and behaviors when they're important to the UX.
+
+---
+
 ## Adding a new SPM module
 
 When asked to add a new module, feature target, or library to this package, follow these steps exactly. The requested module name is referred to as NAME below — preserve the casing provided.

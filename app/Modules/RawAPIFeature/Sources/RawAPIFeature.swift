@@ -10,6 +10,7 @@
 
 import ComposableArchitecture
 import SwiftUI
+import SwiftUIIntrospect
 import UI
 import Utils
 
@@ -153,15 +154,14 @@ public struct RawAPIView: View {
                 .navigationSplitViewColumnWidth(min: 380, ideal: 400, max: 620)
         } detail: {
             detail
-                .navigationSplitViewColumnWidth(min: 380, ideal: 500, max: 720)
+                .navigationSplitViewColumnWidth(min: 380, ideal: 500)
+                .navigationTitle("Response")
         }
     }
 
     @ViewBuilder private var detail: some View {
         if let responseStore = store.scope(state: \.responsePane, action: \.responsePane) {
             ResponsePaneView(store: responseStore)
-                .background(.rcWindowBackground)
-                .navigationTitle("Response")
         } else if let error = store.requestError {
             ResponsePlaceholder(
                 systemImage: "exclamationmark.triangle",
@@ -169,7 +169,6 @@ public struct RawAPIView: View {
                 message: error,
                 tint: .rcDanger
             )
-            .navigationTitle("Response")
         } else {
             ResponsePlaceholder(
                 systemImage: "arrow.left.arrow.right",
@@ -177,7 +176,6 @@ public struct RawAPIView: View {
                 message: "Compose a request and send it to inspect the response here.",
                 tint: .rcTextTertiary
             )
-            .navigationTitle("Response")
         }
     }
 }
@@ -204,7 +202,6 @@ private struct ResponsePlaceholder: View {
                 .frame(maxWidth: 280)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(.rcWindowBackground)
     }
 }
 
@@ -236,6 +233,7 @@ private struct HistorySidebar: View {
                 }
             }
         }
+        .background(.rcSidebarBackground)
         .navigationTitle("History")
     }
 }
@@ -456,11 +454,16 @@ private struct BodyEditor: View {
     var body: some View {
         if method.allowsBody {
             TextEditor(text: $text)
+                .introspect(.textEditor, on: .macOS(.v26)) { textView in
+                    textView.isAutomaticQuoteSubstitutionEnabled = false
+                    textView.isAutomaticDashSubstitutionEnabled = false
+                    textView.isAutomaticTextReplacementEnabled = false
+                }
+                .padding(Space.s)
+                .frame(minHeight: 160)
                 .font(.rcMono)
                 .foregroundStyle(.rcTextPrimary)
                 .scrollContentBackground(.hidden)
-                .padding(Space.s)
-                .frame(minHeight: 160)
                 .background(
                     RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
                         .fill(.rcSurfaceRaised)
@@ -537,43 +540,6 @@ struct StatusDot: View {
             RawAPIFeature()
         }
     )
+    .background(.rcWindowBackground)
     .frame(width: 1100, height: 680)
-}
-
-
-// MARK: - MOVE OUT
-
-extension View {
-    func rcSidebarRow(isSelected: Bool) -> some View {
-        modifier(RCSidebarRowStyle(isSelected: isSelected))
-    }
-}
-
-struct RCSidebarRowStyle: ViewModifier {
-    let isSelected: Bool
-    func body(content: Content) -> some View {
-            content
-                .padding(Space.xs)
-                .background(
-                    RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
-                        .fill(isSelected ? Color.rcAccentMuted : .clear)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
-                                .strokeBorder(isSelected ? Color.rcAccentBorder : .clear, lineWidth: 0.5)
-                        )
-                )
-                // the leading indicator, bleeding into the gutter
-                .overlay(alignment: .leading) {
-                    if isSelected {
-                        Capsule()
-                            .fill(Color.rcAccent)
-                            .frame(width: 3)
-                            .padding(.vertical, 8)
-                            .offset(x: -7)
-                            .shadow(color: .rcAccent.opacity(0.7), radius: 4)
-                    }
-                }
-                .contentShape(Rectangle())
-                .padding(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 4))
-    }
 }

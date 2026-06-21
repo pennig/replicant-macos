@@ -11,6 +11,7 @@
 import ComposableArchitecture
 import DependencyClients
 import LoginFeature
+import RawAPIFeature
 import SwiftUI
 
 /// The two mutually-exclusive top-level states of the app: the user is either
@@ -109,6 +110,30 @@ struct LoginWindow: View {
                 dismissWindow(id: WindowID.login)
             }
         }
+    }
+}
+
+/// Root of the Raw API Access window. Scopes into the signed-in session so the
+/// composer authenticates with the live API key and shares the in-memory request
+/// history. When signed out there's nothing to show — the window can't be opened
+/// from the (disabled) Tools menu, but guard anyway so a restored window is empty.
+struct RawAPIWindow: View {
+    let store: StoreOf<AppFeature>
+    @Shared(.appStorage("appearance")) var appearance: Appearance = .system
+
+    var body: some View {
+        Group {
+            if let mainStore = store.scope(state: \.appState.loggedIn, action: \.appState.loggedIn) {
+                RawAPIView(store: mainStore.scope(state: \.rawAPI, action: \.rawAPI))
+            } else {
+                ContentUnavailableView(
+                    "Not Signed In",
+                    systemImage: "lock",
+                    description: Text("Sign in to use Raw API Access.")
+                )
+            }
+        }
+        .applyAppAppearance(appearance)
     }
 }
 

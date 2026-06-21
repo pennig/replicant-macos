@@ -31,7 +31,7 @@ extension Client {
     ) async throws -> EventLogPage {
         let output = try await getV1ReplicantsReplicantCodeEvents(
             path: .init(replicantCode: replicantCode),
-            query: .init(cursor: cursor, limit: limit, latest: latest, eventType: eventType)
+            query: .init(eventType: eventType, cursor: cursor, limit: limit, latest: latest)
         )
         let body = try output.ok.body.json
         let entries = (body.events ?? []).map(GameLogEntry.init(schema:))

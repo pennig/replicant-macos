@@ -8,6 +8,7 @@
 //
 
 import ComposableArchitecture
+import RawAPIFeature
 import SwiftUI
 
 // MARK: - Sidebar model
@@ -91,12 +92,31 @@ struct MainFeature {
         var category: SidebarItem? = .devices
         var detailSelection: String?
         var isShowingAccount = false
+        /// The Raw API Access experience, shown in its own window (Tools menu).
+        /// Seeded with the session API key so requests authenticate as this user.
+        var rawAPI: RawAPIFeature.State
+
+        init(
+            account: Account,
+            apiKey: String,
+            category: SidebarItem? = .devices,
+            detailSelection: String? = nil,
+            isShowingAccount: Bool = false
+        ) {
+            self.account = account
+            self.apiKey = apiKey
+            self.category = category
+            self.detailSelection = detailSelection
+            self.isShowingAccount = isShowingAccount
+            self.rawAPI = RawAPIFeature.State(apiKey: apiKey)
+        }
     }
 
     enum Action: BindableAction {
         case binding(BindingAction<State>)
         case delegate(Delegate)
         case logoutButtonTapped
+        case rawAPI(RawAPIFeature.Action)
 
         enum Delegate {
             case loggedOut
@@ -105,6 +125,9 @@ struct MainFeature {
 
     var body: some Reducer<State, Action> {
         BindingReducer()
+        Scope(state: \.rawAPI, action: \.rawAPI) {
+            RawAPIFeature()
+        }
         Reduce { state, action in
             switch action {
             case .binding(\.category):
@@ -120,6 +143,9 @@ struct MainFeature {
 
             case .logoutButtonTapped:
                 return .send(.delegate(.loggedOut))
+
+            case .rawAPI:
+                return .none
             }
         }
     }

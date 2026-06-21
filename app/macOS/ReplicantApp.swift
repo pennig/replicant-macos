@@ -7,6 +7,7 @@
 
 import ComposableArchitecture
 import SwiftUI
+import UI
 
 @main
 struct ReplicantApp: App {
@@ -16,6 +17,8 @@ struct ReplicantApp: App {
         AppFeature()
     }
 
+    @Environment(\.openWindow) private var openWindow
+
     var body: some Scene {
         // The first-launch / sign-in window. It lives in its own window so the
         // login ⇄ main transition is a clean window hand-off, and so it can pin
@@ -24,6 +27,7 @@ struct ReplicantApp: App {
         // so it never participates in state restoration.
         Window("Welcome", id: WindowID.login) {
             LoginWindow(store: store)
+                .background(WindowConfigurator())
         }
         .defaultLaunchBehavior(store.isLoggedOut ? .presented : .suppressed)
         .restorationBehavior(.disabled)
@@ -33,13 +37,33 @@ struct ReplicantApp: App {
         // a session was restored synchronously from the Keychain.
         Window("Dashboard", id: WindowID.main) {
             MainWindow(store: store)
+                .background(WindowConfigurator())
         }
         .defaultLaunchBehavior(store.isLoggedOut ? .suppressed : .presented)
+        .commands {
+            // Power-user direct API access, reachable once signed in.
+            CommandMenu("Tools") {
+                Button("Raw API Access") {
+                    openWindow(id: WindowID.rawAPI)
+                }
+                .keyboardShortcut("r", modifiers: [.command, .option])
+                .disabled(store.isLoggedOut)
+            }
+        }
+
+        // The direct API access window for power users. Opened on demand from the
+        // Tools menu (never at launch) and follows the appearance preference.
+        Window("Raw API Access", id: WindowID.rawAPI) {
+            RawAPIWindow(store: store)
+                .background(WindowConfigurator())
+        }
+        .defaultLaunchBehavior(.suppressed)
 
         // The Preferences window (⌘,), which follows the same appearance
         // preference as the main window.
         Settings {
             PreferencesView(store: store.scope(state: \.preferences, action: \.preferences))
+                .background(WindowConfigurator())
                 .applyAppAppearance(store.preferences.appearance)
         }
     }
@@ -49,4 +73,5 @@ struct ReplicantApp: App {
 enum WindowID {
     static let login = "login"
     static let main = "main"
+    static let rawAPI = "rawAPI"
 }

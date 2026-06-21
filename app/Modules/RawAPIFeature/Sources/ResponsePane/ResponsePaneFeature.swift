@@ -111,14 +111,7 @@ public struct ResponsePaneView: View {
             case .tree:
                 JSONTreeView(node: store.jsonTreeNode)
             case .raw:
-                ScrollView([.horizontal, .vertical]) {
-                    Text(store.response.rawString)
-                        .font(.rcMono)
-                        .foregroundStyle(.rcTextPrimary)
-                        .textSelection(.enabled)
-                        .padding(Space.s)
-                }
-                .defaultScrollAnchor(.topLeading)
+                FindableTextView(store.response.rawString)
             case .headers:
                 Table(store.response.headers) {
                     TableColumn("Header") { header in

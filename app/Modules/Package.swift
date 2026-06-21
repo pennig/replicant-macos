@@ -18,7 +18,8 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-openapi-generator", from: "1.0.0"),
         .package(url: "https://github.com/apple/swift-openapi-runtime", from: "1.0.0"),
         .package(url: "https://github.com/apple/swift-openapi-urlsession", from: "1.0.0"),
-        .package(url: "https://github.com/pointfreeco/swift-composable-architecture", from: "1.26.0")
+        .package(url: "https://github.com/pointfreeco/swift-composable-architecture", from: "1.26.0"),
+        .package(url: "https://github.com/siteline/swiftui-introspect", exact: "26.0.1"),
     ],
     targets: [
         .target(
@@ -63,6 +64,7 @@ let package = Package(
             name: "RawAPIFeature",
             dependencies: [
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "SwiftUIIntrospect", package: "swiftui-introspect"),
                 "UI",
                 "Utils",
             ],
@@ -70,7 +72,9 @@ let package = Package(
         ),
         .testTarget(
             name: "RawAPIFeatureTests",
-            dependencies: ["RawAPIFeature"],
+            dependencies: [
+                "RawAPIFeature"
+            ],
             path: "RawAPIFeature/Tests"
         ),
         .target(
