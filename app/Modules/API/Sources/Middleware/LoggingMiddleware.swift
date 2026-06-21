@@ -20,7 +20,7 @@ public struct LoggingMiddleware: ClientMiddleware {
     private let maxBodyBytes: Int
 
     public init(
-        logger: Logger = Logger(subsystem: "space.replicant.api", category: "http"),
+        logger: Logger = Logger(subsystem: "name.pennig.replicould.api", category: "http"),
         maxBodyBytes: Int = 64 * 1024
     ) {
         self.logger = logger

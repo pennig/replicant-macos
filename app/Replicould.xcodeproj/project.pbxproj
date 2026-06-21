@@ -25,7 +25,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		C922A8B62FDC493200431320 /* Replicant.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Replicant.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C922A8B62FDC493200431320 /* Replicould.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Replicould.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C9B530562FDC9D00006F79A8 /* Modules */ = {isa = PBXFileReference; lastKnownFileType = wrapper; path = Modules; sourceTree = "<group>"; };
 		C9B530572FDDD839006F79A8 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		C9B530592FDDD839006F79A8 /* ReplicantApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplicantApp.swift; sourceTree = "<group>"; };
@@ -73,7 +73,7 @@
 		C922A8B72FDC493200431320 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				C922A8B62FDC493200431320 /* Replicant.app */,
+				C922A8B62FDC493200431320 /* Replicould.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -112,9 +112,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		C922A8B52FDC493200431320 /* Replicant */ = {
+		C922A8B52FDC493200431320 /* Replicould */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = C922A8C12FDC493300431320 /* Build configuration list for PBXNativeTarget "Replicant" */;
+			buildConfigurationList = C922A8C12FDC493300431320 /* Build configuration list for PBXNativeTarget "Replicould" */;
 			buildPhases = (
 				C922A8B22FDC493200431320 /* Sources */,
 				C922A8B32FDC493200431320 /* Frameworks */,
@@ -124,7 +124,7 @@
 			);
 			dependencies = (
 			);
-			name = Replicant;
+			name = Replicould;
 			packageProductDependencies = (
 				C9B530792FE0A6D1006F79A8 /* ComposableArchitecture */,
 				C9B530942FE1D3AA006F79A8 /* API */,
@@ -135,7 +135,7 @@
 				C9B5309E2FE72B0B006F79A8 /* RawAPIFeature */,
 			);
 			productName = Replicant;
-			productReference = C922A8B62FDC493200431320 /* Replicant.app */;
+			productReference = C922A8B62FDC493200431320 /* Replicould.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -153,7 +153,7 @@
 					};
 				};
 			};
-			buildConfigurationList = C922A8B12FDC493200431320 /* Build configuration list for PBXProject "Replicant" */;
+			buildConfigurationList = C922A8B12FDC493200431320 /* Build configuration list for PBXProject "Replicould" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -170,7 +170,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				C922A8B52FDC493200431320 /* Replicant */,
+				C922A8B52FDC493200431320 /* Replicould */,
 			);
 		};
 /* End PBXProject section */
@@ -358,7 +358,7 @@
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.0;
 				NEW_SETTING = "";
-				PRODUCT_BUNDLE_IDENTIFIER = name.pennig.Replicant;
+				PRODUCT_BUNDLE_IDENTIFIER = name.pennig.replicould;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -402,7 +402,7 @@
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.0;
 				NEW_SETTING = "";
-				PRODUCT_BUNDLE_IDENTIFIER = name.pennig.Replicant;
+				PRODUCT_BUNDLE_IDENTIFIER = name.pennig.replicould;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -417,7 +417,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		C922A8B12FDC493200431320 /* Build configuration list for PBXProject "Replicant" */ = {
+		C922A8B12FDC493200431320 /* Build configuration list for PBXProject "Replicould" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				C922A8BF2FDC493300431320 /* Debug */,
@@ -426,7 +426,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		C922A8C12FDC493300431320 /* Build configuration list for PBXNativeTarget "Replicant" */ = {
+		C922A8C12FDC493300431320 /* Build configuration list for PBXNativeTarget "Replicould" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				C922A8C22FDC493300431320 /* Debug */,

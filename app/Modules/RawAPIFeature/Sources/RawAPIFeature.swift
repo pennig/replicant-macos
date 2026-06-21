@@ -447,23 +447,29 @@ private struct KeyValueEditor: View {
 
 // MARK: - Body editor
 
+@MainActor func findTextView(in view: NSView) -> NSTextView? {
+    if let tv = view as? NSTextView {
+        return tv
+    }
+
+    for subview in view.subviews {
+        if let tv = findTextView(in: subview) {
+            return tv
+        }
+    }
+
+    return nil
+}
+
 private struct BodyEditor: View {
     let method: HTTPMethod
     @Binding var text: String
 
     var body: some View {
         if method.allowsBody {
-            TextEditor(text: $text)
-                .introspect(.textEditor, on: .macOS(.v26)) { textView in
-                    textView.isAutomaticQuoteSubstitutionEnabled = false
-                    textView.isAutomaticDashSubstitutionEnabled = false
-                    textView.isAutomaticTextReplacementEnabled = false
-                }
+            CodeTextView(text: $text)
                 .padding(Space.s)
                 .frame(minHeight: 160)
-                .font(.rcMono)
-                .foregroundStyle(.rcTextPrimary)
-                .scrollContentBackground(.hidden)
                 .background(
                     RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
                         .fill(.rcSurfaceRaised)

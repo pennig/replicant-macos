@@ -39,7 +39,7 @@ extension RawAPIClient {
 
 extension RawAPIClient: DependencyKey {
     static let liveValue = RawAPIClient { request, apiKey in
-        let logger = Logger(subsystem: "space.replicant.raw-api", category: "http")
+        let logger = Logger(subsystem: "name.pennig.replicould.raw-api", category: "http")
         
         // Resolve the relative path against the base. A leading slash would make
         // `appending(path:)` treat it oddly, so normalize it off first.
