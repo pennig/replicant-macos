@@ -109,42 +109,91 @@ public struct RelayClient: Sendable {
         return RelayPage(events: events, nextCursor: page.nextCursor)
     }
 
-    /// A long-lived stream of events: drains everything after `cursor`, then
-    /// polls. Persist each consumed event's `id` (it's the cursor) so the app
-    /// resumes where it left off across launches.
+    /// A long-lived stream of events using SSE. Drains history after `cursor`,
+    /// then receives new events in near-real-time as they arrive. The server
+    /// closes the connection at Vercel's max function duration; the client
+    /// reconnects automatically using `Last-Event-ID`.
+    ///
+    /// Persist each consumed event's `id` (it's the cursor) so the app resumes
+    /// where it left off across launches.
     ///
     ///     for try await event in relay.stream(from: savedCursor) {
     ///         let game = try event.decoded()
-    ///         // ... update state, post a notification, etc.
     ///         saveCursor(event.id)
     ///     }
-    public func stream(
-        from cursor: String? = nil,
-        pollEvery interval: Duration = .seconds(5),
-        pageSize: Int = 200
-    ) -> AsyncThrowingStream<RelayEvent, Error> {
+    public func stream(from cursor: String? = nil) -> AsyncThrowingStream<RelayEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
-                var cursor = cursor
+                var lastEventID: String? = cursor
+                var retryDelay: Duration = .seconds(1)
+
                 while !Task.isCancelled {
                     do {
-                        let page = try await events(after: cursor, limit: pageSize)
-                        for event in page.events {
-                            continuation.yield(event)
+                        var components = URLComponents(
+                            url: baseURL.appending(path: "api/stream"),
+                            resolvingAgainstBaseURL: false
+                        )!
+                        if let id = lastEventID {
+                            components.queryItems = [URLQueryItem(name: "cursor", value: id)]
                         }
-                        if !page.nextCursor.isEmpty {
-                            cursor = page.nextCursor
+
+                        var request = URLRequest(url: components.url!)
+                        request.setValue("Bearer \(clientToken)", forHTTPHeaderField: "Authorization")
+                        if let id = lastEventID {
+                            request.setValue(id, forHTTPHeaderField: "Last-Event-ID")
                         }
-                        if page.events.isEmpty {
-                            try await Task.sleep(for: interval)
+
+                        let (bytes, response) = try await session.bytes(for: request)
+                        guard let http = response as? HTTPURLResponse else {
+                            throw RelayError.malformedResponse
+                        }
+                        guard http.statusCode == 200 else {
+                            throw RelayError.badStatus(http.statusCode)
+                        }
+
+                        var pendingID: String? = nil
+                        var pendingData: String? = nil
+
+                        for try await line in bytes.lines {
+                            guard !Task.isCancelled else { break }
+
+                            if line.isEmpty {
+                                // Blank line = end of SSE event.
+                                if let id = pendingID, let dataStr = pendingData,
+                                   let data = dataStr.data(using: .utf8)
+                                {
+                                    lastEventID = id
+                                    continuation.yield(RelayEvent(id: id, raw: data))
+                                }
+                                pendingID = nil
+                                pendingData = nil
+                            } else if line.hasPrefix("id:") {
+                                pendingID = String(line.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+                            } else if line.hasPrefix("data:") {
+                                pendingData = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+                            } else if line.hasPrefix("retry:") {
+                                if let ms = Int(line.dropFirst(6).trimmingCharacters(in: .whitespaces)) {
+                                    retryDelay = .milliseconds(ms)
+                                }
+                            }
+                            // Lines starting with ":" are SSE comments (keepalive); skip.
                         }
                     } catch is CancellationError {
                         break
                     } catch {
-                        continuation.finish(throwing: error)
-                        return
+                        // Network or server error — back off before reconnecting.
+                        guard !Task.isCancelled else { break }
+                        try? await Task.sleep(for: retryDelay)
+                        continue
+                    }
+
+                    // Server closed the connection normally (e.g. Vercel max duration hit).
+                    // Reconnect quickly; Last-Event-ID ensures no events are missed.
+                    if !Task.isCancelled {
+                        try? await Task.sleep(for: .milliseconds(100))
                     }
                 }
+
                 continuation.finish()
             }
             continuation.onTermination = { _ in task.cancel() }
