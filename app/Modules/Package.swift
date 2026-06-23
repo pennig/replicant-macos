@@ -2,7 +2,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "ReplicantKit",
+    name: "ReplicouldKit",
     platforms: [
         .macOS(.v26),
     ],
@@ -10,7 +10,9 @@ let package = Package(
         .library(name: "API", targets: ["API"]),
         .library(name: "DependencyClients", targets: ["DependencyClients"]),
         .library(name: "LoginFeature", targets: ["LoginFeature"]),
+        .library(name: "MessagesFeature", targets: ["MessagesFeature"]),
         .library(name: "RawAPIFeature", targets: ["RawAPIFeature"]),
+        .library(name: "StarMapFeature", targets: ["StarMapFeature"]),
         .library(name: "UI", targets: ["UI"]),
         .library(name: "Utils", targets: ["Utils"]),
     ],
@@ -50,9 +52,9 @@ let package = Package(
         .target(
             name: "LoginFeature",
             dependencies: [
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
                 "DependencyClients",
                 "UI",
-                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
             ],
             path: "LoginFeature/Sources",
         ),
@@ -60,6 +62,20 @@ let package = Package(
             name: "LoginFeatureTests",
             dependencies: ["LoginFeature"],
             path: "LoginFeature/Tests"
+        ),
+        .target(
+            name: "MessagesFeature",
+            dependencies: [
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "SQLiteData", package: "sqlite-data"),
+                "UI",
+            ],
+            path: "MessagesFeature/Sources"
+        ),
+        .testTarget(
+            name: "MessagesFeatureTests",
+            dependencies: ["MessagesFeature"],
+            path: "MessagesFeature/Tests"
         ),
         .target(
             name: "RawAPIFeature",
@@ -77,6 +93,19 @@ let package = Package(
                 "RawAPIFeature"
             ],
             path: "RawAPIFeature/Tests"
+        ),
+        .target(
+            name: "StarMapFeature",
+            dependencies: [
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                "UI",
+            ],
+            path: "StarMapFeature/Sources"
+        ),
+        .testTarget(
+            name: "StarMapFeatureTests",
+            dependencies: ["StarMapFeature"],
+            path: "StarMapFeature/Tests"
         ),
         .target(
             name: "UI",

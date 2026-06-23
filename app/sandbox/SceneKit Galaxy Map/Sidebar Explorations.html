@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Replicant — Sidebar Explorations</title>
+  <style>
+    html, body { margin: 0; padding: 0; background: #0a0e16; }
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+      color: #e9eef7; min-height: 100vh;
+      background:
+        radial-gradient(1100px 700px at 20% -8%, #141d31, transparent 62%),
+        radial-gradient(900px 700px at 100% 120%, #11202a, transparent 60%),
+        #0a0e16;
+    }
+    ::selection { background: rgba(255,178,62,0.3); }
+    .stars { position: fixed; inset: 0; pointer-events: none; opacity: 0.5; }
+    .wrap { position: relative; z-index: 1; padding: 40px 48px 72px; }
+    .head h1 { font-size: 22px; font-weight: 700; letter-spacing: -0.3px; margin: 0 0 6px; }
+    .head p { font-size: 14px; line-height: 1.5; color: #9aa6bc; margin: 0; max-width: 760px; }
+    .row { display: flex; gap: 52px; margin-top: 40px; flex-wrap: wrap; }
+    .col { display: flex; flex-direction: column; gap: 14px; }
+    .lab { display: flex; align-items: baseline; gap: 8px; }
+    .lab .n { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11px; font-weight: 700; color: #ffb23e; }
+    .lab .t { font-size: 14px; font-weight: 600; color: #e9eef7; }
+    .lab .d { font-size: 12px; color: #697488; }
+    .note { font-size: 11.5px; line-height: 1.5; color: #697488; max-width: 268px; }
+  </style>
+
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+</head>
+<body>
+  <svg class="stars" id="stars"></svg>
+  <div id="root"></div>
+
+  <script>
+    // faint starfield
+    (function () {
+      const svg = document.getElementById('stars');
+      let s = 9, html = '';
+      const rnd = () => { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff; };
+      for (let i = 0; i < 120; i++) html += `<circle cx="${(rnd() * 100).toFixed(2)}%" cy="${(rnd() * 100).toFixed(2)}%" r="${(rnd() * 1.1 + 0.3).toFixed(2)}" fill="#dfe8ff" opacity="${(rnd() * 0.5 + 0.1).toFixed(2)}"/>`;
+      svg.innerHTML = html;
+    })();
+  </script>
+
+  <script type="text/babel" src="data.js"></script>
+  <script type="text/babel" src="Sidebars.jsx"></script>
+
+  <script type="text/babel">
+    const { SidebarV4 } = window;
+
+    function Change({ children }) {
+      return <li style={{ fontSize: 13, lineHeight: 1.5, color: '#9aa6bc', marginBottom: 11 }}>{children}</li>;
+    }
+
+    function Page() {
+      return (
+        <div className="wrap">
+          <div className="head">
+            <h1>Sidebar · converged</h1>
+            <p>One direction, merged from your notes — A's titled, bounded replicant picker over B's information density. Interactive: open the picker to switch replicant (host icon + NPC mark update), edit the Plan inline, select nav items, and scroll the catalog.</p>
+          </div>
+          <div className="row" style={{ alignItems: 'flex-start' }}>
+            <div className="col">
+              <div className="lab"><span className="n">V4</span><span className="t">Converged</span></div>
+              <SidebarV4 />
+            </div>
+            <div className="col" style={{ maxWidth: 380, paddingTop: 8 }}>
+              <div className="lab"><span className="t">What changed</span></div>
+              <ul style={{ margin: '8px 0 0', padding: 0, listStyle: 'none' }}>
+                <Change><b style={{ color: '#e9eef7', fontWeight: 600 }}>Picker</b> — kept A's "Active replicant" title and bounded box; everything below it now uses B's compact density.</Change>
+                <Change><b style={{ color: '#e9eef7', fontWeight: 600 }}>Subtitle</b> — host name ("Windrunner") removed; now reads <span style={{ color: '#e9eef7' }}>Sylphrena</span> / <span style={{ color: '#e9eef7' }}>Vessel · ▣</span> where ▣ is the NPC mark.</Change>
+                <Change><b style={{ color: '#e9eef7', fontWeight: 600 }}>NPC</b> — no more pill or toggle; just a small read-only chip icon by the name (and in the switcher). Editing happens on another screen.</Change>
+                <Change><b style={{ color: '#e9eef7', fontWeight: 600 }}>Show in Replicants ↗</b> — restored, on the meta row.</Change>
+                <Change><b style={{ color: '#e9eef7', fontWeight: 600 }}>Account</b> — kept the key + "Logged in" label and right-aligned chevron; XP and replicant values are bold and accent-colored, labels stay gray.</Change>
+              </ul>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<Page />);
+  </script>
+</body>
+</html>

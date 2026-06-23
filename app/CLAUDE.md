@@ -79,46 +79,7 @@ Append the test target to the targets array:
 
 Insert in alphabetical order (case-insensitive) and preserve existing formatting and trailing commas. Do not reorder unrelated targets.
 
-### 3. Wire into the Xcode project
-
-If you have a skill or the Xcode MCP allows you to do this step, leverage that. Otherwise, follow these steps to perform the update manually.
-
-Locate the .pbxproj:
-
-    find . -name "*.xcodeproj" -maxdepth 2
-
-Generate two 24-character UUIDs (UUID_A for the product dependency, UUID_B for the build file):
-
-    uuidgen | tr -d '-' | cut -c1-24
-    uuidgen | tr -d '-' | cut -c1-24
-
-Add to XCSwiftPackageProductDependency:
-
-    UUID_A /* NAME */ = {
-        isa = XCSwiftPackageProductDependency;
-        productName = NAME;
-    };
-
-Add to PBXBuildFile:
-
-    UUID_B /* NAME in Frameworks */ = {
-        isa = PBXBuildFile;
-        productRef = UUID_A /* NAME */;
-    };
-
-Add to the app target's PBXFrameworksBuildPhase files array:
-
-    UUID_B /* NAME in Frameworks */,
-
-Add to the app target's PBXNativeTarget packageProductDependencies array:
-
-    UUID_A /* NAME */,
-
-Verify with:
-
-    grep -c "NAME" *.xcodeproj/project.pbxproj   # expect 4 or more occurrences
-
-### 4. Verify the package resolves
+### 3. Verify the package resolves
 
     swift package resolve
 

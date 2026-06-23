@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Replicant — Galaxy & Star System Directions</title>
+  <style>
+    html, body { margin: 0; padding: 0; background: #0a0e16; }
+    * { box-sizing: border-box; }
+    ::selection { background: rgba(255,178,62,0.3); }
+  </style>
+
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel" src="data.js"></script>
+  <script type="text/babel" src="galaxy-data.jsx"></script>
+  <script type="text/babel" src="galaxy-ui.jsx"></script>
+  <script type="text/babel" src="GalaxyDirections.jsx"></script>
+  <script type="text/babel" src="SystemDirections.jsx"></script>
+  <script type="text/babel" src="Storyboard.jsx"></script>
+  <script type="text/babel" src="design-canvas.jsx"></script>
+
+  <script type="text/babel">
+    const { DesignCanvas, DCSection, DCArtboard,
+      GalaxyAtlas, GalaxyMesh, GalaxyObservatory,
+      SystemOrrery, SystemInstrument, SystemHorizon, DrillStoryboard, rcMap } = window;
+    const M = window.RD_MONO;
+
+    const DARK = '#06080f', LIGHT = '#e3dccf';
+
+    // ── Design-notes intro (assumptions + context + reasoning) ──
+    function Legend() {
+      const c = rcMap('dark');
+      const items = [
+        ['My presence', c.accent], ['FTL relay', c.relay], ['Life', c.life],
+        ['Resources', c.resource], ['Other replicants', c.npc], ['In transit', c.transit],
+      ];
+      return (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '9px 18px' }}>
+          {items.map(([l, col]) => (
+            <span key={l} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12, color: '#9aa6bc' }}>
+              <span style={{ width: 9, height: 9, borderRadius: '50%', background: col, boxShadow: `0 0 7px ${col}` }} />{l}
+            </span>
+          ))}
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12, color: '#9aa6bc' }}>
+            <span style={{ fontSize: 11 }}>● ◐ ○</span> Scanned · visited · aware
+          </span>
+        </div>
+      );
+    }
+
+    function Intro() {
+      const dirs = [
+        ['Galaxy', 'A · Atlas', 'Grounded. Layer legend + system inspector + course bar. Dark & light.'],
+        ['Galaxy', 'B · Relay Mesh', 'Network-forward. Filter rail, reach readout, compass minimap.'],
+        ['Galaxy', 'C · Observatory', 'Bold. Cinematic bloom, instrument-stack toggles, big system card.'],
+        ['System', 'A · Orrery', 'Grounded. Live orrery, body legend, inspector, vessel dock. Dark & light.'],
+        ['System', 'B · Instrument', 'Schematic chart. Blueprint grid, Lagrange manifest, crosshair.'],
+        ['System', 'C · Horizon', 'Bold. Cinematic planets, depth bloom, floating device dock.'],
+      ];
+      return (
+        <div style={{ width: 1248, minHeight: 440, background: 'radial-gradient(1000px 600px at 20% -10%, #141d31, transparent 60%), #0a0e16', borderRadius: 4, padding: '34px 38px', fontFamily: window.RD_FONT, color: '#e9eef7', boxSizing: 'border-box' }}>
+          <div style={{ fontFamily: M, fontSize: 11, letterSpacing: 2, color: '#ffb23e' }}>EXPLORATION · ROUND 1</div>
+          <div style={{ fontSize: 28, fontWeight: 700, letterSpacing: -0.5, margin: '8px 0 12px' }}>Galaxy Explorer & Star System views</div>
+          <p style={{ fontSize: 14, lineHeight: 1.6, color: '#9aa6bc', maxWidth: 860, margin: 0 }}>
+            Both views are <b style={{ color: '#e9eef7' }}>full-bleed maps with floating glass HUD</b>, optimized for trackpad gestures, in the Replicant
+            visual language with a No&nbsp;Man’s&nbsp;Sky cinematic lean. The galaxy is a <b style={{ color: '#e9eef7' }}>tilted 3D disc</b> (parallax starfield,
+            depth-sorted systems); the star system is a <b style={{ color: '#e9eef7' }}>live 2D orrery</b> (orbiting bodies, moving vessels, a ticking clock).
+            Each shows the grounded direction in dark &amp; light, plus a schematic/network take and a bold cinematic one. Click anything.
+          </p>
+          <div style={{ display: 'flex', gap: 32, marginTop: 26, flexWrap: 'wrap' }}>
+            <div style={{ flex: '1 1 520px', minWidth: 480 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, textTransform: 'uppercase', color: '#6a7488', marginBottom: 12 }}>Six directions</div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 24px' }}>
+                {dirs.map(([grp, t, d]) => (
+                  <div key={t} style={{ display: 'flex', gap: 10 }}>
+                    <span style={{ fontFamily: M, fontSize: 9, fontWeight: 700, color: grp === 'Galaxy' ? '#5aa9ff' : '#ffb23e', marginTop: 3, width: 44, flexShrink: 0 }}>{grp.toUpperCase()}</span>
+                    <span><span style={{ display: 'block', fontSize: 13, fontWeight: 600 }}>{t}</span><span style={{ display: 'block', fontSize: 11.5, color: '#9aa6bc', lineHeight: 1.45, marginTop: 2 }}>{d}</span></span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div style={{ flex: '1 1 300px', minWidth: 280 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, textTransform: 'uppercase', color: '#6a7488', marginBottom: 12 }}>Layer legend</div>
+              <Legend />
+              <div style={{ marginTop: 18, padding: 14, borderRadius: 12, background: 'rgba(255,255,255,0.04)', boxShadow: 'inset 0 0 0 0.5px rgba(255,255,255,0.08)', fontSize: 12, color: '#9aa6bc', lineHeight: 1.55 }}>
+                <b style={{ color: '#ffb23e' }}>Next:</b> pick the strongest galaxy + system direction (mix &amp; match HUD pieces welcome) and I’ll build it into a single interactive prototype with the live drill-down.
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    const GW = 1240, GH = 800;
+
+    function App() {
+      return (
+        <DesignCanvas>
+          <DCSection id="brief" title="Brief & system" subtitle="My read of the assignment, the six directions, and the shared layer language.">
+            <DCArtboard id="notes" label="Design notes" width={1248} height={440} style={{ background: DARK }}>
+              <Intro />
+            </DCArtboard>
+          </DCSection>
+
+          <DCSection id="galaxy" title="Galaxy Explorer" subtitle="Full-bleed tilted-3D disc + floating glass HUD. Toggle layers, select a system, plot a course. Click stars.">
+            <DCArtboard id="atlas-d" label="A · Atlas — Dark" width={GW} height={GH} style={{ background: DARK }}><GalaxyAtlas theme="dark" /></DCArtboard>
+            <DCArtboard id="atlas-l" label="A · Atlas — Light" width={GW} height={GH} style={{ background: LIGHT }}><GalaxyAtlas theme="light" /></DCArtboard>
+            <DCArtboard id="mesh-d" label="B · Relay Mesh — Dark" width={GW} height={GH} style={{ background: DARK }}><GalaxyMesh theme="dark" /></DCArtboard>
+            <DCArtboard id="obs-d" label="C · Observatory — Dark" width={GW} height={GH} style={{ background: DARK }}><GalaxyObservatory theme="dark" /></DCArtboard>
+          </DCSection>
+
+          <DCSection id="system" title="Star System — Chamakuy" subtitle="Live 2D orrery: orbits, belt, Lagrange points, devices, moving vessels. Click a vessel/body to retarget.">
+            <DCArtboard id="orr-d" label="A · Orrery — Dark" width={GW} height={GH} style={{ background: DARK }}><SystemOrrery theme="dark" /></DCArtboard>
+            <DCArtboard id="orr-l" label="A · Orrery — Light" width={GW} height={GH} style={{ background: LIGHT }}><SystemOrrery theme="light" /></DCArtboard>
+            <DCArtboard id="inst-d" label="B · Instrument — Dark" width={GW} height={GH} style={{ background: DARK }}><SystemInstrument theme="dark" /></DCArtboard>
+            <DCArtboard id="hor-d" label="C · Horizon — Dark" width={GW} height={GH} style={{ background: DARK }}><SystemHorizon theme="dark" /></DCArtboard>
+          </DCSection>
+
+          <DCSection id="drill" title="Drill-down transition" subtitle="Storyboard of the galaxy→system zoom. We'd build this live in SceneKit next round.">
+            <DCArtboard id="drill-d" label="Storyboard — Dark" width={1248} height={560} style={{ background: DARK }}><DrillStoryboard theme="dark" /></DCArtboard>
+            <DCArtboard id="drill-l" label="Storyboard — Light" width={1248} height={560} style={{ background: LIGHT }}><DrillStoryboard theme="light" /></DCArtboard>
+          </DCSection>
+        </DesignCanvas>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

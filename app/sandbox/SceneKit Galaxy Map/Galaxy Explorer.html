@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Replicant — Galaxy Explorer</title>
+  <style>
+    html, body { margin: 0; padding: 0; background: #05070d; overflow: hidden; height: 100%; }
+    * { box-sizing: border-box; }
+    #cv { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; touch-action: none; cursor: grab; }
+    #cv:active { cursor: grabbing; }
+    ::selection { background: rgba(255,178,62,0.3); }
+    .fade-in { animation: fadeIn .3s ease both; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  </style>
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+</head>
+<body>
+  <canvas id="cv"></canvas>
+  <div id="root"></div>
+
+  <script type="text/babel" src="data.js"></script>
+  <script type="text/babel" src="galaxy-data.jsx"></script>
+  <script type="text/babel" src="galaxy3d-engine.jsx"></script>
+  <script type="text/babel" src="tweaks-panel.jsx"></script>
+
+  <script type="text/babel">
+    const { GAL_SYSTEMS, GAL_LINKS, GAL_LAYERS, RECON, LIFE, rcMap } = window;
+    const { useTweaks, TweaksPanel, TweakSection, TweakSlider, TweakToggle, TweakRadio } = window;
+    const M = window.RD_MONO, F = window.RD_FONT;
+    const c = rcMap('dark');
+
+    const relayCount = (id) => GAL_LINKS.filter((l) => l.owner === 'mine' && (l.a === id || l.b === id)).length;
+    const lifeLabel = (s) => s.life ? (LIFE[s.life] ? LIFE[s.life].label : s.life) : 'No biosignatures';
+
+    // ── layer glyphs ──────────────────────────────────────────────
+    function LIcon({ k, color, size = 16 }) {
+      const p = { fill: 'none', stroke: color, strokeWidth: 1.5, strokeLinecap: 'round', strokeLinejoin: 'round' };
+      const G = {
+        presence: <g {...p}><circle cx="9" cy="9" r="3" /><circle cx="9" cy="9" r="7" opacity="0.5" /></g>,
+        relay: <g {...p}><circle cx="4" cy="9" r="1.6" fill={color} stroke="none" /><circle cx="14" cy="9" r="1.6" fill={color} stroke="none" /><path d="M5.4 9h7.2" /></g>,
+        recon: <g {...p}><circle cx="9" cy="9" r="6.5" /><path d="M9 9 L13.5 5.5" /><circle cx="9" cy="9" r="1.4" fill={color} stroke="none" /></g>,
+        life: <g {...p}><path d="M9 15c0-4 0-6 4-9-1 5-2 6-4 9z" /><path d="M9 15c0-3 0-4-3-6.5" /></g>,
+        resource: <g {...p}><path d="M9 3 L14.5 6 L14.5 12 L9 15 L3.5 12 L3.5 6 Z" /></g>,
+        npc: <g {...p}><circle cx="9" cy="9" r="6.5" /><circle cx="9" cy="9" r="2" fill={color} stroke="none" /><circle cx="15.5" cy="9" r="1.3" fill={color} stroke="none" /></g>,
+      };
+      return <svg width={size} height={size} viewBox="0 0 18 18">{G[k]}</svg>;
+    }
+    const colOf = (key) => c[key] || c.t2;
+
+    function Switch({ on, color }) {
+      return (
+        <span style={{ width: 26, height: 15, borderRadius: 8, flexShrink: 0, position: 'relative', background: on ? color : 'rgba(255,255,255,0.1)', boxShadow: on ? 'none' : `inset 0 0 0 0.5px ${c.glassLine}`, transition: 'background .15s' }}>
+          <span style={{ position: 'absolute', top: 2, left: on ? 13 : 2, width: 11, height: 11, borderRadius: '50%', background: '#fff', transition: 'left .15s', boxShadow: '0 1px 2px rgba(0,0,0,0.4)' }} />
+        </span>
+      );
+    }
+
+    function glass(extra) {
+      return { background: c.glass, backdropFilter: 'blur(26px) saturate(1.2)', WebkitBackdropFilter: 'blur(26px) saturate(1.2)', boxShadow: `inset 0 0 0 0.5px ${c.glassLine}, ${c.glassShadow}`, color: c.t1, fontFamily: F, ...extra };
+    }
+
+    // ── HUD treatment A: Panel ────────────────────────────────────
+    function LayerPanel({ layers, toggle }) {
+      return (
+        <div style={glass({ position: 'absolute', top: 96, left: 22, width: 236, borderRadius: 16, padding: 12 })}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 9, padding: '0 2px' }}>
+            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 1.4, textTransform: 'uppercase', color: c.t3 }}>Display layers</span>
+            <span style={{ fontFamily: M, fontSize: 10, color: c.accent }}>{Object.values(layers).filter(Boolean).length}/{GAL_LAYERS.length}</span>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+            {GAL_LAYERS.map((l) => {
+              const on = layers[l.key]; const col = colOf(l.color);
+              return (
+                <button key={l.key} onClick={() => toggle(l.key)} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left', cursor: 'pointer', padding: '8px 9px', borderRadius: 9, border: 'none', fontFamily: F, background: on ? 'rgba(255,255,255,0.04)' : 'transparent' }}>
+                  <span style={{ opacity: on ? 1 : 0.45 }}><LIcon k={l.key} color={on ? col : c.t3} /></span>
+                  <span style={{ flex: 1, minWidth: 0 }}>
+                    <span style={{ display: 'block', fontSize: 12.5, fontWeight: 600, color: on ? c.t1 : c.t2 }}>{l.label}</span>
+                    <span style={{ display: 'block', fontSize: 10, color: c.t3, marginTop: 1 }}>{l.desc}</span>
+                  </span>
+                  <Switch on={on} color={col} />
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      );
+    }
+
+    // ── HUD treatment B: Rail (icon dock) ─────────────────────────
+    function LayerRail({ layers, toggle }) {
+      const [hover, setHover] = React.useState(null);
+      return (
+        <div style={{ position: 'absolute', top: '50%', left: 22, transform: 'translateY(-50%)', display: 'flex', flexDirection: 'column', gap: 7 }}>
+          {GAL_LAYERS.map((l) => {
+            const on = layers[l.key]; const col = colOf(l.color);
+            return (
+              <div key={l.key} onMouseEnter={() => setHover(l.key)} onMouseLeave={() => setHover(null)} style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                <button onClick={() => toggle(l.key)} style={glass({ width: 44, height: 44, borderRadius: 12, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', boxShadow: `inset 0 0 0 0.5px ${on ? col : c.glassLine}`, opacity: on ? 1 : 0.6 })}>
+                  {on && <span style={{ position: 'absolute', left: 0, top: 10, bottom: 10, width: 3, borderRadius: 3, background: col, boxShadow: `0 0 8px ${col}` }} />}
+                  <LIcon k={l.key} color={on ? col : c.t3} size={20} />
+                </button>
+                {hover === l.key && (
+                  <div style={glass({ position: 'absolute', left: 54, whiteSpace: 'nowrap', borderRadius: 9, padding: '7px 11px', pointerEvents: 'none' })}>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: c.t1 }}>{l.label}</span>
+                    <span style={{ fontSize: 10.5, color: c.t3, marginLeft: 8 }}>{on ? 'on' : 'off'}</span>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+
+    // ── HUD treatment C: Chips (top toolbar) ──────────────────────
+    function LayerChips({ layers, toggle }) {
+      return (
+        <div style={{ position: 'absolute', top: 24, left: '50%', transform: 'translateX(-50%)' }}>
+          <div style={glass({ display: 'flex', gap: 4, borderRadius: 13, padding: 5 })}>
+            {GAL_LAYERS.map((l) => {
+              const on = layers[l.key]; const col = colOf(l.color);
+              return (
+                <button key={l.key} onClick={() => toggle(l.key)} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '7px 13px', borderRadius: 9, border: 'none', cursor: 'pointer', fontFamily: F, fontSize: 12, fontWeight: 600, background: on ? `${col}22` : 'transparent', color: on ? col : c.t3, boxShadow: on ? `inset 0 0 0 0.5px ${col}66` : 'none' }}>
+                  <LIcon k={l.key} color={on ? col : c.t3} size={15} />{l.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      );
+    }
+
+    // ── dossier (bottom-right, full info regardless of layers) ────
+    function Dossier({ s }) {
+      const recon = RECON[s.recon];
+      const reconMark = s.recon === 'scanned' ? '●' : s.recon === 'visited' ? '◐' : '○';
+      return (
+        <div className="fade-in" key={s.id} style={glass({ position: 'absolute', bottom: 22, right: 22, width: 312, borderRadius: 18, padding: 18 })}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontFamily: M, fontSize: 13, color: s.recon === 'aware' ? c.t3 : c.t2 }}>{reconMark}</span>
+            <span style={{ fontSize: 21, fontWeight: 700, letterSpacing: -0.3 }}>{s.name}</span>
+            {s.home && <span style={{ fontFamily: M, fontSize: 9, fontWeight: 700, color: c.accent, padding: '2px 6px', borderRadius: 5, background: c.accentSoft }}>HOME</span>}
+            <span style={{ marginLeft: 'auto', fontFamily: M, fontSize: 11, color: c.t3 }}>{s.cls}</span>
+          </div>
+          <div style={{ fontSize: 11.5, color: c.t2, marginTop: 6 }}>{recon.label} · {recon.note}</div>
+
+          <div style={{ display: 'flex', gap: 12, margin: '14px 0', padding: '13px 0', borderTop: `1px solid ${c.glassLineSoft}`, borderBottom: `1px solid ${c.glassLineSoft}` }}>
+            {[['Devices', s.presence === 'mine' ? s.devices : '—', s.presence === 'mine' && s.devices > 0],
+              ['Vessels', s.vessels || '—', false],
+              ['Relays', s.relay ? relayCount(s.id) : '—', false]].map(([k, v, hot]) => (
+              <div key={k} style={{ flex: 1 }}>
+                <div style={{ fontFamily: M, fontSize: 17, fontWeight: 700, color: hot ? c.accent : c.t1 }}>{v}</div>
+                <div style={{ fontSize: 9.5, color: c.t3, letterSpacing: 0.5, textTransform: 'uppercase', marginTop: 3 }}>{k}</div>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+            <Line k="Life" v={lifeLabel(s)} dot={s.life ? c.life : null} />
+            <Line k="Resources" v={`${Math.round(s.resource * 100)}% richness`} bar={s.resource} barCol={c.resource} />
+            <Line k="Presence" v={s.presence === 'mine' ? 'Sylphrena (mine)' : s.presence === 'npc' ? 'Foreign probe' : 'None'} dot={s.presence === 'npc' ? c.npc : s.presence ? c.accent : null} />
+          </div>
+
+          <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+            <Btn primary>Plot course</Btn>
+            {s.recon !== 'aware'
+              ? <Btn href="Star System.html">Drill into system →</Btn>
+              : <Btn>Plot survey</Btn>}
+          </div>
+        </div>
+      );
+    }
+    function Line({ k, v, dot, bar, barCol }) {
+      return (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 11, color: c.t3, width: 76, flexShrink: 0 }}>{k}</span>
+          {dot && <span style={{ width: 6, height: 6, borderRadius: '50%', background: dot, boxShadow: `0 0 6px ${dot}`, flexShrink: 0 }} />}
+          <span style={{ fontSize: 12, color: c.t1, flex: 1 }}>{v}</span>
+          {bar != null && <span style={{ width: 54, height: 4, borderRadius: 3, background: 'rgba(255,255,255,0.08)', overflow: 'hidden', flexShrink: 0 }}><span style={{ display: 'block', width: `${Math.round(bar * 100)}%`, height: '100%', background: barCol }} /></span>}
+        </div>
+      );
+    }
+    function Btn({ children, primary, href }) {
+      const st = { flex: 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: '10px 14px', borderRadius: 10, border: 'none', cursor: 'pointer', fontFamily: F, fontSize: 12.5, fontWeight: 700, textDecoration: 'none', background: primary ? `linear-gradient(180deg, ${c.accent}, #ff9e2c)` : 'rgba(255,255,255,0.05)', color: primary ? '#2a1a05' : c.t1, boxShadow: primary ? `0 6px 18px ${c.accentSoft}` : `inset 0 0 0 0.5px ${c.glassLine}` };
+      return href ? <a href={href} style={st}>{children}</a> : <button style={st}>{children}</button>;
+    }
+
+    const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+      "hud": "rail",
+      "bloom": 0.3,
+      "density": 6000,
+      "autoRotate": true
+    }/*EDITMODE-END*/;
+
+    function App() {
+      const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+      const [layers, setLayers] = React.useState({ presence: true, relay: true, recon: false, life: false, resource: false, npc: true });
+      const [sel, setSel] = React.useState(null);
+      const engRef = React.useRef(null);
+
+      React.useEffect(() => {
+        const cv = document.getElementById('cv');
+        const eng = window.createGalaxy(cv, {
+          layers, bloom: t.bloom, starCount: t.density, autoRotate: t.autoRotate,
+          onSelect: (s) => setSel(s),
+        });
+        engRef.current = eng;
+        return () => eng.destroy();
+      }, []);
+
+      React.useEffect(() => { engRef.current && engRef.current.setLayers(layers); }, [layers]);
+      React.useEffect(() => { engRef.current && engRef.current.setOption('bloom', t.bloom); }, [t.bloom]);
+      React.useEffect(() => { engRef.current && engRef.current.setOption('autoRotate', t.autoRotate); }, [t.autoRotate]);
+      React.useEffect(() => { engRef.current && engRef.current.setOption('density', t.density); }, [t.density]);
+
+      const toggle = (k) => setLayers((L) => ({ ...L, [k]: !L[k] }));
+      const HUD = { panel: LayerPanel, rail: LayerRail, chips: LayerChips }[t.hud];
+
+      return (
+        <>
+          {/* header */}
+          <div style={{ position: 'absolute', top: 22, left: 24, pointerEvents: 'none' }}>
+            <div style={{ fontFamily: M, fontSize: 10.5, letterSpacing: 3, color: c.accent }}>OBSERVATORY</div>
+            <div style={{ fontSize: 24, fontWeight: 700, letterSpacing: -0.4, color: c.t1, marginTop: 4 }}>The Orion Spur</div>
+          </div>
+
+          <HUD layers={layers} toggle={toggle} />
+
+          {sel && <Dossier s={sel} />}
+
+          {/* bottom-left: readout + nav hint */}
+          <div style={{ position: 'absolute', bottom: 22, left: 24, display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={glass({ borderRadius: 12, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 14 })}>
+              <span style={{ fontFamily: M, fontSize: 12, color: c.t1 }}><b style={{ color: c.accent }}>{t.density.toLocaleString()}</b> stars</span>
+              <span style={{ width: 1, height: 14, background: c.glassLineSoft }} />
+              <span style={{ fontFamily: M, fontSize: 12, color: c.t2 }}>{GAL_SYSTEMS.length} charted</span>
+              <span style={{ width: 1, height: 14, background: c.glassLineSoft }} />
+              <button onClick={() => { engRef.current && engRef.current.resetView(); }} style={{ border: 'none', background: 'transparent', color: c.accent, fontFamily: F, fontSize: 12, fontWeight: 600, cursor: 'pointer', padding: 0 }}>Reset view</button>
+            </div>
+            <div style={{ fontFamily: M, fontSize: 10.5, color: c.t3, letterSpacing: 0.3, paddingLeft: 2 }}>drag&nbsp;rotate · scroll&nbsp;zoom · shift-drag&nbsp;pan · click&nbsp;a&nbsp;star</div>
+          </div>
+
+          <TweaksPanel title="Tweaks">
+            <TweakSection label="HUD workshop" />
+            <TweakRadio label="Layer toggles" value={t.hud} options={['panel', 'rail', 'chips']} onChange={(v) => setTweak('hud', v)} />
+            <TweakSection label="Scene" />
+            <TweakSlider label="Bloom" value={t.bloom} min={0} max={1} step={0.05} onChange={(v) => setTweak('bloom', v)} />
+            <TweakSlider label="Star density" value={t.density} min={600} max={6000} step={200} unit=" stars" onChange={(v) => setTweak('density', v)} />
+            <TweakToggle label="Auto-rotate" value={t.autoRotate} onChange={(v) => setTweak('autoRotate', v)} />
+          </TweaksPanel>
+        </>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

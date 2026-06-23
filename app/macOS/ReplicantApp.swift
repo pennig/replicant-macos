@@ -6,6 +6,7 @@
 //
 
 import ComposableArchitecture
+import MessagesFeature
 import SwiftUI
 import UI
 
@@ -18,6 +19,13 @@ struct ReplicantApp: App {
     }
 
     @Environment(\.openWindow) private var openWindow
+
+    init() {
+        // Open the local database and run migrations before any view that
+        // observes it appears. SQLiteData vends an on-disk store in the app and
+        // an in-memory one in previews/tests.
+        prepareDependencies { try? $0.bootstrapDatabase() }
+    }
 
     var body: some Scene {
         // The first-launch / sign-in window. It lives in its own window so the

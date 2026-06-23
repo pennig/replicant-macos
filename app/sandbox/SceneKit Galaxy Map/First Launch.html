@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Replicant — First Launch</title>
+<style>
+  :root {
+    --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+    --win: #0b1019; --content: #0a1019;
+    --panel: rgba(255,255,255,0.04); --panel2: rgba(255,255,255,0.065);
+    --line: rgba(255,255,255,0.09); --lineSoft: rgba(255,255,255,0.055);
+    --t1: #e9eef7; --t2: #9aa6bc; --t3: #697488;
+    --accent: #ffb23e; --accentText: #2a1a05;
+    --selBg: rgba(255,178,62,0.12); --selRing: rgba(255,178,62,0.34);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: var(--sans); background: #06090f; color: var(--t1);
+    display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 32px;
+  }
+  ::selection { background: rgba(255,178,62,0.3); }
+
+  /* macOS window */
+  .win {
+    width: 760px; height: 560px; border-radius: 13px; overflow: hidden; position: relative;
+    background: var(--win);
+    box-shadow: 0 0 0 0.5px rgba(255,255,255,0.10), 0 50px 130px rgba(0,0,0,0.65);
+    display: flex; flex-direction: column;
+  }
+  .titlebar { height: 42px; display: flex; align-items: center; padding: 0 16px; position: relative; z-index: 5; }
+  .lights { display: flex; gap: 8px; }
+  .lights span { width: 12px; height: 12px; border-radius: 50%; box-shadow: inset 0 0 0 0.5px rgba(0,0,0,0.25); }
+  .lights .r { background: #ff5f57; } .lights .y { background: #febc2e; } .lights .g { background: #28c840; }
+
+  /* cosmic backdrop */
+  .bg { position: absolute; inset: 0; pointer-events: none; }
+  .nebula {
+    position: absolute; inset: 0;
+    background-image:
+      radial-gradient(680px 460px at 50% -12%, rgba(255,178,62,0.14), transparent 60%),
+      radial-gradient(560px 520px at 12% 116%, rgba(101,140,255,0.10), transparent 62%),
+      radial-gradient(520px 460px at 104% 90%, rgba(63,211,203,0.07), transparent 60%);
+  }
+
+  /* content */
+  .stage { flex: 1; position: relative; z-index: 2; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; padding: 8px 56px 44px; }
+  .brand { display: flex; flex-direction: column; align-items: center; gap: 16px; margin-bottom: 26px; }
+  .mark { width: 64px; height: 64px; position: relative; display: flex; align-items: center; justify-content: center; }
+  .mark .core {
+    position: absolute; width: 18px; height: 18px; border-radius: 50%;
+    background: radial-gradient(circle at 36% 30%, #ffe2b0, #d39433 62%, #8a5e1f);
+    box-shadow: 0 0 22px rgba(255,178,62,0.6), inset 0 0 0 0.5px rgba(255,255,255,0.4);
+  }
+  .wordmark { font-size: 26px; font-weight: 700; letter-spacing: -0.4px; }
+  .tagline { font-size: 13.5px; color: var(--t2); margin-top: -8px; }
+
+  /* segmented control */
+  .seg { display: flex; gap: 3px; padding: 3px; border-radius: 10px; background: var(--panel);
+    box-shadow: inset 0 0 0 0.5px var(--line); margin-bottom: 22px; }
+  .seg button { appearance: none; border: none; cursor: pointer; font-family: var(--sans);
+    font-size: 12.5px; font-weight: 600; color: var(--t2); background: transparent;
+    padding: 7px 18px; border-radius: 7px; transition: color .15s, background .15s; }
+  .seg button.on { color: var(--t1); background: var(--panel2); box-shadow: inset 0 0 0 0.5px var(--line); }
+
+  /* form */
+  form { width: 100%; max-width: 360px; display: flex; flex-direction: column; gap: 13px; }
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  .field label { font-size: 10.5px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; color: var(--t3); }
+  .field .hint { font-size: 11px; color: var(--t3); font-weight: 400; letter-spacing: 0; text-transform: none; }
+  .ctl { position: relative; display: flex; align-items: center; }
+  input, select {
+    width: 100%; appearance: none; font-family: var(--sans); font-size: 13.5px; color: var(--t1);
+    background: rgba(255,255,255,0.05); border: none; border-radius: 9px;
+    box-shadow: inset 0 0 0 1px var(--line); padding: 11px 13px; outline: none; transition: box-shadow .15s;
+  }
+  input.mono { font-family: var(--mono); font-size: 13px; letter-spacing: 0.2px; }
+  input::placeholder { color: var(--t3); }
+  input:focus, select:focus { box-shadow: inset 0 0 0 1.5px var(--selRing); background: rgba(255,255,255,0.06); }
+  select { cursor: pointer; padding-right: 34px; }
+  .ctl.sel::after { content: ""; position: absolute; right: 13px; width: 9px; height: 9px; pointer-events: none;
+    border-right: 1.6px solid var(--t2); border-bottom: 1.6px solid var(--t2); transform: translateY(-2px) rotate(45deg); }
+  .reveal { position: absolute; right: 6px; border: none; background: transparent; cursor: pointer; color: var(--t3);
+    font-size: 11px; font-weight: 600; font-family: var(--sans); padding: 6px 8px; border-radius: 6px; }
+  .reveal:hover { color: var(--t2); }
+
+  .submit {
+    margin-top: 6px; appearance: none; border: none; cursor: pointer; font-family: var(--sans);
+    font-size: 14px; font-weight: 700; color: var(--accentText); padding: 12px; border-radius: 10px;
+    background: linear-gradient(180deg, #ffc05c, #ff9e2c);
+    box-shadow: 0 6px 20px rgba(255,158,44,0.32), inset 0 1px 0 rgba(255,255,255,0.45);
+    display: flex; align-items: center; justify-content: center; gap: 8px; transition: transform .08s, filter .15s;
+  }
+  .submit:hover { filter: brightness(1.04); }
+  .submit:active { transform: translateY(1px); }
+  .submit .arrow { font-size: 15px; }
+
+  .foot { margin-top: 18px; font-size: 11.5px; color: var(--t3); text-align: center; line-height: 1.5; }
+  .foot a { color: var(--t2); text-decoration: none; border-bottom: 1px solid var(--lineSoft); }
+  .switch { background: none; border: none; color: var(--accent); font: inherit; font-size: 11.5px; cursor: pointer; padding: 0; }
+
+  .hidden { display: none; }
+  /* gentle entrance for the panel on toggle */
+  @keyframes fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  .anim { animation: fade .22s ease; }
+</style>
+</head>
+<body>
+  <div class="win">
+    <div class="bg"><div class="nebula"></div><svg id="stars" width="100%" height="100%"></svg></div>
+    <div class="titlebar"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div></div>
+
+    <div class="stage">
+      <div class="brand">
+        <div class="mark">
+          <svg width="64" height="64" viewBox="0 0 64 64" fill="none">
+            <circle cx="32" cy="32" r="29" stroke="rgba(255,178,62,0.30)" stroke-width="1"/>
+            <ellipse cx="32" cy="32" rx="29" ry="11" stroke="rgba(255,255,255,0.10)" stroke-width="1"/>
+            <ellipse cx="32" cy="32" rx="11" ry="29" stroke="rgba(255,255,255,0.07)" stroke-width="1"/>
+            <circle cx="61" cy="32" r="2.4" fill="#5aa9ff"/>
+            <circle cx="32" cy="3" r="1.8" fill="#62d39a"/>
+          </svg>
+          <div class="core"></div>
+        </div>
+        <div style="text-align:center">
+          <div class="wordmark">Replicant</div>
+          <div class="tagline">Command your probes across the local cluster.</div>
+        </div>
+      </div>
+
+      <div class="seg" role="tablist">
+        <button id="tab-login" class="on" role="tab">Log in</button>
+        <button id="tab-signup" role="tab">Create account</button>
+      </div>
+
+      <!-- LOG IN -->
+      <form id="form-login" class="anim" autocomplete="off">
+        <div class="field">
+          <label>API Key <span class="hint">— paste the key from your account</span></label>
+          <div class="ctl">
+            <input id="apikey" class="mono" type="password" placeholder="rk_live_••••••••••••••••••••••••" spellcheck="false" />
+            <button type="button" class="reveal" id="reveal">Show</button>
+          </div>
+        </div>
+        <button class="submit" type="submit">Log in <span class="arrow">→</span></button>
+        <div class="foot">
+          No account yet? <button type="button" class="switch" data-goto="signup">Create one</button> to get started.
+        </div>
+      </form>
+
+      <!-- SIGN UP -->
+      <form id="form-signup" class="hidden" autocomplete="off">
+        <div class="field">
+          <label>Name</label>
+          <div class="ctl"><input id="name" type="text" placeholder="What should we call you?" /></div>
+        </div>
+        <div class="field">
+          <label>Email</label>
+          <div class="ctl"><input id="email" type="email" placeholder="you@example.com" spellcheck="false" /></div>
+        </div>
+        <div class="field">
+          <label>Time zone</label>
+          <div class="ctl sel">
+            <select id="tz"></select>
+          </div>
+        </div>
+        <button class="submit" type="submit">Begin <span class="arrow">→</span></button>
+        <div class="foot">
+          Already have a key? <button type="button" class="switch" data-goto="login">Log in instead</button>.
+        </div>
+      </form>
+    </div>
+  </div>
+
+<script>
+  // faint starfield inside the window
+  (function () {
+    const svg = document.getElementById('stars');
+    let s = 11, html = '';
+    const rnd = () => { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff; };
+    for (let i = 0; i < 70; i++) html += `<circle cx="${(rnd()*100).toFixed(2)}%" cy="${(rnd()*100).toFixed(2)}%" r="${(rnd()*1.1+0.3).toFixed(2)}" fill="#dfe8ff" opacity="${(rnd()*0.5+0.12).toFixed(2)}"/>`;
+    svg.innerHTML = html;
+  })();
+
+  // time zones — common set + the user's detected zone surfaced first
+  (function () {
+    const sel = document.getElementById('tz');
+    const zones = [
+      'Pacific/Honolulu','America/Anchorage','America/Los_Angeles','America/Denver',
+      'America/Chicago','America/New_York','America/Sao_Paulo','UTC',
+      'Europe/London','Europe/Paris','Europe/Berlin','Europe/Athens','Africa/Cairo',
+      'Asia/Dubai','Asia/Kolkata','Asia/Shanghai','Asia/Tokyo','Australia/Sydney','Pacific/Auckland'
+    ];
+    let detected = 'UTC';
+    try { detected = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch (e) {}
+    if (!zones.includes(detected)) zones.unshift(detected);
+    const label = (z) => {
+      let off = '';
+      try {
+        const d = new Date();
+        const s = new Intl.DateTimeFormat('en-US', { timeZone: z, timeZoneName: 'shortOffset' }).formatToParts(d).find(p => p.type === 'timeZoneName');
+        off = s ? ' (' + s.value + ')' : '';
+      } catch (e) {}
+      return z.replace(/_/g, ' ') + off;
+    };
+    sel.innerHTML = zones.map(z => `<option value="${z}"${z===detected?' selected':''}>${label(z)}</option>`).join('');
+  })();
+
+  // tab switching
+  const tabs = { login: document.getElementById('tab-login'), signup: document.getElementById('tab-signup') };
+  const forms = { login: document.getElementById('form-login'), signup: document.getElementById('form-signup') };
+  function show(which) {
+    for (const k of ['login','signup']) {
+      tabs[k].classList.toggle('on', k === which);
+      forms[k].classList.toggle('hidden', k !== which);
+    }
+    forms[which].classList.remove('anim'); void forms[which].offsetWidth; forms[which].classList.add('anim');
+    const first = forms[which].querySelector('input, select'); if (first) setTimeout(() => first.focus(), 30);
+  }
+  tabs.login.onclick = () => show('login');
+  tabs.signup.onclick = () => show('signup');
+  document.querySelectorAll('.switch').forEach(b => b.onclick = () => show(b.dataset.goto));
+
+  // reveal API key
+  const key = document.getElementById('apikey'), reveal = document.getElementById('reveal');
+  reveal.onclick = () => { const p = key.type === 'password'; key.type = p ? 'text' : 'password'; reveal.textContent = p ? 'Hide' : 'Show'; key.focus(); };
+
+  // prevent actual submit (mockup)
+  forms.login.onsubmit = forms.signup.onsubmit = (e) => { e.preventDefault(); };
+</script>
+</body>
+</html>

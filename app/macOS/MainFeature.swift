@@ -8,7 +8,9 @@
 //
 
 import ComposableArchitecture
+import MessagesFeature
 import RawAPIFeature
+import StarMapFeature
 import SwiftUI
 
 // MARK: - Sidebar model
@@ -52,8 +54,8 @@ enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
         }
     }
 
-    /// The Event Log is the one category that shows content only — no detail pane.
-    var hasDetail: Bool { self != .eventLog }
+    /// The Stars (Galaxy Map) and Event Log show content only — no detail pane.
+    var hasDetail: Bool { self != .eventLog && self != .stars }
 
     /// Placeholder content rows for this category.
     var sampleItems: [String] {
@@ -92,9 +94,13 @@ struct MainFeature {
         var category: SidebarItem? = .devices
         var detailSelection: String?
         var isShowingAccount = false
+        /// The Messages inbox, persisted locally and seeded with the session key.
+        var messages: MessagesFeature.State
         /// The Raw API Access experience, shown in its own window (Tools menu).
         /// Seeded with the session API key so requests authenticate as this user.
         var rawAPI: RawAPIFeature.State
+        /// The Galaxy Map (Stars view) — currently seeded with static galaxy data.
+        var starMap: StarMapFeature.State
 
         init(
             account: Account,
@@ -108,7 +114,9 @@ struct MainFeature {
             self.category = category
             self.detailSelection = detailSelection
             self.isShowingAccount = isShowingAccount
+            self.messages = MessagesFeature.State(apiKey: apiKey)
             self.rawAPI = RawAPIFeature.State(apiKey: apiKey)
+            self.starMap = StarMapFeature.State()
         }
     }
 
@@ -116,7 +124,9 @@ struct MainFeature {
         case binding(BindingAction<State>)
         case delegate(Delegate)
         case logoutButtonTapped
+        case messages(MessagesFeature.Action)
         case rawAPI(RawAPIFeature.Action)
+        case starMap(StarMapFeature.Action)
 
         enum Delegate {
             case loggedOut
@@ -125,8 +135,14 @@ struct MainFeature {
 
     var body: some Reducer<State, Action> {
         BindingReducer()
+        Scope(state: \.messages, action: \.messages) {
+            MessagesFeature()
+        }
         Scope(state: \.rawAPI, action: \.rawAPI) {
             RawAPIFeature()
+        }
+        Scope(state: \.starMap, action: \.starMap) {
+            StarMapFeature()
         }
         Reduce { state, action in
             switch action {
@@ -144,7 +160,7 @@ struct MainFeature {
             case .logoutButtonTapped:
                 return .send(.delegate(.loggedOut))
 
-            case .rawAPI:
+            case .messages, .rawAPI, .starMap:
                 return .none
             }
         }
@@ -209,9 +225,23 @@ struct MainView: View {
         }
     }
 
+    /// The Messages inbox store, scoped from the main session.
+    private var messagesStore: StoreOf<MessagesFeature> {
+        store.scope(state: \.messages, action: \.messages)
+    }
+
+    /// The Galaxy Map store, scoped from the main session.
+    private var starMapStore: StoreOf<StarMapFeature> {
+        store.scope(state: \.starMap, action: \.starMap)
+    }
+
     // — Content: a selectable list (or, for the Event Log, a plain list) —
     @ViewBuilder private var content: some View {
-        if let category = store.category {
+        if store.category == .messages {
+            MessagesListView(store: messagesStore)
+        } else if store.category == .stars {
+            StarMapView(store: starMapStore)
+        } else if let category = store.category {
             if category.hasDetail {
                 List(selection: $store.detailSelection) {
                     ForEach(category.sampleItems, id: \.self) { item in
@@ -235,7 +265,9 @@ struct MainView: View {
 
     // — Detail (three-column categories only) —
     @ViewBuilder private var detail: some View {
-        if let category = store.category, let selection = store.detailSelection {
+        if store.category == .messages {
+            MessageDetailView(store: messagesStore)
+        } else if let category = store.category, let selection = store.detailSelection {
             VStack(spacing: 12) {
                 Image(systemName: category.symbol).font(.system(size: 48)).foregroundStyle(.tint)
                 Text(selection).font(.title2.bold())

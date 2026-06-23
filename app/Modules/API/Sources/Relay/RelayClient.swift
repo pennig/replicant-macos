@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 import Utils
 
 /// The common envelope of a replicant.space webhook delivery.
@@ -39,12 +40,6 @@ public struct RelayEvent: Sendable, Identifiable {
     }
 }
 
-public struct RelayPage: Sendable {
-    public let events: [RelayEvent]
-    /// Pass this back as `after:` to fetch strictly newer events.
-    public let nextCursor: String
-}
-
 public enum RelayError: Error {
     case badStatus(Int)
     case malformedResponse
@@ -56,57 +51,17 @@ public struct RelayClient: Sendable {
 
     private let baseURL: URL
     private let clientToken: String
+    private let logger: Logger
     private let session: URLSession
 
     /// - Parameters:
     ///   - baseURL: e.g. `https://your-relay.vercel.app`
     ///   - clientToken: must match the relay's `RELAY_CLIENT_TOKEN` env var.
-    public init(baseURL: URL, clientToken: String, session: URLSession = .shared) {
+    public init(baseURL: URL, clientToken: String, session: URLSession = .shared, logger: Logger? = nil) {
         self.baseURL = baseURL
         self.clientToken = clientToken
         self.session = session
-    }
-
-    /// Fetch one page of events after the given cursor (nil = from the
-    /// start of the retained log).
-    public func events(after cursor: String?, limit: Int = 100) async throws -> RelayPage {
-        var components = URLComponents(
-            url: baseURL.appending(path: "api/events"),
-            resolvingAgainstBaseURL: false
-        )!
-        var queryItems = [URLQueryItem(name: "limit", value: String(limit))]
-        if let cursor, !cursor.isEmpty {
-            queryItems.append(URLQueryItem(name: "cursor", value: cursor))
-        }
-        components.queryItems = queryItems
-
-        var request = URLRequest(url: components.url!)
-        request.setValue("Bearer \(clientToken)", forHTTPHeaderField: "Authorization")
-
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else { throw RelayError.malformedResponse }
-        guard http.statusCode == 200 else { throw RelayError.badStatus(http.statusCode) }
-
-        struct Page: Decodable {
-            struct Item: Decodable {
-                let id: String
-                let event: JSONValue
-            }
-            let events: [Item]
-            let nextCursor: String
-
-            enum CodingKeys: String, CodingKey {
-                case events
-                case nextCursor = "next_cursor"
-            }
-        }
-
-        let page = try JSONDecoder().decode(Page.self, from: data)
-        let encoder = JSONEncoder()
-        let events = try page.events.map { item in
-            RelayEvent(id: item.id, raw: try encoder.encode(item.event))
-        }
-        return RelayPage(events: events, nextCursor: page.nextCursor)
+        self.logger = logger ?? Logger(subsystem: "name.pennig.replicould.events", category: "relay")
     }
 
     /// A long-lived stream of events using SSE. Drains history after `cursor`,
@@ -162,6 +117,7 @@ public struct RelayClient: Sendable {
                                 if let id = pendingID, let dataStr = pendingData,
                                    let data = dataStr.data(using: .utf8)
                                 {
+                                    logger.debug("id: \(id), data: \(dataStr)")
                                     lastEventID = id
                                     continuation.yield(RelayEvent(id: id, raw: data))
                                 }
@@ -175,8 +131,12 @@ public struct RelayClient: Sendable {
                                 if let ms = Int(line.dropFirst(6).trimmingCharacters(in: .whitespaces)) {
                                     retryDelay = .milliseconds(ms)
                                 }
+                                logger.debug("retry after: \(retryDelay)")
+                            } else if line.hasPrefix(":") {
+                                logger.debug("comment: \(line)")
+                            } else {
+                                logger.debug("unhandled: \(line)")
                             }
-                            // Lines starting with ":" are SSE comments (keepalive); skip.
                         }
                     } catch is CancellationError {
                         break

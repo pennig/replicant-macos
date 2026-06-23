@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Replicant — Star System · Chamakuy</title>
+  <style>
+    html, body { margin: 0; padding: 0; background: #070a12; overflow: hidden; height: 100%; }
+    * { box-sizing: border-box; }
+    #stage { position: fixed; inset: 0; overflow: hidden; background: radial-gradient(1100px 880px at 50% 54%, #101a30 0%, #0a0f1b 56%, #070a12 100%); }
+    ::selection { background: rgba(255,178,62,0.3); }
+    .fade-in { animation: fadeIn .3s ease both; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  </style>
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+</head>
+<body>
+  <div id="stage"></div>
+  <div id="root"></div>
+
+  <script type="text/babel" src="data.js"></script>
+  <script type="text/babel" src="galaxy-data.jsx"></script>
+  <script type="text/babel" src="galaxy-ui.jsx"></script>
+  <script type="text/babel" src="tweaks-panel.jsx"></script>
+
+  <script type="text/babel">
+    const { rcMap, GAL_SYSTEMS, SYS_STAR, SYS_PLANETS, SYS_LAGRANGE, SYS_DEVICES, SYS_VESSELS,
+      useClock, Glass, StarField, Orrery, prefersStill } = window;
+    const { useTweaks, TweaksPanel, TweakSection, TweakSlider, TweakToggle } = window;
+    const M = window.RD_MONO, F = window.RD_FONT;
+    const c = rcMap('dark');
+    const planetById = Object.fromEntries(SYS_PLANETS.map((p) => [p.id, p]));
+
+    function resolve(id) {
+      if (!id) return null;
+      if (planetById[id]) return { kind: 'planet', d: planetById[id] };
+      const lp = SYS_LAGRANGE.find((x) => x.id === id); if (lp) return { kind: 'lagrange', d: lp };
+      const v = SYS_VESSELS.find((x) => x.code === id); if (v) return { kind: 'vessel', d: v };
+      const dv = SYS_DEVICES.find((x) => x.code === id); if (dv) return { kind: 'device', d: dv };
+      return null;
+    }
+    const glass = (extra) => ({ background: c.glass, backdropFilter: 'blur(26px) saturate(1.2)', WebkitBackdropFilter: 'blur(26px) saturate(1.2)', boxShadow: `inset 0 0 0 0.5px ${c.glassLine}, ${c.glassShadow}`, color: c.t1, fontFamily: F, ...extra });
+
+    function Btn({ children, primary, href }) {
+      const st = { flex: 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: '10px 14px', borderRadius: 10, border: 'none', cursor: 'pointer', fontFamily: F, fontSize: 12.5, fontWeight: 700, textDecoration: 'none', background: primary ? `linear-gradient(180deg, ${c.accent}, #ff9e2c)` : 'rgba(255,255,255,0.05)', color: primary ? '#2a1a05' : c.t1, boxShadow: primary ? `0 6px 18px ${c.accentSoft}` : `inset 0 0 0 0.5px ${c.glassLine}` };
+      return href ? <a href={href} style={st}>{children}</a> : <button style={st}>{children}</button>;
+    }
+    function Title({ eyebrow, name, right }) {
+      return (
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontFamily: M, fontSize: 10, letterSpacing: 1.6, textTransform: 'uppercase', color: c.t3 }}>{eyebrow}</div>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 4 }}>
+            <span style={{ fontSize: 22, fontWeight: 700, letterSpacing: -0.3 }}>{name}</span>{right}
+          </div>
+        </div>
+      );
+    }
+    function KV({ k, v, dot }) {
+      return (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 0', borderBottom: `1px solid ${c.glassLineSoft}` }}>
+          <span style={{ fontSize: 11, color: c.t3, width: 88, flexShrink: 0 }}>{k}</span>
+          {dot && <span style={{ width: 6, height: 6, borderRadius: '50%', background: dot, boxShadow: `0 0 6px ${dot}`, flexShrink: 0 }} />}
+          <span style={{ fontSize: 12.5, color: c.t1, flex: 1 }}>{v}</span>
+        </div>
+      );
+    }
+    const tone = (col) => <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontFamily: M, fontSize: 11 }}><span style={{ width: 6, height: 6, borderRadius: '50%', background: col, boxShadow: `0 0 6px ${col}` }} /></span>;
+
+    function Dossier({ sel }) {
+      const r = resolve(sel);
+      if (!r) return null;
+      let body;
+      if (r.kind === 'vessel') { const v = r.d; const hero = v.name === 'HEAVEN';
+        body = <>
+          <Title eyebrow={hero ? 'Replicant host vessel' : 'Vessel'} name={v.name} right={<span style={{ fontFamily: M, fontSize: 11, color: c.transit, display: 'inline-flex', alignItems: 'center', gap: 5 }}><span style={{ width: 6, height: 6, borderRadius: '50%', background: c.transit, boxShadow: `0 0 6px ${c.transit}` }} />Cruising</span>} />
+          <KV k="Replicant" v={hero ? 'Sylphrena · 30B93F2F' : '—'} dot={hero ? c.accent : null} />
+          <KV k="Course" v={`${planetById[v.from] ? planetById[v.from].name : v.from} → ${planetById[v.to] ? planetById[v.to].name : v.to}`} />
+          <KV k="Progress" v={`${Math.round(v.t * 100)}% · ETA 41m`} />
+          <KV k="Code" v={v.code} />
+          <div style={{ display: 'flex', gap: 8, marginTop: 16 }}><Btn primary>Set destination</Btn><Btn>Open vessel →</Btn></div>
+          <div style={{ fontSize: 10.5, color: c.t3, marginTop: 10, textAlign: 'center' }}>Tap any body or point on the map to retarget</div>
+        </>;
+      } else if (r.kind === 'planet') { const p = r.d;
+        body = <>
+          <Title eyebrow={`${p.type} · Chamakuy ${p.id}`} name={p.name} right={p.life ? <span style={{ fontFamily: M, fontSize: 11, color: c.life, display: 'inline-flex', alignItems: 'center', gap: 5 }}><span style={{ width: 6, height: 6, borderRadius: '50%', background: c.life }} />Life</span> : null} />
+          <KV k="Class" v={p.type} />
+          <KV k="Moons" v={(p.moons || []).length || '—'} />
+          <KV k="Devices" v={p.devices ? `${p.devices} stationed` : 'None'} dot={p.devices ? c.accent : null} />
+          {p.lagrange ? <KV k="Lagrange" v="L1–L5 plotted" dot={c.accent} /> : null}
+          <div style={{ display: 'flex', gap: 8, marginTop: 16 }}><Btn primary>Travel here</Btn><Btn>Scan</Btn></div>
+        </>;
+      } else if (r.kind === 'lagrange') { const lp = r.d; const host = planetById[lp.host];
+        body = <>
+          <Title eyebrow={`Lagrange point · ${host.name}`} name={lp.id} right={lp.device ? <span style={{ fontFamily: M, fontSize: 11, color: c.accent }}>occupied</span> : null} />
+          <div style={{ fontSize: 12.5, color: c.t2, lineHeight: 1.5, marginBottom: 12 }}>{lp.label}</div>
+          <KV k="Stability" v={lp.kind === 'trojan' ? 'Stable (trojan)' : 'Metastable'} />
+          <KV k="Station" v={lp.device ? ({ ftl_relay: 'FTL Relay', surge_plate: 'Surge Plate' })[lp.device] : 'Vacant'} dot={lp.device ? c.accent : null} />
+          <div style={{ display: 'flex', gap: 8, marginTop: 16 }}><Btn primary>Travel to {lp.id}</Btn><Btn>{lp.device ? 'Open device →' : 'Deploy here'}</Btn></div>
+        </>;
+      } else { const d = r.d;
+        body = <>
+          <Title eyebrow="Device" name={d.label} right={<span style={{ fontFamily: M, fontSize: 11, color: c.accent, display: 'inline-flex', alignItems: 'center', gap: 5 }}><span style={{ width: 6, height: 6, borderRadius: '50%', background: c.accent }} />{d.status}</span>} />
+          <KV k="Code" v={d.code} />
+          <KV k="Station" v={d.at === 'belt' ? 'Chamakuy belt' : d.at} />
+          <div style={{ display: 'flex', gap: 8, marginTop: 16 }}><Btn primary>Retarget</Btn><Btn>Open device →</Btn></div>
+        </>;
+      }
+      return <div className="fade-in" key={sel} style={glass({ position: 'absolute', bottom: 22, right: 22, width: 312, borderRadius: 18, padding: 18 })}>{body}</div>;
+    }
+
+    function ClockReadout({ t }) {
+      const cyc = (SYS_PLANETS[1].phase0 + (360 * t) / SYS_PLANETS[1].period) % 360;
+      return (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontFamily: M, fontSize: 11.5, color: c.t2 }}>
+          <span style={{ width: 6, height: 6, borderRadius: '50%', background: c.life, boxShadow: `0 0 7px ${c.life}`, animation: prefersStill ? 'none' : 'rcPulse 1.6s ease-in-out infinite' }} />
+          LIVE · Orrun {Math.round(cyc)}°
+        </span>
+      );
+    }
+
+    function Switch({ on, color }) {
+      return (
+        <span style={{ width: 26, height: 15, borderRadius: 8, flexShrink: 0, position: 'relative', background: on ? color : 'rgba(255,255,255,0.1)', boxShadow: on ? 'none' : `inset 0 0 0 0.5px ${c.glassLine}`, transition: 'background .15s' }}>
+          <span style={{ position: 'absolute', top: 2, left: on ? 13 : 2, width: 11, height: 11, borderRadius: '50%', background: '#fff', transition: 'left .15s', boxShadow: '0 1px 2px rgba(0,0,0,0.4)' }} />
+        </span>
+      );
+    }
+
+    const SYS_LAYERS = [
+      { key: 'hz', label: 'Habitable zone', desc: 'Liquid-water band', color: c.life },
+      { key: 'belt', label: 'Asteroid belt', desc: 'Chamakuy belt · mined', color: c.resource },
+      { key: 'kuiper', label: 'Kuiper belt', desc: 'Icy bodies · log scale', color: c.sense },
+      { key: 'oort', label: 'Oort cloud', desc: 'Outer shell · log scale', color: c.transit },
+    ];
+
+    function SLIcon({ k, color, size = 20 }) {
+      const p = { fill: 'none', stroke: color, strokeWidth: 1.5, strokeLinecap: 'round', strokeLinejoin: 'round' };
+      const dots = (n, rad) => Array.from({ length: n }, (_, i) => { const a = (i / n) * Math.PI * 2; return <circle key={i} cx={9 + Math.cos(a) * rad} cy={9 + Math.sin(a) * rad} r="0.9" fill={color} stroke="none" />; });
+      const G = {
+        hz: <g {...p}><circle cx="9" cy="9" r="2" fill={color} stroke="none" /><circle cx="9" cy="9" r="6.6" /></g>,
+        belt: <g {...p}><circle cx="9" cy="9" r="2" fill={color} stroke="none" />{dots(7, 6.4)}</g>,
+        kuiper: <g {...p}><circle cx="9" cy="9" r="7.2" strokeDasharray="1.5 2.5" opacity="0.7" />{dots(9, 7.2)}<circle cx="9" cy="9" r="1.4" fill={color} stroke="none" /></g>,
+        oort: <g {...p}><circle cx="9" cy="9" r="7.4" opacity="0.7" /><circle cx="9" cy="9" r="1.4" fill={color} stroke="none" />{dots(6, 4.4)}</g>,
+      };
+      return <svg width={size} height={size} viewBox="0 0 18 18">{G[k]}</svg>;
+    }
+
+    function SystemRail({ show, toggle }) {
+      const [hover, setHover] = React.useState(null);
+      return (
+        <div onClick={(e) => e.stopPropagation()} style={{ position: 'absolute', top: 250, left: 26, display: 'flex', flexDirection: 'column', gap: 7 }}>
+          <span style={{ fontFamily: M, fontSize: 9, letterSpacing: 1.4, color: c.t3, paddingLeft: 3, marginBottom: 1 }}>SHOW</span>
+          {SYS_LAYERS.map((l) => {
+            const on = show[l.key]; const col = l.color;
+            return (
+              <div key={l.key} onMouseEnter={() => setHover(l.key)} onMouseLeave={() => setHover(null)} style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                <button onClick={() => toggle(l.key)} style={glass({ width: 44, height: 44, borderRadius: 12, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', boxShadow: `inset 0 0 0 0.5px ${on ? col : c.glassLine}`, opacity: on ? 1 : 0.6 })}>
+                  {on && <span style={{ position: 'absolute', left: 0, top: 10, bottom: 10, width: 3, borderRadius: 3, background: col, boxShadow: `0 0 8px ${col}` }} />}
+                  <SLIcon k={l.key} color={on ? col : c.t3} />
+                </button>
+                {hover === l.key && (
+                  <div style={glass({ position: 'absolute', left: 54, whiteSpace: 'nowrap', borderRadius: 9, padding: '7px 11px', pointerEvents: 'none', zIndex: 5 })}>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: c.t1 }}>{l.label}</span>
+                    <span style={{ fontSize: 10.5, color: c.t3, marginLeft: 8 }}>{l.desc}</span>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+
+    function InsetCard() {
+      return (
+        <div style={glass({ width: 188, borderRadius: 14, padding: 8, marginTop: 12 })}>
+          <div style={{ position: 'relative', height: 78, borderRadius: 9, overflow: 'hidden', background: 'rgba(255,255,255,0.02)' }}>
+            <svg width="172" height="78" viewBox="0 0 172 78" style={{ display: 'block' }}>
+              <ellipse cx="86" cy="40" rx="68" ry="26" fill="none" stroke={c.glassLineSoft} />
+              {GAL_SYSTEMS.map((s) => { const a = s.a * Math.PI / 180; const home = s.id === 'CHK'; return (
+                <circle key={s.id} cx={86 + Math.cos(a) * s.r * 66} cy={40 + Math.sin(a) * s.r * 26} r={home ? 3.4 : 1.6} fill={home ? c.accent : s.presence === 'mine' ? c.accent : c.starDim} opacity={home ? 1 : 0.7} style={home ? { filter: `drop-shadow(0 0 5px ${c.accent})` } : null} />
+              ); })}
+            </svg>
+            <span style={{ position: 'absolute', left: 8, bottom: 6, fontFamily: M, fontSize: 8.5, letterSpacing: 0.6, color: c.t3 }}>CHAMAKUY · ORION SPUR</span>
+          </div>
+          <a href="Galaxy Explorer.html" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, marginTop: 8, padding: '9px 12px', borderRadius: 9, textDecoration: 'none', background: 'rgba(255,255,255,0.05)', boxShadow: `inset 0 0 0 0.5px ${c.glassLine}`, color: c.t1, fontFamily: F, fontSize: 12, fontWeight: 600 }}>
+            <span style={{ fontSize: 13 }}>↖</span> Back to Galaxy
+          </a>
+        </div>
+      );
+    }
+
+    const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+      "orbitSpeed": 0.05,
+      "bloom": false
+    }/*EDITMODE-END*/;
+
+    function App() {
+      const [tw, setTweak] = useTweaks(TWEAK_DEFAULTS);
+      const t = useClock(tw.orbitSpeed);
+      const [sel, setSel] = React.useState('C1D9F0A2');
+      const [vp, setVp] = React.useState({ w: window.innerWidth, h: window.innerHeight });
+      React.useEffect(() => { const r = () => setVp({ w: window.innerWidth, h: window.innerHeight }); window.addEventListener('resize', r); return () => window.removeEventListener('resize', r); }, []);
+
+      const tracked = SYS_VESSELS;
+      const [show, setShow] = React.useState({ hz: true, belt: true, kuiper: false, oort: false });
+      const toggleShow = (k) => setShow((s) => ({ ...s, [k]: !s[k] }));
+      // Outer fields need room — zoom out (smaller scale, bigger logical canvas).
+      const L = show.oort ? { w: 1900, h: 1660 } : show.kuiper ? { w: 1520, h: 1320 } : { w: 1200, h: 1000 };
+      const S = Math.min((vp.w / L.w) * 0.98, (vp.h / L.h) * 0.98, 1.12);
+
+      return (
+        <>
+          <div onClick={() => setSel(null)} style={{ position: 'absolute', inset: 0 }}>
+            <StarField c={c} seed={23} n={170} />
+            <div style={{ position: 'absolute', left: '50%', top: '50%', width: L.w, height: L.h, transform: `translate(-50%,-50%) scale(${S})`, transition: 'width .5s cubic-bezier(.3,.7,.3,1), height .5s cubic-bezier(.3,.7,.3,1), transform .5s cubic-bezier(.3,.7,.3,1)' }}>
+              <Orrery c={c} t={t} selected={sel} onSelect={setSel} variant={tw.bloom ? 'cinematic' : 'orrery'} size={L} show={show} />
+            </div>
+            <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', background: 'radial-gradient(120% 95% at 50% 48%, transparent 52%, rgba(0,0,0,0.45) 100%)' }} />
+          </div>
+
+          {/* header + galaxy inset (replaces the live clock) */}
+          <div style={{ position: 'absolute', top: 24, left: 26 }}>
+            <div style={{ pointerEvents: 'none' }}>
+              <div style={{ fontFamily: M, fontSize: 10.5, letterSpacing: 3, color: c.accent }}>STAR SYSTEM</div>
+              <div style={{ fontSize: 28, fontWeight: 700, letterSpacing: -0.5, color: c.t1, marginTop: 4 }}>Chamakuy</div>
+            </div>
+            <InsetCard />
+          </div>
+
+          {/* tracked dock, top-right */}
+          <div style={{ position: 'absolute', top: 24, right: 24, display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end' }}>
+            <span style={{ fontFamily: M, fontSize: 10, letterSpacing: 1.4, color: c.t3, marginRight: 4 }}>TRACKED</span>
+            {tracked.map((x) => { const isV = !!x.name; const id = x.code; const on = sel === id;
+              const col = isV && x.name === 'HEAVEN' ? c.accent : isV ? c.transit : c.sense;
+              return (
+                <button key={id} onClick={() => setSel(id)} style={glass({ display: 'flex', alignItems: 'center', gap: 9, padding: '9px 13px', borderRadius: 11, border: 'none', cursor: 'pointer', minWidth: 168, boxShadow: `inset 0 0 0 0.5px ${on ? c.accentLine : c.glassLine}`, textAlign: 'left' })}>
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: col, boxShadow: `0 0 7px ${col}` }} />
+                  <span style={{ flex: 1 }}>
+                    <span style={{ display: 'block', fontSize: 12, fontWeight: 600, color: c.t1 }}>{isV ? x.name : x.label}</span>
+                    <span style={{ display: 'block', fontFamily: M, fontSize: 9.5, color: c.t3 }}>{x.status}</span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          <Dossier sel={sel} />
+
+          {/* left-center: display rail (matches galaxy) */}
+          <SystemRail show={show} toggle={toggleShow} />
+
+          {/* bottom-left: nav hint */}
+          <div style={{ position: 'absolute', bottom: 24, left: 26, fontFamily: M, fontSize: 10.5, color: c.t3, letterSpacing: 0.3 }}>click a body, vessel or L-point</div>
+
+          <TweaksPanel title="Tweaks">
+            <TweakSection label="Motion" />
+            <TweakSlider label="Orbit speed" value={tw.orbitSpeed} min={0} max={0.6} step={0.05} onChange={(v) => setTweak('orbitSpeed', v)} />
+            <TweakToggle label="Cinematic bloom" value={tw.bloom} onChange={(v) => setTweak('bloom', v)} />
+          </TweaksPanel>
+        </>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

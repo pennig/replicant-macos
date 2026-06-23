@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C9AB58FE2FEA4A3300536794 /* StarMapFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C9AB58FD2FEA4A3300536794 /* StarMapFeature */; };
 		C9B5305C2FDDD839006F79A8 /* ReplicantApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9B530592FDDD839006F79A8 /* ReplicantApp.swift */; };
 		C9B5305D2FDDD839006F79A8 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C9B530572FDDD839006F79A8 /* Assets.xcassets */; };
 		C9B530672FDDD950006F79A8 /* ReplicantSplitView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9B530642FDDD93C006F79A8 /* ReplicantSplitView.swift */; };
@@ -22,6 +23,7 @@
 		C9B5309B2FE1DC5E006F79A8 /* LoginFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C9B5309A2FE1DC5E006F79A8 /* LoginFeature */; };
 		C9B5309D2FE1DEE2006F79A8 /* DependencyClients in Frameworks */ = {isa = PBXBuildFile; productRef = C9B5309C2FE1DEE2006F79A8 /* DependencyClients */; };
 		C9B5309F2FE72B0B006F79A8 /* RawAPIFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C9B5309E2FE72B0B006F79A8 /* RawAPIFeature */; };
+		C9D902132FE9DDC000781FBB /* MessagesFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C9D902122FE9DDC000781FBB /* MessagesFeature */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -40,6 +42,14 @@
 		C9B5307D2FE0E38E006F79A8 /* PreferencesFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesFeature.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		C9AB58FC2FEA3F9500536794 /* SceneKit Galaxy Map */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "SceneKit Galaxy Map";
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
 /* Begin PBXFrameworksBuildPhase section */
 		C922A8B32FDC493200431320 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
@@ -48,6 +58,8 @@
 				C9B5307A2FE0A6D1006F79A8 /* ComposableArchitecture in Frameworks */,
 				C9B5309F2FE72B0B006F79A8 /* RawAPIFeature in Frameworks */,
 				C9B530972FE1D3AA006F79A8 /* UI in Frameworks */,
+				C9D902132FE9DDC000781FBB /* MessagesFeature in Frameworks */,
+				C9AB58FE2FEA4A3300536794 /* StarMapFeature in Frameworks */,
 				C9B5309D2FE1DEE2006F79A8 /* DependencyClients in Frameworks */,
 				C9B5309B2FE1DC5E006F79A8 /* LoginFeature in Frameworks */,
 				C9B530992FE1D3AA006F79A8 /* Utils in Frameworks */,
@@ -98,6 +110,7 @@
 				C9B530602FDDD93C006F79A8 /* DESIGN_SPEC.md */,
 				C9B530612FDDD93C006F79A8 /* README.md */,
 				C9B530642FDDD93C006F79A8 /* ReplicantSplitView.swift */,
+				C9AB58FC2FEA3F9500536794 /* SceneKit Galaxy Map */,
 			);
 			path = sandbox;
 			sourceTree = "<group>";
@@ -133,6 +146,8 @@
 				C9B5309A2FE1DC5E006F79A8 /* LoginFeature */,
 				C9B5309C2FE1DEE2006F79A8 /* DependencyClients */,
 				C9B5309E2FE72B0B006F79A8 /* RawAPIFeature */,
+				C9D902122FE9DDC000781FBB /* MessagesFeature */,
+				C9AB58FD2FEA4A3300536794 /* StarMapFeature */,
 			);
 			productName = Replicant;
 			productReference = C922A8B62FDC493200431320 /* Replicould.app */;
@@ -451,6 +466,10 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		C9AB58FD2FEA4A3300536794 /* StarMapFeature */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = StarMapFeature;
+		};
 		C9B530792FE0A6D1006F79A8 /* ComposableArchitecture */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = C9B530782FE0A6D1006F79A8 /* XCRemoteSwiftPackageReference "swift-composable-architecture" */;
@@ -479,6 +498,10 @@
 		C9B5309E2FE72B0B006F79A8 /* RawAPIFeature */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = RawAPIFeature;
+		};
+		C9D902122FE9DDC000781FBB /* MessagesFeature */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = MessagesFeature;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

@@ -1,0 +1,536 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Replicant — First Launch</title>
+<style>
+  :root {
+    --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+    --win: #0b1019; --content: #0a1019;
+    --panel: rgba(255,255,255,0.04); --panel2: rgba(255,255,255,0.065);
+    --line: rgba(255,255,255,0.09); --lineSoft: rgba(255,255,255,0.055);
+    --t1: #e9eef7; --t2: #9aa6bc; --t3: #697488;
+    --accent: #ffb23e; --accentText: #2a1a05;
+    --selBg: rgba(255,178,62,0.12); --selRing: rgba(255,178,62,0.34);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: var(--sans); background: #05040a; color: var(--t1);
+    display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 32px;
+  }
+  ::selection { background: rgba(255,178,62,0.3); }
+
+  /* macOS window */
+  .win {
+    width: 760px; height: 560px; border-radius: 13px; overflow: hidden; position: relative;
+    background: linear-gradient(180deg, #1b1733 0%, #08060f 100%);
+    box-shadow: 0 0 0 0.5px rgba(255,255,255,0.10), 0 50px 130px rgba(0,0,0,0.65);
+    display: flex; flex-direction: column;
+  }
+  .titlebar { height: 42px; display: flex; align-items: center; padding: 0 16px; position: relative; z-index: 5; }
+  .lights { display: flex; gap: 8px; }
+  .lights span { width: 12px; height: 12px; border-radius: 50%; box-shadow: inset 0 0 0 0.5px rgba(0,0,0,0.25); }
+  .lights .r { background: #ff5f57; } .lights .y { background: #febc2e; } .lights .g { background: #28c840; }
+
+  /* cosmic backdrop */
+  .bg { position: absolute; inset: 0; pointer-events: none; }
+  .bg svg { position: absolute; inset: 0; }
+  .nebula {
+    position: absolute; inset: 0;
+    background-image:
+      radial-gradient(680px 460px at 50% -12%, rgba(255,178,62,0.14), transparent 60%),
+      radial-gradient(560px 520px at 12% 116%, rgba(101,140,255,0.10), transparent 62%),
+      radial-gradient(520px 460px at 104% 90%, rgba(63,211,203,0.07), transparent 60%);
+  }
+  /* legibility scrim — softly darkens behind the wordmark/tagline so the
+     radiating ring strokes never cut across the lettering */
+  .veil {
+    position: absolute; inset: 0; pointer-events: none;
+    background-image:
+      radial-gradient(360px 200px at 50% 34%, rgba(6,9,15,0.62), rgba(6,9,15,0) 72%),
+      radial-gradient(620px 360px at 50% 78%, rgba(6,9,15,0.40), rgba(6,9,15,0) 70%);
+  }
+
+  /* content */
+  .stage { flex: 1; position: relative; z-index: 2; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; padding: 8px 56px 44px; }
+  .brand { display: flex; flex-direction: column; align-items: center; gap: 16px; margin-bottom: 26px; }
+  .mark { width: 116px; height: 116px; position: relative; display: flex; align-items: center; justify-content: center;
+    animation: markIn .6s cubic-bezier(.2,.8,.2,1) both; }
+  .mark svg { display: block; }
+  @keyframes markIn { from { opacity: 0; transform: scale(.82); } to { opacity: 1; transform: none; } }
+  .wordmark { font-size: 26px; font-weight: 700; letter-spacing: -0.4px; }
+  .tagline { font-size: 13.5px; color: var(--t2); margin-top: -8px; }
+
+  /* segmented control */
+  .seg { display: flex; gap: 3px; padding: 3px; border-radius: 10px; background: var(--panel);
+    box-shadow: inset 0 0 0 0.5px var(--line); margin-bottom: 22px; }
+  .seg button { appearance: none; border: none; cursor: pointer; font-family: var(--sans);
+    font-size: 12.5px; font-weight: 600; color: var(--t2); background: transparent;
+    padding: 7px 18px; border-radius: 7px; transition: color .15s, background .15s; }
+  .seg button.on { color: var(--t1); background: var(--panel2); box-shadow: inset 0 0 0 0.5px var(--line); }
+
+  /* form */
+  form { width: 100%; max-width: 360px; display: flex; flex-direction: column; gap: 13px; }
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  .field label { font-size: 10.5px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; color: var(--t3); }
+  .field .hint { font-size: 11px; color: var(--t3); font-weight: 400; letter-spacing: 0; text-transform: none; }
+  .ctl { position: relative; display: flex; align-items: center; }
+  input, select {
+    width: 100%; appearance: none; font-family: var(--sans); font-size: 13.5px; color: var(--t1);
+    background: rgba(255,255,255,0.05); border: none; border-radius: 9px;
+    box-shadow: inset 0 0 0 1px var(--line); padding: 11px 13px; outline: none; transition: box-shadow .15s;
+  }
+  input.mono { font-family: var(--mono); font-size: 13px; letter-spacing: 0.2px; }
+  input::placeholder { color: var(--t3); }
+  input:focus, select:focus { box-shadow: inset 0 0 0 1.5px var(--selRing); background: rgba(255,255,255,0.06); }
+  select { cursor: pointer; padding-right: 34px; }
+  .ctl.sel::after { content: ""; position: absolute; right: 13px; width: 9px; height: 9px; pointer-events: none;
+    border-right: 1.6px solid var(--t2); border-bottom: 1.6px solid var(--t2); transform: translateY(-2px) rotate(45deg); }
+  .reveal { position: absolute; right: 6px; border: none; background: transparent; cursor: pointer; color: var(--t3);
+    font-size: 11px; font-weight: 600; font-family: var(--sans); padding: 6px 8px; border-radius: 6px; }
+  .reveal:hover { color: var(--t2); }
+
+  .submit {
+    margin-top: 6px; appearance: none; border: none; cursor: pointer; font-family: var(--sans);
+    font-size: 14px; font-weight: 700; color: var(--accentText); padding: 12px; border-radius: 10px;
+    background: linear-gradient(180deg, #ffc05c, #ff9e2c);
+    box-shadow: 0 6px 20px rgba(255,158,44,0.32), inset 0 1px 0 rgba(255,255,255,0.45);
+    display: flex; align-items: center; justify-content: center; gap: 8px; transition: transform .08s, filter .15s;
+  }
+  .submit:hover { filter: brightness(1.04); }
+  .submit:active { transform: translateY(1px); }
+  .submit .arrow { font-size: 15px; }
+
+  .foot { margin-top: 18px; font-size: 11.5px; color: var(--t3); text-align: center; line-height: 1.5; }
+  .foot a { color: var(--t2); text-decoration: none; border-bottom: 1px solid var(--lineSoft); }
+  .switch { background: none; border: none; color: var(--accent); font: inherit; font-size: 11.5px; cursor: pointer; padding: 0; }
+
+  .hidden { display: none; }
+  /* gentle entrance for the panel on toggle */
+  @keyframes fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  .anim { animation: fade .22s ease; }
+</style>
+</head>
+<body>
+  <div class="win">
+    <div class="bg"><div class="nebula"></div><svg id="rings" width="100%" height="100%"></svg><svg id="stars" width="100%" height="100%"></svg><div class="veil"></div></div>
+    <div class="titlebar"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div></div>
+
+    <div class="stage">
+      <div class="brand">
+        <div class="mark" id="mark"></div>
+        <div style="text-align:center">
+          <div class="wordmark">Replicant</div>
+          <div class="tagline">Command your probes across the local cluster.</div>
+        </div>
+      </div>
+
+      <div class="seg" role="tablist">
+        <button id="tab-login" class="on" role="tab">Log in</button>
+        <button id="tab-signup" role="tab">Create account</button>
+      </div>
+
+      <!-- LOG IN -->
+      <form id="form-login" class="anim" autocomplete="off">
+        <div class="field">
+          <label>API Key <span class="hint">— paste the key from your account</span></label>
+          <div class="ctl">
+            <input id="apikey" class="mono" type="password" placeholder="rk_live_••••••••••••••••••••••••" spellcheck="false" />
+            <button type="button" class="reveal" id="reveal">Show</button>
+          </div>
+        </div>
+        <button class="submit" type="submit">Log in <span class="arrow">→</span></button>
+        <div class="foot">
+          No account yet? <button type="button" class="switch" data-goto="signup">Create one</button> to get started.
+        </div>
+      </form>
+
+      <!-- SIGN UP -->
+      <form id="form-signup" class="hidden" autocomplete="off">
+        <div class="field">
+          <label>Name</label>
+          <div class="ctl"><input id="name" type="text" placeholder="What should we call you?" /></div>
+        </div>
+        <div class="field">
+          <label>Email</label>
+          <div class="ctl"><input id="email" type="email" placeholder="you@example.com" spellcheck="false" /></div>
+        </div>
+        <div class="field">
+          <label>Time zone</label>
+          <div class="ctl sel">
+            <select id="tz"></select>
+          </div>
+        </div>
+        <button class="submit" type="submit">Begin <span class="arrow">→</span></button>
+        <div class="foot">
+          Already have a key? <button type="button" class="switch" data-goto="login">Log in instead</button>.
+        </div>
+      </form>
+    </div>
+  </div>
+
+<script>
+  // ─────────────────────────────────────────────────────────────
+  //  Bloom mark geometry (ported from the Replicant icon)
+  // ─────────────────────────────────────────────────────────────
+  function hex(cx, cy, r) {
+    let d = '';
+    for (let i = 0; i < 6; i++) { const a = (-90 + i * 60) * Math.PI / 180; d += (i ? 'L' : 'M') + (cx + r * Math.cos(a)).toFixed(1) + ' ' + (cy + r * Math.sin(a)).toFixed(1) + ' '; }
+    return d + 'Z';
+  }
+  function uvec(f, t) { const dx = t[0] - f[0], dy = t[1] - f[1], L = Math.hypot(dx, dy) || 1; return [dx / L, dy / L]; }
+  function roundedHex(cx, cy, Rc, k) {
+    if (k <= 0.001) return hex(cx, cy, Rc);
+    k = Math.min(k, 1);
+    const V = [];
+    for (let i = 0; i < 6; i++) { const a = (-90 + i * 60) * Math.PI / 180; V.push([cx + Rc * Math.cos(a), cy + Rc * Math.sin(a)]); }
+    const d = k * (Rc / 2), rf = d * Math.tan(Math.PI / 3);
+    const A = [], B = [];
+    for (let i = 0; i < 6; i++) {
+      const cur = V[i], prev = V[(i + 5) % 6], next = V[(i + 1) % 6];
+      const up = uvec(cur, prev), un = uvec(cur, next);
+      A.push([cur[0] + d * up[0], cur[1] + d * up[1]]);
+      B.push([cur[0] + d * un[0], cur[1] + d * un[1]]);
+    }
+    let p = 'M ' + A[0][0].toFixed(1) + ' ' + A[0][1].toFixed(1) + ' ';
+    for (let i = 0; i < 6; i++) {
+      p += 'A ' + rf.toFixed(1) + ' ' + rf.toFixed(1) + ' 0 0 1 ' + B[i][0].toFixed(1) + ' ' + B[i][1].toFixed(1) + ' ';
+      p += 'L ' + A[(i + 1) % 6][0].toFixed(1) + ' ' + A[(i + 1) % 6][1].toFixed(1) + ' ';
+    }
+    return p + 'Z';
+  }
+
+  const VIOLET = [181, 139, 255];
+  const toRgb = (h) => { h = h.replace('#', ''); return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)]; };
+  const mix = (a, b, f) => a.map((v, i) => Math.round(v + (b[i] - v) * f));
+  const rgb = (c) => `rgb(${c[0]},${c[1]},${c[2]})`;
+
+  const ICON = {
+    accent: '#ffb23e', relayTint: 20, bg: 'violet', ringCount: 6, spacingEase: 1.3,
+    outerPlacement: 650, rounding: 1.1, glow: 85, budRadius: 13, outlineRadius: 24,
+    outlineOpacity: 30, cubeContrast: 45, cubeEdge: 15,
+  };
+
+  // Tunable parameters for the radiating-ring background (host rewrites this block).
+  const RINGS = /*EDITMODE-BEGIN*/{
+    "ringCount": 12,
+    "appearRadius": 20,
+    "circleRadius": 170,
+    "vanishRadius": 580,
+    "spacingEase": 2.4,
+    "speed": 0.4
+  }/*EDITMODE-END*/;
+  const BG = { violet: ['#1b1733', '#08060f'], navy: ['#122036', '#070b14'], void: ['#15151c', '#050506'] };
+  const R = 230, INNER_R = 158;
+  const CUBE = {
+    top:   'M0 -78 L67.55 -39 L0 0 L-67.55 -39 Z',
+    right: 'M67.55 -39 L67.55 39 L0 78 L0 0 Z',
+    left:  'M-67.55 -39 L0 0 L0 78 L-67.55 39 Z',
+    ridge: 'M-67.55 -39 L0 0 L67.55 -39',
+    front: 'M0 0 L0 78',
+  };
+  function genRings(t) {
+    const n = Math.max(2, Math.round(t.ringCount));
+    const outerR = t.outerPlacement, ease = t.spacingEase, gamma = t.rounding, rings = [];
+    for (let i = 0; i < n; i++) {
+      const p = i / (n - 1);
+      rings.push({ Rc: INNER_R + (outerR - INNER_R) * Math.pow(p, ease), k: Math.pow(p, gamma), op: 0.05 + 0.5 * Math.pow(1 - p, 1.3), w: 7 - 2 * p, buds: i === 0 });
+    }
+    return rings;
+  }
+  function bloomSVG(t, size, idp) {
+    const rings = genRings(t), n = rings.length, glow = t.glow / 100, tint = t.relayTint / 100;
+    const acc = toRgb(t.accent);
+    const coreLight = rgb(mix(acc, [255, 255, 255], 0.55)), coreDark = rgb(mix(acc, [0, 0, 0], 0.5)), budFill = rgb(mix(acc, [255, 255, 255], 0.18));
+    const [bg0, bg1] = BG[t.bg] || BG.violet;
+    const ce = t.cubeContrast / 100, ee = t.cubeEdge / 100;
+    const fL = (0.18 * ce).toFixed(3), fR = (0.06 * ce).toFixed(3), fT = (0.26 * ce).toFixed(3);
+    const eR = (0.30 * ee).toFixed(3), eF = (0.32 * ee).toFixed(3);
+    let body = '';
+    for (let i = n - 1; i >= 0; i--) {
+      const r = rings[i], outerFrac = i / (n - 1), c = mix(acc, VIOLET, tint * outerFrac);
+      body += `<path d="${roundedHex(0, 0, r.Rc, r.k)}" fill="none" stroke="rgba(${c[0]},${c[1]},${c[2]},${r.op.toFixed(3)})" stroke-width="${r.w.toFixed(1)}" stroke-linejoin="round"/>`;
+    }
+    body += `<path d="${hex(0, 0, 78)}" fill="url(#core${idp})"/>`
+      + `<path d="${CUBE.left}" fill="rgba(0,0,0,${fL})"/>`
+      + `<path d="${CUBE.right}" fill="rgba(0,0,0,${fR})"/>`
+      + `<path d="${CUBE.top}" fill="url(#cubeTop${idp})"/>`
+      + `<path d="${CUBE.ridge}" fill="none" stroke="rgba(255,244,218,${eR})" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>`
+      + `<path d="${CUBE.front}" fill="none" stroke="rgba(42,21,0,${eF})" stroke-width="1.8" stroke-linecap="round"/>`;
+    const halo = `rgba(${acc[0]},${acc[1]},${acc[2]},${(t.outlineOpacity / 100).toFixed(3)})`;
+    for (let i = 0; i < 6; i++) {
+      const a = (-90 + i * 60) * Math.PI / 180, x = (INNER_R * Math.cos(a)).toFixed(1), y = (INNER_R * Math.sin(a)).toFixed(1);
+      body += `<circle cx="${x}" cy="${y}" r="${t.outlineRadius}" fill="${halo}"/><circle cx="${x}" cy="${y}" r="${t.budRadius}" fill="${budFill}"/>`;
+    }
+    return `<svg width="${size}" height="${size}" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <radialGradient id="core${idp}" cx="40%" cy="34%" r="72%"><stop offset="0" stop-color="${coreLight}"/><stop offset="58%" stop-color="${t.accent}"/><stop offset="100%" stop-color="${coreDark}"/></radialGradient>
+        <radialGradient id="glow${idp}" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="rgba(${acc[0]},${acc[1]},${acc[2]},0.5)"/><stop offset="100%" stop-color="rgba(${acc[0]},${acc[1]},${acc[2]},0)"/></radialGradient>
+        <linearGradient id="cubeTop${idp}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="rgba(255,243,216,${fT})"/><stop offset="1" stop-color="rgba(255,243,216,0)"/></linearGradient>
+        <linearGradient id="bgg${idp}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${bg0}"/><stop offset="1" stop-color="${bg1}"/></linearGradient>
+        <clipPath id="clip${idp}"><rect width="1024" height="1024" rx="${R}"/></clipPath>
+      </defs>
+      <rect width="1024" height="1024" rx="${R}" fill="url(#bgg${idp})"/>
+      <g clip-path="url(#clip${idp})"><g transform="translate(512,512)">
+        <circle r="${(330 * (0.7 + glow * 0.3)).toFixed(0)}" fill="url(#glow${idp})" opacity="${(0.7 * glow).toFixed(2)}"/>
+        ${body}
+      </g></g>
+    </svg>`;
+  }
+  // The brand mark = the icon's IMAGERY itself (core cube + buds + first ring),
+  // drawn transparent so it sits directly on the launch screen — no squircle tile.
+  function markSVG(t, size) {
+    const acc = toRgb(t.accent);
+    const coreLight = rgb(mix(acc, [255, 255, 255], 0.55)), coreDark = rgb(mix(acc, [0, 0, 0], 0.5)), budFill = rgb(mix(acc, [255, 255, 255], 0.18));
+    const ce = t.cubeContrast / 100, ee = t.cubeEdge / 100;
+    const fL = (0.18 * ce).toFixed(3), fR = (0.06 * ce).toFixed(3), fT = (0.26 * ce).toFixed(3);
+    const eR = (0.30 * ee).toFixed(3), eF = (0.32 * ee).toFixed(3);
+    const rings = genRings(t).slice(0, 2); // ring 0 (carries buds) + the first ring past it
+    let body = '';
+    for (let i = rings.length - 1; i >= 0; i--) {
+      const r = rings[i];
+      body += `<path d="${roundedHex(0, 0, r.Rc, r.k)}" fill="none" stroke="rgba(${acc[0]},${acc[1]},${acc[2]},${r.op.toFixed(3)})" stroke-width="${r.w.toFixed(1)}" stroke-linejoin="round"/>`;
+    }
+    body += `<path d="${hex(0, 0, 78)}" fill="url(#coremk)"/>`
+      + `<path d="${CUBE.left}" fill="rgba(0,0,0,${fL})"/>`
+      + `<path d="${CUBE.right}" fill="rgba(0,0,0,${fR})"/>`
+      + `<path d="${CUBE.top}" fill="url(#cubeTopmk)"/>`
+      + `<path d="${CUBE.ridge}" fill="none" stroke="rgba(255,244,218,${eR})" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>`
+      + `<path d="${CUBE.front}" fill="none" stroke="rgba(42,21,0,${eF})" stroke-width="1.8" stroke-linecap="round"/>`;
+    const halo = `rgba(${acc[0]},${acc[1]},${acc[2]},${(t.outlineOpacity / 100).toFixed(3)})`;
+    for (let i = 0; i < 6; i++) {
+      const a = (-90 + i * 60) * Math.PI / 180, x = (INNER_R * Math.cos(a)).toFixed(1), y = (INNER_R * Math.sin(a)).toFixed(1);
+      body += `<circle cx="${x}" cy="${y}" r="${t.outlineRadius}" fill="${halo}"/><circle cx="${x}" cy="${y}" r="${t.budRadius}" fill="${budFill}"/>`;
+    }
+    const ext = 250;
+    return `<svg width="${size}" height="${size}" viewBox="${-ext} ${-ext} ${ext * 2} ${ext * 2}" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <radialGradient id="coremk" cx="40%" cy="34%" r="72%"><stop offset="0" stop-color="${coreLight}"/><stop offset="58%" stop-color="${t.accent}"/><stop offset="100%" stop-color="${coreDark}"/></radialGradient>
+        <radialGradient id="glowmk" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="rgba(${acc[0]},${acc[1]},${acc[2]},0.45)"/><stop offset="100%" stop-color="rgba(${acc[0]},${acc[1]},${acc[2]},0)"/></radialGradient>
+        <linearGradient id="cubeTopmk" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="rgba(255,243,216,${fT})"/><stop offset="1" stop-color="rgba(255,243,216,0)"/></linearGradient>
+      </defs>
+      <circle r="210" fill="url(#glowmk)"/>
+      ${body}
+    </svg>`;
+  }
+  // mount the mark imagery as the brand logo
+  document.getElementById('mark').innerHTML = markSVG(ICON, 116);
+
+  // ─────────────────────────────────────────────────────────────
+  //  Radiating rings — the bloom escaping the logo into the window
+  //  Opacity + hex→circle morph are driven by each ring's current
+  //  RADIUS (appear / circle / vanish), so the tweaks read intuitively.
+  // ─────────────────────────────────────────────────────────────
+  const RingsFX = (function () {
+    const svg = document.getElementById('rings');
+    const win = document.querySelector('.win');
+    const mark = document.getElementById('mark');
+    const SVGNS = 'http://www.w3.org/2000/svg';
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const acc = toRgb(ICON.accent);
+    const BIRTH_R = 16, BASE_LIFE = 7200;
+    let W = 0, H = 0, ox = 0, oy = 0, paths = [];
+
+    function measure() {
+      const wb = win.getBoundingClientRect(), mb = mark.getBoundingClientRect();
+      W = wb.width; H = wb.height;
+      ox = mb.left + mb.width / 2 - wb.left;
+      oy = mb.top + mb.height / 2 - wb.top;
+      svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    }
+
+    function build(n) {
+      svg.innerHTML = ''; paths = [];
+      for (let i = 0; i < n; i++) {
+        const el = document.createElementNS(SVGNS, 'path');
+        el.setAttribute('fill', 'none');
+        el.setAttribute('stroke-linejoin', 'round');
+        svg.appendChild(el);
+        paths.push(el);
+      }
+    }
+
+    function draw(now) {
+      const count = Math.max(2, Math.round(RINGS.ringCount));
+      if (paths.length !== count) build(count);
+      const appearR = RINGS.appearRadius, vanishR = Math.max(appearR + 40, RINGS.vanishRadius);
+      const circleR = Math.max(BIRTH_R + 1, RINGS.circleRadius);
+      const ease = RINGS.spacingEase, period = BASE_LIFE / Math.max(0.05, RINGS.speed);
+      const span = vanishR - BIRTH_R;
+      for (let i = 0; i < count; i++) {
+        const p = (now / period + i / count) % 1;            // life phase 0..1
+        const Rc = BIRTH_R + span * Math.pow(p, ease);       // radius (eased outward)
+        // rounding: sharp hex at birth → full circle by circleR, then held
+        const k = Math.max(0, Math.min(1, (Rc - BIRTH_R) / (circleR - BIRTH_R)));
+        // opacity: invisible outside [appearR, vanishR]; fade in then out within
+        let op = 0;
+        if (Rc > appearR && Rc < vanishR) {
+          const f = (Rc - appearR) / (vanishR - appearR);    // 0..1 across visible band
+          op = 0.2 * Math.min(1, f / 0.10) * Math.min(1, (1 - f) / 0.45);
+        }
+        const w = 0.8 + 2.2 * (1 - Math.min(1, Rc / vanishR));
+        const c = mix(acc, VIOLET, k * 0.45);                // relay tint ramps in as it rounds
+        const el = paths[i];
+        el.setAttribute('d', roundedHex(ox, oy, Rc, k));
+        el.setAttribute('stroke', `rgb(${c[0]},${c[1]},${c[2]})`);
+        el.setAttribute('stroke-width', w.toFixed(2));
+        el.setAttribute('opacity', op.toFixed(3));
+      }
+    }
+
+    measure();
+    const STATIC_NOW = BASE_LIFE * 0.5;
+    if (reduce) {
+      draw(STATIC_NOW);
+    } else {
+      const loop = (now) => { draw(now); requestAnimationFrame(loop); };
+      requestAnimationFrame(loop);
+    }
+    window.addEventListener('resize', measure);
+    // expose a redraw for the static (reduced-motion) case when tweaks change
+    return { redrawStatic: () => { if (reduce) draw(STATIC_NOW); } };
+  })();
+
+  // ─────────────────────────────────────────────────────────────
+  //  Tweaks panel (vanilla — implements the editor host protocol)
+  // ─────────────────────────────────────────────────────────────
+  (function () {
+    const FX = [
+      { key: 'ringCount',    label: 'Number of rings',     min: 4,   max: 12,  step: 1,   fmt: (v) => String(Math.round(v)) },
+      { key: 'appearRadius', label: 'Appears at radius',    min: 0,   max: 240, step: 5,   fmt: (v) => Math.round(v) + 'px' },
+      { key: 'circleRadius', label: 'Becomes a circle at',  min: 60,  max: 520, step: 10,  fmt: (v) => Math.round(v) + 'px' },
+      { key: 'vanishRadius', label: 'Disappears at radius', min: 280, max: 900, step: 10,  fmt: (v) => Math.round(v) + 'px' },
+      { key: 'spacingEase',  label: 'Outward easing',       min: 0.6, max: 3,   step: 0.1, fmt: (v) => (+v).toFixed(1) },
+      { key: 'speed',        label: 'Animation speed',      min: 0.3, max: 2.5, step: 0.1, fmt: (v) => (+v).toFixed(1) + '×' },
+    ];
+
+    const style = document.createElement('style');
+    style.textContent = `
+      .fxp{position:fixed;right:16px;bottom:16px;z-index:2147483646;width:266px;
+        transform:scale(var(--dc-inv-zoom,1));transform-origin:bottom right;
+        background:rgba(20,24,38,0.82);-webkit-backdrop-filter:blur(26px) saturate(150%);
+        backdrop-filter:blur(26px) saturate(150%);color:#e9eef7;
+        border:0.5px solid rgba(255,255,255,0.14);border-radius:14px;
+        box-shadow:0 1px 0 rgba(255,255,255,0.06) inset,0 18px 50px rgba(0,0,0,0.5);
+        font:11.5px/1.4 -apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;overflow:hidden}
+      .fxp[hidden]{display:none}
+      .fxp-hd{display:flex;align-items:center;justify-content:space-between;padding:11px 9px 10px 14px;
+        border-bottom:0.5px solid rgba(255,255,255,0.08)}
+      .fxp-hd b{font-size:12px;font-weight:600;letter-spacing:0.02em}
+      .fxp-x{appearance:none;border:0;background:transparent;color:rgba(233,238,247,0.55);
+        width:22px;height:22px;border-radius:6px;cursor:pointer;font-size:15px;line-height:1}
+      .fxp-x:hover{background:rgba(255,255,255,0.08);color:#e9eef7}
+      .fxp-body{padding:13px 14px 15px;display:flex;flex-direction:column;gap:13px}
+      .fxp-sec{font-size:9.5px;font-weight:700;letter-spacing:0.09em;text-transform:uppercase;
+        color:#6a7488}
+      .fxp-row{display:flex;flex-direction:column;gap:6px}
+      .fxp-lbl{display:flex;justify-content:space-between;align-items:baseline}
+      .fxp-lbl span:first-child{color:#9aa6bc;font-weight:500}
+      .fxp-lbl .v{color:#ffb23e;font-variant-numeric:tabular-nums;font-weight:600;
+        font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:10.5px}
+      .fxp input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:3px;border-radius:3px;
+        background:rgba(255,255,255,0.16);outline:none;margin:5px 0;cursor:pointer}
+      .fxp input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;
+        width:14px;height:14px;border-radius:50%;background:#ffb23e;cursor:pointer;
+        box-shadow:0 0 0 0.5px rgba(0,0,0,0.3),0 2px 6px rgba(255,158,44,0.5)}
+      .fxp input[type=range]::-moz-range-thumb{width:14px;height:14px;border:0;border-radius:50%;
+        background:#ffb23e;cursor:pointer}
+    `;
+    document.head.appendChild(style);
+
+    const panel = document.createElement('div');
+    panel.className = 'fxp';
+    panel.hidden = true;
+    let rows = '<div class="fxp-hd"><b>Tweaks</b><button class="fxp-x" title="Close">×</button></div><div class="fxp-body"><div class="fxp-sec">Radiating rings</div>';
+    FX.forEach((f) => {
+      rows += `<div class="fxp-row"><div class="fxp-lbl"><span>${f.label}</span><span class="v" data-v="${f.key}">${f.fmt(RINGS[f.key])}</span></div>`
+        + `<input type="range" data-k="${f.key}" min="${f.min}" max="${f.max}" step="${f.step}" value="${RINGS[f.key]}"/></div>`;
+    });
+    rows += '</div>';
+    panel.innerHTML = rows;
+    document.body.appendChild(panel);
+
+    panel.addEventListener('input', (e) => {
+      const k = e.target.getAttribute('data-k');
+      if (!k) return;
+      const f = FX.find((x) => x.key === k);
+      const val = +e.target.value;
+      RINGS[k] = val;
+      panel.querySelector(`[data-v="${k}"]`).textContent = f.fmt(val);
+      RingsFX.redrawStatic();
+      window.parent.postMessage({ type: '__edit_mode_set_keys', edits: { [k]: val } }, '*');
+    });
+    panel.querySelector('.fxp-x').addEventListener('click', () => {
+      panel.hidden = true;
+      window.parent.postMessage({ type: '__edit_mode_dismissed' }, '*');
+    });
+
+    window.addEventListener('message', (e) => {
+      const ty = e && e.data && e.data.type;
+      if (ty === '__activate_edit_mode') panel.hidden = false;
+      else if (ty === '__deactivate_edit_mode') panel.hidden = true;
+    });
+    window.parent.postMessage({ type: '__edit_mode_available' }, '*');
+  })();
+
+  // faint starfield inside the window
+  (function () {
+    const svg = document.getElementById('stars');
+    let s = 11, html = '';
+    const rnd = () => { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff; };
+    for (let i = 0; i < 95; i++) html += `<circle cx="${(rnd()*100).toFixed(2)}%" cy="${(rnd()*100).toFixed(2)}%" r="${(rnd()*1.2+0.35).toFixed(2)}" fill="#dfe8ff" opacity="${(rnd()*0.55+0.2).toFixed(2)}"/>`;
+    svg.innerHTML = html;
+  })();
+
+  // time zones — common set + the user's detected zone surfaced first
+  (function () {
+    const sel = document.getElementById('tz');
+    const zones = [
+      'Pacific/Honolulu','America/Anchorage','America/Los_Angeles','America/Denver',
+      'America/Chicago','America/New_York','America/Sao_Paulo','UTC',
+      'Europe/London','Europe/Paris','Europe/Berlin','Europe/Athens','Africa/Cairo',
+      'Asia/Dubai','Asia/Kolkata','Asia/Shanghai','Asia/Tokyo','Australia/Sydney','Pacific/Auckland'
+    ];
+    let detected = 'UTC';
+    try { detected = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch (e) {}
+    if (!zones.includes(detected)) zones.unshift(detected);
+    const label = (z) => {
+      let off = '';
+      try {
+        const d = new Date();
+        const s = new Intl.DateTimeFormat('en-US', { timeZone: z, timeZoneName: 'shortOffset' }).formatToParts(d).find(p => p.type === 'timeZoneName');
+        off = s ? ' (' + s.value + ')' : '';
+      } catch (e) {}
+      return z.replace(/_/g, ' ') + off;
+    };
+    sel.innerHTML = zones.map(z => `<option value="${z}"${z===detected?' selected':''}>${label(z)}</option>`).join('');
+  })();
+
+  // tab switching
+  const tabs = { login: document.getElementById('tab-login'), signup: document.getElementById('tab-signup') };
+  const forms = { login: document.getElementById('form-login'), signup: document.getElementById('form-signup') };
+  function show(which) {
+    for (const k of ['login','signup']) {
+      tabs[k].classList.toggle('on', k === which);
+      forms[k].classList.toggle('hidden', k !== which);
+    }
+    forms[which].classList.remove('anim'); void forms[which].offsetWidth; forms[which].classList.add('anim');
+    const first = forms[which].querySelector('input, select'); if (first) setTimeout(() => first.focus(), 30);
+  }
+  tabs.login.onclick = () => show('login');
+  tabs.signup.onclick = () => show('signup');
+  document.querySelectorAll('.switch').forEach(b => b.onclick = () => show(b.dataset.goto));
+
+  // reveal API key
+  const key = document.getElementById('apikey'), reveal = document.getElementById('reveal');
+  reveal.onclick = () => { const p = key.type === 'password'; key.type = p ? 'text' : 'password'; reveal.textContent = p ? 'Hide' : 'Show'; key.focus(); };
+
+  // prevent actual submit (mockup)
+  forms.login.onsubmit = forms.signup.onsubmit = (e) => { e.preventDefault(); };
+</script>
+</body>
+</html>

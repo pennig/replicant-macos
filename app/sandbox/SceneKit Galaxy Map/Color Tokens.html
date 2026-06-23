@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Replicant — Color Tokens</title>
+<style>
+  :root { --mono: ui-monospace, "SF Mono", Menlo, monospace; --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body { font-family: var(--sans); background: #06090f; color: #e9eef7; padding: 36px 40px 64px; }
+  h1 { font-size: 22px; font-weight: 700; letter-spacing: -0.3px; margin: 0 0 4px; }
+  .sub { font-size: 13.5px; color: #9aa6bc; margin: 0 0 26px; max-width: 720px; line-height: 1.5; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; max-width: 1040px; }
+  .pane { border-radius: 16px; padding: 20px 22px; border: 1px solid rgba(255,255,255,0.08); }
+  .pane.dark { background: #0A1019; }
+  .pane.light { background: #F9F5EE; }
+  .pane h2 { font-size: 11px; font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase; margin: 0 0 16px; }
+  .pane.dark h2 { color: #697488; }
+  .pane.light h2 { color: #929BAD; }
+  .group { font-size: 10px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; margin: 18px 0 9px; opacity: 0.7; }
+  .group:first-child { margin-top: 0; }
+  .pane.dark .group { color: #697488; }
+  .pane.light .group { color: #929BAD; }
+  .row { display: flex; align-items: center; gap: 12px; padding: 5px 0; }
+  .chip { width: 40px; height: 40px; border-radius: 9px; flex-shrink: 0; position: relative; }
+  .pane.dark .chip { box-shadow: inset 0 0 0 1px rgba(255,255,255,0.10); }
+  .pane.light .chip { box-shadow: inset 0 0 0 1px rgba(28,34,48,0.10); }
+  .meta { min-width: 0; }
+  .name { font-size: 12.5px; font-weight: 600; }
+  .pane.dark .name { color: #E9EEF7; }
+  .pane.light .name { color: #1B2230; }
+  .hex { font-family: var(--mono); font-size: 11px; margin-top: 2px; }
+  .pane.dark .hex { color: #697488; }
+  .pane.light .hex { color: #929BAD; }
+</style>
+</head>
+<body>
+  <h1>Replicant · color tokens</h1>
+  <p class="sub">The 24 named colors in <code>ReplicantColors.xcassets</code>, shown resolved for each appearance. Alpha tokens (separators, muted/border fills) are drawn over their pane background so the translucency reads true. Names match <code>Color.rc*</code> in <code>ReplicantDesignSystem.swift</code>.</p>
+  <div class="grid" id="grid"></div>
+
+<script>
+  // [group, name, lightHex, lightAlpha, darkHex, darkAlpha]
+  const PAL = [
+    ['Surfaces','WindowBackground','#F1ECE3',1,'#0B1019',1],
+    ['Surfaces','ContentBackground','#F9F5EE',1,'#0A1019',1],
+    ['Surfaces','SidebarBackground','#ECE6DC',1,'#0E1421',1],
+    ['Surfaces','SurfaceRaised','#F2EEE7',1,'#12161F',1],
+    ['Surfaces','SurfaceRaisedStrong','#ECE7DE',1,'#171C26',1],
+    ['Separators','Separator','#1C2230',0.12,'#FFFFFF',0.09],
+    ['Separators','SeparatorSoft','#1C2230',0.07,'#FFFFFF',0.055],
+    ['Text','TextPrimary','#1B2230',1,'#E9EEF7',1],
+    ['Text','TextSecondary','#5A6478',1,'#9AA6BC',1],
+    ['Text','TextTertiary','#929BAD',1,'#697488',1],
+    ['Accent','AccentPrimary','#CF8418',1,'#FFB23E',1],
+    ['Accent','AccentOnColor','#FFFFFF',1,'#2A1A05',1],
+    ['Accent','AccentMuted','#CF8418',0.13,'#FFB23E',0.12],
+    ['Accent','AccentBorder','#CF8418',0.45,'#FFB23E',0.34],
+    ['Status','StatusReady','#1F9D63',1,'#62D39A',1],
+    ['Status','StatusWorking','#C47A12',1,'#FFB23E',1],
+    ['Status','StatusTransit','#2F6FD0',1,'#5AA9FF',1],
+    ['Status','StatusSensing','#0F978F',1,'#3FD3CB',1],
+    ['Status','StatusRelay','#7B4FD6',1,'#B58BFF',1],
+    ['Status','StatusWaiting','#9A6F1E',1,'#D8B06A',1],
+    ['Status','StatusOffline','#6B7488',1,'#7E879B',1],
+    ['Special','NPCAccent','#7B4FD6',1,'#B58BFF',1],
+    ['Special','Danger','#BB463C',1,'#E58A83',1],
+    ['Special','DangerMuted','#BB463C',0.10,'#E0726A',0.12],
+  ];
+  const hexA = (h,a) => { const n = h.replace('#',''); const r=parseInt(n.slice(0,2),16),g=parseInt(n.slice(2,4),16),b=parseInt(n.slice(4,6),16); return `rgba(${r},${g},${b},${a})`; };
+
+  function pane(mode) {
+    const isDark = mode === 'dark';
+    let html = `<div class="pane ${mode}"><h2>${isDark ? 'Dark appearance' : 'Light appearance'}</h2>`;
+    let group = '';
+    for (const [grp, name, lHex, lA, dHex, dA] of PAL) {
+      if (grp !== group) { html += `<div class="group">${grp}</div>`; group = grp; }
+      const hex = isDark ? dHex : lHex, a = isDark ? dA : lA;
+      const shown = a === 1 ? hex : `${hex} · ${Math.round(a*100)}%`;
+      html += `<div class="row"><div class="chip" style="background:${hexA(hex,a)}"></div>`
+        + `<div class="meta"><div class="name">${name}</div><div class="hex">${shown}</div></div></div>`;
+    }
+    return html + '</div>';
+  }
+  document.getElementById('grid').innerHTML = pane('dark') + pane('light');
+</script>
+</body>
+</html>

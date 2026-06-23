@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Replicant — Buttons & Fields</title>
+<style>
+  :root {
+    --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    font-family: var(--sans); background: #06090f; color: #e9eef7;
+    min-height: 100vh; padding: 40px;
+  }
+  .page-head { max-width: 1180px; margin: 0 auto 28px; }
+  .page-head h1 { font-size: 22px; font-weight: 700; letter-spacing: -0.3px; margin: 0 0 6px; }
+  .page-head p { font-size: 13.5px; line-height: 1.55; color: #9aa6bc; margin: 0; max-width: 760px; }
+  .page-head code { font-family: var(--mono); font-size: 12px; color: #ffb23e; }
+
+  .cols { max-width: 1180px; margin: 0 auto; display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+
+  /* themed panel */
+  .panel {
+    border-radius: 16px; padding: 26px 26px 30px; overflow: hidden;
+    background: var(--content);
+    box-shadow: 0 0 0 0.5px var(--line), 0 30px 80px rgba(0,0,0,0.4);
+  }
+  .panel[data-theme="dark"] {
+    --content: #0a1019; --raised: #12161f; --raisedStrong: #171c26;
+    --line: rgba(255,255,255,0.085); --lineSoft: rgba(255,255,255,0.05);
+    --t1: #e9eef7; --t2: #9aa6bc; --t3: #6a7488;
+    --accent: #ffb23e; --accentText: #2a1a05; --accentGlow: rgba(255,158,44,0.32);
+    --accentBorder: rgba(255,178,62,0.34); --lineStrong: rgba(255,255,255,0.16); --secHover: rgba(255,255,255,0.05);
+    --danger: #de544a; --dangerBg: rgba(222,84,74,0.13); --dangerRing: rgba(222,84,74,0.36);
+    --dangerGlow: rgba(222,84,74,0.36); --fieldBg: rgba(255,255,255,0.05);
+  }
+  .panel[data-theme="light"] {
+    --content: #f9f5ee; --raised: #f2eee7; --raisedStrong: #ece7de;
+    --line: rgba(28,34,48,0.12); --lineSoft: rgba(28,34,48,0.07);
+    --t1: #1b2230; --t2: #5a6478; --t3: #929bad;
+    --accent: #d19317; --accentText: #2a1a05; --accentGlow: rgba(209,147,23,0.28);
+    --accentBorder: rgba(209,147,23,0.45); --lineStrong: rgba(28,34,48,0.22); --secHover: rgba(28,34,48,0.04);
+    --danger: #bb463c; --dangerBg: rgba(187,70,60,0.09); --dangerRing: rgba(187,70,60,0.30);
+    --dangerGlow: rgba(187,70,60,0.28); --fieldBg: #ffffff;
+  }
+  .panel { color: var(--t1); }
+
+  .scheme-tag { font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: 1.4px;
+    color: var(--t3); margin-bottom: 22px; }
+  .group-label { font-size: 11px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase;
+    color: var(--t3); opacity: 0.85; margin: 26px 0 14px; }
+  .group-label:first-of-type { margin-top: 0; }
+
+  .variant { margin-bottom: 20px; }
+  .variant-name { display: flex; align-items: baseline; gap: 9px; margin-bottom: 9px; }
+  .variant-name b { font-size: 13px; font-weight: 600; color: var(--t1); }
+  .variant-name span { font-family: var(--mono); font-size: 10.5px; color: var(--t3); }
+
+  .states { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; }
+  .state { display: flex; flex-direction: column; align-items: flex-start; gap: 7px; }
+  .state em { font-style: normal; font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.4px;
+    text-transform: uppercase; color: var(--t3); }
+
+  /* buttons */
+  .btn { position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+    font-family: var(--sans); font-size: 13px; font-weight: 700; border: none; cursor: default;
+    border-radius: 8px; padding: 9px 16px; line-height: 1; white-space: nowrap; }
+  .btn svg { width: 13px; height: 13px; }
+
+  .btn.primary { background: var(--accent); color: var(--accentText); box-shadow: 0 6px 14px var(--accentGlow); }
+  .btn.primary::before { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+    background: linear-gradient(180deg, rgba(255,255,255,0.14), transparent 50%); }
+  .btn.primary.hover::before { background: linear-gradient(180deg, rgba(255,255,255,0.20), transparent 50%); }
+  .btn.primary.pressed { filter: brightness(0.9); transform: scale(0.98); }
+  .btn.primary.disabled { opacity: 0.4; box-shadow: none; }
+
+  .btn.secondary { background: transparent; color: var(--t2); box-shadow: inset 0 0 0 1px var(--lineStrong); }
+  .btn.secondary.hover { color: var(--t1); background: var(--secHover); }
+  .btn.secondary.pressed { transform: scale(0.98); }
+  .btn.secondary.disabled { opacity: 0.4; }
+
+  .btn.destructive { background: transparent; color: var(--danger); box-shadow: inset 0 0 0 1px var(--dangerRing); }
+  .btn.destructive.hover { background: var(--dangerBg); box-shadow: inset 0 0 0 1px var(--danger); }
+  .btn.destructive.pressed { background: var(--dangerBg); transform: scale(0.98); }
+
+  .btn.prominent { background: var(--danger); color: #fff; box-shadow: 0 6px 14px var(--dangerGlow); }
+  .btn.prominent::before { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+    background: linear-gradient(180deg, rgba(255,255,255,0.16), transparent 50%); }
+  .btn.prominent.hover { filter: brightness(1.05); }
+  .btn.prominent.pressed { filter: brightness(0.9); transform: scale(0.98); }
+
+  .btn.text { background: none; box-shadow: none; padding: 2px 1px; color: var(--accent); font-weight: 600;
+    border-radius: 0; }
+  .btn.text.hover { box-shadow: inset 0 -1px 0 var(--accent); }
+  .btn.text.disabled { opacity: 0.35; }
+
+  /* fields */
+  .field-row { display: flex; flex-direction: column; gap: 7px; margin-bottom: 16px; max-width: 380px; }
+  .cap { display: flex; align-items: center; gap: 6px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.5px;
+    text-transform: uppercase; color: var(--t3); }
+  .cap .hint { font-weight: 400; letter-spacing: 0; text-transform: none; font-size: 11px; }
+  .field { display: flex; align-items: center; gap: 8px; padding: 11px 13px; border-radius: 8px;
+    background: var(--fieldBg); box-shadow: inset 0 0 0 1px var(--line); font-size: 13.5px; color: var(--t1); }
+  .field.focused { box-shadow: inset 0 0 0 1.5px var(--accentBorder); }
+  .field .val { flex: 1; }
+  .field .ph { flex: 1; color: var(--t3); }
+  .field .mono { font-family: var(--mono); font-size: 13px; }
+  .field .reveal { font-size: 11px; font-weight: 600; color: var(--t3); }
+  .caret { width: 1px; height: 16px; background: var(--accent); display: inline-block; margin-left: -2px; }
+
+  .note { font-size: 11.5px; color: var(--t3); margin-top: 6px; line-height: 1.5; }
+</style>
+</head>
+<body>
+  <div class="page-head">
+    <h1>Buttons &amp; text fields</h1>
+    <p>The interactive controls for the Replicant design system, codified in <code>ReplicantControls.swift</code>.
+      Four <code>RCButtonStyle</code> variants (+ a solid confirm), and the labeled <code>RCField</code> wrapper —
+      every state shown below maps to a real style branch. All colors read <code>Color.rc*</code> tokens, so the controls
+      track light/dark automatically. Default · Hover · Pressed · Disabled.</p>
+  </div>
+
+  <div class="cols" id="cols"></div>
+
+<script>
+  const arrow = '<svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 7h9M7.5 3l4 4-4 4"/></svg>';
+
+  // [class, label(html), [states to render]]
+  const buttons = [
+    { cls: 'primary',    name: 'Primary',                tok: 'AccentPrimary · AccentOnColor',  label: 'Deploy',
+      states: ['default','hover','pressed','disabled'] },
+    { cls: 'secondary',  name: 'Secondary',              tok: 'transparent + SeparatorStrong hairline', label: 'Cancel',
+      states: ['default','hover','pressed','disabled'] },
+    { cls: 'destructive',name: 'Destructive',            tok: 'Danger (tinted) — opens confirm', label: 'Deactivate',
+      states: ['default','hover','pressed'] },
+    { cls: 'prominent',  name: 'Destructive · confirm',  tok: 'Danger (solid) — fires it',       label: 'Decommission device',
+      states: ['default','hover','pressed'] },
+    { cls: 'text',       name: 'Text',                   tok: 'AccentPrimary label only',        label: 'Create one',
+      states: ['default','hover','disabled'] },
+  ];
+
+  function btn(cls, state, label, withArrow) {
+    const s = state === 'default' ? '' : ' ' + state;
+    const inner = label + (withArrow ? arrow : '');
+    return `<div class="state"><em>${state}</em><button class="btn ${cls}${s}">${inner}</button></div>`;
+  }
+
+  function fields(focusedKey) {
+    // focusedKey controls which field shows the focus ring + caret in this column
+    const f = (key) => focusedKey === key ? ' focused' : '';
+    const caretName = focusedKey === 'name' ? '<span class="caret"></span>' : '';
+    const caretKey  = focusedKey === 'key'  ? '<span class="caret"></span>' : '';
+    return `
+      <div class="field-row">
+        <div class="cap">Name</div>
+        <div class="field${f('name')}"><span class="ph">What should we call you?</span>${caretName}</div>
+      </div>
+      <div class="field-row">
+        <div class="cap">Email</div>
+        <div class="field${f('email')}"><span class="val">kell@pennig.name</span></div>
+      </div>
+      <div class="field-row">
+        <div class="cap">API Key <span class="hint">— paste the key from your account</span></div>
+        <div class="field${f('key')}"><span class="ph mono">rk_live_…</span>${caretKey}<span class="reveal">Show</span></div>
+      </div>`;
+  }
+
+  function column(theme, focusedKey) {
+    let html = `<div class="panel" data-theme="${theme}">`;
+    html += `<div class="scheme-tag">${theme.toUpperCase()}</div>`;
+    html += `<div class="group-label">Buttons</div>`;
+    for (const b of buttons) {
+      html += `<div class="variant"><div class="variant-name"><b>${b.name}</b><span>${b.tok}</span></div><div class="states">`;
+      for (const st of b.states) {
+        const withArrow = b.cls === 'primary' && st !== 'disabled';
+        html += btn(b.cls, st, b.label, withArrow);
+      }
+      html += `</div></div>`;
+    }
+    html += `<div class="group-label">Text fields</div>`;
+    html += fields(focusedKey);
+    html += `<div class="note">Focus ring uses <b>AccentBorder</b>; the labeled <code style="font-family:var(--mono)">RCField</code> wrapper carries the caption, optional hint, mono &amp; secure-with-reveal.</div>`;
+    html += `</div>`;
+    return html;
+  }
+
+  document.getElementById('cols').innerHTML = column('dark', 'key') + column('light', 'name');
+</script>
+</body>
+</html>

@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import Utils
+
 /// One game event, normalized so the app doesn't care which channel it
 /// arrived on. Both the relay (webhook) stream and the game's event log
 /// produce these, and the fingerprint lets the pipeline deduplicate when

@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Replicant — Star Map</title>
+  <style>
+    html, body { margin: 0; padding: 0; background: #05070d; overflow: hidden; height: 100%; }
+    * { box-sizing: border-box; }
+    #cv { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; touch-action: none; }
+    ::selection { background: rgba(255,178,62,0.3); }
+    .fade-in { animation: fadeIn .3s ease both; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+    @keyframes rcPulse { 0%,100% { opacity: .9 } 50% { opacity: .35 } }
+    #sys, #galhud { transition: opacity .5s ease; }
+    #sysInner { transition: opacity .55s ease, transform .6s cubic-bezier(.3,.7,.25,1); }
+  </style>
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+</head>
+<body>
+  <canvas id="cv"></canvas>
+  <div id="root"></div>
+
+  <script type="text/babel" src="data.js"></script>
+  <script type="text/babel" src="galaxy-data.jsx"></script>
+  <script type="text/babel" src="galaxy3d-engine.jsx"></script>
+  <script type="text/babel" src="galaxy-ui.jsx"></script>
+  <script type="text/babel" src="map-hud.jsx"></script>
+  <script type="text/babel" src="tweaks-panel.jsx"></script>
+
+  <script type="text/babel">
+    const { rcMap, GAL_SYSTEMS, GAL_BY_ID, useClock, StarField, Orrery } = window;
+    const { GalaxyRail, SystemRail, GalaxyDossier, SystemDossier, TrackedDock, InsetCard, glass } = window.mapHud;
+    const { useTweaks, TweaksPanel, TweakSection, TweakSlider, TweakToggle } = window;
+    const M = window.RD_MONO, F = window.RD_FONT;
+    const c = rcMap('dark');
+
+    const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+      "bloom": 0.3,
+      "density": 1800,
+      "autoRotate": true,
+      "orbitSpeed": 0.05
+    }/*EDITMODE-END*/;
+
+    function App() {
+      const [tw, setTweak] = useTweaks(TWEAK_DEFAULTS);
+      const engRef = React.useRef(null);
+      const [galLayers, setGalLayers] = React.useState({ presence: true, relay: true, recon: false, life: false, resource: false, npc: true });
+      const [galSel, setGalSel] = React.useState(null);
+
+      // transition state
+      const [galIn, setGalIn] = React.useState(true);   // galaxy HUD visible
+      const [sysIn, setSysIn] = React.useState(false);  // system overlay visible
+      const [mode, setMode] = React.useState('galaxy'); // pointer routing
+      const [sysName, setSysName] = React.useState('Chamakuy');
+      const [sysId, setSysId] = React.useState('CHK');
+
+      // system view state
+      const t = useClock(tw.orbitSpeed);
+      const [sysSel, setSysSel] = React.useState('C1D9F0A2');
+      const [show, setShow] = React.useState({ hz: true, belt: true, kuiper: false, oort: false });
+      const [vp, setVp] = React.useState({ w: window.innerWidth, h: window.innerHeight });
+      React.useEffect(() => { const r = () => setVp({ w: window.innerWidth, h: window.innerHeight }); window.addEventListener('resize', r); return () => window.removeEventListener('resize', r); }, []);
+
+      React.useEffect(() => {
+        const cv = document.getElementById('cv');
+        const eng = window.createGalaxy(cv, { layers: galLayers, bloom: tw.bloom, starCount: tw.density, autoRotate: tw.autoRotate, onSelect: (s) => setGalSel(s) });
+        engRef.current = eng;
+        return () => eng.destroy();
+      }, []);
+      React.useEffect(() => { engRef.current && engRef.current.setLayers(galLayers); }, [galLayers]);
+      React.useEffect(() => { engRef.current && engRef.current.setOption('bloom', tw.bloom); }, [tw.bloom]);
+      React.useEffect(() => { engRef.current && engRef.current.setOption('autoRotate', tw.autoRotate); }, [tw.autoRotate]);
+      React.useEffect(() => { engRef.current && engRef.current.setOption('density', tw.density); }, [tw.density]);
+
+      const drillIn = (s) => {
+        setSysName(s.name); setSysId(s.id); setGalIn(false);
+        engRef.current.flyTo(s.id, {
+          onMid: () => { setMode('system'); setSysIn(true); },
+        });
+      };
+      const drillOut = () => {
+        setSysIn(false);
+        engRef.current.flyBack({
+          onMid: () => { setGalIn(true); },
+          onDone: () => { setMode('galaxy'); },
+        });
+      };
+
+      // canvas only receives input when fully in galaxy
+      React.useEffect(() => {
+        const cv = document.getElementById('cv');
+        cv.style.pointerEvents = (mode === 'galaxy' && !sysIn) ? 'auto' : 'none';
+      }, [mode, sysIn]);
+
+      const toggleGal = (k) => setGalLayers((L) => ({ ...L, [k]: !L[k] }));
+      const toggleShow = (k) => setShow((s) => ({ ...s, [k]: !s[k] }));
+      const L = show.oort ? { w: 1900, h: 1660 } : show.kuiper ? { w: 1520, h: 1320 } : { w: 1200, h: 1000 };
+      const S = Math.min((vp.w / L.w) * 0.98, (vp.h / L.h) * 0.98, 1.12);
+
+      return (
+        <>
+          {/* ── galaxy HUD ── */}
+          <div id="galhud" style={{ opacity: galIn ? 1 : 0, pointerEvents: galIn ? 'auto' : 'none' }}>
+            <div style={{ position: 'absolute', top: 22, left: 24, pointerEvents: 'none' }}>
+              <div style={{ fontFamily: M, fontSize: 10.5, letterSpacing: 3, color: c.accent }}>OBSERVATORY</div>
+              <div style={{ fontSize: 24, fontWeight: 700, letterSpacing: -0.4, color: c.t1, marginTop: 4 }}>The Orion Spur</div>
+            </div>
+            <GalaxyRail layers={galLayers} toggle={toggleGal} />
+            {galSel && <GalaxyDossier s={galSel} onDrill={drillIn} />}
+            <div style={{ position: 'absolute', bottom: 22, left: 24, display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={glass({ borderRadius: 12, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 14 })}>
+                <span style={{ fontFamily: M, fontSize: 12, color: c.t1 }}><b style={{ color: c.accent }}>{tw.density.toLocaleString()}</b> stars</span>
+                <span style={{ width: 1, height: 14, background: c.glassLineSoft }} />
+                <span style={{ fontFamily: M, fontSize: 12, color: c.t2 }}>{GAL_SYSTEMS.length} charted</span>
+                <span style={{ width: 1, height: 14, background: c.glassLineSoft }} />
+                <button onClick={() => engRef.current && engRef.current.resetView()} style={{ border: 'none', background: 'transparent', color: c.accent, fontFamily: F, fontSize: 12, fontWeight: 600, cursor: 'pointer', padding: 0 }}>Reset view</button>
+              </div>
+              <div style={{ fontFamily: M, fontSize: 10.5, color: c.t3, letterSpacing: 0.3, paddingLeft: 2 }}>drag&nbsp;rotate · scroll&nbsp;zoom · click a star to drill in</div>
+            </div>
+          </div>
+
+          {/* ── system overlay ── */}
+          <div id="sys" style={{ position: 'absolute', inset: 0, opacity: sysIn ? 1 : 0, pointerEvents: sysIn ? 'auto' : 'none' }}>
+            <div id="sysInner" onClick={() => setSysSel(null)} style={{ position: 'absolute', inset: 0, opacity: sysIn ? 1 : 0, transform: sysIn ? 'scale(1)' : 'scale(1.22)', background: 'radial-gradient(1100px 880px at 50% 54%, #101a30 0%, #0a0f1b 56%, #070a12 100%)' }}>
+              <StarField c={c} seed={23} n={170} />
+              <div style={{ position: 'absolute', left: '50%', top: '50%', width: L.w, height: L.h, transform: `translate(-50%,-50%) scale(${S})`, transition: 'width .5s cubic-bezier(.3,.7,.3,1), height .5s cubic-bezier(.3,.7,.3,1), transform .5s cubic-bezier(.3,.7,.3,1)' }}>
+                <Orrery c={c} t={t} selected={sysSel} onSelect={setSysSel} variant="cinematic" size={L} show={show} />
+              </div>
+              <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', background: 'radial-gradient(120% 95% at 50% 48%, transparent 52%, rgba(0,0,0,0.45) 100%)' }} />
+            </div>
+
+            <div style={{ position: 'absolute', top: 24, left: 26 }}>
+              <div style={{ pointerEvents: 'none' }}>
+                <div style={{ fontFamily: M, fontSize: 10.5, letterSpacing: 3, color: c.accent }}>STAR SYSTEM</div>
+                <div style={{ fontSize: 28, fontWeight: 700, letterSpacing: -0.5, color: c.t1, marginTop: 4 }}>{sysName}</div>
+              </div>
+              <InsetCard onBack={drillOut} sysId={sysId} label={sysName} />
+            </div>
+            <SystemRail show={show} toggle={toggleShow} />
+            <TrackedDock sel={sysSel} setSel={setSysSel} />
+            <SystemDossier sel={sysSel} />
+            <div style={{ position: 'absolute', bottom: 24, left: 26, fontFamily: M, fontSize: 10.5, color: c.t3, letterSpacing: 0.3 }}>click a body, vessel or L-point</div>
+          </div>
+
+          <TweaksPanel title="Tweaks">
+            <TweakSection label="Galaxy" />
+            <TweakSlider label="Bloom" value={tw.bloom} min={0} max={1} step={0.05} onChange={(v) => setTweak('bloom', v)} />
+            <TweakSlider label="Star density" value={tw.density} min={600} max={6000} step={200} unit=" stars" onChange={(v) => setTweak('density', v)} />
+            <TweakToggle label="Auto-rotate" value={tw.autoRotate} onChange={(v) => setTweak('autoRotate', v)} />
+            <TweakSection label="System" />
+            <TweakSlider label="Orbit speed" value={tw.orbitSpeed} min={0} max={0.6} step={0.05} onChange={(v) => setTweak('orbitSpeed', v)} />
+          </TweaksPanel>
+        </>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

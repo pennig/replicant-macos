@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Replicant — Buttons &amp; Fields (live)</title>
+<style>
+  :root {
+    --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body { font-family: var(--sans); background: #06090f; color: #e9eef7; min-height: 100vh; padding: 0 0 56px; }
+
+  /* toolbar */
+  .bar { position: sticky; top: 0; z-index: 20; backdrop-filter: blur(14px);
+    background: rgba(8,11,18,0.82); border-bottom: 0.5px solid rgba(255,255,255,0.1);
+    padding: 16px 40px; display: flex; align-items: center; gap: 26px; flex-wrap: wrap; }
+  .bar h1 { font-size: 15px; font-weight: 700; margin: 0; letter-spacing: -0.2px; }
+  .bar .sub { font-size: 12px; color: #9aa6bc; margin: 0; }
+  .ctl { display: flex; align-items: center; gap: 10px; }
+  .ctl > label { font-size: 10.5px; font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase; color: #6a7488; }
+  .seg { display: flex; gap: 3px; padding: 3px; background: rgba(255,255,255,0.05); border-radius: 9px;
+    box-shadow: inset 0 0 0 0.5px rgba(255,255,255,0.09); }
+  .seg button { font-family: var(--sans); font-size: 12px; font-weight: 600; color: #9aa6bc; background: none;
+    border: none; cursor: pointer; padding: 6px 13px; border-radius: 7px; }
+  .seg button[aria-pressed="true"] { background: rgba(255,255,255,0.08); color: #e9eef7; }
+  .acc { display: flex; align-items: center; gap: 9px; }
+  .acc input[type=range] { width: 130px; accent-color: #ffb23e; }
+  #dngSlider { accent-color: #de4339; }
+  .acc .hex { font-family: var(--mono); font-size: 11.5px; color: #e9eef7; min-width: 62px; }
+  .acc .ratio { font-family: var(--mono); font-size: 10.5px; color: #6a7488; }
+  .acc .ratio.warn { color: #e58a52; }
+  .bar .hint { font-size: 11.5px; color: #6a7488; margin-left: auto; max-width: 360px; line-height: 1.45; }
+  .bar .hint b { color: #ffb23e; font-weight: 600; }
+
+  .cols { max-width: 1180px; margin: 30px auto 0; display: grid; grid-template-columns: 1fr 1fr; gap: 22px; padding: 0 24px; }
+
+  .panel { border-radius: 16px; padding: 26px 26px 32px; overflow: hidden; background: var(--content);
+    box-shadow: 0 0 0 0.5px var(--line), 0 30px 80px rgba(0,0,0,0.4); color: var(--t1); }
+  .panel[data-theme="dark"] {
+    --content: #0a1019; --raised: #12161f; --raisedStrong: #171c26; --secTint: rgba(255,255,255,0.085);
+    --line: rgba(255,255,255,0.085); --lineSoft: rgba(255,255,255,0.05); --lineStrong: rgba(255,255,255,0.16);
+    --t1: #e9eef7; --t2: #9aa6bc; --t3: #6a7488;
+    --accent: #ffb23e; --accentText: #2a1a05; --accentGlow: rgba(255,158,44,0.32); --accentBorder: rgba(255,178,62,0.34);
+    --danger: #de544a; --dangerBg: rgba(222,84,74,0.13); --dangerRing: rgba(222,84,74,0.36);
+    --dangerGlow: rgba(222,84,74,0.36); --fieldBg: rgba(255,255,255,0.05); --secHover: rgba(255,255,255,0.05); }
+  .panel[data-theme="light"] {
+    --content: #f9f5ee; --raised: #f2eee7; --raisedStrong: #ece7de; --secTint: #e4dccd;
+    --line: rgba(28,34,48,0.12); --lineSoft: rgba(28,34,48,0.07); --lineStrong: rgba(28,34,48,0.22);
+    --t1: #1b2230; --t2: #5a6478; --t3: #929bad;
+    --accent: #d19317; --accentText: #2a1a05; --accentGlow: rgba(209,147,23,0.28); --accentBorder: rgba(209,147,23,0.45);
+    --danger: #bb463c; --dangerBg: rgba(187,70,60,0.09); --dangerRing: rgba(187,70,60,0.30);
+    --dangerGlow: rgba(187,70,60,0.28); --fieldBg: #ffffff; --secHover: rgba(28,34,48,0.04); }
+
+  .scheme-tag { font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: 1.4px; color: var(--t3); margin-bottom: 22px; }
+  .group-label { font-size: 11px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: var(--t3); opacity: 0.85; margin: 24px 0 14px; }
+
+  .variant { margin-bottom: 18px; }
+  .variant-name { display: flex; align-items: baseline; gap: 9px; margin-bottom: 9px; }
+  .variant-name b { font-size: 13px; font-weight: 600; color: var(--t1); }
+  .variant-name span { font-family: var(--mono); font-size: 10.5px; color: var(--t3); }
+  .states { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+
+  /* buttons — real, interactive */
+  .btn { position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+    font-family: var(--sans); font-size: 13px; font-weight: 700; border: none; cursor: pointer;
+    border-radius: 8px; padding: 9px 16px; line-height: 1; white-space: nowrap; color: var(--t1);
+    transition: filter .12s ease, transform .12s ease, background .12s ease, color .12s ease, box-shadow .12s ease; }
+  .btn svg { width: 13px; height: 13px; }
+  .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .btn:disabled { cursor: default; opacity: 0.4; }
+  .btn:disabled.primary { box-shadow: none; }
+
+  .btn.primary { background: var(--accent); color: var(--accentText); box-shadow: 0 6px 14px var(--accentGlow); }
+  .btn.primary::before { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+    background: linear-gradient(180deg, rgba(255,255,255,0.14), transparent 50%); transition: background .12s ease; }
+  .btn.primary:not(:disabled):hover::before { background: linear-gradient(180deg, rgba(255,255,255,0.20), transparent 50%); }
+  .btn.primary:not(:disabled):active { filter: brightness(0.9); transform: scale(0.98); }
+
+  .btn.secondary { color: var(--t2); }
+  .btn.secondary:not(:disabled):hover { color: var(--t1); }
+  .btn.secondary:not(:disabled):active { transform: scale(0.98); }
+
+  .btn.destructive { background: transparent; color: var(--danger); box-shadow: inset 0 0 0 1px var(--dangerRing); }
+  .btn.destructive:not(:disabled):hover { background: var(--dangerBg); box-shadow: inset 0 0 0 1px var(--danger); }
+  .btn.destructive:not(:disabled):active { background: var(--dangerBg); transform: scale(0.98); }
+
+  .btn.prominent { background: var(--danger); color: #fff; box-shadow: 0 6px 14px var(--dangerGlow); }
+  .btn.prominent::before { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+    background: linear-gradient(180deg, rgba(255,255,255,0.16), transparent 50%); }
+  .btn.prominent:not(:disabled):hover { filter: brightness(1.05); }
+  .btn.prominent:not(:disabled):active { filter: brightness(0.9); transform: scale(0.98); }
+
+  .btn.text { background: none; box-shadow: none; padding: 4px 2px; color: var(--accent); font-weight: 600; border-radius: 0; }
+  .btn.text:not(:disabled):hover { box-shadow: inset 0 -1px 0 var(--accent); }
+
+  /* secondary treatments (switchable) */
+  .panel[data-secondary="raised"]  .btn.secondary { background: var(--raisedStrong); box-shadow: inset 0 0 0 1px var(--line); }
+  .panel[data-secondary="raised"]  .btn.secondary:not(:disabled):hover { filter: brightness(1.05); background: var(--raisedStrong); }
+  .panel[data-secondary="outline"] .btn.secondary { background: transparent; box-shadow: inset 0 0 0 1px var(--lineStrong); }
+  .panel[data-secondary="outline"] .btn.secondary:not(:disabled):hover { background: var(--secHover); }
+  .panel[data-secondary="tinted"]  .btn.secondary { background: var(--secTint); box-shadow: inset 0 0 0 1px var(--lineStrong); }
+  .panel[data-secondary="tinted"]  .btn.secondary:not(:disabled):hover { filter: brightness(0.97); }
+
+  /* fields — real inputs */
+  .field-row { display: flex; flex-direction: column; gap: 7px; margin-bottom: 16px; max-width: 380px; }
+  .cap { display: flex; align-items: center; gap: 6px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.5px;
+    text-transform: uppercase; color: var(--t3); }
+  .cap .hint { font-weight: 400; letter-spacing: 0; text-transform: none; font-size: 11px; }
+  .field { display: flex; align-items: center; gap: 8px; padding: 0 13px; border-radius: 8px; background: var(--fieldBg);
+    box-shadow: inset 0 0 0 1px var(--line); transition: box-shadow .12s ease; }
+  .field:focus-within { box-shadow: inset 0 0 0 1.5px var(--accentBorder); }
+  .field input { flex: 1; border: none; outline: none; background: none; color: var(--t1); font-family: var(--sans);
+    font-size: 13.5px; padding: 11px 0; min-width: 0; }
+  .field input::placeholder { color: var(--t3); }
+  .field input.mono { font-family: var(--mono); font-size: 13px; }
+  .field .reveal { font-size: 11px; font-weight: 600; color: var(--t3); background: none; border: none; cursor: pointer; padding: 4px; }
+  .field .reveal:hover { color: var(--t1); }
+</style>
+</head>
+<body>
+  <div class="bar">
+    <div>
+      <h1>Buttons &amp; text fields — live</h1>
+      <p class="sub">Hover, click, focus, type. Both themes are interactive.</p>
+    </div>
+    <div class="ctl">
+      <label>Secondary</label>
+      <div class="seg" id="secSeg">
+        <button data-v="raised">Raised</button>
+        <button data-v="outline">Outline</button>
+        <button data-v="tinted">Tinted</button>
+      </div>
+    </div>
+    <div class="ctl">
+      <label>Accent &middot; light</label>
+      <div class="acc">
+        <input type="range" id="accSlider" min="0" max="100" value="30">
+        <span class="hex" id="accHex">#d19317</span>
+        <span class="ratio" id="accRatio"></span>
+      </div>
+    </div>
+    <div class="ctl">
+      <label>Danger &middot; dark</label>
+      <div class="acc">
+        <input type="range" id="dngSlider" min="0" max="100" value="45">
+        <span class="hex" id="dngHex">#de544a</span>
+        <span class="ratio" id="dngRatio"></span>
+      </div>
+    </div>
+    <p class="hint" id="secHint"></p>
+  </div>
+
+  <div class="cols" id="cols"></div>
+
+<script>
+  const arrow = '<svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 7h9M7.5 3l4 4-4 4"/></svg>';
+
+  const buttons = [
+    { cls:'primary',     name:'Primary',               tok:'AccentPrimary · AccentOnColor' },
+    { cls:'secondary',   name:'Secondary',             tok:'switchable below' },
+    { cls:'destructive', name:'Destructive',           tok:'Danger (tinted) — opens confirm' },
+    { cls:'prominent',   name:'Destructive · confirm', tok:'Danger (solid) — fires it' },
+    { cls:'text',        name:'Text',                  tok:'AccentPrimary label only' },
+  ];
+  const labels = { primary:'Deploy', secondary:'Cancel', destructive:'Deactivate', prominent:'Decommission device', text:'Create one' };
+
+  function buttonsBlock(theme) {
+    let h = `<div class="group-label">Buttons</div>`;
+    for (const b of buttons) {
+      const arr = b.cls === 'primary' ? arrow : '';
+      const disabledFor = (b.cls === 'primary' || b.cls === 'secondary' || b.cls === 'text');
+      h += `<div class="variant"><div class="variant-name"><b>${b.name}</b><span>${b.tok}</span></div><div class="states">`;
+      h += `<button class="btn ${b.cls}">${labels[b.cls]}${arr}</button>`;
+      if (b.cls === 'destructive') h += `<button class="btn ${b.cls}">Log out</button>`;
+      if (disabledFor) h += `<button class="btn ${b.cls}" disabled>${labels[b.cls]}</button>`;
+      h += `</div></div>`;
+    }
+    return h;
+  }
+
+  function fieldsBlock(uid) {
+    return `<div class="group-label">Text fields</div>
+      <div class="field-row"><div class="cap">Name</div>
+        <div class="field"><input type="text" placeholder="What should we call you?"></div></div>
+      <div class="field-row"><div class="cap">Email</div>
+        <div class="field"><input type="email" value="kell@pennig.name"></div></div>
+      <div class="field-row"><div class="cap">API Key <span class="hint">— paste the key from your account</span></div>
+        <div class="field"><input class="mono" id="${uid}" type="password" placeholder="rk_live_…">
+          <button class="reveal" data-target="${uid}">Show</button></div></div>`;
+  }
+
+  function panel(theme, uid) {
+    return `<div class="panel" data-theme="${theme}" data-secondary="raised">
+      <div class="scheme-tag">${theme.toUpperCase()}</div>
+      ${buttonsBlock(theme)}${fieldsBlock(uid)}</div>`;
+  }
+
+  document.getElementById('cols').innerHTML = panel('dark','keyDark') + panel('light','keyLight');
+
+  // reveal toggles
+  document.querySelectorAll('.reveal').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const inp = document.getElementById(btn.dataset.target);
+      const show = inp.type === 'password';
+      inp.type = show ? 'text' : 'password';
+      btn.textContent = show ? 'Hide' : 'Show';
+    });
+  });
+
+  // secondary treatment switcher (persisted)
+  const seg = document.getElementById('secSeg');
+  const hintEl = document.getElementById('secHint');
+  const hints = {
+    raised:  'Current spec. In <b>light</b> the fill is only ~3% darker than the surface — it leans on the hairline and reads weakly.',
+    outline: 'Transparent fill + a stronger hairline. Clean and unambiguous in both themes; my recommendation.',
+    tinted:  'A genuinely darker fill + stronger hairline. Most button-like, but adds a tone the palette doesn\'t have yet.',
+  };
+  function applySecondary(v) {
+    document.querySelectorAll('.panel').forEach(p => p.dataset.secondary = v);
+    seg.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === v)));
+    hintEl.innerHTML = hints[v];
+    try { localStorage.setItem('rc_secondary', v); } catch(e) {}
+  }
+  seg.addEventListener('click', e => { const b = e.target.closest('button'); if (b) applySecondary(b.dataset.v); });
+  let initial = 'outline';
+  try { initial = localStorage.getItem('rc_secondary') || 'outline'; } catch(e) {}
+  applySecondary(initial);
+
+  // light-accent tweak: shift hue from amber (#cf8418, ~37°) toward yellow (~52°)
+  const accSlider = document.getElementById('accSlider');
+  const accHex = document.getElementById('accHex');
+  const accRatio = document.getElementById('accRatio');
+  const lightPanel = document.querySelector('.panel[data-theme="light"]');
+
+  function hslToRgb(h, s, l) {
+    h /= 360;
+    const f = (n) => {
+      const k = (n + h * 12) % 12;
+      const a = s * Math.min(l, 1 - l);
+      return l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+    };
+    return [f(0), f(8), f(4)].map(v => Math.round(v * 255));
+  }
+  const hex2 = (n) => n.toString(16).padStart(2, '0');
+  function lin(c) { c /= 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); }
+  function lum([r, g, b]) { return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b); }
+
+  function applyAccent(pos) {
+    // hue 37→52, hold saturation/lightness near the current token
+    const hue = 37 + (pos / 100) * 15;
+    const rgb = hslToRgb(hue, 0.80, 0.455);
+    const hex = '#' + rgb.map(hex2).join('');
+    const brownL = lum([0x2a, 0x1a, 0x05]);
+    const aL = lum(rgb);
+    const ratio = (Math.max(brownL, aL) + 0.05) / (Math.min(brownL, aL) + 0.05); // dark text on accent
+    lightPanel.style.setProperty('--accent', hex);
+    lightPanel.style.setProperty('--accentGlow', `rgba(${rgb.join(',')},0.28)`);
+    lightPanel.style.setProperty('--accentBorder', `rgba(${rgb.join(',')},0.5)`);
+    accHex.textContent = hex;
+    accRatio.textContent = ratio.toFixed(2) + ':1 ●';
+    accRatio.classList.toggle('warn', ratio < 4.5);
+    try { localStorage.setItem('rc_accentPos', pos); } catch(e) {}
+  }
+  accSlider.addEventListener('input', () => applyAccent(+accSlider.value));
+  let accPos = 30;
+  try { const v = localStorage.getItem('rc_accentPos'); if (v !== null) accPos = +v; } catch(e) {}
+  accSlider.value = accPos;
+  applyAccent(accPos);
+
+  // dark-danger tweak: hold red hue (~4°), slide from pink/light (old #E58A83)
+  // toward deep saturated red. Readout = WHITE text on the solid confirm fill.
+  const dngSlider = document.getElementById('dngSlider');
+  const dngHex = document.getElementById('dngHex');
+  const dngRatio = document.getElementById('dngRatio');
+  const darkPanel = document.querySelector('.panel[data-theme="dark"]');
+
+  function applyDanger(pos) {
+    const s = 0.65 + (pos / 100) * 0.09;   // 0.65 → 0.74
+    const l = 0.71 - (pos / 100) * 0.29;   // 0.71 (pink) → 0.42 (deep)
+    const rgb = hslToRgb(4, s, l);
+    const hex = '#' + rgb.map(hex2).join('');
+    const ratio = (1.05) / (lum(rgb) + 0.05); // white text on the fill
+    darkPanel.style.setProperty('--danger', hex);
+    darkPanel.style.setProperty('--dangerBg', `rgba(${rgb.join(',')},0.13)`);
+    darkPanel.style.setProperty('--dangerRing', `rgba(${rgb.join(',')},0.36)`);
+    darkPanel.style.setProperty('--dangerGlow', `rgba(${rgb.join(',')},0.36)`);
+    dngHex.textContent = hex;
+    dngRatio.textContent = ratio.toFixed(2) + ':1 ⚪';
+    dngRatio.classList.toggle('warn', ratio < 4);
+    try { localStorage.setItem('rc_dangerPos', pos); } catch(e) {}
+  }
+  dngSlider.addEventListener('input', () => applyDanger(+dngSlider.value));
+  let dngPos = 45;
+  try { const v = localStorage.getItem('rc_dangerPos'); if (v !== null) dngPos = +v; } catch(e) {}
+  dngSlider.value = dngPos;
+  applyDanger(dngPos);
+</script>
+</body>
+</html>
