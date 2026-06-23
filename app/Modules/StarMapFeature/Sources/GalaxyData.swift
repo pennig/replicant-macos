@@ -50,7 +50,8 @@ public enum GalaxyData {
         let resource: Double
         let devices: Int, vessels: Int
         let presence: Presence?
-        let relay: Bool, home: Bool
+        let relay: Bool
+        let home: Bool
         let cls: String
     }
 
@@ -106,7 +107,7 @@ public enum GalaxyData {
                 vesselCount: row.vessels,
                 presence: row.presence,
                 hasRelay: row.relay,
-                isHome: row.home
+                isCurrentLocation: row.home
             )
         }
     }

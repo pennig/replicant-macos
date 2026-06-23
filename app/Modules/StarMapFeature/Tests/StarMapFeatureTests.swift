@@ -9,7 +9,7 @@ import Testing
     }
 
     @Test func homeIsChamakuyAtTheOrigin() throws {
-        let home = try #require(GalaxyData.systems.first { $0.isHome })
+        let home = try #require(GalaxyData.systems.first { $0.isCurrentLocation })
         #expect(home.id == "CHK")
         // Distance is measured from home, so home's own distance is ~0.
         #expect(home.star.distanceFromReplicant == 0)

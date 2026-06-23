@@ -239,7 +239,7 @@ private struct SystemDossier: View {
 
             if system.star.explored {
                 Button(action: onDrill) {
-                    Label("Drill into system", systemImage: "arrow.down.right.and.arrow.up.left.rectangle")
+                    Label("View system", systemImage: "arrow.down.right.and.arrow.up.left.rectangle")
                         .font(.rcCaption)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 5)
@@ -271,7 +271,7 @@ private struct SystemDossier: View {
     }
 
     private var distanceText: String {
-        system.isHome ? "Home system" : String(format: "%.1f ly", system.star.distanceFromReplicant)
+        system.isCurrentLocation ? "Current Location" : String(format: "%.1f ly", system.star.distanceFromReplicant)
     }
 
     private func stat(_ label: String, _ value: String) -> some View {

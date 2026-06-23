@@ -23,7 +23,7 @@ public enum ChamakuyData {
         model.star.spectralType = system.spectralType
         model.star.color = system.star.color
         model.star.position = system.position
-        model.sunColorHex = system.isHome ? "#ffb648" : system.star.color
+        model.sunColorHex = system.isCurrentLocation ? "#ffb648" : system.star.color
         return model
     }
 

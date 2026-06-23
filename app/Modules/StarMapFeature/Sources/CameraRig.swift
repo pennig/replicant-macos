@@ -28,11 +28,16 @@ final class CameraRig {
 
     init() {
         let camera = SCNCamera()
-        camera.wantsHDR = true
-        camera.bloomIntensity = 0.35      // spec §4 — dialed down vs the canvas fake
-        camera.bloomThreshold = 0.8
-        camera.bloomBlurRadius = 8
+        // Bloom (and the HDR pipeline that fed it) is off: it washed the systems
+        // out and brightened the whole frame as you zoomed out, because HDR
+        // exposure adapts to how much emissive content is in view. Plain LDR
+        // rendering keeps brightness constant at every zoom level.
+        camera.wantsHDR = false
+        camera.bloomIntensity = 0
         camera.fieldOfView = 38
+        // Pin the FOV to the vertical axis so the optical-shift reconstruction
+        // below can derive `f` (= cot(fov/2)) independent of the view aspect.
+        camera.projectionDirection = .vertical
         camera.zNear = 0.5
         camera.zFar = 6000
         cameraNode.camera = camera
@@ -97,6 +102,48 @@ final class CameraRig {
         pivot.simdWorldPosition = .zero
         pivot.eulerAngles = SCNVector3(Self.startPitch, Self.startYaw, 0)
         cameraNode.position.z = Self.defaultDistance
+    }
+
+    // MARK: - Optical shift (sidebar-aware centering)
+
+    // Captured once from SceneKit's own symmetric projection so the off-center
+    // reconstruction inherits SceneKit's depth/clip convention exactly.
+    private var baseVerticalF: Float?
+    private var baseC2z: Float = 0
+    private var baseC2w: Float = -1
+    private var baseC3z: Float = 0
+    private var opticalShiftNDC: Float = 0
+
+    /// Horizontal optical shift, in normalized device coords. A positive value
+    /// nudges the rendered content to the right — used to recenter the scene in
+    /// the area the translucent sidebar leaves clear. This shifts the *image*
+    /// only; the look-at point and orbit center are untouched, so the galaxy
+    /// still spins about its true center.
+    func setOpticalShift(_ ndc: Float) {
+        opticalShiftNDC = ndc
+    }
+
+    /// Rebuild the (possibly off-center) projection for the current drawable
+    /// aspect. Cheap; call from the view's layout pass.
+    func updateProjection(aspect: CGFloat) {
+        guard aspect.isFinite, aspect > 0, let camera = cameraNode.camera else { return }
+        if baseVerticalF == nil {
+            // Read SceneKit's symmetric matrix before we ever override it.
+            let base = simd_float4x4(camera.projectionTransform)
+            baseVerticalF = base.columns.1.y          // cot(fovY/2), aspect-independent
+            baseC2z = base.columns.2.z
+            baseC2w = base.columns.2.w
+            baseC3z = base.columns.3.z
+        }
+        guard let f = baseVerticalF else { return }
+        var m = simd_float4x4(0)
+        m.columns.0 = SIMD4(f / Float(aspect), 0, 0, 0)
+        m.columns.1 = SIMD4(0, f, 0, 0)
+        // columns.2.x is the off-center term: ndc.x of the look-at point becomes
+        // -columns.2.x, so negate the desired shift to push content right.
+        m.columns.2 = SIMD4(-opticalShiftNDC, 0, baseC2z, baseC2w)
+        m.columns.3 = SIMD4(0, 0, baseC3z, 0)
+        camera.projectionTransform = SCNMatrix4(m)
     }
 
     /// Ease back to the default galaxy pose.

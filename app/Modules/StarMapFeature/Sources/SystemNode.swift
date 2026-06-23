@@ -18,6 +18,10 @@ final class SystemNode: SCNNode {
     let system: GalaxySystem
 
     private let starNode = SCNNode()
+    /// One billboarded container for all flat overlay chrome (label, rings,
+    /// halo, pips). Because it tracks the screen, every child is camera-facing
+    /// and screen-anchored without needing its own constraint.
+    private let overlay = SCNNode()
     private let labelNode = SCNNode()
     private let halo = SCNNode()
     private var layerNodes: [InfoLayer: SCNNode] = [:]
@@ -25,7 +29,7 @@ final class SystemNode: SCNNode {
     /// The lazily-built orrery (Phase 2). Created on first drill-in, then kept.
     private(set) var orrery: OrreryNode?
 
-    private var baseRadius: CGFloat { system.isHome ? 2.8 : 1.7 }
+    private var baseRadius: CGFloat { system.isCurrentLocation ? 2.8 : 1.7 }
 
     init(system: GalaxySystem) {
         self.system = system
@@ -33,6 +37,7 @@ final class SystemNode: SCNNode {
         name = "system:\(system.id)"
         position = SCNVector3(system.position.x, system.position.y, system.position.z)
         buildStar()
+        buildOverlay()
         buildHalo()
         buildLabel()
         buildInfoLayers()
@@ -44,7 +49,7 @@ final class SystemNode: SCNNode {
     // MARK: - Build
 
     private var starColor: NSColor {
-        system.isHome ? MapPalette.accent : MapPalette.star(hex: system.star.color)
+        system.isCurrentLocation ? MapPalette.accent : MapPalette.star(hex: system.star.color)
     }
 
     private func buildStar() {
@@ -55,11 +60,19 @@ final class SystemNode: SCNNode {
         m.diffuse.contents = starColor
         m.emission.contents = starColor
         // Aware-only systems glow dimmer (recon.dim), so the field reads at a glance.
-        m.emission.intensity = CGFloat(system.recon.dim) * (system.isHome ? 1.3 : 1.0)
+        m.emission.intensity = CGFloat(system.recon.dim) * (system.isCurrentLocation ? 1.0 : 0.5)
         sphere.materials = [m]
         starNode.geometry = sphere
         starNode.name = "star:\(system.id)"
         addChildNode(starNode)
+    }
+
+    /// The shared billboarded container. Sits at the star's center; the single
+    /// constraint here serves every overlay child.
+    private func buildOverlay() {
+        overlay.name = "overlay:\(system.id)"
+        overlay.constraints = [cameraFacingBillboard()]
+        addChildNode(overlay)
     }
 
     private func buildHalo() {
@@ -69,12 +82,14 @@ final class SystemNode: SCNNode {
         m.diffuse.contents = MapPalette.accent
         m.emission.contents = MapPalette.accent
         torus.materials = [m]
+        // The torus ring lies in XZ; tilt it into the overlay's XY (screen)
+        // plane so the shared billboard shows it face-on as a circle.
         halo.geometry = torus
+        halo.eulerAngles = SCNVector3(CGFloat.pi / 2, 0, 0)
         halo.name = "halo:\(system.id)"
-        halo.constraints = [SCNBillboardConstraint()]
         halo.opacity = 0
         halo.isHidden = true
-        addChildNode(halo)
+        overlay.addChildNode(halo)
     }
 
     private func buildLabel() {
@@ -86,16 +101,18 @@ final class SystemNode: SCNNode {
         m.diffuse.contents = MapPalette.textPrimary
         m.emission.contents = MapPalette.textPrimary
         text.materials = [m]
-        labelNode.geometry = text
 
-        // Center horizontally, anchor just above the star.
+        // The overlay tracks the screen, so offsetting the glyph *down in local
+        // space* keeps the label screen-down (visually beneath the star) at any
+        // camera pitch. Pivot at the glyph's top-center so it grows downward.
+        labelNode.geometry = text
         let (lo, hi) = text.boundingBox
-        labelNode.pivot = SCNMatrix4MakeTranslation((lo.x + hi.x) / 2, lo.y, 0)
+        labelNode.pivot = SCNMatrix4MakeTranslation((lo.x + hi.x) / 2, hi.y, 0)
         labelNode.scale = SCNVector3(0.42, 0.42, 0.42)
-        labelNode.position = SCNVector3(0, baseRadius + 3.2, 0)
-        labelNode.constraints = [SCNBillboardConstraint()]
+        labelNode.position = SCNVector3(0, -(baseRadius + 1.4), 0)
+        labelNode.renderingOrder = 10
         labelNode.name = "label:\(system.id)"
-        addChildNode(labelNode)
+        overlay.addChildNode(labelNode)
     }
 
     /// Build only the info-layer markers that apply to this system. Each is
@@ -135,10 +152,20 @@ final class SystemNode: SCNNode {
         m.diffuse.contents = color
         m.emission.contents = color
         torus.materials = [m]
+        // Tilt the torus from its native XZ plane into the overlay's XY (screen)
+        // plane so the shared billboard reads it as a circle around the star.
         let node = SCNNode(geometry: torus)
-        node.constraints = [SCNBillboardConstraint()]
-        addChildNode(node)
+        node.eulerAngles = SCNVector3(CGFloat.pi / 2, 0, 0)
+        overlay.addChildNode(node)
         return node
+    }
+
+    /// A billboard constraint free on all axes — keeps the overlay (and thus all
+    /// its flat chrome) fully face-on to the camera at any orbit angle.
+    private func cameraFacingBillboard() -> SCNBillboardConstraint {
+        let billboard = SCNBillboardConstraint()
+        billboard.freeAxes = .all
+        return billboard
     }
 
     private func makePip(color: NSColor, size: CGFloat, angle: CGFloat) -> SCNNode {
@@ -150,10 +177,11 @@ final class SystemNode: SCNNode {
         m.emission.contents = color
         sphere.materials = [m]
         let node = SCNNode(geometry: sphere)
+        // Positioned in the overlay's screen plane, so the cluster stays pinned
+        // around the star on screen regardless of camera angle.
         let r = baseRadius + 1.8
         node.position = SCNVector3(cos(angle) * r, sin(angle) * r, 0)
-        node.constraints = [SCNBillboardConstraint()]  // keep cluster facing camera
-        addChildNode(node)
+        overlay.addChildNode(node)
         return node
     }
 
@@ -213,7 +241,7 @@ final class SystemNode: SCNNode {
     func exitSystemMode(activeLayers: Set<InfoLayer>) {
         starNode.scale = SCNVector3(1, 1, 1)
         starNode.geometry?.firstMaterial?.emission.intensity =
-            CGFloat(system.recon.dim) * (system.isHome ? 1.3 : 1.0)
+            CGFloat(system.recon.dim) * (system.isCurrentLocation ? 1.3 : 1.0)
         apply(activeLayers: activeLayers)
         labelNode.isHidden = false
     }

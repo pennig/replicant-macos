@@ -24,8 +24,34 @@ enum StarMapIntent: Equatable, Sendable {
 /// SCNView subclass so we can route the scroll wheel to zoom.
 final class MapSCNView: SCNView {
     var onScroll: ((CGFloat) -> Void)?
+    /// Fired whenever the view is (re)laid out or attached to a window, so the
+    /// scene can refresh the sidebar-aware optical shift.
+    var onLayout: (() -> Void)?
+
     override func scrollWheel(with event: NSEvent) {
         onScroll?(event.scrollingDeltaY)
+    }
+
+    override func layout() {
+        super.layout()
+        onLayout?()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        onLayout?()
+    }
+}
+
+extension NSView {
+    /// Nearest ancestor split view, if any (NavigationSplitView is NSSplitView-backed).
+    var enclosingSplitView: NSSplitView? {
+        var view = superview
+        while let current = view {
+            if let split = current as? NSSplitView { return split }
+            view = current.superview
+        }
+        return nil
     }
 }
 
@@ -40,6 +66,7 @@ final class GalaxyScene: NSObject {
     private let systemsRoot = SCNNode()
     private let relayLinksNode = SCNNode()
     private var ambientField: SCNNode?
+    private var starShell: SCNNode?
     private var systemNodes: [String: SystemNode] = [:]
 
     // Mirrors of the last-applied declarative state, for idempotent applies.
@@ -69,6 +96,18 @@ final class GalaxyScene: NSObject {
         installGestures()
         updateLabelLOD()
         rearmIdle()
+        // The sidebar can resize/collapse without changing our (full-bleed) frame,
+        // so listen for split-view layout changes too — not just our own.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(splitViewDidResize),
+            name: NSSplitView.didResizeSubviewsNotification,
+            object: nil
+        )
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
     }
 
     // MARK: - Setup
@@ -83,12 +122,55 @@ final class GalaxyScene: NSObject {
         scnView.backgroundColor = .black
         scene.background.contents = makeSpaceBackground()
         scnView.onScroll = { [weak self] delta in self?.handleScroll(delta) }
+        scnView.onLayout = { [weak self] in self?.relayout() }
+    }
+
+    // MARK: - Sidebar-aware centering
+
+    @objc private func splitViewDidResize() { relayout() }
+
+    /// Recompute the camera's optical shift and projection so the scene is
+    /// centered in the region the (translucent, full-height) sidebar leaves clear.
+    private func relayout() {
+        let bounds = scnView.bounds
+        guard bounds.width > 0, bounds.height > 0 else { return }
+        let obscured = leadingObscuredWidth()
+        // ndc shift = fraction of full width hidden on the leading edge; this
+        // centers content in the visible span [obscured, width].
+        rig.setOpticalShift(Float(obscured / bounds.width))
+        rig.updateProjection(aspect: bounds.width / bounds.height)
+    }
+
+    /// How much of our leading edge is covered by the split view's sidebar.
+    /// Zero when the scene sits beside the sidebar rather than under it, so the
+    /// correction self-disables when there's nothing to correct.
+    private func leadingObscuredWidth() -> CGFloat {
+        guard let split = scnView.enclosingSplitView,
+              let sidebar = split.arrangedSubviews.first,
+              sidebar !== scnView, sidebar.window != nil,
+              !sidebar.isHidden, sidebar.frame.width > 0 else { return 0 }
+        // Trailing edge of the sidebar expressed in our coordinates: ≤ 0 when the
+        // sidebar is entirely to our left (no overlap), positive when it overlaps.
+        let trailing = sidebar.convert(NSPoint(x: sidebar.bounds.maxX, y: sidebar.bounds.midY), to: scnView)
+        return max(0, min(trailing.x, scnView.bounds.width))
     }
 
     private func buildScene(systems: [GalaxySystem], relays: [RelayLink]) {
         scene.rootNode.addChildNode(rig.pivot)
 
-        let field = AmbientField.makeNode()
+        let shell = AmbientField.makeStarShell()
+        starShell = shell
+        // Skybox behavior: keep the shell centered on the camera (no parallax —
+        // the stars read as infinitely far) while preserving its own fixed
+        // orientation, so orbiting the camera sweeps past different stars.
+        let follow = SCNReplicatorConstraint(target: rig.cameraNode)
+        follow.replicatesOrientation = false
+        follow.replicatesScale = false
+        follow.replicatesPosition = true
+        shell.constraints = [follow]
+        scene.rootNode.addChildNode(shell)
+
+        let field = AmbientField.makeNode(tints: ambientTints())
         ambientField = field
         scene.rootNode.addChildNode(field)
 
@@ -108,26 +190,75 @@ final class GalaxyScene: NSObject {
         relayLinksNode.isHidden = true   // shown when the relay layer is on
     }
 
-    /// Deep-space radial gradient. These are the spec's one token-less colors
-    /// ("Deep-space background #05070D → #0A0F1B"); everything else uses tokens.
+    /// Deep-space backdrop. A dark, full-bleed vignette over the spec's
+    /// token-less deep-space tones ("#05070D → #0A0F1B"), lifted with a few
+    /// faint token-tinted nebula washes — never the daytime-blue wash it used to
+    /// be. Stars live in the 3D star shell (`AmbientField.makeStarShell`) so they
+    /// parallax with the camera; this flat backdrop stays starless.
     private func makeSpaceBackground() -> NSImage {
-        let size = NSSize(width: 1024, height: 1024)
+        let size = NSSize(width: 2048, height: 2048)
         let image = NSImage(size: size)
         image.lockFocus()
-        let gradient = NSGradient(
-            colors: [
-                NSColor(hex: "#152238")!,
-                NSColor(hex: "#0a0f1b")!,
-                NSColor(hex: "#06080f")!,
-            ],
+        defer { image.unlockFocus() }
+        guard let ctx = NSGraphicsContext.current?.cgContext else { return image }
+
+        // Solid darkest base first — guarantees full coverage, no uncovered corner.
+        let base = NSColor(hex: "#04060D")!
+        base.setFill()
+        NSBezierPath(rect: NSRect(origin: .zero, size: size)).fill()
+
+        // Soft, off-center vignette. Ending on `base` (and filling past the end
+        // radius with it) means the gradient dissolves into the corners with no
+        // visible ring.
+        let vignette = NSGradient(
+            colors: [NSColor(hex: "#0C1322")!, NSColor(hex: "#070A14")!, base],
             atLocations: [0, 0.55, 1],
             colorSpace: .sRGB
         )!
-        let focus = NSPoint(x: size.width * 0.28, y: size.height * 0.86)
-        gradient.draw(fromCenter: focus, radius: 0,
-                      toCenter: focus, radius: size.width * 0.95, options: [])
-        image.unlockFocus()
+        let focus = NSPoint(x: size.width * 0.42, y: size.height * 0.60)
+        vignette.draw(fromCenter: focus, radius: 0,
+                      toCenter: focus, radius: size.width * 0.85,
+                      options: [.drawsAfterEndingLocation])
+
+        // Faint nebula washes — token-derived hues, screened over the dark so
+        // they only ever lighten. Subtle: this is distant gas, not the field.
+        ctx.saveGState()
+        ctx.setBlendMode(.screen)
+        func nebula(_ cx: CGFloat, _ cy: CGFloat, _ radius: CGFloat, _ color: NSColor, _ alpha: CGFloat) {
+            let g = NSGradient(
+                starting: color.withAlphaComponent(alpha),
+                ending: color.withAlphaComponent(0)
+            )!
+            g.draw(fromCenter: NSPoint(x: cx, y: cy), radius: 0,
+                   toCenter: NSPoint(x: cx, y: cy), radius: radius, options: [])
+        }
+        nebula(size.width * 0.28, size.height * 0.74, size.width * 0.46, MapPalette.npc, 0.10)
+        nebula(size.width * 0.76, size.height * 0.34, size.width * 0.52, MapPalette.sensing, 0.07)
+        nebula(size.width * 0.58, size.height * 0.84, size.width * 0.30, MapPalette.accent, 0.05)
+        ctx.restoreGState()
+
         return image
+    }
+
+    /// Resolve the ambient field's hues from design tokens (dark appearance), so
+    /// the interstellar medium stays on-palette without hard-coded color.
+    private func ambientTints() -> AmbientField.Tints {
+        func rgb(_ color: NSColor) -> SIMD3<Float> {
+            let c = color.usingColorSpace(.sRGB) ?? color
+            return SIMD3(Float(c.redComponent), Float(c.greenComponent), Float(c.blueComponent))
+        }
+        return AmbientField.Tints(
+            dustWarm: rgb(MapPalette.resource),
+            dustCool: rgb(MapPalette.transit),
+            nebula: [
+                rgb(MapPalette.npc),
+                rgb(MapPalette.sensing),
+                rgb(MapPalette.life),
+                rgb(MapPalette.transit),
+                rgb(MapPalette.relayPurple),
+            ],
+            protostar: rgb(MapPalette.accent)
+        )
     }
 
     // MARK: - Relay links
@@ -283,6 +414,7 @@ final class GalaxyScene: NSObject {
     /// one). The focused star stays opaque and continuous across the move.
     private func fadeGalaxy(to opacity: CGFloat, excluding id: String?) {
         ambientField?.opacity = opacity
+        // The star shell is the skybox — it stays put as you drill into a system.
         relayLinksNode.opacity = opacity
         for (sid, node) in systemNodes where sid != id {
             node.opacity = opacity
@@ -397,7 +529,7 @@ final class GalaxyScene: NSObject {
     private func updateLabelLOD() {
         let show = rig.distance < labelDistanceThreshold
         for node in systemNodes.values {
-            node.setLabelVisible(show || node.system.isHome || node.system.id == currentSelection)
+            node.setLabelVisible(show || node.system.isCurrentLocation || node.system.id == currentSelection)
         }
     }
 

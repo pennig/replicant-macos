@@ -148,7 +148,7 @@ public struct GalaxySystem: Identifiable, Equatable, Sendable {
     public var vesselCount: Int
     public var presence: Presence?
     public var hasRelay: Bool            // participates in a relay mesh
-    public var isHome: Bool
+    public var isCurrentLocation: Bool
 
     public var id: String { star.designation }
     public var position: Position { star.position }
@@ -164,7 +164,7 @@ public struct GalaxySystem: Identifiable, Equatable, Sendable {
         vesselCount: Int,
         presence: Presence?,
         hasRelay: Bool,
-        isHome: Bool
+        isCurrentLocation: Bool
     ) {
         self.star = star
         self.name = name
@@ -175,7 +175,7 @@ public struct GalaxySystem: Identifiable, Equatable, Sendable {
         self.vesselCount = vesselCount
         self.presence = presence
         self.hasRelay = hasRelay
-        self.isHome = isHome
+        self.isCurrentLocation = isCurrentLocation
     }
 }
 
