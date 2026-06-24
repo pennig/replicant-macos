@@ -9,6 +9,13 @@ import SQLiteData
 import Testing
 @testable import MessagesFeature
 
+/// A stand-in error whose `localizedDescription` is a known string, for
+/// asserting surfaced error messages.
+private struct StubError: LocalizedError {
+    let message: String
+    var errorDescription: String? { message }
+}
+
 @MainActor
 @Suite struct MessagesFeatureTests {
     /// Refreshing fetches a page and upserts it into the local store.
@@ -21,11 +28,11 @@ import Testing
                     createdAt: Date(timeIntervalSince1970: 200)),
         ]
 
-        let store = TestStore(initialState: MessagesFeature.State(apiKey: "key")) {
+        let store = TestStore(initialState: MessagesFeature.State()) {
             MessagesFeature()
         } withDependencies: {
             $0.defaultDatabase = database
-            $0.messagesClient.fetch = { _, _, _, _ in
+            $0.messagesClient.fetch = { _, _, _ in
                 MessagePage(messages: inbox, nextCursor: nil, unreadCount: 1)
             }
         }
@@ -44,12 +51,12 @@ import Testing
     /// A failed fetch surfaces an error and clears the loading flag.
     @Test func refreshFailureSurfacesError() async throws {
         let database = try makeDatabase()
-        let store = TestStore(initialState: MessagesFeature.State(apiKey: "key")) {
+        let store = TestStore(initialState: MessagesFeature.State()) {
             MessagesFeature()
         } withDependencies: {
             $0.defaultDatabase = database
-            $0.messagesClient.fetch = { _, _, _, _ in
-                throw MessagesClientError.http(status: 500, message: "boom")
+            $0.messagesClient.fetch = { _, _, _ in
+                throw StubError(message: "boom")
             }
         }
 
@@ -69,11 +76,11 @@ import Testing
         ])
 
         let markReadCalls = LockIsolated<[MarkRead]>([])
-        let store = TestStore(initialState: MessagesFeature.State(apiKey: "key")) {
+        let store = TestStore(initialState: MessagesFeature.State()) {
             MessagesFeature()
         } withDependencies: {
             $0.defaultDatabase = database
-            $0.messagesClient.markRead = { _, ids, markAll in
+            $0.messagesClient.markRead = { ids, markAll in
                 markReadCalls.withValue { $0.append(MarkRead(ids: ids, markAll: markAll)) }
             }
         }
@@ -101,11 +108,11 @@ import Testing
         ])
 
         let markReadCalls = LockIsolated<[MarkRead]>([])
-        let store = TestStore(initialState: MessagesFeature.State(apiKey: "key")) {
+        let store = TestStore(initialState: MessagesFeature.State()) {
             MessagesFeature()
         } withDependencies: {
             $0.defaultDatabase = database
-            $0.messagesClient.markRead = { _, ids, markAll in
+            $0.messagesClient.markRead = { ids, markAll in
                 markReadCalls.withValue { $0.append(MarkRead(ids: ids, markAll: markAll)) }
             }
         }
@@ -127,12 +134,12 @@ import Testing
                     createdAt: Date(timeIntervalSince1970: 1)),
         ])
 
-        let store = TestStore(initialState: MessagesFeature.State(apiKey: "key")) {
+        let store = TestStore(initialState: MessagesFeature.State()) {
             MessagesFeature()
         } withDependencies: {
             $0.defaultDatabase = database
-            $0.messagesClient.markRead = { _, _, _ in
-                throw MessagesClientError.http(status: 429, message: "rate limited")
+            $0.messagesClient.markRead = { _, _ in
+                throw StubError(message: "rate limited")
             }
         }
 
@@ -147,7 +154,7 @@ import Testing
     /// A second `.task`/refresh while one is in flight is ignored.
     @Test func refreshIsIgnoredWhileLoading() async throws {
         let database = try makeDatabase()
-        let store = TestStore(initialState: MessagesFeature.State(apiKey: "key", isLoading: true)) {
+        let store = TestStore(initialState: MessagesFeature.State(isLoading: true)) {
             MessagesFeature()
         } withDependencies: {
             $0.defaultDatabase = database
@@ -161,12 +168,12 @@ import Testing
     /// A failed mark-all surfaces an error.
     @Test func markAllReadFailureSurfacesError() async throws {
         let database = try makeDatabase()
-        let store = TestStore(initialState: MessagesFeature.State(apiKey: "key")) {
+        let store = TestStore(initialState: MessagesFeature.State()) {
             MessagesFeature()
         } withDependencies: {
             $0.defaultDatabase = database
-            $0.messagesClient.markRead = { _, _, _ in
-                throw MessagesClientError.http(status: 500, message: "boom")
+            $0.messagesClient.markRead = { _, _ in
+                throw StubError(message: "boom")
             }
         }
 
@@ -179,7 +186,7 @@ import Testing
     /// Dismissing an error clears it.
     @Test func dismissErrorClearsMessage() async throws {
         let store = TestStore(
-            initialState: MessagesFeature.State(apiKey: "key", errorMessage: "boom")
+            initialState: MessagesFeature.State(errorMessage: "boom")
         ) {
             MessagesFeature()
         }
@@ -205,11 +212,11 @@ import Testing
             .execute(db)
         }
 
-        let store = TestStore(initialState: MessagesFeature.State(apiKey: "key")) {
+        let store = TestStore(initialState: MessagesFeature.State()) {
             MessagesFeature()
         } withDependencies: {
             $0.defaultDatabase = database
-            $0.messagesClient.markRead = { _, _, _ in }
+            $0.messagesClient.markRead = { _, _ in }
         }
 
         await store.send(.markAllReadButtonTapped)

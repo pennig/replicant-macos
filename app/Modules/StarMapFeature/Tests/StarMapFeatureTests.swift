@@ -1,4 +1,6 @@
 import ComposableArchitecture
+import Foundation
+import SQLiteData
 import Testing
 @testable import StarMapFeature
 
@@ -6,13 +8,6 @@ import Testing
     @Test func seedsSixteenSystemsAndFiveRelays() {
         #expect(GalaxyData.systems.count == 16)
         #expect(GalaxyData.relays.count == 5)
-    }
-
-    @Test func homeIsChamakuyAtTheOrigin() throws {
-        let home = try #require(GalaxyData.systems.first { $0.isCurrentLocation })
-        #expect(home.id == "CHK")
-        // Distance is measured from home, so home's own distance is ~0.
-        #expect(home.star.distanceFromReplicant == 0)
     }
 
     @Test func reconControlsExploredFlag() throws {
@@ -50,8 +45,6 @@ import Testing
         await store.send(.systemTapped("VLZ")) {
             $0.selectedSystemID = "VLZ"
         }
-        #expect(store.state.selectedSystem?.id == "VLZ")
-
         await store.send(.systemTapped(nil)) {
             $0.selectedSystemID = nil
         }
@@ -106,13 +99,150 @@ import Testing
         }
     }
 
-    @Test func drillInIgnoredForUnexploredSystem() async {
+    @Test func drillInIgnoredWhileTransitioning() async {
+        let store = TestStore(initialState: StarMapFeature.State(isTransitioning: true)) {
+            StarMapFeature()
+        }
+        // A drill request mid-fly is a no-op (no state change, no effect).
+        await store.send(.drillInRequested("CHK"))
+    }
+}
+
+// MARK: - Survey & persistence
+
+@MainActor
+@Suite struct StarSurveyTests {
+    private func makeStarsDatabase() throws -> any DatabaseWriter {
+        let database = try SQLiteData.defaultDatabase()
+        var migrator = DatabaseMigrator()
+        Star.registerMigrations(&migrator)
+        try migrator.migrate(database)
+        return database
+    }
+
+    private func item(_ designation: String, explored: Bool = true, spectral: String = "G2 V") -> StarItem {
+        StarItem(
+            designation: designation, spectralType: spectral, color: "#fff4ea",
+            position: Position(x: 1, y: 2, z: 3), estimatedPlanets: 3,
+            explored: explored, hasLife: nil, entryPoint: nil
+        )
+    }
+
+    private func page(_ number: Int, totalPages: Int, _ designations: [String], totalStars: Int) -> StarPage {
+        StarPage(
+            stars: designations.map { item($0) }, page: number, perPage: 100,
+            totalStars: totalStars, totalPages: totalPages, replicantPosition: Position(x: 0, y: 0, z: 0)
+        )
+    }
+
+    @Test func surveyWalksPagesAndPersistsAllStars() async throws {
+        let database = try makeStarsDatabase()
+        let page1 = page(1, totalPages: 2, ["AAA", "BBB"], totalStars: 3)
+        let page2 = page(2, totalPages: 2, ["CCC"], totalStars: 3)
+
+        let store = TestStore(initialState: StarMapFeature.State(replicantCode: "RC")) {
+            StarMapFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.starsClient.survey = { _, _ in
+                AsyncThrowingStream { continuation in
+                    continuation.yield(page1)
+                    continuation.yield(page2)
+                    continuation.finish()
+                }
+            }
+        }
+
+        await store.send(.surveyButtonTapped) { $0.isSurveying = true }
+        await store.receive(\.surveyProgress) {
+            $0.surveyPagesDone = 1; $0.surveyTotalPages = 2; $0.surveyStarCount = 3
+        }
+        await store.receive(\.surveyProgress) {
+            $0.surveyPagesDone = 2; $0.surveyTotalPages = 2; $0.surveyStarCount = 3
+        }
+        await store.receive(\.surveyFinished) { $0.isSurveying = false }
+
+        let count = try await database.read { db in try Star.fetchCount(db) }
+        #expect(count == 3)
+    }
+
+    @Test func emptyDatabaseTriggersCorruptionModal() async throws {
+        let database = try makeStarsDatabase()   // empty
         let store = TestStore(initialState: StarMapFeature.State()) {
             StarMapFeature()
         } withDependencies: {
-            $0.continuousClock = ImmediateClock()
+            $0.defaultDatabase = database
         }
-        // TYR is recon: .aware → not explored, so drilling is a no-op.
-        await store.send(.drillInRequested("TYR"))
+        await store.send(.task)
+        await store.receive(\.bootCorruptionDetected) { $0.bootPhase = .corruptionDetected }
+    }
+
+    @Test func manualOverrideRebuildsThenAutoDismisses() async throws {
+        let database = try makeStarsDatabase()
+        let clock = TestClock()
+        let only = page(1, totalPages: 1, ["AAA"], totalStars: 1)
+
+        let store = TestStore(initialState: StarMapFeature.State()) {
+            StarMapFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
+            $0.continuousClock = clock
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.starsClient.survey = { _, _ in
+                AsyncThrowingStream { $0.yield(only); $0.finish() }
+            }
+        }
+
+        await store.send(.manualOverrideTapped) {
+            $0.bootPhase = .rebuilding
+            $0.isSurveying = true
+        }
+        await store.receive(\.surveyProgress) {
+            $0.surveyPagesDone = 1; $0.surveyTotalPages = 1; $0.surveyStarCount = 1
+        }
+        await store.receive(\.surveyFinished) {
+            $0.isSurveying = false
+            $0.bootPhase = .complete
+        }
+        await clock.advance(by: .milliseconds(1400))
+        await store.receive(\.bootDismissed) { $0.bootPhase = .idle }
+
+        let count = try await database.read { db in try Star.fetchCount(db) }
+        #expect(count == 1)
+    }
+
+    @Test func reSurveyRefreshesFieldsButPreservesTimestamps() async throws {
+        let database = try makeStarsDatabase()
+        let created = Date(timeIntervalSince1970: 1_000)
+        let initial = Star(item: item("AAA", explored: false, spectral: "G2 V"), createdAt: created)
+        let resurvey = Star(item: item("AAA", explored: true, spectral: "M0 V"),
+                            createdAt: Date(timeIntervalSince1970: 2_000))
+
+        // First survey stores AAA (unexplored, G2 V) with createdAt = 1000.
+        try await database.write { db in
+            try Star.insert { initial }.execute(db)
+        }
+
+        // Re-survey with changed fields and a later stamp; timestamps must hold.
+        try await database.write { db in
+            try Star.insert {
+                resurvey
+            } onConflict: {
+                $0.designation
+            } doUpdate: { row, excluded in
+                row.spectralType = excluded.spectralType
+                row.explored = excluded.explored
+            }
+            .execute(db)
+        }
+
+        let star = try await database.read { db in
+            try Star.where { $0.designation.eq("AAA") }.fetchOne(db)
+        }
+        #expect(star?.createdAt == created)       // preserved
+        #expect(star?.firstVisitedAt == nil)      // preserved (still unset)
+        #expect(star?.explored == true)           // refreshed
+        #expect(star?.spectralType == "M0 V")     // refreshed
     }
 }

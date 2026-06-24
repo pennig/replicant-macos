@@ -17,19 +17,15 @@ import SQLiteData
 public struct MessagesFeature {
     @ObservableState
     public struct State: Equatable {
-        /// Session bearer token used to authenticate message requests.
-        public var apiKey: String
         public var selectedMessageID: Message.ID?
         public var isLoading: Bool
         public var errorMessage: String?
 
         public init(
-            apiKey: String = "",
             selectedMessageID: Message.ID? = nil,
             isLoading: Bool = false,
             errorMessage: String? = nil
         ) {
-            self.apiKey = apiKey
             self.selectedMessageID = selectedMessageID
             self.isLoading = isLoading
             self.errorMessage = errorMessage
@@ -60,7 +56,6 @@ public struct MessagesFeature {
                 // Opening a message marks it read — locally first for an instant
                 // UI response, then on the server.
                 guard let id = state.selectedMessageID else { return .none }
-                let apiKey = state.apiKey
                 let database = self.database
                 let messagesClient = self.messagesClient
                 return .run { _ in
@@ -76,7 +71,7 @@ public struct MessagesFeature {
                         return true
                     }
                     guard wasUnread else { return }
-                    try await messagesClient.markRead(apiKey, [id], false)
+                    try await messagesClient.markRead([id], false)
                 } catch: { error, send in
                     await send(.markReadFailed(error.localizedDescription))
                 }
@@ -88,11 +83,10 @@ public struct MessagesFeature {
                 guard !state.isLoading else { return .none }
                 state.isLoading = true
                 state.errorMessage = nil
-                let apiKey = state.apiKey
                 let database = self.database
                 let messagesClient = self.messagesClient
                 return .run { send in
-                    let page = try await messagesClient.fetch(apiKey, nil, 50, false)
+                    let page = try await messagesClient.fetch(nil, 50, false)
                     try await database.write { db in
                         for message in page.messages {
                             try Message.upsert { message }.execute(db)
@@ -113,14 +107,13 @@ public struct MessagesFeature {
                 return .none
 
             case .markAllReadButtonTapped:
-                let apiKey = state.apiKey
                 let database = self.database
                 let messagesClient = self.messagesClient
                 return .run { _ in
                     try await database.write { db in
                         try Message.update { $0.isRead = true }.execute(db)
                     }
-                    try await messagesClient.markRead(apiKey, nil, true)
+                    try await messagesClient.markRead(nil, true)
                 } catch: { error, send in
                     await send(.markReadFailed(error.localizedDescription))
                 }

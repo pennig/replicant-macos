@@ -10,13 +10,20 @@
 
 import ComposableArchitecture
 import Foundation
+import SQLiteData
 
 @Reducer
 public struct StarMapFeature {
+    /// The active replicant whose nearby stars we survey.
+    /// TODO: source this from the signed-in session once an active-replicant
+    /// selection flow exists; hardcoded to the current replicant for now.
+    public static let defaultReplicantCode = "99380EDF"
+
     @ObservableState
     public struct State: Equatable {
-        public var systems: IdentifiedArrayOf<GalaxySystem>
-        public var relays: [RelayLink]
+        // The charted galaxy is rendered straight from the SQLite `Star` table
+        // (observed in the view via `@FetchAll`); the reducer keeps only intent
+        // and transient UI state.
         public var selectedSystemID: String?
         public var activeLayers: Set<InfoLayer>
         public var autoRotate: Bool
@@ -27,21 +34,23 @@ public struct StarMapFeature {
         public var focus: StarMapFocus
         public var isTransitioning: Bool
 
-        /// The currently selected system, if any — drives the HUD dossier.
-        public var selectedSystem: GalaxySystem? {
-            guard let id = selectedSystemID else { return nil }
-            return systems[id: id]
-        }
+        // Survey (nearby-stars fetch + persist).
+        public var replicantCode: String
+        public var isSurveying: Bool
+        public var surveyPagesDone: Int
+        public var surveyTotalPages: Int?
+        public var surveyStarCount: Int
+        public var surveyError: String?
+        /// The themed first-run database-rebuild sequence.
+        public var bootPhase: BootPhase
 
-        /// The drilled-in system, if any — drives the system HUD.
-        public var focusedSystem: GalaxySystem? {
-            guard case let .system(id) = focus else { return nil }
-            return systems[id: id]
+        public var surveyFraction: Double {
+            guard let total = surveyTotalPages, total > 0 else { return 0 }
+            return min(1, Double(surveyPagesDone) / Double(total))
         }
 
         public init(
-            systems: IdentifiedArrayOf<GalaxySystem> = IdentifiedArrayOf(uniqueElements: GalaxyData.systems),
-            relays: [RelayLink] = GalaxyData.relays,
+            replicantCode: String = StarMapFeature.defaultReplicantCode,
             selectedSystemID: String? = nil,
             activeLayers: Set<InfoLayer> = [.presence],
             autoRotate: Bool = true,
@@ -49,14 +58,19 @@ public struct StarMapFeature {
             focus: StarMapFocus = .galaxy,
             isTransitioning: Bool = false
         ) {
-            self.systems = systems
-            self.relays = relays
+            self.replicantCode = replicantCode
             self.selectedSystemID = selectedSystemID
             self.activeLayers = activeLayers
             self.autoRotate = autoRotate
             self.cameraResetToken = cameraResetToken
             self.focus = focus
             self.isTransitioning = isTransitioning
+            self.isSurveying = false
+            self.surveyPagesDone = 0
+            self.surveyTotalPages = nil
+            self.surveyStarCount = 0
+            self.surveyError = nil
+            self.bootPhase = .idle
         }
     }
 
@@ -69,15 +83,30 @@ public struct StarMapFeature {
         case drillInRequested(String)
         case zoomOutRequested
         case transitionCompleted
+        case surveyButtonTapped
+        case surveyProgress(pagesDone: Int, totalPages: Int, starCount: Int)
+        case surveyFinished
+        case surveyFailed(String)
+        // First-run database-rebuild sequence.
+        case task
+        case bootCorruptionDetected
+        case manualOverrideTapped
+        case bootDismissed
     }
 
-    private enum CancelID { case transition }
+    private enum CancelID { case transition, survey }
 
     /// Fly durations (must match the SceneKit animation in `GalaxyScene`).
     static let drillInDuration: Duration = .milliseconds(1150)
     static let zoomOutDuration: Duration = .milliseconds(950)
 
+    /// The server caps `per_page` at 50.
+    static let surveyPageSize = 50
+
     @Dependency(\.continuousClock) var clock
+    @Dependency(\.defaultDatabase) var database
+    @Dependency(\.starsClient) var starsClient
+    @Dependency(\.date) var date
 
     public init() {}
 
@@ -109,11 +138,9 @@ public struct StarMapFeature {
                 return .none
 
             case let .drillInRequested(id):
-                // Only explored systems can be drilled into, and not mid-fly.
-                guard !state.isTransitioning,
-                      state.focus == .galaxy,
-                      state.systems[id: id]?.star.explored == true
-                else { return .none }
+                // Not mid-fly, and only from the galaxy. The view only offers the
+                // drill control for explored systems, so the reducer trusts it.
+                guard !state.isTransitioning, state.focus == .galaxy else { return .none }
                 state.selectedSystemID = id
                 state.focus = .system(id)
                 state.isTransitioning = true
@@ -138,7 +165,114 @@ public struct StarMapFeature {
             case .transitionCompleted:
                 state.isTransitioning = false
                 return .none
+
+            case .surveyButtonTapped:
+                guard !state.isSurveying else { return .none }
+                return runSurvey(&state)
+
+            case let .surveyProgress(pagesDone, totalPages, starCount):
+                state.surveyPagesDone = pagesDone
+                state.surveyTotalPages = totalPages
+                state.surveyStarCount = starCount
+                return .none
+
+            case .surveyFinished:
+                state.isSurveying = false
+                if state.bootPhase == .rebuilding {
+                    state.bootPhase = .complete
+                    let clock = self.clock
+                    return .run { send in
+                        try await clock.sleep(for: .milliseconds(1400))
+                        await send(.bootDismissed)
+                    }
+                }
+                return .none
+
+            case let .surveyFailed(message):
+                state.isSurveying = false
+                state.surveyError = message
+                // Drop back to the modal so the override can be retried.
+                if state.bootPhase == .rebuilding { state.bootPhase = .corruptionDetected }
+                return .none
+
+            case .task:
+                // First run only: if the local star catalog is empty, present the
+                // (themed) corruption modal that gates the initial rebuild.
+                guard state.bootPhase == .idle else { return .none }
+                let database = self.database
+                return .run { send in
+                    let count = try await database.read { db in try Star.fetchCount(db) }
+                    if count == 0 { await send(.bootCorruptionDetected) }
+                } catch: { _, _ in }
+
+            case .bootCorruptionDetected:
+                guard state.bootPhase == .idle else { return .none }
+                state.bootPhase = .corruptionDetected
+                return .none
+
+            case .manualOverrideTapped:
+                guard !state.isSurveying else { return .none }
+                state.bootPhase = .rebuilding
+                return runSurvey(&state)
+
+            case .bootDismissed:
+                state.bootPhase = .idle
+                return .none
             }
         }
+    }
+
+    /// Starts the paged nearby-stars survey: resets progress, then walks every
+    /// page — persisting each (timestamps preserved on re-survey) and reporting
+    /// progress. The view's `@FetchAll` observation renders the inserted rows.
+    private func runSurvey(_ state: inout State) -> Effect<Action> {
+        state.isSurveying = true
+        state.surveyError = nil
+        state.surveyPagesDone = 0
+        state.surveyTotalPages = nil
+        state.surveyStarCount = 0
+        let code = state.replicantCode
+        let starsClient = self.starsClient
+        let database = self.database
+        let date = self.date
+        let pageSize = Self.surveyPageSize
+        return .run { send in
+            for try await result in starsClient.survey(code, pageSize) {
+                let stamp = date.now
+                let records = result.stars.map { Star(item: $0, createdAt: stamp) }
+                try await database.write { db in
+                    try Star.insert {
+                        records
+                    } onConflict: {
+                        $0.designation
+                    } doUpdate: { row, excluded in
+                        // Schema fields refresh; the local lifecycle timestamps
+                        // (createdAt/firstVisitedAt/fullyScannedAt) are preserved.
+                        row.spectralType = excluded.spectralType
+                        row.color = excluded.color
+                        row.positionX = excluded.positionX
+                        row.positionY = excluded.positionY
+                        row.positionZ = excluded.positionZ
+                        row.estimatedPlanets = excluded.estimatedPlanets
+                        row.explored = excluded.explored
+                        row.hasLife = excluded.hasLife
+                        row.entryPoint = excluded.entryPoint
+                    }
+                    .execute(db)
+                }
+                // Persisting each page is enough — the view observes the `Star`
+                // table via `@FetchAll`, so the scene renders the new rows
+                // automatically. We only report counts for the modal's progress.
+                await send(.surveyProgress(
+                    pagesDone: result.page,
+                    totalPages: result.totalPages,
+                    starCount: result.totalStars
+                ))
+            }
+            await send(.surveyFinished)
+        } catch: { error, send in
+            await send(.surveyFailed(error.localizedDescription))
+        }
+        .cancellable(id: CancelID.survey)
     }
 }

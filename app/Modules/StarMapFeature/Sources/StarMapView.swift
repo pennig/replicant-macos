@@ -8,42 +8,75 @@
 //
 
 import ComposableArchitecture
+import SQLiteData
 import SwiftUI
 import UI
 
 public struct StarMapView: View {
     @Bindable var store: StoreOf<StarMapFeature>
+    /// The charted galaxy, observed straight from the `Star` table — new rows
+    /// (from a survey) flow into the scene automatically. Sorted by distance so
+    /// the home system (0) sorts first.
+    @FetchAll(Star.order(by: \.createdAt)) private var stars
 
     public init(store: StoreOf<StarMapFeature>) {
         self.store = store
     }
 
+    private var chartedStarCount: Int { stars.count }
+
+    /// The selected/focused star as a presentation system for the HUD.
+    private func system(forID id: String?) -> GalaxySystem? {
+        guard let id, let star = stars.first(where: { $0.id == id }) else { return nil }
+        return GalaxySystem(surveyed: star.item, isCurrentLocation: star.designation == "ATIANFU")
+    }
+    private var selectedSystem: GalaxySystem? { system(forID: store.selectedSystemID) }
+    private var focusedSystem: GalaxySystem? {
+        guard case let .system(id) = store.focus else { return nil }
+        return system(forID: id)
+    }
+
     public var body: some View {
         ZStack {
-            StarMapSceneView(store: store, focus: store.focus, resetToken: store.cameraResetToken)
-                .ignoresSafeArea()
+            StarMapSceneView(
+                store: store,
+                focus: store.focus,
+                resetToken: store.cameraResetToken,
+                stars: stars,
+                flashNew: store.bootPhase == .rebuilding,
+                interactive: store.bootPhase == .idle
+            )
+            .ignoresSafeArea()
 
             switch store.focus {
             case .galaxy:
                 galaxyHUD.transition(.opacity)
             case .system:
-                if let system = store.focusedSystem {
+                if let system = focusedSystem {
                     SystemHUD(system: system, isTransitioning: store.isTransitioning) {
                         store.send(.zoomOutRequested)
                     }
                     .transition(.opacity)
                 }
             }
+
+            // The themed first-run "database rebuild" sequence, over everything.
+            if store.bootPhase != .idle {
+                BootRebuildOverlay(store: store)
+                    .transition(.opacity)
+            }
         }
         .background(.black)
         .environment(\.colorScheme, .dark)
         .animation(.easeInOut(duration: 0.6), value: store.focus)
         .animation(.easeInOut(duration: 0.22), value: store.selectedSystemID)
+        .animation(.easeInOut(duration: 0.4), value: store.bootPhase)
         .navigationTitle(navigationTitle)
+        .task { store.send(.task) }
     }
 
     private var navigationTitle: String {
-        store.focusedSystem.map { "Galaxy · \($0.name)" } ?? "Galaxy"
+        focusedSystem.map { "Galaxy · \($0.name)" } ?? "Galaxy"
     }
 
     // MARK: - Galaxy HUD
@@ -54,7 +87,7 @@ public struct StarMapView: View {
                 header
                 Spacer()
                 HStack(alignment: .bottom) {
-                    if let system = store.selectedSystem {
+                    if let system = selectedSystem {
                         SystemDossier(
                             system: system,
                             canDrill: system.star.explored && !store.isTransitioning,
@@ -89,7 +122,7 @@ public struct StarMapView: View {
             Text("Galaxy Explorer")
                 .font(.rcTitle)
                 .foregroundStyle(.rcTextPrimary)
-            Text("\(store.systems.count) charted systems")
+            Text(chartedStarCount > 0 ? "\(chartedStarCount.formatted()) charted stars" : "Uncharted")
                 .font(.rcCaption)
                 .foregroundStyle(.rcTextTertiary)
         }
@@ -100,6 +133,10 @@ public struct StarMapView: View {
 
     private var controls: some View {
         VStack(alignment: .leading, spacing: Space.s) {
+            surveyControl
+
+            Divider().overlay(.rcSeparator)
+
             Toggle(isOn: Binding(
                 get: { store.autoRotate },
                 set: { _ in store.send(.autoRotateToggled) }
@@ -120,7 +157,44 @@ public struct StarMapView: View {
         }
         .padding(.horizontal, Space.m)
         .padding(.vertical, Space.s)
+        .frame(width: 184, alignment: .leading)
         .hudGlass()
+    }
+
+    @ViewBuilder private var surveyControl: some View {
+        if store.isSurveying {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: Space.s) {
+                    ProgressView().controlSize(.small)
+                    Text("Surveying…").font(.rcCaption).foregroundStyle(.rcTextSecondary)
+                }
+                if let total = store.surveyTotalPages {
+                    ProgressView(value: Double(store.surveyPagesDone), total: Double(max(total, 1)))
+                        .tint(.rcAccent)
+                    Text("Page \(store.surveyPagesDone) / \(total) · \(store.surveyStarCount.formatted()) stars")
+                        .font(.rcMonoSmall)
+                        .foregroundStyle(.rcTextTertiary)
+                }
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 4) {
+                Button {
+                    store.send(.surveyButtonTapped)
+                } label: {
+                    Label("Survey nearby stars", systemImage: "dot.radiowaves.left.and.right")
+                        .font(.rcCaption)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.rcAccent)
+
+                if let error = store.surveyError {
+                    Text(error)
+                        .font(.rcMonoSmall)
+                        .foregroundStyle(.rcError)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
     }
 }
 
@@ -271,7 +345,7 @@ private struct SystemDossier: View {
     }
 
     private var distanceText: String {
-        system.isCurrentLocation ? "Current Location" : String(format: "%.1f ly", system.star.distanceFromReplicant)
+        system.isCurrentLocation ? "Current Location" : String(format: "%.1f ly", 3.2)
     }
 
     private func stat(_ label: String, _ value: String) -> some View {
@@ -399,6 +473,133 @@ private struct SystemHUD: View {
     }
 }
 
+// MARK: - Boot / database-rebuild overlay
+
+/// The themed first-run sequence: a faux system fault that demands a "manual
+/// override" to rebuild the star catalog, then shows the live survey progress.
+/// The scrim is deliberately light so the stars flashing in behind read through.
+private struct BootRebuildOverlay: View {
+    let store: StoreOf<StarMapFeature>
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.45).ignoresSafeArea()
+            card
+                .frame(width: 440)
+        }
+    }
+
+    private var card: some View {
+        VStack(alignment: .leading, spacing: Space.l) {
+            HStack(alignment: .top, spacing: Space.m) {
+                Image(systemName: icon)
+                    .font(.system(size: 30, weight: .semibold))
+                    .foregroundStyle(iconColor)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(title)
+                        .font(.rcHeadline)
+                        .foregroundStyle(.rcTextPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(message)
+                        .font(.rcBody)
+                        .foregroundStyle(.rcTextSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            phaseContent
+        }
+        .padding(Space.xl)
+        .hudGlass()
+    }
+
+    @ViewBuilder private var phaseContent: some View {
+        switch store.bootPhase {
+        case .corruptionDetected:
+            VStack(alignment: .leading, spacing: Space.m) {
+                Text("FAULT 0x5A · STAR_SYSTEM_DB · INTEGRITY CHECK FAILED")
+                    .font(.rcMonoSmall)
+                    .foregroundStyle(.rcTextTertiary)
+                if let error = store.surveyError {
+                    Text("Last attempt failed: \(error)")
+                        .font(.rcMonoSmall)
+                        .foregroundStyle(.rcError)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Button {
+                    store.send(.manualOverrideTapped)
+                } label: {
+                    Text(store.surveyError == nil ? "Manual Override" : "Retry Manual Override")
+                        .font(.rcBodyEmph)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, Space.s)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.rcAccentOnColor)
+                .background(RoundedRectangle(cornerRadius: Radius.control).fill(.rcAccent))
+            }
+
+        case .rebuilding, .complete:
+            VStack(alignment: .leading, spacing: Space.s) {
+                ProgressView(value: store.surveyFraction)
+                    .tint(.rcAccent)
+                HStack {
+                    Text(progressLine)
+                        .font(.rcMonoSmall)
+                        .foregroundStyle(.rcTextSecondary)
+                    Spacer()
+                    Text("\(Int(store.surveyFraction * 100))%")
+                        .font(.rcMonoSmall)
+                        .foregroundStyle(.rcTextTertiary)
+                }
+            }
+
+        case .idle:
+            EmptyView()
+        }
+    }
+
+    private var progressLine: String {
+        let total = store.surveyTotalPages ?? 0
+        let stars = store.surveyStarCount.formatted()
+        return store.bootPhase == .complete
+            ? "\(stars) STARS RESTORED"
+            : "PAGE \(store.surveyPagesDone) / \(total) · \(stars) STARS RECOVERED"
+    }
+
+    private var icon: String {
+        switch store.bootPhase {
+        case .complete: "checkmark.seal.fill"
+        case .rebuilding: "arrow.triangle.2.circlepath"
+        default: "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var iconColor: Color {
+        switch store.bootPhase {
+        case .complete: .rcStatusReady
+        case .rebuilding: .rcAccent
+        default: .rcError
+        }
+    }
+
+    private var title: String {
+        switch store.bootPhase {
+        case .complete: "Star system database restored"
+        case .rebuilding: "Rebuilding star system database…"
+        default: "Error during Replicant boot sequence: Database corruption detected!"
+        }
+    }
+
+    private var message: String {
+        switch store.bootPhase {
+        case .complete: "Catalog reconstructed from deep survey. Resuming normal operation."
+        case .rebuilding: "Manual override accepted. Reconstructing the catalog from a live deep-space survey."
+        default: "Manual override required to rebuild the star system database."
+        }
+    }
+}
+
 // MARK: - Glass recipe + layer colors
 
 extension View {
@@ -437,6 +638,12 @@ struct StarMapSceneView: NSViewRepresentable {
     /// dependency and drives the imperative commands).
     let focus: StarMapFocus
     let resetToken: Int
+    /// The charted stars, observed from the `Star` table. The scene diffs and
+    /// renders new rows; `flashNew` flashes them in during a rebuild.
+    let stars: [Star]
+    let flashNew: Bool
+    /// Whether stars accept selection/drill-in yet (after the rebuild).
+    let interactive: Bool
 
     func makeCoordinator() -> Coordinator { Coordinator(store: store) }
 
@@ -451,6 +658,7 @@ struct StarMapSceneView: NSViewRepresentable {
         scene.apply(autoRotate: store.autoRotate)
         scene.apply(resetToken: resetToken)
         scene.apply(focus: focus)
+        scene.sync(stars: stars, flashNew: flashNew, interactive: interactive)
     }
 
     @MainActor
@@ -458,10 +666,7 @@ struct StarMapSceneView: NSViewRepresentable {
         let scene: GalaxyScene
 
         init(store: StoreOf<StarMapFeature>) {
-            self.scene = GalaxyScene(
-                systems: Array(store.systems),
-                relays: store.relays
-            ) { intent in
+            self.scene = GalaxyScene { intent in
                 switch intent {
                 case let .selectedSystem(id):
                     store.send(.systemTapped(id))

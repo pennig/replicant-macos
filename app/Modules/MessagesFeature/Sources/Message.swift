@@ -48,8 +48,9 @@ public struct Message: Identifiable, Equatable, Sendable {
 
 extension Message {
     /// Registers the `messages` table migration. Kept here, alongside the model,
-    /// so the schema and the type it backs never drift apart.
-    static func registerMigrations(_ migrator: inout DatabaseMigrator) {
+    /// so the schema and the type it backs never drift apart. Composed into the
+    /// app's `bootstrapDatabase` alongside other features' tables.
+    public static func registerMigrations(_ migrator: inout DatabaseMigrator) {
         migrator.registerMigration("Create 'messages' table") { db in
             try #sql(
                 """
@@ -65,24 +66,6 @@ extension Message {
             )
             .execute(db)
         }
-    }
-}
-
-// MARK: - Database bootstrap
-
-extension DependencyValues {
-    /// Opens the default database and runs the Messages migrations. Call once
-    /// from the app entry point's `prepareDependencies`. SQLiteData vends an
-    /// in-memory store automatically in test and preview contexts.
-    public mutating func bootstrapDatabase() throws {
-        let database = try SQLiteData.defaultDatabase()
-        var migrator = DatabaseMigrator()
-        #if DEBUG
-        migrator.eraseDatabaseOnSchemaChange = true
-        #endif
-        Message.registerMigrations(&migrator)
-        try migrator.migrate(database)
-        defaultDatabase = database
     }
 }
 

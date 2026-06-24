@@ -7,6 +7,8 @@
 
 import ComposableArchitecture
 import MessagesFeature
+import SQLiteData
+import StarMapFeature
 import SwiftUI
 import UI
 
@@ -82,4 +84,24 @@ enum WindowID {
     static let login = "login"
     static let main = "main"
     static let rawAPI = "rawAPI"
+}
+
+// MARK: - Database bootstrap
+
+extension DependencyValues {
+    /// Opens the default database and runs every feature's migrations. Called
+    /// once from the app entry point's `prepareDependencies`. SQLiteData vends an
+    /// in-memory store automatically in test and preview contexts. The app owns
+    /// this composition so each feature contributes its own table schema.
+    mutating func bootstrapDatabase() throws {
+        let database = try SQLiteData.defaultDatabase()
+        var migrator = DatabaseMigrator()
+        #if DEBUG
+        migrator.eraseDatabaseOnSchemaChange = true
+        #endif
+        Message.registerMigrations(&migrator)
+        Star.registerMigrations(&migrator)
+        try migrator.migrate(database)
+        defaultDatabase = database
+    }
 }

@@ -33,6 +33,16 @@ Look in the `Modules/UI` folder for the Swift package that represents the design
 - When engaging with the backend for implementation or for testing/mocks/previews, you may follow the OpenAPI spec found here: https://api.replicant.space/swagger/openapi.json (last fetched June 21, 2026)
 - While the app is written predominantly in SwiftUI, it's acceptable to wrap AppKit views and behaviors when they're important to the UX.
 
+### Backend access
+
+- **Use the generated OpenAPI client for all backend calls.** The `API` module generates a `Client` from `openapi.json` at build time (swift-openapi-generator, `accessModifier: public`), wired with bearer auth + rate limiting + logging middleware.
+- **Get the client from the shared `@Dependency(\.gameClient)`, not by building one yourself.** `GameClient` (in `DependencyClients`) vends a `Client` authenticated with the stored session token (read live from the Keychain) over a process-shared rate-limit governor — so the session token lives in exactly one place and is never threaded through feature state or call sites. A feature's domain client (e.g. `MessagesClient`, `StarsClient`) resolves `@Dependency(\.gameClient)` in its `liveValue`, calls generated operations on `gameClient()`, and maps the generated `Components.Schemas.*` types to the feature's own value types. Such features depend on both the `API` and `DependencyClients` products. See `Modules/API/Sources/Event Log/GameLogFetching.swift` for the operation-call pattern (`extension Client { … try output.ok.body.json … }`), and `MessagesClient`/`StarsClient` for feature-side usage.
+  - Do **not** pass the API key into feature state or client methods. (`ReplicantSpace.client(apiKey:)` exists, but the only direct caller should be `GameClient`.)
+  - Generated operation method names come from the path (no operationIds), e.g. `getV1Messages`, `getV1ReplicantsReplicantCodeStars`. Generated property names are idiomatic camelCase (`per_page` → `perPage`); treat generated schema properties as optional and coalesce.
+  - When an endpoint is paged, resolve `gameClient()` **once** and reuse that client across the whole walk. (The governor is process-shared via `GameClient`, but reusing one client per walk is still the clean shape — see `StarsClient.survey`.)
+- **The one exception is `RawAPIFeature`**, which is a power-user raw HTTP console: it intentionally uses its own `URLSession` so it can send arbitrary requests. Do not route it through the generated client.
+- **Do not hand-roll `URLSession` calls in other features** for endpoints the spec already covers.
+
 ---
 
 ## Adding a new SPM module

@@ -67,7 +67,16 @@ final class GalaxyScene: NSObject {
     private let relayLinksNode = SCNNode()
     private var ambientField: SCNNode?
     private var starShell: SCNNode?
+    /// Every charted star, rendered from the `Star` table (`sync(stars:…)`).
     private var systemNodes: [String: SystemNode] = [:]
+    /// Whether stars accept selection/drill-in yet. Held false during a rebuild.
+    private var interactive = false
+    /// Whether the camera has framed the home (distance-0) system yet.
+    private var didCenterOnHome = false
+
+    /// Scene units per light-year. The survey perceives stars to ~120 ly, so
+    /// this puts the far edge at ~180 units. Tunable for visual taste.
+    private let sceneUnitsPerLightYear: Double = 10
 
     // Mirrors of the last-applied declarative state, for idempotent applies.
     private var currentSelection: String?
@@ -81,20 +90,18 @@ final class GalaxyScene: NSObject {
     private var idleTask: Task<Void, Never>?
 
     /// Below this camera distance, system labels are shown (LOD cull above it).
-    private let labelDistanceThreshold: CGFloat = 400
+    /// A star's label is shown only while the camera is within this many scene
+    /// units of it — so labels fade in star-by-star as you approach, never all
+    /// at once. Home and the selected system always label.
+    private let labelVisibleDistance: Float = 200
 
-    init(
-        systems: [GalaxySystem],
-        relays: [RelayLink],
-        onIntent: @escaping (StarMapIntent) -> Void
-    ) {
+    init(onIntent: @escaping (StarMapIntent) -> Void) {
         self.scnView = MapSCNView()
         self.onIntent = onIntent
         super.init()
         configureView()
-        buildScene(systems: systems, relays: relays)
+        buildScene()
         installGestures()
-        updateLabelLOD()
         rearmIdle()
         // The sidebar can resize/collapse without changing our (full-bleed) frame,
         // so listen for split-view layout changes too — not just our own.
@@ -155,7 +162,7 @@ final class GalaxyScene: NSObject {
         return max(0, min(trailing.x, scnView.bounds.width))
     }
 
-    private func buildScene(systems: [GalaxySystem], relays: [RelayLink]) {
+    private func buildScene() {
         scene.rootNode.addChildNode(rig.pivot)
 
         let shell = AmbientField.makeStarShell()
@@ -180,14 +187,9 @@ final class GalaxyScene: NSObject {
         systemsRoot.name = "systems"
         galaxyLayer.addChildNode(relayLinksNode)
         galaxyLayer.addChildNode(systemsRoot)
-
-        for system in systems {
-            let node = SystemNode(system: system)
-            systemNodes[system.id] = node
-            systemsRoot.addChildNode(node)
-        }
-        buildRelayLinks(relays)
-        relayLinksNode.isHidden = true   // shown when the relay layer is on
+        relayLinksNode.isHidden = true
+        // Charted systems are added on demand from the `Star` table — see
+        // `sync(stars:flashNew:interactive:)`.
     }
 
     /// Deep-space backdrop. A dark, full-bleed vignette over the spec's
@@ -261,56 +263,6 @@ final class GalaxyScene: NSObject {
         )
     }
 
-    // MARK: - Relay links
-
-    private func buildRelayLinks(_ relays: [RelayLink]) {
-        for relay in relays {
-            guard let a = systemNodes[relay.a]?.simdPosition,
-                  let b = systemNodes[relay.b]?.simdPosition else { continue }
-            let color = relay.owner == .mine ? MapPalette.accent : MapPalette.npc
-            let link = SCNNode()
-            link.name = "relay:\(relay.id)"
-
-            // Sample a quadratic bezier bowed slightly off the disc; render as a
-            // chain of short cylinders. Planned links skip alternate segments
-            // (a dashed read) without needing a dashed material.
-            let segments = 14
-            let control = (a + b) / 2 + simd_float3(0, 12, 0)
-            var prev = a
-            for i in 1...segments {
-                let t = Float(i) / Float(segments)
-                let point = bezier(a, control, b, t)
-                if !(relay.planned && i % 2 == 0) {
-                    link.addChildNode(cylinder(from: prev, to: point, radius: 0.12, color: color))
-                }
-                prev = point
-            }
-            relayLinksNode.addChildNode(link)
-        }
-    }
-
-    private func bezier(_ p0: simd_float3, _ c: simd_float3, _ p1: simd_float3, _ t: Float) -> simd_float3 {
-        let u = 1 - t
-        return u * u * p0 + 2 * u * t * c + t * t * p1
-    }
-
-    private func cylinder(from a: simd_float3, to b: simd_float3, radius: CGFloat, color: NSColor) -> SCNNode {
-        let dir = b - a
-        let height = simd_length(dir)
-        let geometry = SCNCylinder(radius: radius, height: CGFloat(height))
-        let m = SCNMaterial()
-        m.lightingModel = .constant
-        m.diffuse.contents = color
-        m.emission.contents = color
-        geometry.materials = [m]
-        let node = SCNNode(geometry: geometry)
-        node.simdPosition = (a + b) / 2
-        if height > 1e-5 {
-            node.simdOrientation = simd_quatf(from: simd_float3(0, 1, 0), to: simd_normalize(dir))
-        }
-        return node
-    }
-
     // MARK: - Declarative state (idempotent)
 
     func apply(activeLayers: Set<InfoLayer>) {
@@ -349,6 +301,55 @@ final class GalaxyScene: NSObject {
         rig.reset(animated: true)
         updateLabelLOD()
         rearmIdle()
+    }
+
+    // MARK: - DB-driven star rendering
+
+    /// Reconcile the scene with the observed `Star` table. New rows are added as
+    /// `SystemNode`s at absolute galactic coordinates (SOL = scene origin) scaled
+    /// to scene units, so the map reads correctly wherever the replicant roams.
+    /// New stars *flash* in during a rebuild (`flashNew`) or quick-fade otherwise
+    /// (a normal relaunch). `interactive` gates selection/drill-in. Idempotent:
+    /// only rows not already on screen are added.
+    func sync(stars: [Star], flashNew: Bool, interactive: Bool) {
+        self.interactive = interactive
+        let scale = sceneUnitsPerLightYear
+        var addedNode = false
+        for star in stars where systemNodes[star.designation] == nil {
+            addedNode = true
+            // TODO: don't hardcode this
+            let isHome = star.designation == "ATIANFU"
+            let system = GalaxySystem(surveyed: star.item, isCurrentLocation: isHome)
+            let node = SystemNode(system: system)
+            node.position = SCNVector3(star.positionX * scale, star.positionY * scale, star.positionZ * scale)
+            node.opacity = 0
+            node.apply(activeLayers: currentLayers)   // honor any toggled layers
+            systemNodes[star.designation] = node
+            systemsRoot.addChildNode(node)
+
+            if flashNew {
+                node.scale = SCNVector3(0.3, 0.3, 0.3)
+                node.runAction(.group([
+                    .fadeOpacity(to: 1.0, duration: 0.2),
+                    .scale(to: 1.0, duration: 0.4),
+                ]))
+            } else {
+                node.runAction(.fadeOpacity(to: 1.0, duration: 0.35))
+            }
+
+            // Frame the home (distance-0) system the first time it appears.
+            if isHome && !didCenterOnHome {
+                didCenterOnHome = true
+                SCNTransaction.begin()
+                SCNTransaction.animationDuration = 0.8
+                SCNTransaction.animationTimingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                rig.focus(on: node.simdPosition, distance: CameraRig.defaultDistance)
+                SCNTransaction.commit()
+            }
+        }
+        // Re-evaluate which nearby stars should show labels (also the first
+        // time stars appear, before any camera interaction).
+        if addedNode { updateLabelLOD() }
     }
 
     // MARK: - Galaxy ↔ system transition
@@ -508,6 +509,8 @@ final class GalaxyScene: NSObject {
     /// in front of the camera. Projection beats geometry hit-testing for the
     /// tiny far stars.
     private func nearestSystem(to point: CGPoint) -> String? {
+        // Stars are not selectable until the rebuild has finished.
+        guard interactive else { return nil }
         var bestID: String?
         var bestDistance: CGFloat = 22
         for (id, node) in systemNodes {
@@ -527,9 +530,11 @@ final class GalaxyScene: NSObject {
     // MARK: - Label LOD
 
     private func updateLabelLOD() {
-        let show = rig.distance < labelDistanceThreshold
+        let camera = rig.cameraNode.simdWorldPosition
+        let maxDistanceSquared = labelVisibleDistance * labelVisibleDistance
         for node in systemNodes.values {
-            node.setLabelVisible(show || node.system.isCurrentLocation || node.system.id == currentSelection)
+            let near = simd_length_squared(node.simdWorldPosition - camera) < maxDistanceSquared
+            node.setLabelVisible(near || node.system.isCurrentLocation || node.system.id == currentSelection)
         }
     }
 

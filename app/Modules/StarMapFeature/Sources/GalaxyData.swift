@@ -77,20 +77,13 @@ public enum GalaxyData {
     // MARK: - Build
 
     private static func build() -> [GalaxySystem] {
-        // Resolve the home position first so distances are measured from it.
-        let homeRow = rows.first { $0.home } ?? rows[0]
-        let homePos = position(for: homeRow)
-
         return rows.map { row in
             let pos = position(for: row)
-            // ~0.25 light-years per scene unit (approximate, pending real data).
-            let distanceLY = pos.distance(to: homePos) * 0.25
+            
             let star = StarItem(
                 designation: row.id,
                 spectralType: row.cls,
                 color: spectralColorHex(row.cls),
-                distanceFromReplicant: (distanceLY * 10).rounded() / 10,
-                estimatedTravelTime: Int(distanceLY * 3600),  // ~1h per LY (placeholder)
                 position: pos,
                 estimatedPlanets: estimatedPlanets(for: row),
                 explored: row.recon != .aware,

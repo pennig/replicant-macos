@@ -46,6 +46,7 @@ let package = Package(
             name: "DependencyClients",
             dependencies: [
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                "API",
             ],
             path: "DependencyClients/Sources",
         ),
@@ -68,6 +69,8 @@ let package = Package(
             dependencies: [
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
                 .product(name: "SQLiteData", package: "sqlite-data"),
+                "API",
+                "DependencyClients",
                 "UI",
             ],
             path: "MessagesFeature/Sources"
@@ -98,6 +101,9 @@ let package = Package(
             name: "StarMapFeature",
             dependencies: [
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "SQLiteData", package: "sqlite-data"),
+                "API",
+                "DependencyClients",
                 "UI",
             ],
             path: "StarMapFeature/Sources"

@@ -37,9 +37,19 @@ enum MapPalette {
     static var textPrimary: NSColor { ns(.rcTextPrimary) }
     static var textTertiary: NSColor { ns(.rcTextTertiary) }
 
-    /// A star's body color from its API `color` hex string (domain data).
-    static func star(hex: String) -> NSColor {
-        NSColor(hex: hex) ?? ns(.rcTextPrimary)
+    /// A star's body color from its spectral type.
+    static func starColor(spectralType: String) -> NSColor {
+        let hex = switch spectralType.first {
+        case "O": "#9bb0ff"
+        case "B": "#aabfff"
+        case "A": "#cad7ff"
+        case "F": "#f8f7ff"
+        case "G": "#fff4ea"
+        case "K": "#ffd2a1"
+        case "M": "#ffb56c"
+        default:  "#ffe6b0"
+        }
+        return NSColor(hex: hex) ?? ns(.rcTextPrimary)
     }
 }
 

@@ -10,7 +10,7 @@ import OpenAPIURLSession
 /// operationIds, so explore them via autocomplete on the returned client.
 public enum ReplicantSpace {
 
-    public static let defaultServerURL = URL(string: "https://api.replicant.space/v1")!
+    public static let defaultServerURL = URL(string: "https://api.replicant.space/")!
 
     /// A fully wired game API client: bearer auth + self-throttling.
     ///

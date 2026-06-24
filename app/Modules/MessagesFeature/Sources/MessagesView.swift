@@ -199,13 +199,19 @@ public struct MessageDetailView: View {
 // MARK: - Previews
 
 #Preview("Inbox") {
-    let _ = prepareDependencies { try? $0.bootstrapDatabase() }
+    let _ = prepareDependencies {
+        let database = try! SQLiteData.defaultDatabase()
+        var migrator = DatabaseMigrator()
+        Message.registerMigrations(&migrator)
+        try! migrator.migrate(database)
+        $0.defaultDatabase = database
+    }
     MessagesPreviewHarness()
         .frame(width: 820, height: 560)
 }
 
 private struct MessagesPreviewHarness: View {
-    @State private var store = Store(initialState: MessagesFeature.State(apiKey: "preview")) {
+    @State private var store = Store(initialState: MessagesFeature.State()) {
         MessagesFeature()
     }
 

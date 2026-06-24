@@ -51,7 +51,7 @@ final class OrreryNode: SCNNode {
     private func buildSunLight() {
         let light = SCNLight()
         light.type = .omni
-        light.color = MapPalette.star(hex: model.sunColorHex)
+        light.color = MapPalette.starColor(spectralType: model.star.spectralType)
         light.intensity = 1400
         light.attenuationStartDistance = 4
         light.attenuationEndDistance = 120
@@ -185,7 +185,7 @@ final class OrreryNode: SCNNode {
         sphere.segmentCount = 20
         let m = SCNMaterial()
         m.lightingModel = .blinn
-        m.diffuse.contents = MapPalette.star(hex: hex)
+        m.diffuse.contents = hex
         m.specular.contents = NSColor(white: 0.4, alpha: 1)
         sphere.materials = [m]
         return sphere
@@ -206,7 +206,7 @@ final class OrreryNode: SCNNode {
         let torus = SCNTorus(ringRadius: planetRadius * 1.7, pipeRadius: planetRadius * 0.18)
         let m = SCNMaterial()
         m.lightingModel = .blinn
-        m.diffuse.contents = MapPalette.star(hex: hex)
+        m.diffuse.contents = hex
         torus.materials = [m]
         let node = SCNNode(geometry: torus)
         node.eulerAngles = SCNVector3(0.45, 0, 0.12)   // a slight tilt

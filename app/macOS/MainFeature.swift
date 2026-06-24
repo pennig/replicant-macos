@@ -114,7 +114,7 @@ struct MainFeature {
             self.category = category
             self.detailSelection = detailSelection
             self.isShowingAccount = isShowingAccount
-            self.messages = MessagesFeature.State(apiKey: apiKey)
+            self.messages = MessagesFeature.State()
             self.rawAPI = RawAPIFeature.State(apiKey: apiKey)
             self.starMap = StarMapFeature.State()
         }

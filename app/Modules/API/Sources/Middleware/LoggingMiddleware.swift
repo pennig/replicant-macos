@@ -52,7 +52,7 @@ public struct LoggingMiddleware: ClientMiddleware {
             let buffered = try await buffer(responseBody)
             logger.debug("""
                 ← \(response.status.code, privacy: .public) [\(operationID, privacy: .public)]
-                headers: \(response.headerFields.debugDescription, privacy: .public)
+                headers: \(redacted(response.headerFields), privacy: .public)
                 body: \(describe(buffered), privacy: .public)
                 """)
             return (response, buffered.map { HTTPBody($0) } ?? responseBody)
@@ -72,10 +72,10 @@ public struct LoggingMiddleware: ClientMiddleware {
         return String(decoding: data, as: UTF8.self)
     }
 
-    private func redacted(_ fields: HTTPFields) -> String {
+    private func redacted(_ fields: HTTPFields) -> [String] {
         var fields = fields
         if fields[.authorization] != nil { fields[.authorization] = "Bearer <redacted>" }
-        return fields.debugDescription
+        return fields.map({ "\($0.name): \($0.value)" })
     }
 }
 

@@ -39,6 +39,12 @@ public struct Position: Equatable, Sendable, Codable {
         let dx = x - other.x, dy = y - other.y, dz = z - other.z
         return (dx * dx + dy * dy + dz * dz).squareRoot()
     }
+
+    /// Component-wise difference — used to re-base absolute galactic
+    /// coordinates onto the replicant (so home sits at the scene origin).
+    public static func - (lhs: Position, rhs: Position) -> Position {
+        Position(x: lhs.x - rhs.x, y: lhs.y - rhs.y, z: lhs.z - rhs.z)
+    }
 }
 
 /// A charted star as it appears in the stars list. Mirrors
@@ -48,8 +54,6 @@ public struct StarItem: Equatable, Sendable, Codable {
     public var designation: String
     public var spectralType: String
     public var color: String
-    public var distanceFromReplicant: Double   // light-years
-    public var estimatedTravelTime: Int        // seconds
     public var position: Position
     public var estimatedPlanets: Int
     public var explored: Bool
@@ -60,8 +64,6 @@ public struct StarItem: Equatable, Sendable, Codable {
         designation: String,
         spectralType: String,
         color: String,
-        distanceFromReplicant: Double,
-        estimatedTravelTime: Int,
         position: Position,
         estimatedPlanets: Int,
         explored: Bool,
@@ -71,8 +73,6 @@ public struct StarItem: Equatable, Sendable, Codable {
         self.designation = designation
         self.spectralType = spectralType
         self.color = color
-        self.distanceFromReplicant = distanceFromReplicant
-        self.estimatedTravelTime = estimatedTravelTime
         self.position = position
         self.estimatedPlanets = estimatedPlanets
         self.explored = explored
@@ -154,6 +154,24 @@ public struct GalaxySystem: Identifiable, Equatable, Sendable {
     public var position: Position { star.position }
     public var spectralType: String { star.spectralType }
 
+    /// Build a galaxy system from a freshly-surveyed star. The stars list only
+    /// carries `explored`/`hasLife`, so the richer overlays (presence, relay,
+    /// life tier, resources) start empty until a deeper scan fills them in.
+    public init(surveyed star: StarItem, isCurrentLocation: Bool) {
+        self.init(
+            star: star,
+            name: star.designation,
+            recon: star.explored ? .visited : .aware,
+            lifeTier: nil,
+            resourceRichness: 0,
+            deviceCount: 0,
+            vesselCount: 0,
+            presence: nil,
+            hasRelay: false,
+            isCurrentLocation: isCurrentLocation
+        )
+    }
+
     public init(
         star: StarItem,
         name: String,
@@ -203,6 +221,17 @@ public struct RelayLink: Identifiable, Equatable, Sendable {
 public enum StarMapFocus: Equatable, Sendable {
     case galaxy
     case system(String)   // system designation
+}
+
+// MARK: - Database rebuild (first-run survey)
+
+/// The themed first-run "database rebuild" sequence. The map presents the live
+/// star survey as a recovery from (fictional) database corruption.
+public enum BootPhase: Equatable, Sendable {
+    case idle               // normal galaxy
+    case corruptionDetected // the fake error modal, awaiting manual override
+    case rebuilding         // survey running; progress shown, stars stream in
+    case complete           // brief success state before auto-dismiss
 }
 
 // MARK: - Info layers

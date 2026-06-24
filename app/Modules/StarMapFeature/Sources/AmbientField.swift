@@ -193,6 +193,50 @@ enum AmbientField {
         return node
     }
 
+    /// A bright point cloud at the given world positions, one draw call. Used to
+    /// flash freshly-surveyed stars into the scene as the database rebuilds.
+    static func makePoints(_ positions: [SCNVector3], color: SIMD3<Float>) -> SCNNode {
+        var colorComponents: [Float] = []
+        colorComponents.reserveCapacity(positions.count * 4)
+        for _ in positions {
+            colorComponents.append(color.x)
+            colorComponents.append(color.y)
+            colorComponents.append(color.z)
+            colorComponents.append(1.0)
+        }
+
+        let vertexSource = SCNGeometrySource(vertices: positions)
+        let colorData = colorComponents.withUnsafeBytes { Data($0) }
+        let colorSource = SCNGeometrySource(
+            data: colorData,
+            semantic: .color,
+            vectorCount: positions.count,
+            usesFloatComponents: true,
+            componentsPerVector: 4,
+            bytesPerComponent: MemoryLayout<Float>.size,
+            dataOffset: 0,
+            dataStride: MemoryLayout<Float>.size * 4
+        )
+
+        let indices = (0..<positions.count).map { UInt32($0) }
+        let element = SCNGeometryElement(indices: indices, primitiveType: .point)
+        element.pointSize = 4.0
+        element.minimumPointScreenSpaceRadius = 1.5
+        element.maximumPointScreenSpaceRadius = 5.0
+
+        let geometry = SCNGeometry(sources: [vertexSource, colorSource], elements: [element])
+        let material = SCNMaterial()
+        material.lightingModel = .constant
+        material.isLitPerPixel = false
+        material.writesToDepthBuffer = false
+        material.blendMode = .add   // bright; the camera bloom catches it
+        geometry.materials = [material]
+
+        let node = SCNNode(geometry: geometry)
+        node.castsShadow = false
+        return node
+    }
+
     /// A distant shell of faint stars on a large sphere — the universe beyond.
     /// Real 3D geometry (not a flat backdrop), so it parallaxes as the camera
     /// orbits. Alpha-blended and dim, it never accumulates or blooms.
