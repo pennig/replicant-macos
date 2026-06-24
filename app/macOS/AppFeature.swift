@@ -149,6 +149,12 @@ struct MainWindow: View {
         Group {
             if let mainStore = store.scope(state: \.appState.loggedIn, action: \.appState.loggedIn) {
                 MainView(store: mainStore)
+            } else {
+                ContentUnavailableView(
+                    "Not Signed In",
+                    systemImage: "lock",
+                    description: Text("Sign in to use Replicould.")
+                )
             }
         }
         .applyAppAppearance(appearance)

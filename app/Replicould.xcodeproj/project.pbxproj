@@ -28,6 +28,7 @@
 
 /* Begin PBXFileReference section */
 		C922A8B62FDC493200431320 /* Replicould.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Replicould.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C97F9CE42FEB8A2E0061B07A /* BloomMark.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = BloomMark.svg; sourceTree = "<group>"; };
 		C9B530562FDC9D00006F79A8 /* Modules */ = {isa = PBXFileReference; lastKnownFileType = wrapper; path = Modules; sourceTree = "<group>"; };
 		C9B530572FDDD839006F79A8 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		C9B530592FDDD839006F79A8 /* ReplicantApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplicantApp.swift; sourceTree = "<group>"; };
@@ -111,6 +112,7 @@
 				C9B530612FDDD93C006F79A8 /* README.md */,
 				C9B530642FDDD93C006F79A8 /* ReplicantSplitView.swift */,
 				C9AB58FC2FEA3F9500536794 /* SceneKit Galaxy Map */,
+				C97F9CE42FEB8A2E0061B07A /* BloomMark.svg */,
 			);
 			path = sandbox;
 			sourceTree = "<group>";

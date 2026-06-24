@@ -17,6 +17,7 @@
 //  from ReplicantDesignSystem.swift if you want them centralized.
 //
 
+import AppKit
 import SwiftUI
 import UI
 
@@ -44,16 +45,9 @@ private extension Color {
     }
 }
 
-// palette
+// Bespoke deep-space window gradient — not part of the shared token set, so it
+// stays inline. Everything else now uses the Color.rc* design tokens.
 private enum P {
-    static let t1 = Color(hex: "e9eef7")
-    static let t2 = Color(hex: "9aa6bc")
-    static let t3 = Color(hex: "697488")
-    static let accent = Color(hex: "ffb23e")
-    static let accentText = Color(hex: "2a1a05")
-    static let panel = Color.white.opacity(0.05)
-    static let line = Color.white.opacity(0.09)
-    static let selRing = Color(hex: "ffb23e", 0.34)
     static let winTop = Color(hex: "1b1733")
     static let winBot = Color(hex: "08060f")
 }
@@ -95,28 +89,25 @@ private func polyPath(_ points: [CGPoint]) -> Path {
     return p
 }
 
-// MARK: - Ring tweaks (defaults match the saved Tweaks panel values)
-
-public struct RingTweaks {
-    public var ringCount: Double
-    public var appearRadius: Double
-    public var circleRadius: Double
-    public var vanishRadius: Double
-    public var spacingEase: Double
-    public var speed: Double
-    public init(ringCount: Double = 12, appearRadius: Double = 20, circleRadius: Double = 170,
-                vanishRadius: Double = 580, spacingEase: Double = 2.4, speed: Double = 0.4) {
-        self.ringCount = ringCount; self.appearRadius = appearRadius; self.circleRadius = circleRadius
-        self.vanishRadius = vanishRadius; self.spacingEase = spacingEase; self.speed = speed
-    }
-}
-
 // MARK: - Radiating ring field
 
-private struct RingField: View {
+private struct RingField: View, Animatable {
     var origin: CGPoint
-    var tweaks: RingTweaks
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    // Interpolate `origin` so the field glides when the logo moves between forms.
+    var animatableData: AnimatablePair<CGFloat, CGFloat> {
+        get { AnimatablePair(origin.x, origin.y) }
+        set { origin = CGPoint(x: newValue.first, y: newValue.second) }
+    }
+
+    // Static config (matches the saved Tweaks panel values).
+    private static let ringCount: Double = 12
+    private static let appearRadius: Double = 20
+    private static let circleRadius: Double = 170
+    private static let vanishRadius: Double = 580
+    private static let spacingEase: Double = 2.4
+    private static let speed: Double = 0.4
 
     private let birthR: Double = 16
     private let baseLife: Double = 7.2   // seconds at speed 1×
@@ -134,12 +125,12 @@ private struct RingField: View {
     }
 
     private func draw(into ctx: GraphicsContext, now: TimeInterval) {
-        let count = max(2, Int(tweaks.ringCount.rounded()))
-        let appearR = tweaks.appearRadius
-        let vanishR = max(appearR + 40, tweaks.vanishRadius)
-        let circleR = max(birthR + 1, tweaks.circleRadius)
-        let ease = tweaks.spacingEase
-        let period = baseLife / max(0.05, tweaks.speed)
+        let count = max(2, Int(Self.ringCount.rounded()))
+        let appearR = Self.appearRadius
+        let vanishR = max(appearR + 40, Self.vanishRadius)
+        let circleR = max(birthR + 1, Self.circleRadius)
+        let ease = Self.spacingEase
+        let period = baseLife / max(0.05, Self.speed)
         let span = vanishR - birthR
 
         for i in 0..<count {
@@ -164,9 +155,9 @@ private struct RingField: View {
     }
 }
 
-// MARK: - Bloom mark (the logo imagery — transparent)
+// MARK: - Replicould logo (the logo imagery — transparent)
 
-private struct BloomMark: View {
+private struct ReplicouldLogoView: View {
     var size: CGFloat = 116
     var body: some View {
         Canvas { ctx, sz in
@@ -290,94 +281,48 @@ private struct Veil: View {
     }
 }
 
-// MARK: - Form controls
-
-private struct FieldLabel: View {
-    let text: String
-    var hint: String? = nil
-    var body: some View {
-        HStack(spacing: 6) {
-            Text(text.uppercased()).font(.system(size: 10.5, weight: .bold)).kerning(0.5).foregroundStyle(P.t3)
-            if let hint { Text("— \(hint)").font(.system(size: 11)).foregroundStyle(P.t3) }
-        }
-    }
-}
-
-private struct CosmicField<Content: View>: View {
-    @ViewBuilder var content: Content
-    var body: some View {
-        content
-            .textFieldStyle(.plain)
-            .font(.system(size: 13.5))
-            .foregroundStyle(P.t1, P.t1, P.t1)
-            .padding(.horizontal, 13).padding(.vertical, 11)
-            .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 9))
-            .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(P.line, lineWidth: 1))
-    }
-}
-
-private struct SubmitButton: View {
-    let title: String
-    let action: () -> Void
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                Text(title).font(.system(size: 14, weight: .bold))
-                Image(systemName: "arrow.right").font(.system(size: 13, weight: .bold))
-            }
-            .foregroundStyle(P.accentText)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 12)
-            .background(LinearGradient(colors: [Color(hex: "ffc05c"), Color(hex: "ff9e2c")],
-                                       startPoint: .top, endPoint: .bottom),
-                        in: RoundedRectangle(cornerRadius: 10))
-            .shadow(color: Color(hex: "ff9e2c", 0.32), radius: 14, y: 6)
-        }
-        .buttonStyle(.plain)
-    }
-}
-
 // MARK: - Logo-center reporting (so rings emanate from the mark)
 
-private struct LogoCenterKey: PreferenceKey {
-    static let defaultValue: CGPoint = .zero
-    static func reduce(value: inout CGPoint, nextValue: () -> CGPoint) { value = nextValue() }
-}
 private extension CGRect { var center: CGPoint { CGPoint(x: midX, y: midY) } }
 
 // MARK: - Root view
 
 public struct FirstLaunchView: View {
-    public init(tweaks: RingTweaks = RingTweaks()) { self.tweaks = tweaks }
-    var tweaks: RingTweaks
+    public init() {}
 
-    enum Mode { case login, signup }
-    @State private var mode: Mode = .login
+    enum Mode { case login, signup, confirmation }
+    @State private var mode: Mode = .signup
     @State private var apiKey = ""
-    @State private var reveal = false
     @State private var name = ""
     @State private var email = ""
     @State private var timeZone = TimeZone.current.identifier
     @State private var logoCenter: CGPoint = .zero
 
-    private let zones = [
-        "Pacific/Honolulu", "America/Anchorage", "America/Los_Angeles", "America/Denver",
-        "America/Chicago", "America/New_York", "America/Sao_Paulo", "UTC",
-        "Europe/London", "Europe/Paris", "Europe/Berlin", "Europe/Athens", "Africa/Cairo",
-        "Asia/Dubai", "Asia/Kolkata", "Asia/Shanghai", "Asia/Tokyo", "Australia/Sydney", "Pacific/Auckland",
-    ]
+    // The key the server issues on successful signup, shown once so the user can
+    // copy it for use elsewhere (the app also stores it for its own calls).
+    @State private var issuedKey = ""
+    @State private var copied = false
+
+    // All IANA time zone identifiers known to the system (always includes the current
+    // zone), grouped by region — the prefix before the first "/".
+    private let zoneGroups: [(region: String, identifiers: [String])] = {
+        Dictionary(grouping: TimeZone.knownTimeZoneIdentifiers) { id in
+            id.split(separator: "/").first.map(String.init) ?? id
+        }
+        .map { (region: $0.key, identifiers: $0.value.sorted()) }
+        .sorted { $0.region < $1.region }
+    }()
 
     public var body: some View {
         GeometryReader { _ in
             ZStack {
                 CosmicBackground()
-                RingField(origin: logoCenter == .zero ? CGPoint(x: 380, y: 136) : logoCenter, tweaks: tweaks)
+                RingField(origin: logoCenter == .zero ? CGPoint(x: 380, y: 136) : logoCenter)
                 Starfield()
                 Veil()
                 content
             }
             .coordinateSpace(name: "screen")
-            .onPreferenceChange(LogoCenterKey.self) { logoCenter = $0 }
         }
         .frame(minWidth: 640, minHeight: 520)
         .background(P.winBot)
@@ -388,26 +333,40 @@ public struct FirstLaunchView: View {
             Spacer(minLength: 24)
 
             // brand
-            VStack(spacing: 14) {
-                BloomMark(size: 116)
-                    .background(GeometryReader { p in
-                        Color.clear.preference(key: LogoCenterKey.self,
-                                               value: p.frame(in: .named("screen")).center)
-                    })
+            VStack(spacing: 8) {
+                ReplicouldLogoView(size: 116)
+                    .onGeometryChange(for: CGPoint.self) { proxy in
+                        proxy.frame(in: .named("screen")).center
+                    } action: { center in
+                        withAnimation(.easeOut(duration: 0.15)) { logoCenter = center }
+                    }
                 VStack(spacing: 2) {
-                    Text("Replicant").font(.system(size: 26, weight: .bold)).kerning(-0.4).foregroundStyle(P.t1)
-                    Text("Command your probes across the local cluster.")
-                        .font(.system(size: 13.5)).foregroundStyle(P.t2)
+                    Text("Repli\(Text("could").italic())")
+                        .font(.system(size: 26, weight: .bold))
+                        .foregroundStyle(.rcTextPrimary)
+                    HStack(spacing: 0) {
+                        Text("A fun interface for the API-based game,")
+                        .foregroundStyle(.secondary)
+                        Button("replicant.space") {
+                            
+                        }.buttonStyle(RCButtonStyle(.text))
+                    }
                 }
             }
             .padding(.bottom, 24)
 
-            segmented.padding(.bottom, 22)
+            if mode != .confirmation {
+                modeFooter.padding(.bottom, 22)
+            }
 
             Group {
-                if mode == .login { loginForm } else { signupForm }
+                switch mode {
+                case .login:        loginForm
+                case .signup:       signupForm
+                case .confirmation: confirmationForm
+                }
             }
-            .frame(maxWidth: 360)
+            .frame(maxWidth: 400)
 
             Spacer(minLength: 24)
         }
@@ -415,87 +374,173 @@ public struct FirstLaunchView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private var segmented: some View {
-        HStack(spacing: 3) {
-            seg("Log in", .login)
-            seg("Create account", .signup)
+    @ViewBuilder private var modeFooter: some View {
+        if mode == .login {
+            footer(prompt: "No account yet? ", action: "Create one", trailing: " to get started.") { mode = .signup }
+        } else {
+            footer(prompt: "Already have a key? ", action: "Log in instead", trailing: ".") { mode = .login }
         }
-        .padding(3)
-        .background(P.panel, in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(P.line, lineWidth: 0.5))
-    }
-
-    private func seg(_ title: String, _ m: Mode) -> some View {
-        let on = mode == m
-        return Button { withAnimation(.easeOut(duration: 0.15)) { mode = m } } label: {
-            Text(title).font(.system(size: 12.5, weight: .semibold))
-                .foregroundStyle(on ? P.t1 : P.t2)
-                .padding(.horizontal, 18).padding(.vertical, 7)
-                .background(on ? AnyShapeStyle(Color.white.opacity(0.065)) : AnyShapeStyle(.clear),
-                            in: RoundedRectangle(cornerRadius: 7))
-        }
-        .buttonStyle(.plain)
     }
 
     private var loginForm: some View {
         VStack(spacing: 13) {
-            VStack(alignment: .leading, spacing: 6) {
-                FieldLabel(text: "API Key", hint: "paste the key from your account")
-                CosmicField {
-                    HStack(spacing: 6) {
-                        Group {
-                            if reveal { TextField("rk_live_…", text: $apiKey).foregroundStyle(P.t1, P.t1, P.t1) }
-                            else { SecureField("rk_live_…", text: $apiKey).foregroundStyle(P.t1, P.t1, P.t1) }
-                        }
-                        .font(.system(size: 13, design: .monospaced))
-                        Button(reveal ? "Hide" : "Show") { reveal.toggle() }
-                            .buttonStyle(.plain)
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(P.t3)
-                    }
-                }
-            }
-            SubmitButton(title: "Log in") {}
-            footer(prompt: "No account yet?", action: "Create one", trailing: "to get started.") { mode = .signup }
+            RCField("API Key", text: $apiKey, placeholder: "rk_live_…",
+                    hint: "paste the key from your account", mono: true, secure: true)
+            submit("Log in")
         }
         .transition(.opacity)
     }
 
     private var signupForm: some View {
         VStack(spacing: 13) {
-            VStack(alignment: .leading, spacing: 6) {
-                FieldLabel(text: "Name")
-                CosmicField { TextField("What should we call you?", text: $name) }
+            RCField("Name", text: $name, placeholder: "What should we call you?")
+            RCField("Email", text: $email, placeholder: "you@example.com")
+            VStack(alignment: .leading, spacing: Space.xs + 2) {
+                Text("Time zone".uppercased())
+                    .font(.system(size: 10.5, weight: .bold)).kerning(0.5)
+                    .foregroundStyle(.rcTextTertiary)
+                timeZoneField
             }
-            VStack(alignment: .leading, spacing: 6) {
-                FieldLabel(text: "Email")
-                CosmicField { TextField("you@example.com", text: $email) }
-            }
-            VStack(alignment: .leading, spacing: 6) {
-                FieldLabel(text: "Time zone")
-                Picker("", selection: $timeZone) {
-                    ForEach(zoneList, id: \.self) { Text($0.replacingOccurrences(of: "_", with: " ")).tag($0) }
-                }
-                .labelsHidden().pickerStyle(.menu).tint(P.t2)
-            }
-            SubmitButton(title: "Begin") {}
-            footer(prompt: "Already have a key?", action: "Log in instead", trailing: ".") { mode = .login }
+            submit("Begin") { completeSignup() }
         }
         .transition(.opacity)
     }
 
-    private var zoneList: [String] {
-        var z = zones
-        if !z.contains(timeZone) { z.insert(timeZone, at: 0) }
-        return z
+    /// Sign-up confirmation: surface the server-issued key so the user can copy
+    /// it for use elsewhere before continuing into the app.
+    private var confirmationForm: some View {
+        VStack(spacing: 13) {
+            VStack(alignment: .leading, spacing: Space.xs + 2) {
+                HStack(spacing: 6) {
+                    Text("Your API key".uppercased())
+                        .font(.system(size: 10.5, weight: .bold)).kerning(0.5)
+                        .foregroundStyle(.rcTextTertiary)
+                    Text("— store it somewhere safe")
+                        .font(.system(size: 11)).foregroundStyle(.rcTextTertiary)
+                }
+                keyDisplay
+            }
+            Text("Saved to this device so you can start right away. Copy it to use your account from the API or other tools.")
+                .font(.system(size: 11.5))
+                .foregroundStyle(.rcTextSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            submit("Continue") {}
+        }
+        .transition(.opacity)
+    }
+
+    /// Read-only key readout with a copy button, styled like the other fields.
+    private var keyDisplay: some View {
+        HStack(spacing: Space.s) {
+            Text(issuedKey)
+                .font(.rcMono)
+                .foregroundStyle(.rcTextPrimary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button { copyKey() } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                    Text(copied ? "Copied" : "Copy")
+                }
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(copied ? .rcAccent : .rcTextSecondary)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 13).padding(.vertical, 11)
+        .background(.rcSurfaceRaised, in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                .strokeBorder(.rcSeparator, lineWidth: 1)
+        )
+    }
+
+    /// Full-width primary CTA with the trailing arrow, using the design system.
+    private func submit(_ title: String, action: @escaping () -> Void = {}) -> some View {
+        Button(action: action) {
+            HStack(spacing: Space.s) {
+                Text(title)
+                Image(systemName: "arrow.right")
+            }
+        }
+        .buttonStyle(RCButtonStyle(.primary, fullWidth: true))
+    }
+
+    /// Stand-in for the signup request. The real flow posts name/email/timeZone
+    /// and receives the new account's API key in the response.
+    private func completeSignup() {
+        issuedKey = "rk_live_9f2c7b1e84a64d3f6c0a5e2b7d1f6093"
+        withAnimation(.easeOut(duration: 0.15)) { mode = .confirmation }
+    }
+
+    private func copyKey() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(issuedKey, forType: .string)
+        withAnimation { copied = true }
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            withAnimation { copied = false }
+        }
+    }
+
+    /// Grouped time-zone menu with an `RCValueSelect`-style field trigger.
+    private var timeZoneField: some View {
+        Menu {
+            Picker("Time zone", selection: $timeZone) {
+                ForEach(zoneGroups, id: \.region) { group in
+                    Section(group.region) {
+                        ForEach(group.identifiers, id: \.self) { id in
+                            Text(zoneLabel(id)).tag(id)
+                        }
+                    }
+                }
+            }
+            .pickerStyle(.inline)
+        } label: {
+            HStack(spacing: Space.s - 2) {
+                Image(systemName: "clock")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.rcTextTertiary)
+                Text(timeZone.replacingOccurrences(of: "_", with: " "))
+                    .font(.rcMono)
+                    .foregroundStyle(.rcTextPrimary)
+                Spacer(minLength: Space.xs)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.rcTextSecondary)
+            }
+            .frame(maxWidth: .infinity, minHeight: 36)
+            .padding(.horizontal, Space.m)
+            .background(
+                RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                    .fill(.rcSurfaceRaised)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                            .strokeBorder(.rcSeparator, lineWidth: 1)
+                    )
+            )
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+    }
+
+    /// Display name for a zone within its region section: drops the region prefix
+    /// (keeping any sub-region, e.g. "Argentina/Buenos Aires") and de-underscores.
+    private func zoneLabel(_ id: String) -> String {
+        let rest = id.split(separator: "/").dropFirst()
+        let name = rest.isEmpty ? id : rest.joined(separator: "/")
+        return name.replacingOccurrences(of: "_", with: " ")
     }
 
     private func footer(prompt: String, action: String, trailing: String, tap: @escaping () -> Void) -> some View {
-        HStack(spacing: 4) {
-            Text(prompt).foregroundStyle(P.t3)
+        HStack(spacing: 0) {
+            Text(prompt).foregroundStyle(.rcTextTertiary)
             Button(action) { withAnimation(.easeOut(duration: 0.15)) { tap() } }
-                .buttonStyle(.plain).foregroundStyle(P.accent)
-            Text(trailing).foregroundStyle(P.t3)
+                .buttonStyle(.plain).foregroundStyle(.rcAccent)
+            Text(trailing).foregroundStyle(.rcTextTertiary)
         }
         .font(.system(size: 11.5))
         .padding(.top, 6)

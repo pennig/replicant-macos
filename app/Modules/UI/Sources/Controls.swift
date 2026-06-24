@@ -240,10 +240,16 @@ public struct RCField: View {
                 }
                 .focused($focused)
                 if secure {
-                    Button(reveal ? "Hide" : "Show") { reveal.toggle() }
-                        .buttonStyle(.plain)
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(Color.rcTextTertiary)
+                    Button { reveal.toggle() } label: {
+                        Image(systemName: reveal ? "eye.slash" : "eye")
+                            .font(.system(size: 13))
+                            .foregroundStyle(Color.rcTextTertiary)
+                            .padding(8)               // enlarge the hit target…
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(-8)                      // …without affecting layout
+                    .accessibilityLabel(reveal ? "Hide" : "Show")
                 }
             }
             .rcField(focused: focused, mono: mono)

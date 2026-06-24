@@ -41,6 +41,7 @@ struct ReplicantApp: App {
         }
         .defaultLaunchBehavior(store.isLoggedOut ? .presented : .suppressed)
         .restorationBehavior(.disabled)
+        .commandsRemoved()
 
         // The signed-in main experience, in its own window so it can follow the
         // appearance preference via `preferredColorScheme`. Shown at launch when
