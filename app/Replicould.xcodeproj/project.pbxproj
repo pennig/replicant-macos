@@ -11,7 +11,6 @@
 		C9B5305C2FDDD839006F79A8 /* ReplicantApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9B530592FDDD839006F79A8 /* ReplicantApp.swift */; };
 		C9B5305D2FDDD839006F79A8 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C9B530572FDDD839006F79A8 /* Assets.xcassets */; };
 		C9B530672FDDD950006F79A8 /* ReplicantSplitView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9B530642FDDD93C006F79A8 /* ReplicantSplitView.swift */; };
-		C9B5306F2FE095E6006F79A8 /* FirstLaunchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9B5306E2FE095E3006F79A8 /* FirstLaunchView.swift */; };
 		C9B530752FE0A5FC006F79A8 /* MainFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9B530742FE0A5FC006F79A8 /* MainFeature.swift */; };
 		C9B530772FE0A60B006F79A8 /* AppFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9B530762FE0A60B006F79A8 /* AppFeature.swift */; };
 		C9B5307A2FE0A6D1006F79A8 /* ComposableArchitecture in Frameworks */ = {isa = PBXBuildFile; productRef = C9B530792FE0A6D1006F79A8 /* ComposableArchitecture */; };
@@ -28,7 +27,6 @@
 
 /* Begin PBXFileReference section */
 		C922A8B62FDC493200431320 /* Replicould.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Replicould.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		C97F9CE42FEB8A2E0061B07A /* BloomMark.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = BloomMark.svg; sourceTree = "<group>"; };
 		C9B530562FDC9D00006F79A8 /* Modules */ = {isa = PBXFileReference; lastKnownFileType = wrapper; path = Modules; sourceTree = "<group>"; };
 		C9B530572FDDD839006F79A8 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		C9B530592FDDD839006F79A8 /* ReplicantApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplicantApp.swift; sourceTree = "<group>"; };
@@ -36,7 +34,6 @@
 		C9B530602FDDD93C006F79A8 /* DESIGN_SPEC.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = DESIGN_SPEC.md; sourceTree = "<group>"; };
 		C9B530612FDDD93C006F79A8 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 		C9B530642FDDD93C006F79A8 /* ReplicantSplitView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplicantSplitView.swift; sourceTree = "<group>"; };
-		C9B5306E2FE095E3006F79A8 /* FirstLaunchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirstLaunchView.swift; sourceTree = "<group>"; };
 		C9B530742FE0A5FC006F79A8 /* MainFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainFeature.swift; sourceTree = "<group>"; };
 		C9B530762FE0A60B006F79A8 /* AppFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppFeature.swift; sourceTree = "<group>"; };
 		C9B5307B2FE0E385006F79A8 /* AccountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountView.swift; sourceTree = "<group>"; };
@@ -107,12 +104,10 @@
 		C9B5305E2FDDD91C006F79A8 /* sandbox */ = {
 			isa = PBXGroup;
 			children = (
-				C9B5306E2FE095E3006F79A8 /* FirstLaunchView.swift */,
 				C9B530602FDDD93C006F79A8 /* DESIGN_SPEC.md */,
 				C9B530612FDDD93C006F79A8 /* README.md */,
 				C9B530642FDDD93C006F79A8 /* ReplicantSplitView.swift */,
 				C9AB58FC2FEA3F9500536794 /* SceneKit Galaxy Map */,
-				C97F9CE42FEB8A2E0061B07A /* BloomMark.svg */,
 			);
 			path = sandbox;
 			sourceTree = "<group>";
@@ -208,7 +203,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				C9B5306F2FE095E6006F79A8 /* FirstLaunchView.swift in Sources */,
 				C9B530752FE0A5FC006F79A8 /* MainFeature.swift in Sources */,
 				C9B5307C2FE0E385006F79A8 /* AccountView.swift in Sources */,
 				C9B530672FDDD950006F79A8 /* ReplicantSplitView.swift in Sources */,

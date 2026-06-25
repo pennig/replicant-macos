@@ -38,7 +38,9 @@ struct ReplicantApp: App {
         Window("Welcome", id: WindowID.login) {
             LoginWindow(store: store)
                 .background(WindowConfigurator())
+                .ignoresSafeArea(.container, edges: .top)
         }
+        .defaultSize(width: 640, height: 520)
         .defaultLaunchBehavior(store.isLoggedOut ? .presented : .suppressed)
         .restorationBehavior(.disabled)
         .commandsRemoved()

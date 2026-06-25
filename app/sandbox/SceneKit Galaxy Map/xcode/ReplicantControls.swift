@@ -602,7 +602,7 @@ private struct GalleryFields: View {
         VStack(alignment: .leading, spacing: Space.m) {
             RCField("Name", text: $name, placeholder: "What should we call you?")
             RCField("Email", text: $email, placeholder: "you@example.com")
-            RCField("API Key", text: $key, placeholder: "rk_live_…",
+            RCField("API Key", text: $key, placeholder: "xsPaUKCPJxa…",
                     hint: "paste the key from your account", mono: true, secure: true)
         }
         .frame(maxWidth: 360)

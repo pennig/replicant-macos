@@ -171,7 +171,7 @@ public struct StarMapView: View {
                 if let total = store.surveyTotalPages {
                     ProgressView(value: Double(store.surveyPagesDone), total: Double(max(total, 1)))
                         .tint(.rcAccent)
-                    Text("Page \(store.surveyPagesDone) / \(total) · \(store.surveyStarCount.formatted()) stars")
+                    Text("Sector \(store.surveyPagesDone) / \(total)")
                         .font(.rcMonoSmall)
                         .foregroundStyle(.rcTextTertiary)
                 }
@@ -564,7 +564,7 @@ private struct BootRebuildOverlay: View {
         let stars = store.surveyStarCount.formatted()
         return store.bootPhase == .complete
             ? "\(stars) STARS RESTORED"
-            : "PAGE \(store.surveyPagesDone) / \(total) · \(stars) STARS RECOVERED"
+            : "SECTOR \(store.surveyPagesDone) / \(total) · \(stars) STARS RECOVERED"
     }
 
     private var icon: String {
@@ -587,7 +587,7 @@ private struct BootRebuildOverlay: View {
         switch store.bootPhase {
         case .complete: "Star system database restored"
         case .rebuilding: "Rebuilding star system database…"
-        default: "Error during Replicant boot sequence: Database corruption detected!"
+        default: "Error loading galaxy map: database corruption detected!"
         }
     }
 
