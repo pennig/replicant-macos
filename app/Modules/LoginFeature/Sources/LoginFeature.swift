@@ -9,9 +9,13 @@
 //   • confirmation — paste the key from the verification page
 //
 //  "Log in" / "Continue" validate the pasted key against GET /v1/accounts/me
-//  before writing it to the Keychain and signaling the parent (delegate) that the
-//  session is authenticated. Backend calls go straight through the base
-//  `ReplicantSpace` client — these endpoints carry no domain model worth wrapping.
+//  before signaling the parent (delegate) that the session is authenticated.
+//  Because `gameClient()` authenticates with the *stored* key, validation writes
+//  the pasted key to the Keychain first, then deletes it again if it's rejected.
+//
+//  All backend calls go through the shared `@Dependency(\.gameClient)` (the base
+//  `ReplicantSpace` client) — these endpoints carry no domain model worth
+//  wrapping, and routing through the dependency keeps the reducer testable.
 //
 
 import API
@@ -57,9 +61,9 @@ public struct LoginFeature {
         case signupButtonTapped
         case signupResponse(Result<Void, SignupError>)
         case submitKeyTapped
-        case keyValidated(apiKey: String)
         case keyRejected(message: String)
 
+        @CasePathable
         public enum Delegate {
             case loggedIn(apiKey: String)
         }
@@ -75,6 +79,7 @@ public struct LoginFeature {
     public init() {}
 
     @Dependency(\.keychain) var keychain
+    @Dependency(\.gameClient) var gameClient
 
     public var body: some Reducer<State, Action> {
         BindingReducer()
@@ -90,18 +95,12 @@ public struct LoginFeature {
                 let email = state.email.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !name.isEmpty, !email.isEmpty else { return .none }
                 let timeZone = state.timeZone
+                let gameClient = self.gameClient
                 state.isSaving = true
                 return .run { send in
-                    do {
-                        try await register(name: name, email: email, timeZone: timeZone)
-                        await send(.signupResponse(.success(())))
-                    } catch let error as SignupError {
-                        await send(.signupResponse(.failure(error)))
-                    } catch {
-                        await send(.signupResponse(.failure(
-                            SignupError("Something went wrong creating your account. Please try again.")
-                        )))
-                    }
+                    await send(.signupResponse(
+                        await register(gameClient(), name: name, email: email, timeZone: timeZone)
+                    ))
                 }
 
             case .signupResponse(.success):
@@ -123,25 +122,23 @@ public struct LoginFeature {
             case .submitKeyTapped:
                 let apiKey = state.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !apiKey.isEmpty else { return .none }
+                let keychain = self.keychain
+                let gameClient = self.gameClient
                 state.isSaving = true
                 return .run { send in
                     do {
-                        let client = ReplicantSpace.client(apiKey: apiKey)
-                        guard case .ok = try await client.getV1AccountsMe() else {
+                        // Store first so `gameClient()` authenticates with this key…
+                        try keychain.save(apiKey, KeychainClient.apiKeyAccount)
+                        guard case .ok = try await gameClient().getV1AccountsMe() else {
+                            try? keychain.delete(KeychainClient.apiKeyAccount)   // …roll back a bad key
                             await send(.keyRejected(message: "That key was rejected. Double-check it and try again."))
                             return
                         }
-                        await send(.keyValidated(apiKey: apiKey))
+                        await send(.delegate(.loggedIn(apiKey: apiKey)))
                     } catch {
+                        try? keychain.delete(KeychainClient.apiKeyAccount)
                         await send(.keyRejected(message: "Couldn’t verify the key. Check your connection and try again."))
                     }
-                }
-
-            case let .keyValidated(apiKey):
-                let keychain = self.keychain
-                return .run { send in
-                    try keychain.save(apiKey, KeychainClient.apiKeyAccount)
-                    await send(.delegate(.loggedIn(apiKey: apiKey)))
                 }
 
             case let .keyRejected(message):
@@ -160,20 +157,27 @@ public struct LoginFeature {
 
 /// Create the account. The server replies 201 and emails a verification link;
 /// the API key itself is revealed on that page (pasted back in `.confirmation`).
-/// Throws `LoginFeature.SignupError` with a user-facing message on failure.
-private func register(name: String, email: String, timeZone: String) async throws {
-    let client = ReplicantSpace.client(apiKey: "")
-    let output = try await client.postV1Accounts(
-        body: .json(.init(email: email, name: name, timezone: timeZone))
-    )
-    switch output {
-    case .created:
-        return
-    case let .conflict(response):
-        throw LoginFeature.SignupError((try? response.body.json.error) ?? "An account with that email already exists.")
-    case let .badRequest(response):
-        throw LoginFeature.SignupError((try? response.body.json.error) ?? "Please check your details and try again.")
-    default:
-        throw LoginFeature.SignupError("Something went wrong creating your account. Please try again.")
+private func register(
+    _ client: Client,
+    name: String,
+    email: String,
+    timeZone: String
+) async -> Result<Void, LoginFeature.SignupError> {
+    do {
+        let output = try await client.postV1Accounts(
+            body: .json(.init(email: email, name: name, timezone: timeZone))
+        )
+        switch output {
+        case .created:
+            return .success(())
+        case let .conflict(response):
+            return .failure(.init((try? response.body.json.error) ?? "An account with that email already exists."))
+        case let .badRequest(response):
+            return .failure(.init((try? response.body.json.error) ?? "Please check your details and try again."))
+        default:
+            return .failure(.init("Something went wrong creating your account. Please try again."))
+        }
+    } catch {
+        return .failure(.init("Something went wrong creating your account. Please try again."))
     }
 }

@@ -17,6 +17,7 @@ let package = Package(
         .library(name: "Utils", targets: ["Utils"]),
     ],
     dependencies: [
+        .package(url: "https://github.com/apple/swift-http-types", from: "1.0.0"),
         .package(url: "https://github.com/apple/swift-openapi-generator", from: "1.0.0"),
         .package(url: "https://github.com/apple/swift-openapi-runtime", from: "1.0.0"),
         .package(url: "https://github.com/apple/swift-openapi-urlsession", from: "1.0.0"),
@@ -62,7 +63,12 @@ let package = Package(
         ),
         .testTarget(
             name: "LoginFeatureTests",
-            dependencies: ["LoginFeature"],
+            dependencies: [
+                "LoginFeature",
+                "API",
+                .product(name: "HTTPTypes", package: "swift-http-types"),
+                .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime"),
+            ],
             path: "LoginFeature/Tests"
         ),
         .target(
