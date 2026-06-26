@@ -56,17 +56,28 @@ public struct Reconciler: Sendable {
               let eventType = event.eventType
         else { return }
 
-        switch eventType {
-        case "print_complete":
-            await completeOpenOperation(on: deviceCode, eventTime: event.date, result: event.payload)
-        default:
-            break
-        }
+        // Event types that close the device's open operation. The event is truth
+        // for the action it completes (§4.4); the deadline timer is only the
+        // backstop for when one of these is lost.
+        guard Self.completionEventTypes.contains(eventType) else { return }
+        await completeOpenOperation(on: deviceCode, source: .event, eventTime: event.date, result: event.payload)
     }
 
-    /// Mark the single open operation on a device completed, recording the event
+    /// Relay `event_type`s that complete an operation, keyed in one place so an
+    /// evolving payload taxonomy is a localized edit.
+    static let completionEventTypes: Set<String> = [
+        "print_complete",          // enqueued print finished (carries new_device_code)
+        "device_cruise_arrived",   // travel finished
+    ]
+
+    /// Mark the single open operation on a device completed, recording any event
     /// result (e.g. a print's `new_device_code`) under `detail.result`.
-    func completeOpenOperation(on deviceCode: String, eventTime: Date?, result: [String: JSONValue]?) async {
+    public func completeOpenOperation(
+        on deviceCode: String,
+        source: OperationSource,
+        eventTime: Date?,
+        result: [String: JSONValue]?
+    ) async {
         @Dependency(\.defaultDatabase) var database
         @Dependency(\.date) var date
         let stamp = eventTime ?? date.now
@@ -87,7 +98,7 @@ public struct Reconciler: Sendable {
                 op.detail = .object(dict)
             }
             op.status = OperationStatus.completed.rawValue
-            op.source = OperationSource.event.rawValue
+            op.source = source.rawValue
             op.lastConfirmedAt = stamp
             try Operation.upsert { op }.execute(db)
         }

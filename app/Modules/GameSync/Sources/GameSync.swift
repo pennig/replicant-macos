@@ -60,12 +60,18 @@ extension GameSync {
         // they're wired here rather than from the app. Feature-specific routes
         // (e.g. Messages) are still registered by the composition root.
         let reconciler = Reconciler()
+        let coordinator = PollCoordinator(reconciler: reconciler)
+        let scheduler = DeadlineScheduler(coordinator: coordinator, reconciler: reconciler)
         routes.withValue { current in
-            current.append(Self.deviceRoute(reconciler: reconciler))
+            current.append(Self.deviceRoute(coordinator: coordinator, reconciler: reconciler))
             current.append(Self.bobnetRoute())
         }
 
-        let engine = GameSyncEngine(configuration: configuration, router: RelayRouter(routes: routes))
+        let engine = GameSyncEngine(
+            configuration: configuration,
+            router: RelayRouter(routes: routes),
+            scheduler: scheduler
+        )
 
         return GameSync(
             registerRoute: { route in
@@ -85,17 +91,22 @@ extension GameSync {
 actor GameSyncEngine {
     private let configuration: RelayConfiguration
     private let router: RelayRouter
+    private let scheduler: DeadlineScheduler
     private var pipeline: EventPipeline?
     private var consumeTask: Task<Void, Never>?
 
-    init(configuration: RelayConfiguration, router: RelayRouter) {
+    init(configuration: RelayConfiguration, router: RelayRouter, scheduler: DeadlineScheduler) {
         self.configuration = configuration
         self.router = router
+        self.scheduler = scheduler
     }
 
     func start() {
         guard consumeTask == nil else { return }   // idempotent
         @Dependency(\.gameClient) var gameClient
+
+        // Arm the deadline backstop for any already-open operations.
+        Task { await scheduler.start() }
 
         let relay = RelayClient(baseURL: configuration.baseURL, clientToken: configuration.clientToken)
         // Backfill reads share the app's rate-limit budget via gameClient's client.
@@ -132,6 +143,7 @@ actor GameSyncEngine {
         consumeTask = nil
         await pipeline?.stop()
         pipeline = nil
+        await scheduler.stop()
     }
 }
 
@@ -144,16 +156,16 @@ extension GameSync {
     /// device fields out of the event). Phase 4 adds request coalescing, per-type
     /// TTL, and budget-aware deferral; Phase 2 does one read per device-naming
     /// event.
-    static func deviceRoute(reconciler: Reconciler) -> RelayRoute {
+    static func deviceRoute(coordinator: PollCoordinator, reconciler: Reconciler) -> RelayRoute {
         RelayRoute(id: "device.event", type: "event") { event in
             // Completion events are truth for the action they close (§4.4): fold
             // the result into the device's open operation first (cheap, no read).
             await reconciler.applyOperationEvent(event)
-            // Then refresh the device row itself via the confirm-read path.
+            // Then refresh the device row via the poll coordinator — a low-priority
+            // (event-invalidation) trigger that coalesces, respects the TTL, and
+            // defers under read-budget pressure.
             guard let code = event.deviceCode, !code.isEmpty else { return }
-            @Dependency(\.devicesClient) var devicesClient
-            guard let device = try? await devicesClient.read(code) else { return }
-            await reconciler.ingest(device)
+            await coordinator.refresh(code, priority: .low)
         }
     }
 
