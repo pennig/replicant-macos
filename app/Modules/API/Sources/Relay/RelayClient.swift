@@ -50,7 +50,7 @@ public enum RelayError: Error {
     case malformedResponse
 }
 
-/// Client for the Rust relay's `/api/events` endpoint. Polling this is free
+/// Client for the Rust relay's `/api/stream` endpoint. Polling this is free
 /// and unlimited — it never counts against the game's rate limits.
 public struct RelayClient: Sendable {
 

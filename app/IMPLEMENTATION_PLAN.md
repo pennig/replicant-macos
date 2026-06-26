@@ -350,24 +350,26 @@ func reconcile(incoming, source) {
 Each phase is independently shippable and observably better than the last. Earlier phases de-risk later ones.
 
 ### Phase 0 — Foundations (small, unblocks everything)
-- [ ] Expose the rate budget: add `snapshot()` / budget accessor to `GameClient` surfacing `RateLimitGovernor.Snapshot`. (Wire it to a debug HUD optionally.)
-- [ ] Consume `@Shared(.appStorage(Account.activeReplicantCodeKey))` in `StarMapFeature`; delete the hardcoded `defaultReplicantCode = "99380EDF"`.
+- [x] Expose the rate budget: add `snapshot()` / budget accessor to `GameClient` surfacing `RateLimitGovernor.Snapshot`. (Wire it to a debug HUD optionally.) — `GameClient.budget(_:)`.
+- [x] Consume `@Shared(.appStorage(Account.activeReplicantCodeKey))` in `StarMapFeature`; delete the hardcoded `defaultReplicantCode = "99380EDF"`.
 - **Ship criterion:** budget is readable; star map uses the logged-in replicant.
 
 ### Phase 1 — `GameSync` skeleton + relay live + Messages-for-free (the cheap proof)
-- [ ] New `GameSync` SPM module (per CLAUDE.md recipe). Owns `EventPipeline` + `RelayClient`.
-- [ ] Plumb relay base URL + **static relay Bearer token** (compile-time constant; flagged tech-debt) into `RelayClient`.
-- [ ] Relay-route registry modeled on `SessionLifecycleHandler` (`registerRoute(type:apply:gapRepair:)`).
-- [ ] Start/stop `GameSync` via `accountManager.registerHandler` in `ReplicantApp.registerSessionCleanup()`’s sibling.
-- [ ] Implement the `message` route → upsert `Message`. **No change to MessagesFeature.**
+- [x] New `GameSync` SPM module (per CLAUDE.md recipe). Owns `EventPipeline` + `RelayClient`.
+- [x] Plumb relay base URL + **static relay Bearer token** (compile-time constant; flagged tech-debt) into `RelayClient`. — `RelayConfiguration.live`.
+- [x] Relay-route registry modeled on `SessionLifecycleHandler` (`registerRoute(type:apply:gapRepair:)`).
+- [x] Start/stop `GameSync` via `accountManager.registerHandler` in `ReplicantApp.registerSessionCleanup()`’s sibling. (+ idempotent start at launch for a restored session, which never fires `onLogin`.)
+- [x] Implement the `message` route → upsert `Message`. **No change to MessagesFeature.** — _Note: the relay `message` event is thin (no `id`/read-state; content is top-level), so the route triggers one authoritative `getV1Messages(latest:)` and upserts the real rows, rather than synthesizing from the event (which would collide ids on cold-load). Registered from the app since `Message` is a feature type._
 - **Ship criterion:** inbox updates in real time with the relay connected; Messages polling retired. This proves the whole ingestion architecture on the lowest-risk channel.
 
 ### Phase 2 — Reconciliation core + Device table + game-event route + backfill
-- [ ] `Device` + `BobnetMessage` tables in `DependencyClients`; add to `bootstrapDatabase()`; logout cleanup handlers. **Device schema per §4.1** (core columns + raw `detail` JSON blob; `additionalProperties` → `JSONValue` in `detail`).
-- [ ] Reconciler with the event-time/provenance guard (§6), using the **synthesized `updated_at`** (relay event `timestamp`; fetch wall-clock for reads — §4.1).
-- [ ] `event` route → reconcile Device rows; `bobnet` route → append.
-- [ ] Two-tier gap-repair (§5.3): tier-1 cursor replay (already built) + tier-2 per-replicant `backfill` + `getV1Messages`.
+- [x] `Device` + `BobnetMessage` tables in `DependencyClients`; add to `bootstrapDatabase()`; logout cleanup handlers. **Device schema per §4.1** (core columns + raw `detail` JSON blob; `additionalProperties` → `JSONValue` in `detail`). _`BobnetMessage.id` is `Int` (the real payload), not string as the §4 sketch had it._
+- [x] Reconciler with the event-time/provenance guard (§6), using the **synthesized `updated_at`** (relay event `timestamp`; fetch wall-clock for reads — §4.1).
+- [x] `event` route → reconcile Device rows; `bobnet` route → append. _`event` route = invalidate→confirm-read (`DevicesClient.read`)→reconcile, parsing **no** device fields out of the event (robust to evolving payloads). Both routes self-registered by `GameSync` since `Device`/`BobnetMessage` are shared infra, not feature types._
+- [x] Two-tier gap-repair (§5.3): tier-1 cursor replay (already built) + tier-2 per-replicant `backfill`. _Device tier-2 = `EventPipeline.backfill` per replicant on start → events → confirm-reads. `getV1Messages` tier-2 left to the existing Messages cold-load (`.task`) + the live message route; not duplicated in `GameSync` (can't reach the `Message` feature type)._
 - **Ship criterion:** a device's `status`/`location` updates live from relay events; a cold start reconstructs recent state; no regressions from out-of-order arrivals (covered by tests in §8).
+
+> **Carried into Phase 4 from Phase 2:** the `event` route does **one confirm-read per device-naming event, uncoalesced**; the poll coordinator must dedupe in-flight reads by device. Device rows currently appear **on demand** (event/read), not via a bulk `GET /v1/devices` walk — that cold-load lands with the Devices feature (Phase 5).
 
 ### Phase 3 — `Operation` model + action-dispatch template
 - [ ] `Operation` table + partial unique index (one open per device).
