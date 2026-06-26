@@ -372,10 +372,14 @@ Each phase is independently shippable and observably better than the last. Earli
 > **Carried into Phase 4 from Phase 2:** the `event` route does **one confirm-read per device-naming event, uncoalesced**; the poll coordinator must dedupe in-flight reads by device. Device rows currently appear **on demand** (event/read), not via a bulk `GET /v1/devices` walk — that cold-load lands with the Devices feature (Phase 5).
 
 ### Phase 3 — `Operation` model + action-dispatch template
-- [ ] `Operation` table + partial unique index (one open per device).
-- [ ] `CommandClient` in `DependencyClients`: `dispatch(kind:deviceCode:params:)` = optimistic insert → POST → (full response or post-command read) → reconcile (§5.1), correlate by `entityCode`, **no auto-retry**.
-- [ ] Implement `travel` (self-describing) first end-to-end, then `print` (enqueued + `print_complete` event completion + `rejected`-on-400 + `superseded`-on-replace).
+- [x] `Operation` table + partial unique index (one open per device). _Status taxonomy added `optimistic` as a state (the §4 list omitted it); it's **excluded** from the open-uniqueness index so dispatch can stage a row without conflicting with the op it may replace — the prior op is superseded only on confirmation._
+- [x] `CommandClient` in `DependencyClients`: `dispatch(kind:deviceCode:params:)` = optimistic insert → POST → reconcile (§5.1), correlate by `entityCode`, **no auto-retry**. _The 200 body is a command **result** schema, not a full device snapshot, so the post-command device read is taken on **every** success (per §1's settled decision), not only for enqueued commands._
+- [x] Implement `travel` (self-describing) first end-to-end, then `print` (enqueued + `print_complete` event completion + `rejected`-on-400 + `superseded`-on-replace).
 - **Ship criterion:** firing travel/print shows instant optimistic state, reconciles within one round-trip, and completes via deadline (travel) or relay event (print).
+
+> **The `Reconciler` moved from `GameSync` to `DependencyClients`** (made `public`): the §6 guard is the one write path shared by *all three writers*, and `CommandClient` (in `DependencyClients`) must reach it without a `DependencyClients → GameSync` cycle. It's pure logic over the shared `Device`/`Operation` tables and knows nothing about the relay, so the lowest shared layer is its correct home. `GameSync`'s event route now calls it.
+>
+> **Carried into Phase 4:** travel **auto-completion by deadline** is not yet wired — dispatch sets `Operation.completesAt`, but the timer that fires at it is the Phase-4 deadline scheduler. Print completion via the `print_complete` relay event **is** done. Commands beyond travel/print (`mine`/`scan`/`census`) throw `unsupported` for now.
 
 ### Phase 4 — Deadline scheduler, poll coordinator, live progress UI
 - [ ] Single deadline timer over open `Operation.completesAt` (skip nil-deadline enqueued ops; bounded backoff fallback for them).

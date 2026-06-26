@@ -111,6 +111,12 @@ struct ReplicantApp: App {
                 try? await database.write { db in try BobnetMessage.delete().execute(db) }
             })
         )
+        accountManager.registerHandler(
+            SessionLifecycleHandler(id: "operations", onLogout: {
+                @Dependency(\.defaultDatabase) var database
+                try? await database.write { db in try DependencyClients.Operation.delete().execute(db) }
+            })
+        )
     }
 
     var body: some Scene {
@@ -191,6 +197,8 @@ extension DependencyValues {
         Replicant.registerMigrations(&migrator)
         Device.registerMigrations(&migrator)
         BobnetMessage.registerMigrations(&migrator)
+        // Qualified: `Operation` would otherwise be ambiguous with Foundation's.
+        DependencyClients.Operation.registerMigrations(&migrator)
         try migrator.migrate(database)
         defaultDatabase = database
     }

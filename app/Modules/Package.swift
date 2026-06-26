@@ -77,6 +77,18 @@ let package = Package(
             ],
             path: "DependencyClients/Sources",
         ),
+        .testTarget(
+            name: "DependencyClientsTests",
+            dependencies: [
+                "DependencyClients",
+                "API",
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "SQLiteData", package: "sqlite-data"),
+                .product(name: "HTTPTypes", package: "swift-http-types"),
+                .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime"),
+            ],
+            path: "DependencyClients/Tests"
+        ),
         .target(
             name: "GameSync",
             dependencies: [

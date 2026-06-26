@@ -146,6 +146,10 @@ extension GameSync {
     /// event.
     static func deviceRoute(reconciler: Reconciler) -> RelayRoute {
         RelayRoute(id: "device.event", type: "event") { event in
+            // Completion events are truth for the action they close (§4.4): fold
+            // the result into the device's open operation first (cheap, no read).
+            await reconciler.applyOperationEvent(event)
+            // Then refresh the device row itself via the confirm-read path.
             guard let code = event.deviceCode, !code.isEmpty else { return }
             @Dependency(\.devicesClient) var devicesClient
             guard let device = try? await devicesClient.read(code) else { return }
