@@ -8,8 +8,8 @@
 //  down on logout.
 //
 
+import AccountManager
 import ComposableArchitecture
-import DependencyClients
 import LoginFeature
 import RawAPIFeature
 import SwiftUI
@@ -35,11 +35,11 @@ struct AppFeature {
         }
 
         init() {
-            /// Decide the initial session synchronously by consulting the Keychain,
-            /// so the very first frame is already correct (no logged-out flash).
-            @Dependency(\.keychain) var keychain
-            if let apiKey = keychain.load(KeychainClient.apiKeyAccount) {
-                appState = .loggedIn(MainFeature.State(account: .mock, apiKey: apiKey))
+            /// Decide the initial session synchronously by restoring the stored
+            /// token, so the very first frame is already correct (no logged-out flash).
+            @Dependency(\.accountManager) var accountManager
+            if let apiKey = accountManager.restoredAPIKey() {
+                appState = .loggedIn(MainFeature.State(apiKey: apiKey))
             } else {
                 appState = .loggedOut(LoginFeature.State())
             }
@@ -55,7 +55,7 @@ struct AppFeature {
         case preferences(PreferencesFeature.Action)
     }
 
-    @Dependency(\.keychain) var keychain
+    @Dependency(\.accountManager) var accountManager
 
     var body: some Reducer<State, Action> {
         Scope(state: \.preferences, action: \.preferences) {
@@ -67,14 +67,14 @@ struct AppFeature {
         Reduce { state, action in
             switch action {
             case let .appState(.loggedOut(.delegate(.loggedIn(apiKey)))):
-                state.appState = .loggedIn(MainFeature.State(account: .mock, apiKey: apiKey))
+                state.appState = .loggedIn(MainFeature.State(apiKey: apiKey))
                 return .none
 
             case .appState(.loggedIn(.delegate(.loggedOut))):
                 state.appState = .loggedOut(LoginFeature.State())
-                let keychain = self.keychain
+                let accountManager = self.accountManager
                 return .run { _ in
-                    try? keychain.delete(KeychainClient.apiKeyAccount)
+                    await accountManager.logOut()
                 }
 
             case .appState, .preferences:

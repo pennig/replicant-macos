@@ -5,7 +5,9 @@
 //  Created by Matt Pennig on 6/12/26.
 //
 
+import AccountManager
 import ComposableArchitecture
+import DependencyClients
 import MessagesFeature
 import SQLiteData
 import StarMapFeature
@@ -27,6 +29,27 @@ struct ReplicantApp: App {
         // observes it appears. SQLiteData vends an on-disk store in the app and
         // an in-memory one in previews/tests.
         prepareDependencies { try? $0.bootstrapDatabase() }
+        registerSessionCleanup()
+    }
+
+    /// Register each feature's logout cleanup with the `AccountManager`, so
+    /// signing out wipes their locally-persisted tables (the account profile and
+    /// replicant roster are cleared by the manager itself). This is where the
+    /// composition root opts features into the session lifecycle.
+    private func registerSessionCleanup() {
+        @Dependency(\.accountManager) var accountManager
+        accountManager.registerHandler(
+            SessionLifecycleHandler(id: "messages", onLogout: {
+                @Dependency(\.defaultDatabase) var database
+                try? await database.write { db in try Message.delete().execute(db) }
+            })
+        )
+        accountManager.registerHandler(
+            SessionLifecycleHandler(id: "stars", onLogout: {
+                @Dependency(\.defaultDatabase) var database
+                try? await database.write { db in try Star.delete().execute(db) }
+            })
+        )
     }
 
     var body: some Scene {
@@ -104,6 +127,7 @@ extension DependencyValues {
         #endif
         Message.registerMigrations(&migrator)
         Star.registerMigrations(&migrator)
+        Replicant.registerMigrations(&migrator)
         try migrator.migrate(database)
         defaultDatabase = database
     }

@@ -7,6 +7,8 @@
 //
 
 import ComposableArchitecture
+import DependencyClients
+import SQLiteData
 import SwiftUI
 
 struct AccountView: View {
@@ -19,7 +21,7 @@ struct AccountView: View {
                 Section("Account") {
                     LabeledContent("Name", value: store.account.name)
                     LabeledContent("Email", value: store.account.email)
-                    LabeledContent("Replicants", value: "\(store.account.replicantCount)")
+                    LabeledContent("Replicants", value: "\(store.replicants.count)")
                 }
                 Section("API Key") {
                     Text(store.apiKey)
@@ -48,8 +50,15 @@ struct AccountView: View {
 }
 
 #Preview {
+    let _ = prepareDependencies {
+        let database = try! SQLiteData.defaultDatabase()
+        var migrator = DatabaseMigrator()
+        Replicant.registerMigrations(&migrator)
+        try! migrator.migrate(database)
+        $0.defaultDatabase = database
+    }
     AccountView(
-        store: Store(initialState: MainFeature.State(account: .mock, apiKey: "rk_live_0123456789abcdef")) {
+        store: Store(initialState: MainFeature.State(apiKey: "rk_live_0123456789abcdef")) {
             MainFeature()
         }
     )

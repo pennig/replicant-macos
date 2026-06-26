@@ -2,18 +2,16 @@
 //  LoginFeatureTests.swift
 //  Replicould — Login feature
 //
-//  Drives the reducer through the shared `gameClient` dependency, stubbed with a
-//  canned `ClientTransport`, so the signup and key-validation round-trips are
-//  exercised end-to-end (status code → reducer outcome) alongside the input
-//  guards and alert / mode plumbing.
+//  `LoginFeature` is now pure UI flow: it delegates all account business logic to
+//  `@Dependency(\.accountManager)`. These tests stub the manager to drive the
+//  signup and key-validation outcomes, and verify the input guards, mode
+//  transitions, alerts, and the `loggedIn` delegate. (The real persistence
+//  round-trip lives in `AccountManagerTests`.)
 //
 
-import API
+import AccountManager
 import ComposableArchitecture
-import DependencyClients
 import Foundation
-import HTTPTypes
-import OpenAPIRuntime
 import Testing
 @testable import LoginFeature
 
@@ -40,14 +38,14 @@ import Testing
 
     // MARK: Signup round-trip
 
-    /// 201 clears the spinner and advances to the verify step.
+    /// A successful signup clears the spinner and advances to the verify step.
     @Test func signupSuccessAdvancesToConfirmation() async {
         let store = TestStore(
             initialState: LoginFeature.State(mode: .signup, name: "Roy", email: "roy@tyrell.example")
         ) {
             LoginFeature()
         } withDependencies: {
-            $0.gameClient = stubGameClient { _ in jsonResponse(201) }
+            $0.accountManager.signUp = { _, _, _ in }
         }
 
         await store.send(.signupButtonTapped) { $0.isSaving = true }
@@ -57,14 +55,14 @@ import Testing
         }
     }
 
-    /// 409 surfaces the server's error message in an alert.
+    /// A signup failure surfaces the manager's error message in an alert.
     @Test func signupConflictShowsAlert() async {
         let store = TestStore(
             initialState: LoginFeature.State(mode: .signup, name: "Roy", email: "taken@tyrell.example")
         ) {
             LoginFeature()
         } withDependencies: {
-            $0.gameClient = stubGameClient { _ in jsonResponse(409, #"{"error":"Email taken"}"#) }
+            $0.accountManager.signUp = { _, _, _ in throw AccountManager.SignupError("Email taken") }
         }
 
         await store.send(.signupButtonTapped) { $0.isSaving = true }
@@ -80,36 +78,24 @@ import Testing
 
     // MARK: Key validation round-trip
 
-    /// A 200 from /me means the key is good: it stays in the Keychain and the
-    /// parent is told the session is authenticated.
-    @Test func validKeySavesAndLogsIn() async {
-        let saves = LockIsolated<[String]>([])
-        let deletes = LockIsolated<[String]>([])
+    /// A successful sign-in tells the parent the session is authenticated.
+    @Test func validKeyLogsIn() async {
         let store = TestStore(initialState: LoginFeature.State(mode: .login, apiKey: "rk_live_abc")) {
             LoginFeature()
         } withDependencies: {
-            $0.gameClient = stubGameClient { _ in jsonResponse(200) }
-            $0.keychain.save = { value, _ in saves.withValue { $0.append(value) } }
-            $0.keychain.delete = { account in deletes.withValue { $0.append(account) } }
+            $0.accountManager.logIn = { _ in }
         }
 
         await store.send(.submitKeyTapped) { $0.isSaving = true }
         await store.receive(\.delegate.loggedIn, "rk_live_abc")
-
-        #expect(saves.value == ["rk_live_abc"])
-        #expect(deletes.value.isEmpty)
     }
 
-    /// A non-200 from /me rejects the key, rolling back the Keychain write.
-    @Test func invalidKeyIsRejectedAndRolledBack() async {
-        let saves = LockIsolated<[String]>([])
-        let deletes = LockIsolated<[String]>([])
+    /// A rejected key surfaces the "rejected" message in an alert.
+    @Test func rejectedKeyShowsAlert() async {
         let store = TestStore(initialState: LoginFeature.State(mode: .login, apiKey: "bad")) {
             LoginFeature()
         } withDependencies: {
-            $0.gameClient = stubGameClient { _ in jsonResponse(401) }
-            $0.keychain.save = { value, _ in saves.withValue { $0.append(value) } }
-            $0.keychain.delete = { account in deletes.withValue { $0.append(account) } }
+            $0.accountManager.logIn = { _ in throw AccountManager.LoginError.rejected }
         }
 
         await store.send(.submitKeyTapped) { $0.isSaving = true }
@@ -121,9 +107,25 @@ import Testing
                 TextState("That key was rejected. Double-check it and try again.")
             }
         }
+    }
 
-        #expect(saves.value == ["bad"])
-        #expect(deletes.value == [KeychainClient.apiKeyAccount])
+    /// A failed verification surfaces the "couldn’t verify" message.
+    @Test func verificationFailureShowsAlert() async {
+        let store = TestStore(initialState: LoginFeature.State(mode: .login, apiKey: "rk_live_abc")) {
+            LoginFeature()
+        } withDependencies: {
+            $0.accountManager.logIn = { _ in throw AccountManager.LoginError.verificationFailed }
+        }
+
+        await store.send(.submitKeyTapped) { $0.isSaving = true }
+        await store.receive(\.keyRejected) {
+            $0.isSaving = false
+            $0.alert = AlertState<LoginFeature.Action.Alert> {
+                TextState("Sign-in failed")
+            } message: {
+                TextState("Couldn’t verify the key. Check your connection and try again.")
+            }
+        }
     }
 
     // MARK: Plumbing
@@ -145,36 +147,4 @@ import Testing
 
         await store.send(.alert(.dismiss)) { $0.alert = nil }
     }
-}
-
-// MARK: - Stubbed game client
-
-/// Vends a `GameClient` whose generated `Client` is backed by a canned transport.
-private func stubGameClient(
-    _ respond: @escaping @Sendable (HTTPRequest) -> (HTTPResponse, HTTPBody?)
-) -> GameClient {
-    GameClient(make: {
-        Client(serverURL: URL(string: "https://stub.invalid")!, transport: StubTransport(respond: respond))
-    })
-}
-
-/// A `ClientTransport` that returns a fixed response, ignoring the request.
-private struct StubTransport: ClientTransport {
-    let respond: @Sendable (HTTPRequest) -> (HTTPResponse, HTTPBody?)
-    func send(
-        _ request: HTTPRequest,
-        body: HTTPBody?,
-        baseURL: URL,
-        operationID: String
-    ) async throws -> (HTTPResponse, HTTPBody?) {
-        respond(request)
-    }
-}
-
-/// A JSON response with the given status code and body.
-private func jsonResponse(_ status: Int, _ body: String = "{}") -> (HTTPResponse, HTTPBody?) {
-    (
-        HTTPResponse(status: .init(code: status), headerFields: [.contentType: "application/json"]),
-        HTTPBody(Array(body.utf8))
-    )
 }

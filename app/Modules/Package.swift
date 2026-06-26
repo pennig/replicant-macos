@@ -7,6 +7,7 @@ let package = Package(
         .macOS(.v26),
     ],
     products: [
+        .library(name: "AccountManager", targets: ["AccountManager"]),
         .library(name: "API", targets: ["API"]),
         .library(name: "DependencyClients", targets: ["DependencyClients"]),
         .library(name: "LoginFeature", targets: ["LoginFeature"]),
@@ -26,6 +27,28 @@ let package = Package(
         .package(url: "https://github.com/siteline/swiftui-introspect", exact: "26.0.1"),
     ],
     targets: [
+        .target(
+            name: "AccountManager",
+            dependencies: [
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "SQLiteData", package: "sqlite-data"),
+                "API",
+                "DependencyClients",
+            ],
+            path: "AccountManager/Sources"
+        ),
+        .testTarget(
+            name: "AccountManagerTests",
+            dependencies: [
+                "AccountManager",
+                "API",
+                "DependencyClients",
+                .product(name: "SQLiteData", package: "sqlite-data"),
+                .product(name: "HTTPTypes", package: "swift-http-types"),
+                .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime"),
+            ],
+            path: "AccountManager/Tests"
+        ),
         .target(
             name: "API",
             dependencies: [
@@ -47,6 +70,7 @@ let package = Package(
             name: "DependencyClients",
             dependencies: [
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "SQLiteData", package: "sqlite-data"),
                 "API",
             ],
             path: "DependencyClients/Sources",
@@ -55,8 +79,7 @@ let package = Package(
             name: "LoginFeature",
             dependencies: [
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
-                "API",
-                "DependencyClients",
+                "AccountManager",
                 "UI",
             ],
             path: "LoginFeature/Sources",
@@ -65,9 +88,7 @@ let package = Package(
             name: "LoginFeatureTests",
             dependencies: [
                 "LoginFeature",
-                "API",
-                .product(name: "HTTPTypes", package: "swift-http-types"),
-                .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime"),
+                "AccountManager",
             ],
             path: "LoginFeature/Tests"
         ),

@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C90D75CF2FED785C00B293DE /* AccountManager in Frameworks */ = {isa = PBXBuildFile; productRef = C90D75CE2FED785C00B293DE /* AccountManager */; };
 		C9AB58FE2FEA4A3300536794 /* StarMapFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C9AB58FD2FEA4A3300536794 /* StarMapFeature */; };
 		C9B5305C2FDDD839006F79A8 /* ReplicantApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9B530592FDDD839006F79A8 /* ReplicantApp.swift */; };
 		C9B5305D2FDDD839006F79A8 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C9B530572FDDD839006F79A8 /* Assets.xcassets */; };
@@ -55,6 +56,7 @@
 			files = (
 				C9B5307A2FE0A6D1006F79A8 /* ComposableArchitecture in Frameworks */,
 				C9B5309F2FE72B0B006F79A8 /* RawAPIFeature in Frameworks */,
+				C90D75CF2FED785C00B293DE /* AccountManager in Frameworks */,
 				C9B530972FE1D3AA006F79A8 /* UI in Frameworks */,
 				C9D902132FE9DDC000781FBB /* MessagesFeature in Frameworks */,
 				C9AB58FE2FEA4A3300536794 /* StarMapFeature in Frameworks */,
@@ -145,6 +147,7 @@
 				C9B5309E2FE72B0B006F79A8 /* RawAPIFeature */,
 				C9D902122FE9DDC000781FBB /* MessagesFeature */,
 				C9AB58FD2FEA4A3300536794 /* StarMapFeature */,
+				C90D75CE2FED785C00B293DE /* AccountManager */,
 			);
 			productName = Replicant;
 			productReference = C922A8B62FDC493200431320 /* Replicould.app */;
@@ -462,6 +465,10 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		C90D75CE2FED785C00B293DE /* AccountManager */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = AccountManager;
+		};
 		C9AB58FD2FEA4A3300536794 /* StarMapFeature */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = StarMapFeature;

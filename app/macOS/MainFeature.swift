@@ -8,8 +8,10 @@
 //
 
 import ComposableArchitecture
+import DependencyClients
 import MessagesFeature
 import RawAPIFeature
+import SQLiteData
 import StarMapFeature
 import SwiftUI
 
@@ -74,22 +76,17 @@ enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
     ]
 }
 
-/// Stub account information surfaced in the sidebar header and Account window.
-struct Account: Equatable {
-    var name: String
-    var email: String
-    var replicantCount: Int
-
-    static let mock = Account(name: "K. Pennig", email: "kell@pennig.name", replicantCount: 5)
-}
-
 // MARK: - Main feature
 
 @Reducer
 struct MainFeature {
     @ObservableState
     struct State: Equatable {
-        var account: Account
+        /// The signed-in account profile, persisted to disk and refreshed on
+        /// login. Reads back immediately on relaunch.
+        @Shared(.account) var account: Account
+        /// The account's replicant roster, observed straight from SQLite.
+        @FetchAll var replicants: [Replicant]
         var apiKey: String
         var category: SidebarItem? = .devices
         var detailSelection: String?
@@ -103,13 +100,11 @@ struct MainFeature {
         var starMap: StarMapFeature.State
 
         init(
-            account: Account,
             apiKey: String,
             category: SidebarItem? = .devices,
             detailSelection: String? = nil,
             isShowingAccount: Bool = false
         ) {
-            self.account = account
             self.apiKey = apiKey
             self.category = category
             self.detailSelection = detailSelection
@@ -205,7 +200,7 @@ struct MainView: View {
     // — Sidebar: header · grouped categories · footer —
     private var sidebar: some View {
         VStack(spacing: 0) {
-            SidebarHeader(account: store.account)
+            SidebarHeader(account: store.account, replicantCount: store.replicants.count)
             Divider()
             List(selection: $store.category) {
                 ForEach(SidebarItem.groups) { group in
@@ -286,6 +281,7 @@ struct MainView: View {
 
 struct SidebarHeader: View {
     let account: Account
+    let replicantCount: Int
 
     var body: some View {
         HStack(spacing: 12) {
@@ -294,7 +290,7 @@ struct SidebarHeader: View {
                 .foregroundStyle(.tint)
             VStack(alignment: .leading, spacing: 2) {
                 Text(account.name).font(.headline)
-                Text("\(account.replicantCount) replicants")
+                Text("\(replicantCount) replicants")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
