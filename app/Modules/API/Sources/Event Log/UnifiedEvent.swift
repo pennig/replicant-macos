@@ -31,6 +31,11 @@ public struct UnifiedEvent: Sendable, Identifiable {
     public let message: String?
     public let payload: [String: JSONValue]?
     public let source: Source
+    /// The original relay bytes (relay source only; nil for game-log entries).
+    /// Routes for `type`s whose data lives outside the generic envelope — e.g.
+    /// `bobnet`, which carries a top-level `messages[]` array the envelope drops —
+    /// decode this to recover their type-specific payload.
+    public let rawData: Data?
 
     /// Parsed timestamp, when the string is well-formed.
     public var date: Date? {
@@ -51,6 +56,7 @@ public struct UnifiedEvent: Sendable, Identifiable {
         self.message = nil
         self.payload = event.payload
         self.source = .relay(streamID: relayEvent.id)
+        self.rawData = relayEvent.raw
         self.id = Self.fingerprint(
             type: event.type,
             eventType: event.eventType,
@@ -75,6 +81,7 @@ public struct UnifiedEvent: Sendable, Identifiable {
         self.message = entry.message
         self.payload = entry.payload
         self.source = .gameLog
+        self.rawData = nil
         self.id = Self.fingerprint(
             type: "event",
             eventType: entry.eventType,

@@ -73,6 +73,7 @@ let package = Package(
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
                 .product(name: "SQLiteData", package: "sqlite-data"),
                 "API",
+                "Utils",
             ],
             path: "DependencyClients/Sources",
         ),
@@ -80,6 +81,7 @@ let package = Package(
             name: "GameSync",
             dependencies: [
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "SQLiteData", package: "sqlite-data"),
                 "API",
                 "DependencyClients",
             ],
@@ -90,7 +92,10 @@ let package = Package(
             dependencies: [
                 "GameSync",
                 "API",
+                "DependencyClients",
+                "Utils",
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "SQLiteData", package: "sqlite-data"),
             ],
             path: "GameSync/Tests"
         ),

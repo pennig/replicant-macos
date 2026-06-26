@@ -135,12 +135,21 @@ erDiagram
     DEVICE {
         string device_code PK
         string device_type
-        string owner_replicant_code FK
+        string replicant_code FK
         string status
-        string location
+        string location "nullable"
+        string location_name "nullable"
         double operational_capacity
-        json features
-        date   updated_at "authoritative event-time for reconciliation"
+        int    queue_size
+        string stowed_in_device_code "nullable"
+        string controller_device_code "nullable"
+        string attached_to_device_code "nullable"
+        date   created_at "server-provided"
+        json   available_commands "[String]"
+        json   features "[String]"
+        json   tags "[String]"
+        json   detail "entire variable per-type tail, verbatim (see §4.1)"
+        date   updated_at "SYNTHESIZED authoritative event-time (see §4.1)"
         date   firstSeenAt "local-only provenance"
     }
     OPERATION {
@@ -162,7 +171,29 @@ Constraints & rules baked into the schema/helpers:
 
 - **One non-terminal `Operation` per `entityCode`** — enforce with a partial unique index (`WHERE status IN ('enqueued','active')`). This makes correlation a deterministic lookup.
 - **Local-only columns are preserved across upserts** (`firstSeenAt`, etc.), exactly like `Star`'s existing `createdAt`/`firstVisitedAt` discipline.
-- **`Device.updated_at`** holds the authoritative event-time used by the reconciliation guard; never overwrite a row from a source whose event-time is older.
+- **`Device.updated_at`** holds the authoritative event-time used by the reconciliation guard; never overwrite a row from a source whose event-time is older. **It is synthesized — the payload has no server modified-time** (see §4.1).
+
+### 4.1 Device storage — variable per-`device_type` shape (decided 2026-06-25)
+
+The real `app_schemas_devices_DeviceStatusSchema` is far richer and more variable than a flat row. The actual `/v1/devices` payload has three kinds of field:
+
+| Kind | Examples | Generated as | Present when |
+|---|---|---|---|
+| **Universal core** | `device_code`, `device_type`, `replicant_code`, `status`, `location`(_name), `operational_capacity`, `queue_size`, `created_at`, `features[]`, `available_commands[]`, `tags[]`, the `*_device_code` links | scalars / `[String]` | every device |
+| **Typed activity sub-objects** | `travel`, `mining`, `scan`, `prospect`, `repair`, `printing`, `cargo[]` (`$ref` schemas → `…InfoSchema` structs) | optional Swift structs | only for the relevant `device_type` **and** `status` |
+| **Untyped free-form** `{"type":"object","additionalProperties":{}}` | `ami_directive`, `system_status`, `waiting_for`, `controlled_devices[]`, `print_queue[]`, `attached_devices[]`, `stowed_devices[]`, `upkeep_requirements[]` | `OpenAPIObjectContainer` (type-erased) | device-type-specific |
+
+Plus type-specific scalars (`cargo_capacity`/`cargo_used`, `stow_capacity`/`stow_used`, `tracking_site_id`, `ami_directive_status`, `available_directives[]`, `beacon_only`, `taxi_mode`, …).
+
+**Decision: hybrid — stable typed core columns + one raw `detail` JSON blob.**
+
+- **Core columns** (the ER block above) are exactly the universal fields the sidebar/list/status-badge/capacity-ring query, sort, and observe via `@FetchAll`. Stable across the fleet and across backend churn — mirrors how `Star` keeps typed columns only for what the scene queries.
+- **`detail` JSON** holds the *entire* variable tail verbatim — both the typed activity sub-objects **and** the untyped free-form objects. Decoded on demand in the device-detail pane: generated `…InfoSchema` structs for the typed parts, `Utils.JSONValue` for the schemaless parts. **A new device type or field needs zero migration** — it is already captured in the blob; add a decode accessor when that device's UI is built. This is the deliberate answer to the review's warning that relay/device payloads are still evolving with possible breaking changes.
+- **`additionalProperties:{}` storage:** these have no schema, so nothing is normalized into columns — they live in `detail` and are surfaced as `JSONValue` at the point of use (e.g. `detail["ami_directive"]?["name"].stringValue`). Reuse the existing `Utils.JSONValue` (already used for the loosely-typed webhook `payload`).
+- **Arrays** (`features`, `available_commands`, `tags`) → JSON-encoded text columns (StructuredQueries' Codable JSON column representation); SQLite has no array type and these are small display/command-gating lists.
+- **Queryable progress lives in `Operation`, not `detail`.** The one thing a blob can't sort/observe is "what's arriving soon." During reconciliation, the active `travel`/`mining`/`printing` sub-object is normalized **out of `detail` into an `Operation` row** with `completesAt` (Phase 3). So: `Device.detail` = raw fidelity; `Operation` = extracted, queryable active-task + deadline.
+
+**Synthesized `updated_at`.** The device payload carries `created_at` but **no server modified-time**, so the event-time the §6 guard compares is synthesized per source: a relay event uses its `timestamp`; a targeted read/survey is stamped with fetch wall-clock ("truth as of fetch"). Decide and centralize this in the reconciler (Phase 2) — it is the input to the whole last-writer-wins guard.
 
 ### Operation lifecycle
 
@@ -332,8 +363,8 @@ Each phase is independently shippable and observably better than the last. Earli
 - **Ship criterion:** inbox updates in real time with the relay connected; Messages polling retired. This proves the whole ingestion architecture on the lowest-risk channel.
 
 ### Phase 2 — Reconciliation core + Device table + game-event route + backfill
-- [ ] `Device` + `BobnetMessage` tables in `DependencyClients`; add to `bootstrapDatabase()`; logout cleanup handlers.
-- [ ] Reconciler with the event-time/provenance guard (§6).
+- [ ] `Device` + `BobnetMessage` tables in `DependencyClients`; add to `bootstrapDatabase()`; logout cleanup handlers. **Device schema per §4.1** (core columns + raw `detail` JSON blob; `additionalProperties` → `JSONValue` in `detail`).
+- [ ] Reconciler with the event-time/provenance guard (§6), using the **synthesized `updated_at`** (relay event `timestamp`; fetch wall-clock for reads — §4.1).
 - [ ] `event` route → reconcile Device rows; `bobnet` route → append.
 - [ ] Two-tier gap-repair (§5.3): tier-1 cursor replay (already built) + tier-2 per-replicant `backfill` + `getV1Messages`.
 - **Ship criterion:** a device's `status`/`location` updates live from relay events; a cold start reconstructs recent state; no regressions from out-of-order arrivals (covered by tests in §8).

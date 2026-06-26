@@ -99,6 +99,18 @@ struct ReplicantApp: App {
                 try? await database.write { db in try Star.delete().execute(db) }
             })
         )
+        accountManager.registerHandler(
+            SessionLifecycleHandler(id: "devices", onLogout: {
+                @Dependency(\.defaultDatabase) var database
+                try? await database.write { db in try Device.delete().execute(db) }
+            })
+        )
+        accountManager.registerHandler(
+            SessionLifecycleHandler(id: "bobnet", onLogout: {
+                @Dependency(\.defaultDatabase) var database
+                try? await database.write { db in try BobnetMessage.delete().execute(db) }
+            })
+        )
     }
 
     var body: some Scene {
@@ -177,6 +189,8 @@ extension DependencyValues {
         Message.registerMigrations(&migrator)
         Star.registerMigrations(&migrator)
         Replicant.registerMigrations(&migrator)
+        Device.registerMigrations(&migrator)
+        BobnetMessage.registerMigrations(&migrator)
         try migrator.migrate(database)
         defaultDatabase = database
     }
