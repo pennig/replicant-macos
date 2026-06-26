@@ -24,6 +24,7 @@
 		C9B5309D2FE1DEE2006F79A8 /* DependencyClients in Frameworks */ = {isa = PBXBuildFile; productRef = C9B5309C2FE1DEE2006F79A8 /* DependencyClients */; };
 		C9B5309F2FE72B0B006F79A8 /* RawAPIFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C9B5309E2FE72B0B006F79A8 /* RawAPIFeature */; };
 		C9D902132FE9DDC000781FBB /* MessagesFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C9D902122FE9DDC000781FBB /* MessagesFeature */; };
+		C9F814BE2FEE1EED00ACFAC3 /* GameSync in Frameworks */ = {isa = PBXBuildFile; productRef = C9F814BD2FEE1EED00ACFAC3 /* GameSync */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -55,6 +56,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				C9B5307A2FE0A6D1006F79A8 /* ComposableArchitecture in Frameworks */,
+				C9F814BE2FEE1EED00ACFAC3 /* GameSync in Frameworks */,
 				C9B5309F2FE72B0B006F79A8 /* RawAPIFeature in Frameworks */,
 				C90D75CF2FED785C00B293DE /* AccountManager in Frameworks */,
 				C9B530972FE1D3AA006F79A8 /* UI in Frameworks */,
@@ -148,6 +150,7 @@
 				C9D902122FE9DDC000781FBB /* MessagesFeature */,
 				C9AB58FD2FEA4A3300536794 /* StarMapFeature */,
 				C90D75CE2FED785C00B293DE /* AccountManager */,
+				C9F814BD2FEE1EED00ACFAC3 /* GameSync */,
 			);
 			productName = Replicant;
 			productReference = C922A8B62FDC493200431320 /* Replicould.app */;
@@ -505,6 +508,10 @@
 		C9D902122FE9DDC000781FBB /* MessagesFeature */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = MessagesFeature;
+		};
+		C9F814BD2FEE1EED00ACFAC3 /* GameSync */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = GameSync;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

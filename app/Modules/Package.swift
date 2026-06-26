@@ -10,6 +10,7 @@ let package = Package(
         .library(name: "AccountManager", targets: ["AccountManager"]),
         .library(name: "API", targets: ["API"]),
         .library(name: "DependencyClients", targets: ["DependencyClients"]),
+        .library(name: "GameSync", targets: ["GameSync"]),
         .library(name: "LoginFeature", targets: ["LoginFeature"]),
         .library(name: "MessagesFeature", targets: ["MessagesFeature"]),
         .library(name: "RawAPIFeature", targets: ["RawAPIFeature"]),
@@ -74,6 +75,24 @@ let package = Package(
                 "API",
             ],
             path: "DependencyClients/Sources",
+        ),
+        .target(
+            name: "GameSync",
+            dependencies: [
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                "API",
+                "DependencyClients",
+            ],
+            path: "GameSync/Sources"
+        ),
+        .testTarget(
+            name: "GameSyncTests",
+            dependencies: [
+                "GameSync",
+                "API",
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+            ],
+            path: "GameSync/Tests"
         ),
         .target(
             name: "LoginFeature",

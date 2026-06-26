@@ -35,6 +35,11 @@ public struct RelayEvent: Sendable, Identifiable {
     /// The raw webhook payload as delivered by the game.
     public let raw: Data
 
+    public init(id: String, raw: Data) {
+        self.id = id
+        self.raw = raw
+    }
+
     public func decoded() throws -> GameEvent {
         try JSONDecoder().decode(GameEvent.self, from: raw)
     }

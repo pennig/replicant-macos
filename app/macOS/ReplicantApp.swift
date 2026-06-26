@@ -5,9 +5,11 @@
 //  Created by Matt Pennig on 6/12/26.
 //
 
+import API
 import AccountManager
 import ComposableArchitecture
 import DependencyClients
+import GameSync
 import MessagesFeature
 import SQLiteData
 import StarMapFeature
@@ -30,6 +32,53 @@ struct ReplicantApp: App {
         // an in-memory one in previews/tests.
         prepareDependencies { try? $0.bootstrapDatabase() }
         registerSessionCleanup()
+        registerGameSync()
+    }
+
+    /// Wire the relay ingestion service (`GameSync`): register the routes that
+    /// map relay event types onto feature tables, hook start/stop into the
+    /// session lifecycle, and kick it off now for a session restored
+    /// synchronously at launch (which never fires `onLogin`). This is the
+    /// composition root opting features into real-time ingestion — `GameSync`
+    /// itself stays feature-agnostic.
+    private func registerGameSync() {
+        @Dependency(\.accountManager) var accountManager
+        @Dependency(\.gameSync) var gameSync
+
+        // "message": a relay message event is a thin notification (no id or
+        // read-state — its content lives at the envelope's top level), so the
+        // route triggers one authoritative inbox read instead of upserting from
+        // the event. The resulting rows land in the same `Message` table the
+        // Messages feature observes via @FetchAll, making the inbox live with no
+        // change to that feature. Request coalescing/TTL arrives with the Phase 4
+        // poll coordinator.
+        gameSync.registerRoute(
+            RelayRoute(id: "message", type: "message") { _ in
+                @Dependency(\.messagesClient) var messagesClient
+                @Dependency(\.defaultDatabase) var database
+                guard let page = try? await messagesClient.fetch(nil, 50, false) else { return }
+                try? await database.write { db in
+                    for message in page.messages {
+                        try Message.upsert { message }.execute(db)
+                    }
+                }
+            }
+        )
+
+        // Start consuming the relay on login, stop on logout.
+        accountManager.registerHandler(
+            SessionLifecycleHandler(
+                id: "gameSync",
+                onLogin: { await gameSync.start() },
+                onLogout: { await gameSync.stop() }
+            )
+        )
+
+        // A returning user's session is restored from the Keychain without a
+        // login, so start the relay here too (start() is idempotent).
+        if accountManager.restoredAPIKey() != nil {
+            Task { await gameSync.start() }
+        }
     }
 
     /// Register each feature's logout cleanup with the `AccountManager`, so
