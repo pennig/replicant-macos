@@ -27,6 +27,12 @@ public actor RateLimitGovernor {
         public let limit: Int
         public let remaining: Int
         public let resetAt: Date?
+
+        public init(limit: Int, remaining: Int, resetAt: Date?) {
+            self.limit = limit
+            self.remaining = remaining
+            self.resetAt = resetAt
+        }
     }
 
     private struct State {

@@ -1,4 +1,5 @@
 import ComposableArchitecture
+import DependencyClients
 import Foundation
 import SQLiteData
 import Testing
@@ -137,19 +138,25 @@ import Testing
 
     @Test func surveyWalksPagesAndPersistsAllStars() async throws {
         let database = try makeStarsDatabase()
+        let defaults = UserDefaults.inMemory
+        defaults.set("RC", forKey: Account.activeReplicantCodeKey)
         let page1 = page(1, totalPages: 2, ["AAA", "BBB"], totalStars: 3)
         let page2 = page(2, totalPages: 2, ["CCC"], totalStars: 3)
 
-        let store = TestStore(initialState: StarMapFeature.State(replicantCode: "RC")) {
-            StarMapFeature()
-        } withDependencies: {
-            $0.defaultDatabase = database
-            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
-            $0.starsClient.survey = { _, _ in
-                AsyncThrowingStream { continuation in
-                    continuation.yield(page1)
-                    continuation.yield(page2)
-                    continuation.finish()
+        let store = withDependencies {
+            $0.defaultAppStorage = defaults
+        } operation: {
+            TestStore(initialState: StarMapFeature.State()) {
+                StarMapFeature()
+            } withDependencies: {
+                $0.defaultDatabase = database
+                $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+                $0.starsClient.survey = { _, _ in
+                    AsyncThrowingStream { continuation in
+                        continuation.yield(page1)
+                        continuation.yield(page2)
+                        continuation.finish()
+                    }
                 }
             }
         }
@@ -180,17 +187,23 @@ import Testing
 
     @Test func manualOverrideRebuildsThenAutoDismisses() async throws {
         let database = try makeStarsDatabase()
+        let defaults = UserDefaults.inMemory
+        defaults.set("RC", forKey: Account.activeReplicantCodeKey)
         let clock = TestClock()
         let only = page(1, totalPages: 1, ["AAA"], totalStars: 1)
 
-        let store = TestStore(initialState: StarMapFeature.State()) {
-            StarMapFeature()
-        } withDependencies: {
-            $0.defaultDatabase = database
-            $0.continuousClock = clock
-            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
-            $0.starsClient.survey = { _, _ in
-                AsyncThrowingStream { $0.yield(only); $0.finish() }
+        let store = withDependencies {
+            $0.defaultAppStorage = defaults
+        } operation: {
+            TestStore(initialState: StarMapFeature.State()) {
+                StarMapFeature()
+            } withDependencies: {
+                $0.defaultDatabase = database
+                $0.continuousClock = clock
+                $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+                $0.starsClient.survey = { _, _ in
+                    AsyncThrowingStream { $0.yield(only); $0.finish() }
+                }
             }
         }
 

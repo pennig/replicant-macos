@@ -9,16 +9,12 @@
 //
 
 import ComposableArchitecture
+import DependencyClients
 import Foundation
 import SQLiteData
 
 @Reducer
 public struct StarMapFeature {
-    /// The active replicant whose nearby stars we survey.
-    /// TODO: source this from the signed-in session once an active-replicant
-    /// selection flow exists; hardcoded to the current replicant for now.
-    public static let defaultReplicantCode = "99380EDF"
-
     @ObservableState
     public struct State: Equatable {
         // The charted galaxy is rendered straight from the SQLite `Star` table
@@ -35,7 +31,10 @@ public struct StarMapFeature {
         public var isTransitioning: Bool
 
         // Survey (nearby-stars fetch + persist).
-        public var replicantCode: String
+        /// The active replicant whose nearby stars we survey, sourced from the
+        /// signed-in session's local selection (set on login by `AccountManager`).
+        /// Nil until an account with a replicant is signed in.
+        @Shared(.appStorage(Account.activeReplicantCodeKey)) public var activeReplicantCode: String?
         public var isSurveying: Bool
         public var surveyPagesDone: Int
         public var surveyTotalPages: Int?
@@ -50,7 +49,6 @@ public struct StarMapFeature {
         }
 
         public init(
-            replicantCode: String = StarMapFeature.defaultReplicantCode,
             selectedSystemID: String? = nil,
             activeLayers: Set<InfoLayer> = [.presence],
             autoRotate: Bool = true,
@@ -58,7 +56,6 @@ public struct StarMapFeature {
             focus: StarMapFocus = .galaxy,
             isTransitioning: Bool = false
         ) {
-            self.replicantCode = replicantCode
             self.selectedSystemID = selectedSystemID
             self.activeLayers = activeLayers
             self.autoRotate = autoRotate
@@ -226,12 +223,18 @@ public struct StarMapFeature {
     /// page — persisting each (timestamps preserved on re-survey) and reporting
     /// progress. The view's `@FetchAll` observation renders the inserted rows.
     private func runSurvey(_ state: inout State) -> Effect<Action> {
+        // No survey is possible without an active replicant to survey around;
+        // bail (and reopen the boot modal if this was the first-run rebuild).
+        guard let code = state.activeReplicantCode, !code.isEmpty else {
+            state.surveyError = "No active replicant selected."
+            if state.bootPhase == .rebuilding { state.bootPhase = .corruptionDetected }
+            return .none
+        }
         state.isSurveying = true
         state.surveyError = nil
         state.surveyPagesDone = 0
         state.surveyTotalPages = nil
         state.surveyStarCount = 0
-        let code = state.replicantCode
         let starsClient = self.starsClient
         let database = self.database
         let date = self.date

@@ -21,8 +21,19 @@ public struct GameClient: Sendable {
     /// without any reconfiguration.
     public var make: @Sendable () -> Client
 
-    public init(make: @escaping @Sendable () -> Client) {
+    /// A read-only view of the process-shared rate-limit budget for a bucket,
+    /// for surfacing remaining reads/actions in the UI (e.g. a debug HUD). The
+    /// budget tracks the same governor every `make()`-built client throttles on.
+    public var budget: @Sendable (RateLimitGovernor.Bucket) async -> RateLimitGovernor.Snapshot
+
+    public init(
+        make: @escaping @Sendable () -> Client,
+        budget: @escaping @Sendable (RateLimitGovernor.Bucket) async -> RateLimitGovernor.Snapshot = { _ in
+            RateLimitGovernor.Snapshot(limit: 0, remaining: 0, resetAt: nil)
+        }
+    ) {
         self.make = make
+        self.budget = budget
     }
 
     /// Convenience: build a client now.
@@ -34,11 +45,14 @@ extension GameClient: DependencyKey {
         // One governor per process: rate limits are token-scoped, so every
         // client built here shares the same throttle budget.
         let governor = RateLimitGovernor()
-        return GameClient(make: {
-            @Dependency(\.keychain) var keychain
-            let token = keychain.load(KeychainClient.apiKeyAccount) ?? ""
-            return ReplicantSpace.client(apiKey: token, governor: governor)
-        })
+        return GameClient(
+            make: {
+                @Dependency(\.keychain) var keychain
+                let token = keychain.load(KeychainClient.apiKeyAccount) ?? ""
+                return ReplicantSpace.client(apiKey: token, governor: governor)
+            },
+            budget: { bucket in await governor.snapshot(bucket) }
+        )
     }()
 }
 
