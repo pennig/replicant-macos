@@ -11,6 +11,7 @@ use http_body_util::StreamBody;
 use hyper::body::{Bytes, Frame};
 use replicant_relay::{authorize_client, error_id, Upstash, EVENT_STREAM_KEY};
 use serde_json::Value;
+use tokio::time::{Duration, Instant};
 use tokio_stream::wrappers::ReceiverStream;
 use vercel_runtime::{run, service_fn, AppState, Error, Request, Response, ResponseBody};
 
@@ -87,16 +88,30 @@ async fn handler(req: Request, state: AppState) -> Result<Response<ResponseBody>
             return;
         }
 
+        // Close 10 s before Vercel's 300 s hard limit so the connection ends
+        // cleanly rather than being force-killed. The client reconnects with
+        // Last-Event-ID and resumes from where it left off.
+        let deadline = Instant::now() + Duration::from_secs(290);
+
         loop {
             if tx.is_closed() {
                 break;
             }
 
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+
+            // Clamp the XREAD block to remaining time so we never overshoot
+            // the deadline by a full 25 s polling interval.
+            let block_ms = remaining.min(Duration::from_secs(25)).as_millis() as u64;
+
             let result = upstash
                 .command(&[
                     "XREAD",
                     "BLOCK",
-                    "25000",
+                    &block_ms.to_string(),
                     "COUNT",
                     "100",
                     "STREAMS",
