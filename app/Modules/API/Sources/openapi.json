@@ -28,7 +28,7 @@
             "additionalProperties": {}
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "flask_smorest_pagination_PaginationMetadataSchema": {
         "type": "object",
@@ -62,7 +62,7 @@
             "description": "Next page number."
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_accounts_RegisterRequestSchema": {
         "type": "object",
@@ -82,7 +82,7 @@
             "nullable": true
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_common_ErrorSchema": {
         "type": "object",
@@ -92,7 +92,7 @@
             "description": "Error message"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_accounts_AccountInfoSchema": {
         "type": "object",
@@ -110,7 +110,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_accounts_AccountResponseSchema": {
         "type": "object",
@@ -127,7 +127,7 @@
             "nullable": true
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_accounts_RecoverRequestSchema": {
         "type": "object",
@@ -137,7 +137,7 @@
             "description": "Email address to recover"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_accounts_RecoverResponseSchema": {
         "type": "object",
@@ -146,7 +146,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_accounts_ReplicantBriefSchema": {
         "type": "object",
@@ -158,7 +158,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_accounts_VerificationResponseSchema": {
         "type": "object",
@@ -184,7 +184,7 @@
             ]
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_accounts_ReplicantSummarySchema": {
         "type": "object",
@@ -225,7 +225,7 @@
             "type": "integer"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_accounts_AccountMeResponseSchema": {
         "type": "object",
@@ -274,7 +274,7 @@
             }
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_achievements_AchievementSchema": {
         "type": "object",
@@ -298,7 +298,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_achievements_AchievementListResponseSchema": {
         "type": "object",
@@ -310,7 +310,7 @@
             }
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_accounts_AccountUpdateRequestSchema": {
         "type": "object",
@@ -352,7 +352,7 @@
             "nullable": true
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_accounts_AccountUpdateResponseSchema": {
         "type": "object",
@@ -380,7 +380,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_accounts_AccountWipeRequestedSchema": {
         "type": "object",
@@ -389,7 +389,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_accounts_WebhookInfoSchema": {
         "type": "object",
@@ -403,7 +403,7 @@
             "nullable": true
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_accounts_WebhookRegisterSchema": {
         "type": "object",
@@ -416,7 +416,7 @@
         "required": [
           "url"
         ],
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_accounts_WebhookResponseSchema": {
         "type": "object",
@@ -434,7 +434,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_accounts_WebhookRemovedSchema": {
         "type": "object",
@@ -443,7 +443,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_replicants_ReplicantSearchItemSchema": {
         "type": "object",
@@ -462,7 +462,7 @@
             "nullable": true
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_replicants_ReplicantSearchResponseSchema": {
         "type": "object",
@@ -478,7 +478,7 @@
             "nullable": true
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_common_PositionSchema": {
         "type": "object",
@@ -493,7 +493,7 @@
             "type": "number"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_replicants_TravelInfoSchema": {
         "type": "object",
@@ -552,7 +552,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_replicants_MiningInfoSchema": {
         "type": "object",
@@ -579,7 +579,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_replicants_PrintingInfoSchema": {
         "type": "object",
@@ -600,7 +600,7 @@
             "type": "number"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_replicants_TeleportInfoSchema": {
         "type": "object",
@@ -618,7 +618,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_replicants_ReplicantStatusSchema": {
         "type": "object",
@@ -715,7 +715,7 @@
             "$ref": "#/components/schemas/app_schemas_replicants_TeleportInfoSchema"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_replicants_ReplicantUpdateRequestSchema": {
         "type": "object",
@@ -753,7 +753,7 @@
             "description": "Cooperation permission: 'private' or 'public'"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_replicants_ReplicantUpdateResponseSchema": {
         "type": "object",
@@ -790,7 +790,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_replicants_TeleportRequestSchema": {
         "type": "object",
@@ -803,7 +803,7 @@
         "required": [
           "target"
         ],
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_replicants_TeleportResponseSchema": {
         "type": "object",
@@ -833,7 +833,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_replicants_ReplicantMessageRequestSchema": {
         "type": "object",
@@ -851,7 +851,7 @@
           "channel",
           "text"
         ],
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_replicants_ReplicantMessageResponseSchema": {
         "type": "object",
@@ -885,7 +885,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_replicants_TransferRequestSchema": {
         "type": "object",
@@ -898,7 +898,7 @@
         "required": [
           "target"
         ],
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_replicants_TransferResponseSchema": {
         "type": "object",
@@ -916,7 +916,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_stars_StarItemSchema": {
         "type": "object",
@@ -954,7 +954,7 @@
             "nullable": true
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_stars_StarListResponseSchema": {
         "type": "object",
@@ -984,7 +984,7 @@
             }
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_stars_StarDetailResponseSchema": {
         "type": "object",
@@ -996,7 +996,7 @@
             "$ref": "#/components/schemas/app_schemas_stars_StarItemSchema"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_travel_TravelRequestSchema": {
         "type": "object",
@@ -1022,7 +1022,7 @@
             "description": "If true, return the computed route without initiating travel."
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_travel_RouteLegSchema": {
         "type": "object",
@@ -1065,7 +1065,7 @@
             "nullable": true
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_travel_TravelResponseSchema": {
         "type": "object",
@@ -1133,7 +1133,7 @@
             "nullable": true
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_scanning_HabitableZoneSchema": {
         "type": "object",
@@ -1145,7 +1145,7 @@
             "type": "number"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_scanning_StarDetailSchema": {
         "type": "object",
@@ -1181,7 +1181,7 @@
             "$ref": "#/components/schemas/app_schemas_common_PositionSchema"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_scanning_AsteroidBeltDetailSchema": {
         "type": "object",
@@ -1205,7 +1205,7 @@
             }
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_scanning_AsteroidBeltSchema": {
         "type": "object",
@@ -1220,7 +1220,7 @@
             }
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_scanning_InventoryItemSchema": {
         "type": "object",
@@ -1232,7 +1232,7 @@
             "type": "number"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_scanning_PlanetSummarySchema": {
         "type": "object",
@@ -1272,7 +1272,7 @@
             }
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_scanning_ActiveLocationEventSummarySchema": {
         "type": "object",
@@ -1293,7 +1293,7 @@
             "type": "integer"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_scanning_ShopTradeSchema": {
         "type": "object",
@@ -1316,7 +1316,7 @@
             "type": "integer"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_scanning_ShopSummarySchema": {
         "type": "object",
@@ -1351,7 +1351,7 @@
             }
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_scanning_SystemScanResponseSchema": {
         "type": "object",
@@ -1416,7 +1416,7 @@
             }
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_devices_DeviceListItemSchema": {
         "type": "object",
@@ -1492,7 +1492,7 @@
             "format": "date-time"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_devices_DeviceListResponseSchema": {
         "type": "object",
@@ -1504,7 +1504,7 @@
             }
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_devices_TravelInfoSchema": {
         "type": "object",
@@ -1572,7 +1572,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_devices_MiningInfoSchema": {
         "type": "object",
@@ -1605,7 +1605,7 @@
             "type": "number"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_devices_ScanInfoSchema": {
         "type": "object",
@@ -1623,7 +1623,7 @@
             "type": "number"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_devices_ProspectInfoSchema": {
         "type": "object",
@@ -1641,7 +1641,7 @@
             "type": "number"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_devices_RepairInfoSchema": {
         "type": "object",
@@ -1659,7 +1659,7 @@
             "type": "number"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_devices_PrintingInfoSchema": {
         "type": "object",
@@ -1680,7 +1680,7 @@
             "type": "number"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_devices_CargoItemSchema": {
         "type": "object",
@@ -1692,7 +1692,7 @@
             "type": "integer"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_devices_DeviceStatusSchema": {
         "type": "object",
@@ -1882,7 +1882,7 @@
             "format": "date-time"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_devices_DeviceConfigurationSchema": {
         "type": "object",
@@ -1915,7 +1915,7 @@
             "nullable": true
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_devices_DeviceConfigurationRequestSchema": {
         "type": "object",
@@ -1927,7 +1927,7 @@
         "required": [
           "configuration"
         ],
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_devices_DeviceConfigurationResponseSchema": {
         "type": "object",
@@ -1942,7 +1942,7 @@
             }
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_devices_DeviceTagListResponseSchema": {
         "type": "object",
@@ -1958,7 +1958,7 @@
             "nullable": true
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_devices_AccountDeviceListResponseSchema": {
         "type": "object",
@@ -1974,7 +1974,7 @@
             "nullable": true
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_events_EventSchema": {
         "type": "object",
@@ -2003,7 +2003,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_events_EventListResponseSchema": {
         "type": "object",
@@ -2019,7 +2019,7 @@
             "nullable": true
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_devices_DeviceCommandResponseSchema": {
         "type": "object",
@@ -2221,6 +2221,12 @@
           "new_replicant_name": {
             "type": "string"
           },
+          "deployed_from": {
+            "type": "string"
+          },
+          "stowed_in": {
+            "type": "string"
+          },
           "host_device_code": {
             "type": "string"
           },
@@ -2264,7 +2270,7 @@
             }
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_devices_NetworkConnectionSchema": {
         "type": "object",
@@ -2279,7 +2285,7 @@
             "type": "number"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_devices_DeviceNetworkSchema": {
         "type": "object",
@@ -2297,7 +2303,7 @@
             }
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_devices_ChannelItemSchema": {
         "type": "object",
@@ -2311,7 +2317,7 @@
             "description": "ISO 8601 timestamp of the last message"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_devices_DeviceChannelsResponseSchema": {
         "type": "object",
@@ -2324,7 +2330,7 @@
             }
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_devices_BobnetMessageItemSchema": {
         "type": "object",
@@ -2354,7 +2360,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_devices_DeviceMessagesResponseSchema": {
         "type": "object",
@@ -2376,7 +2382,7 @@
             "type": "integer"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_inventory_InventoryItemSchema": {
         "type": "object",
@@ -2388,12 +2394,15 @@
             "type": "integer"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_inventory_LocationInventorySchema": {
         "type": "object",
         "properties": {
           "location": {
+            "type": "string"
+          },
+          "location_name": {
             "type": "string"
           },
           "items": {
@@ -2403,7 +2412,7 @@
             }
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_inventory_SystemInventorySchema": {
         "type": "object",
@@ -2439,7 +2448,23 @@
             "nullable": true
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
+      },
+      "app_schemas_inventory_AccountInventoryResponseSchema": {
+        "type": "object",
+        "properties": {
+          "locations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/app_schemas_inventory_LocationInventorySchema"
+            }
+          },
+          "next_cursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": true
       },
       "app_schemas_printing_PrintRequestSchema": {
         "type": "object",
@@ -2458,7 +2483,7 @@
             "nullable": true
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_printing_PrintResponseSchema": {
         "type": "object",
@@ -2482,12 +2507,18 @@
             "type": "boolean"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_blueprints_BlueprintSchema": {
         "type": "object",
         "properties": {
           "device_type": {
+            "type": "string"
+          },
+          "short_description": {
+            "type": "string"
+          },
+          "description": {
             "type": "string"
           },
           "features": {
@@ -2525,11 +2556,14 @@
           "attach_capacity": {
             "type": "integer"
           },
+          "queue_size": {
+            "type": "integer"
+          },
           "strength": {
             "type": "number"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_blueprints_BlueprintListSchema": {
         "type": "object",
@@ -2541,7 +2575,7 @@
             }
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_messages_MessageSchema": {
         "type": "object",
@@ -2565,7 +2599,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_messages_MessageListResponseSchema": {
         "type": "object",
@@ -2584,7 +2618,7 @@
             "type": "integer"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_messages_MessagesReadRequestSchema": {
         "type": "object",
@@ -2602,7 +2636,7 @@
             "default": false
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_messages_MessagesReadResponseSchema": {
         "type": "object",
@@ -2611,7 +2645,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_locations_LocationCountsSchema": {
         "type": "object",
@@ -2632,7 +2666,7 @@
             "type": "integer"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_locations_LocationSystemMapSchema": {
         "type": "object",
@@ -2644,7 +2678,7 @@
             }
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_locations_LocationResponseSchema": {
         "type": "object",
@@ -2767,7 +2801,7 @@
             }
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_locations_LocationContributionRequestSchema": {
         "type": "object",
@@ -2783,7 +2817,7 @@
         "required": [
           "devices"
         ],
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_inventory_InventoryLookupSchema": {
         "type": "object",
@@ -2819,7 +2853,7 @@
             "nullable": true
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_mining_ReplicantMineRequestSchema": {
         "type": "object",
@@ -2844,7 +2878,7 @@
         "required": [
           "resource_type"
         ],
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_mining_ReplicantMineResponseSchema": {
         "type": "object",
@@ -2892,7 +2926,7 @@
             "type": "number"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_leaderboards_LeaderboardBoardSchema": {
         "type": "object",
@@ -2907,7 +2941,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_leaderboards_LeaderboardIndexResponseSchema": {
         "type": "object",
@@ -2919,7 +2953,7 @@
             }
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_leaderboards_LeaderboardEntrySchema": {
         "type": "object",
@@ -2944,7 +2978,7 @@
             "type": "integer"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_leaderboards_LeaderboardResponseSchema": {
         "type": "object",
@@ -2959,7 +2993,7 @@
             }
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_location_events_LocationEventSchema": {
         "type": "object",
@@ -3022,7 +3056,7 @@
             "nullable": true
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_location_events_LocationEventListResponseSchema": {
         "type": "object",
@@ -3038,7 +3072,7 @@
             "nullable": true
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_species_SpeciesSchema": {
         "type": "object",
@@ -3068,7 +3102,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_species_SpeciesListResponseSchema": {
         "type": "object",
@@ -3080,7 +3114,7 @@
             }
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_species_AccountReputationEntrySchema": {
         "type": "object",
@@ -3101,7 +3135,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_species_AccountReputationResponseSchema": {
         "type": "object",
@@ -3113,7 +3147,7 @@
             }
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_species_ReplicantReputationEntrySchema": {
         "type": "object",
@@ -3128,7 +3162,7 @@
             "type": "number"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_species_ReplicantReputationResponseSchema": {
         "type": "object",
@@ -3140,7 +3174,7 @@
             }
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_feedback_FeedbackSubmitRequestSchema": {
         "type": "object",
@@ -3158,7 +3192,7 @@
             "nullable": true
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_feedback_FeedbackSubmitResponseSchema": {
         "type": "object",
@@ -3167,7 +3201,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_admin_AdminMessageRequestSchema": {
         "type": "object",
@@ -3188,7 +3222,7 @@
           "targets",
           "title"
         ],
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_admin_AdminMessageResponseSchema": {
         "type": "object",
@@ -3200,7 +3234,7 @@
             "type": "integer"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_device_commands_NoParamSchema": {
         "type": "object",
@@ -3212,7 +3246,7 @@
         "required": [
           "command"
         ],
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_device_commands_TravelSchema": {
         "type": "object",
@@ -3238,7 +3272,7 @@
           "command",
           "destination"
         ],
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_device_commands_StartMiningSchema": {
         "type": "object",
@@ -3268,7 +3302,7 @@
           "command",
           "resource_type"
         ],
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_device_commands_RetargetSchema": {
         "type": "object",
@@ -3292,7 +3326,7 @@
           "command",
           "resource_type"
         ],
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_device_commands_StowSchema": {
         "type": "object",
@@ -3310,7 +3344,7 @@
         "required": [
           "command"
         ],
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_device_commands_ConfigureSchema": {
         "type": "object",
@@ -3328,7 +3362,7 @@
         "required": [
           "command"
         ],
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_device_commands_CollectResourcesSchema": {
         "type": "object",
@@ -3347,7 +3381,7 @@
           "command",
           "resources"
         ],
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_device_commands_DepositResourcesSchema": {
         "type": "object",
@@ -3367,7 +3401,7 @@
         "required": [
           "command"
         ],
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_device_commands_RepairSchema": {
         "type": "object",
@@ -3389,7 +3423,7 @@
         "required": [
           "command"
         ],
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_device_commands_EnqueuePrintSchema": {
         "type": "object",
@@ -3412,13 +3446,22 @@
             "default": null,
             "description": "Controller device code for auto-adopt",
             "nullable": true
+          },
+          "tags": {
+            "type": "array",
+            "default": null,
+            "description": "Tags to apply to the new device",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true
           }
         },
         "required": [
           "command",
           "device_type"
         ],
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_device_commands_DequeuePrintSchema": {
         "type": "object",
@@ -3436,7 +3479,7 @@
         "required": [
           "command"
         ],
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_device_commands_AdoptSchema": {
         "type": "object",
@@ -3466,7 +3509,7 @@
         "required": [
           "command"
         ],
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_device_commands_ReleaseSchema": {
         "type": "object",
@@ -3496,7 +3539,7 @@
         "required": [
           "command"
         ],
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_device_commands_SetDirectiveSchema": {
         "type": "object",
@@ -3526,7 +3569,7 @@
           "command",
           "directive"
         ],
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_device_commands_ReplicateSchema": {
         "type": "object",
@@ -3549,7 +3592,7 @@
           "command",
           "target"
         ],
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_device_commands_RenameSchema": {
         "type": "object",
@@ -3571,7 +3614,7 @@
           "designation",
           "name"
         ],
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_device_commands_SetWelcomeMessageSchema": {
         "type": "object",
@@ -3589,7 +3632,7 @@
         "required": [
           "command"
         ],
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_device_commands_ChangeOwnerSchema": {
         "type": "object",
@@ -3606,7 +3649,7 @@
           "command",
           "target"
         ],
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_device_commands_MessageSchema": {
         "type": "object",
@@ -3628,7 +3671,7 @@
           "command",
           "text"
         ],
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_device_commands_StellarCensusSchema": {
         "type": "object",
@@ -3650,7 +3693,28 @@
         "required": [
           "command"
         ],
-        "additionalProperties": false
+        "additionalProperties": true
+      },
+      "app_schemas_device_commands_ProspectSchema": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "direction": {
+            "type": "array",
+            "default": null,
+            "description": "Direction vector [x, y, z] to prospect toward (default: outward from galaxy centre)",
+            "items": {
+              "type": "number"
+            },
+            "nullable": true
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "additionalProperties": true
       },
       "app_schemas_device_commands_AttachSchema": {
         "type": "object",
@@ -3680,7 +3744,7 @@
         "required": [
           "command"
         ],
-        "additionalProperties": false
+        "additionalProperties": true
       },
       "app_schemas_device_commands_DetachSchema": {
         "type": "object",
@@ -3710,7 +3774,7 @@
         "required": [
           "command"
         ],
-        "additionalProperties": false
+        "additionalProperties": true
       }
     },
     "responses": {
@@ -5134,6 +5198,9 @@
                     "$ref": "#/components/schemas/app_schemas_device_commands_MessageSchema"
                   },
                   {
+                    "$ref": "#/components/schemas/app_schemas_device_commands_ProspectSchema"
+                  },
+                  {
                     "$ref": "#/components/schemas/app_schemas_device_commands_ReleaseSchema"
                   },
                   {
@@ -5178,6 +5245,7 @@
                     "clear_directive": "#/components/schemas/app_schemas_device_commands_NoParamSchema",
                     "clear_queue": "#/components/schemas/app_schemas_device_commands_NoParamSchema",
                     "collect_resources": "#/components/schemas/app_schemas_device_commands_CollectResourcesSchema",
+                    "compact": "#/components/schemas/app_schemas_device_commands_NoParamSchema",
                     "configure": "#/components/schemas/app_schemas_device_commands_ConfigureSchema",
                     "deactivate": "#/components/schemas/app_schemas_device_commands_NoParamSchema",
                     "decommission": "#/components/schemas/app_schemas_device_commands_NoParamSchema",
@@ -5189,7 +5257,7 @@
                     "enqueue_print": "#/components/schemas/app_schemas_device_commands_EnqueuePrintSchema",
                     "launch": "#/components/schemas/app_schemas_device_commands_NoParamSchema",
                     "message": "#/components/schemas/app_schemas_device_commands_MessageSchema",
-                    "prospect": "#/components/schemas/app_schemas_device_commands_NoParamSchema",
+                    "prospect": "#/components/schemas/app_schemas_device_commands_ProspectSchema",
                     "recall": "#/components/schemas/app_schemas_device_commands_NoParamSchema",
                     "release": "#/components/schemas/app_schemas_device_commands_ReleaseSchema",
                     "rename": "#/components/schemas/app_schemas_device_commands_RenameSchema",
@@ -5206,6 +5274,7 @@
                     "stow": "#/components/schemas/app_schemas_device_commands_StowSchema",
                     "system_scan": "#/components/schemas/app_schemas_device_commands_NoParamSchema",
                     "travel": "#/components/schemas/app_schemas_device_commands_TravelSchema",
+                    "unfurl": "#/components/schemas/app_schemas_device_commands_NoParamSchema",
                     "withdraw": "#/components/schemas/app_schemas_device_commands_NoParamSchema"
                   }
                 }
@@ -5953,6 +6022,66 @@
           }
         }
       ]
+    },
+    "/v1/inventory": {
+      "get": {
+        "parameters": [
+          {
+            "in": "query",
+            "name": "location",
+            "description": "Filter to a star system or specific location code",
+            "schema": {
+              "type": "string",
+              "default": null,
+              "nullable": true
+            },
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "description": "Location code cursor for pagination",
+            "schema": {
+              "type": "string",
+              "default": null,
+              "nullable": true
+            },
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "description": "Max locations per page (default 50)",
+            "schema": {
+              "type": "integer",
+              "default": 50
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "422": {
+            "$ref": "#/components/responses/UNPROCESSABLE_ENTITY"
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/app_schemas_inventory_AccountInventoryResponseSchema"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/DEFAULT_ERROR"
+          }
+        },
+        "summary": "List inventory across all systems where the account has devices.",
+        "tags": [
+          "inventory"
+        ]
+      }
     },
     "/v1/replicants/{replicant_code}/print": {
       "post": {

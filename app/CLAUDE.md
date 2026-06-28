@@ -42,6 +42,7 @@ Look in the `Modules/UI` folder for the Swift package that represents the design
   - When an endpoint is paged, resolve `gameClient()` **once** and reuse that client across the whole walk. (The governor is process-shared via `GameClient`, but reusing one client per walk is still the clean shape — see `StarsClient.survey`.)
 - **The one exception is `RawAPIFeature`**, which is a power-user raw HTTP console: it intentionally uses its own `URLSession` so it can send arbitrary requests. Do not route it through the generated client.
 - **Do not hand-roll `URLSession` calls in other features** for endpoints the spec already covers.
+- **To see what an endpoint actually returns, probe the live API** with the `replicant raw <METHOD> <path>` CLI before trusting `openapi.json` (which lags the server). Paths are base-relative (`devices/ABCD1234`, not `v1/...`). Use the **`probe-api`** skill — it covers the path convention, output format, the openapi-drift workflow, and the rule that GET is safe while POST/PATCH/DELETE mutate the one live account and must be announced first.
 
 ---
 

@@ -10,6 +10,7 @@ let package = Package(
         .library(name: "AccountManager", targets: ["AccountManager"]),
         .library(name: "API", targets: ["API"]),
         .library(name: "DependencyClients", targets: ["DependencyClients"]),
+        .library(name: "DevicesFeature", targets: ["DevicesFeature"]),
         .library(name: "GameSync", targets: ["GameSync"]),
         .library(name: "LoginFeature", targets: ["LoginFeature"]),
         .library(name: "MessagesFeature", targets: ["MessagesFeature"]),
@@ -88,6 +89,26 @@ let package = Package(
                 .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime"),
             ],
             path: "DependencyClients/Tests"
+        ),
+        .target(
+            name: "DevicesFeature",
+            dependencies: [
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "SQLiteData", package: "sqlite-data"),
+                "DependencyClients",
+                "UI",
+            ],
+            path: "DevicesFeature/Sources"
+        ),
+        .testTarget(
+            name: "DevicesFeatureTests",
+            dependencies: [
+                "DevicesFeature",
+                "DependencyClients",
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "SQLiteData", package: "sqlite-data"),
+            ],
+            path: "DevicesFeature/Tests"
         ),
         .target(
             name: "GameSync",

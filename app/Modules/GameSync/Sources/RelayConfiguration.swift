@@ -32,5 +32,5 @@ public struct RelayConfiguration: Sendable {
     /// `RELAY_CLIENT_TOKEN` value before the relay will connect — and moved out
     /// of source (Keychain / remote config) before any distribution, since a
     /// committed token ships in the binary.
-    public static let placeholderClientToken = "a3019598bb3ba520dbe752896d189baa0d486a19540adafb4080641a5a6952eeDone"
+    public static let placeholderClientToken = "a3019598bb3ba520dbe752896d189baa0d486a19540adafb4080641a5a6952ee"
 }

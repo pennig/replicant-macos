@@ -42,6 +42,12 @@ private func device(_ code: String, status: String = "idle") -> Device {
     )
 }
 
+private func travellingDevice(_ code: String, arrivesAt: Date) -> Device {
+    var device = device(code, status: "travelling")
+    device.detail = .object(["travel": .object(["arrives_at": .string(arrivesAt.ISO8601Format())])])
+    return device
+}
+
 private func activeOp(_ id: String, device: String, completesAt: Date?) -> Operation {
     Operation(
         id: id, entityCode: device, kind: OperationKind.travel.rawValue,
@@ -198,6 +204,40 @@ private func budgetGameClient(remaining: Int) -> GameClient {
 
         let stored = try await database.read { db in try Operation.where { $0.id.eq("op1") }.fetchOne(db) }
         #expect(stored?.status == OperationStatus.completed.rawValue)
+        #expect(reads.value == 1)
+    }
+
+    /// At the deadline the device is still working (estimate slipped): the op is
+    /// NOT completed — it's re-armed to the device's fresh ETA so polling
+    /// continues. Guards against the deadline preempting a not-quite-finished
+    /// action (and against a lost arrival event leaving it stuck).
+    @Test func stillBusyAtDeadlineRearmsInsteadOfCompleting() async throws {
+        let database = try makeDatabase()
+        let deadline = Date(timeIntervalSince1970: 1_000)
+        try await database.write { db in
+            try Operation.insert { activeOp("op1", device: "D", completesAt: deadline) }.execute(db)
+        }
+        let now = deadline.addingTimeInterval(1)
+        let arrivesAt = now.addingTimeInterval(5)   // server now says 5 more seconds
+        let reads = LockIsolated(0)
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(now)
+            $0.gameClient = budgetGameClient(remaining: 100)
+            $0.devicesClient.read = { code in
+                reads.withValue { $0 += 1 }
+                return travellingDevice(code, arrivesAt: arrivesAt)
+            }
+        } operation: {
+            let reconciler = Reconciler()
+            let scheduler = DeadlineScheduler(coordinator: PollCoordinator(reconciler: reconciler), reconciler: reconciler)
+            await scheduler.processDue(now: now)
+        }
+
+        let stored = try await database.read { db in try Operation.where { $0.id.eq("op1") }.fetchOne(db) }
+        #expect(stored?.status == OperationStatus.active.rawValue)              // not completed
+        #expect((stored?.completesAt).map { $0 > deadline } == true)            // re-armed forward
         #expect(reads.value == 1)
     }
 

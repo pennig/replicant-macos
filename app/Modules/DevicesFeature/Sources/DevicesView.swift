@@ -1,0 +1,162 @@
+//
+//  DevicesView.swift
+//  Replicould — Devices feature
+//
+//  The fleet master list for the split view's content column. Rows render
+//  straight from the `Device` table via `@FetchAll`, so every relay update flows
+//  in automatically; the store drives selection and the cold-load/refresh.
+//
+
+import ComposableArchitecture
+import DependencyClients
+import SQLiteData
+import SwiftUI
+import UI
+
+public struct DevicesListView: View {
+    @Bindable var store: StoreOf<DevicesFeature>
+    @FetchAll(Device.order { $0.deviceType }) private var devices
+
+    public init(store: StoreOf<DevicesFeature>) {
+        self.store = store
+    }
+
+    public var body: some View {
+        List(selection: $store.selectedDeviceCode) {
+            ForEach(devices) { device in
+                DeviceRow(device: device)
+                    .tag(device.deviceCode)
+                    .listRowSeparator(.hidden)
+            }
+        }
+        .listStyle(.inset)
+        .scrollContentBackground(.hidden)
+        .overlay {
+            if devices.isEmpty {
+                if store.isLoading {
+                    ProgressView()
+                } else {
+                    ContentUnavailableView(
+                        "No Devices",
+                        systemImage: SidebarSymbol.devices,
+                        description: Text("Your fleet will appear here once it loads.")
+                    )
+                }
+            }
+        }
+        .navigationTitle("Devices")
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if let errorMessage = store.errorMessage {
+                errorBanner(errorMessage)
+            }
+        }
+        .toolbar {
+            ToolbarItem {
+                if !devices.isEmpty {
+                    Text("\(devices.count) devices")
+                        .font(.rcCaption)
+                        .foregroundStyle(.rcTextTertiary)
+                }
+            }
+            ToolbarItem {
+                Button {
+                    store.send(.refreshButtonTapped)
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .help("Refresh fleet")
+                .disabled(store.isLoading)
+            }
+        }
+        .task { store.send(.task) }
+    }
+
+    private func errorBanner(_ message: String) -> some View {
+        HStack(spacing: Space.s) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.rcWarning)
+            Text(message)
+                .font(.rcCaption)
+                .foregroundStyle(.rcTextSecondary)
+                .lineLimit(2)
+            Spacer(minLength: Space.s)
+            Button("Dismiss") { store.send(.dismissError) }
+                .buttonStyle(RCButtonStyle(.text))
+        }
+        .padding(.horizontal, Space.m)
+        .padding(.vertical, Space.s)
+        .background(.rcSurfaceRaised)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(.rcSeparator).frame(height: 0.5)
+        }
+    }
+}
+
+// MARK: - Row
+
+private struct DeviceRow: View {
+    let device: Device
+
+    var body: some View {
+        HStack(spacing: Space.s) {
+            glyphTile
+            VStack(alignment: .leading, spacing: Space.xs) {
+                HStack(spacing: Space.s) {
+                    Text(DevicePresentation.displayName(device.deviceType))
+                        .font(.rcBodyEmph)
+                        .foregroundStyle(.rcTextPrimary)
+                        .lineLimit(1)
+                    Text(device.deviceCode)
+                        .font(.rcMonoSmall)
+                        .foregroundStyle(.rcTextTertiary)
+                    Spacer(minLength: Space.xs)
+                }
+                HStack(spacing: Space.s) {
+                    StatusBadge(device.status)
+                    if let location = device.location {
+                        Text(location)
+                            .font(.rcMonoSmall)
+                            .foregroundStyle(.rcTextTertiary)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: Space.xs)
+                    capacityBar
+                }
+            }
+        }
+        .padding(.vertical, Space.xs)
+    }
+
+    private var glyphTile: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                .fill(.rcSurfaceRaised)
+                .overlay(
+                    RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                        .strokeBorder(.rcSeparator, lineWidth: 0.5)
+                )
+            Image(systemName: DevicePresentation.symbol(for: device.deviceType))
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(.rcAccent)
+        }
+        .frame(width: 30, height: 30)
+    }
+
+    private var capacityBar: some View {
+        HStack(spacing: Space.xs) {
+            Capsule()
+                .fill(.rcSeparator)
+                .frame(width: 36, height: 4)
+                .overlay(alignment: .leading) {
+                    Capsule()
+                        .fill(.rcAccent)
+                        .frame(width: 36 * device.operationalCapacity / 100, height: 4)
+                }
+            Text("\(Int(device.operationalCapacity))%")
+                .font(.rcMonoSmall)
+                .foregroundStyle(.rcTextTertiary)
+                .monospacedDigit()
+        }
+        .fixedSize()
+    }
+}

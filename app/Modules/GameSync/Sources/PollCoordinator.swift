@@ -22,6 +22,9 @@
 import ComposableArchitecture
 import DependencyClients
 import Foundation
+import OSLog
+
+private let logger = Logger(subsystem: "name.pennig.replicould", category: "PollCoordinator")
 
 actor PollCoordinator {
     /// How urgent a refresh is. Deadline confirmations are `high` (always worth a
@@ -51,21 +54,25 @@ actor PollCoordinator {
     func refresh(_ deviceCode: String, priority: Priority) async -> Device? {
         // Join an in-flight read rather than firing a second.
         if let existing = inFlight[deviceCode] {
+            logger.debug("refresh \(deviceCode, privacy: .public) [\(String(describing: priority), privacy: .public)]: coalesced into in-flight read")
             return await existing.value
         }
 
         if priority == .low {
             @Dependency(\.date) var date
             if let last = lastReadAt[deviceCode], date.now.timeIntervalSince(last) < ttl {
+                logger.debug("refresh \(deviceCode, privacy: .public) [low]: suppressed (within \(self.ttl, format: .fixed(precision: 0))s TTL)")
                 return nil   // read too recently for a low-priority trigger
             }
             @Dependency(\.gameClient) var gameClient
             let budget = await gameClient.budget(.reads)
             if budget.remaining <= budgetFloor {
+                logger.notice("refresh \(deviceCode, privacy: .public) [low]: deferred (reads budget \(budget.remaining) ≤ floor \(self.budgetFloor))")
                 return nil   // defer under budget pressure
             }
         }
 
+        logger.debug("refresh \(deviceCode, privacy: .public) [\(String(describing: priority), privacy: .public)]: reading")
         let reconciler = self.reconciler
         let task = Task<Device?, Never> {
             @Dependency(\.devicesClient) var devicesClient

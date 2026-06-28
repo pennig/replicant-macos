@@ -86,7 +86,8 @@ public struct RelayClient: Sendable {
             let task = Task {
                 var lastEventID: String? = cursor
                 var retryDelay: Duration = .seconds(1)
-
+                var hasConnected = false
+                
                 while !Task.isCancelled {
                     do {
                         var components = URLComponents(
@@ -103,6 +104,8 @@ public struct RelayClient: Sendable {
                             request.setValue(id, forHTTPHeaderField: "Last-Event-ID")
                         }
 
+                        logger.info("\(hasConnected ? "Reconnecting" : "Connecting") to event relay (SSE)...")
+                        
                         let (bytes, response) = try await session.bytes(for: request)
                         guard let http = response as? HTTPURLResponse else {
                             throw RelayError.malformedResponse
@@ -112,38 +115,39 @@ public struct RelayClient: Sendable {
                         }
 
                         var pendingID: String? = nil
-                        var pendingData: String? = nil
 
                         for try await line in bytes.lines {
                             guard !Task.isCancelled else { break }
-
+                            hasConnected = true
+                            
                             if line.isEmpty {
                                 // Blank line = end of SSE event.
-                                if let id = pendingID, let dataStr = pendingData,
-                                   let data = dataStr.data(using: .utf8)
-                                {
-                                    logger.debug("id: \(id), data: \(dataStr)")
-                                    lastEventID = id
-                                    continuation.yield(RelayEvent(id: id, raw: data))
-                                }
                                 pendingID = nil
-                                pendingData = nil
                             } else if line.hasPrefix("id:") {
                                 pendingID = String(line.dropFirst(3)).trimmingCharacters(in: .whitespaces)
                             } else if line.hasPrefix("data:") {
-                                pendingData = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+                                let dataStr = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+                                if
+                                    let id = pendingID,
+                                    let data = dataStr.data(using: .utf8)
+                                {
+                                    logger.info("id: \(id)\ndata: \(dataStr)")
+                                    lastEventID = id
+                                    continuation.yield(RelayEvent(id: id, raw: data))
+                                }
                             } else if line.hasPrefix("retry:") {
                                 if let ms = Int(line.dropFirst(6).trimmingCharacters(in: .whitespaces)) {
                                     retryDelay = .milliseconds(ms)
                                 }
-                                logger.debug("retry after: \(retryDelay)")
+                                logger.debug("setting retry to: \(retryDelay)")
                             } else if line.hasPrefix(":") {
-                                logger.debug("comment: \(line)")
+                                logger.debug("comment: \(line.dropFirst(2))")
                             } else {
                                 logger.debug("unhandled: \(line)")
                             }
                         }
                     } catch is CancellationError {
+                        logger.info("server closed connection. reconnecting...")
                         break
                     } catch {
                         // Network or server error — back off before reconnecting.

@@ -1,0 +1,164 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="3300px" height="2200px" viewBox="0 0 3300 2200" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <title>device.ftl_beacon</title>
+    <g id="device.ftl_beacon" stroke="none" fill="none" fill-rule="evenodd" stroke-width="1">
+        <g id="Notes">
+            <path id="artboard" fill="#FFFFFF" d="M0,0H3300V2200H0Z"/>
+            <path id="Path" stroke="#000000" stroke-width="0.5" d="M263,292L3036,292"/>
+            <text id="Weight/Scale-Variations" fill="#000000" fill-rule="nonzero" font-family="Helvetica" font-size="13" font-weight="normal">
+                <tspan x="263" y="322">Weight/Scale Variations</tspan>
+            </text>
+            <text id="Ultralight" fill="#000000" fill-rule="nonzero" font-family="Helvetica" font-size="13" font-weight="normal">
+                <tspan x="533.711" y="322">Ultralight</tspan>
+            </text>
+            <text id="Thin" fill="#000000" fill-rule="nonzero" font-family="Helvetica" font-size="13" font-weight="normal">
+                <tspan x="843.422" y="322">Thin</tspan>
+            </text>
+            <text id="Light" fill="#000000" fill-rule="nonzero" font-family="Helvetica" font-size="13" font-weight="normal">
+                <tspan x="1138.63" y="322">Light</tspan>
+            </text>
+            <text id="Regular" fill="#000000" fill-rule="nonzero" font-family="Helvetica" font-size="13" font-weight="normal">
+                <tspan x="1426.84" y="322">Regular</tspan>
+            </text>
+            <text id="Medium" fill="#000000" fill-rule="nonzero" font-family="Helvetica" font-size="13" font-weight="normal">
+                <tspan x="1723.06" y="322">Medium</tspan>
+            </text>
+            <text id="Semibold" fill="#000000" fill-rule="nonzero" font-family="Helvetica" font-size="13" font-weight="normal">
+                <tspan x="2015.77" y="322">Semibold</tspan>
+            </text>
+            <text id="Bold" fill="#000000" fill-rule="nonzero" font-family="Helvetica" font-size="13" font-weight="normal">
+                <tspan x="2326.48" y="322">Bold</tspan>
+            </text>
+            <text id="Heavy" fill="#000000" fill-rule="nonzero" font-family="Helvetica" font-size="13" font-weight="normal">
+                <tspan x="2618.19" y="322">Heavy</tspan>
+            </text>
+            <text id="Black" fill="#000000" fill-rule="nonzero" font-family="Helvetica" font-size="13" font-weight="normal">
+                <tspan x="2917.4" y="322">Black</tspan>
+            </text>
+            <path id="Path" stroke="#000000" stroke-width="0.5" d="M263,1903L3036,1903"/>
+            <g id="Group" transform="translate(264.3672, 1918.0684)" fill="#000000" fill-rule="nonzero">
+                <path d="M7.88086,15.76172 C12.23632,15.76172 15.77148,12.23632 15.77148,7.88086 C15.77148,3.5254 12.23632,0 7.88086,0 C3.53516,0 0,3.5254 0,7.88086 C0,12.23632 3.53516,15.76172 7.88086,15.76172 Z M7.88086,14.277344 C4.3457,14.277344 1.49414,11.416024 1.49414,7.880864 C1.49414,4.345704 4.3457,1.484384 7.88086,1.484384 C11.41602,1.484384 14.27734,4.345704 14.27734,7.880864 C14.27734,11.416024 11.41602,14.277344 7.88086,14.277344 Z M8.603516,10.722664 L8.603516,5.029304 C8.603516,4.580086 8.310548,4.27735 7.861328,4.27735 C7.43164,4.27735 7.138672,4.580084 7.138672,5.029304 L7.138672,10.722664 C7.138672,11.162118 7.43164,11.464852 7.861328,11.464852 C8.310546,11.464852 8.603516,11.162118 8.603516,10.722664 L8.603516,10.722664 Z M5.039056,8.603524 L10.722656,8.603524 C11.16211,8.603524 11.464844,8.310556 11.464844,7.880868 C11.464844,7.441414 11.16211,7.13868 10.722656,7.13868 L5.039056,7.13868 C4.589838,7.13868 4.287102,7.441414 4.287102,7.880868 C4.287102,8.310556 4.589836,8.603524 5.039056,8.603524 Z" id="Shape"></path>
+            </g>
+            <g id="Group" transform="translate(283.254, 1915.9883)" fill="#000000" fill-rule="nonzero">
+                <path d="M9.96094,19.92188 C15.45898,19.92188 19.92188,15.45898 19.92188,9.96094 C19.92188,4.4629 15.45898,0 9.96094,0 C4.4629,0 0,4.4629 0,9.96094 C0,15.45898 4.4629,19.92188 9.96094,19.92188 Z M9.96094,18.261724 C5.3711,18.261724 1.66016,14.550784 1.66016,9.960944 C1.66016,5.371104 5.3711,1.660164 9.96094,1.660164 C14.55078,1.660164 18.26172,5.371104 18.26172,9.960944 C18.26172,14.550784 14.55078,18.261724 9.96094,18.261724 Z M10.771486,13.642584 L10.771486,6.259764 C10.771486,5.761718 10.42969,5.41992 9.941408,5.41992 C9.462892,5.41992 9.130862,5.761716 9.130862,6.259764 L9.130862,13.642584 C9.130862,14.130866 9.462894,14.472662 9.941408,14.472662 C10.42969,14.472662 10.771486,14.14063 10.771486,13.642584 L10.771486,13.642584 Z M6.259766,10.761724 L13.652346,10.761724 C14.140628,10.761724 14.482424,10.439458 14.482424,9.960942 C14.482424,9.47266 14.140628,9.130864 13.652346,9.130864 L6.259766,9.130864 C5.76172,9.130864 5.429688,9.47266 5.429688,9.960942 C5.429688,10.439458 5.76172,10.761724 6.259766,10.761724 L6.259766,10.761724 Z" id="Shape"></path>
+            </g>
+            <g id="Group" transform="translate(307.1799, 1913.2246)" fill="#000000" fill-rule="nonzero">
+                <path d="M12.71484,25.43944 C19.73632,25.43944 25.43944,19.74608 25.43944,12.7246 C25.43944,5.70312 19.73632,0 12.71484,0 C5.69336,0 0,5.70312 0,12.7246 C0,19.74608 5.69336,25.43944 12.71484,25.43944 Z M12.71484,23.623034 C6.68944,23.623034 1.8164,18.749994 1.8164,12.724594 C1.8164,6.699194 6.68944,1.826154 12.71484,1.826154 C18.74024,1.826154 23.61328,6.699194 23.61328,12.724594 C23.61328,18.749994 18.74024,23.623034 12.71484,23.623034 Z M13.603512,17.558574 L13.603512,7.861314 C13.603512,7.314438 13.232418,6.93358 12.695308,6.93358 C12.17773,6.93358 11.806636,7.31444 11.806636,7.861314 L11.806636,17.558574 C11.806636,18.095684 12.17773,18.476542 12.695308,18.476542 C13.232418,18.476542 13.603512,18.105448 13.603512,17.558574 L13.603512,17.558574 Z M7.861332,13.603494 L17.558592,13.603494 C18.095702,13.603494 18.47656,13.242166 18.47656,12.724588 C18.47656,12.177712 18.105466,11.80662 17.558592,11.80662 L7.861332,11.80662 C7.314456,11.80662 6.943364,12.177714 6.943364,12.724588 C6.943364,13.242166 7.314458,13.603494 7.861332,13.603494 Z" id="Shape"></path>
+            </g>
+            <text id="Design-Variations" fill="#000000" fill-rule="nonzero" font-family="Helvetica" font-size="13" font-weight="normal">
+                <tspan x="263" y="1953">Design Variations</tspan>
+            </text>
+            <text id="Symbols-are-supported-in-up-to-nine-weights-and-three-scales." fill="#000000" fill-rule="nonzero" font-family="Helvetica" font-size="13" font-weight="normal">
+                <tspan x="263" y="1971">Symbols are supported in up to nine weights and three scales.</tspan>
+            </text>
+            <text id="For-optimal-layout-with-text-and-other-symbols,-vertically-align" fill="#000000" fill-rule="nonzero" font-family="Helvetica" font-size="13" font-weight="normal">
+                <tspan x="263" y="1989">For optimal layout with text and other symbols, vertically align</tspan>
+            </text>
+            <text id="symbols-with-the-adjacent-text." fill="#000000" fill-rule="nonzero" font-family="Helvetica" font-size="13" font-weight="normal">
+                <tspan x="263" y="2007">symbols with the adjacent text.</tspan>
+            </text>
+            <path id="Path" stroke="#00AEEF" stroke-width="0.5" d="M776,1919L776,1933"/>
+            <g id="Group" transform="translate(778.4902, 1918.7324)" fill="#000000" fill-rule="nonzero">
+                <path d="M0.8203154,14.423832 C1.3378934,14.423832 1.5917994,14.2285116 1.7773474,13.681636 L5.8886674,2.177736 L5.9374956,2.177736 L10.0585956,13.681636 C10.2441424,14.228512 10.4980496,14.423832 11.0058616,14.423832 C11.5234396,14.423832 11.8554716,14.111324 11.8554716,13.623042 C11.8554716,13.4570264 11.8261748,13.300776 11.7480498,13.095698 L7.1679698,0.898438 C6.9433598,0.302734 6.5429698,0 5.9179698,0 C5.3125018,0 4.9023458,0.292968 4.6875018,0.888672 L0.1074218,13.105472 C0.0292968,13.31055 1.13686838e-13,13.4668 1.13686838e-13,13.632816 C1.13686838e-13,14.121098 0.3125,14.423832 0.820312,14.423832 L0.8203154,14.423832 Z M2.8613354,10.234364 L8.9941554,10.234364 C9.3945454,10.234364 9.7265774,9.902332 9.7265774,9.501942 C9.7265774,9.091786 9.3945454,8.76952 8.9941554,8.76952 L2.8613354,8.76952 C2.4609454,8.76952 2.1289134,9.091786 2.1289134,9.501942 C2.1289134,9.902332 2.4609454,10.234364 2.8613354,10.234364 Z" id="Shape"></path>
+            </g>
+            <path id="Path" stroke="#00AEEF" stroke-width="0.5" d="M792.836,1919L792.836,1933"/>
+            <text id="Margins" fill="#000000" fill-rule="nonzero" font-family="Helvetica" font-size="13" font-weight="normal">
+                <tspan x="776" y="1953">Margins</tspan>
+            </text>
+            <text id="Leading-and-trailing-margins-on-the-left-and-right-side-of-each-symbol" fill="#000000" fill-rule="nonzero" font-family="Helvetica" font-size="13" font-weight="normal">
+                <tspan x="776" y="1971">Leading and trailing margins on the left and right side of each symbol</tspan>
+            </text>
+            <text id="can-be-adjusted-by-modifying-the-x-location-of-the-margin-guidelines." fill="#000000" fill-rule="nonzero" font-family="Helvetica" font-size="13" font-weight="normal">
+                <tspan x="776" y="1989">can be adjusted by modifying the x-location of the margin guidelines.</tspan>
+            </text>
+            <text id="Modifications-are-automatically-applied-proportionally-to-all" fill="#000000" fill-rule="nonzero" font-family="Helvetica" font-size="13" font-weight="normal">
+                <tspan x="776" y="2007">Modifications are automatically applied proportionally to all</tspan>
+            </text>
+            <text id="scales-and-weights." fill="#000000" fill-rule="nonzero" font-family="Helvetica" font-size="13" font-weight="normal">
+                <tspan x="776" y="2025">scales and weights.</tspan>
+            </text>
+            <g id="Group" transform="translate(1291.2448, 1914.3675)" fill="#000000" fill-rule="nonzero">
+                <path d="M0.597019616,21.2594937 L2.16928562,22.8317597 C3.02866162,23.7106657 4.03451962,23.6520717 4.94272562,22.6266817 L17.0814056,8.98410175 L16.1048436,8.00753975 L4.05406362,21.5426997 C3.69273562,21.9333237 3.36070362,22.0309817 2.89195362,21.562231 L1.85679762,20.536841 C1.39781362,20.077857 1.49546962,19.745825 1.89586002,19.374731 L15.39196,6.94309099 L14.415398,5.97629499 L0.802118016,18.495835 C-0.193975984,19.413803 -0.262335984,20.390367 0.597040016,21.259515 L0.597019616,21.2594937 Z M9.57161962,1.76731375 C9.16146362,2.16770375 9.12240162,2.74387575 9.35677562,3.12473575 C9.58138562,3.48606375 10.0501356,3.73020375 10.6751356,3.57395375 C11.8470116,3.24192175 13.1946756,3.09543775 14.4544356,3.75950055 L13.9173256,5.18528255 C13.5950596,5.98606455 13.7708412,6.56223655 14.2591216,7.07004855 L16.3099016,9.13058855 C16.7786516,9.60910455 17.2181056,9.61887055 17.7259176,9.52121255 L18.6145896,9.37472815 L19.1321676,9.88254015 L19.0931052,10.3317581 C19.073574,10.7907421 19.200527,11.1911341 19.6497452,11.6305861 L20.3235732,12.2946481 C20.7825572,12.7536321 21.4270892,12.7926941 21.8860732,12.3337105 L24.4837332,9.72629055 C24.9427172,9.25754055 24.9134212,8.65207255 24.4446708,8.19308655 L23.7610768,7.50949255 C23.3216228,7.07003855 22.9505308,6.90402455 22.4915448,6.93332055 L22.0227948,6.98214875 L21.5345128,6.49386675 L21.7395908,5.55636675 C21.866544,5.00949075 21.6907626,4.56027275 21.1634188,4.03292875 L18.9075588,1.79660875 C16.3196588,-0.771751255 11.7884188,-0.410431255 9.57161882,1.76731195 L9.57161962,1.76731375 Z M10.9876356,2.17746975 C12.7454476,0.898173745 16.1829556,1.04465775 17.7259156,2.56809375 L20.1868556,5.00949375 C20.3919336,5.21457175 20.4309956,5.37082175 20.3724024,5.67355575 L20.0794344,7.00167975 L21.4270904,8.33956975 L22.3059964,8.29074155 C22.5306064,8.28097593 22.6087304,8.30050717 22.7747464,8.46652275 L23.2825584,8.96456875 L21.1145984,11.1325287 L20.6165524,10.6344827 C20.4505368,10.4587015 20.42124,10.3903427 20.4310056,10.1559667 L20.4895994,9.28682675 L19.1517094,7.93917075 L17.7845214,8.17354675 C17.5013174,8.23214055 17.3743654,8.21260915 17.1497554,7.99776555 L15.3626454,6.22042155 C15.1478014,6.01534355 15.1282694,5.87862555 15.2649892,5.54659355 L16.1829572,3.25167355 C14.9622532,1.98214155 12.7747572,1.74776755 11.0657772,2.33370555 C10.9291156,2.38253375 10.8802304,2.25558055 10.9876522,2.17745555 L10.9876356,2.17746975 Z" id="Shape"></path>
+            </g>
+            <text id="Exporting" fill="#000000" fill-rule="nonzero" font-family="Helvetica" font-size="13" font-weight="normal">
+                <tspan x="1289" y="1953">Exporting</tspan>
+            </text>
+            <text id="Symbols-should-be-outlined-when-exporting-to-ensure-the" fill="#000000" fill-rule="nonzero" font-family="Helvetica" font-size="13" font-weight="normal">
+                <tspan x="1289" y="1971">Symbols should be outlined when exporting to ensure the</tspan>
+            </text>
+            <text id="design-is-preserved-when-submitting-to-Xcode." fill="#000000" fill-rule="nonzero" font-family="Helvetica" font-size="13" font-weight="normal">
+                <tspan x="1289" y="1989">design is preserved when submitting to Xcode.</tspan>
+            </text>
+            <text id="template-version" fill="#000000" fill-rule="nonzero" font-family="Helvetica" font-size="13" font-weight="normal">
+                <tspan x="2952" y="1933">Template v.7.0</tspan>
+            </text>
+            <text id="Requires-Xcode-26-or-greater" fill="#000000" fill-rule="nonzero" font-family="Helvetica" font-size="13" font-weight="normal">
+                <tspan x="2865" y="1951">Requires Xcode 26 or greater</tspan>
+            </text>
+            <text id="descriptive-name" fill="#000000" fill-rule="nonzero" font-family="Helvetica" font-size="13" font-weight="normal">
+                <tspan x="2821" y="1969">Generated from custom.star.hexagon</tspan>
+            </text>
+            <text id="Typeset-at-100.0-points" fill="#000000" fill-rule="nonzero" font-family="Helvetica" font-size="13" font-weight="normal">
+                <tspan x="2901" y="1987">Typeset at 100.0 points</tspan>
+            </text>
+            <text id="Small" fill="#000000" fill-rule="nonzero" font-family="Helvetica" font-size="13" font-weight="normal">
+                <tspan x="263" y="726">Small</tspan>
+            </text>
+            <text id="Medium" fill="#000000" fill-rule="nonzero" font-family="Helvetica" font-size="13" font-weight="normal">
+                <tspan x="263" y="1156">Medium</tspan>
+            </text>
+            <text id="Large" fill="#000000" fill-rule="nonzero" font-family="Helvetica" font-size="13" font-weight="normal">
+                <tspan x="263" y="1586">Large</tspan>
+            </text>
+        </g>
+        <g id="Guides" transform="translate(263, 600.785)">
+            <g id="H-reference" transform="translate(76.9937, 24.756)" fill="#27AAE1" fill-rule="nonzero">
+                <path d="M0,70.459 L2.644096,70.459 L28.334446,3.3267 L29.036646,3.3267 L29.036646,0 L27.128946,0 L0,70.459 Z M10.694846,45.9791 L45.987846,45.9791 L45.237846,43.7305 L11.444846,43.7305 L10.694846,45.9791 Z M54.125946,70.459 L56.770046,70.459 L29.644546,0 L28.438946,0 L28.438946,3.3267 L54.125946,70.459 Z" id="Shape"></path>
+            </g>
+            <path id="Baseline-S" stroke="#27AAE1" stroke-width="0.5" d="M0,95.215L2773,95.215"/>
+            <path id="Capline-S" stroke="#27AAE1" stroke-width="0.5" d="M0,24.756L2773,24.756"/>
+            <g id="H-reference" transform="translate(76.9937, 454.756)" fill="#27AAE1" fill-rule="nonzero">
+                <path d="M0,70.459 L2.644096,70.459 L28.334446,3.3267 L29.036646,3.3267 L29.036646,-2.27373675e-13 L27.128946,-2.27373675e-13 L0,70.459 Z M10.694846,45.9791 L45.987846,45.9791 L45.237846,43.7305 L11.444846,43.7305 L10.694846,45.9791 Z M54.125946,70.459 L56.770046,70.459 L29.644546,-2.27373675e-13 L28.438946,-2.27373675e-13 L28.438946,3.3267 L54.125946,70.459 Z" id="Shape"></path>
+            </g>
+            <path id="Baseline-M" stroke="#27AAE1" stroke-width="0.5" d="M0,525.215L2773,525.215"/>
+            <path id="Capline-M" stroke="#27AAE1" stroke-width="0.5" d="M0,454.755L2773,454.755"/>
+            <g id="H-reference" transform="translate(76.9937, 884.756)" fill="#27AAE1" fill-rule="nonzero">
+                <path d="M0,70.459 L2.644096,70.459 L28.334446,3.3267 L29.036646,3.3267 L29.036646,-2.27373675e-13 L27.128946,-2.27373675e-13 L0,70.459 Z M10.694846,45.9791 L45.987846,45.9791 L45.237846,43.7305 L11.444846,43.7305 L10.694846,45.9791 Z M54.125946,70.459 L56.770046,70.459 L29.644546,-2.27373675e-13 L28.438946,-2.27373675e-13 L28.438946,3.3267 L54.125946,70.459 Z" id="Shape"></path>
+            </g>
+            <path id="Baseline-L" stroke="#27AAE1" stroke-width="0.5" d="M0,955.215L2773,955.215"/>
+            <path id="Capline-L" stroke="#27AAE1" stroke-width="0.5" d="M0,884.755L2773,884.755"/>
+            <path id="right-margin-Black-S" stroke="#00AEEF" stroke-width="0.5" d="M2722.55,0L2722.55,119.336"/>
+            <path id="left-margin-Black-S" stroke="#00AEEF" stroke-width="0.5" d="M2618.25,0L2618.25,119.336"/>
+            <path id="right-margin-Regular-S" stroke="#00AEEF" stroke-width="0.5" d="M1235.62,0L1235.62,119.336"/>
+            <path id="left-margin-Regular-S" stroke="#00AEEF" stroke-width="0.5" d="M1138.07,0L1138.07,119.336"/>
+            <path id="right-margin-Ultralight-S" stroke="#00AEEF" stroke-width="0.5" d="M342.107,0L342.107,119.336"/>
+            <path id="left-margin-Ultralight-S" stroke="#00AEEF" stroke-width="0.5" d="M251.315,0L251.315,119.336"/>
+        </g>
+        <g id="Symbols" transform="translate(524.0806, 613.6758)" fill="#000000">
+            <g id="Black-S" transform="translate(2362.9194, -3.521)">
+                <g id="black" transform="translate(9, 11.8453)">
+                    <path d="M85.4603318,53.9150921 L78.5396682,66.0849079 C52.5496196,51.3050307 21.4503804,51.3050307 -4.53966822,66.0849079 L-11.4603318,53.9150921 C18.8208285,36.6949693 55.1791715,36.6949693 85.4603318,53.9150921 Z" id="hull" fill-rule="nonzero"></path>
+                    <path id="node" d="M23,65A14,14 0 1,0 51,65A14,14 0 1,0 23,65Z"/>
+                    <path d="M65.3747724,40.1082399 L68.2665325,46.4830123 L55.5169877,52.2665325 L52.6252276,45.8917601 C49.9048912,39.8948845 43.7843583,36 37,36 C30.2156417,36 24.0951088,39.8948845 21.3747724,45.8917601 L18.4830123,52.2665325 L5.73346747,46.4830123 L8.62522757,40.1082399 C13.6282239,29.0793294 24.7528845,22 37,22 C49.2471155,22 60.3717761,29.0793294 65.3747724,40.1082399 Z" id="dome" fill-rule="nonzero"></path>
+                    <path d="M77.7724083,19.0402901 C79.9592957,22.2283032 79.147723,26.5855209 75.9597099,28.7724083 C72.7716968,30.9592957 68.4144791,30.147723 66.2275917,26.9597099 C60.3684112,18.4182805 49.2131279,13 37,13 C24.7868721,13 13.6315888,18.4182805 7.77240832,26.9597099 C5.58552094,30.147723 1.22830322,30.9592957 -1.95970987,28.7724083 C-5.14772295,26.5855209 -5.95929569,22.2283032 -3.77240832,19.0402901 C4.79990877,6.5436891 20.3310334,-1 37,-1 C53.6689666,-1 69.2000912,6.5436891 77.7724083,19.0402901 Z" id="radio" fill-rule="nonzero"></path>
+                </g>
+            </g>
+            <g id="Regular-S" transform="translate(886.755, 3.3692)">
+                <g id="regular" transform="translate(1.9144, 2.9551)">
+                    <path d="M83.7301659,54.9575461 L80.2698341,61.0424539 C53.2070076,45.6525154 20.7929924,45.6525154 -6.26983411,61.0424539 L-9.73016589,54.9575461 C19.4782164,38.3474846 54.5217836,38.3474846 83.7301659,54.9575461 Z" id="hull" fill-rule="nonzero"></path>
+                    <path id="node" d="M25,59A12,12 0 1,0 49,59A12,12 0 1,0 25,59Z"/>
+                    <path d="M62.1873862,45.5541199 L63.6332663,48.7415062 L57.2584938,51.6332663 L55.8126138,48.4458801 C52.5216124,41.1909957 45.1500476,36.5 37,36.5 C28.8499524,36.5 21.4783876,41.1909957 18.1873862,48.4458801 L16.7415062,51.6332663 L10.3667337,48.7415062 L11.8126138,45.5541199 C16.2449452,35.7832182 26.1185738,29.5 37,29.5 C47.8814262,29.5 57.7550548,35.7832182 62.1873862,45.5541199 Z" id="dome" fill-rule="nonzero"></path>
+                    <path d="M75.9595832,29.1316138 C76.9914645,30.7661465 76.5029189,32.927702 74.8683862,33.9595832 C73.2338535,34.9914645 71.072298,34.5029189 70.0404168,32.8683862 C63.272972,22.1485384 50.6757413,15.5 37,15.5 C23.3242587,15.5 10.727028,22.1485384 3.95958323,32.8683862 C2.92770201,34.5029189 0.766146458,34.9914645 -0.868386227,33.9595832 C-2.50291891,32.927702 -2.99146445,30.7661465 -1.95958323,29.1316138 C6.11679813,16.3383687 20.9684441,8.5 37,8.5 C53.0315559,8.5 67.8832019,16.3383687 75.9595832,29.1316138 Z" id="radio" fill-rule="nonzero"></path>
+                </g>
+            </g>
+            <g id="Ultralight-S" transform="translate(0, 6.9339)">
+                <g id="ultralight" transform="translate(-0.0806, 1.3904)">
+                    <path d="M81.6284399,57.9194616 L80.3715601,60.0805384 C53.2496872,44.3064872 20.7503128,44.3064872 -6.37156006,60.0805384 L-7.62843994,57.9194616 C20.2704247,41.6935128 53.7295753,41.6935128 81.6284399,57.9194616 Z" id="hull" fill-rule="nonzero"></path>
+                    <path id="node" d="M28,55A9,9 0 1,0 46,55A9,9 0 1,0 28,55Z"/>
+                    <path d="M61.1294272,48.4643749 L61.6650523,49.593802 L59.406198,50.6650523 L58.8705728,49.5356251 C55.0439611,41.4667746 46.4735457,36.25 37,36.25 C27.5264543,36.25 18.9560389,41.4667746 15.1294272,49.5356251 L14.593802,50.6650523 L12.3349477,49.593802 L12.8705728,48.4643749 C17.1183544,39.5074393 26.5770048,33.75 37,33.75 C47.4229952,33.75 56.8816456,39.5074393 61.1294272,48.4643749 Z" id="dome" fill-rule="nonzero"></path>
+                    <path d="M76.07049,35.3545923 C76.4269389,35.9458076 76.236623,36.7140412 75.6454077,37.07049 C75.0541924,37.4269389 74.2859588,37.236623 73.92951,36.6454077 C66.3237894,24.0303609 52.2450411,16.25 37,16.25 C21.7549589,16.25 7.67621063,24.0303609 0.0704900383,36.6454077 C-0.285958783,37.236623 -1.05419236,37.4269389 -1.64540768,37.07049 C-2.23662301,36.7140412 -2.42693886,35.9458076 -2.07049004,35.3545923 C5.99227247,21.9814839 20.8873385,13.75 37,13.75 C53.1126615,13.75 68.0077275,21.9814839 76.07049,35.3545923 Z" id="radio" fill-rule="nonzero"></path>
+                </g>
+            </g>
+        </g>
+    </g>
+</svg>

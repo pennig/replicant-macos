@@ -66,7 +66,6 @@ public struct StarMapView: View {
                     .transition(.opacity)
             }
         }
-        .background(.black)
         .environment(\.colorScheme, .dark)
         .animation(.easeInOut(duration: 0.6), value: store.focus)
         .animation(.easeInOut(duration: 0.22), value: store.selectedSystemID)

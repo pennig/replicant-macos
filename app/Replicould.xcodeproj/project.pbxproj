@@ -24,6 +24,7 @@
 		C9B5309F2FE72B0B006F79A8 /* RawAPIFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C9B5309E2FE72B0B006F79A8 /* RawAPIFeature */; };
 		C9D902132FE9DDC000781FBB /* MessagesFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C9D902122FE9DDC000781FBB /* MessagesFeature */; };
 		C9F814BE2FEE1EED00ACFAC3 /* GameSync in Frameworks */ = {isa = PBXBuildFile; productRef = C9F814BD2FEE1EED00ACFAC3 /* GameSync */; };
+		C9F814C02FEEB96000ACFAC3 /* DevicesFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C9F814BF2FEEB96000ACFAC3 /* DevicesFeature */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -36,6 +37,8 @@
 		C9B530762FE0A60B006F79A8 /* AppFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppFeature.swift; sourceTree = "<group>"; };
 		C9B5307B2FE0E385006F79A8 /* AccountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountView.swift; sourceTree = "<group>"; };
 		C9B5307D2FE0E38E006F79A8 /* PreferencesFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesFeature.swift; sourceTree = "<group>"; };
+		C9F814C12FEEC06100ACFAC3 /* ARCHITECTURE_REVIEW.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = ARCHITECTURE_REVIEW.md; sourceTree = "<group>"; };
+		C9F814C22FEEC06100ACFAC3 /* IMPLEMENTATION_PLAN.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = IMPLEMENTATION_PLAN.md; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -52,6 +55,7 @@
 				C9AB58FE2FEA4A3300536794 /* StarMapFeature in Frameworks */,
 				C9B5309D2FE1DEE2006F79A8 /* DependencyClients in Frameworks */,
 				C9B5309B2FE1DC5E006F79A8 /* LoginFeature in Frameworks */,
+				C9F814C02FEEB96000ACFAC3 /* DevicesFeature in Frameworks */,
 				C9B530992FE1D3AA006F79A8 /* Utils in Frameworks */,
 				C9B530952FE1D3AA006F79A8 /* API in Frameworks */,
 			);
@@ -63,6 +67,8 @@
 		C922A8AD2FDC493200431320 = {
 			isa = PBXGroup;
 			children = (
+				C9F814C12FEEC06100ACFAC3 /* ARCHITECTURE_REVIEW.md */,
+				C9F814C22FEEC06100ACFAC3 /* IMPLEMENTATION_PLAN.md */,
 				C9B5305F2FDDD93C006F79A8 /* CLAUDE.md */,
 				C9B5305A2FDDD839006F79A8 /* macOS */,
 				C9B530562FDC9D00006F79A8 /* Modules */,
@@ -127,6 +133,7 @@
 				C9AB58FD2FEA4A3300536794 /* StarMapFeature */,
 				C90D75CE2FED785C00B293DE /* AccountManager */,
 				C9F814BD2FEE1EED00ACFAC3 /* GameSync */,
+				C9F814BF2FEEB96000ACFAC3 /* DevicesFeature */,
 			);
 			productName = Replicant;
 			productReference = C922A8B62FDC493200431320 /* Replicould.app */;
@@ -487,6 +494,10 @@
 		C9F814BD2FEE1EED00ACFAC3 /* GameSync */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = GameSync;
+		};
+		C9F814BF2FEEB96000ACFAC3 /* DevicesFeature */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = DevicesFeature;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

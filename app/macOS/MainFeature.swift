@@ -9,11 +9,13 @@
 
 import ComposableArchitecture
 import DependencyClients
+import DevicesFeature
 import MessagesFeature
 import RawAPIFeature
 import SQLiteData
 import StarMapFeature
 import SwiftUI
+import UI
 
 // MARK: - Sidebar model
 
@@ -56,8 +58,14 @@ enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
         }
     }
 
-    /// The Stars (Galaxy Map) and Event Log show content only — no detail pane.
-    var hasDetail: Bool { self != .eventLog && self != .stars }
+    /// Some categories show content only — no detail pane (Galaxy Map, Event Log,
+    /// and the live ledgers Activity/Bobnet).
+    var hasDetail: Bool {
+        switch self {
+        case .eventLog, .stars, .signals, .bobnet: false
+        default: true
+        }
+    }
 
     /// Placeholder content rows for this category.
     var sampleItems: [String] {
@@ -98,6 +106,8 @@ struct MainFeature {
         var rawAPI: RawAPIFeature.State
         /// The Galaxy Map (Stars view) — currently seeded with static galaxy data.
         var starMap: StarMapFeature.State
+        /// The live fleet (Devices view) — list + inspector + command dispatch.
+        var devices: DevicesFeature.State
 
         init(
             apiKey: String,
@@ -112,6 +122,7 @@ struct MainFeature {
             self.messages = MessagesFeature.State()
             self.rawAPI = RawAPIFeature.State(apiKey: apiKey)
             self.starMap = StarMapFeature.State()
+            self.devices = DevicesFeature.State()
         }
     }
 
@@ -122,6 +133,7 @@ struct MainFeature {
         case messages(MessagesFeature.Action)
         case rawAPI(RawAPIFeature.Action)
         case starMap(StarMapFeature.Action)
+        case devices(DevicesFeature.Action)
 
         enum Delegate {
             case loggedOut
@@ -139,6 +151,9 @@ struct MainFeature {
         Scope(state: \.starMap, action: \.starMap) {
             StarMapFeature()
         }
+        Scope(state: \.devices, action: \.devices) {
+            DevicesFeature()
+        }
         Reduce { state, action in
             switch action {
             case .binding(\.category):
@@ -155,7 +170,7 @@ struct MainFeature {
             case .logoutButtonTapped:
                 return .send(.delegate(.loggedOut))
 
-            case .messages, .rawAPI, .starMap:
+            case .messages, .rawAPI, .starMap, .devices:
                 return .none
             }
         }
@@ -177,6 +192,7 @@ struct MainView: View {
                         .navigationSplitViewColumnWidth(min: 220, ideal: 240, max: 300)
                 } detail: {
                     content
+                        .background(.rcWindowBackground)
                 }
                 .navigationTitle("Replicant")
             } else {
@@ -186,8 +202,13 @@ struct MainView: View {
                 } content: {
                     content
                         .navigationSplitViewColumnWidth(min: 280, ideal: 320, max: 420)
+                        .background(.rcWindowBackground)
                 } detail: {
-                    detail
+                    Group {
+                        detail
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(.rcContentBackground)
                 }
                 .navigationTitle("Replicant")
             }
@@ -230,12 +251,23 @@ struct MainView: View {
         store.scope(state: \.starMap, action: \.starMap)
     }
 
+    /// The Devices store, scoped from the main session.
+    private var devicesStore: StoreOf<DevicesFeature> {
+        store.scope(state: \.devices, action: \.devices)
+    }
+
     // — Content: a selectable list (or, for the Event Log, a plain list) —
     @ViewBuilder private var content: some View {
         if store.category == .messages {
             MessagesListView(store: messagesStore)
         } else if store.category == .stars {
             StarMapView(store: starMapStore)
+        } else if store.category == .devices {
+            DevicesListView(store: devicesStore)
+        } else if store.category == .signals {
+            ActivityView()
+        } else if store.category == .bobnet {
+            BobnetView()
         } else if let category = store.category {
             if category.hasDetail {
                 List(selection: $store.detailSelection) {
@@ -262,6 +294,8 @@ struct MainView: View {
     @ViewBuilder private var detail: some View {
         if store.category == .messages {
             MessageDetailView(store: messagesStore)
+        } else if store.category == .devices {
+            DeviceDetailView(store: devicesStore)
         } else if let category = store.category, let selection = store.detailSelection {
             VStack(spacing: 12) {
                 Image(systemName: category.symbol).font(.system(size: 48)).foregroundStyle(.tint)

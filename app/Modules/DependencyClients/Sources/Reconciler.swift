@@ -21,8 +21,11 @@
 import API
 import ComposableArchitecture
 import Foundation
+import OSLog
 import SQLiteData
 import Utils
+
+private let logger = Logger(subsystem: "name.pennig.replicould", category: "Reconciler")
 
 public struct Reconciler: Sendable {
     public init() {}
@@ -39,11 +42,15 @@ public struct Reconciler: Sendable {
 
             // Guard: never overwrite a row from a source whose event-time is
             // older than what's stored (out-of-order / duplicate arrivals).
-            if let existing, device.updatedAt < existing.updatedAt { return }
+            if let existing, device.updatedAt < existing.updatedAt {
+                logger.debug("ingest \(device.deviceCode, privacy: .public): dropped stale (incoming \(device.updatedAt.ISO8601Format(), privacy: .public) < stored \(existing.updatedAt.ISO8601Format(), privacy: .public))")
+                return
+            }
 
             var toWrite = device
             if let existing { toWrite.firstSeenAt = existing.firstSeenAt }
             try Device.upsert { toWrite }.execute(db)
+            logger.debug("ingest \(device.deviceCode, privacy: .public): applied status=\(device.status, privacy: .public) loc=\(device.location ?? "-", privacy: .public)")
         }
     }
 
@@ -101,6 +108,7 @@ public struct Reconciler: Sendable {
             op.source = source.rawValue
             op.lastConfirmedAt = stamp
             try Operation.upsert { op }.execute(db)
+            logger.info("completed op \(op.id, privacy: .public) (\(op.kind, privacy: .public)) on \(deviceCode, privacy: .public) via \(source.rawValue, privacy: .public)")
         }
     }
 }

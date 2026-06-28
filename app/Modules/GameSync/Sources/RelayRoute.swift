@@ -14,6 +14,9 @@
 import API
 import ComposableArchitecture
 import Foundation
+import OSLog
+
+private let logger = Logger(subsystem: "name.pennig.replicould", category: "GameSync")
 
 /// A handler for one top-level relay event `type` ("event" / "message" /
 /// "bobnet"). Identified by `id` so re-registering replaces rather than
@@ -49,7 +52,11 @@ struct RelayRouter: Sendable {
     let routes: LockIsolated<[RelayRoute]>
 
     func dispatch(_ event: UnifiedEvent) async {
-        for route in routes.value where route.type == event.type {
+        let matches = routes.value.filter { $0.type == event.type }
+        if matches.isEmpty {
+            logger.debug("dispatch: no route for type=\(event.type, privacy: .public)")
+        }
+        for route in matches {
             await route.apply(event)
         }
     }

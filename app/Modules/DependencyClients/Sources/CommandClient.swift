@@ -18,8 +18,11 @@
 import API
 import ComposableArchitecture
 import Foundation
+import OSLog
 import SQLiteData
 import Utils
+
+private let logger = Logger(subsystem: "name.pennig.replicould", category: "Command")
 
 /// Command-specific parameters. Only the fields a given command needs are set.
 public struct CommandParams: Sendable, Equatable {
@@ -40,10 +43,27 @@ public struct CommandParams: Sendable, Equatable {
 }
 
 public struct CommandClient: Sendable {
-    /// Fire a command at a device. Returns the client-local operation id so a
-    /// caller can correlate, though the UI normally just observes the tables.
-    /// Never throws — failures land as the operation's `rejected`/`failed` state.
-    public var dispatch: @Sendable (_ kind: OperationKind, _ deviceCode: String, _ params: CommandParams) async -> String
+    /// Fire a command at a device. Never throws — the result is reported as a
+    /// `CommandOutcome` (and also recorded on the operation row), so the caller
+    /// can surface a rejection/failure while the UI still mostly observes tables.
+    public var dispatch: @Sendable (_ kind: OperationKind, _ deviceCode: String, _ params: CommandParams) async -> CommandOutcome
+}
+
+/// What happened when a command was dispatched. `accepted` means the server took
+/// it (the op is now active/enqueued); `rejected` is a server 4xx (busy/illegal,
+/// with the server's message); `failed` is a transport/encoding error.
+public enum CommandOutcome: Sendable, Equatable {
+    case accepted(operationID: String)
+    case rejected(String)
+    case failed(String)
+
+    /// The user-facing message for a non-accepted outcome, if any.
+    public var failureMessage: String? {
+        switch self {
+        case .accepted: return nil
+        case let .rejected(message), let .failed(message): return message
+        }
+    }
 }
 
 // MARK: - Live implementation
@@ -71,6 +91,7 @@ extension CommandClient: DependencyKey {
                 detail: .object(["params": params.json])
             )
             try? await database.write { db in try Operation.insert { optimistic }.execute(db) }
+            logger.info("dispatch \(kind.rawValue, privacy: .public) → \(deviceCode, privacy: .public): optimistic op \(opID, privacy: .public)")
 
             // 2) POST the command.
             do {
@@ -117,6 +138,7 @@ extension CommandClient: DependencyKey {
                             try Operation.upsert { op }.execute(db)
                         }
                     }
+                    logger.info("dispatch \(opID, privacy: .public): confirmed \(confirmed.rawValue, privacy: .public)\(completesAt.map { " · completes \($0.ISO8601Format())" } ?? "", privacy: .public)")
 
                     // 4) One authoritative post-command device read (§1 settled
                     //    decision): the command response is a result, not a full
@@ -124,22 +146,34 @@ extension CommandClient: DependencyKey {
                     if let device = try? await devicesClient.read(deviceCode) {
                         await Reconciler().ingest(device)
                     }
+                    return .accepted(operationID: opID)
 
                 case let .badRequest(response):
-                    await finish(opID, as: .rejected, reason: errorMessage(response.body), at: date.now, database: database)
+                    let reason = errorMessage(response.body)
+                    logger.warning("dispatch \(opID, privacy: .public): rejected (400) — \(reason, privacy: .public)")
+                    await finish(opID, as: .rejected, reason: reason, at: date.now, database: database)
+                    return .rejected(reason)
                 case let .forbidden(response):
-                    await finish(opID, as: .rejected, reason: errorMessage(response.body), at: date.now, database: database)
+                    let reason = errorMessage(response.body)
+                    logger.warning("dispatch \(opID, privacy: .public): rejected (403) — \(reason, privacy: .public)")
+                    await finish(opID, as: .rejected, reason: reason, at: date.now, database: database)
+                    return .rejected(reason)
                 case let .notFound(response):
-                    await finish(opID, as: .rejected, reason: errorMessage(response.body), at: date.now, database: database)
+                    let reason = errorMessage(response.body)
+                    logger.warning("dispatch \(opID, privacy: .public): rejected (404) — \(reason, privacy: .public)")
+                    await finish(opID, as: .rejected, reason: reason, at: date.now, database: database)
+                    return .rejected(reason)
                 @unknown default:
+                    logger.error("dispatch \(opID, privacy: .public): unexpected server response")
                     await finish(opID, as: .failed, reason: "Unexpected server response.", at: date.now, database: database)
+                    return .failed("Unexpected server response.")
                 }
             } catch {
                 // Network / encoding error — not a server rejection. No retry.
+                logger.error("dispatch \(opID, privacy: .public): failed — \(error.localizedDescription, privacy: .public)")
                 await finish(opID, as: .failed, reason: error.localizedDescription, at: date.now, database: database)
+                return .failed(error.localizedDescription)
             }
-
-            return opID
         }
     )
 
@@ -224,7 +258,7 @@ public enum CommandError: Error, Equatable {
 extension CommandClient: TestDependencyKey {
     /// Inert by default — does nothing and returns a fixed id. Tests that
     /// exercise dispatch use the live value over a stubbed `gameClient`.
-    public static let testValue = CommandClient(dispatch: { _, _, _ in "test-op" })
+    public static let testValue = CommandClient(dispatch: { _, _, _ in .accepted(operationID: "test-op") })
 }
 
 extension DependencyValues {

@@ -157,6 +157,53 @@ extension Device {
     }
 }
 
+// MARK: - Operation completion signals
+
+extension Device {
+    /// Device statuses that mean it is *not* executing a timed operation. The
+    /// relay completion event is the primary signal that an op finished; when
+    /// that's lost, the deadline scheduler falls back to this — an op is complete
+    /// once its device has settled.
+    public static let settledStatuses: Set<String> = ["idle", "stowed", "inactive"]
+
+    /// Whether the device is idle / done with any timed activity.
+    public var isSettled: Bool { Self.settledStatuses.contains(status) }
+
+    /// The soonest completion time reported by an in-progress activity block in
+    /// `detail` (travel/mining/printing/…), if the device is still mid-activity.
+    /// Used to re-arm the deadline when the server's estimate slips past the
+    /// original ETA (so the bar stays honest and the scheduler keeps polling
+    /// instead of completing the op prematurely). All activity-timing payload
+    /// parsing lives here, in one place. Nil when no active block is present.
+    public var activityDeadline: Date? {
+        let blocks: [(block: String, fields: [String])] = [
+            ("travel", ["arrives_at", "final_arrives_at"]),
+            ("mining", ["completes_at", "cycle_completes_at"]),
+            ("printing", ["completes_at"]),
+            ("scan", ["completes_at"]),
+            ("prospect", ["completes_at"]),
+            ("repair", ["completes_at"]),
+        ]
+        var soonest: Date?
+        for (block, fields) in blocks {
+            guard case .object = detail[block] else { continue }
+            for field in fields {
+                if let string = detail[block]?[field]?.stringValue,
+                   let date = Self.parseActivityDate(string) {
+                    soonest = soonest.map { min($0, date) } ?? date
+                }
+            }
+        }
+        return soonest
+    }
+
+    private static func parseActivityDate(_ string: String) -> Date? {
+        if let date = try? Date(string, strategy: Date.ISO8601FormatStyle(includingFractionalSeconds: true)) { return date }
+        if let date = try? Date(string, strategy: Date.ISO8601FormatStyle()) { return date }
+        return nil
+    }
+}
+
 // MARK: - Schema
 
 extension Device {

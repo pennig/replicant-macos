@@ -93,7 +93,8 @@ private typealias Operation = DependencyClients.Operation
                 return makeDevice(code: code, status: "idle")
             }
         } operation: {
-            _ = await CommandClient.liveValue.dispatch(.travel, "965AC2C3", CommandParams(destination: "X"))
+            let outcome = await CommandClient.liveValue.dispatch(.travel, "965AC2C3", CommandParams(destination: "X"))
+            #expect(outcome == .rejected("Device is busy"))
         }
 
         let stored = try await op(database, device: "965AC2C3")

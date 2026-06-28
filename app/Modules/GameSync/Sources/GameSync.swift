@@ -17,7 +17,10 @@ import API
 import ComposableArchitecture
 import DependencyClients
 import Foundation
+import OSLog
 import SQLiteData
+
+private let logger = Logger(subsystem: "name.pennig.replicould", category: "GameSync")
 
 public struct GameSync: Sendable {
     /// Register a route for a relay event `type`. Synchronous and immediate, so
@@ -102,8 +105,12 @@ actor GameSyncEngine {
     }
 
     func start() {
-        guard consumeTask == nil else { return }   // idempotent
+        guard consumeTask == nil else {
+            logger.debug("start ignored — already running")
+            return
+        }
         @Dependency(\.gameClient) var gameClient
+        logger.info("starting — relay \(self.configuration.baseURL.absoluteString, privacy: .public)")
 
         // Arm the deadline backstop for any already-open operations.
         Task { await scheduler.start() }
@@ -134,11 +141,13 @@ actor GameSyncEngine {
         @Dependency(\.defaultDatabase) var database
         let replicants = (try? await database.read { db in try Replicant.fetchAll(db) }) ?? []
         for replicant in replicants {
-            _ = try? await pipeline.backfill(replicantCode: replicant.replicantCode, since: nil)
+            let recovered = (try? await pipeline.backfill(replicantCode: replicant.replicantCode, since: nil)) ?? 0
+            logger.info("backfill \(replicant.replicantCode, privacy: .public): recovered \(recovered) event(s)")
         }
     }
 
     func stop() async {
+        logger.info("stopping")
         consumeTask?.cancel()
         consumeTask = nil
         await pipeline?.stop()
@@ -158,6 +167,7 @@ extension GameSync {
     /// event.
     static func deviceRoute(coordinator: PollCoordinator, reconciler: Reconciler) -> RelayRoute {
         RelayRoute(id: "device.event", type: "event") { event in
+            logger.debug("event \(event.eventType ?? "?", privacy: .public) device=\(event.deviceCode ?? "-", privacy: .public)")
             // Completion events are truth for the action they close (§4.4): fold
             // the result into the device's open operation first (cheap, no read).
             await reconciler.applyOperationEvent(event)
@@ -183,6 +193,7 @@ extension GameSync {
                     try BobnetMessage.upsert { message }.execute(db)
                 }
             }
+            logger.debug("bobnet: appended \(messages.count) message(s)")
         }
     }
 }

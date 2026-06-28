@@ -18,19 +18,13 @@ import UI
 
 @main
 struct ReplicantApp: App {
-    /// A single root store shared across every scene, so state (e.g. the
-    /// appearance preference and the active session) stays consistent.
-    @State private var store = Store(initialState: AppFeature.State()) {
-        AppFeature()
-    }
-
+    @State private var store: StoreOf<AppFeature>
     @Environment(\.openWindow) private var openWindow
 
     init() {
-        // Open the local database and run migrations before any view that
-        // observes it appears. SQLiteData vends an on-disk store in the app and
-        // an in-memory one in previews/tests.
         prepareDependencies { try? $0.bootstrapDatabase() }
+        // Construct the root store *after* the database is prepared
+        _store = State(initialValue: Store(initialState: AppFeature.State()) { AppFeature() })
         registerSessionCleanup()
         registerGameSync()
     }
@@ -127,7 +121,7 @@ struct ReplicantApp: App {
         // so it never participates in state restoration.
         Window("Welcome", id: WindowID.login) {
             LoginWindow(store: store)
-                .background(WindowConfigurator())
+//                .containerBackground(.rcWindowBackground, for: .window)
                 .ignoresSafeArea(.container, edges: .top)
         }
         .defaultSize(width: 640, height: 520)
@@ -140,7 +134,7 @@ struct ReplicantApp: App {
         // a session was restored synchronously from the Keychain.
         Window("Dashboard", id: WindowID.main) {
             MainWindow(store: store)
-                .background(WindowConfigurator())
+//                .containerBackground(.rcWindowBackground, for: .window)
         }
         .defaultLaunchBehavior(store.isLoggedOut ? .suppressed : .presented)
         .commands {
@@ -158,7 +152,7 @@ struct ReplicantApp: App {
         // Tools menu (never at launch) and follows the appearance preference.
         Window("Raw API Access", id: WindowID.rawAPI) {
             RawAPIWindow(store: store)
-                .background(WindowConfigurator())
+//                .containerBackground(.rcWindowBackground, for: .window)
         }
         .defaultLaunchBehavior(.suppressed)
 
@@ -166,7 +160,7 @@ struct ReplicantApp: App {
         // preference as the main window.
         Settings {
             PreferencesView(store: store.scope(state: \.preferences, action: \.preferences))
-                .background(WindowConfigurator())
+//                .containerBackground(.rcWindowBackground, for: .window)
                 .applyAppAppearance(store.preferences.appearance)
         }
     }

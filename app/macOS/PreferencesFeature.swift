@@ -90,7 +90,6 @@ struct PreferencesView: View {
             }
             .pickerStyle(.inline)
         }
-        .formStyle(.grouped)
         .frame(width: 360)
         .navigationTitle("Preferences")
     }
