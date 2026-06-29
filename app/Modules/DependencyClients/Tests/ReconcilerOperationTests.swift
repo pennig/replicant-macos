@@ -24,8 +24,42 @@ private typealias Operation = DependencyClients.Operation
         let database = try SQLiteData.defaultDatabase()
         var migrator = DatabaseMigrator()
         Operation.registerMigrations(&migrator)
+        Device.registerMigrations(&migrator)
         try migrator.migrate(database)
         return database
+    }
+
+    /// A device snapshot mid-`printing`, with the `started_at`/`completes_at`
+    /// block the backend attaches to an in-progress device.
+    private func printingDevice(_ code: String) -> Device {
+        Device(
+            deviceCode: code, deviceType: "heaven_vessel", replicantCode: "R1",
+            status: "printing (ami_survey_controller)",
+            location: "ATIANFU-BELT-1", locationName: nil, operationalCapacity: 100,
+            queueSize: 0, stowedInDeviceCode: nil, controllerDeviceCode: nil,
+            attachedToDeviceCode: nil, createdAt: Date(timeIntervalSince1970: 0),
+            availableCommands: [], features: [], tags: [],
+            detail: .object([
+                "printing": .object([
+                    "started_at": .string("2026-06-28T23:52:27-05:00"),
+                    "completes_at": .string("2026-06-29T00:17:27-05:00"),
+                    "device_type": .string("ami_survey_controller"),
+                ])
+            ]),
+            updatedAt: Date(timeIntervalSince1970: 1_000),
+            firstSeenAt: Date(timeIntervalSince1970: 1_000)
+        )
+    }
+
+    private func idleDevice(_ code: String) -> Device {
+        Device(
+            deviceCode: code, deviceType: "mining_drone", replicantCode: "R1", status: "idle",
+            location: nil, locationName: nil, operationalCapacity: 100, queueSize: 0,
+            stowedInDeviceCode: nil, controllerDeviceCode: nil, attachedToDeviceCode: nil,
+            createdAt: Date(timeIntervalSince1970: 0), availableCommands: [], features: [], tags: [],
+            detail: .object([:]), updatedAt: Date(timeIntervalSince1970: 1_000),
+            firstSeenAt: Date(timeIntervalSince1970: 1_000)
+        )
     }
 
     @Test func printCompleteClosesOpenOpAndRecordsResult() async throws {
@@ -70,6 +104,75 @@ private typealias Operation = DependencyClients.Operation
             $0.defaultDatabase = database
         } operation: {
             await Reconciler().applyOperationEvent(event)
+        }
+
+        let count = try await database.read { db in try Operation.fetchCount(db) }
+        #expect(count == 0)
+    }
+
+    /// Ingesting a device that is already in-progress, with no operation of its
+    /// own, adopts an active op carrying the snapshot's start/completion — so a
+    /// cold-load or relaunch surfaces the running task and its progress bar.
+    @Test func inProgressSnapshotAdoptsActiveOp() async throws {
+        let database = try makeDatabase()
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.uuid = .incrementing
+        } operation: {
+            await Reconciler().ingest(printingDevice("965AC2C3"))
+        }
+
+        let op = try await database.read { db in
+            try Operation.where { $0.entityCode.eq("965AC2C3") }.fetchOne(db)
+        }
+        #expect(op?.kind == OperationKind.print.rawValue)
+        #expect(op?.status == OperationStatus.active.rawValue)
+        #expect(op?.source == OperationSource.poll.rawValue)
+        #expect(op?.completesAt != nil)
+        // The bar needs a positive span: completes_at is 25 min after started_at.
+        if let op, let completesAt = op.completesAt {
+            #expect(completesAt > op.startedAt)
+        }
+    }
+
+    /// When the device already has an open op (e.g. a dispatched print), ingest
+    /// does not adopt a second one.
+    @Test func adoptionSkippedWhenOpenOpExists() async throws {
+        let database = try makeDatabase()
+        try await database.write { db in
+            try Operation.insert {
+                Operation(
+                    id: "existing", entityCode: "965AC2C3", kind: OperationKind.print.rawValue,
+                    status: OperationStatus.enqueued.rawValue, source: OperationSource.optimistic.rawValue,
+                    startedAt: Date(timeIntervalSince1970: 0), completesAt: nil,
+                    lastConfirmedAt: Date(timeIntervalSince1970: 0), detail: .object([:])
+                )
+            }.execute(db)
+        }
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.uuid = .incrementing
+        } operation: {
+            await Reconciler().ingest(printingDevice("965AC2C3"))
+        }
+
+        let count = try await database.read { db in
+            try Operation.where { $0.entityCode.eq("965AC2C3") }.fetchCount(db)
+        }
+        #expect(count == 1)
+    }
+
+    /// A settled (idle) device carries no activity block, so nothing is adopted.
+    @Test func settledDeviceAdoptsNothing() async throws {
+        let database = try makeDatabase()
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.uuid = .incrementing
+        } operation: {
+            await Reconciler().ingest(idleDevice("304F6EC1"))
         }
 
         let count = try await database.read { db in try Operation.fetchCount(db) }

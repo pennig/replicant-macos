@@ -7,6 +7,7 @@
 //  panes. The Account sheet lives in AccountView.swift.
 //
 
+import BlueprintsFeature
 import ComposableArchitecture
 import DependencyClients
 import DevicesFeature
@@ -108,6 +109,8 @@ struct MainFeature {
         var starMap: StarMapFeature.State
         /// The live fleet (Devices view) — list + inspector + command dispatch.
         var devices: DevicesFeature.State
+        /// The unlocked blueprint catalog (Blueprints view) — list + inspector.
+        var blueprints: BlueprintsFeature.State
 
         init(
             apiKey: String,
@@ -123,6 +126,7 @@ struct MainFeature {
             self.rawAPI = RawAPIFeature.State(apiKey: apiKey)
             self.starMap = StarMapFeature.State()
             self.devices = DevicesFeature.State()
+            self.blueprints = BlueprintsFeature.State()
         }
     }
 
@@ -134,6 +138,7 @@ struct MainFeature {
         case rawAPI(RawAPIFeature.Action)
         case starMap(StarMapFeature.Action)
         case devices(DevicesFeature.Action)
+        case blueprints(BlueprintsFeature.Action)
 
         enum Delegate {
             case loggedOut
@@ -154,6 +159,9 @@ struct MainFeature {
         Scope(state: \.devices, action: \.devices) {
             DevicesFeature()
         }
+        Scope(state: \.blueprints, action: \.blueprints) {
+            BlueprintsFeature()
+        }
         Reduce { state, action in
             switch action {
             case .binding(\.category):
@@ -170,7 +178,7 @@ struct MainFeature {
             case .logoutButtonTapped:
                 return .send(.delegate(.loggedOut))
 
-            case .messages, .rawAPI, .starMap, .devices:
+            case .messages, .rawAPI, .starMap, .devices, .blueprints:
                 return .none
             }
         }
@@ -256,6 +264,11 @@ struct MainView: View {
         store.scope(state: \.devices, action: \.devices)
     }
 
+    /// The Blueprints store, scoped from the main session.
+    private var blueprintsStore: StoreOf<BlueprintsFeature> {
+        store.scope(state: \.blueprints, action: \.blueprints)
+    }
+
     // — Content: a selectable list (or, for the Event Log, a plain list) —
     @ViewBuilder private var content: some View {
         if store.category == .messages {
@@ -264,6 +277,8 @@ struct MainView: View {
             StarMapView(store: starMapStore)
         } else if store.category == .devices {
             DevicesListView(store: devicesStore)
+        } else if store.category == .blueprints {
+            BlueprintsListView(store: blueprintsStore)
         } else if store.category == .signals {
             ActivityView()
         } else if store.category == .bobnet {
@@ -296,6 +311,8 @@ struct MainView: View {
             MessageDetailView(store: messagesStore)
         } else if store.category == .devices {
             DeviceDetailView(store: devicesStore)
+        } else if store.category == .blueprints {
+            BlueprintDetailView(store: blueprintsStore)
         } else if let category = store.category, let selection = store.detailSelection {
             VStack(spacing: 12) {
                 Image(systemName: category.symbol).font(.system(size: 48)).foregroundStyle(.tint)

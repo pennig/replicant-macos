@@ -58,6 +58,13 @@ public struct CommandClient: Sendable {
     /// `CommandOutcome` (and also recorded on the operation row), so the caller
     /// can surface a rejection/failure while the UI still mostly observes tables.
     public var dispatch: @Sendable (_ kind: OperationKind, _ deviceCode: String, _ params: CommandParams) async -> CommandOutcome
+
+    /// Preview a `travel` command via `dry_run`: ask the server to plot the
+    /// route without dispatching the device, so the user can confirm the
+    /// itinerary first. Never throws — the result is a `TravelPreviewOutcome`.
+    /// Stages no optimistic op and takes no device read; nothing about game
+    /// state changes.
+    public var previewTravel: @Sendable (_ deviceCode: String, _ destination: String) async -> TravelPreviewOutcome
 }
 
 /// What happened when a command was dispatched. `accepted` means the server took
@@ -260,6 +267,50 @@ extension CommandClient: DependencyKey {
                 await finish(opID, as: .failed, reason: error.localizedDescription, at: date.now, database: database)
                 return .failed(error.localizedDescription)
             }
+        },
+        previewTravel: { deviceCode, destination in
+            @Dependency(\.gameClient) var gameClient
+
+            // A dry-run travel: same endpoint, `dry_run: true`. The server plots
+            // the route and returns it with `status: "preview"` and no
+            // `arrives_at` — nothing is dispatched, so we stage no op and take no
+            // device read.
+            let body: Operations.PostV1DevicesDeviceCode.Input.Body =
+                .json(.travel(.init(command: "travel", destination: destination, dryRun: true)))
+            do {
+                let output = try await gameClient().postV1DevicesDeviceCode(
+                    path: .init(deviceCode: deviceCode), body: body
+                )
+                switch output {
+                case let .ok(ok):
+                    let response = try ok.body.json
+                    guard let plan = travelPlan(from: response) else {
+                        logger.warning("preview travel → \(deviceCode, privacy: .public): unreadable plan")
+                        return .failed("Couldn’t read the travel preview.")
+                    }
+                    logger.info("preview travel → \(deviceCode, privacy: .public): \(plan.route.count, privacy: .public) leg(s)")
+                    return .plan(plan)
+                case let .badRequest(response):
+                    let reason = errorMessage(response.body)
+                    logger.warning("preview travel → \(deviceCode, privacy: .public): rejected (400) — \(reason, privacy: .public)")
+                    return .rejected(reason)
+                case let .forbidden(response):
+                    let reason = errorMessage(response.body)
+                    logger.warning("preview travel → \(deviceCode, privacy: .public): rejected (403) — \(reason, privacy: .public)")
+                    return .rejected(reason)
+                case let .notFound(response):
+                    let reason = errorMessage(response.body)
+                    logger.warning("preview travel → \(deviceCode, privacy: .public): rejected (404) — \(reason, privacy: .public)")
+                    return .rejected(reason)
+                case let .default(statusCode, _):
+                    return .failed("Server error (\(statusCode)).")
+                @unknown default:
+                    return .failed("Unexpected server response.")
+                }
+            } catch {
+                logger.error("preview travel → \(deviceCode, privacy: .public): failed — \(error.localizedDescription, privacy: .public)")
+                return .failed(error.localizedDescription)
+            }
         }
     )
 
@@ -370,6 +421,18 @@ extension CommandClient: DependencyKey {
         "unfurl", "withdraw", "search", "set_entry_point", "detonate",
     ]
 
+    /// Decode a dry-run travel response into a `TravelPlan`. The generated route
+    /// legs are untyped (`additionalProperties`), so we round-trip the response
+    /// through JSON — the re-encode preserves the raw leg keys — and decode the
+    /// typed plan from that.
+    private static func travelPlan(from response: CommandResponse) -> TravelPlan? {
+        guard
+            let data = try? jsonEncoder.encode(response),
+            let plan = try? JSONDecoder().decode(TravelPlan.self, from: data)
+        else { return nil }
+        return plan
+    }
+
     /// The deadline a self-describing command reports, trying the known
     /// completion-time fields of the shared response in priority order.
     private static func parseDeadline(from response: CommandResponse) -> Date? {
@@ -451,7 +514,10 @@ public enum CommandError: Error, Equatable {
 extension CommandClient: TestDependencyKey {
     /// Inert by default — does nothing and returns a fixed id. Tests that
     /// exercise dispatch use the live value over a stubbed `gameClient`.
-    public static let testValue = CommandClient(dispatch: { _, _, _ in .accepted(operationID: "test-op") })
+    public static let testValue = CommandClient(
+        dispatch: { _, _, _ in .accepted(operationID: "test-op") },
+        previewTravel: { _, _ in .plan(TravelPlan()) }
+    )
 }
 
 extension DependencyValues {

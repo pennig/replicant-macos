@@ -94,4 +94,61 @@ private func device(_ code: String) -> Device {
         #expect(dispatched.value?.1 == "A")
         #expect(dispatched.value?.2.destination == "X")
     }
+
+    /// Requesting a travel preview opens the sheet (loading), then loads the
+    /// dry-run plan from `CommandClient.previewTravel`.
+    @Test func travelPreviewRequestLoadsPlan() async throws {
+        let database = try makeDatabase()
+        let plan = TravelPlan(
+            finalDestination: "IZARUM-2-L4",
+            totalTimeSeconds: 125.5,
+            route: [TravelPlan.Leg(leg: 1, from: "A", to: "IZARUM-2-L4", type: "surge")]
+        )
+
+        let store = TestStore(initialState: DevicesFeature.State()) {
+            DevicesFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
+            $0.commandClient.previewTravel = { _, _ in .plan(plan) }
+        }
+
+        await store.send(.travelPreviewRequested(deviceCode: "A", destination: "IZARUM")) {
+            $0.travelPreview = DevicesFeature.TravelPreview(deviceCode: "A", destination: "IZARUM")
+        }
+        await store.receive(\.travelPreviewResponse) {
+            $0.travelPreview?.phase = .loaded(plan)
+        }
+    }
+
+    /// Confirming the previewed itinerary clears the sheet and dispatches the
+    /// real travel command for the previewed device/destination.
+    @Test func travelPreviewConfirmedDispatches() async throws {
+        let database = try makeDatabase()
+        let dispatched = LockIsolated<(OperationKind, String, CommandParams)?>(nil)
+
+        var state = DevicesFeature.State()
+        state.travelPreview = DevicesFeature.TravelPreview(
+            deviceCode: "A", destination: "IZARUM", phase: .loaded(TravelPlan())
+        )
+
+        let store = TestStore(initialState: state) {
+            DevicesFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
+            $0.commandClient.dispatch = { kind, code, params in
+                dispatched.setValue((kind, code, params))
+                return .accepted(operationID: "op")
+            }
+        }
+        store.exhaustivity = .off
+
+        await store.send(.travelPreviewConfirmed) {
+            $0.travelPreview = nil
+        }
+        await store.finish()
+
+        #expect(dispatched.value?.0 == .travel)
+        #expect(dispatched.value?.1 == "A")
+        #expect(dispatched.value?.2.destination == "IZARUM")
+    }
 }

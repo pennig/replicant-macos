@@ -7,6 +7,7 @@
 
 import API
 import AccountManager
+import BlueprintsFeature
 import ComposableArchitecture
 import DependencyClients
 import GameSync
@@ -187,6 +188,7 @@ extension DependencyValues {
         migrator.eraseDatabaseOnSchemaChange = true
         #endif
         Message.registerMigrations(&migrator)
+        Blueprint.registerMigrations(&migrator)
         Star.registerMigrations(&migrator)
         Replicant.registerMigrations(&migrator)
         Device.registerMigrations(&migrator)

@@ -9,6 +9,7 @@ let package = Package(
     products: [
         .library(name: "AccountManager", targets: ["AccountManager"]),
         .library(name: "API", targets: ["API"]),
+        .library(name: "BlueprintsFeature", targets: ["BlueprintsFeature"]),
         .library(name: "DependencyClients", targets: ["DependencyClients"]),
         .library(name: "DevicesFeature", targets: ["DevicesFeature"]),
         .library(name: "GameSync", targets: ["GameSync"]),
@@ -67,6 +68,26 @@ let package = Package(
             name: "APITests",
             dependencies: ["API"],
             path: "API/Tests"
+        ),
+        .target(
+            name: "BlueprintsFeature",
+            dependencies: [
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "SQLiteData", package: "sqlite-data"),
+                "API",
+                "DependencyClients",
+                "UI",
+            ],
+            path: "BlueprintsFeature/Sources"
+        ),
+        .testTarget(
+            name: "BlueprintsFeatureTests",
+            dependencies: [
+                "BlueprintsFeature",
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "SQLiteData", package: "sqlite-data"),
+            ],
+            path: "BlueprintsFeature/Tests"
         ),
         .target(
             name: "DependencyClients",

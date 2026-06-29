@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		C90D75CF2FED785C00B293DE /* AccountManager in Frameworks */ = {isa = PBXBuildFile; productRef = C90D75CE2FED785C00B293DE /* AccountManager */; };
+		C9702B6D2FF202A5002E2CCE /* BlueprintsFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C9702B6C2FF202A5002E2CCE /* BlueprintsFeature */; };
 		C9AB58FE2FEA4A3300536794 /* StarMapFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C9AB58FD2FEA4A3300536794 /* StarMapFeature */; };
 		C9B5305C2FDDD839006F79A8 /* ReplicantApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9B530592FDDD839006F79A8 /* ReplicantApp.swift */; };
 		C9B5305D2FDDD839006F79A8 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C9B530572FDDD839006F79A8 /* Assets.xcassets */; };
@@ -56,6 +57,7 @@
 				C9B5309D2FE1DEE2006F79A8 /* DependencyClients in Frameworks */,
 				C9B5309B2FE1DC5E006F79A8 /* LoginFeature in Frameworks */,
 				C9F814C02FEEB96000ACFAC3 /* DevicesFeature in Frameworks */,
+				C9702B6D2FF202A5002E2CCE /* BlueprintsFeature in Frameworks */,
 				C9B530992FE1D3AA006F79A8 /* Utils in Frameworks */,
 				C9B530952FE1D3AA006F79A8 /* API in Frameworks */,
 			);
@@ -134,6 +136,7 @@
 				C90D75CE2FED785C00B293DE /* AccountManager */,
 				C9F814BD2FEE1EED00ACFAC3 /* GameSync */,
 				C9F814BF2FEEB96000ACFAC3 /* DevicesFeature */,
+				C9702B6C2FF202A5002E2CCE /* BlueprintsFeature */,
 			);
 			productName = Replicant;
 			productReference = C922A8B62FDC493200431320 /* Replicould.app */;
@@ -453,6 +456,10 @@
 		C90D75CE2FED785C00B293DE /* AccountManager */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = AccountManager;
+		};
+		C9702B6C2FF202A5002E2CCE /* BlueprintsFeature */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = BlueprintsFeature;
 		};
 		C9AB58FD2FEA4A3300536794 /* StarMapFeature */ = {
 			isa = XCSwiftPackageProductDependency;

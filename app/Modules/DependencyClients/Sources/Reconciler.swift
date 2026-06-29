@@ -35,6 +35,7 @@ public struct Reconciler: Sendable {
     /// `firstSeenAt`.
     public func ingest(_ device: Device) async {
         @Dependency(\.defaultDatabase) var database
+        @Dependency(\.uuid) var uuid
         try? await database.write { db in
             let existing = try Device
                 .where { $0.deviceCode.eq(device.deviceCode) }
@@ -51,6 +52,38 @@ public struct Reconciler: Sendable {
             if let existing { toWrite.firstSeenAt = existing.firstSeenAt }
             try Device.upsert { toWrite }.execute(db)
             logger.debug("ingest \(device.deviceCode, privacy: .public): applied status=\(device.status, privacy: .public) loc=\(device.location ?? "-", privacy: .public)")
+
+            // Adopt an in-progress activity as an open operation when the device
+            // holds none of its own. Ops are normally created only by optimistic
+            // dispatch, so a cold-load / relaunch that first meets a device while
+            // it's already printing or travelling would otherwise show no task or
+            // progress. Skipped when an op already exists (open or still-staging
+            // optimistic) so this never duplicates or races a dispatch in flight.
+            if let activity = device.derivedActivity {
+                let hasOpenOrPending = try Operation.where {
+                    $0.entityCode.eq(device.deviceCode)
+                        && ($0.status.eq(OperationStatus.enqueued.rawValue)
+                            || $0.status.eq(OperationStatus.active.rawValue)
+                            || $0.status.eq(OperationStatus.optimistic.rawValue))
+                }
+                .fetchOne(db) != nil
+
+                if !hasOpenOrPending {
+                    let op = Operation(
+                        id: uuid().uuidString,
+                        entityCode: device.deviceCode,
+                        kind: activity.kind.rawValue,
+                        status: OperationStatus.active.rawValue,
+                        source: OperationSource.poll.rawValue,
+                        startedAt: activity.startedAt ?? device.updatedAt,
+                        completesAt: activity.completesAt,
+                        lastConfirmedAt: device.updatedAt,
+                        detail: .object([:])
+                    )
+                    try Operation.insert { op }.execute(db)
+                    logger.info("ingest \(device.deviceCode, privacy: .public): adopted \(activity.kind.rawValue, privacy: .public) op from in-progress snapshot")
+                }
+            }
         }
     }
 

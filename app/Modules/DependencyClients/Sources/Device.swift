@@ -204,6 +204,57 @@ extension Device {
     }
 }
 
+// MARK: - Derived operations
+
+extension Device {
+    /// An open operation derived from an in-progress device snapshot. The
+    /// reconcile path adopts this when the device holds no operation of its own —
+    /// e.g. a cold-load or relaunch finds the device already printing or
+    /// travelling, so its task (and progress bar) would otherwise be invisible
+    /// because ops are normally only created by optimistic command dispatch. Nil
+    /// when the device is settled or carries no recognized activity block.
+    public struct DerivedActivity: Equatable, Sendable {
+        public let kind: OperationKind
+        public let startedAt: Date?
+        public let completesAt: Date?
+    }
+
+    /// The in-progress activity this snapshot describes, if any. Reads the same
+    /// `detail` activity blocks as `activityDeadline`, but identifies the kind so
+    /// an op can be reconstructed. Mining is continuous (its cycle deadline is the
+    /// soonest completion, not the op's end), so its `completesAt` is best-effort.
+    public var derivedActivity: DerivedActivity? {
+        guard !isSettled else { return nil }
+        if case .object = detail["printing"] {
+            return DerivedActivity(
+                kind: .print,
+                startedAt: detailDate("printing", "started_at"),
+                completesAt: detailDate("printing", "completes_at")
+            )
+        }
+        if case .object = detail["travel"] {
+            return DerivedActivity(
+                kind: .travel,
+                startedAt: detailDate("travel", "started_at"),
+                completesAt: detailDate("travel", "arrives_at") ?? detailDate("travel", "final_arrives_at")
+            )
+        }
+        if case .object = detail["mining"] {
+            return DerivedActivity(
+                kind: .mine,
+                startedAt: detailDate("mining", "started_at"),
+                completesAt: detailDate("mining", "completes_at") ?? detailDate("mining", "cycle_completes_at")
+            )
+        }
+        return nil
+    }
+
+    private func detailDate(_ block: String, _ field: String) -> Date? {
+        guard let string = detail[block]?[field]?.stringValue else { return nil }
+        return Self.parseActivityDate(string)
+    }
+}
+
 // MARK: - Schema
 
 extension Device {
