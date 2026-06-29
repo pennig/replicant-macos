@@ -225,7 +225,11 @@ private struct ActiveTaskCard: View {
 
                 if operation.status == OperationStatus.active.rawValue,
                    let completesAt = operation.completesAt {
+                    // Keyed by op id so the progress view's "reached the end" state
+                    // resets for a genuinely new operation (but survives a re-arm of
+                    // the same one).
                     OperationProgressView(startedAt: operation.startedAt, completesAt: completesAt)
+                        .id(operation.id)
                 } else {
                     Text(label(for: operation.status))
                         .font(.rcCaption)

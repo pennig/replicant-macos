@@ -48,12 +48,17 @@ private func travellingDevice(_ code: String, arrivesAt: Date) -> Device {
     return device
 }
 
-private func activeOp(_ id: String, device: String, completesAt: Date?) -> Operation {
+private func activeOp(
+    _ id: String,
+    device: String,
+    completesAt: Date?,
+    startedAt: Date = Date(timeIntervalSince1970: 0)
+) -> Operation {
     Operation(
         id: id, entityCode: device, kind: OperationKind.travel.rawValue,
         status: OperationStatus.active.rawValue, source: OperationSource.poll.rawValue,
-        startedAt: Date(timeIntervalSince1970: 0), completesAt: completesAt,
-        lastConfirmedAt: Date(timeIntervalSince1970: 0), detail: .object([:])
+        startedAt: startedAt, completesAt: completesAt,
+        lastConfirmedAt: startedAt, detail: .object([:])
     )
 }
 
@@ -215,7 +220,10 @@ private func budgetGameClient(remaining: Int) -> GameClient {
         let database = try makeDatabase()
         let deadline = Date(timeIntervalSince1970: 1_000)
         try await database.write { db in
-            try Operation.insert { activeOp("op1", device: "D", completesAt: deadline) }.execute(db)
+            // Started just before the deadline, so it's well within the give-up cap.
+            try Operation.insert {
+                activeOp("op1", device: "D", completesAt: deadline, startedAt: deadline.addingTimeInterval(-50))
+            }.execute(db)
         }
         let now = deadline.addingTimeInterval(1)
         let arrivesAt = now.addingTimeInterval(5)   // server now says 5 more seconds

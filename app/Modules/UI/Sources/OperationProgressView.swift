@@ -22,14 +22,26 @@ public struct OperationProgressView: View {
         self.tint = tint
     }
 
+    /// Once the bar reaches the finish line it stays there. The backstop poller
+    /// can push `completesAt` out a few seconds to re-confirm a slipped ETA;
+    /// without this the bar would visibly step backward from "Arriving…" to a
+    /// fresh countdown. Reset per operation by `.id(operation.id)` at the call
+    /// site. (Pre-arrival `completesAt` doesn't move, so this never masks real
+    /// remaining time.)
+    @State private var reachedEnd = false
+
     public var body: some View {
         TimelineView(.periodic(from: startedAt, by: 1)) { context in
+            let pending = reachedEnd || context.date >= completesAt
             VStack(alignment: .leading, spacing: Space.xs) {
-                ProgressView(value: Self.fraction(now: context.date, start: startedAt, end: completesAt))
+                ProgressView(value: pending ? 1 : Self.fraction(now: context.date, start: startedAt, end: completesAt))
                     .tint(tint)
-                Text(Self.etaText(now: context.date, end: completesAt))
+                Text(pending ? "Arriving…" : Self.etaText(now: context.date, end: completesAt))
                     .font(.rcMonoSmall)
                     .foregroundStyle(.rcTextSecondary)
+            }
+            .onChange(of: pending, initial: true) { _, isPending in
+                if isPending { reachedEnd = true }
             }
         }
     }

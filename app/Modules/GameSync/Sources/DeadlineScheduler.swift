@@ -33,6 +33,11 @@ actor DeadlineScheduler {
 
     private var loopTask: Task<Void, Never>?
 
+    /// Wait this much *past* a deadline before the confirm-read, so the common
+    /// case lands after the server has actually settled the action — sparing a
+    /// re-arm round-trip. `completesAt` stays the honest server ETA (the progress
+    /// bar reaches 100% on time); only the confirm is nudged a beat later.
+    private let confirmGrace: TimeInterval
     /// Minimum spacing between re-poll attempts once a deadline has passed but
     /// the device is still working (so a slipped estimate doesn't busy-loop).
     private let rearmBackoff: TimeInterval
@@ -44,12 +49,14 @@ actor DeadlineScheduler {
         coordinator: PollCoordinator,
         reconciler: Reconciler,
         cap: Duration = .seconds(30),
+        confirmGrace: TimeInterval = 1,
         rearmBackoff: TimeInterval = 4,
-        giveUpAfter: TimeInterval = 30 * 60
+        giveUpAfter: TimeInterval = 5 * 60
     ) {
         self.coordinator = coordinator
         self.reconciler = reconciler
         self.cap = cap
+        self.confirmGrace = confirmGrace
         self.rearmBackoff = rearmBackoff
         self.giveUpAfter = giveUpAfter
     }
@@ -75,7 +82,9 @@ actor DeadlineScheduler {
                 .compactMap(\.completesAt)
                 .filter { $0 > now }
                 .min()
-            let delay: Duration = upcoming.map { .seconds(max(0, $0.timeIntervalSince(now))) } ?? cap
+            // Wake a grace beat past the ETA so the confirm-read usually finds the
+            // action already settled (no re-arm needed).
+            let delay: Duration = upcoming.map { .seconds(max(0, $0.timeIntervalSince(now) + confirmGrace)) } ?? cap
             try? await clock.sleep(for: min(delay, cap))
         }
     }
