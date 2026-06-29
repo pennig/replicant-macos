@@ -75,6 +75,35 @@ private typealias Operation = DependencyClients.Operation
         )
     }
 
+    /// A vessel mid-flight on a *multi-leg* route: the `travel` block carries the
+    /// active leg's arrival (`arrives_at`) and the whole route's end
+    /// (`final_arrives_at`, ~2.5 min later), with two legs in `route`. Mirrors a
+    /// real in-transit payload.
+    private func travellingDevice(_ code: String) -> Device {
+        Device(
+            deviceCode: code, deviceType: "heaven_vessel", replicantCode: "R1",
+            status: "travelling",
+            location: nil, locationName: nil, operationalCapacity: 100,
+            queueSize: 0, stowedInDeviceCode: nil, controllerDeviceCode: nil,
+            attachedToDeviceCode: nil, createdAt: Date(timeIntervalSince1970: 0),
+            availableCommands: [], features: [], tags: [],
+            detail: .object([
+                "travel": .object([
+                    "departed_at": .string("2026-06-29T01:33:04-05:00"),
+                    "arrives_at": .string("2026-06-29T01:33:54-05:00"),         // leg 1
+                    "final_arrives_at": .string("2026-06-29T01:36:22-05:00"),   // route
+                    "final_destination": .string("BETSU-7-L4"),
+                    "route": .array([
+                        .object(["leg": .number(1), "active": .bool(true), "to": .string("ATIANFU-1-L4")]),
+                        .object(["leg": .number(2), "to": .string("BETSU-7-L4")]),
+                    ]),
+                ])
+            ]),
+            updatedAt: Date(timeIntervalSince1970: 1_000),
+            firstSeenAt: Date(timeIntervalSince1970: 1_000)
+        )
+    }
+
     private func idleDevice(_ code: String) -> Device {
         Device(
             deviceCode: code, deviceType: "mining_drone", replicantCode: "R1", status: "idle",
@@ -280,6 +309,134 @@ private typealias Operation = DependencyClients.Operation
         }
         #expect(stored?.status == OperationStatus.completed)
         #expect(stored?.source == OperationSource.event)
+    }
+
+    /// Meeting a vessel mid-multi-leg-travel adopts a travel op whose deadline is
+    /// the *route's* end (`final_arrives_at`), not the active leg's arrival
+    /// (`arrives_at`). Regression: keying off `arrives_at` ended the trip a leg
+    /// early.
+    @Test func multiLegTravelSnapshotAdoptsOpWithRouteDeadline() async throws {
+        let database = try makeDatabase()
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.uuid = .incrementing
+        } operation: {
+            await Reconciler().ingest(travellingDevice("965AC2C3"))
+        }
+
+        let op = try await database.read { db in
+            try Operation.where { $0.entityCode.eq("965AC2C3") }.fetchOne(db)
+        }
+        #expect(op?.kind == OperationKind.travel.rawValue)
+        #expect(op?.status == OperationStatus.active)
+        let routeEnd = try Date("2026-06-29T01:36:22-05:00", strategy: Date.ISO8601FormatStyle())
+        let leg1End = try Date("2026-06-29T01:33:54-05:00", strategy: Date.ISO8601FormatStyle())
+        #expect(op?.completesAt == routeEnd)
+        #expect(op?.completesAt != leg1End)
+    }
+
+    /// A *per-leg* arrival event (`device_cruise_arrived`) must not complete an
+    /// open travel op — those fire on every leg. Only the whole-route
+    /// `device_travel_arrived` closes the trip. Regression: completing on the leg
+    /// event ended a multi-leg trip after its first leg.
+    @Test func legArrivalDoesNotCompleteTravelButRouteArrivalDoes() async throws {
+        let database = try makeDatabase()
+        try await database.write { db in
+            try Operation.insert {
+                Operation(
+                    id: "t1", entityCode: "965AC2C3", kind: OperationKind.travel.rawValue,
+                    status: OperationStatus.active, source: OperationSource.poll,
+                    startedAt: Date(timeIntervalSince1970: 0), completesAt: Date(timeIntervalSince1970: 1_200),
+                    lastConfirmedAt: Date(timeIntervalSince1970: 0), detail: .object([:])
+                )
+            }.execute(db)
+        }
+
+        let legRaw = #"{"type":"event","event_type":"device_cruise_arrived","device_code":"965AC2C3","payload":{"location":"ATIANFU-1-L4"},"timestamp":"2026-06-29T01:33:54-05:00"}"#
+        let legEvent = try UnifiedEvent(relayEvent: RelayEvent(id: "1-0", raw: Data(legRaw.utf8)))
+
+        let routeRaw = #"{"type":"event","event_type":"device_travel_arrived","device_code":"965AC2C3","payload":{"location":"BETSU-7-L4","star":"BETSU"},"timestamp":"2026-06-29T01:36:23-05:00"}"#
+        let routeEvent = try UnifiedEvent(relayEvent: RelayEvent(id: "2-0", raw: Data(routeRaw.utf8)))
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+        } operation: {
+            await Reconciler().applyOperationEvent(legEvent)
+            let afterLeg = try await database.read { db in
+                try Operation.where { $0.id.eq("t1") }.fetchOne(db)
+            }
+            #expect(afterLeg?.status == OperationStatus.active)  // still in transit
+
+            await Reconciler().applyOperationEvent(routeEvent)
+            let afterRoute = try await database.read { db in
+                try Operation.where { $0.id.eq("t1") }.fetchOne(db)
+            }
+            #expect(afterRoute?.status == OperationStatus.completed)
+            #expect(afterRoute?.source == OperationSource.event)
+        }
+    }
+
+    /// Ingesting a now-settled device completes its open deadline-bearing op
+    /// directly — the robust travel-completion path, since a simple single-leg
+    /// trip only emits a per-leg `device_cruise_arrived` (no whole-route event)
+    /// and an early arrival can beat the estimated ETA. Mirrors the
+    /// DeadlineScheduler's `isSettled → complete`, but on the confirm-read.
+    @Test func settledDeviceCompletesOpenTravelOp() async throws {
+        let database = try makeDatabase()
+        try await database.write { db in
+            try Operation.insert {
+                Operation(
+                    id: "t1", entityCode: "965AC2C3", kind: OperationKind.travel.rawValue,
+                    status: OperationStatus.active, source: OperationSource.poll,
+                    startedAt: Date(timeIntervalSince1970: 0),
+                    completesAt: Date(timeIntervalSince1970: 5_000),  // ETA still in the "future"
+                    lastConfirmedAt: Date(timeIntervalSince1970: 0), detail: .object([:])
+                )
+            }.execute(db)
+        }
+
+        // The vessel arrived (idle) — even though its op's ETA hasn't elapsed.
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.uuid = .incrementing
+        } operation: {
+            await Reconciler().ingest(idleDevice("965AC2C3"))
+        }
+
+        let op = try await database.read { db in
+            try Operation.where { $0.id.eq("t1") }.fetchOne(db)
+        }
+        #expect(op?.status == OperationStatus.completed)
+        #expect(op?.source == OperationSource.poll)
+    }
+
+    /// A settled device does *not* complete a continuous op with no deadline
+    /// (mining runs until stopped by its own signals), so the open op survives.
+    @Test func settledDeviceLeavesDeadlinelessOpOpen() async throws {
+        let database = try makeDatabase()
+        try await database.write { db in
+            try Operation.insert {
+                Operation(
+                    id: "m1", entityCode: "304F6EC1", kind: OperationKind.mine.rawValue,
+                    status: OperationStatus.active, source: OperationSource.poll,
+                    startedAt: Date(timeIntervalSince1970: 0), completesAt: nil,
+                    lastConfirmedAt: Date(timeIntervalSince1970: 0), detail: .object([:])
+                )
+            }.execute(db)
+        }
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.uuid = .incrementing
+        } operation: {
+            await Reconciler().ingest(idleDevice("304F6EC1"))
+        }
+
+        let op = try await database.read { db in
+            try Operation.where { $0.id.eq("m1") }.fetchOne(db)
+        }
+        #expect(op?.status == OperationStatus.active)
     }
 
     /// A settled (idle) device carries no activity block, so nothing is adopted.

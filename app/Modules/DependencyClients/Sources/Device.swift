@@ -177,7 +177,6 @@ extension Device {
     /// parsing lives here, in one place. Nil when no active block is present.
     public var activityDeadline: Date? {
         let blocks: [(block: String, fields: [String])] = [
-            ("travel", ["arrives_at", "final_arrives_at"]),
             ("mining", ["completes_at", "cycle_completes_at"]),
             ("printing", ["completes_at"]),
             ("scan", ["completes_at"]),
@@ -193,6 +192,15 @@ extension Device {
                     soonest = soonest.map { min($0, date) } ?? date
                 }
             }
+        }
+        // Travel reports both the active leg's arrival (`arrives_at`) and the
+        // whole route's arrival (`final_arrives_at`). The op completes when the
+        // *route* does, so prefer `final_arrives_at` — taking the soonest (as the
+        // table above does) would pick the first leg on a multi-leg route and end
+        // the trip early.
+        if case .object = detail["travel"],
+           let date = detailDate("travel", "final_arrives_at") ?? detailDate("travel", "arrives_at") {
+            soonest = soonest.map { Swift.min($0, date) } ?? date
         }
         // The survey `scan`/search block reports *remaining* time as
         // `eta_seconds` rather than an absolute `completes_at`, so derive its
@@ -243,8 +251,11 @@ extension Device {
         if case .object = detail["travel"] {
             return DerivedActivity(
                 kind: .travel,
-                startedAt: detailDate("travel", "started_at"),
-                completesAt: detailDate("travel", "arrives_at") ?? detailDate("travel", "final_arrives_at")
+                startedAt: detailDate("travel", "started_at") ?? detailDate("travel", "departed_at"),
+                // Prefer the route's end (`final_arrives_at`); `arrives_at` is only
+                // the active leg, so a multi-leg trip would otherwise be adopted
+                // with a deadline at the first waypoint.
+                completesAt: detailDate("travel", "final_arrives_at") ?? detailDate("travel", "arrives_at")
             )
         }
         if case .object = detail["mining"] {

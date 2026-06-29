@@ -17,6 +17,7 @@ private func makeDatabase() throws -> any DatabaseWriter {
     let database = try SQLiteData.defaultDatabase()
     var migrator = DatabaseMigrator()
     Device.registerMigrations(&migrator)
+    Operation.registerMigrations(&migrator)  // ingest reconciles devices against open ops
     try migrator.migrate(database)
     return database
 }

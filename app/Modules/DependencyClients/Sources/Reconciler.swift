@@ -105,6 +105,29 @@ public struct Reconciler: Sendable {
                 default:
                     break
                 }
+            } else if device.isSettled {
+                // The device has settled (idle/stowed/inactive): it finished
+                // whatever timed action it was running. Close its open
+                // deadline-bearing op directly instead of waiting for the deadline
+                // timer — this is what completes travel, since arrival events are
+                // unreliable as a "done" signal (per-leg `device_cruise_arrived`
+                // fires on every leg, and a simple single-leg trip emits *only*
+                // that, never a whole-route `device_travel_arrived`). It also
+                // catches arrivals the server reports before its own ETA estimate.
+                // Continuous mining has no deadline (`completesAt == nil`) and is
+                // left to its own stop signals; search tracks its site and never
+                // settles. Mirrors the DeadlineScheduler's `isSettled → complete`.
+                if var op = try Operation.where({
+                    $0.entityCode.eq(device.deviceCode)
+                        && $0.status.eq(OperationStatus.active)
+                }).fetchOne(db),
+                   op.completesAt != nil {
+                    op.status = .completed
+                    op.source = OperationSource.poll
+                    op.lastConfirmedAt = device.updatedAt
+                    try Operation.upsert { op }.execute(db)
+                    logger.info("ingest \(device.deviceCode, privacy: .public): device settled (\(device.status, privacy: .public)) — completed \(op.kind, privacy: .public) op \(op.id, privacy: .public)")
+                }
             }
         }
     }
@@ -128,9 +151,18 @@ public struct Reconciler: Sendable {
 
     /// Relay `event_type`s that complete an operation, keyed in one place so an
     /// evolving payload taxonomy is a localized edit.
+    ///
+    /// Travel is completed primarily by the settled-device path (see `ingest`),
+    /// not by an arrival event: the per-leg events (`device_cruise_arrived`,
+    /// `device_surge_hop_arrived`) fire on *every* leg, and a simple single-leg
+    /// trip emits only `device_cruise_arrived` — never a whole-route arrival — so
+    /// no single arrival type means "the trip is done." `device_travel_arrived`
+    /// (emitted at the final destination of a multi-leg/interstellar route) is
+    /// kept here only as a snappy fast-path that closes the op without waiting for
+    /// the confirm-read; the per-leg events fall through to drive that read.
     static let completionEventTypes: Set<String> = [
         "print_complete",          // enqueued print finished (carries new_device_code)
-        "device_cruise_arrived",   // travel finished
+        "device_travel_arrived",   // whole route finished (multi-leg/interstellar fast-path)
         "site_resource_depleted",  // mining site exhausted → drone returns to idle
         "scan_complete",           // survey search located a site → drone now tracks it
     ]

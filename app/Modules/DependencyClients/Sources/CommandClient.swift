@@ -450,9 +450,13 @@ extension CommandClient: DependencyKey {
     }
 
     /// The deadline a self-describing command reports, trying the known
-    /// completion-time fields of the shared response in priority order.
+    /// completion-time fields of the shared response in priority order. For
+    /// travel, `final_arrives_at` is the *whole route's* end while `arrives_at`
+    /// is only the current/first leg — so it must come first, or a multi-leg
+    /// trip's deadline lands at the first waypoint and the op completes a leg
+    /// early.
     private static func parseDeadline(from response: CommandResponse) -> Date? {
-        for field in [response.arrivesAt, response.completesAt, response.finalArrivesAt] {
+        for field in [response.finalArrivesAt, response.arrivesAt, response.completesAt] {
             if let field, let date = parseTimestamp(field) { return date }
         }
         return nil
