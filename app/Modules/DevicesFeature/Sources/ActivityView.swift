@@ -56,13 +56,13 @@ private struct ActivityRow: View {
                         .font(.rcMonoSmall)
                         .foregroundStyle(.rcTextTertiary)
                 }
-                Text(operation.status)
+                Text(operation.status.rawValue)
                     .font(.rcCaption)
                     .foregroundStyle(color(for: operation.status))
             }
             Spacer(minLength: Space.s)
             if let completesAt = operation.completesAt,
-               operation.status == OperationStatus.active.rawValue {
+               operation.status == .active {
                 Text(completesAt, format: .relative(presentation: .named))
                     .font(.rcMonoSmall)
                     .foregroundStyle(.rcTextTertiary)
@@ -71,14 +71,13 @@ private struct ActivityRow: View {
         .padding(.vertical, Space.xs)
     }
 
-    private func color(for status: String) -> Color {
+    private func color(for status: OperationStatus) -> Color {
         switch status {
-        case OperationStatus.active.rawValue, OperationStatus.enqueued.rawValue,
-             OperationStatus.optimistic.rawValue:
+        case .active, .enqueued, .optimistic:
             return .rcAccent
-        case OperationStatus.completed.rawValue:
+        case .completed:
             return .rcStatusReady
-        case OperationStatus.rejected.rawValue, OperationStatus.failed.rawValue:
+        case .rejected, .failed:
             return .rcError
         default:
             return .rcTextTertiary

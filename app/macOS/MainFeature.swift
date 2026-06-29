@@ -7,6 +7,7 @@
 //  panes. The Account sheet lives in AccountView.swift.
 //
 
+import AppKit
 import BlueprintsFeature
 import ComposableArchitecture
 import DependencyClients
@@ -189,6 +190,9 @@ struct MainFeature {
 
 struct MainView: View {
     @Bindable var store: StoreOf<MainFeature>
+    /// Live unread-message count, observed straight from SQLite, used for the
+    /// Messages sidebar badge and the app's dock-tile badge.
+    @FetchOne(Message.where { !$0.isRead }.count()) private var unreadCount = 0
 
     var body: some View {
         Group {
@@ -224,6 +228,11 @@ struct MainView: View {
         .sheet(isPresented: $store.isShowingAccount) {
             AccountView(store: store)
         }
+        // Mirror the unread count onto the dock icon so it's visible when the
+        // app is in the background. Cleared (nil) whenever the inbox is caught up.
+        .onChange(of: unreadCount, initial: true) { _, count in
+            NSApp.dockTile.badgeLabel = count > 0 ? "\(count)" : nil
+        }
     }
 
     // — Sidebar: header · grouped categories · footer —
@@ -236,6 +245,9 @@ struct MainView: View {
                     Section(group.id) {
                         ForEach(group.items) { item in
                             Label(item.title, systemImage: item.symbol)
+                                // `.badge(0)` renders nothing, so only Messages
+                                // shows a count, and only while unread > 0.
+                                .badge(item == .messages ? unreadCount : 0)
                                 .tag(item)
                         }
                     }

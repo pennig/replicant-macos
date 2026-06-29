@@ -166,8 +166,8 @@ extension CommandClient: DependencyKey {
             //    op that this command might replace.
             let optimistic = Operation(
                 id: opID, entityCode: deviceCode, kind: kind.rawValue,
-                status: OperationStatus.optimistic.rawValue,
-                source: OperationSource.optimistic.rawValue,
+                status: .optimistic,
+                source: OperationSource.optimistic,
                 startedAt: started, completesAt: nil, lastConfirmedAt: started,
                 detail: .object(["params": params.json])
             )
@@ -207,19 +207,18 @@ extension CommandClient: DependencyKey {
                         let openOps = try Operation
                             .where {
                                 $0.entityCode.eq(deviceCode)
-                                    && ($0.status.eq(OperationStatus.enqueued.rawValue)
-                                        || $0.status.eq(OperationStatus.active.rawValue))
+                                    && $0.status.in(OperationStatus.liveCases)
                             }
                             .fetchAll(db)
                         for var other in openOps where other.id != opID {
-                            other.status = OperationStatus.superseded.rawValue
+                            other.status = .superseded
                             other.lastConfirmedAt = confirmedAt
                             try Operation.upsert { other }.execute(db)
                         }
 
                         if var op = try Operation.where({ $0.id.eq(opID) }).fetchOne(db) {
-                            op.status = confirmed.rawValue
-                            op.source = OperationSource.poll.rawValue
+                            op.status = confirmed
+                            op.source = OperationSource.poll
                             op.completesAt = completesAt
                             op.lastConfirmedAt = confirmedAt
                             op.detail = .object(["params": params.json, "result": resultJSON])
@@ -231,8 +230,22 @@ extension CommandClient: DependencyKey {
                     // 4) One authoritative post-command device read (§1 settled
                     //    decision): the command response is a result, not a full
                     //    device snapshot, so this refreshes status/location/detail.
+                    //    For a deadline op whose response withheld the ETA (e.g.
+                    //    `search`, whose countdown lives in the device's `scan`
+                    //    block), back-fill `completesAt` from the fresh snapshot so
+                    //    the progress bar and deadline scheduler have a deadline.
                     if let device = try? await devicesClient.read(deviceCode) {
                         await Reconciler().ingest(device)
+                        if completesAt == nil, let derived = device.activityDeadline {
+                            try? await database.write { db in
+                                if var op = try Operation.where({ $0.id.eq(opID) }).fetchOne(db),
+                                   op.status == .active,
+                                   op.completesAt == nil {
+                                    op.completesAt = derived
+                                    try Operation.upsert { op }.execute(db)
+                                }
+                            }
+                        }
                     }
                     return .accepted(operationID: opID)
 
@@ -343,8 +356,11 @@ extension CommandClient: DependencyKey {
     /// No-param commands that are nonetheless self-describing with a deadline —
     /// e.g. `recall` cruises the device home to stow on the nearest craft and
     /// returns `arrives_at`, so it's a tracked deadline op like travel (its
-    /// tracked-path supersede ends any in-flight mining/travel op).
-    private static let deadlineCommands: Set<String> = ["recall"]
+    /// tracked-path supersede ends any in-flight mining/travel op). `search` is a
+    /// long-running survey scan whose deadline lives in the device's `scan` block
+    /// (`eta_seconds`) rather than the dispatch response, so it's tracked here and
+    /// its `completesAt` is back-filled from the post-command read below.
+    private static let deadlineCommands: Set<String> = ["recall", "search"]
 
     /// Immediate commands that stop a device's running action — closing its open
     /// operation so a lingering mining/travel row doesn't survive the stop.
@@ -461,7 +477,7 @@ extension CommandClient: DependencyKey {
     ) async {
         try? await database.write { db in
             guard var op = try Operation.where({ $0.id.eq(opID) }).fetchOne(db) else { return }
-            op.status = status.rawValue
+            op.status = status
             op.lastConfirmedAt = confirmedAt
             op.detail = .object(["error": .string(reason)])
             try Operation.upsert { op }.execute(db)

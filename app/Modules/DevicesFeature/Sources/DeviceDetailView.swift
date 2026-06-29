@@ -38,10 +38,7 @@ public struct DeviceDetailView: View {
     private var openOperation: Operation? {
         guard let code = store.selectedDeviceCode else { return nil }
         return operations.first {
-            $0.entityCode == code
-                && ($0.status == OperationStatus.active.rawValue
-                    || $0.status == OperationStatus.enqueued.rawValue
-                    || $0.status == OperationStatus.optimistic.rawValue)
+            $0.entityCode == code && $0.status.isOpen
         }
     }
 
@@ -233,7 +230,7 @@ private struct ActiveTaskCard: View {
                     .font(.rcHeadline)
                     .foregroundStyle(.rcTextPrimary)
 
-                if operation.status == OperationStatus.active.rawValue,
+                if operation.status == .active,
                    let completesAt = operation.completesAt {
                     // Keyed by op id so the progress view's "reached the end" state
                     // resets for a genuinely new operation (but survives a re-arm of
@@ -263,11 +260,11 @@ private struct ActiveTaskCard: View {
         )
     }
 
-    private func label(for status: String) -> String {
+    private func label(for status: OperationStatus) -> String {
         switch status {
-        case OperationStatus.enqueued.rawValue:   return "Queued — awaiting start."
-        case OperationStatus.optimistic.rawValue: return "Dispatching…"
-        default:                                  return status.capitalized
+        case .enqueued:   return "Queued — awaiting start."
+        case .optimistic: return "Dispatching…"
+        default:          return status.rawValue.capitalized
         }
     }
 }

@@ -112,7 +112,7 @@ actor DeadlineScheduler {
                 let op = try? await database.read({ db in
                     try Operation.where { $0.id.eq(due.id) }.fetchOne(db)
                 }),
-                op.status == OperationStatus.active.rawValue
+                op.status == .active
             else { continue }
 
             let device = try? await database.read { db in
@@ -140,7 +140,7 @@ actor DeadlineScheduler {
     private func openDatedOps() async -> [Operation] {
         @Dependency(\.defaultDatabase) var database
         let active = (try? await database.read { db in
-            try Operation.where { $0.status.eq(OperationStatus.active.rawValue) }.fetchAll(db)
+            try Operation.where { $0.status.eq(OperationStatus.active) }.fetchAll(db)
         }) ?? []
         return active.filter { $0.completesAt != nil }
     }
@@ -153,7 +153,7 @@ actor DeadlineScheduler {
             guard var op = try Operation.where({ $0.id.eq(id) }).fetchOne(db) else { return }
             op.completesAt = deadline
             op.lastConfirmedAt = now
-            op.source = OperationSource.poll.rawValue
+            op.source = OperationSource.poll
             try Operation.upsert { op }.execute(db)
         }
     }
@@ -162,9 +162,9 @@ actor DeadlineScheduler {
         @Dependency(\.defaultDatabase) var database
         try? await database.write { db in
             guard var op = try Operation.where({ $0.id.eq(id) }).fetchOne(db) else { return }
-            op.status = status.rawValue
+            op.status = status
             op.lastConfirmedAt = now
-            op.source = OperationSource.poll.rawValue
+            op.source = OperationSource.poll
             try Operation.upsert { op }.execute(db)
         }
     }

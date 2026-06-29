@@ -36,7 +36,7 @@ private typealias Operation = DependencyClients.Operation
     private func openOp(_ id: String, device: String, status: OperationStatus) -> Operation {
         Operation(
             id: id, entityCode: device, kind: OperationKind.travel.rawValue,
-            status: status.rawValue, source: OperationSource.poll.rawValue,
+            status: status, source: OperationSource.poll,
             startedAt: Date(timeIntervalSince1970: 0), completesAt: nil,
             lastConfirmedAt: Date(timeIntervalSince1970: 0), detail: .object([:])
         )
@@ -71,8 +71,8 @@ private typealias Operation = DependencyClients.Operation
         }
 
         let stored = try await op(database, device: "965AC2C3")
-        #expect(stored?.status == OperationStatus.active.rawValue)
-        #expect(stored?.source == OperationSource.poll.rawValue)
+        #expect(stored?.status == OperationStatus.active)
+        #expect(stored?.source == OperationSource.poll)
         #expect(stored?.completesAt == (try Date("2026-06-26T01:00:00Z", strategy: .iso8601)))
         #expect(readCount.value == 1)   // one authoritative post-command read
     }
@@ -98,7 +98,7 @@ private typealias Operation = DependencyClients.Operation
         }
 
         let stored = try await op(database, device: "965AC2C3")
-        #expect(stored?.status == OperationStatus.rejected.rawValue)
+        #expect(stored?.status == OperationStatus.rejected)
         #expect(readCount.value == 0)
     }
 
@@ -123,11 +123,11 @@ private typealias Operation = DependencyClients.Operation
         let prior = try await database.read { db in
             try Operation.where { $0.id.eq("prior") }.fetchOne(db)
         }
-        #expect(prior?.status == OperationStatus.superseded.rawValue)
+        #expect(prior?.status == OperationStatus.superseded)
 
         let openCount = try await database.read { db in
             try Operation.where {
-                $0.status.eq(OperationStatus.active.rawValue) || $0.status.eq(OperationStatus.enqueued.rawValue)
+                $0.status.in(OperationStatus.liveCases)
             }.fetchCount(db)
         }
         #expect(openCount == 1)   // exactly one open op survives (the new travel)
@@ -153,7 +153,7 @@ private typealias Operation = DependencyClients.Operation
         }
 
         let stored = try await op(database, device: "32658E70")
-        #expect(stored?.status == OperationStatus.active.rawValue)
+        #expect(stored?.status == OperationStatus.active)
         #expect(stored?.completesAt == nil)
     }
 
@@ -220,7 +220,7 @@ private typealias Operation = DependencyClients.Operation
         let running = try await database.read { db in
             try Operation.where { $0.id.eq("running") }.fetchOne(db)
         }
-        #expect(running?.status == OperationStatus.completed.rawValue)
+        #expect(running?.status == OperationStatus.completed)
     }
 
     /// `recall` is self-describing — it cruises the device home to stow and
@@ -246,12 +246,12 @@ private typealias Operation = DependencyClients.Operation
         let mining = try await database.read { db in
             try Operation.where { $0.id.eq("mining") }.fetchOne(db)
         }
-        #expect(mining?.status == OperationStatus.superseded.rawValue)
+        #expect(mining?.status == OperationStatus.superseded)
 
         let recall = try await database.read { db in
             try Operation.where { $0.kind.eq("recall") }.fetchOne(db)
         }
-        #expect(recall?.status == OperationStatus.active.rawValue)
+        #expect(recall?.status == OperationStatus.active)
         #expect(recall?.completesAt == (try Date("2026-06-26T01:00:00Z", strategy: .iso8601)))
     }
 

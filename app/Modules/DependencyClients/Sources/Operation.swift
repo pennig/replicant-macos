@@ -28,10 +28,11 @@ public struct Operation: Identifiable, Equatable, Sendable {
     public var entityCode: String
     /// `OperationKind.rawValue`.
     public var kind: String
-    /// `OperationStatus.rawValue`.
-    public var status: String
-    /// `OperationSource.rawValue` — which writer last touched this row.
-    public var source: String
+    /// Lifecycle state, stored as its `rawValue` in a `TEXT` column.
+    public var status: OperationStatus
+    /// Which writer last touched this row, stored as its `rawValue` in a `TEXT`
+    /// column.
+    public var source: OperationSource
     public var startedAt: Date
     /// When the action completes; nil for enqueued ops with no deadline yet.
     /// Drives the Phase-4 deadline scheduler and the progress bar.
@@ -46,8 +47,8 @@ public struct Operation: Identifiable, Equatable, Sendable {
         id: String,
         entityCode: String,
         kind: String,
-        status: String,
-        source: String,
+        status: OperationStatus,
+        source: OperationSource,
         startedAt: Date,
         completesAt: Date?,
         lastConfirmedAt: Date,
@@ -68,7 +69,7 @@ public struct Operation: Identifiable, Equatable, Sendable {
 // MARK: - Taxonomy
 
 /// The lifecycle state of an operation (IMPLEMENTATION_PLAN §4 state machine).
-public enum OperationStatus: String, Sendable, CaseIterable {
+public enum OperationStatus: String, Sendable, CaseIterable, QueryBindable {
     /// Provisional, just inserted on dispatch — excluded from the open-uniqueness
     /// index so it never conflicts with a still-running prior op.
     case optimistic
@@ -80,9 +81,17 @@ public enum OperationStatus: String, Sendable, CaseIterable {
     case superseded
     case unknown
 
-    /// The states the partial unique index treats as "one per device". Note this
-    /// excludes `optimistic` by design.
-    public var isOpen: Bool { self == .enqueued || self == .active }
+    /// optimistic + enqueued + active — an operation still in flight (see `isOpen`).
+    /// Shared so the Swift property and the `.in(_:)` query predicates agree by
+    /// construction.
+    public static let openCases: [OperationStatus] = [.optimistic, .enqueued, .active]
+
+    /// The subset the partial unique index enforces as "one open per device".
+    /// Excludes `optimistic` by design, so dispatch can stage a row without
+    /// conflicting with the op it may replace.
+    public static let liveCases: [OperationStatus] = [.enqueued, .active]
+
+    public var isOpen: Bool { Self.openCases.contains(self) }
 
     public var isTerminal: Bool {
         switch self {
@@ -110,6 +119,14 @@ public struct OperationKind: RawRepresentable, Hashable, Sendable {
     public static let mine   = OperationKind(rawValue: "mine")
     public static let print  = OperationKind(rawValue: "print")
 
+    /// Survey-drone belt search — the drone scours rocks until it locates a
+    /// mining cluster (status `searching`, a `scan` activity block with an
+    /// `eta_seconds` countdown). Tracked as a deadline op that completes when the
+    /// site is found; the server announces that with a `scan_complete` relay event
+    /// (the drone then *tracks* the site rather than settling to idle, so the
+    /// event — not a settled status — is the completion signal).
+    public static let search = OperationKind(rawValue: "search")
+
     /// Immediate reads — the server answers synchronously with data, so they
     /// create no tracked operation (firing them never disturbs a running action).
     public static let scan   = OperationKind(rawValue: "scan")
@@ -128,7 +145,7 @@ public struct OperationKind: RawRepresentable, Hashable, Sendable {
 }
 
 /// Which writer last touched an operation row (provenance for the §6 guard).
-public enum OperationSource: String, Sendable {
+public enum OperationSource: String, Sendable, QueryBindable {
     case optimistic
     case event
     case poll

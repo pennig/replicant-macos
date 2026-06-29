@@ -194,6 +194,14 @@ extension Device {
                 }
             }
         }
+        // The survey `scan`/search block reports *remaining* time as
+        // `eta_seconds` rather than an absolute `completes_at`, so derive its
+        // deadline off the fetch event-time. (Folded in after the loop so a
+        // future scan variant carrying `completes_at` still wins via the table.)
+        if case .object = detail["scan"], let eta = detail["scan"]?["eta_seconds"]?.numberValue {
+            let date = updatedAt.addingTimeInterval(eta)
+            soonest = soonest.map { Swift.min($0, date) } ?? date
+        }
         return soonest
     }
 
@@ -244,6 +252,18 @@ extension Device {
                 kind: .mine,
                 startedAt: detailDate("mining", "started_at"),
                 completesAt: detailDate("mining", "completes_at") ?? detailDate("mining", "cycle_completes_at")
+            )
+        }
+        // Survey-drone search: a `scan` block with an `eta_seconds` countdown (no
+        // absolute completion). The deadline is the fetch event-time plus the
+        // remaining ETA — eta_seconds is *remaining*, not total, so anchoring on
+        // `updatedAt` (not `started_at`) lands on the real finish.
+        if case .object = detail["scan"] {
+            return DerivedActivity(
+                kind: .search,
+                startedAt: detailDate("scan", "started_at"),
+                completesAt: detailDate("scan", "completes_at")
+                    ?? detail["scan"]?["eta_seconds"]?.numberValue.map { updatedAt.addingTimeInterval($0) }
             )
         }
         return nil

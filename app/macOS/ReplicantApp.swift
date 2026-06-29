@@ -7,6 +7,7 @@
 
 import API
 import AccountManager
+import AppKit
 import BlueprintsFeature
 import ComposableArchitecture
 import DependencyClients
@@ -86,6 +87,9 @@ struct ReplicantApp: App {
             SessionLifecycleHandler(id: "messages", onLogout: {
                 @Dependency(\.defaultDatabase) var database
                 try? await database.write { db in try Message.delete().execute(db) }
+                // Clear the dock badge directly: the main window may already be
+                // gone, so the view's reactive update can't be relied upon.
+                await MainActor.run { NSApp.dockTile.badgeLabel = nil }
             })
         )
         accountManager.registerHandler(

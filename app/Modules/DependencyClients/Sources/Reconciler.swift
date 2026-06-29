@@ -53,28 +53,30 @@ public struct Reconciler: Sendable {
             try Device.upsert { toWrite }.execute(db)
             logger.debug("ingest \(device.deviceCode, privacy: .public): applied status=\(device.status, privacy: .public) loc=\(device.location ?? "-", privacy: .public)")
 
-            // Adopt an in-progress activity as an open operation when the device
-            // holds none of its own. Ops are normally created only by optimistic
-            // dispatch, so a cold-load / relaunch that first meets a device while
-            // it's already printing or travelling would otherwise show no task or
-            // progress. Skipped when an op already exists (open or still-staging
-            // optimistic) so this never duplicates or races a dispatch in flight.
+            // Reconcile the device's open operation against the in-progress
+            // activity its snapshot describes. Ops are normally created only by
+            // optimistic dispatch, so the reconcile path has to (a) adopt one when
+            // the device holds none of its own — a cold-load / relaunch that first
+            // meets a device already printing or travelling — and (b) promote a
+            // queued op to active once the snapshot shows it has actually started
+            // (a dispatched print sits `enqueued` with no deadline until then, so
+            // the progress bar can't draw). Both also refresh a slipped deadline.
             if let activity = device.derivedActivity {
-                let hasOpenOrPending = try Operation.where {
-                    $0.entityCode.eq(device.deviceCode)
-                        && ($0.status.eq(OperationStatus.enqueued.rawValue)
-                            || $0.status.eq(OperationStatus.active.rawValue)
-                            || $0.status.eq(OperationStatus.optimistic.rawValue))
+                let openOp = try Operation.where {
+                    $0.entityCode.eq(device.deviceCode) &&
+                    $0.status.in(OperationStatus.openCases)
                 }
-                .fetchOne(db) != nil
+                .fetchOne(db)
 
-                if !hasOpenOrPending {
+                switch openOp {
+                case nil:
+                    // Adopt a fresh active op from the snapshot.
                     let op = Operation(
                         id: uuid().uuidString,
                         entityCode: device.deviceCode,
                         kind: activity.kind.rawValue,
-                        status: OperationStatus.active.rawValue,
-                        source: OperationSource.poll.rawValue,
+                        status: .active,
+                        source: OperationSource.poll,
                         startedAt: activity.startedAt ?? device.updatedAt,
                         completesAt: activity.completesAt,
                         lastConfirmedAt: device.updatedAt,
@@ -82,6 +84,26 @@ public struct Reconciler: Sendable {
                     )
                     try Operation.insert { op }.execute(db)
                     logger.info("ingest \(device.deviceCode, privacy: .public): adopted \(activity.kind.rawValue, privacy: .public) op from in-progress snapshot")
+
+                case let op? where op.status != .optimistic
+                    && op.kind == activity.kind.rawValue
+                    && activity.completesAt != nil
+                    && (op.status != .active || op.completesAt != activity.completesAt):
+                    // The op exists but the snapshot is ahead of it: a queued op
+                    // that has now started, or a moved deadline. Promote/refresh in
+                    // place (same id, so the progress bar keeps its identity). An
+                    // `optimistic` op is left for dispatch to confirm.
+                    var updated = op
+                    updated.status = .active
+                    updated.completesAt = activity.completesAt
+                    if let startedAt = activity.startedAt { updated.startedAt = startedAt }
+                    updated.source = OperationSource.poll
+                    updated.lastConfirmedAt = device.updatedAt
+                    try Operation.upsert { updated }.execute(db)
+                    logger.info("ingest \(device.deviceCode, privacy: .public): promoted \(op.kind, privacy: .public) op \(op.id, privacy: .public) to active from in-progress snapshot")
+
+                default:
+                    break
                 }
             }
         }
@@ -91,9 +113,10 @@ public struct Reconciler: Sendable {
     /// event types close the device's open operation and fold their result into
     /// its `detail`; everything else is left to the device confirm-read path.
     public func applyOperationEvent(_ event: UnifiedEvent) async {
-        guard event.type == "event",
-              let deviceCode = event.deviceCode,
-              let eventType = event.eventType
+        guard
+            event.type == "event",
+            let deviceCode = event.deviceCode,
+            let eventType = event.eventType
         else { return }
 
         // Event types that close the device's open operation. The event is truth
@@ -109,6 +132,7 @@ public struct Reconciler: Sendable {
         "print_complete",          // enqueued print finished (carries new_device_code)
         "device_cruise_arrived",   // travel finished
         "site_resource_depleted",  // mining site exhausted → drone returns to idle
+        "scan_complete",           // survey search located a site → drone now tracks it
     ]
 
     /// Mark the single open operation on a device completed, recording any event
@@ -125,8 +149,7 @@ public struct Reconciler: Sendable {
         try? await database.write { db in
             guard var op = try Operation.where({
                 $0.entityCode.eq(deviceCode)
-                    && ($0.status.eq(OperationStatus.enqueued.rawValue)
-                        || $0.status.eq(OperationStatus.active.rawValue))
+                    && $0.status.in(OperationStatus.liveCases)
             }).fetchOne(db)
             else { return }
 
@@ -138,8 +161,8 @@ public struct Reconciler: Sendable {
                 dict["result"] = .object(result)
                 op.detail = .object(dict)
             }
-            op.status = OperationStatus.completed.rawValue
-            op.source = source.rawValue
+            op.status = .completed
+            op.source = source
             op.lastConfirmedAt = stamp
             try Operation.upsert { op }.execute(db)
             logger.info("completed op \(op.id, privacy: .public) (\(op.kind, privacy: .public)) on \(deviceCode, privacy: .public) via \(source.rawValue, privacy: .public)")

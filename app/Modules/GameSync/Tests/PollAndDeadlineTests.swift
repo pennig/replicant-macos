@@ -56,7 +56,7 @@ private func activeOp(
 ) -> Operation {
     Operation(
         id: id, entityCode: device, kind: OperationKind.travel.rawValue,
-        status: OperationStatus.active.rawValue, source: OperationSource.poll.rawValue,
+        status: OperationStatus.active, source: OperationSource.poll,
         startedAt: startedAt, completesAt: completesAt,
         lastConfirmedAt: startedAt, detail: .object([:])
     )
@@ -208,7 +208,7 @@ private func budgetGameClient(remaining: Int) -> GameClient {
         await schedulerProcessing(now: deadline.addingTimeInterval(1), database: database, reads: reads)
 
         let stored = try await database.read { db in try Operation.where { $0.id.eq("op1") }.fetchOne(db) }
-        #expect(stored?.status == OperationStatus.completed.rawValue)
+        #expect(stored?.status == OperationStatus.completed)
         #expect(reads.value == 1)
     }
 
@@ -244,7 +244,7 @@ private func budgetGameClient(remaining: Int) -> GameClient {
         }
 
         let stored = try await database.read { db in try Operation.where { $0.id.eq("op1") }.fetchOne(db) }
-        #expect(stored?.status == OperationStatus.active.rawValue)              // not completed
+        #expect(stored?.status == OperationStatus.active)              // not completed
         #expect((stored?.completesAt).map { $0 > deadline } == true)            // re-armed forward
         #expect(reads.value == 1)
     }
@@ -262,7 +262,7 @@ private func budgetGameClient(remaining: Int) -> GameClient {
         await schedulerProcessing(now: Date(timeIntervalSince1970: 1_000), database: database, reads: reads)
 
         let stored = try await database.read { db in try Operation.where { $0.id.eq("op1") }.fetchOne(db) }
-        #expect(stored?.status == OperationStatus.active.rawValue)
+        #expect(stored?.status == OperationStatus.active)
         #expect(reads.value == 0)
     }
 
@@ -272,7 +272,7 @@ private func budgetGameClient(remaining: Int) -> GameClient {
         let database = try makeDatabase()
         try await database.write { db in
             var op = activeOp("op1", device: "D", completesAt: Date(timeIntervalSince1970: 1_000))
-            op.status = OperationStatus.completed.rawValue
+            op.status = OperationStatus.completed
             try Operation.insert { op }.execute(db)
         }
         let reads = LockIsolated(0)
