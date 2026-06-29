@@ -265,11 +265,15 @@ private struct CommandGrid: View {
     let store: StoreOf<DevicesFeature>
 
     @State private var pending: DeviceCommand?
-    @State private var parameter: String = ""
+    @State private var textValue: String = ""
+    @State private var choiceValue: String = ""
 
-    /// The dispatchable subset of the device's available commands.
+    /// The dispatchable subset of the device's available commands. `retarget` is
+    /// gated on the device actually mining — the server rejects it otherwise.
     private var commands: [DeviceCommand] {
-        device.availableCommands.compactMap(DeviceCommand.init(command:))
+        device.availableCommands
+            .compactMap(DeviceCommand.init(command:))
+            .filter { $0 != .retarget || device.status.lowercased().contains("mining") }
     }
 
     var body: some View {
@@ -286,8 +290,7 @@ private struct CommandGrid: View {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: Space.s)], spacing: Space.s) {
                     ForEach(commands) { command in
                         Button {
-                            parameter = ""
-                            pending = (pending == command) ? nil : command
+                            select(command)
                         } label: {
                             Label(command.title, systemImage: command.systemImage)
                                 .frame(maxWidth: .infinity)
@@ -304,10 +307,37 @@ private struct CommandGrid: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    /// Toggle a command's confirm panel, seeding any default parameter value.
+    private func select(_ command: DeviceCommand) {
+        if pending == command { pending = nil; return }
+        textValue = ""
+        if case let .choice(_, options) = command.parameter {
+            choiceValue = options.first ?? ""
+        } else {
+            choiceValue = ""
+        }
+        pending = command
+    }
+
+    @ViewBuilder
     private func parameterPanel(_ command: DeviceCommand) -> some View {
         VStack(alignment: .leading, spacing: Space.s) {
-            RCField(command.parameterLabel, text: $parameter,
-                    placeholder: command.parameterPlaceholder, mono: true)
+            switch command.parameter {
+            case let .text(label, placeholder):
+                RCField(label, text: $textValue, placeholder: placeholder, mono: true)
+            case let .choice(label, options):
+                VStack(alignment: .leading, spacing: Space.xs) {
+                    Text(label.uppercased())
+                        .font(.rcSectionLabel)
+                        .foregroundStyle(.rcTextTertiary)
+                    RCValueSelect(label, options: options, selection: $choiceValue)
+                }
+            case .none:
+                Text("Run \(command.title) on \(device.deviceCode)?")
+                    .font(.rcCaption)
+                    .foregroundStyle(.rcTextSecondary)
+            }
+
             HStack(spacing: Space.s) {
                 Spacer()
                 Button("Cancel") { pending = nil }
@@ -316,12 +346,12 @@ private struct CommandGrid: View {
                     store.send(.commandConfirmed(
                         kind: command.kind,
                         deviceCode: device.deviceCode,
-                        params: command.params(parameter)
+                        params: command.params(confirmValue(for: command))
                     ))
                     pending = nil
                 }
-                .buttonStyle(RCButtonStyle(.primary))
-                .disabled(parameter.trimmingCharacters(in: .whitespaces).isEmpty)
+                .buttonStyle(RCButtonStyle(command.isDestructive ? .destructiveProminent : .primary))
+                .disabled(!isConfirmable(command))
             }
         }
         .padding(Space.m)
@@ -333,5 +363,24 @@ private struct CommandGrid: View {
                         .strokeBorder(.rcAccentBorder, lineWidth: 0.5)
                 )
         )
+    }
+
+    /// The value passed to `params(_:)` for the pending command's parameter kind.
+    private func confirmValue(for command: DeviceCommand) -> String {
+        switch command.parameter {
+        case .text:   return textValue
+        case .choice: return choiceValue
+        case .none:   return ""
+        }
+    }
+
+    /// Whether the confirm button is enabled — text must be non-empty; choice and
+    /// confirm-only commands are always ready.
+    private func isConfirmable(_ command: DeviceCommand) -> Bool {
+        switch command.parameter {
+        case .text:   return !textValue.trimmingCharacters(in: .whitespaces).isEmpty
+        case .choice: return !choiceValue.isEmpty
+        case .none:   return true
+        }
     }
 }

@@ -25,13 +25,22 @@ Look in the `Modules/UI` folder for the Swift package that represents the design
 - Don't add decorative imagery; this UI is data‑viz forward (gauges, dots, bars).
 - Don't represent a replicant without its host icon (vessel / matrix / hub).
 
+## Documentation
+
+The backend API service has copious documentation:
+- The API Docs site itself: https://replicant.space/docs/ It describes how the game works, the various core concepts, as well as the main classes of endpoints (accounts, devices, etc). If there's ever a question about a business rule, consult the docs first.
+- The OpenAPI spec: https://api.replicant.space/swagger/openapi.json. It does a great job of documenting the full capabilities and surface area of the API. We've already run into a few issues though, so this doc seems to be hand-maintained and carries with it mismatches between spec and implementation. Use caution.
+
+The docs website seems to be updated more diligently to match the real implementation, so if there's ever a mismatch between expectation and reality, check the docs site to see if that mismatch can be resolved without further debugging.
+
 ---
 
 ## Implementation Notes
 
 - This app targets macOS 26 and newer, so feel free to use the latest SwiftUI and other SDK APIs.
-- When engaging with the backend for implementation or for testing/mocks/previews, you may follow the OpenAPI spec found here: https://api.replicant.space/swagger/openapi.json (last fetched June 21, 2026)
+- When engaging with the backend for implementation or for testing/mocks/previews, you may follow the aforementioned OpenAPI spec (regularly updated locally in the repository as well in the Modules/API/Sources/openapi.json)
 - While the app is written predominantly in SwiftUI, it's acceptable to wrap AppKit views and behaviors when they're important to the UX.
+
 
 ### Backend access
 

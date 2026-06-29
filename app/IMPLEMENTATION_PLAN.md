@@ -393,6 +393,18 @@ Each phase is independently shippable and observably better than the last. Earli
 - [x] Minimal Bobnet view over `BobnetMessage` (best-effort, locally persisted). _Content-only view on the `bobnet` sidebar item._
 - **Ship criterion:** the three-panel device experience is real and live; the action layer has a home. _Built + unit-tested; pending the manual link of `DevicesFeature` to the app target (pbxproj edits are agent-blocked), same as `GameSync` in Phase 1._
 
+### Phase 6 — Live mining progress (per-cycle poll while focused) — **DEFERRED / TODO**
+
+Continuous mining (`start_mining`) confirms an `active` op with **no `completesAt`**, so the `DeadlineScheduler` skips it and there is **zero polling** while a drone mines. It runs cycle-by-cycle (`cycle_time_seconds`, per-cycle — not an ETA) until the site depletes (relay `site_resource_depleted`, now a completion event → op closes, drone goes idle) or it's recalled. To show *live* mining state rather than just "active until it stops":
+
+- [ ] When the drone's detail pane is **focused** (high-priority / visibility-gated — the bit Phase 4 deferred), derive the current cycle from `startedAt + cycle_time_seconds` (zero-network, like the travel progress bar).
+- [ ] On each cycle boundary, fire a **coalesced high-priority confirm-read** through `PollCoordinator` (bypasses TTL/budget) and surface `pending_resources` / pending-cycle count → distinguish **extracting** vs **searching for a new site** vs **depleted**.
+- [ ] Homework first: re-`start_mining` a drone and probe the **active** `GET /v1/devices/{code}` shape to confirm the field names (`pending_resources`, pending-cycle count) — the depletion left the drone idle, so the active sub-object can't be observed until mining restarts.
+- [ ] **Smart resource picker**: `start_mining`/`retarget` currently use a blind enum. `GET /v1/locations/{designation}` returns `resource_sites[]` with `resources_remaining_pct` per resource (and `inventory`, `devices`) — drive the picker from real site data instead, and reflect that `retarget` is constrained to resources still present at the device's **current** site.
+- Also still open: a **cargo-full** mining completion event type (unknown; add to `Reconciler.completionEventTypes` once probed).
+
+_Recorded 2026-06-28 from a live `site_resource_depleted` observation. See memory `device-command-shapes`._
+
 ---
 
 ## 8. Testing strategy
@@ -425,9 +437,17 @@ For each action endpoint, record before implementing: dispatch-response class (s
 
 | Command | Class | Completion event | Busy behavior | Notes |
 |---|---|---|---|---|
-| `travel` | self-describing | `device_cruise_arrived` | TBD | response = full device body |
-| `print` | enqueued | `print_complete` (carries `new_device_code`) | rejects while traveling | queue info only on dispatch |
-| `mine` / `scan` / `teleport` / `transfer` | TBD | TBD | TBD | confirm per §7 Phase-3 work |
+| `travel` | self-describing (deadline) | `device_cruise_arrived` | rejects while busy | response carries `arrives_at` → op `active` + `completesAt` |
+| `start_mining` (`mine`) | **continuous** (no deadline) | `site_resource_depleted` (site exhausted → drone idle) | needs `resource_type` | response = `{status:"mining_started", cycle_time_seconds}`; `cycle_time_seconds` is **per-cycle**, not a completion ETA. Op confirmed `active` with `completesAt == nil`; runs until the site depletes or it's recalled. **Cargo-full completion event TBD** (deferred). |
+| `system_scan` (`scan`) | **synchronous read** | — (none) | — | Returns the full system survey **inline** (star/planets/belts/etc.). No tracked op; op-less dispatch + one device read. **Spec drift:** `DeviceCommandResponseSchema.star` was typed `string` but the server returns an object — relaxed to `{}` in `openapi.json` so the generated client decodes it. |
+| `stellar_census` (`census`) | **synchronous read** | — (none) | — | Returns a paginated star list inline. No tracked op. |
+| `retarget` | **continuous modifier** (no deadline) | — | **server-gated**: rejects unless the device is mining (`"Device is not mining"`) *and* the resource exists at the current site (`"No X remaining at this site"`) | response = `{status:"mining_retargeted", new_resource, old_resource, cycle_time_seconds}`. Changes the **existing** mining op's resource in place → dispatched as **immediate** (no new op, no supersede). UI gates the button on the device's status containing `mining`. |
+| `print` (`enqueue_print`) | enqueued | `print_complete` (carries `new_device_code`) | rejects while traveling | queue info only on dispatch |
+| `recall` | **self-describing (deadline)** | `device_cruise_arrived` (+ deadline-confirm sees `stowed`) | — | **Not** status-only: cruises the device **home to stow on the nearest craft** → returns `arrives_at`. Tracked deadline op like travel; its supersede ends any in-flight mining/travel op. (Was wrongly modeled as immediate-terminating; fixed.) |
+| `stow` | status-only / immediate | — | optional `target` (carrier); auto-picks nearest craft if omitted | response = `{status:"stowed", stowed_in}`. **Terminating** (ends activity → closes open op). `deploy` is its inverse: `{status:"deployed", deployed_from, location}`, also immediate. |
+| no-param lifecycle (`deactivate`, `deploy`, `decommission`, `clear_queue`, `activate`, `assemble`, `compact`, `launch`, `unfurl`, `withdraw`, `search`, `set_entry_point`, `clear_directive`, `detonate`) | **status-only / immediate** | — | varies | Confirm-only grid buttons. No tracked op. `deactivate`/`decommission` are **terminating** (close the device's open op). `deactivate` is the **in-place mining stop** → `{deactivated:"mining", status:"mining_stopped"}`, device returns to `idle` without relocating (there is no `stop_mining` verb — server 400s "Unknown command"). `decommission`/`detonate` get a destructive-styled confirm. |
+
+> **Body decoding caveat.** The generated `postV1DevicesDeviceCode` decodes the 200 body **eagerly** into the single `DeviceCommandResponseSchema`, so a command whose response structurally conflicts with a *typed* field (not just adds unknown keys) throws before the `.ok` case is reached. `system_scan`'s object-valued `star` was the one conflict in scope; future per-command shapes may need the same `{}`-relaxation in `openapi.json`.
 
 ---
 

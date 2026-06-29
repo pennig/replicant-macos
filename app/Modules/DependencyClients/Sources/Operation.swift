@@ -92,14 +92,39 @@ public enum OperationStatus: String, Sendable, CaseIterable {
     }
 }
 
-/// The kind of action. `rawValue` is the backend `command` discriminator where
-/// they align; `print` maps to the `enqueue_print` command.
-public enum OperationKind: String, Sendable {
-    case travel
-    case mine
-    case scan
-    case census
-    case print
+/// The kind of action. `rawValue` is a stable local identifier stored in
+/// `Operation.kind`; the backend `command` string it maps to is resolved in
+/// `CommandClient` (e.g. `mine` → `start_mining`, `print` → `enqueue_print`,
+/// `census` → `stellar_census`).
+///
+/// Modeled as a `RawRepresentable` newtype rather than a closed enum so simple,
+/// parameter-less lifecycle commands (`deactivate`, `recall`, …) can be
+/// represented by their backend verb without a dedicated case per command.
+public struct OperationKind: RawRepresentable, Hashable, Sendable {
+    public let rawValue: String
+    public init(rawValue: String) { self.rawValue = rawValue }
+
+    /// Tracked actions — each creates a first-class `Operation` row whose
+    /// lifecycle is driven to completion (deadline, continuous, or relay event).
+    public static let travel = OperationKind(rawValue: "travel")
+    public static let mine   = OperationKind(rawValue: "mine")
+    public static let print  = OperationKind(rawValue: "print")
+
+    /// Immediate reads — the server answers synchronously with data, so they
+    /// create no tracked operation (firing them never disturbs a running action).
+    public static let scan   = OperationKind(rawValue: "scan")
+    public static let census = OperationKind(rawValue: "census")
+
+    /// Mid-mining modifier — changes the active mining op's `resource_type` in
+    /// place (server-gated on the device actually mining). Immediate.
+    public static let retarget = OperationKind(rawValue: "retarget")
+    /// Stow into the nearest carrier — status-only topology change. Immediate.
+    public static let stow     = OperationKind(rawValue: "stow")
+
+    /// A simple, parameter-less lifecycle command, identified by its backend
+    /// verb (e.g. `deactivate`, `deploy`, `recall`). Status-only, completes at
+    /// once; the body maps to the matching no-param command in `CommandClient`.
+    public static func simple(_ command: String) -> OperationKind { OperationKind(rawValue: command) }
 }
 
 /// Which writer last touched an operation row (provenance for the §6 guard).

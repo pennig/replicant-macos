@@ -75,6 +75,7 @@ public struct Reconciler: Sendable {
     static let completionEventTypes: Set<String> = [
         "print_complete",          // enqueued print finished (carries new_device_code)
         "device_cruise_arrived",   // travel finished
+        "site_resource_depleted",  // mining site exhausted → drone returns to idle
     ]
 
     /// Mark the single open operation on a device completed, recording any event

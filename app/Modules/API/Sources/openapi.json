@@ -2030,9 +2030,7 @@
           "device_code": {
             "type": "string"
           },
-          "star": {
-            "type": "string"
-          },
+          "star": {},
           "location": {
             "type": "string"
           },

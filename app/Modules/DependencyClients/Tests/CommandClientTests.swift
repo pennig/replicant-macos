@@ -132,6 +132,149 @@ private typealias Operation = DependencyClients.Operation
         }
         #expect(openCount == 1)   // exactly one open op survives (the new travel)
     }
+
+    /// Mining is continuous — its 200 carries no deadline, so the op confirms
+    /// active with a nil `completesAt` (it runs until stopped, not toward an ETA).
+    @Test func mineConfirmsActiveWithoutDeadline() async throws {
+        let database = try makeDatabase()
+        let body = #"{"status":"mining_started","resource_type":"volatiles","cycle_time_seconds":25}"#
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.gameClient = stubGameClient { _ in jsonResponse(200, body) }
+            $0.devicesClient.read = { code in makeDevice(code: code, status: "mining") }
+        } operation: {
+            let outcome = await CommandClient.liveValue.dispatch(
+                .mine, "32658E70", CommandParams(resourceType: "volatiles")
+            )
+            if case .accepted = outcome {} else { Issue.record("expected accepted, got \(outcome)") }
+        }
+
+        let stored = try await op(database, device: "32658E70")
+        #expect(stored?.status == OperationStatus.active.rawValue)
+        #expect(stored?.completesAt == nil)
+    }
+
+    /// A missing required parameter fails before any optimistic row is staged.
+    @Test func missingParameterFailsWithoutStagingOp() async throws {
+        let database = try makeDatabase()
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.gameClient = stubGameClient { _ in jsonResponse(200) }
+            $0.devicesClient.read = { code in makeDevice(code: code, status: "idle") }
+        } operation: {
+            let outcome = await CommandClient.liveValue.dispatch(.mine, "32658E70", CommandParams())
+            if case .failed = outcome {} else { Issue.record("expected failed, got \(outcome)") }
+        }
+
+        #expect(try await op(database, device: "32658E70") == nil)   // no op staged
+    }
+
+    /// An immediate command (scan) creates no operation row but still takes the
+    /// one authoritative post-command device read.
+    @Test func immediateCommandCreatesNoOpButReads() async throws {
+        let database = try makeDatabase()
+        let readCount = LockIsolated(0)
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.gameClient = stubGameClient { _ in jsonResponse(200, #"{"star":{"designation":"ATIANFU"}}"#) }
+            $0.devicesClient.read = { code in
+                readCount.withValue { $0 += 1 }
+                return makeDevice(code: code, status: "idle")
+            }
+        } operation: {
+            let outcome = await CommandClient.liveValue.dispatch(.scan, "965AC2C3", CommandParams())
+            #expect(outcome == .accepted(operationID: nil))
+        }
+
+        #expect(try await op(database, device: "965AC2C3") == nil)   // no tracked op
+        #expect(readCount.value == 1)
+    }
+
+    /// A terminating immediate command (deactivate) closes the device's open
+    /// operation, so a continuous mining row doesn't survive the in-place stop.
+    @Test func terminatingCommandClosesOpenOp() async throws {
+        let database = try makeDatabase()
+        try await database.write { db in
+            try Operation.insert { openOp("running", device: "32658E70", status: .active) }.execute(db)
+        }
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 2_000))
+            $0.uuid = .incrementing
+            $0.gameClient = stubGameClient { _ in jsonResponse(200, #"{"deactivated":"mining","status":"mining_stopped"}"#) }
+            $0.devicesClient.read = { code in makeDevice(code: code, status: "idle") }
+        } operation: {
+            _ = await CommandClient.liveValue.dispatch(.simple("deactivate"), "32658E70", CommandParams())
+        }
+
+        let running = try await database.read { db in
+            try Operation.where { $0.id.eq("running") }.fetchOne(db)
+        }
+        #expect(running?.status == OperationStatus.completed.rawValue)
+    }
+
+    /// `recall` is self-describing — it cruises the device home to stow and
+    /// returns `arrives_at`, so it confirms a tracked deadline op and supersedes
+    /// any in-flight op (e.g. mining) rather than completing it in place.
+    @Test func recallConfirmsDeadlineAndSupersedesPrior() async throws {
+        let database = try makeDatabase()
+        try await database.write { db in
+            try Operation.insert { openOp("mining", device: "32658E70", status: .active) }.execute(db)
+        }
+        let body = #"{"status":"recalling","arrives_at":"2026-06-26T01:00:00Z","destination":"ATIANFU-1"}"#
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.gameClient = stubGameClient { _ in jsonResponse(200, body) }
+            $0.devicesClient.read = { code in makeDevice(code: code, status: "recalling") }
+        } operation: {
+            _ = await CommandClient.liveValue.dispatch(.simple("recall"), "32658E70", CommandParams())
+        }
+
+        let mining = try await database.read { db in
+            try Operation.where { $0.id.eq("mining") }.fetchOne(db)
+        }
+        #expect(mining?.status == OperationStatus.superseded.rawValue)
+
+        let recall = try await database.read { db in
+            try Operation.where { $0.kind.eq("recall") }.fetchOne(db)
+        }
+        #expect(recall?.status == OperationStatus.active.rawValue)
+        #expect(recall?.completesAt == (try Date("2026-06-26T01:00:00Z", strategy: .iso8601)))
+    }
+
+    /// `retarget` is a mid-mining modifier — its valid `resource_type` builds the
+    /// body and it dispatches as immediate (no new op; the mining op continues).
+    @Test func retargetIsImmediateWithResource() async throws {
+        let database = try makeDatabase()
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.gameClient = stubGameClient { _ in jsonResponse(200, #"{"status":"mining_retargeted","new_resource":"conductive"}"#) }
+            $0.devicesClient.read = { code in makeDevice(code: code, status: "mining") }
+        } operation: {
+            let outcome = await CommandClient.liveValue.dispatch(
+                .retarget, "32658E70", CommandParams(resourceType: "conductive")
+            )
+            #expect(outcome == .accepted(operationID: nil))
+        }
+
+        #expect(try await op(database, device: "32658E70") == nil)   // no tracked op
+    }
 }
 
 // MARK: - Helpers

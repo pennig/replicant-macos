@@ -28,16 +28,27 @@ private let logger = Logger(subsystem: "name.pennig.replicould", category: "Comm
 public struct CommandParams: Sendable, Equatable {
     public var destination: String?   // travel
     public var deviceType: String?    // print (enqueue_print)
+    public var resourceType: String?  // mine (start_mining) — one of the belt resources
+    public var target: String?        // mine — optional resource-site designation
 
-    public init(destination: String? = nil, deviceType: String? = nil) {
+    public init(
+        destination: String? = nil,
+        deviceType: String? = nil,
+        resourceType: String? = nil,
+        target: String? = nil
+    ) {
         self.destination = destination
         self.deviceType = deviceType
+        self.resourceType = resourceType
+        self.target = target
     }
 
     var json: JSONValue {
         var dict: [String: JSONValue] = [:]
         if let destination { dict["destination"] = .string(destination) }
         if let deviceType { dict["device_type"] = .string(deviceType) }
+        if let resourceType { dict["resource_type"] = .string(resourceType) }
+        if let target { dict["target"] = .string(target) }
         return .object(dict)
     }
 }
@@ -53,7 +64,10 @@ public struct CommandClient: Sendable {
 /// it (the op is now active/enqueued); `rejected` is a server 4xx (busy/illegal,
 /// with the server's message); `failed` is a transport/encoding error.
 public enum CommandOutcome: Sendable, Equatable {
-    case accepted(operationID: String)
+    /// The server took the command. `operationID` is the tracked op's id for
+    /// long-running actions (travel/mine/print), or `nil` for immediate ones
+    /// (scan/census/lifecycle) which create no operation row.
+    case accepted(operationID: String?)
     case rejected(String)
     case failed(String)
 
@@ -77,6 +91,66 @@ extension CommandClient: DependencyKey {
             @Dependency(\.date) var date
             @Dependency(\.uuid) var uuid
 
+            // Build the request body up front — a missing/invalid parameter or an
+            // unsupported command fails fast, before any optimistic row is staged.
+            let body: Operations.PostV1DevicesDeviceCode.Input.Body
+            do {
+                body = try makeBody(kind: kind, params: params)
+            } catch {
+                let reason = describe(error)
+                logger.warning("dispatch \(kind.rawValue, privacy: .public) → \(deviceCode, privacy: .public): \(reason, privacy: .public)")
+                return .failed(reason)
+            }
+
+            // Immediate commands (scan/census reads + status-only lifecycle) are
+            // not long-running, so they create no Operation row and never
+            // supersede a device's running action. POST, then take the single
+            // authoritative device read so status/location refresh. A terminating
+            // command (recall/deactivate/decommission) also closes the device's
+            // open op, since it stops whatever was running.
+            if completion(for: kind) == .immediate {
+                do {
+                    let output = try await gameClient().postV1DevicesDeviceCode(
+                        path: .init(deviceCode: deviceCode), body: body
+                    )
+                    switch output {
+                    case .ok:
+                        logger.info("dispatch \(kind.rawValue, privacy: .public) → \(deviceCode, privacy: .public): accepted (immediate)")
+                        if terminatingCommands.contains(kind.rawValue) {
+                            await Reconciler().completeOpenOperation(
+                                on: deviceCode, source: .poll, eventTime: date.now, result: nil
+                            )
+                        }
+                        if let device = try? await devicesClient.read(deviceCode) {
+                            await Reconciler().ingest(device)
+                        }
+                        return .accepted(operationID: nil)
+                    case let .badRequest(response):
+                        let reason = errorMessage(response.body)
+                        logger.warning("dispatch \(kind.rawValue, privacy: .public) → \(deviceCode, privacy: .public): rejected (400) — \(reason, privacy: .public)")
+                        return .rejected(reason)
+                    case let .forbidden(response):
+                        let reason = errorMessage(response.body)
+                        logger.warning("dispatch \(kind.rawValue, privacy: .public) → \(deviceCode, privacy: .public): rejected (403) — \(reason, privacy: .public)")
+                        return .rejected(reason)
+                    case let .notFound(response):
+                        let reason = errorMessage(response.body)
+                        logger.warning("dispatch \(kind.rawValue, privacy: .public) → \(deviceCode, privacy: .public): rejected (404) — \(reason, privacy: .public)")
+                        return .rejected(reason)
+                    case let .default(statusCode, _):
+                        let reason = "Server error (\(statusCode))."
+                        logger.warning("dispatch \(kind.rawValue, privacy: .public) → \(deviceCode, privacy: .public): \(reason, privacy: .public)")
+                        return .failed(reason)
+                    @unknown default:
+                        return .failed("Unexpected server response.")
+                    }
+                } catch {
+                    logger.error("dispatch \(kind.rawValue, privacy: .public): failed — \(error.localizedDescription, privacy: .public)")
+                    return .failed(error.localizedDescription)
+                }
+            }
+
+            // Tracked commands (travel/mine/print): full optimistic lifecycle.
             let opID = uuid().uuidString
             let started = date.now
 
@@ -95,7 +169,6 @@ extension CommandClient: DependencyKey {
 
             // 2) POST the command.
             do {
-                let body = try makeBody(kind: kind, params: params)
                 let output = try await gameClient().postV1DevicesDeviceCode(
                     path: .init(deviceCode: deviceCode), body: body
                 )
@@ -103,11 +176,19 @@ extension CommandClient: DependencyKey {
                 switch output {
                 case let .ok(ok):
                     let response = try ok.body.json
-                    // 3) Confirm: travel-style responses carry `arrives_at` (a
-                    //    deadline → active); enqueued ones don't (→ enqueued,
-                    //    completion comes later from a relay event).
-                    let completesAt = response.arrivesAt.flatMap(parseTimestamp)
-                    let confirmed: OperationStatus = completesAt == nil ? .enqueued : .active
+                    // 3) Confirm. The op's status + deadline follow the command's
+                    //    completion class: travel is self-describing (a deadline →
+                    //    active); mining is continuous (active, no deadline — runs
+                    //    until stopped); print is enqueued (completes later via a
+                    //    relay event).
+                    let confirmed: OperationStatus
+                    let completesAt: Date?
+                    switch completion(for: kind) {
+                    case .deadline:   confirmed = .active;    completesAt = parseDeadline(from: response)
+                    case .continuous: confirmed = .active;    completesAt = nil
+                    case .enqueued:   confirmed = .enqueued;  completesAt = nil
+                    case .immediate:  confirmed = .completed; completesAt = nil  // unreachable
+                    }
                     let resultJSON = jsonValue(from: response)
                     let confirmedAt = date.now
 
@@ -163,6 +244,11 @@ extension CommandClient: DependencyKey {
                     logger.warning("dispatch \(opID, privacy: .public): rejected (404) — \(reason, privacy: .public)")
                     await finish(opID, as: .rejected, reason: reason, at: date.now, database: database)
                     return .rejected(reason)
+                case let .default(statusCode, _):
+                    let reason = "Server error (\(statusCode))."
+                    logger.warning("dispatch \(opID, privacy: .public): \(reason, privacy: .public)")
+                    await finish(opID, as: .failed, reason: reason, at: date.now, database: database)
+                    return .failed(reason)
                 @unknown default:
                     logger.error("dispatch \(opID, privacy: .public): unexpected server response")
                     await finish(opID, as: .failed, reason: "Unexpected server response.", at: date.now, database: database)
@@ -179,8 +265,44 @@ extension CommandClient: DependencyKey {
 
     // MARK: Helpers
 
-    /// Map a kind + params onto the generated `oneOf` command body. Phase 3
-    /// implements travel and print; other kinds aren't dispatchable yet.
+    private typealias NoParam = Components.Schemas.AppSchemasDeviceCommandsNoParamSchema
+    private typealias MiningSchema = Components.Schemas.AppSchemasDeviceCommandsStartMiningSchema
+    private typealias RetargetSchema = Components.Schemas.AppSchemasDeviceCommandsRetargetSchema
+    private typealias CommandResponse = Components.Schemas.AppSchemasDevicesDeviceCommandResponseSchema
+
+    /// How a command reports completion — derived from live probing of the API
+    /// (see IMPLEMENTATION_PLAN §10). Drives the confirmed `Operation` status and
+    /// whether dispatch tracks an op at all.
+    private enum Completion {
+        case deadline    // travel — self-describing with `arrives_at` → active
+        case continuous  // mining — `mining_started`, no deadline; runs until stopped
+        case enqueued    // print — queued; completes via a later relay event
+        case immediate   // scan/census/lifecycle — synchronous answer, no tracked op
+    }
+
+    private static func completion(for kind: OperationKind) -> Completion {
+        switch kind {
+        case .travel: return .deadline
+        case .mine:   return .continuous
+        case .print:  return .enqueued
+        default:      return deadlineCommands.contains(kind.rawValue) ? .deadline : .immediate
+        }
+    }
+
+    /// No-param commands that are nonetheless self-describing with a deadline —
+    /// e.g. `recall` cruises the device home to stow on the nearest craft and
+    /// returns `arrives_at`, so it's a tracked deadline op like travel (its
+    /// tracked-path supersede ends any in-flight mining/travel op).
+    private static let deadlineCommands: Set<String> = ["recall"]
+
+    /// Immediate commands that stop a device's running action — closing its open
+    /// operation so a lingering mining/travel row doesn't survive the stop.
+    /// (`recall` is excluded — it's deadline-tracked and supersedes instead.)
+    private static let terminatingCommands: Set<String> = ["deactivate", "decommission", "stow"]
+
+    /// Map a kind + params onto the generated `oneOf` command body. Parameterized
+    /// commands (travel/mine/print) build their typed schema; simple
+    /// parameter-less lifecycle commands route through `simpleBody`.
     private static func makeBody(
         kind: OperationKind,
         params: CommandParams
@@ -189,11 +311,81 @@ extension CommandClient: DependencyKey {
         case .travel:
             guard let destination = params.destination else { throw CommandError.missingParameter("destination") }
             return .json(.travel(.init(command: "travel", destination: destination)))
+        case .mine:
+            guard let resource = params.resourceType else { throw CommandError.missingParameter("resource_type") }
+            guard let payload = MiningSchema.ResourceTypePayload(rawValue: resource) else {
+                throw CommandError.invalidParameter("resource_type", resource)
+            }
+            return .json(.startMining(.init(command: "start_mining", resourceType: payload, target: params.target)))
+        case .scan:
+            return .json(.systemScan(.init(command: "system_scan")))
+        case .census:
+            return .json(.stellarCensus(.init(command: "stellar_census")))
+        case .retarget:
+            guard let resource = params.resourceType else { throw CommandError.missingParameter("resource_type") }
+            guard let payload = RetargetSchema.ResourceTypePayload(rawValue: resource) else {
+                throw CommandError.invalidParameter("resource_type", resource)
+            }
+            return .json(.retarget(.init(command: "retarget", resourceType: payload)))
+        case .stow:
+            return .json(.stow(.init(command: "stow", target: params.target)))
         case .print:
             guard let deviceType = params.deviceType else { throw CommandError.missingParameter("device_type") }
             return .json(.enqueuePrint(.init(command: "enqueue_print", deviceType: deviceType)))
-        case .mine, .scan, .census:
-            throw CommandError.unsupported(kind)
+        default:
+            guard let body = simpleBody(for: kind.rawValue) else { throw CommandError.unsupported(kind) }
+            return body
+        }
+    }
+
+    /// The supported parameter-less commands, each routed to its discriminated
+    /// `oneOf` case (the body enum is closed, so only vetted verbs dispatch).
+    private static func simpleBody(for command: String) -> Operations.PostV1DevicesDeviceCode.Input.Body? {
+        let schema = NoParam(command: command)
+        switch command {
+        case "activate":        return .json(.activate(schema))
+        case "deactivate":      return .json(.deactivate(schema))
+        case "deploy":          return .json(.deploy(schema))
+        case "recall":          return .json(.recall(schema))
+        case "decommission":    return .json(.decommission(schema))
+        case "clear_queue":     return .json(.clearQueue(schema))
+        case "clear_directive": return .json(.clearDirective(schema))
+        case "assemble":        return .json(.assemble(schema))
+        case "compact":         return .json(.compact(schema))
+        case "launch":          return .json(.launch(schema))
+        case "unfurl":          return .json(.unfurl(schema))
+        case "withdraw":        return .json(.withdraw(schema))
+        case "search":          return .json(.search(schema))
+        case "set_entry_point": return .json(.setEntryPoint(schema))
+        case "detonate":        return .json(.detonate(schema))
+        default:                return nil
+        }
+    }
+
+    /// The set of parameter-less lifecycle commands `simpleBody` can dispatch —
+    /// the device-side gate for surfacing them as confirm-only grid buttons.
+    public static let supportedSimpleCommands: Set<String> = [
+        "activate", "deactivate", "deploy", "recall", "decommission",
+        "clear_queue", "clear_directive", "assemble", "compact", "launch",
+        "unfurl", "withdraw", "search", "set_entry_point", "detonate",
+    ]
+
+    /// The deadline a self-describing command reports, trying the known
+    /// completion-time fields of the shared response in priority order.
+    private static func parseDeadline(from response: CommandResponse) -> Date? {
+        for field in [response.arrivesAt, response.completesAt, response.finalArrivesAt] {
+            if let field, let date = parseTimestamp(field) { return date }
+        }
+        return nil
+    }
+
+    /// A user-facing message for a body-construction failure.
+    private static func describe(_ error: Error) -> String {
+        switch error {
+        case let CommandError.missingParameter(name): return "Missing required parameter: \(name)."
+        case let CommandError.invalidParameter(name, value): return "Invalid \(name): “\(value)”."
+        case let CommandError.unsupported(kind): return "Command not supported: \(kind.rawValue)."
+        default: return error.localizedDescription
         }
     }
 
@@ -250,6 +442,7 @@ extension CommandClient: DependencyKey {
 
 public enum CommandError: Error, Equatable {
     case missingParameter(String)
+    case invalidParameter(String, String)
     case unsupported(OperationKind)
 }
 
