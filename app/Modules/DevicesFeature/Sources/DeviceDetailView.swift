@@ -97,9 +97,9 @@ public struct DeviceDetailView: View {
                         RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
                             .strokeBorder(.rcSeparator, lineWidth: 0.5)
                     )
-                Image(systemName: DevicePresentation.symbol(for: device.deviceType))
-                    .font(.system(size: 22, weight: .medium))
-                    .foregroundStyle(.rcAccent)
+                Image.rcSymbol("device.\(device.deviceType)")
+                    .font(.system(size: 32, weight: .regular))
+                    .foregroundStyle(.rcTextPrimary, .rcAccent, .rcTextSecondary)
             }
             .frame(width: 52, height: 52)
 
@@ -112,6 +112,7 @@ public struct DeviceDetailView: View {
                     Text(device.deviceCode)
                         .font(.rcMono)
                         .foregroundStyle(.rcTextSecondary)
+                        .textSelection(.enabled)
                     if let location = device.location {
                         Text("·").foregroundStyle(.rcTextTertiary)
                         Text(device.locationName ?? location)

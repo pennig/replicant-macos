@@ -14,6 +14,17 @@ import SwiftUI
 
 private let rcBundle: Bundle = .module
 
+// MARK: - Symbols
+
+public extension Image {
+    /// Resolves a custom symbol from the UI module's `Symbols.xcassets`.
+    /// Use this for any asset-catalog image shipped in the design system, since
+    /// callers in other modules would otherwise look in `Bundle.main` and fail.
+    static func rcSymbol(_ name: String) -> Image {
+        Image(name, bundle: rcBundle)
+    }
+}
+
 // MARK: - Semantic colors
 
 // Defined on `ShapeStyle where Self == Color` so each token is usable both as a

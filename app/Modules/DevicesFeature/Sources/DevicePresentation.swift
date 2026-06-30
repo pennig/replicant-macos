@@ -11,20 +11,6 @@ import DependencyClients
 import Foundation
 
 enum DevicePresentation {
-    /// An SF Symbol for a device type.
-    static func symbol(for deviceType: String) -> String {
-        switch deviceType {
-        case "heaven_vessel":     return "paperplane"
-        case "replicant_matrix":  return "square.grid.2x2"
-        case "mining_drone":      return "hammer"
-        case "survey_drone":      return "scope"
-        case "transport_hauler":  return "shippingbox"
-        case "maintenance_drone": return "wrench.and.screwdriver"
-        case "ftl_beacon":        return "antenna.radiowaves.left.and.right"
-        default:                  return "circle.hexagongrid"
-        }
-    }
-
     /// "heaven_vessel" → "Heaven Vessel".
     static func displayName(_ deviceType: String) -> String {
         deviceType
@@ -121,7 +107,7 @@ enum DeviceCommand: Hashable, Identifiable {
     }
 
     private static let simpleSymbols: [String: String] = [
-        "activate": "power", "deactivate": "power",
+        "activate": "bolt", "deactivate": "bolt.slash",
         "deploy": "arrow.up.forward.app", "recall": "arrow.uturn.backward",
         "decommission": "trash", "clear_queue": "trash.slash",
         "clear_directive": "xmark.circle", "assemble": "square.stack.3d.up",

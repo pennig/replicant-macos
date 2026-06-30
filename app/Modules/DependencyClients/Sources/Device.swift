@@ -189,7 +189,7 @@ extension Device {
             for field in fields {
                 if let string = detail[block]?[field]?.stringValue,
                    let date = Self.parseActivityDate(string) {
-                    soonest = soonest.map { min($0, date) } ?? date
+                    soonest = soonest.map { Swift.min($0, date) } ?? date
                 }
             }
         }

@@ -1,0 +1,12 @@
+{
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  },
+  "symbols" : [
+    {
+      "filename" : "device.ami_survey_controller.svg",
+      "idiom" : "universal"
+    }
+  ]
+}

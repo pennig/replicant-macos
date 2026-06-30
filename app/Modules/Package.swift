@@ -224,6 +224,7 @@ let package = Package(
             path: "UI/Sources",
             resources: [
                 .copy("Colors.xcassets"),
+                .copy("Symbols.xcassets"),
             ]
         ),
         .target(

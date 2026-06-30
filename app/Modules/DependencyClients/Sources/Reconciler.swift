@@ -102,6 +102,41 @@ public struct Reconciler: Sendable {
                     try Operation.upsert { updated }.execute(db)
                     logger.info("ingest \(device.deviceCode, privacy: .public): promoted \(op.kind, privacy: .public) op \(op.id, privacy: .public) to active from in-progress snapshot")
 
+                case let op? where op.status != .optimistic && op.kind != activity.kind.rawValue:
+                    // The device has moved on to a *different* activity than the
+                    // open op tracks — the old action finished (we never saw a
+                    // settled status or completion event, because the device went
+                    // straight from one timed action into the next) and a new one
+                    // began. This happens when the transition is server-driven (a
+                    // recalled survey controller resuming a scan, an AMI directive
+                    // re-tasking a drone) rather than via local dispatch, which
+                    // would have superseded the prior op itself. Complete the stale
+                    // op and adopt the current activity, so the inspector stops
+                    // showing the finished task and the deadline scheduler tracks
+                    // the right one instead of re-arming the wrong op to its ETA.
+                    // An `optimistic` op is left for dispatch to confirm.
+                    var stale = op
+                    stale.status = .completed
+                    stale.source = OperationSource.poll
+                    stale.lastConfirmedAt = device.updatedAt
+                    // Complete first so the open-uniqueness index has room for the
+                    // adopted active op in the same transaction.
+                    try Operation.upsert { stale }.execute(db)
+
+                    let adopted = Operation(
+                        id: uuid().uuidString,
+                        entityCode: device.deviceCode,
+                        kind: activity.kind.rawValue,
+                        status: .active,
+                        source: OperationSource.poll,
+                        startedAt: activity.startedAt ?? device.updatedAt,
+                        completesAt: activity.completesAt,
+                        lastConfirmedAt: device.updatedAt,
+                        detail: .object([:])
+                    )
+                    try Operation.insert { adopted }.execute(db)
+                    logger.info("ingest \(device.deviceCode, privacy: .public): completed stale \(op.kind, privacy: .public) op \(op.id, privacy: .public) and adopted \(activity.kind.rawValue, privacy: .public) from in-progress snapshot")
+
                 default:
                     break
                 }

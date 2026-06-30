@@ -154,9 +154,9 @@ private struct BlueprintRow: View {
                     RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
                         .strokeBorder(.rcSeparator, lineWidth: 0.5)
                 )
-            Image(systemName: BlueprintPresentation.symbol(for: blueprint.deviceType))
-                .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(.rcAccent)
+            Image.rcSymbol("device.\(blueprint.deviceType)")
+                .font(.system(size: 15, weight: .regular))
+                .foregroundStyle(.rcTextPrimary, .rcAccent, .rcTextSecondary)
         }
         .frame(width: 30, height: 30)
     }

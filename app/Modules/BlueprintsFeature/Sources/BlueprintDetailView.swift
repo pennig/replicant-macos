@@ -61,9 +61,9 @@ public struct BlueprintDetailView: View {
                         RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
                             .strokeBorder(.rcSeparator, lineWidth: 0.5)
                     )
-                Image(systemName: BlueprintPresentation.symbol(for: blueprint.deviceType))
-                    .font(.system(size: 26, weight: .medium))
-                    .foregroundStyle(.rcAccent)
+                Image.rcSymbol("device.\(blueprint.deviceType)")
+                    .font(.system(size: 26, weight: .regular))
+                    .foregroundStyle(.rcTextPrimary, .rcAccent, .rcTextSecondary)
             }
             .frame(width: 52, height: 52)
 
