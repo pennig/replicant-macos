@@ -99,7 +99,10 @@ private struct DeviceRow: View {
 
     var body: some View {
         HStack(spacing: Space.s) {
-            glyphTile
+            VStack(spacing: Space.xs) {
+                glyphTile
+                capacityBar
+            }
             VStack(alignment: .leading, spacing: Space.xs) {
                 HStack(spacing: Space.s) {
                     Text(DevicePresentation.displayName(device.deviceType))
@@ -118,13 +121,27 @@ private struct DeviceRow: View {
                             .font(.rcMonoSmall)
                             .foregroundStyle(.rcTextTertiary)
                             .lineLimit(1)
+                    } else if let destination = travelDestination {
+                        Label(destination, systemImage: "location.north.line")
+                            .labelStyle(.titleAndIcon)
+                            .font(.rcMonoSmall)
+                            .foregroundStyle(.rcTextTertiary)
+                            .lineLimit(1)
                     }
                     Spacer(minLength: Space.xs)
-                    capacityBar
                 }
             }
         }
         .padding(.vertical, Space.xs)
+    }
+
+    /// The trip's destination code while the device is en route — surfaced only
+    /// when there's no settled `location` to show instead. Prefers the whole
+    /// route's `final_destination` over the active leg's `destination`.
+    private var travelDestination: String? {
+        guard device.derivedActivity?.kind == .travel else { return nil }
+        return device.detail["travel"]?["final_destination"]?.stringValue
+            ?? device.detail["travel"]?["destination"]?.stringValue
     }
 
     private var glyphTile: some View {
@@ -143,20 +160,13 @@ private struct DeviceRow: View {
     }
 
     private var capacityBar: some View {
-        HStack(spacing: Space.xs) {
-            Capsule()
-                .fill(.rcSeparator)
-                .frame(width: 36, height: 4)
-                .overlay(alignment: .leading) {
-                    Capsule()
-                        .fill(.rcAccent)
-                        .frame(width: 36 * device.operationalCapacity / 100, height: 4)
-                }
-            Text("\(Int(device.operationalCapacity))%")
-                .font(.rcMonoSmall)
-                .foregroundStyle(.rcTextTertiary)
-                .monospacedDigit()
-        }
-        .fixedSize()
+        Capsule()
+            .fill(.rcSeparator)
+            .frame(width: 30, height: 4)
+            .overlay(alignment: .leading) {
+                Capsule()
+                    .fill(.rcAccent)
+                    .frame(width: 30 * device.operationalCapacity / 100, height: 4)
+            }
     }
 }

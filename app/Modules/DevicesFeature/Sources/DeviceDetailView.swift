@@ -13,6 +13,7 @@
 
 import ComposableArchitecture
 import DependencyClients
+import IssueReporting
 import SQLiteData
 import SwiftUI
 import UI
@@ -22,16 +23,13 @@ private typealias Operation = DependencyClients.Operation
 
 public struct DeviceDetailView: View {
     let store: StoreOf<DevicesFeature>
-    @FetchAll(Device.all) private var devices
+    /// Loaded lazily by the selection `.task(id:)` below so the query tracks the
+    /// selected device code rather than fetching the whole fleet to filter it.
+    @FetchOne(Device.none) private var device: Device?
     @FetchAll(Operation.order { $0.startedAt.desc() }) private var operations
 
     public init(store: StoreOf<DevicesFeature>) {
         self.store = store
-    }
-
-    private var device: Device? {
-        guard let code = store.selectedDeviceCode else { return nil }
-        return devices.first { $0.deviceCode == code }
     }
 
     /// The device's single open operation, if any.
@@ -43,32 +41,43 @@ public struct DeviceDetailView: View {
     }
 
     public var body: some View {
-        if let device {
-            ScrollView {
-                VStack(alignment: .leading, spacing: Space.xl) {
-                    header(device)
-                    readouts(device)
-                    details(device)
-                    CommandGrid(device: device, store: store)
+        Group {
+            if let device {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: Space.xl) {
+                        header(device)
+                        readouts(device)
+                        details(device)
+                        CommandGrid(device: device, store: store)
+                    }
+                    .padding(Space.xl)
+                    .frame(minWidth: 360, maxWidth: .infinity, alignment: .leading)
                 }
-                .padding(Space.xl)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .navigationTitle(DevicePresentation.displayName(device.deviceType))
+                .alert("Command Failed", isPresented: commandErrorBinding, presenting: store.commandError) { _ in
+                    Button("OK", role: .cancel) { store.send(.dismissCommandError) }
+                } message: { message in
+                    Text(message)
+                }
+                .sheet(isPresented: travelPreviewBinding) {
+                    TravelPlanSheet(store: store)
+                }
+            } else {
+                ContentUnavailableView(
+                    "No Device Selected",
+                    systemImage: SidebarSymbol.devices,
+                    description: Text("Select a device to inspect it.")
+                )
             }
-            .navigationTitle(DevicePresentation.displayName(device.deviceType))
-            .alert("Command Failed", isPresented: commandErrorBinding, presenting: store.commandError) { _ in
-                Button("OK", role: .cancel) { store.send(.dismissCommandError) }
-            } message: { message in
-                Text(message)
+        }
+        // Reload the single-row query whenever the selected device changes.
+        .task(id: store.selectedDeviceCode) {
+            _ = await withErrorReporting {
+                try await $device.load(
+                    Device.where { $0.deviceCode.eq(store.selectedDeviceCode ?? "") },
+                    animation: .default
+                )
             }
-            .sheet(isPresented: travelPreviewBinding) {
-                TravelPlanSheet(store: store)
-            }
-        } else {
-            ContentUnavailableView(
-                "No Device Selected",
-                systemImage: SidebarSymbol.devices,
-                description: Text("Select a device to inspect it.")
-            )
         }
     }
 
@@ -107,6 +116,7 @@ public struct DeviceDetailView: View {
                 Text(DevicePresentation.displayName(device.deviceType))
                     .font(.rcTitle)
                     .foregroundStyle(.rcTextPrimary)
+                    .lineLimit(1)
                 StatusBadge(device.status)
                 HStack(spacing: Space.s) {
                     Text(device.deviceCode)
@@ -120,24 +130,24 @@ public struct DeviceDetailView: View {
                             .foregroundStyle(.rcTextTertiary)
                     }
                 }
+                .lineLimit(1)
             }
-            Spacer(minLength: 0)
-        }
-    }
-
-    // MARK: Readouts — capacity ring + active-task card
-
-    private func readouts(_ device: Device) -> some View {
-        HStack(alignment: .top, spacing: Space.l) {
+            Spacer(minLength: Space.m)
             VStack(spacing: Space.s) {
                 CapacityRing(value: device.operationalCapacity)
                 Text("Capacity")
                     .font(.rcSectionLabel)
                     .foregroundStyle(.rcTextTertiary)
             }
-            ActiveTaskCard(operation: openOperation)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            .fixedSize()
         }
+    }
+
+    // MARK: Readouts — active-task card
+
+    private func readouts(_ device: Device) -> some View {
+        ActiveTaskCard(operation: openOperation)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: Details
@@ -205,13 +215,13 @@ private struct CapacityRing: View {
                 .rotationEffect(.degrees(-90))
             VStack(spacing: 0) {
                 Text("\(Int(value))")
-                    .font(.system(size: 22, weight: .bold))
+                    .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(.rcTextPrimary)
                     .monospacedDigit()
                 Text("%").font(.rcCaption).foregroundStyle(.rcTextTertiary)
             }
         }
-        .frame(width: 88, height: 88)
+        .frame(width: 60, height: 60)
     }
 }
 
@@ -305,6 +315,8 @@ private struct CommandGrid: View {
                             select(command)
                         } label: {
                             Label(command.title, systemImage: command.systemImage)
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
                                 .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(RCButtonStyle(pending == command ? .primary : .secondary))

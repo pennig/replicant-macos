@@ -11,6 +11,7 @@ import ComposableArchitecture
 import SQLiteData
 import SwiftUI
 import UI
+import UniverseModels
 
 public struct StarMapView: View {
     @Bindable var store: StoreOf<StarMapFeature>

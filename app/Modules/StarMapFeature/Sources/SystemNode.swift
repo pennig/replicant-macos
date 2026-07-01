@@ -12,6 +12,7 @@
 import AppKit
 import SceneKit
 import UI
+import UniverseModels
 
 @MainActor
 final class SystemNode: SCNNode {

@@ -17,6 +17,7 @@ import SQLiteData
 import StarMapFeature
 import SwiftUI
 import UI
+import UniverseModels
 
 @main
 struct ReplicantApp: App {
@@ -194,6 +195,8 @@ extension DependencyValues {
         Message.registerMigrations(&migrator)
         Blueprint.registerMigrations(&migrator)
         Star.registerMigrations(&migrator)
+        SystemDetail.registerMigrations(&migrator)
+        LocationFootprint.registerMigrations(&migrator)
         Replicant.registerMigrations(&migrator)
         Device.registerMigrations(&migrator)
         BobnetMessage.registerMigrations(&migrator)

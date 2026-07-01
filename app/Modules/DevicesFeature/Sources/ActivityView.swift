@@ -33,12 +33,12 @@ public struct ActivityView: View {
             if operations.isEmpty {
                 ContentUnavailableView(
                     "No Activity",
-                    systemImage: SidebarSymbol.signals,
+                    systemImage: SidebarSymbol.eventLog,
                     description: Text("Operations across your fleet will appear here.")
                 )
             }
         }
-        .navigationTitle("Activity")
+        .navigationTitle("Event Log")
     }
 }
 

@@ -12,6 +12,7 @@ import ComposableArchitecture
 import DependencyClients
 import Foundation
 import SQLiteData
+import UniverseModels
 
 @Reducer
 public struct StarMapFeature {

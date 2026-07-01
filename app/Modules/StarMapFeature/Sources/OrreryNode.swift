@@ -16,6 +16,7 @@ import AppKit
 import SceneKit
 import simd
 import UI
+import UniverseModels
 
 @MainActor
 final class OrreryNode: SCNNode {

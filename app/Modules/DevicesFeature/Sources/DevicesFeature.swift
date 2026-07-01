@@ -123,6 +123,10 @@ public struct DevicesFeature {
                     // local provenance is preserved, exactly like a relay read.
                     let reconciler = Reconciler()
                     for device in devices { await reconciler.ingest(device) }
+                    // The walk is the authoritative full fleet, so anything local
+                    // and no longer listed (traded away, destroyed) is gone —
+                    // prune it rather than leaving an orphan row in the list.
+                    await reconciler.pruneDevices(presentCodes: devices.map(\.deviceCode))
                     logger.info("cold-load reconciled \(devices.count) devices")
                     await send(.loadSucceeded)
                 } catch: { error, send in

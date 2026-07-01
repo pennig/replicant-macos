@@ -3,6 +3,7 @@ import DependencyClients
 import Foundation
 import SQLiteData
 import Testing
+import UniverseModels
 @testable import StarMapFeature
 
 @Suite struct GalaxyDataTests {

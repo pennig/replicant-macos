@@ -8,8 +8,9 @@
 //    - `StarDetail`        ← app_schemas_scanning_StarDetailSchema
 //    - `HabitableZone`     ← app_schemas_scanning_HabitableZoneSchema
 //    - `PlanetSummary`     ← app_schemas_scanning_PlanetSummarySchema
-//    - `InventoryItem`     ← app_schemas_scanning_InventoryItemSchema
 //    - `AsteroidBeltDetail`← app_schemas_scanning_AsteroidBeltDetailSchema
+//
+//  (`InventoryItem` moved to `UniverseModels` — shared with the locations catalog.)
 //
 //  `SystemModel` (and its `OrreryPlanet`/`OrreryMoon`/`LagrangePoint`/`Vessel`)
 //  is the presentation model the orrery renders. It carries render-tuned fields
@@ -22,6 +23,7 @@
 //
 
 import Foundation
+import UniverseModels
 
 // MARK: - API-shaped scan core
 
@@ -61,15 +63,6 @@ public struct StarDetail: Equatable, Sendable, Codable {
         self.ageMy = ageMy
         self.habitableZone = habitableZone
         self.position = position
-    }
-}
-
-public struct InventoryItem: Equatable, Sendable, Codable {
-    public var resourceType: String
-    public var quantity: Double
-    public init(resourceType: String, quantity: Double) {
-        self.resourceType = resourceType
-        self.quantity = quantity
     }
 }
 

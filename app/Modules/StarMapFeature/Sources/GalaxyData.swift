@@ -15,6 +15,7 @@
 //
 
 import Foundation
+import UniverseModels
 
 public enum GalaxyData {
 

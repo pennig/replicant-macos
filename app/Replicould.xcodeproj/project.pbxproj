@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		C90D75CF2FED785C00B293DE /* AccountManager in Frameworks */ = {isa = PBXBuildFile; productRef = C90D75CE2FED785C00B293DE /* AccountManager */; };
+		C961BC5B2FF5C7AD00D9C273 /* LocationsFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C961BC5A2FF5C7AD00D9C273 /* LocationsFeature */; };
 		C9702B6D2FF202A5002E2CCE /* BlueprintsFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C9702B6C2FF202A5002E2CCE /* BlueprintsFeature */; };
 		C9AB58FE2FEA4A3300536794 /* StarMapFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C9AB58FD2FEA4A3300536794 /* StarMapFeature */; };
 		C9B5305C2FDDD839006F79A8 /* ReplicantApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9B530592FDDD839006F79A8 /* ReplicantApp.swift */; };
@@ -23,6 +24,7 @@
 		C9B5309B2FE1DC5E006F79A8 /* LoginFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C9B5309A2FE1DC5E006F79A8 /* LoginFeature */; };
 		C9B5309D2FE1DEE2006F79A8 /* DependencyClients in Frameworks */ = {isa = PBXBuildFile; productRef = C9B5309C2FE1DEE2006F79A8 /* DependencyClients */; };
 		C9B5309F2FE72B0B006F79A8 /* RawAPIFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C9B5309E2FE72B0B006F79A8 /* RawAPIFeature */; };
+		C9B8FC732FF5BF5D0050BBDC /* UniverseModels in Frameworks */ = {isa = PBXBuildFile; productRef = C9B8FC722FF5BF5D0050BBDC /* UniverseModels */; };
 		C9D902132FE9DDC000781FBB /* MessagesFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C9D902122FE9DDC000781FBB /* MessagesFeature */; };
 		C9F814BE2FEE1EED00ACFAC3 /* GameSync in Frameworks */ = {isa = PBXBuildFile; productRef = C9F814BD2FEE1EED00ACFAC3 /* GameSync */; };
 		C9F814C02FEEB96000ACFAC3 /* DevicesFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C9F814BF2FEEB96000ACFAC3 /* DevicesFeature */; };
@@ -52,6 +54,7 @@
 				C9B5309F2FE72B0B006F79A8 /* RawAPIFeature in Frameworks */,
 				C90D75CF2FED785C00B293DE /* AccountManager in Frameworks */,
 				C9B530972FE1D3AA006F79A8 /* UI in Frameworks */,
+				C9B8FC732FF5BF5D0050BBDC /* UniverseModels in Frameworks */,
 				C9D902132FE9DDC000781FBB /* MessagesFeature in Frameworks */,
 				C9AB58FE2FEA4A3300536794 /* StarMapFeature in Frameworks */,
 				C9B5309D2FE1DEE2006F79A8 /* DependencyClients in Frameworks */,
@@ -59,6 +62,7 @@
 				C9F814C02FEEB96000ACFAC3 /* DevicesFeature in Frameworks */,
 				C9702B6D2FF202A5002E2CCE /* BlueprintsFeature in Frameworks */,
 				C9B530992FE1D3AA006F79A8 /* Utils in Frameworks */,
+				C961BC5B2FF5C7AD00D9C273 /* LocationsFeature in Frameworks */,
 				C9B530952FE1D3AA006F79A8 /* API in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -137,6 +141,8 @@
 				C9F814BD2FEE1EED00ACFAC3 /* GameSync */,
 				C9F814BF2FEEB96000ACFAC3 /* DevicesFeature */,
 				C9702B6C2FF202A5002E2CCE /* BlueprintsFeature */,
+				C9B8FC722FF5BF5D0050BBDC /* UniverseModels */,
+				C961BC5A2FF5C7AD00D9C273 /* LocationsFeature */,
 			);
 			productName = Replicant;
 			productReference = C922A8B62FDC493200431320 /* Replicould.app */;
@@ -457,6 +463,10 @@
 			isa = XCSwiftPackageProductDependency;
 			productName = AccountManager;
 		};
+		C961BC5A2FF5C7AD00D9C273 /* LocationsFeature */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = LocationsFeature;
+		};
 		C9702B6C2FF202A5002E2CCE /* BlueprintsFeature */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = BlueprintsFeature;
@@ -493,6 +503,10 @@
 		C9B5309E2FE72B0B006F79A8 /* RawAPIFeature */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = RawAPIFeature;
+		};
+		C9B8FC722FF5BF5D0050BBDC /* UniverseModels */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = UniverseModels;
 		};
 		C9D902122FE9DDC000781FBB /* MessagesFeature */ = {
 			isa = XCSwiftPackageProductDependency;

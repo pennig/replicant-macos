@@ -167,6 +167,29 @@ public struct Reconciler: Sendable {
         }
     }
 
+    /// Reconcile the local fleet against an authoritative full device list:
+    /// delete any local device whose code is absent from `presentCodes`, along
+    /// with its operation rows. Only the full account walk (cold-load / explicit
+    /// refresh in `DevicesFeature`) knows the *complete* set the account owns, so
+    /// this is the one place a device can leave the fleet — a traded-away or
+    /// destroyed device stops being returned by `GET /v1/devices` and is pruned
+    /// here. Per-device relay reads never carry that "gone" signal, so they must
+    /// not call this.
+    public func pruneDevices(presentCodes: some Sequence<String>) async {
+        @Dependency(\.defaultDatabase) var database
+        let kept = Set(presentCodes)
+        try? await database.write { db in
+            let staleCodes = try Device
+                .select(\.deviceCode)
+                .fetchAll(db)
+                .filter { !kept.contains($0) }
+            guard !staleCodes.isEmpty else { return }
+            try Operation.where { $0.entityCode.in(staleCodes) }.delete().execute(db)
+            try Device.where { $0.deviceCode.in(staleCodes) }.delete().execute(db)
+            logger.info("prune: removed \(staleCodes.count) device(s) absent from full list: \(staleCodes.joined(separator: ", "), privacy: .public)")
+        }
+    }
+
     /// Apply a relay game-event's effect on the `Operation` table. Completion
     /// event types close the device's open operation and fold their result into
     /// its `detail`; everything else is left to the device confirm-read path.

@@ -11,6 +11,7 @@
 //
 
 import Foundation
+import UniverseModels
 
 public enum ChamakuyData {
 

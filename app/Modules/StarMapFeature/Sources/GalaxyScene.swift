@@ -13,6 +13,7 @@ import AppKit
 import SceneKit
 import simd
 import UI
+import UniverseModels
 
 /// Value-typed intents the scene emits upward (translated to store actions by
 /// the SwiftUI Coordinator).

@@ -2,13 +2,12 @@
 //  StarMapModels.swift
 //  StarMapFeature
 //
-//  Value types for the Galaxy Explorer. The core star types mirror the backend
-//  OpenAPI schemas so seed data and (later) live data share one shape:
-//    - `Position`  ← app_schemas_common_PositionSchema
-//    - `StarItem`  ← app_schemas_stars_StarItemSchema
+//  Presentation value types for the Galaxy Explorer. The shared, API-shaped core
+//  (`Position`, `StarItem`, `Recon`, `LifeTier`) now lives in `UniverseModels`;
+//  this file keeps only the map-specific overlays.
 //
 //  `GalaxySystem` is the presentation model the scene/HUD/info-layers consume.
-//  It wraps a `StarItem` and adds overlay fields the *list* schema does not
+//  It wraps a `StarItem` and adds overlay fields the census schema does not
 //  carry (relay mesh membership, presence, device/vessel counts, recon detail,
 //  resource richness, life tier). Those are sourced app-side for now and marked
 //  as pending real endpoints — see `GalaxyData`.
@@ -19,108 +18,9 @@
 //
 
 import Foundation
-
-// MARK: - API-shaped core (mirrors OpenAPI)
-
-/// A point in 3D galactic space. Mirrors `app_schemas_common_PositionSchema`.
-public struct Position: Equatable, Sendable, Codable {
-    public var x: Double
-    public var y: Double
-    public var z: Double
-
-    public init(x: Double, y: Double, z: Double) {
-        self.x = x
-        self.y = y
-        self.z = z
-    }
-
-    /// Euclidean distance to another position (scene units).
-    public func distance(to other: Position) -> Double {
-        let dx = x - other.x, dy = y - other.y, dz = z - other.z
-        return (dx * dx + dy * dy + dz * dz).squareRoot()
-    }
-
-    /// Component-wise difference — used to re-base absolute galactic
-    /// coordinates onto the replicant (so home sits at the scene origin).
-    public static func - (lhs: Position, rhs: Position) -> Position {
-        Position(x: lhs.x - rhs.x, y: lhs.y - rhs.y, z: lhs.z - rhs.z)
-    }
-}
-
-/// A charted star as it appears in the stars list. Mirrors
-/// `app_schemas_stars_StarItemSchema` (camelCased). `hasLife` and `entryPoint`
-/// are nullable in the schema.
-public struct StarItem: Equatable, Sendable, Codable {
-    public var designation: String
-    public var spectralType: String
-    public var color: String
-    public var position: Position
-    public var estimatedPlanets: Int
-    public var explored: Bool
-    public var hasLife: Bool?
-    public var entryPoint: String?
-
-    public init(
-        designation: String,
-        spectralType: String,
-        color: String,
-        position: Position,
-        estimatedPlanets: Int,
-        explored: Bool,
-        hasLife: Bool?,
-        entryPoint: String?
-    ) {
-        self.designation = designation
-        self.spectralType = spectralType
-        self.color = color
-        self.position = position
-        self.estimatedPlanets = estimatedPlanets
-        self.explored = explored
-        self.hasLife = hasLife
-        self.entryPoint = entryPoint
-    }
-}
+import UniverseModels
 
 // MARK: - Overlay taxonomies
-
-/// How thoroughly a system has been reconnoitered. Richer than the list
-/// schema's `explored: Bool` — pending a real recon field.
-public enum Recon: String, Equatable, Sendable, CaseIterable {
-    case scanned   // ● full intel
-    case visited   // ◐ been there · partial intel
-    case aware     // ○ detected only · uncharted
-
-    public var label: String {
-        switch self {
-        case .scanned: "Scanned"
-        case .visited: "Visited"
-        case .aware:   "Aware"
-        }
-    }
-
-    /// Dimming factor applied to the system's glow in the field (1 = full).
-    public var dim: Double {
-        switch self {
-        case .scanned: 1.0
-        case .visited: 0.78
-        case .aware:   0.5
-        }
-    }
-}
-
-/// Detected biosignature tier. Richer than the schema's `hasLife: Bool`.
-public enum LifeTier: String, Equatable, Sendable, CaseIterable {
-    case microbial, flora, fauna
-
-    public var label: String { rawValue.capitalized }
-    public var tier: Int {
-        switch self {
-        case .microbial: 1
-        case .flora:     2
-        case .fauna:     3
-        }
-    }
-}
 
 /// Whose probe presence occupies a system.
 public enum Presence: String, Equatable, Sendable, CaseIterable {

@@ -1,13 +1,16 @@
 //
 //  StarsClient.swift
-//  StarMapFeature
+//  UniverseModels
 //
-//  Surveys nearby stars from `GET /v1/replicants/{code}/stars` through the
+//  Surveys observable stars from `GET /v1/replicants/{code}/stars` through the
 //  generated `ReplicantSpace` client, so the call inherits bearer auth, rate
 //  limiting, and logging from its middleware stack. The endpoint is paged
-//  (~5757 stars, 100/page); `survey` walks every page over a single client —
-//  one rate-limit governor shared across the whole walk — yielding each page as
-//  it lands so the reducer can persist and report progress incrementally.
+//  (thousands of stars); `survey` walks every page over a single client — one
+//  rate-limit governor shared across the whole walk — yielding each page as it
+//  lands so callers can persist and report progress incrementally.
+//
+//  This is the shared root survey: both the star map and the locations catalog
+//  build atop the `stars` table this client fills.
 //
 
 import API
@@ -15,7 +18,7 @@ import ComposableArchitecture
 import DependencyClients
 import Foundation
 
-/// One page of the nearby-stars listing.
+/// One page of the observable-stars listing.
 public struct StarPage: Equatable, Sendable {
     public var stars: [StarItem]
     public var page: Int
@@ -38,7 +41,7 @@ public struct StarPage: Equatable, Sendable {
 }
 
 public struct StarsClient: Sendable {
-    /// Walk every page of the nearby-stars listing, yielding each page as it
+    /// Walk every page of the observable-stars listing, yielding each page as it
     /// arrives. One generated client (one rate-limit governor) is shared across
     /// the survey. The stream finishes when the last page is read, or throws if
     /// any request fails.
@@ -94,8 +97,8 @@ extension StarsClient: TestDependencyKey {
     public static let previewValue = StarsClient(survey: { _, _ in
         AsyncThrowingStream { continuation in
             continuation.yield(StarPage(
-                stars: GalaxyData.systems.map(\.star), page: 1, perPage: 100,
-                totalStars: GalaxyData.systems.count, totalPages: 1,
+                stars: StarItem.previewSeed, page: 1, perPage: 100,
+                totalStars: StarItem.previewSeed.count, totalPages: 1,
                 replicantPosition: Position(x: 0, y: 0, z: 0)
             ))
             continuation.finish()
@@ -108,6 +111,29 @@ extension DependencyValues {
         get { self[StarsClient.self] }
         set { self[StarsClient.self] = newValue }
     }
+}
+
+// MARK: - Preview seed
+
+extension StarItem {
+    /// A tiny, self-contained census used only by `StarsClient.previewValue`.
+    static let previewSeed: [StarItem] = [
+        StarItem(
+            designation: "SOL", spectralType: "G2", color: "yellow-white",
+            position: Position(x: 0, y: 0, z: 0), estimatedPlanets: 8,
+            explored: true, hasLife: true, entryPoint: "SOL-5-L4"
+        ),
+        StarItem(
+            designation: "UNALEDI", spectralType: "M1", color: "Red",
+            position: Position(x: 0.131, y: -1.68, z: 1.515), estimatedPlanets: 6,
+            explored: true, hasLife: false, entryPoint: "UNALEDI-6-L4"
+        ),
+        StarItem(
+            designation: "DABAH", spectralType: "M9", color: "Red",
+            position: Position(x: 0.433, y: -0.039, z: -4.634), estimatedPlanets: 6,
+            explored: false, hasLife: nil, entryPoint: nil
+        ),
+    ]
 }
 
 // MARK: - Mapping (generated schema → models)

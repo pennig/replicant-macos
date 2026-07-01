@@ -13,11 +13,13 @@ let package = Package(
         .library(name: "DependencyClients", targets: ["DependencyClients"]),
         .library(name: "DevicesFeature", targets: ["DevicesFeature"]),
         .library(name: "GameSync", targets: ["GameSync"]),
+        .library(name: "LocationsFeature", targets: ["LocationsFeature"]),
         .library(name: "LoginFeature", targets: ["LoginFeature"]),
         .library(name: "MessagesFeature", targets: ["MessagesFeature"]),
         .library(name: "RawAPIFeature", targets: ["RawAPIFeature"]),
         .library(name: "StarMapFeature", targets: ["StarMapFeature"]),
         .library(name: "UI", targets: ["UI"]),
+        .library(name: "UniverseModels", targets: ["UniverseModels"]),
         .library(name: "Utils", targets: ["Utils"]),
     ],
     dependencies: [
@@ -154,6 +156,26 @@ let package = Package(
             path: "GameSync/Tests"
         ),
         .target(
+            name: "LocationsFeature",
+            dependencies: [
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "SQLiteData", package: "sqlite-data"),
+                "DependencyClients",
+                "UI",
+                "UniverseModels",
+            ],
+            path: "LocationsFeature/Sources"
+        ),
+        .testTarget(
+            name: "LocationsFeatureTests",
+            dependencies: [
+                "LocationsFeature",
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "SQLiteData", package: "sqlite-data"),
+            ],
+            path: "LocationsFeature/Tests"
+        ),
+        .target(
             name: "LoginFeature",
             dependencies: [
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
@@ -211,12 +233,13 @@ let package = Package(
                 "API",
                 "DependencyClients",
                 "UI",
+                "UniverseModels",
             ],
             path: "StarMapFeature/Sources"
         ),
         .testTarget(
             name: "StarMapFeatureTests",
-            dependencies: ["StarMapFeature"],
+            dependencies: ["StarMapFeature", "UniverseModels"],
             path: "StarMapFeature/Tests"
         ),
         .target(
@@ -226,6 +249,21 @@ let package = Package(
                 .copy("Colors.xcassets"),
                 .copy("Symbols.xcassets"),
             ]
+        ),
+        .target(
+            name: "UniverseModels",
+            dependencies: [
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "SQLiteData", package: "sqlite-data"),
+                "API",
+                "DependencyClients",
+            ],
+            path: "UniverseModels/Sources"
+        ),
+        .testTarget(
+            name: "UniverseModelsTests",
+            dependencies: ["UniverseModels"],
+            path: "UniverseModels/Tests"
         ),
         .target(
             name: "Utils",

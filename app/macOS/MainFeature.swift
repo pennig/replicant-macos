@@ -12,6 +12,7 @@ import BlueprintsFeature
 import ComposableArchitecture
 import DependencyClients
 import DevicesFeature
+import LocationsFeature
 import MessagesFeature
 import RawAPIFeature
 import SQLiteData
@@ -24,9 +25,9 @@ import UI
 /// The categories shown in the sidebar, grouped into three sections.
 enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
     // Catalog
-    case stars, devices, replicants, blueprints
+    case stars, locations, devices, replicants, blueprints
     // Operations
-    case printQueue, signals
+    case printQueue
     // Comms
     case messages, bobnet, eventLog
 
@@ -35,11 +36,11 @@ enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
     var title: String {
         switch self {
         case .stars: "Stars"
+        case .locations: "Locations"
         case .devices: "Devices"
         case .replicants: "Replicants"
         case .blueprints: "Blueprints"
         case .printQueue: "Print Queue"
-        case .signals: "Signals"
         case .messages: "Messages"
         case .bobnet: "Bobnet"
         case .eventLog: "Event Log"
@@ -49,22 +50,22 @@ enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
     var symbol: String {
         switch self {
         case .stars: "sparkles"
+        case .locations: "map"
         case .devices: "circle.hexagongrid"
         case .replicants: "point.3.connected.trianglepath.dotted"
         case .blueprints: "doc.plaintext"
         case .printQueue: "printer"
-        case .signals: "antenna.radiowaves.left.and.right"
         case .messages: "envelope"
         case .bobnet: "bubble.left.and.bubble.right"
         case .eventLog: "list.bullet.rectangle"
         }
     }
 
-    /// Some categories show content only — no detail pane (Galaxy Map, Event Log,
-    /// and the live ledgers Activity/Bobnet).
+    /// Some categories show content only — no detail pane (Galaxy Map, Bobnet,
+    /// and the live Event Log ledger).
     var hasDetail: Bool {
         switch self {
-        case .eventLog, .stars, .signals, .bobnet: false
+        case .eventLog, .stars, .bobnet: false
         default: true
         }
     }
@@ -80,8 +81,8 @@ enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
     }
 
     static let groups: [Group] = [
-        Group(id: "Catalog", items: [.stars, .devices, .replicants, .blueprints]),
-        Group(id: "Operations", items: [.printQueue, .signals]),
+        Group(id: "Catalog", items: [.stars, .locations, .devices, .replicants, .blueprints]),
+        Group(id: "Operations", items: [.printQueue]),
         Group(id: "Comms", items: [.messages, .bobnet, .eventLog]),
     ]
 }
@@ -112,6 +113,8 @@ struct MainFeature {
         var devices: DevicesFeature.State
         /// The unlocked blueprint catalog (Blueprints view) — list + inspector.
         var blueprints: BlueprintsFeature.State
+        /// The stellar-locations catalog (Locations view) — disclosure list + inspector.
+        var locations: LocationsFeature.State
 
         init(
             apiKey: String,
@@ -128,6 +131,7 @@ struct MainFeature {
             self.starMap = StarMapFeature.State()
             self.devices = DevicesFeature.State()
             self.blueprints = BlueprintsFeature.State()
+            self.locations = LocationsFeature.State()
         }
     }
 
@@ -140,6 +144,7 @@ struct MainFeature {
         case starMap(StarMapFeature.Action)
         case devices(DevicesFeature.Action)
         case blueprints(BlueprintsFeature.Action)
+        case locations(LocationsFeature.Action)
 
         enum Delegate {
             case loggedOut
@@ -163,6 +168,9 @@ struct MainFeature {
         Scope(state: \.blueprints, action: \.blueprints) {
             BlueprintsFeature()
         }
+        Scope(state: \.locations, action: \.locations) {
+            LocationsFeature()
+        }
         Reduce { state, action in
             switch action {
             case .binding(\.category):
@@ -179,7 +187,7 @@ struct MainFeature {
             case .logoutButtonTapped:
                 return .send(.delegate(.loggedOut))
 
-            case .messages, .rawAPI, .starMap, .devices, .blueprints:
+            case .messages, .rawAPI, .starMap, .devices, .blueprints, .locations:
                 return .none
             }
         }
@@ -281,6 +289,11 @@ struct MainView: View {
         store.scope(state: \.blueprints, action: \.blueprints)
     }
 
+    /// The Locations catalog store, scoped from the main session.
+    private var locationsStore: StoreOf<LocationsFeature> {
+        store.scope(state: \.locations, action: \.locations)
+    }
+
     // — Content: a selectable list (or, for the Event Log, a plain list) —
     @ViewBuilder private var content: some View {
         if store.category == .messages {
@@ -291,7 +304,9 @@ struct MainView: View {
             DevicesListView(store: devicesStore)
         } else if store.category == .blueprints {
             BlueprintsListView(store: blueprintsStore)
-        } else if store.category == .signals {
+        } else if store.category == .locations {
+            LocationsListView(store: locationsStore)
+        } else if store.category == .eventLog {
             ActivityView()
         } else if store.category == .bobnet {
             BobnetView()
@@ -325,6 +340,8 @@ struct MainView: View {
             DeviceDetailView(store: devicesStore)
         } else if store.category == .blueprints {
             BlueprintDetailView(store: blueprintsStore)
+        } else if store.category == .locations {
+            LocationDetailView(store: locationsStore)
         } else if let category = store.category, let selection = store.detailSelection {
             VStack(spacing: 12) {
                 Image(systemName: category.symbol).font(.system(size: 48)).foregroundStyle(.tint)

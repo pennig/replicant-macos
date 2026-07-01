@@ -1,12 +1,12 @@
 //
 //  Star.swift
-//  StarMapFeature
+//  UniverseModels
 //
-//  The locally-persisted star record. Surveyed from
-//  `GET /v1/replicants/{code}/stars` (paged) and upserted into SQLite so the
-//  galaxy reads instantly offline and survives relaunches. The schema columns
-//  mirror `app_schemas_stars_StarItemSchema`; on top of those we track three
-//  local lifecycle timestamps that the survey never overwrites:
+//  The locally-persisted star record — the root of the universe tree. Surveyed
+//  from `GET /v1/replicants/{code}/stars` (paged) and upserted into SQLite so the
+//  galaxy and the locations catalog read instantly offline and survive relaunches.
+//  The schema columns mirror `app_schemas_stars_StarItemSchema`; on top of those
+//  we track three local lifecycle timestamps that the survey never overwrites:
 //    - `createdAt`      — first time we stored this star locally
 //    - `firstVisitedAt` — first time the replicant visited it (set later)
 //    - `fullyScannedAt` — when its system became fully scanned (set later)

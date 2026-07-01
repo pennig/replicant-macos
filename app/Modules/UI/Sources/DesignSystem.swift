@@ -20,8 +20,12 @@ public extension Image {
     /// Resolves a custom symbol from the UI module's `Symbols.xcassets`.
     /// Use this for any asset-catalog image shipped in the design system, since
     /// callers in other modules would otherwise look in `Bundle.main` and fail.
-    static func rcSymbol(_ name: String) -> Image {
-        Image(name, bundle: rcBundle)
+    static func rcSymbol(_ name: String, fallback: String = "circle.hexagonpath") -> Image {
+        if rcBundle.image(forResource: name) != nil {
+            Image(name, bundle: rcBundle)
+        } else {
+            Image(systemName: fallback)
+        }
     }
 }
 
@@ -179,8 +183,6 @@ public enum SidebarSymbol {
     public static let devices    = "circle.hexagongrid"
     public static let replicants = "point.3.connected.trianglepath.dotted"
     public static let blueprints = "doc.plaintext"
-    public static let printQueue = "printer"
-    public static let signals    = "antenna.radiowaves.left.and.right"
     public static let messages   = "envelope"
     public static let bobnet     = "bubble.left.and.bubble.right"
     public static let eventLog   = "list.bullet.rectangle"
