@@ -62,6 +62,40 @@ struct ReplicantApp: App {
             }
         )
 
+        // "event" (Locations): passively refresh the catalog. Shops,
+        // megastructures/objects, and the outer system live ONLY in the scan
+        // response (never the locations endpoint), so when an event implies the
+        // current system's observable state changed — an arrival, a megastructure
+        // contribution, a new object/threat, a shop or location event — re-scan
+        // (free, current-system) and merge into `SystemDetail`. Excludes
+        // scan-echo event types so our own scan can't feed back into a loop, and
+        // coalesces so at most one passive scan runs at a time.
+        let passiveScanInFlight = LockIsolated(false)
+        gameSync.registerRoute(
+            RelayRoute(id: "locations.scan", type: "event") { event in
+                let triggers = ["arrived", "megastructure", "contribut", "object", "asteroid", "shop", "location_event"]
+                let type = (event.eventType ?? "").lowercased()
+                guard triggers.contains(where: type.contains) else { return }
+                // Atomic test-and-set: skip if a passive scan is already running.
+                let claimed = passiveScanInFlight.withValue { inFlight -> Bool in
+                    if inFlight { return false }
+                    inFlight = true
+                    return true
+                }
+                guard claimed else { return }
+                defer { passiveScanInFlight.withValue { $0 = false } }
+
+                @Dependency(\.locationsClient) var locationsClient
+                @Dependency(\.defaultDatabase) var database
+                var code = event.replicantCode
+                if code == nil {
+                    code = try? await database.read { db in try Replicant.fetchAll(db).first?.replicantCode }
+                }
+                guard let code, !code.isEmpty else { return }
+                try? await locationsClient.scanAndPersist(replicantCode: code)
+            }
+        )
+
         // Start consuming the relay on login, stop on logout.
         accountManager.registerHandler(
             SessionLifecycleHandler(

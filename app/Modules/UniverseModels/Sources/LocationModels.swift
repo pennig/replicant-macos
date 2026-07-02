@@ -166,46 +166,67 @@ public enum SpecialSiteKind: String, Equatable, Sendable, Codable, CaseIterable 
     }
 }
 
-/// A per-device-type contribution requirement for a megastructure.
+/// A per-device-type contribution requirement for a megastructure. Mirrors the
+/// scan's `requirements` dict entries: `{current, remaining, complete, required}`.
 public struct StructureRequirement: Identifiable, Equatable, Sendable, Codable {
     public var deviceType: String
-    public var needed: Int
-    public var contributed: Int
+    public var required: Int
+    public var current: Int
+    public var remaining: Int
+    public var complete: Bool
     public var id: String { deviceType }
-    public init(deviceType: String, needed: Int, contributed: Int = 0) {
+    public init(deviceType: String, required: Int, current: Int = 0, remaining: Int = 0, complete: Bool = false) {
         self.deviceType = deviceType
-        self.needed = needed
-        self.contributed = contributed
+        self.required = required
+        self.current = current
+        self.remaining = remaining
+        self.complete = complete
     }
 }
 
 /// A location that isn't a planet/moon/belt: a lagrange point, megastructure,
-/// or outer-system region (Kuiper/Oort/system object). `parentBody` names the
-/// planet a lagrange point leads. For megastructures, `progress` (0…1) and
-/// `requirements` track galaxy-wide construction.
+/// outer-system region (Kuiper/Oort), or system object. `parentBody` names the
+/// planet a lagrange point leads. For megastructures, `progressPercentage`
+/// (0…100) and `requirements` track galaxy-wide construction. `objectType` is
+/// the scan's raw discriminator ("megastructure", "incoming_asteroid", …) and
+/// `deadline` marks time-bound objects (e.g. an inbound impactor).
 public struct SpecialSite: Identifiable, Equatable, Sendable, Codable {
     public var designation: String
     public var kind: SpecialSiteKind
+    public var objectType: String?
     public var name: String?
+    public var title: String?
+    public var siteDescription: String?
     public var label: String?
+    public var status: String?
+    public var stage: String?
     public var parentBody: String?
     public var orbitalDistanceAu: Double?
-    public var progress: Double?
+    public var progressPercentage: Double?
+    public var deadline: String?
     public var requirements: [StructureRequirement]
     public var id: String { designation }
 
     public init(
-        designation: String, kind: SpecialSiteKind, name: String? = nil, label: String? = nil,
-        parentBody: String? = nil, orbitalDistanceAu: Double? = nil, progress: Double? = nil,
+        designation: String, kind: SpecialSiteKind, objectType: String? = nil, name: String? = nil,
+        title: String? = nil, siteDescription: String? = nil, label: String? = nil,
+        status: String? = nil, stage: String? = nil, parentBody: String? = nil,
+        orbitalDistanceAu: Double? = nil, progressPercentage: Double? = nil, deadline: String? = nil,
         requirements: [StructureRequirement] = []
     ) {
         self.designation = designation
         self.kind = kind
+        self.objectType = objectType
         self.name = name
+        self.title = title
+        self.siteDescription = siteDescription
         self.label = label
+        self.status = status
+        self.stage = stage
         self.parentBody = parentBody
         self.orbitalDistanceAu = orbitalDistanceAu
-        self.progress = progress
+        self.progressPercentage = progressPercentage
+        self.deadline = deadline
         self.requirements = requirements
     }
 }
@@ -216,11 +237,20 @@ public struct ShopTrade: Identifiable, Equatable, Sendable, Codable {
     public var tradeCode: String
     public var name: String
     public var currentStock: Int?
+    /// What the trade costs: resource name → quantity.
+    public var criteria: [String: Double]
+    /// What the trade yields: device type → count.
+    public var rewards: [String: Int]
     public var id: String { tradeCode }
-    public init(tradeCode: String, name: String, currentStock: Int? = nil) {
+    public init(
+        tradeCode: String, name: String, currentStock: Int? = nil,
+        criteria: [String: Double] = [:], rewards: [String: Int] = [:]
+    ) {
         self.tradeCode = tradeCode
         self.name = name
         self.currentStock = currentStock
+        self.criteria = criteria
+        self.rewards = rewards
     }
 }
 

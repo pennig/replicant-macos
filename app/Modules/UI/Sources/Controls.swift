@@ -343,22 +343,37 @@ public struct RCSegmentedControl<Option: Hashable>: View {
 /// macOS pop-up button built on a native `Menu` + `Picker`, so the popover is
 /// the system Liquid-Glass surface and the chosen row gets the OS checkmark.
 /// The trigger reads like an `RCField`: leading glyph · mono value · chevron.
-public struct RCValueSelect: View {
+public struct RCValueSelect<Value: Hashable>: View {
     let title: String
     let systemImage: String?
-    let options: [String]
-    @Binding var selection: String
+    /// Ordered (label, value) pairs. Stored as an array so both a
+    /// dictionary-literal (`KeyValuePairs`, which preserves order — a plain
+    /// `Dictionary` does not) and a bare `[String]` can construct it.
+    let options: [(label: String, value: Value)]
+    @Binding var selection: Value
 
+    /// The ergonomic initializer: pass options as a dictionary literal, e.g.
+    /// `["All": Filter.all, "Explored": .explored]`, and bind directly to the
+    /// value type — no string round-tripping at the call site.
     public init(_ title: String, systemImage: String? = nil,
-                options: [String], selection: Binding<String>) {
-        self.title = title; self.systemImage = systemImage
-        self.options = options; self._selection = selection
+                options: KeyValuePairs<String, Value>, selection: Binding<Value>) {
+        self.title = title
+        self.systemImage = systemImage
+        self.options = options.map { (label: $0.key, value: $0.value) }
+        self._selection = selection
+    }
+
+    /// The label shown in the trigger for the current selection.
+    private var selectedLabel: String {
+        options.first { $0.value == selection }?.label ?? String(describing: selection)
     }
 
     public var body: some View {
         Menu {
             Picker(title, selection: $selection) {
-                ForEach(options, id: \.self) { Text($0).tag($0) }
+                ForEach(options.indices, id: \.self) { index in
+                    Text(options[index].label).tag(options[index].value)
+                }
             }
             .pickerStyle(.inline)
         } label: {
@@ -368,7 +383,7 @@ public struct RCValueSelect: View {
                         .font(.system(size: 13))
                         .foregroundStyle(.rcTextTertiary)
                 }
-                Text(selection)
+                Text(selectedLabel)
                     .font(.rcMono)
                     .foregroundStyle(.rcTextPrimary)
                 Spacer(minLength: Space.xs)
@@ -391,6 +406,18 @@ public struct RCValueSelect: View {
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
         .fixedSize()
+    }
+}
+
+public extension RCValueSelect where Value == String {
+    /// Convenience for a plain list of strings where the label *is* the value
+    /// (e.g. runtime-built option lists). Keeps existing call sites working.
+    init(_ title: String, systemImage: String? = nil,
+         options: [String], selection: Binding<String>) {
+        self.title = title
+        self.systemImage = systemImage
+        self.options = options.map { (label: $0, value: $0) }
+        self._selection = selection
     }
 }
 

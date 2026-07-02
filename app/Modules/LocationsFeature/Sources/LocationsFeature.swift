@@ -16,6 +16,7 @@
 //
 
 import ComposableArchitecture
+import DependencyClients
 import Foundation
 import SQLiteData
 import UniverseModels
@@ -31,7 +32,11 @@ public struct LocationsFeature {
         public var searchText: String
         /// Systems currently being hydrated — guards duplicate fetches.
         public var hydrating: Set<String>
+        /// True while a full scan of the current system is in flight.
+        public var isScanning: Bool
         public var errorMessage: String?
+        /// The active replicant, used to scan its current system.
+        @Shared(.appStorage(Account.activeReplicantCodeKey)) public var activeReplicantCode: String?
 
         public init(
             selection: String? = nil,
@@ -43,6 +48,7 @@ public struct LocationsFeature {
             self.filter = filter
             self.searchText = ""
             self.hydrating = []
+            self.isScanning = false
             self.errorMessage = nil
         }
     }
@@ -53,6 +59,9 @@ public struct LocationsFeature {
         case hydrate(system: String, body: String?)
         case hydrated(String)
         case hydrateFailed(system: String, message: String)
+        case scanRequested
+        case scanFinished
+        case scanFailed(String)
         case loadFailed(String)
         case dismissError
     }
@@ -97,10 +106,21 @@ public struct LocationsFeature {
                 let locationsClient = self.locationsClient
                 let now = self.now
                 return .run { send in
-                    // Star-level detail: roster, belts, counts, events.
-                    let starSystem = try await locationsClient.system(system)
-                    var assembled = starSystem
-                    // If a specific body was selected, fetch and merge its scan.
+                    // Start from the persisted detail so previously-hydrated
+                    // bodies (e.g. a planet's other moons) aren't clobbered by the
+                    // roster — the star-level response carries no moon/body detail.
+                    // Only fetch the roster when we have nothing cached yet.
+                    let cached = try await database.read { db in
+                        try SystemDetail.where { $0.designation.eq(system) }.fetchOne(db)
+                    }
+                    var assembled: StarSystem
+                    if let existing = try cached?.system() {
+                        assembled = existing
+                    } else {
+                        assembled = try await locationsClient.system(system)
+                    }
+                    // If a specific body was selected, fetch and merge its scan
+                    // (this updates just that body, preserving its siblings).
                     if let body, body != system {
                         if let detail = try? await locationsClient.body(body) {
                             assembled = assembled.applying(detail)
@@ -126,6 +146,29 @@ public struct LocationsFeature {
 
             case let .hydrateFailed(system, message):
                 state.hydrating.remove(system)
+                state.errorMessage = message
+                return .none
+
+            case .scanRequested:
+                guard let code = state.activeReplicantCode, !state.isScanning else { return .none }
+                state.isScanning = true
+                let locationsClient = self.locationsClient
+                return .run { send in
+                    // Scan the current system — the only source of shops,
+                    // megastructures/objects, and the outer system — and overlay
+                    // it onto any already-hydrated detail.
+                    try await locationsClient.scanAndPersist(replicantCode: code)
+                    await send(.scanFinished)
+                } catch: { error, send in
+                    await send(.scanFailed(error.localizedDescription))
+                }
+
+            case .scanFinished:
+                state.isScanning = false
+                return .none
+
+            case let .scanFailed(message):
+                state.isScanning = false
                 state.errorMessage = message
                 return .none
 

@@ -176,15 +176,35 @@ struct RawLagrange: Decodable {
 struct RawMegastructure: Decodable {
     var designation: String?
     var name: String?
-    var progress: Double?
-    // requirements shape unconfirmed live; accept the documented per-type form.
-    var requirements: [RawStructureRequirement]?
+    var title: String?
+    var objectType: String?
+    var status: String?
+    var stage: String?
+    var progressPercentage: Double?
+    var orbitalDistanceAu: Double?
+    var deadline: String?
+    /// `{device_type: {current, remaining, complete, required}}`.
+    var requirements: [String: RawRequirement]?
 }
 
-struct RawStructureRequirement: Decodable {
-    var deviceType: String?
-    var needed: Int?
-    var contributed: Int?
+/// One `requirements` entry (shared by the location detail + scan responses).
+struct RawRequirement: Decodable {
+    var current: Int?
+    var remaining: Int?
+    var complete: Bool?
+    var required: Int?
+}
+
+extension Dictionary where Key == String, Value == RawRequirement {
+    var domain: [StructureRequirement] {
+        map { deviceType, r in
+            StructureRequirement(
+                deviceType: deviceType, required: r.required ?? 0,
+                current: r.current ?? 0, remaining: r.remaining ?? 0, complete: r.complete ?? false
+            )
+        }
+        .sorted { $0.deviceType < $1.deviceType }
+    }
 }
 
 struct RawEvent: Decodable {
@@ -446,13 +466,12 @@ extension RawLocation {
         case "megastructure":
             guard let designation = megastructure?.designation ?? location else { return nil }
             return .special(SpecialSite(
-                designation: designation, kind: .megastructure, name: megastructure?.name,
-                progress: megastructure?.progress,
-                requirements: (megastructure?.requirements ?? []).compactMap { r in
-                    r.deviceType.map {
-                        StructureRequirement(deviceType: $0, needed: r.needed ?? 0, contributed: r.contributed ?? 0)
-                    }
-                }
+                designation: designation, kind: .megastructure, objectType: megastructure?.objectType,
+                name: megastructure?.name, title: megastructure?.title,
+                status: megastructure?.status, stage: megastructure?.stage,
+                orbitalDistanceAu: megastructure?.orbitalDistanceAu,
+                progressPercentage: megastructure?.progressPercentage, deadline: megastructure?.deadline,
+                requirements: (megastructure?.requirements ?? [:]).domain
             ))
 
         case "kuiper", "oort", "object":

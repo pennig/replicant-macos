@@ -43,14 +43,39 @@ public struct LocationsClient: Sendable {
     /// into the tree in place of its roster stub.
     public var body: @Sendable (_ designation: String) async throws -> BodyDetail
 
+    /// Full system scan of the replicant's current system — the only source of
+    /// shops, megastructures/objects, and the outer system. Returns a
+    /// `StarSystem` to merge (see `StarSystem.mergingScan`).
+    public var scan: @Sendable (_ replicantCode: String) async throws -> StarSystem
+
     public init(
         footprint: @escaping @Sendable () async throws -> [String: LocationCounts],
         system: @escaping @Sendable (String) async throws -> StarSystem,
-        body: @escaping @Sendable (String) async throws -> BodyDetail
+        body: @escaping @Sendable (String) async throws -> BodyDetail,
+        scan: @escaping @Sendable (String) async throws -> StarSystem
     ) {
         self.footprint = footprint
         self.system = system
         self.body = body
+        self.scan = scan
+    }
+}
+
+extension LocationsClient {
+    /// Scan the replicant's current system and persist the result, overlaying it
+    /// onto any already-hydrated `SystemDetail` (preserving per-body scan detail).
+    /// Shared by the explicit Scan action and the passive GameSync capture.
+    public func scanAndPersist(replicantCode: String) async throws {
+        @Dependency(\.defaultDatabase) var database
+        @Dependency(\.date.now) var now
+        let scanned = try await scan(replicantCode)
+        try await database.write { db in
+            let existing = try SystemDetail
+                .where { $0.designation.eq(scanned.designation) }.fetchOne(db)
+            let merged = (try existing?.system())?.mergingScan(scanned) ?? scanned
+            let row = try SystemDetail(system: merged, hydratedAt: now)
+            try SystemDetail.upsert { row }.execute(db)
+        }
     }
 }
 
@@ -77,6 +102,25 @@ extension LocationsClient: DependencyKey {
             let raw = try await fetchLocation(designation)
             guard let detail = raw.bodyDetail() else { throw LocationsError.malformed }
             return detail
+        },
+        scan: { replicantCode in
+            @Dependency(\.gameClient) var gameClient
+            let client = gameClient.make()
+            let output = try await client.postV1ReplicantsReplicantCodeScan(
+                path: .init(replicantCode: replicantCode)
+            )
+            switch output {
+            case .ok(let ok):
+                let raw = try LocationDecoding.reinterpret(try ok.body.json, as: RawScan.self)
+                guard let system = raw.system() else { throw LocationsError.malformed }
+                return system
+            case .notFound:
+                throw LocationsError.notFound
+            case .badRequest:
+                throw LocationsError.unexpected(400)
+            case .default(let statusCode, _):
+                throw LocationsError.unexpected(statusCode)
+            }
         }
     )
 
@@ -108,7 +152,8 @@ extension LocationsClient: TestDependencyKey {
     public static let testValue = LocationsClient(
         footprint: { [:] },
         system: { _ in throw LocationsError.notExplored },
-        body: { _ in throw LocationsError.notFound }
+        body: { _ in throw LocationsError.notFound },
+        scan: { _ in throw LocationsError.notFound }
     )
 
     public static let previewValue = LocationsClient(
@@ -132,6 +177,15 @@ extension LocationsClient: TestDependencyKey {
         },
         body: { designation in
             .planet(Planet(designation: designation, type: "Terrestrial", recon: .scanned))
+        },
+        scan: { _ in
+            StarSystem(
+                designation: "SOL", star: SystemStar(designation: "SOL", stellarClass: "G2"),
+                recon: .scanned, systemScanned: true,
+                structures: [SpecialSite(designation: "EXODUS-ARK-001", kind: .megastructure,
+                                         objectType: "megastructure", progressPercentage: 100)],
+                shops: [Shop(controllerCode: "043CA0A9", shopName: "Riker's Lunar Supplies", location: "SOL-3-1")]
+            )
         }
     )
 }

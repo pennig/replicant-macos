@@ -4,9 +4,16 @@
 //
 //  The catalog's content pane: a hierarchical disclosure list of star systems →
 //  (belts + planets) → moons, filterable by explored/uncharted and sortable by
-//  name, distance-from-probe, or inventory. Rows and tree are reconstructed from
-//  observed SQLite queries (census `Star`, hydrated `SystemDetail` blobs,
-//  `LocationFootprint`); the reducer only tracks selection/sort/filter.
+//  name, distance-from-probe, or inventory.
+//
+//  Performance notes (the census is ~5,770 systems):
+//    - Rows render through the lazy `List(_:children:selection:)` initializer, so
+//      only visible rows are realized (a `List { OutlineGroup }` realizes the
+//      whole tree eagerly — death on scroll).
+//    - The tree is built OFF the render path: a detached task recomputes it into
+//      `@State` only when its inputs actually change (`forestKey`), never per
+//      body evaluation. Selection/scroll no longer rebuild 5,770 nodes.
+//    - Search + filter are pushed into the SQL query so the built set shrinks.
 //
 
 import ComposableArchitecture
@@ -25,46 +32,60 @@ public struct LocationsListView: View {
     @FetchAll(Replicant.all) private var replicants
     @FetchOne(Star.none) private var myStar: Star?
 
+    /// The built tree, recomputed off-main only when `forestKey` changes.
+    @State private var forest: [LocationNode] = []
+
     public init(store: StoreOf<LocationsFeature>) {
         self.store = store
     }
 
-    private var detailMap: [String: StarSystem] {
-        Dictionary(
-            systemDetails.compactMap { row in (try? row.system()).map { (row.designation, $0) } },
-            uniquingKeysWith: { a, _ in a }
-        )
-    }
-
-    private var footprintMap: [String: LocationCounts] {
-        Dictionary(footprints.map { ($0.location, $0.counts) }, uniquingKeysWith: { a, _ in a })
-    }
-
-    private var forest: [LocationNode] {
-        LocationTree.forest(
-            stars: Array(stars),
-            details: detailMap,
-            footprints: footprintMap,
-            myPosition: myStar?.position,
-            filter: store.filter,
-            sort: store.sort
-        )
+    /// Cheap signature of everything the tree depends on. `@State` `forest` is
+    /// rebuilt only when this changes — not on every body eval (selection,
+    /// scroll, etc.). The detail revision folds in blob updates (same row count).
+    private var forestKey: String {
+        let detailRev = systemDetails.reduce(0.0) { $0 + $1.hydratedAt.timeIntervalSince1970 }
+        return [
+            store.filter.rawValue, store.sort.rawValue,
+            myStar?.designation ?? "-",
+            "\(stars.count)", "\(systemDetails.count)", "\(Int(detailRev))", "\(footprints.count)",
+        ].joined(separator: "|")
     }
 
     public var body: some View {
-        List(selection: $store.selection) {
-            if forest.isEmpty {
-                emptyState
-            } else {
-                OutlineGroup(forest, id: \.id, children: \.children) { node in
-                    LocationRow(node: node)
-                        .tag(node.id)
-                        .listRowSeparator(.hidden)
+        VStack(spacing: 0) {
+            HStack(spacing: Space.m) {
+                Text("\(forest.count.formatted()) \(forest.count == 1 ? "system" : "systems")")
+                    .font(.rcCaption)
+                    .foregroundStyle(.rcTextTertiary)
+                    .monospacedDigit()
+                Spacer(minLength: Space.s)
+                RCValueSelect(
+                    "Filter",
+                    systemImage: "line.3.horizontal.decrease.circle",
+                    options: ["All": LocationFilter.all, "Explored": .explored, "Uncharted": .unexplored],
+                    selection: $store.filter
+                )
+            }
+            .padding(.horizontal, Space.m)
+            .padding(.vertical, Space.s)
+
+            Group {
+                if forest.isEmpty {
+                    emptyState
+                } else {
+                    // Flat `List { ForEach }` (lazily realizes only visible rows)
+                    // with per-row `DisclosureGroup`s (children built on expand) —
+                    // reliably lazy at 5,770 systems, unlike `List(_:children:)`.
+                    List(selection: $store.selection) {
+                        ForEach(forest) { node in
+                            LocationOutlineRow(node: node)
+                        }
+                    }
+                    .listStyle(.inset)
+                    .scrollContentBackground(.hidden)
                 }
             }
         }
-        .listStyle(.inset)
-        .scrollContentBackground(.hidden)
         .searchable(text: $store.searchText, placement: .sidebar, prompt: "Search systems")
         .toolbar { toolbarContent }
         .task { store.send(.task) }
@@ -72,7 +93,7 @@ public struct LocationsListView: View {
             _ = await withErrorReporting {
                 try await $stars.load(
                     Star.where { $0.designation.contains(store.searchText) }.order { $0.designation },
-                    animation: .default
+                    animation: nil
                 )
             }
         }
@@ -82,7 +103,35 @@ public struct LocationsListView: View {
                 try await $myStar.load(Star.where { $0.designation.eq(current) })
             }
         }
+        .task(id: forestKey) { await rebuildForest() }
         .safeAreaInset(edge: .top) { errorBanner }
+    }
+
+    /// Build the tree off the main actor so a 5,770-node census never blocks a
+    /// render. Inputs are snapshotted (value types) before hopping off-main.
+    private func rebuildForest() async {
+        let starsSnapshot = Array(stars)
+        let detailRows = Array(systemDetails)
+        let footprintRows = Array(footprints)
+        let position = myStar?.position
+        let filter = store.filter
+        let sort = store.sort
+
+        let built = await Task.detached(priority: .userInitiated) {
+            let details = Dictionary(
+                detailRows.compactMap { row in (try? row.system()).map { (row.designation, $0) } },
+                uniquingKeysWith: { a, _ in a }
+            )
+            let footprintMap = Dictionary(
+                footprintRows.map { ($0.location, $0.counts) }, uniquingKeysWith: { a, _ in a }
+            )
+            return LocationTree.forest(
+                stars: starsSnapshot, details: details, footprints: footprintMap,
+                myPosition: position, filter: filter, sort: sort
+            )
+        }.value
+
+        forest = built
     }
 
     @ToolbarContentBuilder
@@ -94,12 +143,8 @@ public struct LocationsListView: View {
                         Label(option.label, systemImage: option.symbol).tag(option)
                     }
                 }
-                Divider()
-                Picker("Filter", selection: $store.filter) {
-                    ForEach(LocationFilter.allCases) { Text($0.label).tag($0) }
-                }
             } label: {
-                Label("Sort & Filter", systemImage: "line.3.horizontal.decrease.circle")
+                Label("Sort", systemImage: "arrow.up.arrow.down")
             }
         }
     }
@@ -108,9 +153,11 @@ public struct LocationsListView: View {
     private var emptyState: some View {
         if store.searchText.isEmpty {
             ContentUnavailableView(
-                "No Charted Systems",
+                store.filter == .explored ? "No Explored Systems" : "No Charted Systems",
                 systemImage: SidebarSymbol.stars,
-                description: Text("Survey nearby stars from the Stars view to populate the catalog.")
+                description: Text(store.filter == .explored
+                    ? "Travel to and scan a system to populate its detail."
+                    : "Survey nearby stars from the Stars view to populate the catalog.")
             )
         } else {
             ContentUnavailableView.search(text: store.searchText)
@@ -129,6 +176,29 @@ public struct LocationsListView: View {
             }
             .padding(.horizontal, Space.m).padding(.vertical, Space.s)
             .background(.rcSurfaceRaised)
+        }
+    }
+}
+
+// MARK: - Recursive outline row
+
+/// One node and (lazily, on expand) its children. Leaves render a plain tagged
+/// row; nodes with children render a `DisclosureGroup` whose contents are only
+/// built when the user expands it — so an unexpanded system costs one row.
+struct LocationOutlineRow: View {
+    let node: LocationNode
+
+    var body: some View {
+        if let children = node.children, !children.isEmpty {
+            DisclosureGroup {
+                ForEach(children) { LocationOutlineRow(node: $0) }
+            } label: {
+                LocationRow(node: node).tag(node.id)
+            }
+        } else {
+            LocationRow(node: node)
+                .tag(node.id)
+                .listRowSeparator(.hidden)
         }
     }
 }

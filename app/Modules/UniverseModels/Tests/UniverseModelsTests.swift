@@ -74,6 +74,29 @@ import Testing
         #expect(system.allSalvageSites.contains { $0.designation == "BETSU-3-SAL-1" })
     }
 
+    @Test func applyingMoonDetailPreservesSiblingMoons() {
+        // A planet already hydrated with two moons; scanning one must not drop
+        // the other (regression: the reducer used to rebuild from the moonless
+        // star roster and clobber the sibling).
+        let system = StarSystem(
+            designation: "SOL",
+            planets: [
+                Planet(
+                    designation: "SOL-3", recon: .scanned,
+                    moons: [Moon(designation: "SOL-3-1"), Moon(designation: "SOL-3-2")]
+                )
+            ]
+        )
+        let detailed = BodyDetail.moon(
+            Moon(designation: "SOL-3-1", type: "Rocky", recon: .scanned,
+                 physical: BodyPhysical(massEarth: 0.0123))
+        )
+        let merged = system.applying(detailed)
+        let planet = merged.planets.first { $0.designation == "SOL-3" }
+        #expect(planet?.moons.map(\.designation) == ["SOL-3-1", "SOL-3-2"])
+        #expect(planet?.moons.first { $0.designation == "SOL-3-1" }?.physical?.massEarth == 0.0123)
+    }
+
     @Test func footprintDecodesCounts() throws {
         let raw = try LocationDecoding.decoder.decode(RawFootprint.self, from: Data(Self.footprintJSON.utf8))
         let counts = (raw.locations ?? [:]).mapValues(\.domain)

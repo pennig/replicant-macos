@@ -9,6 +9,7 @@
 //
 
 import ComposableArchitecture
+import DependencyClients
 import SQLiteData
 import SwiftUI
 import UI
@@ -17,10 +18,13 @@ import UniverseModels
 public struct LocationDetailView: View {
     let store: StoreOf<LocationsFeature>
     @FetchOne(SystemDetail.none) private var systemDetail: SystemDetail?
+    @FetchAll(Replicant.all) private var replicants
 
     public init(store: StoreOf<LocationsFeature>) {
         self.store = store
     }
+
+    private var currentStar: String? { replicants.first?.currentStar }
 
     private var systemID: String? {
         store.selection.map { String($0.split(separator: "-").first ?? "") }
@@ -32,7 +36,12 @@ public struct LocationDetailView: View {
         Group {
             if let id = store.selection, let system {
                 if id == system.designation {
-                    SystemInspector(system: system)
+                    SystemInspector(
+                        system: system,
+                        isCurrentSystem: system.designation == currentStar,
+                        isScanning: store.isScanning,
+                        onScan: { store.send(.scanRequested) }
+                    )
                 } else if let planet = system.planets.first(where: { $0.designation == id }) {
                     PlanetInspector(planet: planet)
                 } else if let moon = system.planets.flatMap(\.moons).first(where: { $0.designation == id }) {
@@ -78,9 +87,23 @@ public struct LocationDetailView: View {
 
 private struct SystemInspector: View {
     let system: StarSystem
+    let isCurrentSystem: Bool
+    let isScanning: Bool
+    let onScan: () -> Void
 
     var body: some View {
         InspectorScroll(title: system.name ?? system.designation, code: system.designation, recon: system.recon) {
+            if isCurrentSystem {
+                Button(action: onScan) {
+                    Label(isScanning ? "Scanning…" : "Scan System", systemImage: "dot.radiowaves.left.and.right")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.rcAccent)
+                .disabled(isScanning)
+                .help("Scan reveals shops, megastructures, and outer-system objects here.")
+            }
+
             if let star = system.star {
                 ReadoutCard("Star") {
                     Readout("Class", star.stellarClass ?? "—")
@@ -127,6 +150,14 @@ private struct SystemInspector: View {
                     ForEach(salvage) { s in
                         BubbleRow(title: s.name ?? s.designation, code: s.designation,
                                   detail: (s.depleted ? "Depleted · " : "") + s.resourcesAvailable.joined(separator: ", "))
+                    }
+                }
+            }
+
+            if !system.structures.isEmpty {
+                SectionCard("Structures & Objects", count: system.structures.count) {
+                    ForEach(system.structures) { site in
+                        StructureRow(site: site)
                     }
                 }
             }
@@ -333,6 +364,36 @@ private struct Readout: View {
             Text(label).font(.rcBody).foregroundStyle(.rcTextSecondary)
             Spacer()
             Text(value).font(mono ? .rcMono : .rcBodyEmph).foregroundStyle(.rcTextPrimary)
+        }
+    }
+}
+
+private struct StructureRow: View {
+    let site: SpecialSite
+
+    private var isThreat: Bool { site.objectType == "incoming_asteroid" }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Space.xs) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(site.title ?? site.name ?? site.designation)
+                        .font(.rcBody).foregroundStyle(.rcTextPrimary)
+                    Text(site.designation).font(.rcMonoSmall).foregroundStyle(.rcTextTertiary)
+                }
+                Spacer()
+                Text((site.objectType ?? site.kind.rawValue).replacingOccurrences(of: "_", with: " ").capitalized)
+                    .font(.rcCaption)
+                    .foregroundStyle(isThreat ? .rcDanger : .rcTextSecondary)
+            }
+            if let p = site.progressPercentage {
+                ProgressView(value: min(max(p / 100, 0), 1)).tint(.rcAccent)
+                Text("\(Int(p))% complete").font(.rcCaption).foregroundStyle(.rcTextTertiary)
+            }
+            if let deadline = site.deadline {
+                Label(deadline, systemImage: "clock")
+                    .font(.rcCaption).foregroundStyle(isThreat ? .rcDanger : .rcWarning)
+            }
         }
     }
 }

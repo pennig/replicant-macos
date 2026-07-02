@@ -122,15 +122,13 @@ public enum LocationTree {
         let sorted = filtered.sorted { a, b in
             switch sort {
             case .alphabetical:
-                return a.designation.localizedStandardCompare(b.designation) == .orderedAscending
+                return a.designation < b.designation
             case .distance:
                 return distance(a, myPosition) < distance(b, myPosition)
             case .inventory:
                 let ia = inventoryTotal(a.designation, details, footprints)
                 let ib = inventoryTotal(b.designation, details, footprints)
-                return ia == ib
-                    ? a.designation.localizedStandardCompare(b.designation) == .orderedAscending
-                    : ia > ib
+                return ia == ib ? a.designation < b.designation : ia > ib
             }
         }
 
