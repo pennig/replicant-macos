@@ -1,0 +1,232 @@
+//
+//  ReplicantsFeature.swift
+//  Replicould — Replicants feature
+//
+//  The galaxy-wide replicant directory: the account's own replicants alongside
+//  every other player and NPC the account knows about. The list is observed
+//  straight from the `KnownReplicant` SQLite table (via `@FetchAll` in the
+//  views), so search filters reactively through SQL and scan sightings flow in
+//  live; the reducer owns only intent — the cold load / refresh (seed roster +
+//  walk the directory) and the on-demand details fetch for the inspected
+//  replicant.
+//
+
+import ComposableArchitecture
+import DependencyClients
+import Foundation
+import OSLog
+import SQLiteData
+
+private let logger = Logger(subsystem: "name.pennig.replicould.feature", category: "Replicants")
+
+/// A named group of directory rows (Yours / Players / NPCs), derived in state and
+/// rendered as a `List` section.
+public struct ReplicantSection: Identifiable, Equatable {
+    public let id: String
+    public let replicants: [KnownReplicant]
+}
+
+extension Array where Element == KnownReplicant {
+    /// Case-insensitive sort by display name, falling back to the code so unnamed
+    /// entries still order predictably.
+    func sortedByName() -> [KnownReplicant] {
+        sorted {
+            let lhs = $0.name.isEmpty ? $0.replicantCode : $0.name
+            let rhs = $1.name.isEmpty ? $1.replicantCode : $1.name
+            return lhs.localizedCaseInsensitiveCompare(rhs) == .orderedAscending
+        }
+    }
+}
+
+@Reducer
+public struct ReplicantsFeature {
+    @ObservableState
+    public struct State: Equatable {
+        /// The whole known-replicant directory, ordered — observed straight from
+        /// SQLite as a *static* query, so it resolves synchronously (no async
+        /// reload, no empty-state flash) and stays live as scans/details land.
+        /// `@ObservationStateIgnored` because `@FetchAll` drives its own
+        /// observation; the view still re-renders on change when it reads it.
+        @ObservationStateIgnored
+        @FetchAll(KnownReplicant.order { $0.name }) public var directory: [KnownReplicant]
+        /// The owned roster, to tag which directory entries are the account's own.
+        @ObservationStateIgnored
+        @FetchAll(Replicant.all) public var roster: [Replicant]
+
+        /// The inspected replicant (drives the detail pane).
+        public var selectedReplicantCode: String?
+        /// The list's search query. The filtered/grouped result is derived
+        /// synchronously from `directory` + this in `sections`, so what's shown
+        /// always matches state exactly.
+        public var searchText: String
+        public var isLoading: Bool
+        /// Cold-load failure, shown as a banner over the list.
+        public var errorMessage: String?
+        /// The replicant whose details are currently being fetched, so the
+        /// inspector can show a spinner while the richer record loads.
+        public var loadingDetailCode: String?
+
+        public init(selectedReplicantCode: String? = nil) {
+            self.selectedReplicantCode = selectedReplicantCode
+            self.searchText = ""
+            self.isLoading = false
+            self.errorMessage = nil
+            self.loadingDetailCode = nil
+        }
+
+        /// The directory grouped into the account's own replicants, other players,
+        /// and NPCs — filtered by `searchText` and sorted case-insensitively. A
+        /// pure, synchronous function of the fetched rows and the search text, so
+        /// the list is always consistent with state (never a stale or empty flash).
+        public var sections: [ReplicantSection] {
+            let query = searchText.trimmingCharacters(in: .whitespaces)
+            let matches = query.isEmpty ? directory : directory.filter {
+                $0.name.localizedCaseInsensitiveContains(query)
+                    || $0.replicantCode.localizedCaseInsensitiveContains(query)
+            }
+            let own = Set(roster.map(\.replicantCode))
+            var yours: [KnownReplicant] = []
+            var players: [KnownReplicant] = []
+            var npcs: [KnownReplicant] = []
+            for replicant in matches {
+                if own.contains(replicant.replicantCode) { yours.append(replicant) }
+                else if replicant.isNPC { npcs.append(replicant) }
+                else { players.append(replicant) }
+            }
+            return [
+                ReplicantSection(id: "Yours", replicants: yours.sortedByName()),
+                ReplicantSection(id: "Players", replicants: players.sortedByName()),
+                ReplicantSection(id: "NPCs", replicants: npcs.sortedByName()),
+            ].filter { !$0.replicants.isEmpty }
+        }
+
+        /// Whether the directory table itself is empty (nothing fetched yet) — the
+        /// list distinguishes "still loading" from "no matches for the search".
+        public var isDirectoryEmpty: Bool { directory.isEmpty }
+    }
+
+    public enum Action: BindableAction {
+        case binding(BindingAction<State>)
+        case task
+        case refreshButtonTapped
+        case load
+        case loadSucceeded
+        case loadFailed(String)
+        case dismissError
+        /// The inspector is viewing a replicant; fetch its full details. Nil when
+        /// the selection clears.
+        case detailsRequested(code: String?)
+        case detailsFinished(code: String)
+        case detailsFailed(String)
+        /// Ensure the replicant's host device is in the local `Device` table so
+        /// the inspector can show its real type/glyph — fetching it via
+        /// `devices/{code}` when we don't already have it. Nil clears the loop.
+        case hostDeviceRequested(code: String?)
+    }
+
+    public init() {}
+
+    @Dependency(\.defaultDatabase) var database
+    @Dependency(\.replicantsClient) var replicantsClient
+    @Dependency(\.devicesClient) var devicesClient
+
+    private enum CancelID { case details, hostDevice }
+
+    public var body: some ReducerOf<Self> {
+        BindingReducer()
+        Reduce { state, action in
+            switch action {
+            case .binding:
+                return .none
+
+            case .task:
+                // First run only: cold-load if the directory is empty. After that
+                // the table stays warm (and scans keep sightings fresh), so
+                // navigating here spends no reads — the user can still refresh.
+                let database = self.database
+                return .run { send in
+                    let count = try await database.read { db in try KnownReplicant.fetchCount(db) }
+                    if count == 0 { await send(.load) }
+                } catch: { _, _ in }
+
+            case .refreshButtonTapped:
+                return .send(.load)
+
+            case .load:
+                guard !state.isLoading else { return .none }
+                state.isLoading = true
+                state.errorMessage = nil
+                let replicantsClient = self.replicantsClient
+                logger.info("directory load starting")
+                return .run { send in
+                    let count = try await replicantsClient.refresh()
+                    logger.info("directory load knows \(count) replicants")
+                    await send(.loadSucceeded)
+                } catch: { error, send in
+                    logger.error("directory load failed: \(error.localizedDescription, privacy: .public)")
+                    await send(.loadFailed(error.localizedDescription))
+                }
+
+            case .loadSucceeded:
+                state.isLoading = false
+                return .none
+
+            case let .loadFailed(message):
+                state.isLoading = false
+                state.errorMessage = message
+                return .none
+
+            case .dismissError:
+                state.errorMessage = nil
+                return .none
+
+            case let .detailsRequested(code):
+                guard let code else {
+                    state.loadingDetailCode = nil
+                    return .cancel(id: CancelID.details)
+                }
+                state.loadingDetailCode = code
+                let replicantsClient = self.replicantsClient
+                return .run { send in
+                    try await replicantsClient.loadDetails(code)
+                    await send(.detailsFinished(code: code))
+                } catch: { error, send in
+                    await send(.detailsFailed(error.localizedDescription))
+                }
+                .cancellable(id: CancelID.details, cancelInFlight: true)
+
+            case let .detailsFinished(code):
+                // Only clear the spinner if it still belongs to this fetch.
+                if state.loadingDetailCode == code { state.loadingDetailCode = nil }
+                return .none
+
+            case let .detailsFailed(message):
+                // The row keeps whatever we already knew (directory / scan intel);
+                // a failed refresh of the richer record just stops the spinner.
+                logger.warning("details load failed: \(message, privacy: .public)")
+                state.loadingDetailCode = nil
+                return .none
+
+            case let .hostDeviceRequested(code):
+                guard let code else { return .cancel(id: CancelID.hostDevice) }
+                let database = self.database
+                let devicesClient = self.devicesClient
+                return .run { _ in
+                    // Already in the fleet table? Then the inspector's @FetchOne
+                    // already has it — don't spend a read.
+                    let known = try await database.read { db in
+                        try Device.where { $0.deviceCode.eq(code) }.fetchCount(db) > 0
+                    }
+                    guard !known else { return }
+                    // Otherwise pull the host device and reconcile it in (it may be
+                    // another player's device, in which case the read can fail —
+                    // that's fine, the row just falls back to the generic host mark).
+                    guard let device = try? await devicesClient.read(code) else { return }
+                    await Reconciler().ingest(device)
+                    logger.info("fetched host device \(code, privacy: .public) for inspector")
+                }
+                .cancellable(id: CancelID.hostDevice, cancelInFlight: true)
+            }
+        }
+    }
+}

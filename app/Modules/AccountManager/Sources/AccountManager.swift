@@ -35,6 +35,13 @@ public struct AccountManager: Sendable {
     /// the API key is revealed on that page. Throws `SignupError` on failure.
     public var signUp: @Sendable (_ name: String, _ email: String, _ timeZone: String) async throws -> Void
 
+    /// Re-fetch `/accounts/me` and re-seed the roster + account profile, without
+    /// touching the session token. Called at launch when a session was restored
+    /// from the Keychain (login isn't re-run then), so the sidebar roster and the
+    /// Replicants directory's "own" set stay fresh across relaunches. Best-effort:
+    /// a failed refresh leaves the last-persisted roster in place.
+    public var refreshAccount: @Sendable () async -> Void
+
     /// The stored session token, if any — used to decide the initial app state
     /// synchronously at launch.
     public var restoredAPIKey: @Sendable () -> String?
@@ -46,12 +53,14 @@ public struct AccountManager: Sendable {
         logIn: @escaping @Sendable (String) async throws -> Void,
         logOut: @escaping @Sendable () async -> Void,
         signUp: @escaping @Sendable (String, String, String) async throws -> Void,
+        refreshAccount: @escaping @Sendable () async -> Void,
         restoredAPIKey: @escaping @Sendable () -> String?,
         registerHandler: @escaping @Sendable (SessionLifecycleHandler) -> Void
     ) {
         self.logIn = logIn
         self.logOut = logOut
         self.signUp = signUp
+        self.refreshAccount = refreshAccount
         self.restoredAPIKey = restoredAPIKey
         self.registerHandler = registerHandler
     }
@@ -86,6 +95,7 @@ extension AccountManager {
                 @Dependency(\.keychain) var keychain
                 @Dependency(\.gameClient) var gameClient
                 @Dependency(\.defaultDatabase) var database
+                @Dependency(\.date) var date
                 @Shared(.account) var account
                 @Shared(.appStorage(Account.activeReplicantCodeKey)) var activeReplicantCode: String?
 
@@ -98,13 +108,15 @@ extension AccountManager {
                         throw LoginError.rejected
                     }
                     // The key is good — consume the profile. Persist the roster to
-                    // SQLite and the account profile to disk.
+                    // SQLite (both the sidebar roster and the Replicants directory's
+                    // own set) and the account profile to disk.
                     let body = try ok.body.json
                     let replicants = (body.replicants ?? []).map(Replicant.init(schema:))
                     try await database.write { db in
                         for replicant in replicants {
                             try Replicant.upsert { replicant }.execute(db)
                         }
+                        try KnownReplicant.upsert(roster: replicants, into: db, now: date.now)
                     }
                     $account.withLock { $0 = Account(schema: body) }
                     // Default the active replicant to the first in the roster if
@@ -164,6 +176,37 @@ extension AccountManager {
                     throw SignupError("Something went wrong creating your account. Please try again.")
                 }
             },
+            refreshAccount: {
+                @Dependency(\.gameClient) var gameClient
+                @Dependency(\.defaultDatabase) var database
+                @Dependency(\.date) var date
+                @Shared(.account) var account
+                @Shared(.appStorage(Account.activeReplicantCodeKey)) var activeReplicantCode: String?
+
+                // Best-effort: any failure (offline, rate limit, transient) leaves
+                // the last-persisted roster untouched.
+                guard
+                    let output = try? await gameClient().getV1AccountsMe(),
+                    case let .ok(ok) = output,
+                    let body = try? ok.body.json
+                else { return }
+
+                let replicants = (body.replicants ?? []).map(Replicant.init(schema:))
+                try? await database.write { db in
+                    for replicant in replicants {
+                        try Replicant.upsert { replicant }.execute(db)
+                    }
+                    try KnownReplicant.upsert(roster: replicants, into: db, now: date.now)
+                }
+                $account.withLock { $0 = Account(schema: body) }
+                // Keep the active-replicant selection valid: default to the first
+                // when nothing is chosen or the prior choice is no longer ours.
+                let current = activeReplicantCode
+                if let first = replicants.first,
+                   current == nil || !replicants.contains(where: { $0.replicantCode == current }) {
+                    $activeReplicantCode.withLock { $0 = first.replicantCode }
+                }
+            },
             restoredAPIKey: {
                 @Dependency(\.keychain) var keychain
                 return keychain.load(KeychainClient.apiKeyAccount)
@@ -189,6 +232,7 @@ extension AccountManager: TestDependencyKey {
         logIn: unimplemented("AccountManager.logIn"),
         logOut: unimplemented("AccountManager.logOut"),
         signUp: unimplemented("AccountManager.signUp"),
+        refreshAccount: unimplemented("AccountManager.refreshAccount"),
         restoredAPIKey: unimplemented("AccountManager.restoredAPIKey", placeholder: nil),
         registerHandler: unimplemented("AccountManager.registerHandler")
     )

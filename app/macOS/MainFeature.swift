@@ -7,6 +7,7 @@
 //  panes. The Account sheet lives in AccountView.swift.
 //
 
+import AccountManager
 import AppKit
 import BlueprintsFeature
 import ComposableArchitecture
@@ -14,7 +15,9 @@ import DependencyClients
 import DevicesFeature
 import LocationsFeature
 import MessagesFeature
+import PrintQueueFeature
 import RawAPIFeature
+import ReplicantsFeature
 import SQLiteData
 import StarMapFeature
 import SwiftUI
@@ -115,6 +118,12 @@ struct MainFeature {
         var blueprints: BlueprintsFeature.State
         /// The stellar-locations catalog (Locations view) — disclosure list + inspector.
         var locations: LocationsFeature.State
+        /// The Print Queue (Operations) — printers with an active job or queue.
+        var printQueue: PrintQueueFeature.State
+        /// The Replicants directory — the account's own replicants plus every
+        /// other player and NPC known in the galaxy. (Named to avoid colliding
+        /// with the owned-roster `replicants` array above.)
+        var replicantDirectory: ReplicantsFeature.State
 
         init(
             apiKey: String,
@@ -132,19 +141,34 @@ struct MainFeature {
             self.devices = DevicesFeature.State()
             self.blueprints = BlueprintsFeature.State()
             self.locations = LocationsFeature.State()
+            self.printQueue = PrintQueueFeature.State()
+            self.replicantDirectory = ReplicantsFeature.State()
         }
     }
 
+    @Dependency(\.replicantsClient) var replicantsClient
+    @Dependency(\.accountManager) var accountManager
+
     enum Action: BindableAction {
         case binding(BindingAction<State>)
+        /// The signed-in experience appeared — re-sync the account roster from the
+        /// server (login isn't re-run for a restored session).
+        case task
         case delegate(Delegate)
+        /// Hydrate the active replicant's public details (its `plan`) so the
+        /// sidebar header can show and edit it.
+        case loadActivePlan(String)
         case logoutButtonTapped
+        /// Persist an edited plan for the given replicant via PATCH.
+        case savePlan(code: String, plan: String)
         case messages(MessagesFeature.Action)
         case rawAPI(RawAPIFeature.Action)
         case starMap(StarMapFeature.Action)
         case devices(DevicesFeature.Action)
         case blueprints(BlueprintsFeature.Action)
         case locations(LocationsFeature.Action)
+        case printQueue(PrintQueueFeature.Action)
+        case replicantDirectory(ReplicantsFeature.Action)
 
         enum Delegate {
             case loggedOut
@@ -171,6 +195,12 @@ struct MainFeature {
         Scope(state: \.locations, action: \.locations) {
             LocationsFeature()
         }
+        Scope(state: \.printQueue, action: \.printQueue) {
+            PrintQueueFeature()
+        }
+        Scope(state: \.replicantDirectory, action: \.replicantDirectory) {
+            ReplicantsFeature()
+        }
         Reduce { state, action in
             switch action {
             case .binding(\.category):
@@ -181,13 +211,31 @@ struct MainFeature {
             case .binding:
                 return .none
 
+            case .task:
+                // Restored sessions skip login, so the roster can be stale (or
+                // empty after a DB reset). Re-fetch it so the sidebar and the
+                // Replicants directory's own set are current.
+                return .run { _ in await accountManager.refreshAccount() }
+
             case .delegate:
                 return .none
+
+            case let .loadActivePlan(code):
+                // Best-effort: the sidebar reads the plan straight from SQLite, so
+                // a failed load just leaves the last-known value in place.
+                return .run { _ in try? await replicantsClient.loadDetails(code) }
 
             case .logoutButtonTapped:
                 return .send(.delegate(.loggedOut))
 
-            case .messages, .rawAPI, .starMap, .devices, .blueprints, .locations:
+            case let .savePlan(code, plan):
+                return .run { _ in
+                    _ = await withErrorReporting {
+                        try await replicantsClient.updatePlan(code, plan)
+                    }
+                }
+
+            case .messages, .rawAPI, .starMap, .devices, .blueprints, .locations, .printQueue, .replicantDirectory:
                 return .none
             }
         }
@@ -201,6 +249,15 @@ struct MainView: View {
     /// Live unread-message count, observed straight from SQLite, used for the
     /// Messages sidebar badge and the app's dock-tile badge.
     @FetchOne(Message.where { !$0.isRead }.count()) private var unreadCount = 0
+    /// The whole fleet, observed from SQLite — the header reads it to resolve the
+    /// active replicant's host glyph and any running travel/print progress.
+    @FetchAll private var devices: [Device]
+    /// The known-replicant directory, observed from SQLite — the header reads the
+    /// active replicant's public `plan` from here (hydrated on appear/change).
+    @FetchAll private var knownReplicants: [KnownReplicant]
+    /// The app-wide active-replicant selection (shared with Locations / Stars).
+    /// The header's switcher writes here; other features read the same key.
+    @Shared(.appStorage(Account.activeReplicantCodeKey)) private var activeReplicantCode: String?
 
     var body: some View {
         Group {
@@ -236,6 +293,8 @@ struct MainView: View {
         .sheet(isPresented: $store.isShowingAccount) {
             AccountView(store: store)
         }
+        // Re-sync the account roster on launch (a restored session skips login).
+        .task { store.send(.task) }
         // Mirror the unread count onto the dock icon so it's visible when the
         // app is in the background. Cleared (nil) whenever the inbox is caught up.
         .onChange(of: unreadCount, initial: true) { _, count in
@@ -246,7 +305,7 @@ struct MainView: View {
     // — Sidebar: header · grouped categories · footer —
     private var sidebar: some View {
         VStack(spacing: 0) {
-            SidebarHeader(account: store.account, replicantCount: store.replicants.count)
+            sidebarHeader
             Divider()
             List(selection: $store.category) {
                 ForEach(SidebarItem.groups) { group in
@@ -263,10 +322,143 @@ struct MainView: View {
             }
             .listStyle(.sidebar)
             Divider()
-            SidebarFooter(account: store.account) {
+            RCAccountFooter(
+                name: store.account.name,
+                email: store.account.email,
+                experiencePoints: store.account.experiencePointsTotal,
+                replicantCount: store.replicants.count
+            ) {
                 store.isShowingAccount = true
             }
         }
+    }
+
+    // — Active replicant header —
+    //
+    // The switcher writes the chosen replicant straight to the shared
+    // `activeReplicantCode` (the same appStorage key Locations/Stars read), so
+    // changing the active replicant here updates the whole app. Progress and host
+    // glyphs are derived from the local fleet.
+    @ViewBuilder private var sidebarHeader: some View {
+        if store.replicants.isEmpty {
+            // No roster yet (fresh session / mid-sync) — a quiet placeholder.
+            HStack(spacing: Space.s) {
+                Image(systemName: "point.3.connected.trianglepath.dotted")
+                    .foregroundStyle(.rcTextTertiary)
+                Text("No replicants yet")
+                    .font(.rcBody)
+                    .foregroundStyle(.rcTextSecondary)
+                Spacer()
+            }
+            .padding(.horizontal, Space.m)
+            .padding(.vertical, Space.m)
+        } else {
+            RCActiveReplicantHeader(
+                replicants: rosterOptions,
+                selection: switcherSelection,
+                location: activeReplicant?.currentLocationName ?? activeReplicant?.currentLocation,
+                experiencePoints: activeReplicant?.experiencePoints ?? 0,
+                deviceCount: activeReplicant?.deviceCount ?? 0,
+                progress: activeReplicantProgress,
+                plan: activePlan,
+                onShowInReplicants: { $store.category.wrappedValue = .replicants },
+                onEditPlan: { plan in
+                    if let code = activeReplicant?.replicantCode {
+                        store.send(.savePlan(code: code, plan: plan))
+                    }
+                }
+            )
+            // Hydrate the active replicant's public details (its plan) whenever the
+            // selection changes, so the plan line reflects the server.
+            .task(id: activeReplicant?.replicantCode) {
+                if let code = activeReplicant?.replicantCode {
+                    store.send(.loadActivePlan(code))
+                }
+            }
+        }
+    }
+
+    /// The active replicant's public plan, read from its known-replicant record.
+    private var activePlan: String? {
+        guard let code = activeReplicant?.replicantCode else { return nil }
+        return knownReplicants.first { $0.replicantCode == code }?.plan
+    }
+
+    // — Active replicant derivation —
+
+    /// The currently-active replicant, falling back to the first in the roster
+    /// when nothing (or a stale code) is selected.
+    private var activeReplicant: Replicant? {
+        store.replicants.first { $0.replicantCode == activeReplicantCode } ?? store.replicants.first
+    }
+
+    /// The roster mapped to switcher options, each carrying its host glyph.
+    private var rosterOptions: [RCReplicant] {
+        store.replicants.map { replicant in
+            RCReplicant(id: replicant.replicantCode, name: replicant.name, host: host(for: replicant))
+        }
+    }
+
+    /// A binding the switcher drives: reads the active option, writes the choice
+    /// back to the shared `activeReplicantCode`.
+    private var switcherSelection: Binding<RCReplicant> {
+        Binding(
+            get: {
+                rosterOptions.first { $0.id == activeReplicant?.replicantCode }
+                    ?? rosterOptions.first
+                    ?? RCReplicant(id: "", name: "—", host: .vessel)
+            },
+            set: { newValue in $activeReplicantCode.withLock { $0 = newValue.id } }
+        )
+    }
+
+    /// The host kind for a replicant, read from its hosting device's type when
+    /// that device is in the local fleet (defaults to a vessel otherwise).
+    private func host(for replicant: Replicant) -> HostKind {
+        guard
+            let code = replicant.hostedDeviceCode,
+            let device = devices.first(where: { $0.deviceCode == code })
+        else { return .vessel }
+        return HostKind(deviceType: device.deviceType)
+    }
+
+    /// The active replicant's most relevant running activity — its host device's
+    /// travel first (the replicant itself is moving), then any other device of
+    /// its that's mid-operation (printing, mining, scanning).
+    private var activeReplicantProgress: RCReplicantProgress? {
+        guard let active = activeReplicant else { return nil }
+        let fleet = devices.filter { $0.replicantCode == active.replicantCode }
+        let host = active.hostedDeviceCode.flatMap { code in fleet.first { $0.deviceCode == code } }
+        let ordered = [host].compactMap { $0 } + fleet.filter { $0.deviceCode != active.hostedDeviceCode }
+        for device in ordered {
+            if let progress = progress(for: device) { return progress }
+        }
+        return nil
+    }
+
+    /// Distill a device's in-progress snapshot into a header progress row, or nil
+    /// when it isn't running a timed operation we can chart.
+    private func progress(for device: Device) -> RCReplicantProgress? {
+        guard
+            let activity = device.derivedActivity,
+            let startedAt = activity.startedAt,
+            let completesAt = activity.completesAt
+        else { return nil }
+        let tint = DeviceStatus.tone(for: device.statusBase).color
+        let label: String
+        let symbol: String?
+        switch activity.kind {
+        case .travel:
+            label = device.travelSnapshot?.destinationLabel ?? device.locationName ?? device.location ?? "In transit"
+            symbol = "arrow.right"
+        case .print:
+            label = device.statusParameter.map { $0.replacingOccurrences(of: "_", with: " ").capitalized } ?? "Printing"
+            symbol = "printer"
+        default:
+            label = DeviceStatus.label(for: device.statusBase)
+            symbol = nil
+        }
+        return RCReplicantProgress(label: label, symbol: symbol, startedAt: startedAt, completesAt: completesAt, tint: tint)
     }
 
     /// The Messages inbox store, scoped from the main session.
@@ -294,6 +486,16 @@ struct MainView: View {
         store.scope(state: \.locations, action: \.locations)
     }
 
+    /// The Print Queue store, scoped from the main session.
+    private var printQueueStore: StoreOf<PrintQueueFeature> {
+        store.scope(state: \.printQueue, action: \.printQueue)
+    }
+
+    /// The Replicants directory store, scoped from the main session.
+    private var replicantsStore: StoreOf<ReplicantsFeature> {
+        store.scope(state: \.replicantDirectory, action: \.replicantDirectory)
+    }
+
     // — Content: a selectable list (or, for the Event Log, a plain list) —
     @ViewBuilder private var content: some View {
         if store.category == .messages {
@@ -306,6 +508,10 @@ struct MainView: View {
             BlueprintsListView(store: blueprintsStore)
         } else if store.category == .locations {
             LocationsListView(store: locationsStore)
+        } else if store.category == .printQueue {
+            PrintQueueListView(store: printQueueStore)
+        } else if store.category == .replicants {
+            ReplicantsListView(store: replicantsStore)
         } else if store.category == .eventLog {
             ActivityView()
         } else if store.category == .bobnet {
@@ -342,6 +548,10 @@ struct MainView: View {
             BlueprintDetailView(store: blueprintsStore)
         } else if store.category == .locations {
             LocationDetailView(store: locationsStore)
+        } else if store.category == .printQueue {
+            PrintQueueDetailView(store: printQueueStore)
+        } else if store.category == .replicants {
+            ReplicantDetailView(store: replicantsStore)
         } else if let category = store.category, let selection = store.detailSelection {
             VStack(spacing: 12) {
                 Image(systemName: category.symbol).font(.system(size: 48)).foregroundStyle(.tint)
@@ -357,53 +567,3 @@ struct MainView: View {
     }
 }
 
-// MARK: - Sidebar header & footer
-
-struct SidebarHeader: View {
-    let account: Account
-    let replicantCount: Int
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "person.crop.circle.fill")
-                .font(.system(size: 34))
-                .foregroundStyle(.tint)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(account.name).font(.headline)
-                Text("\(replicantCount) replicants")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-    }
-}
-
-struct SidebarFooter: View {
-    let account: Account
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 10) {
-                Circle()
-                    .fill(.green)
-                    .frame(width: 8, height: 8)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Signed in").font(.callout.weight(.medium))
-                    Text(account.email).font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-}

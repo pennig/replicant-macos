@@ -486,7 +486,9 @@ public struct RCEntitySwitcher: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.rcTextSecondary)
             }
-            .frame(minWidth: 248)
+            // Fill the available width (it lives in the narrow sidebar), but never
+            // squeeze below a legible minimum.
+            .frame(minWidth: 200, maxWidth: .infinity, alignment: .leading)
             .padding(.leading, Space.s + 2).padding(.trailing, Space.m)
             .padding(.vertical, Space.s)
             .background(
@@ -501,7 +503,6 @@ public struct RCEntitySwitcher: View {
         .menuStyle(.button)
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
-        .fixedSize()
     }
 
     private func hostTile(_ host: HostKind) -> some View {
@@ -653,6 +654,7 @@ private struct GalleryDropdowns: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Entity switcher · active replicant").font(.rcCaption).foregroundStyle(.rcTextTertiary)
                 RCEntitySwitcher(reps, selection: $active) {}
+                    .frame(maxWidth: 320)
             }
         }
     }

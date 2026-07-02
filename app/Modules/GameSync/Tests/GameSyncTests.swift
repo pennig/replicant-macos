@@ -125,6 +125,60 @@ import Utils
     }
 }
 
+// MARK: - Print-complete fleet refresh
+
+@Suite struct PrintCompleteRefreshTests {
+
+    private func makeDeviceDatabase() throws -> any DatabaseWriter {
+        let database = try SQLiteData.defaultDatabase()
+        var migrator = DatabaseMigrator()
+        Device.registerMigrations(&migrator)
+        Operation.registerMigrations(&migrator)
+        try migrator.migrate(database)
+        return database
+    }
+
+    private func device(_ code: String, at instant: Date) -> Device {
+        Device(
+            deviceCode: code, deviceType: "mining_drone", replicantCode: "R1", status: "idle",
+            location: nil, locationName: nil, operationalCapacity: 100, queueSize: 0,
+            stowedInDeviceCode: nil, controllerDeviceCode: nil, attachedToDeviceCode: nil,
+            createdAt: Date(timeIntervalSince1970: 0), availableCommands: [], features: [], tags: [],
+            detail: .object([:]), updatedAt: instant, firstSeenAt: instant
+        )
+    }
+
+    /// A finished print spawns a device whose code the local fleet has never seen.
+    /// The refresh walk must fetch the full list and land that new device — while
+    /// pruning a device the walk no longer returns.
+    @Test func refreshFleetLandsNewDeviceAndPrunesAbsent() async throws {
+        let database = try makeDeviceDatabase()
+        let now = Date(timeIntervalSince1970: 10_000)
+
+        // The printer ("PRNT") was already local; "CLONE" is the freshly-printed
+        // device the walk now returns; "GONE" is a stale local row absent from it.
+        let fetched = [device("PRNT", at: now), device("CLONE", at: now)]
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.uuid = .incrementing
+            $0.date = .constant(now)
+            $0.devicesClient.fetchAll = { fetched }
+        } operation: {
+            let reconciler = Reconciler()
+            await reconciler.ingest(device("PRNT", at: now))
+            await reconciler.ingest(device("GONE", at: now))
+
+            await GameSync.refreshFleet(reconciler: reconciler)
+
+            let codes = try await database.read { db in
+                try Device.select(\.deviceCode).fetchAll(db)
+            }
+            #expect(Set(codes) == ["PRNT", "CLONE"])  // clone landed, GONE pruned
+        }
+    }
+}
+
 // MARK: - Bobnet decoding
 
 @Suite struct BobnetDecodeTests {

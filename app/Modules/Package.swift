@@ -16,7 +16,9 @@ let package = Package(
         .library(name: "LocationsFeature", targets: ["LocationsFeature"]),
         .library(name: "LoginFeature", targets: ["LoginFeature"]),
         .library(name: "MessagesFeature", targets: ["MessagesFeature"]),
+        .library(name: "PrintQueueFeature", targets: ["PrintQueueFeature"]),
         .library(name: "RawAPIFeature", targets: ["RawAPIFeature"]),
+        .library(name: "ReplicantsFeature", targets: ["ReplicantsFeature"]),
         .library(name: "StarMapFeature", targets: ["StarMapFeature"]),
         .library(name: "UI", targets: ["UI"]),
         .library(name: "UniverseModels", targets: ["UniverseModels"]),
@@ -120,6 +122,7 @@ let package = Package(
                 .product(name: "SQLiteData", package: "sqlite-data"),
                 "DependencyClients",
                 "UI",
+                "Utils",
             ],
             path: "DevicesFeature/Sources"
         ),
@@ -209,6 +212,27 @@ let package = Package(
             path: "MessagesFeature/Tests"
         ),
         .target(
+            name: "PrintQueueFeature",
+            dependencies: [
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "SQLiteData", package: "sqlite-data"),
+                "DependencyClients",
+                "UI",
+                "Utils",
+            ],
+            path: "PrintQueueFeature/Sources"
+        ),
+        .testTarget(
+            name: "PrintQueueFeatureTests",
+            dependencies: [
+                "PrintQueueFeature",
+                "DependencyClients",
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "SQLiteData", package: "sqlite-data"),
+            ],
+            path: "PrintQueueFeature/Tests"
+        ),
+        .target(
             name: "RawAPIFeature",
             dependencies: [
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
@@ -224,6 +248,28 @@ let package = Package(
                 "RawAPIFeature"
             ],
             path: "RawAPIFeature/Tests"
+        ),
+        .target(
+            name: "ReplicantsFeature",
+            dependencies: [
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "SQLiteData", package: "sqlite-data"),
+                "API",
+                "DependencyClients",
+                "UI",
+                "Utils",
+            ],
+            path: "ReplicantsFeature/Sources"
+        ),
+        .testTarget(
+            name: "ReplicantsFeatureTests",
+            dependencies: [
+                "ReplicantsFeature",
+                "DependencyClients",
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "SQLiteData", package: "sqlite-data"),
+            ],
+            path: "ReplicantsFeature/Tests"
         ),
         .target(
             name: "StarMapFeature",
@@ -249,6 +295,11 @@ let package = Package(
                 .copy("Colors.xcassets"),
                 .copy("Symbols.xcassets"),
             ]
+        ),
+        .testTarget(
+            name: "UITests",
+            dependencies: ["UI"],
+            path: "UI/Tests"
         ),
         .target(
             name: "UniverseModels",

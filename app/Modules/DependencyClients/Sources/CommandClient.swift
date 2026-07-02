@@ -30,17 +30,33 @@ public struct CommandParams: Sendable, Equatable {
     public var deviceType: String?    // print (enqueue_print)
     public var resourceType: String?  // mine (start_mining) — one of the belt resources
     public var target: String?        // mine — optional resource-site designation
+    public var directive: String?     // set_directive — one of the device's available_directives
+    public var index: Int?            // dequeue_print — the queue position to remove
+    /// set_directive — the directive's optional configuration object (e.g. a
+    /// survey controller's `{planets, moons, recall}`). Loosely typed since the
+    /// shape varies per directive; nil/empty omits it.
+    public var configuration: [String: JSONValue]?
+    /// adopt — the device codes an AMI controller should take under its control.
+    public var devices: [String]?
 
     public init(
         destination: String? = nil,
         deviceType: String? = nil,
         resourceType: String? = nil,
-        target: String? = nil
+        target: String? = nil,
+        directive: String? = nil,
+        index: Int? = nil,
+        configuration: [String: JSONValue]? = nil,
+        devices: [String]? = nil
     ) {
         self.destination = destination
         self.deviceType = deviceType
         self.resourceType = resourceType
         self.target = target
+        self.directive = directive
+        self.index = index
+        self.configuration = configuration
+        self.devices = devices
     }
 
     var json: JSONValue {
@@ -49,6 +65,10 @@ public struct CommandParams: Sendable, Equatable {
         if let deviceType { dict["device_type"] = .string(deviceType) }
         if let resourceType { dict["resource_type"] = .string(resourceType) }
         if let target { dict["target"] = .string(target) }
+        if let directive { dict["directive"] = .string(directive) }
+        if let index { dict["index"] = .number(Double(index)) }
+        if let configuration, !configuration.isEmpty { dict["configuration"] = .object(configuration) }
+        if let devices, !devices.isEmpty { dict["devices"] = .array(devices.map(JSONValue.string)) }
         return .object(dict)
     }
 }
@@ -121,12 +141,27 @@ extension CommandClient: DependencyKey {
                         path: .init(deviceCode: deviceCode), body: body
                     )
                     switch output {
-                    case .ok:
+                    case let .ok(ok):
                         logger.info("dispatch \(kind.rawValue, privacy: .public) → \(deviceCode, privacy: .public): accepted (immediate)")
                         if terminatingCommands.contains(kind.rawValue) {
                             await Reconciler().completeOpenOperation(
                                 on: deviceCode, source: .poll, eventTime: date.now, result: nil
                             )
+                        }
+                        // A `system_scan` response carries a `replicants` block —
+                        // everyone detected in the scanned system, with a precise
+                        // `location` and `last_active`. Record those sightings so
+                        // player replicants (whose position the directory withholds)
+                        // get an accurate last-known-location.
+                        if kind == .scan {
+                            let json = (try? ok.body.json).map(jsonValue(from:)) ?? .object([:])
+                            let sightings = KnownReplicant.scanSightings(from: json)
+                            if !sightings.isEmpty {
+                                try? await database.write { db in
+                                    try KnownReplicant.record(sightings: sightings, into: db, now: date.now)
+                                }
+                                logger.info("scan recorded \(sightings.count, privacy: .public) replicant sighting(s)")
+                            }
                         }
                         if let device = try? await devicesClient.read(deviceCode) {
                             await Reconciler().ingest(device)
@@ -332,6 +367,9 @@ extension CommandClient: DependencyKey {
     private typealias NoParam = Components.Schemas.AppSchemasDeviceCommandsNoParamSchema
     private typealias MiningSchema = Components.Schemas.AppSchemasDeviceCommandsStartMiningSchema
     private typealias RetargetSchema = Components.Schemas.AppSchemasDeviceCommandsRetargetSchema
+    private typealias SetDirectiveSchema = Components.Schemas.AppSchemasDeviceCommandsSetDirectiveSchema
+    private typealias AdoptSchema = Components.Schemas.AppSchemasDeviceCommandsAdoptSchema
+    private typealias ReleaseSchema = Components.Schemas.AppSchemasDeviceCommandsReleaseSchema
     private typealias CommandResponse = Components.Schemas.AppSchemasDevicesDeviceCommandResponseSchema
 
     /// How a command reports completion — derived from live probing of the API
@@ -346,10 +384,11 @@ extension CommandClient: DependencyKey {
 
     private static func completion(for kind: OperationKind) -> Completion {
         switch kind {
-        case .travel: return .deadline
-        case .mine:   return .continuous
-        case .print:  return .enqueued
-        default:      return deadlineCommands.contains(kind.rawValue) ? .deadline : .immediate
+        case .travel:     return .deadline
+        case .mine:       return .continuous
+        case .print:      return .enqueued
+        case .surveyScan: return .deadline
+        default:          return deadlineCommands.contains(kind.rawValue) ? .deadline : .immediate
         }
     }
 
@@ -386,6 +425,8 @@ extension CommandClient: DependencyKey {
             return .json(.startMining(.init(command: "start_mining", resourceType: payload, target: params.target)))
         case .scan:
             return .json(.systemScan(.init(command: "system_scan")))
+        case .surveyScan:
+            return .json(.scan(.init(command: "scan")))
         case .census:
             return .json(.stellarCensus(.init(command: "stellar_census")))
         case .retarget:
@@ -396,13 +437,58 @@ extension CommandClient: DependencyKey {
             return .json(.retarget(.init(command: "retarget", resourceType: payload)))
         case .stow:
             return .json(.stow(.init(command: "stow", target: params.target)))
+        case .setDirective:
+            guard let directive = params.directive else { throw CommandError.missingParameter("directive") }
+            return .json(.setDirective(.init(
+                command: "set_directive",
+                directive: directive,
+                configuration: try configurationPayload(from: params.configuration)
+            )))
+        case .adopt:
+            guard let devices = params.devices, !devices.isEmpty else { throw CommandError.missingParameter("devices") }
+            return .json(.adopt(try devicesSchema(AdoptSchema.self, command: "adopt", devices: devices)))
+        case .release:
+            guard let devices = params.devices, !devices.isEmpty else { throw CommandError.missingParameter("devices") }
+            return .json(.release(try devicesSchema(ReleaseSchema.self, command: "release", devices: devices)))
         case .print:
             guard let deviceType = params.deviceType else { throw CommandError.missingParameter("device_type") }
             return .json(.enqueuePrint(.init(command: "enqueue_print", deviceType: deviceType)))
+        case .dequeuePrint:
+            guard let index = params.index else { throw CommandError.missingParameter("index") }
+            return .json(.dequeuePrint(.init(command: "dequeue_print", index: index)))
         default:
             guard let body = simpleBody(for: kind.rawValue) else { throw CommandError.unsupported(kind) }
             return body
         }
+    }
+
+    /// Bridge the loosely-typed `set_directive` configuration into the generated
+    /// schema's `ConfigurationPayload` (an untyped `additionalProperties` bag) by
+    /// round-tripping through JSON — the payload's decoder slurps every key as an
+    /// additional property, so arbitrary per-directive shapes pass through intact.
+    /// Nil/empty configuration is omitted (the field defaults to null server-side).
+    private static func configurationPayload(
+        from configuration: [String: JSONValue]?
+    ) throws -> SetDirectiveSchema.ConfigurationPayload? {
+        guard let configuration, !configuration.isEmpty else { return nil }
+        let data = try jsonEncoder.encode(JSONValue.object(configuration))
+        return try JSONDecoder().decode(SetDirectiveSchema.ConfigurationPayload.self, from: data)
+    }
+
+    /// Build an `adopt`/`release` body carrying a `devices` array. Both generated
+    /// schemas type `devices` as an untyped `OpenAPIValueContainer` (the spec
+    /// leaves it schemaless), so round-trip a `{command, devices}` object through
+    /// JSON — the decoder wraps the string array into the container without
+    /// hand-bridging.
+    private static func devicesSchema<Schema: Decodable>(
+        _ type: Schema.Type, command: String, devices: [String]
+    ) throws -> Schema {
+        let json = JSONValue.object([
+            "command": .string(command),
+            "devices": .array(devices.map(JSONValue.string)),
+        ])
+        let data = try jsonEncoder.encode(json)
+        return try JSONDecoder().decode(Schema.self, from: data)
     }
 
     /// The supported parameter-less commands, each routed to its discriminated

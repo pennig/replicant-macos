@@ -17,6 +17,7 @@ import API
 import ComposableArchitecture
 import Foundation
 import OSLog
+import Utils
 
 private let logger = Logger(subsystem: "name.pennig.replicould", category: "Devices")
 
@@ -29,6 +30,13 @@ public struct DevicesClient: Sendable {
     /// is stamped with the fetch time; callers reconcile them so local provenance
     /// (`firstSeenAt`) is preserved.
     public var fetchAll: @Sendable () async throws -> [Device]
+
+    /// Read the diversion defense state at a location (`GET /v1/locations/{code}`),
+    /// mapping its `object` block to a `DiversionSnapshot`. A `diverting` device
+    /// exposes no activity block of its own — the impact target, ETA, and
+    /// deflection progress all live on the object it's attached to. Nil when the
+    /// location carries no divertible object (or isn't readable).
+    public var diversion: @Sendable (_ locationDesignation: String) async throws -> DiversionSnapshot?
 }
 
 // MARK: - Live implementation
@@ -62,8 +70,21 @@ extension DevicesClient: DependencyKey {
             } while cursor != nil
             logger.info("cold-load: fetched \(devices.count) devices across \(pages) page(s)")
             return devices
+        },
+        diversion: { designation in
+            @Dependency(\.gameClient) var gameClient
+            let output = try await gameClient().getV1LocationsDesignation(path: .init(designation: designation))
+            // The generated client hands the nested blocks back only as an opaque
+            // freeform container, so round-trip through JSON to reach the `object`
+            // block. A non-OK response (403 unexplored, 404) just means "no card".
+            guard case let .ok(ok) = output else { return nil }
+            let data = try Self.locationEncoder.encode(try ok.body.json)
+            let value = try JSONDecoder().decode(JSONValue.self, from: data)
+            return DiversionSnapshot(objectBlock: value["object"], fallbackDesignation: designation)
         }
     )
+
+    private static let locationEncoder = JSONEncoder()
 }
 
 extension DevicesClient: TestDependencyKey {
@@ -71,7 +92,8 @@ extension DevicesClient: TestDependencyKey {
     /// stubbing it fails loudly.
     public static let testValue = DevicesClient(
         read: unimplemented("DevicesClient.read"),
-        fetchAll: unimplemented("DevicesClient.fetchAll", placeholder: [])
+        fetchAll: unimplemented("DevicesClient.fetchAll", placeholder: []),
+        diversion: unimplemented("DevicesClient.diversion", placeholder: nil)
     )
 }
 

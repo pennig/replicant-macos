@@ -17,6 +17,7 @@ import IssueReporting
 import SQLiteData
 import SwiftUI
 import UI
+import Utils
 
 /// Disambiguate from `Foundation.Operation`.
 private typealias Operation = DependencyClients.Operation
@@ -79,6 +80,37 @@ public struct DeviceDetailView: View {
                 )
             }
         }
+        // Keep an in-place-refreshing device live while it's in view: a mining
+        // drone's cycle/yield and a diverting propulsor's defense readout both
+        // change without a completion event, so the reducer re-reads the device on
+        // a cadence keyed to its activity. Stops when the device settles or the
+        // selection clears.
+        .task(id: refreshKey) {
+            store.send(.viewingChanged(deviceCode: refreshKey))
+        }
+    }
+
+    /// The device to keep refreshing while viewed — its code when it's running an
+    /// activity that mutates in place (mining, diverting), else nil (no refresh).
+    /// Keying the task on this restarts the loop for a new device and stops it once
+    /// the device settles.
+    private var refreshKey: String? {
+        guard let device else { return nil }
+        switch device.statusBase {
+        case "mining", "diverting": return device.deviceCode
+        default:                    return nil
+        }
+    }
+
+    /// The fetched diversion snapshot, but only when it belongs to this device's
+    /// object — guards against briefly showing a prior selection's snapshot before
+    /// the new fetch lands.
+    private func diversionSnapshot(for device: Device) -> DiversionSnapshot? {
+        guard device.statusBase == "diverting",
+              let snapshot = store.diversion,
+              snapshot.objectDesignation == device.location
+        else { return nil }
+        return snapshot
     }
 
     private var commandErrorBinding: Binding<Bool> {
@@ -117,7 +149,7 @@ public struct DeviceDetailView: View {
                     .font(.rcTitle)
                     .foregroundStyle(.rcTextPrimary)
                     .lineLimit(1)
-                StatusBadge(device.status)
+                StatusBadge(device.statusBase)
                 HStack(spacing: Space.s) {
                     Text(device.deviceCode)
                         .font(.rcMono)
@@ -146,8 +178,14 @@ public struct DeviceDetailView: View {
     // MARK: Readouts — active-task card
 
     private func readouts(_ device: Device) -> some View {
-        ActiveTaskCard(operation: openOperation)
-            .frame(maxWidth: .infinity, alignment: .leading)
+        ActiveTaskCard(
+            operation: openOperation,
+            parameter: device.statusParameter,
+            liveTravel: device.travelSnapshot,
+            diversion: diversionSnapshot(for: device),
+            mining: device.statusBase == "mining" ? device.miningSnapshot : nil
+        )
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: Details
@@ -159,6 +197,9 @@ public struct DeviceDetailView: View {
                 .foregroundStyle(.rcTextTertiary)
             detailRow("Replicant", device.replicantCode)
             detailRow("Queue", "\(device.queueSize)")
+            if let directive = device.currentDirective {
+                detailRow("Directive", DevicePresentation.displayName(directive))
+            }
             if !device.features.isEmpty {
                 detailRow("Features", device.features.joined(separator: ", "))
             }
@@ -213,13 +254,10 @@ private struct CapacityRing: View {
                 .trim(from: 0, to: max(0, min(1, value / 100)))
                 .stroke(tone, style: StrokeStyle(lineWidth: 7, lineCap: .round))
                 .rotationEffect(.degrees(-90))
-            VStack(spacing: 0) {
-                Text("\(Int(value))")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.rcTextPrimary)
-                    .monospacedDigit()
-                Text("%").font(.rcCaption).foregroundStyle(.rcTextTertiary)
-            }
+            Text("\(Int(value))")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.rcTextPrimary)
+                .monospacedDigit()
         }
         .frame(width: 60, height: 60)
     }
@@ -229,6 +267,31 @@ private struct CapacityRing: View {
 
 private struct ActiveTaskCard: View {
     let operation: Operation?
+    /// The status parameter the backend appended in parentheses (e.g. the device
+    /// type being printed, `"transport_drone"`, or the resource being mined). Shown
+    /// beside the task kind instead of crammed into the status badge.
+    var parameter: String? = nil
+    /// The device's live `travel` block — the fallback route source for a travel
+    /// op adopted mid-flight. An op dispatched locally carries its own whole-route
+    /// snapshot, frozen at departure, which is preferred.
+    var liveTravel: TravelSnapshot? = nil
+    /// The defense readout for a `diverting` propulsor, fetched from the object it's
+    /// attached to (a diverting device carries no activity block of its own). When
+    /// present it replaces the operation readout — diversion isn't a dispatched op.
+    var diversion: DiversionSnapshot? = nil
+    /// The live mining state for a `mining` drone — resource, cycle, and yield. When
+    /// present it replaces the generic operation readout with the cycle-aware card,
+    /// since mining is continuous (no deadline) and refreshes in place each cycle.
+    var mining: MiningSnapshot? = nil
+
+    /// The itinerary to display for a travel op: the whole route captured at
+    /// dispatch when we have it, else the device's remaining-legs snapshot. Nil
+    /// for a non-travel op.
+    private var itinerary: TravelSnapshot? {
+        guard operation?.kind == OperationKind.travel.rawValue else { return nil }
+        if let stored = operation?.travelSnapshot, !stored.legs.isEmpty { return stored }
+        return liveTravel
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.s) {
@@ -236,23 +299,31 @@ private struct ActiveTaskCard: View {
                 .font(.rcSectionLabel).kerning(1)
                 .foregroundStyle(.rcTextTertiary)
 
-            if let operation {
-                Text(operation.kind.capitalized)
-                    .font(.rcHeadline)
-                    .foregroundStyle(.rcTextPrimary)
-
-                if operation.status == .active,
-                   let completesAt = operation.completesAt {
-                    // Keyed by op id so the progress view's "reached the end" state
-                    // resets for a genuinely new operation (but survives a re-arm of
-                    // the same one).
-                    OperationProgressView(startedAt: operation.startedAt, completesAt: completesAt)
-                        .id(operation.id)
-                } else {
-                    Text(label(for: operation.status))
-                        .font(.rcCaption)
-                        .foregroundStyle(.rcTextSecondary)
+            if let diversion {
+                diversionReadout(diversion)
+            } else if let mining {
+                miningReadout(mining)
+            } else if let operation {
+                HStack(spacing: Space.xs) {
+                    Text(operation.kind.replacingOccurrences(of: "_", with: " ").capitalized)
+                        .font(.rcHeadline)
+                        .foregroundStyle(.rcTextPrimary)
+                    if let parameter {
+                        Text("·")
+                            .font(.rcHeadline)
+                            .foregroundStyle(.rcTextTertiary)
+                        Text(DevicePresentation.displayName(parameter))
+                            .font(.rcHeadline)
+                            .foregroundStyle(.rcTextSecondary)
+                    }
                 }
+                .lineLimit(1)
+
+                if let itinerary {
+                    routeReadout(itinerary)
+                }
+
+                progress(for: operation, itinerary: itinerary)
             } else {
                 Text("Idle — no active task.")
                     .font(.rcCaption)
@@ -271,12 +342,246 @@ private struct ActiveTaskCard: View {
         )
     }
 
+    /// The progress readout for the operation. A multi-leg travel op gets the
+    /// segmented bar; everything else keeps the single interpolated bar. Both are
+    /// keyed by op id so the "reached the end" latch resets for a genuinely new
+    /// operation (but survives a re-arm of the same one).
+    @ViewBuilder
+    private func progress(for operation: Operation, itinerary: TravelSnapshot?) -> some View {
+        if operation.status == .active, let completesAt = operation.completesAt {
+            if let itinerary, !itinerary.legs.isEmpty {
+                TravelProgressView(
+                    segments: segments(itinerary),
+                    barStart: barStart(itinerary, operation: operation, completesAt: completesAt),
+                    completesAt: completesAt
+                )
+                .id(operation.id)
+            } else {
+                OperationProgressView(startedAt: operation.startedAt, completesAt: completesAt)
+                    .id(operation.id)
+            }
+        } else {
+            Text(label(for: operation.status))
+                .font(.rcCaption)
+                .foregroundStyle(.rcTextSecondary)
+        }
+    }
+
+    private func segments(_ snapshot: TravelSnapshot) -> [TravelBar.Segment] {
+        snapshot.legs.map { leg in
+            TravelBar.Segment(
+                id: leg.index,
+                weight: leg.timeSeconds ?? 0,
+                type: leg.type,
+                from: leg.from,
+                to: leg.to
+            )
+        }
+    }
+
+    /// Anchor the sweep on `completesAt − total leg duration` so the fill spans
+    /// exactly the legs we can show — the whole trip for a frozen dispatch route,
+    /// just the remaining legs for an adopted one. Falls back to the op's start
+    /// when the legs carry no durations.
+    private func barStart(_ snapshot: TravelSnapshot, operation: Operation, completesAt: Date) -> Date {
+        if let total = snapshot.totalLegSeconds, total > 0 {
+            return completesAt.addingTimeInterval(-total)
+        }
+        return operation.startedAt
+    }
+
     private func label(for status: OperationStatus) -> String {
         switch status {
         case .enqueued:   return "Queued — awaiting start."
         case .optimistic: return "Dispatching…"
         default:          return status.rawValue.capitalized
         }
+    }
+
+    /// Origin → destination for a travel task.
+    private func routeReadout(_ snapshot: TravelSnapshot) -> some View {
+        HStack(spacing: Space.xs) {
+            Text(snapshot.originLabel ?? "—")
+                .foregroundStyle(.rcTextSecondary)
+            Image(systemName: "arrow.right")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.rcTextTertiary)
+            Text(snapshot.destinationLabel ?? "—")
+                .foregroundStyle(.rcTextPrimary)
+        }
+        .font(.rcMonoSmall)
+        .lineLimit(1)
+        .textSelection(.enabled)
+    }
+
+    // MARK: Diversion readout
+
+    /// The planetary-defense readout for a diverting propulsor: the threat object,
+    /// its deflection progress (a server-authoritative percent, not a timed bar),
+    /// and the impact it's averting.
+    @ViewBuilder
+    private func diversionReadout(_ d: DiversionSnapshot) -> some View {
+        HStack(spacing: Space.xs) {
+            Text("Diverting")
+                .font(.rcHeadline)
+                .foregroundStyle(.rcTextPrimary)
+            Text("·")
+                .font(.rcHeadline)
+                .foregroundStyle(.rcTextTertiary)
+            Text(d.objectDesignation)
+                .font(.rcMono)
+                .foregroundStyle(.rcTextSecondary)
+                .textSelection(.enabled)
+        }
+        .lineLimit(1)
+
+        if let subtitle = objectSubtitle(d) {
+            Text(subtitle)
+                .font(.rcCaption)
+                .foregroundStyle(.rcTextTertiary)
+        }
+
+        if let pct = d.progressPct {
+            VStack(alignment: .leading, spacing: Space.xs) {
+                ProgressView(value: min(max(pct / 100, 0), 1))
+                    .tint(StatusTone.working.color)
+                Text("\(Self.percent(pct)) deflected")
+                    .font(.rcMonoSmall)
+                    .foregroundStyle(.rcTextSecondary)
+            }
+        }
+
+        VStack(alignment: .leading, spacing: Space.xs) {
+            if let impact = impactValue(d) {
+                taskRow("Impact", impact)
+            }
+            if let likelihood = d.impactLikelihood {
+                taskRow("Likelihood", Self.percent(likelihood), valueColor: likelihoodColor(likelihood))
+            }
+            if let thrust = thrustValue(d) {
+                taskRow("Thrust", thrust)
+            }
+        }
+        .padding(.top, Space.xs)
+    }
+
+    // MARK: Mining readout
+
+    /// The live readout for a mining drone: whether it's extracting or seeking (per
+    /// the yield tally), a repeating cycle bar, and the belt/availability/yield.
+    @ViewBuilder
+    private func miningReadout(_ m: MiningSnapshot) -> some View {
+        HStack(spacing: Space.xs) {
+            Text(m.isProducing ? "Mining" : "Seeking")
+                .font(.rcHeadline)
+                .foregroundStyle(.rcTextPrimary)
+            if let resource = m.resourceType {
+                Text("·")
+                    .font(.rcHeadline)
+                    .foregroundStyle(.rcTextTertiary)
+                Text(DevicePresentation.displayName(resource))
+                    .font(.rcHeadline)
+                    .foregroundStyle(.rcTextSecondary)
+            }
+        }
+        .lineLimit(1)
+
+        Text(m.isProducing ? "Extracting resource" : "Seeking a workable pocket")
+            .font(.rcCaption)
+            .foregroundStyle(.rcTextTertiary)
+
+        if let started = m.startedAt, let cycle = m.cycleTimeSeconds, cycle > 0 {
+            MiningCycleView(startedAt: started, cycleSeconds: cycle)
+        }
+
+        VStack(alignment: .leading, spacing: Space.xs) {
+            if let belt = beltValue(m) {
+                taskRow("Belt", belt)
+            }
+            if let availability = m.availability {
+                taskRow("Resource", DevicePresentation.displayName(availability))
+            }
+            taskRow("Yield", yieldValue(m))
+        }
+        .padding(.top, Space.xs)
+    }
+
+    /// "ATIANFU-BELT-1 · Dense" — where it's mining and how dense the belt is.
+    private func beltValue(_ m: MiningSnapshot) -> String? {
+        let density = m.density.map(DevicePresentation.displayName)
+        switch (m.belt, density) {
+        case let (belt?, density?): return "\(belt) · \(density)"
+        case let (belt?, nil):      return belt
+        case let (nil, density?):   return density
+        default:                    return nil
+        }
+    }
+
+    /// The uncollected haul: "3 units · 1 cycle", or "none this cycle" when the
+    /// last cycle came up empty (the seeking signal).
+    private func yieldValue(_ m: MiningSnapshot) -> String {
+        let quantity = m.pendingQuantity ?? 0
+        let cycles = m.pendingCycles ?? 0
+        guard quantity > 0 || cycles > 0 else { return "none this cycle" }
+        var parts: [String] = ["\(Self.number(quantity)) unit\(quantity == 1 ? "" : "s")"]
+        if cycles > 0 { parts.append("\(cycles) cycle\(cycles == 1 ? "" : "s")") }
+        return parts.joined(separator: " · ")
+    }
+
+    private func taskRow(_ label: String, _ value: String, valueColor: Color = .rcTextSecondary) -> some View {
+        HStack(alignment: .top, spacing: Space.m) {
+            Text(label)
+                .font(.rcCaption)
+                .foregroundStyle(.rcTextTertiary)
+                .frame(width: 72, alignment: .leading)
+            Text(value)
+                .font(.rcMonoSmall)
+                .foregroundStyle(valueColor)
+                .textSelection(.enabled)
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// "Small Incoming Asteroid" from the object's size class and type.
+    private func objectSubtitle(_ d: DiversionSnapshot) -> String? {
+        let parts = [d.sizeClass, d.objectType].compactMap { $0 }.map(DevicePresentation.displayName)
+        return parts.isEmpty ? nil : parts.joined(separator: " ")
+    }
+
+    /// "ATIANFU-1 · in 7 days" — where the object strikes and how soon.
+    private func impactValue(_ d: DiversionSnapshot) -> String? {
+        let eta = d.impactEta.map { $0.formatted(.relative(presentation: .named)) }
+        switch (d.impactTarget, eta) {
+        case let (target?, eta?): return "\(target) · \(eta)"
+        case let (target?, nil): return target
+        case let (nil, eta?):     return eta
+        default:                  return nil
+        }
+    }
+
+    /// "1/hr · 24 required · 1 plate" — applied thrust vs. the strength needed.
+    private func thrustValue(_ d: DiversionSnapshot) -> String? {
+        var parts: [String] = []
+        if let thrust = d.currentThrustPerHour { parts.append("\(Self.number(thrust))/hr") }
+        if let required = d.requiredStrength { parts.append("\(Self.number(required)) required") }
+        if let plates = d.activePlates { parts.append(plates == 1 ? "1 plate" : "\(plates) plates") }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// A near-certain impact reads as danger, a coin-flip as a warning.
+    private func likelihoodColor(_ value: Double) -> Color {
+        switch value {
+        case 75...:   return .rcError
+        case 40..<75: return .rcWarning
+        default:      return .rcTextSecondary
+        }
+    }
+
+    private static func percent(_ value: Double) -> String { String(format: "%.1f%%", value) }
+
+    /// Whole numbers stay whole (`24`), fractions keep one place (`1.5`).
+    private static func number(_ value: Double) -> String {
+        value == value.rounded() ? String(Int(value)) : String(format: "%.1f", value)
     }
 }
 
@@ -286,16 +591,81 @@ private struct CommandGrid: View {
     let device: Device
     let store: StoreOf<DevicesFeature>
 
+    /// The whole fleet, for building the `adopt` candidate list (worker devices of
+    /// the type this controller shepherds).
+    @FetchAll(Device.order { $0.deviceCode }) private var fleet
     @State private var pending: DeviceCommand?
     @State private var textValue: String = ""
     @State private var choiceValue: String = ""
+    /// The checked device codes for a pending `adopt`.
+    @State private var selectedCodes: Set<String> = []
+    /// `survey_system` directive configuration, revealed when that directive is the
+    /// pending `set_directive` selection.
+    @State private var planetsScope: String = SurveyScope.all
+    @State private var moonsScope: String = SurveyScope.none
+    @State private var recall: Bool = true
+
+    /// The `all` / `none` scope values the survey config dropdowns offer.
+    private enum SurveyScope { static let all = "all", none = "none" }
+
+    /// The devices this controller can adopt: fleet members of the type it
+    /// shepherds (mining drones for a mining controller, etc.) that it doesn't
+    /// already control. Empty for a non-controller.
+    private var adoptCandidates: [DeviceOption] {
+        guard let type = DeviceCommand.controllableType(for: device.deviceType) else { return [] }
+        let controlled = Set(device.controlledDeviceCodes)
+        return fleet
+            .filter { $0.deviceType == type && !controlled.contains($0.deviceCode) }
+            .map { DeviceOption(id: $0.deviceCode, subtitle: adoptSubtitle($0)) }
+    }
+
+    /// "Idle · ATIANFU-1" — a candidate's status and where it is, for the row.
+    private func adoptSubtitle(_ device: Device) -> String {
+        let status = device.statusBase.capitalized
+        if let place = device.locationName ?? device.location { return "\(status) · \(place)" }
+        return status
+    }
+
+    /// The devices this controller already controls, for the release checkbox list.
+    private var releaseCandidates: [DeviceOption] {
+        device.controlledDevices.map {
+            DeviceOption(id: $0.deviceCode, subtitle: controlledSubtitle($0))
+        }
+    }
+
+    /// "Tracking · ATIANFU-BELT-1" — a controlled device's status and location.
+    private func controlledSubtitle(_ device: Device.ControlledDevice) -> String {
+        let status = (device.status?.isEmpty == false ? device.status! : device.deviceType).capitalized
+        if let place = device.location, !place.isEmpty { return "\(status) · \(place)" }
+        return status
+    }
 
     /// The dispatchable subset of the device's available commands. `retarget` is
-    /// gated on the device actually mining — the server rejects it otherwise.
+    /// gated on the device actually mining (the server rejects it otherwise);
+    /// `set_directive` only surfaces when the device offers directives, and
+    /// `adopt`/`release` only when there are devices to act on — empty pickers
+    /// otherwise.
     private var commands: [DeviceCommand] {
-        device.availableCommands
-            .compactMap(DeviceCommand.init(command:))
-            .filter { $0 != .retarget || device.status.lowercased().contains("mining") }
+        let adopt = adoptCandidates
+        let release = releaseCandidates
+        return device.availableCommands
+            .compactMap {
+                DeviceCommand(
+                    command: $0,
+                    availableDirectives: device.availableDirectives,
+                    adoptCandidates: adopt,
+                    releaseCandidates: release
+                )
+            }
+            .filter { command in
+                switch command {
+                case .retarget:               return device.status.lowercased().contains("mining")
+                case let .setDirective(opts):  return !opts.isEmpty
+                case let .adopt(candidates):   return !candidates.isEmpty
+                case let .release(controlled): return !controlled.isEmpty
+                default:                      return true
+                }
+            }
     }
 
     var body: some View {
@@ -335,12 +705,33 @@ private struct CommandGrid: View {
     private func select(_ command: DeviceCommand) {
         if pending == command { pending = nil; return }
         textValue = ""
+        selectedCodes = []
         if case let .choice(_, options) = command.parameter {
-            choiceValue = options.first ?? ""
+            // Seed the directive picker with the device's current directive when
+            // it's a valid option, so re-opening reflects what's in force.
+            if case .setDirective = command, let current = device.currentDirective, options.contains(current) {
+                choiceValue = current
+                seedDirectiveConfig()
+            } else {
+                choiceValue = options.first ?? ""
+            }
         } else {
             choiceValue = ""
         }
         pending = command
+    }
+
+    /// Seed the survey config controls from the directive currently in force, so
+    /// re-opening the picker mirrors what's running. Falls back to the documented
+    /// defaults (planets: all, moons: none, recall: on) when no config is present.
+    private func seedDirectiveConfig() {
+        planetsScope = SurveyScope.all
+        moonsScope = SurveyScope.none
+        recall = true
+        guard device.currentDirective == "survey_system", let config = device.currentDirectiveConfig else { return }
+        planetsScope = config["planets"]?.stringValue ?? planetsScope
+        moonsScope = config["moons"]?.stringValue ?? moonsScope
+        recall = config["recall"]?.boolValue ?? recall
     }
 
     @ViewBuilder
@@ -350,12 +741,21 @@ private struct CommandGrid: View {
             case let .text(label, placeholder):
                 RCField(label, text: $textValue, placeholder: placeholder, mono: true)
             case let .choice(label, options):
-                VStack(alignment: .leading, spacing: Space.xs) {
-                    Text(label.uppercased())
-                        .font(.rcSectionLabel)
-                        .foregroundStyle(.rcTextTertiary)
-                    RCValueSelect(label, options: options, selection: $choiceValue)
+                VStack(alignment: .leading, spacing: Space.s) {
+                    VStack(alignment: .leading, spacing: Space.xs) {
+                        Text(label.uppercased())
+                            .font(.rcSectionLabel)
+                            .foregroundStyle(.rcTextTertiary)
+                        RCValueSelect(label, options: options, selection: $choiceValue)
+                    }
+                    // A directive with its own configuration reveals it inline once
+                    // selected (survey_system today; other directives take none).
+                    if case .setDirective = command {
+                        directiveConfiguration(choiceValue)
+                    }
                 }
+            case let .multiSelect(label, options):
+                deviceCheckboxList(label, options: options)
             case .none:
                 Text("Run \(command.title) on \(device.deviceCode)?")
                     .font(.rcCaption)
@@ -369,7 +769,7 @@ private struct CommandGrid: View {
                 // Travel takes an extra beat: preview the dry-run itinerary in a
                 // sheet and let the user confirm there. Every other command
                 // dispatches straight from here.
-                Button(command == .travel ? "Review Route…" : command.title) {
+                Button(confirmTitle(for: command)) {
                     if command == .travel {
                         store.send(.travelPreviewRequested(
                             deviceCode: device.deviceCode,
@@ -379,7 +779,7 @@ private struct CommandGrid: View {
                         store.send(.commandConfirmed(
                             kind: command.kind,
                             deviceCode: device.deviceCode,
-                            params: command.params(confirmValue(for: command))
+                            params: params(for: command)
                         ))
                     }
                     pending = nil
@@ -399,22 +799,150 @@ private struct CommandGrid: View {
         )
     }
 
+    /// The confirm button's title. Travel reviews a route first; adopt shows how
+    /// many devices are checked.
+    private func confirmTitle(for command: DeviceCommand) -> String {
+        if command == .travel { return "Review Route…" }
+        if !selectedCodes.isEmpty {
+            if case .adopt = command { return "Adopt \(selectedCodes.count)" }
+            if case .release = command { return "Release \(selectedCodes.count)" }
+        }
+        return command.title
+    }
+
     /// The value passed to `params(_:)` for the pending command's parameter kind.
     private func confirmValue(for command: DeviceCommand) -> String {
         switch command.parameter {
-        case .text:   return textValue
-        case .choice: return choiceValue
-        case .none:   return ""
+        case .text:        return textValue
+        case .choice:      return choiceValue
+        case .multiSelect: return ""
+        case .none:        return ""
         }
     }
 
-    /// Whether the confirm button is enabled — text must be non-empty; choice and
-    /// confirm-only commands are always ready.
+    /// The dispatch params for a command. `set_directive` attaches the selected
+    /// directive's configuration and `adopt` the checked device codes; every other
+    /// command uses the plain single-value mapping.
+    private func params(for command: DeviceCommand) -> CommandParams {
+        switch command {
+        case .setDirective:
+            return CommandParams(directive: choiceValue, configuration: directiveConfig(for: choiceValue))
+        case .adopt, .release:
+            return CommandParams(devices: Array(selectedCodes))
+        default:
+            return command.params(confirmValue(for: command))
+        }
+    }
+
+    /// The configuration object for a directive, or nil for directives that take
+    /// none (belt_search and the rest). Only `survey_system` is configurable today.
+    private func directiveConfig(for directive: String) -> [String: JSONValue]? {
+        switch directive {
+        case "survey_system":
+            return [
+                "planets": .string(planetsScope),
+                "moons": .string(moonsScope),
+                "recall": .bool(recall),
+            ]
+        default:
+            return nil
+        }
+    }
+
+    /// Inline configuration controls for a configurable directive. Empty for
+    /// directives that carry no configuration.
+    @ViewBuilder
+    private func directiveConfiguration(_ directive: String) -> some View {
+        if directive == "survey_system" {
+            VStack(alignment: .leading, spacing: Space.s) {
+                configField("Planets", selection: $planetsScope)
+                configField("Moons", selection: $moonsScope)
+                Toggle(isOn: $recall) {
+                    Text("Recall when complete")
+                        .font(.rcCaption)
+                        .foregroundStyle(.rcTextSecondary)
+                }
+                .toggleStyle(.switch)
+                .tint(.rcAccent)
+            }
+            .padding(.top, Space.xs)
+        }
+    }
+
+    /// A labeled all/none scope dropdown for a survey config field.
+    private func configField(_ label: String, selection: Binding<String>) -> some View {
+        VStack(alignment: .leading, spacing: Space.xs) {
+            Text(label.uppercased())
+                .font(.rcSectionLabel)
+                .foregroundStyle(.rcTextTertiary)
+            RCValueSelect(label, options: [SurveyScope.all, SurveyScope.none], selection: selection)
+        }
+    }
+
+    /// The `adopt` checkbox list: one selectable row per eligible device, capped in
+    /// height so a large fleet scrolls rather than pushing the confirm out of view.
+    private func deviceCheckboxList(_ label: String, options: [DeviceOption]) -> some View {
+        VStack(alignment: .leading, spacing: Space.xs) {
+            Text(label.uppercased())
+                .font(.rcSectionLabel)
+                .foregroundStyle(.rcTextTertiary)
+            ScrollView {
+                VStack(spacing: 0) {
+                    ForEach(Array(options.enumerated()), id: \.element.id) { index, option in
+                        if index > 0 { Divider().overlay(Color.rcSeparator) }
+                        checkboxRow(option)
+                    }
+                }
+            }
+            .frame(maxHeight: 220)
+            .background(
+                RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                    .fill(.rcSurfaceRaised)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                            .strokeBorder(.rcSeparator, lineWidth: 1)
+                    )
+            )
+        }
+    }
+
+    /// One device row — a checkbox glyph, the device code, and a status subtitle —
+    /// toggling the code in/out of the pending selection.
+    private func checkboxRow(_ option: DeviceOption) -> some View {
+        let selected = selectedCodes.contains(option.id)
+        return Button {
+            if selected { selectedCodes.remove(option.id) } else { selectedCodes.insert(option.id) }
+        } label: {
+            HStack(spacing: Space.s) {
+                Image(systemName: selected ? "checkmark.square.fill" : "square")
+                    .font(.system(size: 15))
+                    .foregroundStyle(selected ? Color.rcAccent : .rcTextTertiary)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(option.id)
+                        .font(.rcMono)
+                        .foregroundStyle(.rcTextPrimary)
+                    Text(option.subtitle)
+                        .font(.rcCaption)
+                        .foregroundStyle(.rcTextTertiary)
+                }
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+            .padding(.horizontal, Space.m)
+            .padding(.vertical, Space.s)
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Whether the confirm button is enabled — text must be non-empty and a
+    /// multi-select needs at least one checked device; choice and confirm-only
+    /// commands are always ready.
     private func isConfirmable(_ command: DeviceCommand) -> Bool {
         switch command.parameter {
-        case .text:   return !textValue.trimmingCharacters(in: .whitespaces).isEmpty
-        case .choice: return !choiceValue.isEmpty
-        case .none:   return true
+        case .text:        return !textValue.trimmingCharacters(in: .whitespaces).isEmpty
+        case .choice:      return !choiceValue.isEmpty
+        case .multiSelect: return !selectedCodes.isEmpty
+        case .none:        return true
         }
     }
 }

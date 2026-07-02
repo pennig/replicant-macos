@@ -1,0 +1,351 @@
+//
+//  PrintQueueDetailView.swift
+//  Replicould — Print Queue feature
+//
+//  The printer inspector for the split view's detail column: the active job with
+//  a live progress bar (interpolated on device by `OperationProgressView`), any
+//  resources a queued job is still waiting on, the queue itself (each entry
+//  removable via `dequeue_print`), and an enqueue field to add a new job. Reads
+//  everything straight from the device's `printing` / `print_queue` /
+//  `waiting_for` blocks, so a relay update re-renders the pane automatically.
+//
+
+import ComposableArchitecture
+import DependencyClients
+import SQLiteData
+import SwiftUI
+import UI
+
+public struct PrintQueueDetailView: View {
+    let store: StoreOf<PrintQueueFeature>
+    /// Loaded lazily by the selection `.task(id:)` below so the query tracks the
+    /// selected device code rather than fetching the whole fleet to filter it.
+    @FetchOne(Device.none) private var device: Device?
+
+    @State private var enqueueType: String = ""
+
+    public init(store: StoreOf<PrintQueueFeature>) {
+        self.store = store
+    }
+
+    public var body: some View {
+        Group {
+            if let device {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: Space.xl) {
+                        header(device)
+                        activeJob(device)
+                        waitingFor(device)
+                        queue(device)
+                        enqueue(device)
+                    }
+                    .padding(Space.xl)
+                    .frame(minWidth: 360, maxWidth: .infinity, alignment: .leading)
+                }
+                .navigationTitle(PrintQueuePresentation.displayName(device.deviceType))
+                .alert("Command Failed", isPresented: commandErrorBinding, presenting: store.commandError) { _ in
+                    Button("OK", role: .cancel) { store.send(.dismissCommandError) }
+                } message: { message in
+                    Text(message)
+                }
+            } else {
+                ContentUnavailableView(
+                    "No Printer Selected",
+                    systemImage: "printer",
+                    description: Text("Select a printer to inspect its job and queue.")
+                )
+            }
+        }
+        // Reload the single-row query whenever the selected device changes.
+        .task(id: store.selectedDeviceCode) {
+            _ = try? await $device.load(
+                Device.where { $0.deviceCode.eq(store.selectedDeviceCode ?? "") },
+                animation: .default
+            )
+        }
+        // Reset the enqueue field when switching printers.
+        .onChange(of: store.selectedDeviceCode) { _, _ in enqueueType = "" }
+    }
+
+    private var commandErrorBinding: Binding<Bool> {
+        Binding(
+            get: { store.commandError != nil },
+            set: { if !$0 { store.send(.dismissCommandError) } }
+        )
+    }
+
+    // MARK: Header
+
+    private func header(_ device: Device) -> some View {
+        HStack(alignment: .top, spacing: Space.m) {
+            ZStack {
+                RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                    .fill(.rcSurfaceRaised)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                            .strokeBorder(.rcSeparator, lineWidth: 0.5)
+                    )
+                Image.rcSymbol("device.\(device.deviceType)")
+                    .font(.system(size: 32, weight: .regular))
+                    .foregroundStyle(.rcTextPrimary, .rcAccent, .rcTextSecondary)
+            }
+            .frame(width: 52, height: 52)
+
+            VStack(alignment: .leading, spacing: Space.xs) {
+                Text(PrintQueuePresentation.displayName(device.deviceType))
+                    .font(.rcTitle)
+                    .foregroundStyle(.rcTextPrimary)
+                    .lineLimit(1)
+                StatusBadge(device.statusBase, parameter: device.statusParameter.map(PrintQueuePresentation.displayName))
+                HStack(spacing: Space.s) {
+                    Text(device.deviceCode)
+                        .font(.rcMono)
+                        .foregroundStyle(.rcTextSecondary)
+                        .textSelection(.enabled)
+                    if let location = device.location {
+                        Text("·").foregroundStyle(.rcTextTertiary)
+                        Text(device.locationName ?? location)
+                            .font(.rcMonoSmall)
+                            .foregroundStyle(.rcTextTertiary)
+                    }
+                }
+                .lineLimit(1)
+            }
+            Spacer(minLength: Space.m)
+        }
+    }
+
+    // MARK: Active job
+
+    @ViewBuilder
+    private func activeJob(_ device: Device) -> some View {
+        VStack(alignment: .leading, spacing: Space.s) {
+            Text("ACTIVE JOB")
+                .font(.rcSectionLabel).kerning(1)
+                .foregroundStyle(.rcTextTertiary)
+
+            if let printing = device.printingSnapshot {
+                HStack(spacing: Space.xs) {
+                    Text("Printing")
+                        .font(.rcHeadline)
+                        .foregroundStyle(.rcTextPrimary)
+                    if let target = printing.deviceType {
+                        Text("·")
+                            .font(.rcHeadline)
+                            .foregroundStyle(.rcTextTertiary)
+                        Text(PrintQueuePresentation.displayName(target))
+                            .font(.rcHeadline)
+                            .foregroundStyle(.rcTextSecondary)
+                    }
+                }
+                .lineLimit(1)
+
+                // Live interpolated bar when the job reports both endpoints; else
+                // fall back to the server's progress percent.
+                if let started = printing.startedAt, let completes = printing.completesAt {
+                    OperationProgressView(startedAt: started, completesAt: completes)
+                        .id(device.deviceCode + (printing.deviceType ?? ""))
+                } else if let pct = printing.progressPercent {
+                    VStack(alignment: .leading, spacing: Space.xs) {
+                        ProgressView(value: min(max(pct / 100, 0), 1))
+                            .tint(.rcAccent)
+                        Text(String(format: "%.0f%%", pct))
+                            .font(.rcMonoSmall)
+                            .foregroundStyle(.rcTextSecondary)
+                    }
+                }
+            } else {
+                Text("Idle — no job on the platen.")
+                    .font(.rcCaption)
+                    .foregroundStyle(.rcTextTertiary)
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: 72, alignment: .topLeading)
+        .padding(Space.m)
+        .background(cardBackground)
+    }
+
+    // MARK: Waiting-for resources
+
+    @ViewBuilder
+    private func waitingFor(_ device: Device) -> some View {
+        let resources = device.waitingForResources
+        if !resources.isEmpty {
+            VStack(alignment: .leading, spacing: Space.s) {
+                Text("WAITING FOR")
+                    .font(.rcSectionLabel).kerning(1)
+                    .foregroundStyle(.rcTextTertiary)
+                ForEach(resources) { resource in
+                    HStack(alignment: .top, spacing: Space.m) {
+                        Image(systemName: resource.isMet ? "checkmark.circle.fill" : "hourglass")
+                            .font(.system(size: 11))
+                            .foregroundStyle(resource.isMet ? Color.rcStatusReady : .rcWarning)
+                        Text(PrintQueuePresentation.displayName(resource.resource))
+                            .font(.rcCaption)
+                            .foregroundStyle(.rcTextSecondary)
+                            .frame(width: 120, alignment: .leading)
+                        Text(Self.amountText(resource))
+                            .font(.rcMonoSmall)
+                            .foregroundStyle(resource.isMet ? .rcTextSecondary : .rcTextPrimary)
+                        Spacer(minLength: 0)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(Space.m)
+            .background(cardBackground)
+        }
+    }
+
+    // MARK: Queue
+
+    @ViewBuilder
+    private func queue(_ device: Device) -> some View {
+        let items = device.printQueueItems
+        VStack(alignment: .leading, spacing: Space.s) {
+            HStack(spacing: Space.s) {
+                Text("QUEUE")
+                    .font(.rcSectionLabel).kerning(1)
+                    .foregroundStyle(.rcTextTertiary)
+                Spacer(minLength: 0)
+                if device.queueSize > 0 {
+                    Button(role: .destructive) {
+                        store.send(.commandConfirmed(
+                            kind: .simple("clear_queue"),
+                            deviceCode: device.deviceCode,
+                            params: CommandParams()
+                        ))
+                    } label: {
+                        Label("Clear", systemImage: "trash.slash")
+                    }
+                    .buttonStyle(RCButtonStyle(.text))
+                    .help("Clear all queued jobs")
+                }
+            }
+
+            if items.isEmpty {
+                // The server may report a queue count without per-item detail;
+                // reflect the count so the pane never reads as empty when it isn't.
+                Text(device.queueSize > 0
+                     ? "\(device.queueSize) job\(device.queueSize == 1 ? "" : "s") queued."
+                     : "No jobs queued.")
+                    .font(.rcCaption)
+                    .foregroundStyle(.rcTextTertiary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(Space.m)
+                    .background(cardBackground)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(items) { item in
+                        if item.index > 0 { Divider().overlay(Color.rcSeparator) }
+                        queueRow(item, deviceCode: device.deviceCode)
+                    }
+                }
+                .background(cardBackground)
+            }
+        }
+    }
+
+    private func queueRow(_ item: PrintQueueItem, deviceCode: String) -> some View {
+        HStack(spacing: Space.m) {
+            Text("\(item.index + 1)")
+                .font(.rcMonoSmall)
+                .foregroundStyle(.rcTextTertiary)
+                .frame(width: 16)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(PrintQueuePresentation.displayName(item.deviceType ?? "Unknown"))
+                    .font(.rcBody)
+                    .foregroundStyle(.rcTextPrimary)
+                    .lineLimit(1)
+                if !item.tags.isEmpty {
+                    Text(item.tags.joined(separator: ", "))
+                        .font(.rcCaption)
+                        .foregroundStyle(.rcTextTertiary)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: Space.s)
+            Button(role: .destructive) {
+                store.send(.commandConfirmed(
+                    kind: .dequeuePrint,
+                    deviceCode: deviceCode,
+                    params: CommandParams(index: item.index)
+                ))
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.rcTextTertiary)
+            }
+            .buttonStyle(.plain)
+            .help("Remove from queue")
+        }
+        .padding(.horizontal, Space.m)
+        .padding(.vertical, Space.s)
+    }
+
+    // MARK: Enqueue
+
+    @ViewBuilder
+    private func enqueue(_ device: Device) -> some View {
+        VStack(alignment: .leading, spacing: Space.s) {
+            Text("ENQUEUE PRINT")
+                .font(.rcSectionLabel).kerning(1)
+                .foregroundStyle(.rcTextTertiary)
+            RCField("Device type", text: $enqueueType, placeholder: "ftl_beacon", mono: true)
+            HStack(spacing: Space.s) {
+                Spacer()
+                Button("Enqueue") {
+                    let type = enqueueType.trimmingCharacters(in: .whitespaces)
+                    store.send(.commandConfirmed(
+                        kind: .print,
+                        deviceCode: device.deviceCode,
+                        params: CommandParams(deviceType: type)
+                    ))
+                    enqueueType = ""
+                }
+                .buttonStyle(RCButtonStyle(.primary))
+                .disabled(enqueueType.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(Space.m)
+        .background(cardBackground)
+    }
+
+    // MARK: Shared chrome
+
+    private var cardBackground: some View {
+        RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+            .fill(.rcSurfaceRaised)
+            .overlay(
+                RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                    .strokeBorder(.rcSeparator, lineWidth: 0.5)
+            )
+    }
+
+    /// "3 / 5" — how much of a waiting resource the location has vs. needs.
+    private static func amountText(_ resource: WaitingResource) -> String {
+        let have = resource.have.map(number) ?? "—"
+        let need = resource.need.map(number) ?? "—"
+        return "\(have) / \(need)"
+    }
+
+    private static func number(_ value: Double) -> String {
+        value == value.rounded() ? String(Int(value)) : String(format: "%.1f", value)
+    }
+}
+
+// MARK: - Presentation
+
+/// View-side display helpers for the Print Queue. Mirrors `DevicePresentation`
+/// (which is internal to the Devices feature) so this module can render device
+/// type names without a cross-feature dependency.
+enum PrintQueuePresentation {
+    /// "heaven_vessel" → "Heaven Vessel".
+    static func displayName(_ raw: String) -> String {
+        raw
+            .split(separator: "_")
+            .map { $0.prefix(1).uppercased() + $0.dropFirst() }
+            .joined(separator: " ")
+    }
+}

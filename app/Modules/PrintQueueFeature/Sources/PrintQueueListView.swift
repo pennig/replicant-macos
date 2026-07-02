@@ -1,10 +1,12 @@
 //
-//  DevicesView.swift
-//  Replicould — Devices feature
+//  PrintQueueListView.swift
+//  Replicould — Print Queue feature
 //
-//  The fleet master list for the split view's content column. Rows render
-//  straight from the `Device` table via `@FetchAll`, so every relay update flows
-//  in automatically; the store drives selection and the cold-load/refresh.
+//  The master list for the split view's content column: every device that can
+//  print and is currently printing or holding queued jobs. Rows render straight
+//  from the `Device` table via `@FetchAll` (filtered to `isPrintingOrQueued`), so
+//  a relay update or a dispatched command flows in automatically; the store
+//  drives selection and the cold-load / refresh.
 //
 
 import ComposableArchitecture
@@ -13,18 +15,23 @@ import SQLiteData
 import SwiftUI
 import UI
 
-public struct DevicesListView: View {
-    @Bindable var store: StoreOf<DevicesFeature>
+public struct PrintQueueListView: View {
+    @Bindable var store: StoreOf<PrintQueueFeature>
     @FetchAll(Device.order { $0.deviceType }) private var devices
 
-    public init(store: StoreOf<DevicesFeature>) {
+    public init(store: StoreOf<PrintQueueFeature>) {
         self.store = store
+    }
+
+    /// The printers to list: those actively printing or with queued jobs.
+    private var printers: [Device] {
+        devices.filter(\.isPrintingOrQueued)
     }
 
     public var body: some View {
         List(selection: $store.selectedDeviceCode) {
-            ForEach(devices) { device in
-                DeviceRow(device: device)
+            ForEach(printers) { device in
+                PrintQueueRow(device: device)
                     .tag(device.deviceCode)
                     .listRowSeparator(.hidden)
             }
@@ -32,19 +39,19 @@ public struct DevicesListView: View {
         .listStyle(.inset)
         .scrollContentBackground(.hidden)
         .overlay {
-            if devices.isEmpty {
+            if printers.isEmpty {
                 if store.isLoading {
                     ProgressView()
                 } else {
                     ContentUnavailableView(
-                        "No Devices",
-                        systemImage: SidebarSymbol.devices,
-                        description: Text("Your fleet will appear here once it loads.")
+                        "Nothing Printing",
+                        systemImage: "printer",
+                        description: Text("Printers with an active job or a queue will appear here.")
                     )
                 }
             }
         }
-        .navigationTitle("Devices")
+        .navigationTitle("Print Queue")
         .safeAreaInset(edge: .top, spacing: 0) {
             if let errorMessage = store.errorMessage {
                 errorBanner(errorMessage)
@@ -52,8 +59,8 @@ public struct DevicesListView: View {
         }
         .toolbar {
             ToolbarItem {
-                if !devices.isEmpty {
-                    Text("\(devices.count) devices")
+                if !printers.isEmpty {
+                    Text(printers.count == 1 ? "1 printer" : "\(printers.count) printers")
                         .font(.rcCaption)
                         .foregroundStyle(.rcTextTertiary)
                 }
@@ -94,18 +101,17 @@ public struct DevicesListView: View {
 
 // MARK: - Row
 
-private struct DeviceRow: View {
+private struct PrintQueueRow: View {
     let device: Device
+
+    private var printing: PrintingSnapshot? { device.printingSnapshot }
 
     var body: some View {
         HStack(spacing: Space.s) {
-            VStack(spacing: Space.xs) {
-                glyphTile
-                capacityBar
-            }
+            glyphTile
             VStack(alignment: .leading, spacing: Space.xs) {
                 HStack(spacing: Space.s) {
-                    Text(DevicePresentation.displayName(device.deviceType))
+                    Text(PrintQueuePresentation.displayName(device.deviceType))
                         .font(.rcBodyEmph)
                         .foregroundStyle(.rcTextPrimary)
                         .lineLimit(1)
@@ -113,35 +119,47 @@ private struct DeviceRow: View {
                         .font(.rcMonoSmall)
                         .foregroundStyle(.rcTextTertiary)
                     Spacer(minLength: Space.xs)
-                }
-                HStack(spacing: Space.s) {
-                    StatusBadge(device.statusBase)
-                    if let location = device.location {
-                        Text(location)
-                            .font(.rcMonoSmall)
-                            .foregroundStyle(.rcTextTertiary)
-                            .lineLimit(1)
-                    } else if let destination = travelDestination {
-                        Label(destination, systemImage: "location.north.line")
-                            .labelStyle(.titleAndIcon)
-                            .font(.rcMonoSmall)
-                            .foregroundStyle(.rcTextTertiary)
-                            .lineLimit(1)
+                    if device.queueSize > 0 {
+                        queueBadge(device.queueSize)
                     }
-                    Spacer(minLength: Space.xs)
+                }
+
+                if let printing, let target = printing.deviceType {
+                    // Active job — what's on the platen, plus a compact server-value
+                    // progress bar (the live interpolated bar lives in the detail).
+                    HStack(spacing: Space.s) {
+                        Image(systemName: "printer.fill")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.rcAccent)
+                        Text(PrintQueuePresentation.displayName(target))
+                            .font(.rcMonoSmall)
+                            .foregroundStyle(.rcTextSecondary)
+                            .lineLimit(1)
+                        Spacer(minLength: Space.xs)
+                    }
+                    if let pct = printing.progressPercent {
+                        ProgressView(value: min(max(pct / 100, 0), 1))
+                            .tint(.rcAccent)
+                            .controlSize(.small)
+                    }
+                } else {
+                    // No active job, but queued — waiting to start.
+                    StatusBadge(device.statusBase)
                 }
             }
         }
         .padding(.vertical, Space.xs)
     }
 
-    /// The trip's destination code while the device is en route — surfaced only
-    /// when there's no settled `location` to show instead. Prefers the whole
-    /// route's `final_destination` over the active leg's `destination`.
-    private var travelDestination: String? {
-        guard device.derivedActivity?.kind == .travel else { return nil }
-        return device.detail["travel"]?["final_destination"]?.stringValue
-            ?? device.detail["travel"]?["destination"]?.stringValue
+    private func queueBadge(_ count: Int) -> some View {
+        Text("+\(count)")
+            .font(.rcMonoSmall)
+            .foregroundStyle(.rcAccent)
+            .padding(.vertical, 2)
+            .padding(.horizontal, 6)
+            .background(Capsule().fill(Color.rcAccent.opacity(0.12)))
+            .overlay(Capsule().stroke(Color.rcAccent.opacity(0.4), lineWidth: 0.5))
+            .help(count == 1 ? "1 job queued" : "\(count) jobs queued")
     }
 
     private var glyphTile: some View {
@@ -157,16 +175,5 @@ private struct DeviceRow: View {
                 .foregroundStyle(.rcTextPrimary, .rcAccent, .rcTextSecondary)
         }
         .frame(width: 30, height: 30)
-    }
-
-    private var capacityBar: some View {
-        Capsule()
-            .fill(.rcSeparator)
-            .frame(width: 30, height: 4)
-            .overlay(alignment: .leading) {
-                Capsule()
-                    .fill(.rcAccent)
-                    .frame(width: 30 * device.operationalCapacity / 100, height: 4)
-            }
     }
 }

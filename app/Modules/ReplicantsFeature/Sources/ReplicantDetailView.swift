@@ -1,0 +1,336 @@
+//
+//  ReplicantDetailView.swift
+//  Replicould — Replicants feature
+//
+//  The replicant inspector for the split view's detail column: identity (name,
+//  code, NPC badge, pronouns, status), last-known location with the time it was
+//  seen, stats (XP, host, carried devices), and — for NPCs and any replicant that
+//  publishes them — the lore fields (plan, project, description). Reads the
+//  selected row straight from the `KnownReplicant` table and asks the reducer to
+//  refresh its full details when the selection changes.
+//
+
+import ComposableArchitecture
+import DependencyClients
+import IssueReporting
+import SQLiteData
+import SwiftUI
+import UI
+
+public struct ReplicantDetailView: View {
+    let store: StoreOf<ReplicantsFeature>
+    /// Loaded lazily by the selection `.task(id:)` below so the query tracks the
+    /// selected replicant code rather than fetching the whole directory.
+    @FetchOne(KnownReplicant.none) private var replicant: KnownReplicant?
+    /// The replicant's host device, resolved from the local `Device` table so the
+    /// host row shows its real type/glyph. Populated (or fetched) by the reducer
+    /// when we don't already hold it — see `.hostDeviceRequested`.
+    @FetchOne(Device.none) private var hostDevice: Device?
+
+    public init(store: StoreOf<ReplicantsFeature>) {
+        self.store = store
+    }
+
+    /// Whether the inspector is waiting on the details fetch for this replicant.
+    private var isLoadingDetails: Bool {
+        replicant.map { store.loadingDetailCode == $0.replicantCode } ?? false
+    }
+
+    public var body: some View {
+        Group {
+            if let replicant {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: Space.xl) {
+                        header(replicant)
+                        locationCard(replicant)
+                        lore(replicant)
+                        devices(replicant)
+                    }
+                    .padding(Space.xl)
+                    .frame(minWidth: 360, maxWidth: .infinity, alignment: .leading)
+                }
+                .navigationTitle(replicant.name.isEmpty ? replicant.replicantCode : replicant.name)
+                .overlay(alignment: .top) {
+                    if isLoadingDetails {
+                        ProgressView()
+                            .controlSize(.small)
+                            .padding(Space.s)
+                    }
+                }
+            } else {
+                ContentUnavailableView(
+                    "No Replicant Selected",
+                    systemImage: SidebarSymbol.replicants,
+                    description: Text("Select a replicant to inspect it.")
+                )
+            }
+        }
+        // Reload the single-row query whenever the selection changes.
+        .task(id: store.selectedReplicantCode) {
+            _ = await withErrorReporting {
+                try await $replicant.load(
+                    KnownReplicant.where { $0.replicantCode.eq(store.selectedReplicantCode ?? "") },
+                    animation: .default
+                )
+            }
+        }
+        // Ask the reducer to refresh this replicant's full details on selection.
+        .task(id: store.selectedReplicantCode) {
+            store.send(.detailsRequested(code: store.selectedReplicantCode))
+        }
+        // Resolve the host device from the local table (fetching it if missing) so
+        // its row shows the real type/glyph. Re-runs when the host code changes.
+        .task(id: replicant?.hostedDeviceCode) {
+            let code = replicant?.hostedDeviceCode
+            _ = await withErrorReporting {
+                try await $hostDevice.load(
+                    Device.where { $0.deviceCode.eq(code ?? "") },
+                    animation: .default
+                )
+            }
+            store.send(.hostDeviceRequested(code: code))
+        }
+    }
+
+    // MARK: Header
+
+    private func header(_ replicant: KnownReplicant) -> some View {
+        HStack(alignment: .top, spacing: Space.m) {
+            ZStack {
+                RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                    .fill(.rcSurfaceRaised)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                            .strokeBorder(.rcSeparator, lineWidth: 0.5)
+                    )
+                Image(systemName: replicant.isNPC ? SidebarSymbol.npc : SidebarSymbol.replicants)
+                    .font(.system(size: 28, weight: .regular))
+                    .foregroundStyle(.rcAccent)
+            }
+            .frame(width: 52, height: 52)
+
+            VStack(alignment: .leading, spacing: Space.xs) {
+                HStack(spacing: Space.s) {
+                    Text(replicant.name.isEmpty ? replicant.replicantCode : replicant.name)
+                        .font(.rcTitle)
+                        .foregroundStyle(.rcTextPrimary)
+                        .lineLimit(1)
+                    if replicant.isNPC {
+                        Text("NPC")
+                            .font(.rcMonoSmall)
+                            .foregroundStyle(.rcTextTertiary)
+                            .padding(.vertical, 1)
+                            .padding(.horizontal, 5)
+                            .background(Capsule().fill(Color.rcSeparator.opacity(0.5)))
+                    }
+                }
+                if let status = replicant.status, !status.isEmpty {
+                    StatusBadge(status)
+                }
+                HStack(spacing: Space.s) {
+                    Text(replicant.replicantCode)
+                        .font(.rcMono)
+                        .foregroundStyle(.rcTextSecondary)
+                        .textSelection(.enabled)
+                    if let pronouns = replicant.pronouns, !pronouns.isEmpty {
+                        Text("·").foregroundStyle(.rcTextTertiary)
+                        Text(pronouns)
+                            .font(.rcMonoSmall)
+                            .foregroundStyle(.rcTextTertiary)
+                    }
+                }
+                .lineLimit(1)
+            }
+            Spacer(minLength: Space.m)
+            if replicant.experiencePoints > 0 {
+                VStack(spacing: Space.xs) {
+                    Text("\(replicant.experiencePoints)")
+                        .font(.rcHeadline)
+                        .foregroundStyle(.rcTextPrimary)
+                        .monospacedDigit()
+                    Text("XP")
+                        .font(.rcSectionLabel)
+                        .foregroundStyle(.rcTextTertiary)
+                }
+                .fixedSize()
+            }
+        }
+    }
+
+    // MARK: Location
+
+    private func locationCard(_ replicant: KnownReplicant) -> some View {
+        VStack(alignment: .leading, spacing: Space.s) {
+            Text("LAST KNOWN LOCATION")
+                .font(.rcSectionLabel).kerning(1)
+                .foregroundStyle(.rcTextTertiary)
+            if let location = replicant.displayLocationLabel {
+                HStack(spacing: Space.s) {
+                    Image(systemName: "mappin.and.ellipse")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.rcAccent)
+                    Text(location)
+                        .font(.rcHeadline)
+                        .foregroundStyle(.rcTextPrimary)
+                        .textSelection(.enabled)
+                }
+                if let seen = replicant.lastSeenAt {
+                    Text("Seen \(seen.formatted(.relative(presentation: .named)))")
+                        .font(.rcCaption)
+                        .foregroundStyle(.rcTextTertiary)
+                } else if replicant.lastKnownLocation == nil {
+                    Text("From the directory — position not precisely tracked.")
+                        .font(.rcCaption)
+                        .foregroundStyle(.rcTextTertiary)
+                }
+            } else {
+                Text("No sightings yet. Scan a system this replicant occupies to locate it.")
+                    .font(.rcCaption)
+                    .foregroundStyle(.rcTextTertiary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(Space.m)
+        .background(cardBackground)
+    }
+
+    // MARK: Lore
+
+    @ViewBuilder
+    private func lore(_ replicant: KnownReplicant) -> some View {
+        let entries: [(String, String)] = [
+            ("Plan", replicant.plan),
+            ("Project", replicant.project),
+            ("Description", replicant.descriptionText),
+        ].compactMap { label, value in
+            guard let value, !value.isEmpty else { return nil }
+            return (label, value)
+        }
+        if !entries.isEmpty {
+            VStack(alignment: .leading, spacing: Space.m) {
+                Text("PROFILE")
+                    .font(.rcSectionLabel).kerning(1)
+                    .foregroundStyle(.rcTextTertiary)
+                ForEach(entries, id: \.0) { label, value in
+                    VStack(alignment: .leading, spacing: Space.xs) {
+                        Text(label.uppercased())
+                            .font(.rcSectionLabel)
+                            .foregroundStyle(.rcTextTertiary)
+                        Text(value)
+                            .font(.rcBody)
+                            .foregroundStyle(.rcTextSecondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(Space.m)
+            .background(cardBackground)
+        }
+    }
+
+    // MARK: Devices
+
+    @ViewBuilder
+    private func devices(_ replicant: KnownReplicant) -> some View {
+        let stowed = replicant.stowedDevices
+        let attached = replicant.attachedDevices
+        if !stowed.isEmpty || !attached.isEmpty || replicant.hostedDeviceCode != nil {
+            VStack(alignment: .leading, spacing: Space.s) {
+                Text("DEVICES")
+                    .font(.rcSectionLabel).kerning(1)
+                    .foregroundStyle(.rcTextTertiary)
+                if let host = replicant.hostedDeviceCode {
+                    // The host resolves to a real device once we have it locally —
+                    // show its type/glyph; otherwise fall back to the generic mark.
+                    let resolved = hostDevice?.deviceCode == host ? hostDevice : nil
+                    deviceRow(
+                        code: host,
+                        type: resolved.map { ReplicantPresentation.displayName($0.deviceType) } ?? "Host device",
+                        deviceType: resolved?.deviceType,
+                        isHost: true
+                    )
+                }
+                ForEach(attached) { device in
+                    deviceRow(code: device.deviceCode, type: ReplicantPresentation.displayName(device.deviceType), deviceType: device.deviceType)
+                }
+                ForEach(stowed) { device in
+                    deviceRow(code: device.deviceCode, type: ReplicantPresentation.displayName(device.deviceType), deviceType: device.deviceType)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(Space.m)
+            .background(cardBackground)
+        }
+    }
+
+    private func deviceRow(code: String, type: String, deviceType: String? = nil, isHost: Bool = false) -> some View {
+        HStack(spacing: Space.m) {
+            Group {
+                // Actual devices get their per-type glyph; a host we haven't yet
+                // resolved to a device falls back to the semantic house mark.
+                if let deviceType {
+                    Image.rcSymbol("device.\(deviceType)")
+                } else {
+                    Image(systemName: isHost ? "house" : "circle.hexagongrid")
+                }
+            }
+            .font(.system(size: 12))
+            .foregroundStyle(isHost ? Color.rcAccent : .rcTextTertiary)
+            .frame(width: 16)
+            Text(type)
+                .font(.rcBody)
+                .foregroundStyle(.rcTextPrimary)
+            if isHost {
+                Text("HOST")
+                    .font(.rcSectionLabel).kerning(0.5)
+                    .foregroundStyle(.rcAccent)
+                    .padding(.vertical, 1)
+                    .padding(.horizontal, 5)
+                    .background(Capsule().fill(Color.rcAccent.opacity(0.12)))
+                    .overlay(Capsule().stroke(Color.rcAccent.opacity(0.4), lineWidth: 0.5))
+            }
+            Spacer(minLength: Space.s)
+            Text(code)
+                .font(.rcMonoSmall)
+                .foregroundStyle(.rcTextTertiary)
+                .textSelection(.enabled)
+        }
+        .padding(.vertical, isHost ? Space.xs : 0)
+        .padding(.horizontal, isHost ? Space.s : 0)
+        .background {
+            if isHost {
+                RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                    .fill(Color.rcAccent.opacity(0.06))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                            .strokeBorder(Color.rcAccentBorder, lineWidth: 0.5)
+                    )
+            }
+        }
+    }
+
+    // MARK: Chrome
+
+    private var cardBackground: some View {
+        RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+            .fill(.rcSurfaceRaised)
+            .overlay(
+                RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                    .strokeBorder(.rcSeparator, lineWidth: 0.5)
+            )
+    }
+}
+
+// MARK: - Presentation
+
+/// View-side display helpers for the Replicants feature.
+enum ReplicantPresentation {
+    /// "mining_drone" → "Mining Drone".
+    static func displayName(_ raw: String) -> String {
+        raw
+            .split(separator: "_")
+            .map { $0.prefix(1).uppercased() + $0.dropFirst() }
+            .joined(separator: " ")
+    }
+}

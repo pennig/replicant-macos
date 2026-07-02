@@ -157,6 +157,108 @@ extension Device {
     }
 }
 
+// MARK: - Status parsing
+
+extension Device {
+    /// The backend appends a parenthetical parameter to some statuses —
+    /// `"printing (transport_drone)"`, `"mining (iron)"`. The bare activity word
+    /// drives the status badge (tone + label); the parameter is surfaced
+    /// separately (e.g. in the active-task card) rather than crammed into the
+    /// badge.
+    public var statusBase: String { Self.splitStatus(status).base }
+
+    /// The parenthetical parameter appended to the status, if any — typically the
+    /// device type being printed or the resource being mined.
+    public var statusParameter: String? { Self.splitStatus(status).parameter }
+
+    /// Split a raw status into its bare activity word and optional parenthetical
+    /// parameter. `"printing (transport_drone)"` → `("printing", "transport_drone")`;
+    /// a status with no parenthetical returns `(status, nil)`.
+    static func splitStatus(_ raw: String) -> (base: String, parameter: String?) {
+        guard
+            let open = raw.firstIndex(of: "("),
+            let close = raw.lastIndex(of: ")"),
+            open < close
+        else {
+            return (raw.trimmingCharacters(in: .whitespaces), nil)
+        }
+        let base = raw[..<open].trimmingCharacters(in: .whitespaces)
+        let parameter = raw[raw.index(after: open)..<close].trimmingCharacters(in: .whitespaces)
+        return (base, parameter.isEmpty ? nil : parameter)
+    }
+}
+
+// MARK: - AMI directives
+
+extension Device {
+    /// The AMI directives this device can be set to, from the `available_directives`
+    /// tail (e.g. a survey controller's `["survey_system", "belt_search"]` or a
+    /// mining controller's gather modes). When the server leaves that empty — it
+    /// populates it only for the AMI *controllers*, not the worker devices that
+    /// still accept `set_directive` — fall back to a per-type vocabulary so the
+    /// command still surfaces. Empty only when neither source knows any.
+    public var availableDirectives: [String] {
+        let runtime = detail["available_directives"]?.arrayValue?.compactMap(\.stringValue) ?? []
+        if !runtime.isEmpty { return runtime }
+        return Self.fallbackDirectives[deviceType] ?? []
+    }
+
+    /// Directive vocabularies the server omits from a device's runtime
+    /// `available_directives`. Sourced from the device blueprints' `directives`
+    /// field / API docs: a maintenance drone and a service bot both run a repair
+    /// `patrol` (the service bot has no blueprint entry at all, so it can only be
+    /// known here). Keyed by `device_type`; only consulted when the runtime list is
+    /// empty, so a device that *does* advertise its directives always wins.
+    private static let fallbackDirectives: [String: [String]] = [
+        "maintenance_drone": ["patrol"],
+        "service_bot": ["patrol"],
+    ]
+
+    /// The name of the directive currently in force (`ami_directive.name`), or nil
+    /// when no directive is set. Drives the inspector's directive readout and seeds
+    /// the picker's current selection.
+    public var currentDirective: String? {
+        detail["ami_directive"]?["name"]?.stringValue
+    }
+
+    /// The configuration of the directive currently in force (`ami_directive.config`,
+    /// e.g. a survey controller's `{planets, moons, recall}`), or nil when the
+    /// active directive carries none. Seeds the config form so re-opening the
+    /// picker reflects what's running.
+    public var currentDirectiveConfig: JSONValue? {
+        detail["ami_directive"]?["config"]
+    }
+
+    /// One device an AMI controller currently controls, from a `controlled_devices`
+    /// entry. Backs the release picker (and lets the adopt picker exclude these).
+    public struct ControlledDevice: Equatable, Sendable, Identifiable {
+        public let deviceCode: String
+        public let deviceType: String
+        public let status: String?
+        public let location: String?
+        public var id: String { deviceCode }
+    }
+
+    /// The devices this controller currently controls, from its `controlled_devices`
+    /// tail (`[{device_code, device_type, status, location}]`). Empty for a
+    /// non-controller or a controller holding nothing.
+    public var controlledDevices: [ControlledDevice] {
+        detail["controlled_devices"]?.arrayValue?.compactMap { entry in
+            guard let code = entry["device_code"]?.stringValue else { return nil }
+            return ControlledDevice(
+                deviceCode: code,
+                deviceType: entry["device_type"]?.stringValue ?? "",
+                status: entry["status"]?.stringValue,
+                location: entry["location"]?.stringValue
+            )
+        } ?? []
+    }
+
+    /// Just the codes of the controlled devices — lets the adopt picker exclude
+    /// devices this controller already owns.
+    public var controlledDeviceCodes: [String] { controlledDevices.map(\.deviceCode) }
+}
+
 // MARK: - Operation completion signals
 
 extension Device {
@@ -265,13 +367,15 @@ extension Device {
                 completesAt: detailDate("mining", "completes_at") ?? detailDate("mining", "cycle_completes_at")
             )
         }
-        // Survey-drone search: a `scan` block with an `eta_seconds` countdown (no
-        // absolute completion). The deadline is the fetch event-time plus the
+        // Survey-drone scan/search: a `scan` block with an `eta_seconds` countdown
+        // (no absolute completion). The deadline is the fetch event-time plus the
         // remaining ETA — eta_seconds is *remaining*, not total, so anchoring on
-        // `updatedAt` (not `started_at`) lands on the real finish.
+        // `updatedAt` (not `started_at`) lands on the real finish. A body `scan` and
+        // a belt `search` surface an *identical* block, so the device status is the
+        // only discriminator: `scanning` → body scan, otherwise the belt search.
         if case .object = detail["scan"] {
             return DerivedActivity(
-                kind: .search,
+                kind: statusBase == "scanning" ? .surveyScan : .search,
                 startedAt: detailDate("scan", "started_at"),
                 completesAt: detailDate("scan", "completes_at")
                     ?? detail["scan"]?["eta_seconds"]?.numberValue.map { updatedAt.addingTimeInterval($0) }
@@ -283,6 +387,102 @@ extension Device {
     private func detailDate(_ block: String, _ field: String) -> Date? {
         guard let string = detail[block]?[field]?.stringValue else { return nil }
         return Self.parseActivityDate(string)
+    }
+}
+
+// MARK: - Travel snapshot
+
+/// A display summary of a travel itinerary: where the device set out from, where
+/// it's ultimately bound, and every leg of the route (with its duration, so a
+/// segmented progress bar can weight each leg). Parsed from a "travel-ish" JSON
+/// object — either the device's live `travel` block or a `travel` command
+/// response — since both carry the same field vocabulary. The live block only
+/// lists the *remaining* legs (completed ones are dropped server-side and the
+/// rest renumber), while a dispatch response captured the *whole* route at
+/// departure; callers prefer the frozen dispatch route and fall back to the live
+/// block for a device adopted mid-flight.
+public struct TravelSnapshot: Equatable, Sendable {
+    public var origin: String?
+    public var originName: String?
+    public var destination: String?
+    public var destinationName: String?
+    /// The route, in order. Empty when the object carried no `route` array.
+    public var legs: [Leg]
+
+    public struct Leg: Equatable, Sendable, Identifiable {
+        public var index: Int
+        public var from: String?
+        public var fromName: String?
+        public var to: String?
+        public var toName: String?
+        /// The travel mode (e.g. `surge`, `cruise`).
+        public var type: String?
+        /// This leg's duration, driving its share of a segmented bar.
+        public var timeSeconds: Double?
+        /// Whether the server flags this as the leg currently under way.
+        public var active: Bool
+
+        public var id: Int { index }
+    }
+
+    /// Origin label, preferring the human name over the bare code.
+    public var originLabel: String? { originName ?? origin }
+    /// Destination label, preferring the human name over the bare code.
+    public var destinationLabel: String? { destinationName ?? destination }
+
+    /// Sum of every leg's `timeSeconds`, or nil if any leg lacks one. Lets a
+    /// caller anchor a progress bar on `completesAt − totalDuration`.
+    public var totalLegSeconds: Double? {
+        guard !legs.isEmpty, legs.allSatisfy({ $0.timeSeconds != nil }) else { return nil }
+        return legs.reduce(0) { $0 + ($1.timeSeconds ?? 0) }
+    }
+
+    /// Parse from a travel-ish JSON object. Nil when the value isn't an object or
+    /// carries neither a destination nor a route (so it isn't a travel payload).
+    public init?(travelObject object: JSONValue?) {
+        guard case .object = object else { return nil }
+        origin = object?["origin"]?.stringValue
+        originName = object?["origin_name"]?.stringValue
+        // Prefer the ultimate arrival point over the system-level destination.
+        destination = object?["final_destination"]?.stringValue ?? object?["destination"]?.stringValue
+        destinationName = object?["final_destination_name"]?.stringValue ?? object?["destination_name"]?.stringValue
+
+        var parsed: [Leg] = []
+        if case let .array(items)? = object?["route"] {
+            for (offset, item) in items.enumerated() {
+                parsed.append(Leg(
+                    index: item["leg"]?.numberValue.map(Int.init) ?? offset + 1,
+                    from: item["from"]?.stringValue,
+                    fromName: item["from_name"]?.stringValue,
+                    to: item["to"]?.stringValue,
+                    toName: item["to_name"]?.stringValue,
+                    type: item["type"]?.stringValue,
+                    timeSeconds: item["time_seconds"]?.numberValue,
+                    active: item["active"]?.boolValue == true
+                ))
+            }
+        }
+        legs = parsed
+
+        if legs.isEmpty && destination == nil { return nil }
+    }
+}
+
+extension Device {
+    /// The device's current travel itinerary, parsed from its live `travel` block
+    /// (remaining legs only). Nil when the device carries no travel block.
+    public var travelSnapshot: TravelSnapshot? {
+        TravelSnapshot(travelObject: detail["travel"])
+    }
+}
+
+extension Operation {
+    /// The travel itinerary captured when this op was dispatched, parsed from the
+    /// stored command response (`detail.result`) — the *whole* route, frozen at
+    /// departure. Nil for ops adopted from a snapshot (which carry no result) or
+    /// non-travel ops.
+    public var travelSnapshot: TravelSnapshot? {
+        TravelSnapshot(travelObject: detail["result"])
     }
 }
 

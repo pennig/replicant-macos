@@ -15,6 +15,7 @@ import HTTPTypes
 import OpenAPIRuntime
 import SQLiteData
 import Testing
+import Utils
 @testable import DependencyClients
 
 /// Disambiguate from `Foundation.Operation`.
@@ -275,6 +276,271 @@ private typealias Operation = DependencyClients.Operation
 
         #expect(try await op(database, device: "32658E70") == nil)   // no tracked op
     }
+
+    /// `set_directive` is a synchronous controller config change — its valid
+    /// `directive` builds the body and it dispatches as immediate (no tracked op;
+    /// the post-command read refreshes the controller's `ami_directive`).
+    @Test func setDirectiveIsImmediateWithDirective() async throws {
+        let database = try makeDatabase()
+        let readCount = LockIsolated(0)
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.gameClient = stubGameClient { _ in jsonResponse(200, #"{"status":"coordinating","ami_directive":{"name":"belt_search"}}"#) }
+            $0.devicesClient.read = { code in
+                readCount.withValue { $0 += 1 }
+                return makeDevice(code: code, status: "coordinating")
+            }
+        } operation: {
+            let outcome = await CommandClient.liveValue.dispatch(
+                .setDirective, "E45C43AB", CommandParams(directive: "belt_search")
+            )
+            #expect(outcome == .accepted(operationID: nil))
+        }
+
+        #expect(try await op(database, device: "E45C43AB") == nil)   // no tracked op
+        #expect(readCount.value == 1)
+    }
+
+    /// A survey-drone body `scan` is long-running (not the immediate heaven-vessel
+    /// `system_scan`): its 200 carries `completes_at`, so it confirms a tracked
+    /// deadline op, and it dispatches the bare `scan` verb.
+    @Test func surveyScanConfirmsActiveWithDeadline() async throws {
+        let database = try makeDatabase()
+        let command = LockIsolated<String?>(nil)
+        let client = GameClient(make: {
+            Client(
+                serverURL: URL(string: "https://stub.invalid")!,
+                transport: CapturingTransport(
+                    onBody: { data in
+                        command.setValue((try? JSONDecoder().decode(JSONValue.self, from: data))?["command"]?.stringValue)
+                    },
+                    response: jsonResponse(200, #"{"status":"scan_started","completes_at":"2026-06-26T01:00:00Z","scan_target":"ATIANFU-1"}"#)
+                )
+            )
+        })
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.gameClient = client
+            $0.devicesClient.read = { code in makeDevice(code: code, status: "scanning") }
+        } operation: {
+            let outcome = await CommandClient.liveValue.dispatch(.surveyScan, "2586E328", CommandParams())
+            if case .accepted = outcome {} else { Issue.record("expected accepted, got \(outcome)") }
+        }
+
+        #expect(command.value == "scan")   // the drone verb, not "system_scan"
+        let stored = try await op(database, device: "2586E328")
+        #expect(stored?.kind == OperationKind.surveyScan.rawValue)
+        #expect(stored?.status == OperationStatus.active)
+        #expect(stored?.completesAt == (try Date("2026-06-26T01:00:00Z", strategy: .iso8601)))
+    }
+
+    /// `set_directive` carries the directive's configuration object through to the
+    /// request body — the loosely-typed `{planets, moons, recall}` survives the
+    /// bridge into the generated schema's untyped configuration bag.
+    @Test func setDirectiveTransmitsConfiguration() async throws {
+        let database = try makeDatabase()
+        let captured = LockIsolated<JSONValue?>(nil)
+        let client = GameClient(make: {
+            Client(
+                serverURL: URL(string: "https://stub.invalid")!,
+                transport: CapturingTransport(
+                    onBody: { data in captured.setValue(try? JSONDecoder().decode(JSONValue.self, from: data)) },
+                    response: jsonResponse(200, #"{"status":"coordinating"}"#)
+                )
+            )
+        })
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.gameClient = client
+            $0.devicesClient.read = { code in makeDevice(code: code, status: "coordinating") }
+        } operation: {
+            _ = await CommandClient.liveValue.dispatch(
+                .setDirective, "E45C43AB",
+                CommandParams(directive: "survey_system", configuration: [
+                    "planets": .string("all"), "moons": .string("none"), "recall": .bool(true),
+                ])
+            )
+        }
+
+        let body = captured.value
+        #expect(body?["directive"]?.stringValue == "survey_system")
+        #expect(body?["configuration"]?["planets"]?.stringValue == "all")
+        #expect(body?["configuration"]?["moons"]?.stringValue == "none")
+        #expect(body?["configuration"]?["recall"]?.boolValue == true)
+    }
+
+    /// `adopt` is an immediate controller topology change (no tracked op): its
+    /// `devices` array reaches the wire and the controller read refreshes.
+    @Test func adoptSendsDevicesAndIsImmediate() async throws {
+        let database = try makeDatabase()
+        let readCount = LockIsolated(0)
+        let devices = LockIsolated<[String]?>(nil)
+        let client = GameClient(make: {
+            Client(
+                serverURL: URL(string: "https://stub.invalid")!,
+                transport: CapturingTransport(
+                    onBody: { data in
+                        let body = try? JSONDecoder().decode(JSONValue.self, from: data)
+                        devices.setValue(body?["devices"]?.arrayValue?.compactMap(\.stringValue))
+                    },
+                    response: jsonResponse(200, #"{"status":"adopted","controller_code":"18CA7C99","adopted":[{"device_code":"32658E70"}]}"#)
+                )
+            )
+        })
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.gameClient = client
+            $0.devicesClient.read = { code in
+                readCount.withValue { $0 += 1 }
+                return makeDevice(code: code, status: "coordinating")
+            }
+        } operation: {
+            let outcome = await CommandClient.liveValue.dispatch(
+                .adopt, "18CA7C99", CommandParams(devices: ["32658E70", "7C79FCE1"])
+            )
+            #expect(outcome == .accepted(operationID: nil))
+        }
+
+        #expect(devices.value == ["32658E70", "7C79FCE1"])
+        #expect(try await op(database, device: "18CA7C99") == nil)   // no tracked op
+        #expect(readCount.value == 1)                                // one controller read
+    }
+
+    /// `release` mirrors adopt — an immediate topology change whose `devices` array
+    /// reaches the wire (the `release` verb, not `adopt`).
+    @Test func releaseSendsDevicesAndIsImmediate() async throws {
+        let database = try makeDatabase()
+        let command = LockIsolated<String?>(nil)
+        let devices = LockIsolated<[String]?>(nil)
+        let client = GameClient(make: {
+            Client(
+                serverURL: URL(string: "https://stub.invalid")!,
+                transport: CapturingTransport(
+                    onBody: { data in
+                        let body = try? JSONDecoder().decode(JSONValue.self, from: data)
+                        command.setValue(body?["command"]?.stringValue)
+                        devices.setValue(body?["devices"]?.arrayValue?.compactMap(\.stringValue))
+                    },
+                    response: jsonResponse(200, #"{"status":"released","controller_code":"E45C43AB","released":[{"device_code":"CAA6D3EE"}]}"#)
+                )
+            )
+        })
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.gameClient = client
+            $0.devicesClient.read = { code in makeDevice(code: code, status: "coordinating") }
+        } operation: {
+            let outcome = await CommandClient.liveValue.dispatch(
+                .release, "E45C43AB", CommandParams(devices: ["CAA6D3EE"])
+            )
+            #expect(outcome == .accepted(operationID: nil))
+        }
+
+        #expect(command.value == "release")
+        #expect(devices.value == ["CAA6D3EE"])
+        #expect(try await op(database, device: "E45C43AB") == nil)   // no tracked op
+    }
+
+    /// `adopt` with no devices fails before any request is sent.
+    @Test func adoptWithNoDevicesFails() async throws {
+        let database = try makeDatabase()
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.gameClient = stubGameClient { _ in jsonResponse(200) }
+            $0.devicesClient.read = { code in makeDevice(code: code, status: "coordinating") }
+        } operation: {
+            let outcome = await CommandClient.liveValue.dispatch(.adopt, "18CA7C99", CommandParams())
+            if case .failed = outcome {} else { Issue.record("expected failed, got \(outcome)") }
+        }
+    }
+
+    /// `dequeue_print` removes one queued job by index — an immediate command (no
+    /// tracked op) whose `command` verb and `index` reach the wire.
+    @Test func dequeuePrintSendsIndexAndIsImmediate() async throws {
+        let database = try makeDatabase()
+        let command = LockIsolated<String?>(nil)
+        let index = LockIsolated<Double?>(nil)
+        let client = GameClient(make: {
+            Client(
+                serverURL: URL(string: "https://stub.invalid")!,
+                transport: CapturingTransport(
+                    onBody: { data in
+                        let body = try? JSONDecoder().decode(JSONValue.self, from: data)
+                        command.setValue(body?["command"]?.stringValue)
+                        index.setValue(body?["index"]?.numberValue)
+                    },
+                    response: jsonResponse(200, #"{"status":"dequeued","queue_length":1}"#)
+                )
+            )
+        })
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.gameClient = client
+            $0.devicesClient.read = { code in makeDevice(code: code, status: "printing (autofactory)") }
+        } operation: {
+            let outcome = await CommandClient.liveValue.dispatch(
+                .dequeuePrint, "965AC2C3", CommandParams(index: 2)
+            )
+            #expect(outcome == .accepted(operationID: nil))
+        }
+
+        #expect(command.value == "dequeue_print")
+        #expect(index.value == 2)
+        #expect(try await op(database, device: "965AC2C3") == nil)   // no tracked op
+    }
+
+    /// `dequeue_print` with no index fails before any request is sent.
+    @Test func dequeuePrintMissingIndexFails() async throws {
+        let database = try makeDatabase()
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.gameClient = stubGameClient { _ in jsonResponse(200) }
+            $0.devicesClient.read = { code in makeDevice(code: code, status: "printing") }
+        } operation: {
+            let outcome = await CommandClient.liveValue.dispatch(.dequeuePrint, "965AC2C3", CommandParams())
+            if case .failed = outcome {} else { Issue.record("expected failed, got \(outcome)") }
+        }
+    }
+
+    /// `set_directive` with no directive fails before any request is sent.
+    @Test func setDirectiveMissingDirectiveFails() async throws {
+        let database = try makeDatabase()
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.gameClient = stubGameClient { _ in jsonResponse(200) }
+            $0.devicesClient.read = { code in makeDevice(code: code, status: "coordinating") }
+        } operation: {
+            let outcome = await CommandClient.liveValue.dispatch(.setDirective, "E45C43AB", CommandParams())
+            if case .failed = outcome {} else { Issue.record("expected failed, got \(outcome)") }
+        }
+    }
 }
 
 // MARK: - Helpers
@@ -305,6 +571,22 @@ private struct StubTransport: ClientTransport {
         _ request: HTTPRequest, body: HTTPBody?, baseURL: URL, operationID: String
     ) async throws -> (HTTPResponse, HTTPBody?) {
         respond(request)
+    }
+}
+
+/// A transport that hands the collected request body to `onBody` before returning
+/// a fixed response — lets a test assert what was actually sent on the wire.
+private struct CapturingTransport: ClientTransport {
+    let onBody: @Sendable (Data) async -> Void
+    let response: (HTTPResponse, HTTPBody?)
+    func send(
+        _ request: HTTPRequest, body: HTTPBody?, baseURL: URL, operationID: String
+    ) async throws -> (HTTPResponse, HTTPBody?) {
+        if let body {
+            let data = try await Data(collecting: body, upTo: 1_000_000)
+            await onBody(data)
+        }
+        return response
     }
 }
 

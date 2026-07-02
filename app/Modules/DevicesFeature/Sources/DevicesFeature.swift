@@ -33,6 +33,11 @@ public struct DevicesFeature {
         /// A pending `travel` itinerary, shown as a confirmation sheet before the
         /// command is actually dispatched. Non-nil ⇒ the sheet is presented.
         public var travelPreview: TravelPreview?
+        /// The diversion defense state for the selected device, when it's
+        /// `diverting`. A diverting device carries no activity block of its own, so
+        /// its active-task readout is fetched from the object it's attached to (see
+        /// `.diversionRequested`) rather than derived from the device row.
+        public var diversion: DiversionSnapshot?
 
         public init(selectedDeviceCode: String? = nil) {
             self.selectedDeviceCode = selectedDeviceCode
@@ -40,6 +45,7 @@ public struct DevicesFeature {
             self.errorMessage = nil
             self.commandError = nil
             self.travelPreview = nil
+            self.diversion = nil
         }
     }
 
@@ -83,6 +89,13 @@ public struct DevicesFeature {
         case travelPreviewResponse(TravelPreviewOutcome)
         case travelPreviewConfirmed
         case travelPreviewDismissed
+        /// The inspector is viewing a device whose activity refreshes in place
+        /// (mining cycles, a diversion's slow progress). Non-nil starts a
+        /// while-viewing refresh loop for that device; nil (deselect / settled)
+        /// stops it. See `refreshDelay(for:now:)` for the cadence.
+        case viewingChanged(deviceCode: String?)
+        /// A refreshed diversion snapshot for the viewed device (nil clears it).
+        case diversionResponse(DiversionSnapshot?)
     }
 
     public init() {}
@@ -90,6 +103,11 @@ public struct DevicesFeature {
     @Dependency(\.defaultDatabase) var database
     @Dependency(\.devicesClient) var devicesClient
     @Dependency(\.commandClient) var commandClient
+    @Dependency(\.continuousClock) var clock
+    @Dependency(\.date) var date
+
+    /// Cancels the while-viewing refresh loop when the inspected device changes.
+    private enum CancelID { case refresh }
 
     public var body: some ReducerOf<Self> {
         BindingReducer()
@@ -198,7 +216,67 @@ public struct DevicesFeature {
             case .travelPreviewDismissed:
                 state.travelPreview = nil
                 return .none
+
+            case let .viewingChanged(deviceCode):
+                // Any prior device's overlay is stale the moment the selection
+                // changes; clear it before the new loop repopulates it.
+                state.diversion = nil
+                guard let deviceCode else { return .cancel(id: CancelID.refresh) }
+                let devicesClient = self.devicesClient
+                let clock = self.clock
+                let date = self.date
+                return .run { send in
+                    // Refresh the viewed device in place: re-read its snapshot,
+                    // reconcile it into the tables the inspector observes, and — for
+                    // a diverting propulsor — refresh the object's defense readout.
+                    // The cadence tracks the mining cycle (or a slow tick for a
+                    // diversion); a settled device ends the loop.
+                    let reconciler = Reconciler()
+                    while !Task.isCancelled {
+                        guard let device = try? await devicesClient.read(deviceCode) else {
+                            // Transient read failure — back off and retry rather than
+                            // abandoning the loop.
+                            try await clock.sleep(for: .seconds(15))
+                            continue
+                        }
+                        await reconciler.ingest(device)
+                        if device.statusBase == "diverting", let location = device.location {
+                            await send(.diversionResponse(try? await devicesClient.diversion(location)))
+                        }
+                        guard let delay = Self.refreshDelay(for: device, now: date.now) else { return }
+                        try await clock.sleep(for: delay)
+                    }
+                }
+                .cancellable(id: CancelID.refresh, cancelInFlight: true)
+
+            case let .diversionResponse(snapshot):
+                state.diversion = snapshot
+                return .none
             }
+        }
+    }
+
+    /// How long to wait before the next while-viewing refresh, or nil to stop the
+    /// loop (the device settled / isn't a refreshable activity). A mining drone is
+    /// re-read just after each cycle boundary so its yield tally reflects the
+    /// completed cycle; a diverting propulsor ticks on a slow fixed interval since
+    /// its deflection creeps.
+    static func refreshDelay(for device: Device, now: Date) -> Duration? {
+        switch device.statusBase {
+        case "mining":
+            guard let mining = device.miningSnapshot,
+                  let started = mining.startedAt,
+                  let cycle = mining.cycleTimeSeconds, cycle > 0
+            else { return .seconds(20) }  // mining without cycle timing: modest poll
+            let elapsed = now.timeIntervalSince(started)
+            let wrapped = elapsed.truncatingRemainder(dividingBy: cycle)
+            let intoCycle = wrapped < 0 ? wrapped + cycle : wrapped
+            // Land a beat past the boundary so the read sees the finished cycle.
+            return .seconds(cycle - intoCycle + 1.5)
+        case "diverting":
+            return .seconds(30)
+        default:
+            return nil
         }
     }
 }

@@ -232,6 +232,7 @@ extension DependencyValues {
         SystemDetail.registerMigrations(&migrator)
         LocationFootprint.registerMigrations(&migrator)
         Replicant.registerMigrations(&migrator)
+        KnownReplicant.registerMigrations(&migrator)
         Device.registerMigrations(&migrator)
         BobnetMessage.registerMigrations(&migrator)
         // Qualified: `Operation` would otherwise be ambiguous with Foundation's.

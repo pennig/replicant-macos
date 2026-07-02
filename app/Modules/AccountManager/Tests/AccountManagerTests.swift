@@ -48,6 +48,7 @@ import Testing
             $0.defaultDatabase = database
             $0.defaultAppStorage = appStorage
             $0.defaultFileStorage = .inMemory
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
         } operation: {
             try await manager.logIn("rk_live_abc")
         }
@@ -150,11 +151,13 @@ import Testing
 
 // MARK: - In-memory database
 
-/// An in-memory database with the `replicants` table.
+/// An in-memory database with the `replicants` and `knownReplicants` tables
+/// (login seeds both).
 private func makeAccountDatabase() throws -> any DatabaseWriter {
     let database = try SQLiteData.defaultDatabase()
     var migrator = DatabaseMigrator()
     Replicant.registerMigrations(&migrator)
+    KnownReplicant.registerMigrations(&migrator)
     try migrator.migrate(database)
     return database
 }

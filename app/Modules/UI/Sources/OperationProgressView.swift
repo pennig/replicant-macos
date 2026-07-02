@@ -34,9 +34,9 @@ public struct OperationProgressView: View {
         TimelineView(.periodic(from: startedAt, by: 1)) { context in
             let pending = reachedEnd || context.date >= completesAt
             VStack(alignment: .leading, spacing: Space.xs) {
-                ProgressView(value: pending ? 1 : Self.fraction(now: context.date, start: startedAt, end: completesAt))
+                ProgressView(value: pending ? 1 : ProgressMath.fraction(now: context.date, start: startedAt, end: completesAt))
                     .tint(tint)
-                Text(pending ? "Arriving…" : Self.etaText(now: context.date, end: completesAt))
+                Text(pending ? "Arriving…" : ProgressMath.etaText(now: context.date, end: completesAt))
                     .font(.rcMonoSmall)
                     .foregroundStyle(.rcTextSecondary)
             }
@@ -44,21 +44,5 @@ public struct OperationProgressView: View {
                 if isPending { reachedEnd = true }
             }
         }
-    }
-
-    /// Elapsed fraction in `0...1`, clamped (pure — the testable core).
-    static func fraction(now: Date, start: Date, end: Date) -> Double {
-        let total = end.timeIntervalSince(start)
-        guard total > 0 else { return 1 }
-        return min(1, max(0, now.timeIntervalSince(start) / total))
-    }
-
-    /// Compact ETA string, e.g. "ETA 1m 23s", or "Arriving…" once due.
-    static func etaText(now: Date, end: Date) -> String {
-        let remaining = Int(end.timeIntervalSince(now).rounded())
-        guard remaining > 0 else { return "Arriving…" }
-        let minutes = remaining / 60
-        let seconds = remaining % 60
-        return minutes > 0 ? "ETA \(minutes)m \(seconds)s" : "ETA \(seconds)s"
     }
 }

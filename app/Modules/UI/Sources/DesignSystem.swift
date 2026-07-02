@@ -173,6 +173,17 @@ public enum HostKind: String, CaseIterable {
         case .hub:    return "circle.circle"         // claimed system
         }
     }
+
+    /// Infer the host kind from a hosting device's `device_type`. A replicant
+    /// lives inside exactly one host device (`heaven_vessel`, a matrix, or a
+    /// system hub); we match on the type name and default to a vessel — the most
+    /// common host — when the type is unknown or the device isn't loaded yet.
+    public init(deviceType: String) {
+        let type = deviceType.lowercased()
+        if type.contains("matrix") { self = .matrix }
+        else if type.contains("hub") { self = .hub }
+        else { self = .vessel }
+    }
 }
 
 // MARK: - SF Symbol suggestions for the sidebar

@@ -127,16 +127,48 @@ public struct OperationKind: RawRepresentable, Hashable, Sendable {
     /// event — not a settled status — is the completion signal).
     public static let search = OperationKind(rawValue: "search")
 
+    /// Remove one queued print job by its position in the printer's `print_queue`
+    /// (the active job is untouched). Immediate: the server drops the entry and
+    /// answers with the updated queue, so it creates no tracked op.
+    public static let dequeuePrint = OperationKind(rawValue: "dequeue_print")
+
     /// Immediate reads — the server answers synchronously with data, so they
     /// create no tracked operation (firing them never disturbs a running action).
+    /// `scan` here is the heaven-vessel `system_scan` (a synchronous stellar read);
+    /// the survey-drone body scan is the long-running `surveyScan` below.
     public static let scan   = OperationKind(rawValue: "scan")
     public static let census = OperationKind(rawValue: "census")
+
+    /// Survey-drone body scan (`scan` command) — a long-running scan of the body
+    /// at the drone's location that reports `completes_at` (deadline-tracked, like
+    /// travel). Distinct from the immediate heaven-vessel `system_scan` and from
+    /// belt `search`: all three differ only by the device status they drive
+    /// (`scanning` vs `searching`), since a body scan and a belt search surface an
+    /// identical `scan` activity block.
+    public static let surveyScan = OperationKind(rawValue: "survey_scan")
 
     /// Mid-mining modifier — changes the active mining op's `resource_type` in
     /// place (server-gated on the device actually mining). Immediate.
     public static let retarget = OperationKind(rawValue: "retarget")
     /// Stow into the nearest carrier — status-only topology change. Immediate.
     public static let stow     = OperationKind(rawValue: "stow")
+
+    /// Set an AMI controller's autonomous directive (e.g. a survey controller to
+    /// `belt_search`, a mining controller to `gather_evenly`) — a synchronous
+    /// configuration change gated on the device's `available_directives`.
+    /// Immediate: the controller adopts the directive at once; no tracked op.
+    public static let setDirective = OperationKind(rawValue: "set_directive")
+
+    /// Adopt one or more worker devices under an AMI controller (mining drones
+    /// under a mining controller, survey drones under a survey controller) so the
+    /// controller's directive drives them. Immediate: a synchronous topology change
+    /// that adds to the controller's `controlled_devices`; no tracked op.
+    public static let adopt = OperationKind(rawValue: "adopt")
+
+    /// Release one or more devices from an AMI controller, handing them back to
+    /// direct control. The inverse of `adopt`; likewise an immediate topology
+    /// change (removes from `controlled_devices`), no tracked op.
+    public static let release = OperationKind(rawValue: "release")
 
     /// A simple, parameter-less lifecycle command, identified by its backend
     /// verb (e.g. `deactivate`, `deploy`, `recall`). Status-only, completes at
