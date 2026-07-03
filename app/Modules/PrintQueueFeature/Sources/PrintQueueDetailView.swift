@@ -10,7 +10,7 @@
 //  `waiting_for` blocks, so a relay update re-renders the pane automatically.
 //
 
-import BlueprintsFeature
+import PrintingUI
 import ComposableArchitecture
 import DependencyClients
 import GameModels

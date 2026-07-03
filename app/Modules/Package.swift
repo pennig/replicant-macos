@@ -17,6 +17,7 @@ let package = Package(
         .library(name: "LocationsFeature", targets: ["LocationsFeature"]),
         .library(name: "LoginFeature", targets: ["LoginFeature"]),
         .library(name: "MessagesFeature", targets: ["MessagesFeature"]),
+        .library(name: "PrintingUI", targets: ["PrintingUI"]),
         .library(name: "PrintQueueFeature", targets: ["PrintQueueFeature"]),
         .library(name: "RawAPIFeature", targets: ["RawAPIFeature"]),
         .library(name: "ReplicantsFeature", targets: ["ReplicantsFeature"]),
@@ -129,12 +130,12 @@ let package = Package(
             dependencies: [
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
                 .product(name: "SQLiteData", package: "sqlite-data"),
-                // Reuses BlueprintsFeature's `PrintPlanSheet` (the print-planning UI);
-                // the `Blueprint` *table* now comes from GameModels. This is a
-                // deliberate shared-component edge, not the old data-model trap.
-                "BlueprintsFeature",
                 "DependencyClients",
                 "GameModels",
+                // The shared `PrintPlanSheet` (print-confirmation UI) — extracted
+                // into its own module so Devices no longer reaches into another
+                // feature. No feature→feature edges.
+                "PrintingUI",
                 "UI",
                 "UniverseModels",
                 "Utils",
@@ -246,16 +247,22 @@ let package = Package(
             path: "MessagesFeature/Tests"
         ),
         .target(
+            name: "PrintingUI",
+            dependencies: [
+                "GameModels",
+                "UI",
+            ],
+            path: "PrintingUI/Sources"
+        ),
+        .target(
             name: "PrintQueueFeature",
             dependencies: [
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
                 .product(name: "SQLiteData", package: "sqlite-data"),
-                // Reuses BlueprintsFeature's `PrintPlanSheet` (the print-planning UI);
-                // the `Blueprint` *table* now comes from GameModels. Deliberate
-                // shared-component edge, not the old data-model trap.
-                "BlueprintsFeature",
                 "DependencyClients",
                 "GameModels",
+                // Shared `PrintPlanSheet` (see PrintingUI) — no feature→feature edge.
+                "PrintingUI",
                 "UI",
                 "UniverseModels",
                 "Utils",

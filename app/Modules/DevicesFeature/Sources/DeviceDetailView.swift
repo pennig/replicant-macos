@@ -11,7 +11,7 @@
 //  the pane automatically.
 //
 
-import BlueprintsFeature
+import PrintingUI
 import ComposableArchitecture
 import DependencyClients
 import GameModels

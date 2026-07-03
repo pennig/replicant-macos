@@ -1,6 +1,6 @@
 //
 //  PrintPlanSheet.swift
-//  Replicould — Blueprints feature
+//  Replicould — PrintingUI (shared print-confirmation UI)
 //
 //  The `enqueue_print` confirmation sheet, shared by the Devices and Print Queue
 //  inspectors (both depend on this feature for the blueprint catalog). Given a
@@ -10,7 +10,6 @@
 //  plain values + two callbacks, so neither feature's store leaks in here.
 //
 
-import DependencyClients
 import GameModels
 import SwiftUI
 import UI
