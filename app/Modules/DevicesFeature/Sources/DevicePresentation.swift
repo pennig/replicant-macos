@@ -9,6 +9,7 @@
 
 import DependencyClients
 import Foundation
+import GameModels
 
 enum DevicePresentation {
     /// "heaven_vessel" → "Heaven Vessel".

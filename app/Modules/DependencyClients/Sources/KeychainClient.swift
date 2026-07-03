@@ -8,6 +8,7 @@
 
 import ComposableArchitecture
 import Foundation
+import GameModels
 import Security
 
 /// Securely stores small string secrets (the API key) in the Keychain.

@@ -11,7 +11,7 @@
 
 import ComposableArchitecture
 import DependencyClients
-import MessagesFeature
+import GameModels
 import SQLiteData
 import SwiftUI
 import UI

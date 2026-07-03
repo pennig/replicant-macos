@@ -11,6 +11,7 @@
 import API
 import ComposableArchitecture
 import Foundation
+import GameModels
 import SQLiteData
 import Testing
 @testable import BlueprintsFeature

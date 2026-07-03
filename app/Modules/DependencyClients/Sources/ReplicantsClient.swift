@@ -1,6 +1,11 @@
 //
 //  ReplicantsClient.swift
-//  Replicould — Replicants feature
+//  Replicould — shared dependency clients
+//
+//  Moved here from ReplicantsFeature: it's a shared domain client (the Sidebar
+//  drives it too), so it belongs beside the other clients rather than trapped in
+//  a feature — which was one of the feature→feature edges the GameModels split
+//  removed. It feeds the `KnownReplicant` table (now in GameModels).
 //
 //  Talks to the replicant directory and details endpoints via the shared
 //  generated client (bearer auth + rate limiting + logging from the middleware
@@ -15,8 +20,8 @@
 
 import API
 import ComposableArchitecture
-import DependencyClients
 import Foundation
+import GameModels
 import SQLiteData
 import Utils
 

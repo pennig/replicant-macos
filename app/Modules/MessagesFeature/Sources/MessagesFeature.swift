@@ -11,6 +11,7 @@
 
 import ComposableArchitecture
 import Foundation
+import GameModels
 import SQLiteData
 
 @Reducer

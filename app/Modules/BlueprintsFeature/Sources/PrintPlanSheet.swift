@@ -11,6 +11,7 @@
 //
 
 import DependencyClients
+import GameModels
 import SwiftUI
 import UI
 

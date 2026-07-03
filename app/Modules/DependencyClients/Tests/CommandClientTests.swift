@@ -11,6 +11,7 @@
 import API
 import ComposableArchitecture
 import Foundation
+import GameModels
 import HTTPTypes
 import OpenAPIRuntime
 import SQLiteData
@@ -19,7 +20,7 @@ import Utils
 @testable import DependencyClients
 
 /// Disambiguate from `Foundation.Operation`.
-private typealias Operation = DependencyClients.Operation
+private typealias Operation = GameModels.Operation
 
 @Suite struct CommandClientTests {
 

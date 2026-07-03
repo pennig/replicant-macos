@@ -18,6 +18,7 @@
 import API
 import ComposableArchitecture
 import Foundation
+import GameModels
 import OSLog
 import SQLiteData
 import Utils

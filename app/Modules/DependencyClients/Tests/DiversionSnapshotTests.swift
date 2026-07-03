@@ -11,6 +11,7 @@
 //
 
 import Foundation
+import GameModels
 import Testing
 import Utils
 @testable import DependencyClients

@@ -8,6 +8,7 @@
 //
 
 import ComposableArchitecture
+import GameModels
 import SwiftUI
 
 struct AccountView: View {

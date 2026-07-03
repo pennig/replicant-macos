@@ -9,12 +9,13 @@
 //
 
 import DependencyClients
+import GameModels
 import SQLiteData
 import SwiftUI
 import UI
 
 /// Disambiguate from `Foundation.Operation`.
-private typealias Operation = DependencyClients.Operation
+private typealias Operation = GameModels.Operation
 
 public struct ActivityView: View {
     @FetchAll(Operation.order { $0.startedAt.desc() }) private var operations

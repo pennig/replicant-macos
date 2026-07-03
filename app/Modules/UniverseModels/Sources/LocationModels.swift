@@ -24,6 +24,7 @@
 //
 
 import Foundation
+import GameModels
 
 // MARK: - Shared leaf values
 

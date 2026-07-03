@@ -10,12 +10,13 @@
 import ComposableArchitecture
 import DependencyClients
 import Foundation
+import GameModels
 import SQLiteData
 import Testing
 @testable import SidebarFeature
 
 /// Disambiguate from `Foundation.Operation`.
-private typealias Operation = DependencyClients.Operation
+private typealias Operation = GameModels.Operation
 
 private func makeDatabase() throws -> any DatabaseWriter {
     let database = try SQLiteData.defaultDatabase()

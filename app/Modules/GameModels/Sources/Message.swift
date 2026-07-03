@@ -74,7 +74,7 @@ extension Message {
 extension Message {
     /// Sample inbox used by Xcode previews and the `MessagesClient` preview
     /// value. Tests deliberately define their own seeds instead of sharing.
-    static let previewInbox: [Message] = [
+    public static let previewInbox: [Message] = [
         Message(
             id: 4_021,
             messageType: "system",

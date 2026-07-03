@@ -9,6 +9,7 @@
 //
 
 import ComposableArchitecture
+import GameModels
 import SQLiteData
 import SwiftUI
 import UI

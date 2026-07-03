@@ -58,7 +58,9 @@ Graph is **still acyclic**, leaf/shared/feature layering intact, cross-feature *
 |---|---|---|
 | `SidebarFeature → MessagesFeature` | just the `Message` `@Table` (`SidebarView.swift:14,22`) | move `Message` to the shared data layer |
 | `SidebarFeature → ReplicantsFeature` | just `ReplicantsClient` (`SidebarFeature.swift:16,43`) | move the client to the shared client layer |
-| `Devices/PrintQueue → BlueprintsFeature` | just the `Blueprint` `@Table` (`DeviceDetailView.swift:14,601`) | move `Blueprint` to the shared data layer |
+| `Devices/PrintQueue → BlueprintsFeature` | the `Blueprint` `@Table` **and** the `PrintPlanSheet` view (`DeviceDetailView.swift`, `PrintQueueDetailView.swift`) | move `Blueprint` to the shared data layer; the `PrintPlanSheet` reuse is a *legitimate* shared-UI edge that survives |
+
+_(Correction, folded in during the fix: the third edge was **not** "just the `Blueprint` table" as first stated — both consumers also embed `PrintPlanSheet`, a BlueprintsFeature view. Moving `Blueprint` to `GameModels` removed the **data** coupling; the `PrintPlanSheet` reuse is genuine component composition, so `Devices/PrintQueue → BlueprintsFeature` remains — now a deliberate shared-UI edge, not a trapped-data smell. Fully eliminating it would mean extracting `PrintPlanSheet` into its own module — a possible follow-up, not done here.)_
 
 None introduces a cycle or couples feature *logic* to feature *logic* — they only reach shared *data*. But fixing them is the natural trigger for resolving the `DependencyClients` god-module question, because both problems have the same root cause: **there is no dedicated home for shared domain data, so it lands wherever it was first needed** — sometimes in `DependencyClients`, sometimes in a feature.
 
@@ -132,14 +134,14 @@ Net (agreed 2026-07-03): a **2-way split now** — `GameModels` + `GameServices`
 
 ## V2.6 Prioritized punch list
 
-1. **Fix the reconciliation clock** — event-time + provenance on the device row (V2.2). The only correctness-critical item.
-2. **Take `print_complete` off the full-fleet walk** — adopt `new_device_code` via one coordinated read (§5.5).
-3. **Extract `GameModels`** and relocate `Message` / `Blueprint` / `ReplicantsClient` — restores "no feature-to-feature edges" and cuts build coupling in one move (V2.5).
+1. ~~**Fix the reconciliation clock**~~ — **done (2026-07-03).** `Device.updatedAt` is now stamped at request-*issue* time in `DevicesClient.read`/`fetchAll`, so a slow earlier read can't clobber a newer one; no provenance column needed (device rows are written only from authoritative reads). Regression tests added.
+2. ~~**Take `print_complete` off the full-fleet walk**~~ — **done (2026-07-03).** The route now reads only the `new_device_code` via one coordinated high-priority read; `refreshFleet` deleted; pruning left to the explicit cold-load. Regression test guards against re-walking.
+3. ~~**Extract `GameModels`** and relocate `Message` / `Blueprint` / `ReplicantsClient`~~ — **done (2026-07-03).** New TCA-free `GameModels` module holds all `@Table` rows + value types + `Message` + `Blueprint`; `ReplicantsClient` moved into `DependencyClients`. `Sidebar→Messages` and `Sidebar→Replicants` edges fully removed; `Devices/PrintQueue→Blueprints` reduced to the legitimate `PrintPlanSheet` UI edge (see V2.5 correction). Package + app build; 201/201 tests pass. Rename to `GameServices` still deferred.
 4. **Wire per-channel tier-2 `gapRepair`** (esp. messages) + a bounded completion sweep for silently-settled continuous mining ops.
 5. **Consolidate the six composite views into `Controls.swift`** + add display/micro/tile/hairline tokens (V2.4).
-6. Watch items: `RelayClient` bad-token infinite retry; defer the `GameSession` split; document the secondary-query convention.
+6. Watch items: `RelayClient` bad-token infinite retry; defer the `GameSession` split; document the secondary-query convention; consider extracting `PrintPlanSheet` to erase the last feature→feature edge.
 
-Items 1 and 2 are genuine divergences from the prescribed architecture; the rest are refinements.
+Items 1 and 2 were genuine divergences from the prescribed architecture; the rest are refinements.
 
 ---
 

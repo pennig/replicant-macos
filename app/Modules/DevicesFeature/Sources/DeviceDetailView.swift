@@ -14,6 +14,7 @@
 import BlueprintsFeature
 import ComposableArchitecture
 import DependencyClients
+import GameModels
 import IssueReporting
 import SQLiteData
 import SwiftUI
@@ -21,7 +22,7 @@ import UI
 import Utils
 
 /// Disambiguate from `Foundation.Operation`.
-private typealias Operation = DependencyClients.Operation
+private typealias Operation = GameModels.Operation
 
 public struct DeviceDetailView: View {
     let store: StoreOf<DevicesFeature>

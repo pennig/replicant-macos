@@ -13,6 +13,7 @@
 import API
 import ComposableArchitecture
 import Foundation
+import GameModels
 
 public struct GameClient: Sendable {
     /// Build a fully-wired generated client: bearer auth from the current

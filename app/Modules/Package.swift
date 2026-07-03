@@ -12,6 +12,7 @@ let package = Package(
         .library(name: "BlueprintsFeature", targets: ["BlueprintsFeature"]),
         .library(name: "DependencyClients", targets: ["DependencyClients"]),
         .library(name: "DevicesFeature", targets: ["DevicesFeature"]),
+        .library(name: "GameModels", targets: ["GameModels"]),
         .library(name: "GameSync", targets: ["GameSync"]),
         .library(name: "LocationsFeature", targets: ["LocationsFeature"]),
         .library(name: "LoginFeature", targets: ["LoginFeature"]),
@@ -32,6 +33,7 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-openapi-urlsession", from: "1.0.0"),
         .package(url: "https://github.com/pointfreeco/swift-composable-architecture", from: "1.26.0"),
         .package(url: "https://github.com/pointfreeco/sqlite-data", from: "1.6.0"),
+        .package(url: "https://github.com/pointfreeco/swift-sharing", from: "2.8.2"),
         .package(url: "https://github.com/siteline/swiftui-introspect", exact: "26.0.1"),
     ],
     targets: [
@@ -42,6 +44,7 @@ let package = Package(
                 .product(name: "SQLiteData", package: "sqlite-data"),
                 "API",
                 "DependencyClients",
+                "GameModels",
             ],
             path: "AccountManager/Sources"
         ),
@@ -51,6 +54,7 @@ let package = Package(
                 "AccountManager",
                 "API",
                 "DependencyClients",
+                "GameModels",
                 .product(name: "SQLiteData", package: "sqlite-data"),
                 .product(name: "HTTPTypes", package: "swift-http-types"),
                 .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime"),
@@ -81,6 +85,7 @@ let package = Package(
                 .product(name: "SQLiteData", package: "sqlite-data"),
                 "API",
                 "DependencyClients",
+                "GameModels",
                 "UI",
             ],
             path: "BlueprintsFeature/Sources"
@@ -89,6 +94,7 @@ let package = Package(
             name: "BlueprintsFeatureTests",
             dependencies: [
                 "BlueprintsFeature",
+                "GameModels",
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
                 .product(name: "SQLiteData", package: "sqlite-data"),
             ],
@@ -100,6 +106,7 @@ let package = Package(
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
                 .product(name: "SQLiteData", package: "sqlite-data"),
                 "API",
+                "GameModels",
                 "Utils",
             ],
             path: "DependencyClients/Sources",
@@ -109,6 +116,7 @@ let package = Package(
             dependencies: [
                 "DependencyClients",
                 "API",
+                "GameModels",
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
                 .product(name: "SQLiteData", package: "sqlite-data"),
                 .product(name: "HTTPTypes", package: "swift-http-types"),
@@ -121,8 +129,12 @@ let package = Package(
             dependencies: [
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
                 .product(name: "SQLiteData", package: "sqlite-data"),
+                // Reuses BlueprintsFeature's `PrintPlanSheet` (the print-planning UI);
+                // the `Blueprint` *table* now comes from GameModels. This is a
+                // deliberate shared-component edge, not the old data-model trap.
                 "BlueprintsFeature",
                 "DependencyClients",
+                "GameModels",
                 "UI",
                 "UniverseModels",
                 "Utils",
@@ -134,10 +146,21 @@ let package = Package(
             dependencies: [
                 "DevicesFeature",
                 "DependencyClients",
+                "GameModels",
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
                 .product(name: "SQLiteData", package: "sqlite-data"),
             ],
             path: "DevicesFeature/Tests"
+        ),
+        .target(
+            name: "GameModels",
+            dependencies: [
+                .product(name: "SQLiteData", package: "sqlite-data"),
+                .product(name: "Sharing", package: "swift-sharing"),
+                "API",
+                "Utils",
+            ],
+            path: "GameModels/Sources"
         ),
         .target(
             name: "GameSync",
@@ -146,6 +169,7 @@ let package = Package(
                 .product(name: "SQLiteData", package: "sqlite-data"),
                 "API",
                 "DependencyClients",
+                "GameModels",
             ],
             path: "GameSync/Sources"
         ),
@@ -155,6 +179,7 @@ let package = Package(
                 "GameSync",
                 "API",
                 "DependencyClients",
+                "GameModels",
                 "Utils",
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
                 .product(name: "SQLiteData", package: "sqlite-data"),
@@ -167,6 +192,7 @@ let package = Package(
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
                 .product(name: "SQLiteData", package: "sqlite-data"),
                 "DependencyClients",
+                "GameModels",
                 "UI",
                 "UniverseModels",
             ],
@@ -176,6 +202,7 @@ let package = Package(
             name: "LocationsFeatureTests",
             dependencies: [
                 "LocationsFeature",
+                "GameModels",
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
                 .product(name: "SQLiteData", package: "sqlite-data"),
             ],
@@ -205,13 +232,17 @@ let package = Package(
                 .product(name: "SQLiteData", package: "sqlite-data"),
                 "API",
                 "DependencyClients",
+                "GameModels",
                 "UI",
             ],
             path: "MessagesFeature/Sources"
         ),
         .testTarget(
             name: "MessagesFeatureTests",
-            dependencies: ["MessagesFeature"],
+            dependencies: [
+                "MessagesFeature",
+                "GameModels",
+            ],
             path: "MessagesFeature/Tests"
         ),
         .target(
@@ -219,8 +250,12 @@ let package = Package(
             dependencies: [
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
                 .product(name: "SQLiteData", package: "sqlite-data"),
+                // Reuses BlueprintsFeature's `PrintPlanSheet` (the print-planning UI);
+                // the `Blueprint` *table* now comes from GameModels. Deliberate
+                // shared-component edge, not the old data-model trap.
                 "BlueprintsFeature",
                 "DependencyClients",
+                "GameModels",
                 "UI",
                 "UniverseModels",
                 "Utils",
@@ -232,6 +267,7 @@ let package = Package(
             dependencies: [
                 "PrintQueueFeature",
                 "DependencyClients",
+                "GameModels",
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
                 .product(name: "SQLiteData", package: "sqlite-data"),
             ],
@@ -261,6 +297,7 @@ let package = Package(
                 .product(name: "SQLiteData", package: "sqlite-data"),
                 "API",
                 "DependencyClients",
+                "GameModels",
                 "UI",
                 "Utils",
             ],
@@ -271,6 +308,7 @@ let package = Package(
             dependencies: [
                 "ReplicantsFeature",
                 "DependencyClients",
+                "GameModels",
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
                 .product(name: "SQLiteData", package: "sqlite-data"),
             ],
@@ -282,8 +320,7 @@ let package = Package(
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
                 .product(name: "SQLiteData", package: "sqlite-data"),
                 "DependencyClients",
-                "MessagesFeature",
-                "ReplicantsFeature",
+                "GameModels",
                 "UI",
             ],
             path: "SidebarFeature/Sources"
@@ -293,6 +330,7 @@ let package = Package(
             dependencies: [
                 "SidebarFeature",
                 "DependencyClients",
+                "GameModels",
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
                 .product(name: "SQLiteData", package: "sqlite-data"),
             ],
@@ -305,6 +343,7 @@ let package = Package(
                 .product(name: "SQLiteData", package: "sqlite-data"),
                 "API",
                 "DependencyClients",
+                "GameModels",
                 "UI",
                 "UniverseModels",
             ],
@@ -335,6 +374,7 @@ let package = Package(
                 .product(name: "SQLiteData", package: "sqlite-data"),
                 "API",
                 "DependencyClients",
+                "GameModels",
             ],
             path: "UniverseModels/Sources"
         ),

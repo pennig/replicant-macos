@@ -15,6 +15,7 @@ import SQLiteData
 import Testing
 import Utils
 @testable import DependencyClients
+@testable import GameModels
 
 @Suite struct KnownReplicantTests {
 

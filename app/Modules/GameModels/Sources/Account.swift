@@ -1,6 +1,6 @@
 //
 //  Account.swift
-//  Replicould — shared dependency clients
+//  Replicould — GameModels (shared domain data)
 //
 //  The signed-in account profile, mirroring the scalar fields of
 //  `GET /v1/accounts/me` (`app_schemas_accounts_AccountMeResponseSchema`). It is
@@ -15,8 +15,11 @@
 //
 
 import API
-import ComposableArchitecture
 import Foundation
+// `SharedKey`/`FileStorageKey` come from the Sharing library directly — not from
+// ComposableArchitecture (which merely re-exports it) — so GameModels stays
+// TCA-free: the data layer carries no app-architecture types.
+import Sharing
 
 /// The account profile surfaced in the sidebar header/footer and Account sheet.
 public struct Account: Codable, Equatable, Sendable {

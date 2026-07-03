@@ -16,13 +16,14 @@
 import ComposableArchitecture
 import DependencyClients
 import Foundation
+import GameModels
 import OSLog
 import SQLiteData
 
 private let logger = Logger(subsystem: "name.pennig.replicould", category: "DeadlineScheduler")
 
 /// Disambiguate from `Foundation.Operation`.
-private typealias Operation = DependencyClients.Operation
+private typealias Operation = GameModels.Operation
 
 actor DeadlineScheduler {
     private let reconciler: Reconciler

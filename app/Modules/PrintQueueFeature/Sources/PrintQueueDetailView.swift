@@ -13,6 +13,7 @@
 import BlueprintsFeature
 import ComposableArchitecture
 import DependencyClients
+import GameModels
 import SQLiteData
 import SwiftUI
 import UI

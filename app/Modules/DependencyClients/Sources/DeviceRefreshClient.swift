@@ -12,6 +12,7 @@
 
 import ComposableArchitecture
 import Foundation
+import GameModels
 
 public struct DeviceRefreshClient: Sendable {
     /// Refresh a device's authoritative snapshot (read → reconcile), subject to

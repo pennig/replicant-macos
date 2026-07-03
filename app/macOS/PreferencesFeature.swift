@@ -9,6 +9,7 @@
 
 import AppKit
 import ComposableArchitecture
+import GameModels
 import SwiftUI
 
 @Reducer

@@ -12,8 +12,7 @@
 import ComposableArchitecture
 import DependencyClients
 import Foundation
-import MessagesFeature
-import ReplicantsFeature
+import GameModels
 import SQLiteData
 
 @Reducer

@@ -11,6 +11,7 @@
 import API
 import ComposableArchitecture
 import Foundation
+import GameModels
 import SQLiteData
 import Testing
 import Utils
@@ -18,7 +19,7 @@ import Utils
 @testable import GameSync
 
 /// Disambiguate from `Foundation.Operation`.
-private typealias Operation = DependencyClients.Operation
+private typealias Operation = GameModels.Operation
 
 // MARK: - Shared fixtures
 

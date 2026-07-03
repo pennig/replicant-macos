@@ -12,12 +12,13 @@
 //
 
 import Foundation
+import GameModels
 import Testing
 import Utils
 @testable import DependencyClients
 
 /// Disambiguate from `Foundation.Operation`.
-private typealias Operation = DependencyClients.Operation
+private typealias Operation = GameModels.Operation
 
 @Suite struct TravelSnapshotTests {
 

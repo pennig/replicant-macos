@@ -15,6 +15,7 @@ import BlueprintsFeature
 import ComposableArchitecture
 import DependencyClients
 import DevicesFeature
+import GameModels
 import LocationsFeature
 import MessagesFeature
 import PrintQueueFeature

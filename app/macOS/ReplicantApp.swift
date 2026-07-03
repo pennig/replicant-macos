@@ -11,6 +11,7 @@ import AppKit
 import BlueprintsFeature
 import ComposableArchitecture
 import DependencyClients
+import GameModels
 import GameSync
 import MessagesFeature
 import SQLiteData
@@ -148,7 +149,7 @@ struct ReplicantApp: App {
         accountManager.registerHandler(
             SessionLifecycleHandler(id: "operations", onLogout: {
                 @Dependency(\.defaultDatabase) var database
-                try? await database.write { db in try DependencyClients.Operation.delete().execute(db) }
+                try? await database.write { db in try GameModels.Operation.delete().execute(db) }
             })
         )
     }
@@ -236,7 +237,7 @@ extension DependencyValues {
         Device.registerMigrations(&migrator)
         BobnetMessage.registerMigrations(&migrator)
         // Qualified: `Operation` would otherwise be ambiguous with Foundation's.
-        DependencyClients.Operation.registerMigrations(&migrator)
+        GameModels.Operation.registerMigrations(&migrator)
         try migrator.migrate(database)
         defaultDatabase = database
     }

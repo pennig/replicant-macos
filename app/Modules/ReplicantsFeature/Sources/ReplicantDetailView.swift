@@ -12,6 +12,7 @@
 
 import ComposableArchitecture
 import DependencyClients
+import GameModels
 import IssueReporting
 import SQLiteData
 import SwiftUI

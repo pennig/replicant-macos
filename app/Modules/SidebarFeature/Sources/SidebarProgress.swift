@@ -11,11 +11,12 @@
 //
 
 import DependencyClients
+import GameModels
 import UI
 
 /// Disambiguate from `Foundation.Operation` (pulled in transitively via UI).
 /// Module-internal, so it resolves the bare `Operation` everywhere in the target.
-typealias Operation = DependencyClients.Operation
+typealias Operation = GameModels.Operation
 
 enum SidebarProgress {
     /// The active replicant's most relevant running operation as a header row, or
