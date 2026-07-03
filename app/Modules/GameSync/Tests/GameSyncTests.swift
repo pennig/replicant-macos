@@ -125,9 +125,9 @@ import Utils
     }
 }
 
-// MARK: - Print-complete fleet refresh
+// MARK: - Print-complete new-device read
 
-@Suite struct PrintCompleteRefreshTests {
+@Suite struct PrintCompleteRouteTests {
 
     private func makeDeviceDatabase() throws -> any DatabaseWriter {
         let database = try SQLiteData.defaultDatabase()
@@ -149,32 +149,45 @@ import Utils
     }
 
     /// A finished print spawns a device whose code the local fleet has never seen.
-    /// The refresh walk must fetch the full list and land that new device — while
-    /// pruning a device the walk no longer returns.
-    @Test func refreshFleetLandsNewDeviceAndPrunesAbsent() async throws {
+    /// The route reads *just that new device* — named by the event's
+    /// `new_device_code` — through the coordinator at high priority, with no
+    /// full-fleet walk, and does not prune (pruning belongs to the explicit
+    /// cold-load, §5.5). Regression: the old path re-walked `GET /v1/devices` on
+    /// every print completion, bypassing the coordinator.
+    @Test func printCompleteReadsNewDeviceWithoutFleetWalkOrPrune() async throws {
         let database = try makeDeviceDatabase()
         let now = Date(timeIntervalSince1970: 10_000)
-
-        // The printer ("PRNT") was already local; "CLONE" is the freshly-printed
-        // device the walk now returns; "GONE" is a stale local row absent from it.
-        let fetched = [device("PRNT", at: now), device("CLONE", at: now)]
+        let refreshed = LockIsolated<[(code: String, priority: RefreshPriority)]>([])
 
         try await withDependencies {
             $0.defaultDatabase = database
             $0.uuid = .incrementing
             $0.date = .constant(now)
-            $0.devicesClient.fetchAll = { fetched }
+            // fetchAll must never be touched — a full walk is the regression.
+            $0.devicesClient.fetchAll = { Issue.record("should not re-walk the fleet"); return [] }
+            $0.deviceRefresher = DeviceRefreshClient { code, priority in
+                refreshed.withValue { $0.append((code, priority)) }
+                // Stand in for the coordinator's read+reconcile of the named device.
+                guard code == "CLONE" else { return nil }
+                await Reconciler().ingest(device("CLONE", at: now))
+                return device("CLONE", at: now)
+            }
         } operation: {
-            let reconciler = Reconciler()
-            await reconciler.ingest(device("PRNT", at: now))
-            await reconciler.ingest(device("GONE", at: now))
+            // Printer + an unrelated device are already local.
+            await Reconciler().ingest(device("PRNT", at: now))
+            await Reconciler().ingest(device("GONE", at: now))
 
-            await GameSync.refreshFleet(reconciler: reconciler)
+            let raw = #"{"type":"event","event_type":"print_complete","device_code":"PRNT","payload":{"new_device_code":"CLONE","device_type":"ftl_beacon"},"timestamp":"2026-06-26T01:00:00Z"}"#
+            let event = try UnifiedEvent(relayEvent: RelayEvent(id: "1-0", raw: Data(raw.utf8)))
+            await GameSync.deviceRoute(reconciler: Reconciler()).apply(event)
 
             let codes = try await database.read { db in
                 try Device.select(\.deviceCode).fetchAll(db)
             }
-            #expect(Set(codes) == ["PRNT", "CLONE"])  // clone landed, GONE pruned
+            #expect(Set(codes) == ["PRNT", "GONE", "CLONE"])  // clone landed; nothing pruned
+            // The new device was read at high priority; the printer row was too.
+            #expect(refreshed.value.contains { $0.code == "CLONE" && $0.priority == .high })
+            #expect(refreshed.value.contains { $0.code == "PRNT" })
         }
     }
 }

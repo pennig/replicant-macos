@@ -171,12 +171,20 @@ extension GameSync {
             // Completion events are truth for the action they close (§4.4): fold
             // the result into the device's open operation first (cheap, no read).
             let completedOp = await reconciler.applyOperationEvent(event)
-            // A finished print job spawns a brand-new device (the printed clone),
+            // A finished print job spawns a brand-new device (the printed clone)
             // whose code isn't in the local fleet yet — a single-device confirm-read
-            // of the printer can't surface it. Re-walk the whole account list so the
-            // new device appears.
-            if event.eventType == "print_complete" {
-                await refreshFleet(reconciler: reconciler)
+            // of the printer can't surface it. The event payload already names it
+            // (`new_device_code`), so read *just that device* — one coalesced,
+            // high-priority read through the coordinator — rather than re-walking
+            // the whole account list: at hundreds-to-1000+ devices a full paged
+            // walk per print completion is the rate-limit shape §5.5 forbids (and
+            // it bypassed the coordinator's coalescing/budget entirely). Pruning
+            // stays with the explicit cold-load walk in the Devices feature — the
+            // one place that knows the account's complete set (see `pruneDevices`).
+            if event.eventType == "print_complete",
+               let newCode = event.payload?["new_device_code"]?.stringValue,
+               !newCode.isEmpty {
+                await deviceRefresher.refresh(newCode, .high)
             }
             // Then refresh the device row via the poll coordinator. When the event
             // just closed an operation, read authoritatively (high priority): the
@@ -188,22 +196,6 @@ extension GameSync {
             // respects the TTL, and defers under read-budget pressure.
             guard let code = event.deviceCode, !code.isEmpty else { return }
             await deviceRefresher.refresh(code, completedOp ? .high : .low)
-        }
-    }
-
-    /// Re-walk the whole account fleet and reconcile it into the shared tables, so
-    /// a device that appears out of band — a finished print's new clone — enters
-    /// the local list. Mirrors `DevicesFeature`'s cold-load walk (fetch → ingest →
-    /// prune); failures are logged and swallowed since this is a background nudge.
-    static func refreshFleet(reconciler: Reconciler) async {
-        @Dependency(\.devicesClient) var devicesClient
-        do {
-            let devices = try await devicesClient.fetchAll()
-            for device in devices { await reconciler.ingest(device) }
-            await reconciler.pruneDevices(presentCodes: devices.map(\.deviceCode))
-            logger.info("print_complete: refreshed \(devices.count) device(s)")
-        } catch {
-            logger.error("print_complete fleet refresh failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
