@@ -57,6 +57,24 @@ import Utils
 
         #expect(count.value == 2)
     }
+
+    /// `runGapRepair` invokes every route's tier-2 catch-up (§4.5), and a route
+    /// with the default no-op `gapRepair` is a harmless skip.
+    @Test func runGapRepairInvokesEveryRoutesGapRepair() async throws {
+        let routes = LockIsolated<[RelayRoute]>([])
+        let router = RelayRouter(routes: routes)
+        let ran = LockIsolated<[String]>([])
+
+        routes.withValue {
+            $0.append(RelayRoute(id: "a", type: "event", apply: { _ in }, gapRepair: { ran.withValue { $0.append("a") } }))
+            $0.append(RelayRoute(id: "b", type: "message", apply: { _ in }, gapRepair: { ran.withValue { $0.append("b") } }))
+            $0.append(RelayRoute(id: "c", type: "bobnet", apply: { _ in }))   // default no-op gapRepair
+        }
+
+        await router.runGapRepair()
+
+        #expect(Set(ran.value) == ["a", "b"])
+    }
 }
 
 // MARK: - Reconciliation guard

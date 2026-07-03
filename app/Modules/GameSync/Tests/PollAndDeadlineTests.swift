@@ -63,6 +63,17 @@ private func activeOp(
     )
 }
 
+/// An active *continuous* mining op — no deadline, so it never enters the
+/// deadline queue and relies on the continuous-op sweep as its lost-event backstop.
+private func miningOp(_ id: String, device: String) -> Operation {
+    Operation(
+        id: id, entityCode: device, kind: OperationKind.mine.rawValue,
+        status: OperationStatus.active, source: OperationSource.poll,
+        startedAt: Date(timeIntervalSince1970: 0), completesAt: nil,
+        lastConfirmedAt: Date(timeIntervalSince1970: 0), detail: .object([:])
+    )
+}
+
 private func budgetGameClient(remaining: Int) -> GameClient {
     GameClient(
         make: { ReplicantSpace.client(apiKey: "") },
@@ -273,6 +284,64 @@ private func budgetGameClient(remaining: Int) -> GameClient {
         let stored = try await database.read { db in try Operation.where { $0.id.eq("op1") }.fetchOne(db) }
         #expect(stored?.status == OperationStatus.active)
         #expect(reads.value == 0)
+    }
+
+    /// Continuous-op backstop: a deadline-less mining op whose device has
+    /// silently settled to idle (its `site_resource_depleted` stop event was
+    /// lost) is completed by the sweep — the read shows the mine is over.
+    @Test func continuousOpOnSettledDeviceIsCompleted() async throws {
+        let database = try makeDatabase()
+        try await database.write { db in
+            try Operation.insert { miningOp("m1", device: "D") }.execute(db)
+        }
+        let now = Date(timeIntervalSince1970: 5_000)
+        let reconciler = Reconciler()
+        let coordinator = PollCoordinator(reconciler: reconciler)
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(now)
+            $0.gameClient = budgetGameClient(remaining: 100)
+            $0.devicesClient.read = { code in device(code, status: "idle") }   // settled
+            $0.deviceRefresher = DeviceRefreshClient { code, priority in
+                await coordinator.refresh(code, priority: priority)
+            }
+        } operation: {
+            let scheduler = DeadlineScheduler(reconciler: reconciler)
+            await scheduler.sweepContinuousOps(now: now)
+        }
+
+        let stored = try await database.read { db in try Operation.where { $0.id.eq("m1") }.fetchOne(db) }
+        #expect(stored?.status == OperationStatus.completed)
+        #expect(stored?.source == OperationSource.poll)
+    }
+
+    /// The sweep must NOT complete a mine that's still running — a legitimately
+    /// long mine stays open (only a settled device ends it).
+    @Test func continuousOpOnStillMiningDeviceStaysOpen() async throws {
+        let database = try makeDatabase()
+        try await database.write { db in
+            try Operation.insert { miningOp("m1", device: "D") }.execute(db)
+        }
+        let now = Date(timeIntervalSince1970: 5_000)
+        let reconciler = Reconciler()
+        let coordinator = PollCoordinator(reconciler: reconciler)
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(now)
+            $0.gameClient = budgetGameClient(remaining: 100)
+            $0.devicesClient.read = { code in device(code, status: "mining (iron)") }   // still working
+            $0.deviceRefresher = DeviceRefreshClient { code, priority in
+                await coordinator.refresh(code, priority: priority)
+            }
+        } operation: {
+            let scheduler = DeadlineScheduler(reconciler: reconciler)
+            await scheduler.sweepContinuousOps(now: now)
+        }
+
+        let stored = try await database.read { db in try Operation.where { $0.id.eq("m1") }.fetchOne(db) }
+        #expect(stored?.status == OperationStatus.active)
     }
 
     /// If a relay event already completed the op, the deadline does nothing —

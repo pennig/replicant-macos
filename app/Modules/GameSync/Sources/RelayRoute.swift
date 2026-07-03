@@ -60,4 +60,13 @@ struct RelayRouter: Sendable {
             await route.apply(event)
         }
     }
+
+    /// Run each route's tier-2 gap repair (§4.5): authoritative catch-up a route
+    /// owns for its channel, run on (re)start. Routes with no tier-2 keep the
+    /// default no-op, so this is a cheap fan-out over the (small) route set.
+    func runGapRepair() async {
+        for route in routes.value {
+            await route.gapRepair()
+        }
+    }
 }

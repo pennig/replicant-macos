@@ -50,17 +50,29 @@ struct ReplicantApp: App {
         // Messages feature observes via @FetchAll, making the inbox live with no
         // change to that feature. Request coalescing/TTL arrives with the Phase 4
         // poll coordinator.
-        gameSync.registerRoute(
-            RelayRoute(id: "message", type: "message") { _ in
-                @Dependency(\.messagesClient) var messagesClient
-                @Dependency(\.defaultDatabase) var database
-                guard let page = try? await messagesClient.fetch(nil, 50, false) else { return }
-                try? await database.write { db in
-                    for message in page.messages {
-                        try Message.upsert { message }.execute(db)
-                    }
+        //
+        // The same authoritative inbox read is this channel's **tier-2 gap
+        // repair** (§4.5): on a cold start or a reconnect beyond the relay's
+        // cursor retention, `gapRepair` recovers messages that arrived while
+        // disconnected — the REST inbox is authoritative, so a head-page re-read
+        // is the catch-up. `apply` and `gapRepair` therefore share one closure.
+        let refreshInbox: @Sendable () async -> Void = {
+            @Dependency(\.messagesClient) var messagesClient
+            @Dependency(\.defaultDatabase) var database
+            guard let page = try? await messagesClient.fetch(nil, 50, false) else { return }
+            try? await database.write { db in
+                for message in page.messages {
+                    try Message.upsert { message }.execute(db)
                 }
             }
+        }
+        gameSync.registerRoute(
+            RelayRoute(
+                id: "message",
+                type: "message",
+                apply: { _ in await refreshInbox() },
+                gapRepair: refreshInbox
+            )
         )
 
         // "event" (Locations): passively refresh the catalog. Shops,

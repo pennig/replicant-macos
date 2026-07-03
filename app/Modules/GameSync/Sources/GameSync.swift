@@ -129,7 +129,14 @@ actor GameSyncEngine {
             // flow through the same stream → routes and are deduped against
             // tier-1 cursor replay by the pipeline's fingerprint set. Spawned
             // after `start()` so the stream's continuation is live first.
+            //
+            // The event channel's tier-2 is this per-replicant game-log walk
+            // (it must feed the pipeline, not write rows directly). The *other*
+            // channels own their tier-2 as `RelayRoute.gapRepair` — the messages
+            // route re-reads the REST inbox — so run every route's gapRepair here
+            // too, recovering entries missed while disconnected beyond retention.
             Task { await GameSyncEngine.backfillAllReplicants(pipeline) }
+            Task { await router.runGapRepair() }
             for await event in stream {
                 await router.dispatch(event)
             }

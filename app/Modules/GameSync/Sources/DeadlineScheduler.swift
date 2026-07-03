@@ -12,6 +12,13 @@
 //  Enqueued ops with no deadline are intentionally skipped here; their
 //  completion arrives as a relay event (e.g. `print_complete`).
 //
+//  One exception has its own slow backstop: **continuous** mining ops also carry
+//  no deadline (they run until stopped), so they're absent from the deadline
+//  queue too — but their stop event (`site_resource_depleted`) can be lost,
+//  which would leave the op open forever. `sweepContinuousOps` gives them a
+//  throttled, low-priority "is the device idle yet?" check so a silently-settled
+//  mine eventually closes without ever polling a still-running one hard.
+//
 
 import ComposableArchitecture
 import DependencyClients
@@ -44,19 +51,27 @@ actor DeadlineScheduler {
     /// How long past `startedAt` to keep polling a still-busy op before giving up
     /// and marking it `unknown` (a truly stuck backend, not a small skew).
     private let giveUpAfter: TimeInterval
+    /// Minimum spacing between continuous-op backstop sweeps (mining). Slow on
+    /// purpose — a running mine that legitimately continues shouldn't be polled
+    /// hard; this only needs to eventually notice a *settled* one.
+    private let continuousSweepInterval: TimeInterval
+    /// When the last continuous-op sweep ran, so `run()` throttles them.
+    private var lastContinuousSweepAt: Date?
 
     init(
         reconciler: Reconciler,
         cap: Duration = .seconds(30),
         confirmGrace: TimeInterval = 1,
         rearmBackoff: TimeInterval = 4,
-        giveUpAfter: TimeInterval = 5 * 60
+        giveUpAfter: TimeInterval = 5 * 60,
+        continuousSweepInterval: TimeInterval = 2 * 60
     ) {
         self.reconciler = reconciler
         self.cap = cap
         self.confirmGrace = confirmGrace
         self.rearmBackoff = rearmBackoff
         self.giveUpAfter = giveUpAfter
+        self.continuousSweepInterval = continuousSweepInterval
     }
 
     func start() {
@@ -75,6 +90,12 @@ actor DeadlineScheduler {
         while !Task.isCancelled {
             let now = date.now
             await processDue(now: now)
+
+            // Throttled backstop for deadline-less continuous ops (mining).
+            if lastContinuousSweepAt.map({ now.timeIntervalSince($0) >= continuousSweepInterval }) ?? true {
+                lastContinuousSweepAt = now
+                await sweepContinuousOps(now: now)
+            }
 
             let upcoming = await openDatedOps()
                 .compactMap(\.completesAt)
@@ -131,6 +152,39 @@ actor DeadlineScheduler {
                 let next = max(device?.activityDeadline ?? .distantPast, now.addingTimeInterval(rearmBackoff))
                 logger.info("op \(op.id, privacy: .public): still executing — re-armed to \(next.ISO8601Format(), privacy: .public)")
                 await rearm(op.id, to: next, at: now)
+            }
+        }
+    }
+
+    /// Best-effort backstop for **continuous** ops (mining): active operations
+    /// with no `completesAt`, which never enter the deadline queue. If their stop
+    /// event (`site_resource_depleted`) is lost, the op would linger open. On the
+    /// throttled cadence, low-priority confirm-read each and complete any whose
+    /// device has settled to idle — the mine is over. Bounded by the slow
+    /// interval + `.low` priority (TTL-suppressed / budget-deferred), so a mine
+    /// that legitimately keeps running costs almost nothing. Extracted (like
+    /// `processDue`) so it's testable without the sleep loop.
+    func sweepContinuousOps(now: Date) async {
+        @Dependency(\.defaultDatabase) var database
+        @Dependency(\.deviceRefresher) var deviceRefresher
+
+        let active = (try? await database.read { db in
+            try Operation.where { $0.status.eq(OperationStatus.active) }.fetchAll(db)
+        }) ?? []
+        let ops = active.filter { $0.completesAt == nil && $0.kind == OperationKind.mine.rawValue }
+        guard !ops.isEmpty else { return }
+
+        for op in ops {
+            await deviceRefresher.refresh(op.entityCode, .low)
+            let device = try? await database.read { db in
+                try Device.where { $0.deviceCode.eq(op.entityCode) }.fetchOne(db)
+            }
+            // `Reconciler.ingest` deliberately leaves a settled device's
+            // deadline-less op open (continuous ops own their stop signal), so
+            // completing it here is the backstop for a lost stop event.
+            if let device, device.isSettled {
+                logger.info("continuous op \(op.id, privacy: .public) (\(op.kind, privacy: .public)) on \(op.entityCode, privacy: .public): device settled (\(device.status, privacy: .public)) — completing (stop event lost)")
+                await reconciler.completeOpenOperation(on: op.entityCode, source: .poll, eventTime: now, result: nil)
             }
         }
     }
