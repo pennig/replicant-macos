@@ -48,7 +48,7 @@ public struct MessagesListView: View {
         .navigationTitle("Messages")
         .safeAreaInset(edge: .top, spacing: 0) {
             if let errorMessage = store.errorMessage {
-                errorBanner(errorMessage)
+                RCErrorBanner(errorMessage) { store.send(.dismissError) }
             }
         }
         .toolbar {
@@ -80,25 +80,6 @@ public struct MessagesListView: View {
         .task { store.send(.task) }
     }
 
-    private func errorBanner(_ message: String) -> some View {
-        HStack(spacing: Space.s) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.rcWarning)
-            Text(message)
-                .font(.rcCaption)
-                .foregroundStyle(.rcTextSecondary)
-                .lineLimit(2)
-            Spacer(minLength: Space.s)
-            Button("Dismiss") { store.send(.dismissError) }
-                .buttonStyle(RCButtonStyle(.text))
-        }
-        .padding(.horizontal, Space.m)
-        .padding(.vertical, Space.s)
-        .background(.rcSurfaceRaised)
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(.rcSeparator).frame(height: 0.5)
-        }
-    }
 }
 
 // MARK: - Row

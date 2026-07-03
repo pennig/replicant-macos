@@ -89,7 +89,7 @@ private struct SystemInspector: View {
             }
 
             if let star = system.star {
-                ReadoutCard("Star") {
+                RCReadoutCard("Star") {
                     Readout("Class", star.stellarClass ?? "—")
                     Readout("Color", star.color?.capitalized ?? "—")
                     if let age = star.ageMy { Readout("Age", String(format: "%.0f My", age)) }
@@ -98,7 +98,7 @@ private struct SystemInspector: View {
                 }
             }
 
-            ReadoutCard("System") {
+            RCReadoutCard("System") {
                 if let s = system.planetsScanned, let t = system.planetsTotal {
                     Readout("Planets", "\(s)/\(t) scanned")
                 }
@@ -110,7 +110,7 @@ private struct SystemInspector: View {
             }
 
             if !system.shops.isEmpty {
-                SectionCard("Shops", count: system.shops.count) {
+                RCReadoutCard("Shops", count: system.shops.count) {
                     ForEach(system.shops) { shop in
                         BubbleRow(title: shop.shopName, code: shop.location,
                                   detail: shop.ownerName.map { "by \($0)" })
@@ -120,7 +120,7 @@ private struct SystemInspector: View {
 
             let sites = system.allResourceSites
             if !sites.isEmpty {
-                SectionCard("Resource Sites", count: sites.count) {
+                RCReadoutCard("Resource Sites", count: sites.count) {
                     ForEach(sites) { site in
                         BubbleRow(title: site.name ?? site.designation, code: site.designation,
                                   detail: remainingSummary(site.remaining))
@@ -130,7 +130,7 @@ private struct SystemInspector: View {
 
             let salvage = system.allSalvageSites
             if !salvage.isEmpty {
-                SectionCard("Salvage", count: salvage.count) {
+                RCReadoutCard("Salvage", count: salvage.count) {
                     ForEach(salvage) { s in
                         BubbleRow(title: s.name ?? s.designation, code: s.designation,
                                   detail: (s.depleted ? "Depleted · " : "") + s.resourcesAvailable.joined(separator: ", "))
@@ -139,7 +139,7 @@ private struct SystemInspector: View {
             }
 
             if !system.structures.isEmpty {
-                SectionCard("Structures & Objects", count: system.structures.count) {
+                RCReadoutCard("Structures & Objects", count: system.structures.count) {
                     ForEach(system.structures) { site in
                         StructureRow(site: site)
                     }
@@ -147,7 +147,7 @@ private struct SystemInspector: View {
             }
 
             if !system.allEvents.isEmpty {
-                SectionCard("Events", count: system.allEvents.count) {
+                RCReadoutCard("Events", count: system.allEvents.count) {
                     ForEach(system.allEvents) { event in
                         BubbleRow(title: event.title ?? event.eventType ?? event.designation,
                                   code: event.location ?? event.designation, detail: event.status?.capitalized)
@@ -168,7 +168,7 @@ private struct PlanetInspector: View {
     let planet: Planet
     var body: some View {
         InspectorScroll(title: planet.name ?? planet.designation, code: planet.designation, recon: planet.recon) {
-            ReadoutCard("Planet") {
+            RCReadoutCard("Planet") {
                 Readout("Type", (planet.type ?? "—") + (planet.typeEstimated ? " (est.)" : ""))
                 if let au = planet.orbitalDistanceAu { Readout("Orbit", String(format: "%.2f AU", au)) }
                 Readout("Habitable zone", planet.inHabitableZone ? "Yes" : "No")
@@ -185,7 +185,7 @@ private struct MoonInspector: View {
     let moon: Moon
     var body: some View {
         InspectorScroll(title: moon.name ?? moon.designation, code: moon.designation, recon: moon.recon) {
-            ReadoutCard("Moon") {
+            RCReadoutCard("Moon") {
                 Readout("Type", moon.type ?? "—")
             }
             if let phys = moon.physical { PhysicalCard(phys) }
@@ -198,21 +198,21 @@ private struct BeltInspector: View {
     let belt: Belt
     var body: some View {
         InspectorScroll(title: belt.designation, code: belt.designation, recon: .scanned) {
-            ReadoutCard("Belt") {
+            RCReadoutCard("Belt") {
                 if let d = belt.density { Readout("Density", d.capitalized) }
                 if let inner = belt.innerRadiusAu, let outer = belt.outerRadiusAu {
                     Readout("Radius", String(format: "%.1f–%.1f AU", inner, outer))
                 }
             }
             if !belt.richness.isEmpty {
-                SectionCard("Richness", count: belt.richness.count) {
+                RCReadoutCard("Richness", count: belt.richness.count) {
                     ForEach(belt.richness.sorted(by: { $0.key < $1.key }), id: \.key) { name, level in
                         Readout(name.capitalized, level.capitalized)
                     }
                 }
             }
             if !belt.sites.isEmpty {
-                SectionCard("Resource Sites", count: belt.sites.count) {
+                RCReadoutCard("Resource Sites", count: belt.sites.count) {
                     ForEach(belt.sites) { site in
                         BubbleRow(title: site.name ?? site.designation, code: site.designation,
                                   detail: site.remaining.isEmpty ? nil
@@ -221,7 +221,7 @@ private struct BeltInspector: View {
                 }
             }
             if !belt.inventory.isEmpty {
-                SectionCard("Stock", count: belt.inventory.count) {
+                RCReadoutCard("Stock", count: belt.inventory.count) {
                     ForEach(belt.inventory, id: \.resourceType) { item in
                         Readout(item.resourceType.capitalized, String(format: "%.0f", item.quantity))
                     }
@@ -238,14 +238,14 @@ private struct SiteSalvageSections: View {
     let salvage: [SalvageSite]
     var body: some View {
         if !sites.isEmpty {
-            SectionCard("Resource Sites", count: sites.count) {
+            RCReadoutCard("Resource Sites", count: sites.count) {
                 ForEach(sites) { site in
                     BubbleRow(title: site.name ?? site.designation, code: site.designation, detail: nil)
                 }
             }
         }
         if !salvage.isEmpty {
-            SectionCard("Salvage", count: salvage.count) {
+            RCReadoutCard("Salvage", count: salvage.count) {
                 ForEach(salvage) { s in
                     BubbleRow(title: s.name ?? s.designation, code: s.designation,
                               detail: (s.depleted ? "Depleted · " : "") + s.resourcesAvailable.joined(separator: ", "))
@@ -259,7 +259,7 @@ private struct PhysicalCard: View {
     let phys: BodyPhysical
     init(_ phys: BodyPhysical) { self.phys = phys }
     var body: some View {
-        ReadoutCard("Physical") {
+        RCReadoutCard("Physical") {
             if let m = phys.massEarth { Readout("Mass", String(format: "%.2f M⊕", m)) }
             if let r = phys.radiusEarth { Readout("Radius", String(format: "%.2f R⊕", r)) }
             if let g = phys.surfaceGravity { Readout("Gravity", String(format: "%.2f g", g)) }
@@ -298,43 +298,7 @@ private struct InspectorScroll<Content: View>: View {
     }
 }
 
-private struct ReadoutCard<Content: View>: View {
-    let heading: String
-    @ViewBuilder let content: Content
-    init(_ heading: String, @ViewBuilder content: () -> Content) {
-        self.heading = heading; self.content = content()
-    }
-    var body: some View {
-        VStack(alignment: .leading, spacing: Space.s) {
-            Text(heading.uppercased()).font(.rcSectionLabel).foregroundStyle(.rcTextTertiary)
-            VStack(alignment: .leading, spacing: Space.xs) { content }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(Space.m)
-        .background(.rcSurfaceRaised, in: RoundedRectangle(cornerRadius: Radius.card))
-    }
-}
 
-private struct SectionCard<Content: View>: View {
-    let heading: String
-    let count: Int
-    @ViewBuilder let content: Content
-    init(_ heading: String, count: Int, @ViewBuilder content: () -> Content) {
-        self.heading = heading; self.count = count; self.content = content()
-    }
-    var body: some View {
-        VStack(alignment: .leading, spacing: Space.s) {
-            HStack {
-                Text(heading.uppercased()).font(.rcSectionLabel).foregroundStyle(.rcTextTertiary)
-                Text("\(count)").font(.rcMonoSmall).foregroundStyle(.rcTextTertiary)
-            }
-            VStack(alignment: .leading, spacing: Space.xs) { content }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(Space.m)
-        .background(.rcSurfaceRaised, in: RoundedRectangle(cornerRadius: Radius.card))
-    }
-}
 
 private struct Readout: View {
     let label: String

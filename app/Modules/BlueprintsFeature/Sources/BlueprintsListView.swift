@@ -51,7 +51,7 @@ public struct BlueprintsListView: View {
         .searchable(text: $store.searchText, placement: .sidebar, prompt: "Search blueprints")
         .safeAreaInset(edge: .top, spacing: 0) {
             if let errorMessage = store.errorMessage {
-                errorBanner(errorMessage)
+                RCErrorBanner(errorMessage) { store.send(.dismissError) }
             }
         }
         .toolbar {
@@ -76,25 +76,6 @@ public struct BlueprintsListView: View {
         .task { store.send(.task) }
     }
 
-    private func errorBanner(_ message: String) -> some View {
-        HStack(spacing: Space.s) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.rcWarning)
-            Text(message)
-                .font(.rcCaption)
-                .foregroundStyle(.rcTextSecondary)
-                .lineLimit(2)
-            Spacer(minLength: Space.s)
-            Button("Dismiss") { store.send(.dismissError) }
-                .buttonStyle(RCButtonStyle(.text))
-        }
-        .padding(.horizontal, Space.m)
-        .padding(.vertical, Space.s)
-        .background(.rcSurfaceRaised)
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(.rcSeparator).frame(height: 0.5)
-        }
-    }
 }
 
 // MARK: - Row
@@ -104,7 +85,7 @@ private struct BlueprintRow: View {
 
     var body: some View {
         HStack(spacing: Space.s) {
-            glyphTile
+            RCGlyphTile(Image.rcSymbol("device.\(blueprint.deviceType)"))
             VStack(alignment: .leading, spacing: Space.xs) {
                 HStack(spacing: Space.s) {
                     Text(BlueprintPresentation.displayName(blueprint.deviceType))
@@ -127,18 +108,4 @@ private struct BlueprintRow: View {
         .padding(.vertical, Space.xs)
     }
 
-    private var glyphTile: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
-                .fill(.rcSurfaceRaised)
-                .overlay(
-                    RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
-                        .strokeBorder(.rcSeparator, lineWidth: 0.5)
-                )
-            Image.rcSymbol("device.\(blueprint.deviceType)")
-                .font(.system(size: 15, weight: .regular))
-                .foregroundStyle(.rcTextPrimary, .rcAccent, .rcTextSecondary)
-        }
-        .frame(width: 30, height: 30)
-    }
 }

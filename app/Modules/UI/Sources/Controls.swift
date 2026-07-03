@@ -542,6 +542,128 @@ public struct RCEntitySwitcher: View {
     }
 }
 
+// MARK: - Glyph tile (icon chip for list rows & detail headers)
+
+/// The rounded surface chip that frames a device/blueprint/replicant glyph. The
+/// chrome (surface fill + hairline border, square tile) is identical across
+/// every list row and detail header; only the glyph image and size vary — so
+/// callers pass the `Image` and pick a `TileSize`. Replaces the per-feature
+/// `glyphTile` copies.
+public struct RCGlyphTile: View {
+    private let image: Image
+    private let size: CGFloat
+
+    public init(_ image: Image, size: CGFloat = TileSize.small) {
+        self.image = image
+        self.size = size
+    }
+
+    public var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                .fill(.rcSurfaceRaised)
+                .overlay(
+                    RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                        .strokeBorder(.rcSeparator, lineWidth: Hairline.thin)
+                )
+            image
+                .font(.system(size: size * 0.5, weight: .regular))
+                .foregroundStyle(.rcTextPrimary, .rcAccent, .rcTextSecondary)
+        }
+        .frame(width: size, height: size)
+    }
+}
+
+// MARK: - Error banner (inline dismissible warning strip)
+
+/// The inline warning strip shown above a list when an action fails: a warning
+/// glyph, the message, and a Dismiss button, on a raised surface with a bottom
+/// hairline. Byte-identical across five feature list views before this; the only
+/// per-site difference is what Dismiss does, so that's the one parameter.
+public struct RCErrorBanner: View {
+    private let message: String
+    private let onDismiss: () -> Void
+
+    public init(_ message: String, onDismiss: @escaping () -> Void) {
+        self.message = message
+        self.onDismiss = onDismiss
+    }
+
+    public var body: some View {
+        HStack(spacing: Space.s) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.rcWarning)
+            Text(message)
+                .font(.rcCaption)
+                .foregroundStyle(.rcTextSecondary)
+                .lineLimit(2)
+            Spacer(minLength: Space.s)
+            Button("Dismiss", action: onDismiss)
+                .buttonStyle(RCButtonStyle(.text))
+        }
+        .padding(.horizontal, Space.m)
+        .padding(.vertical, Space.s)
+        .background(.rcSurfaceRaised)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(.rcSeparator).frame(height: Hairline.thin)
+        }
+    }
+}
+
+// MARK: - Section header & readout card (detail-pane building blocks)
+
+/// An uppercase section label, optionally trailed by a monospaced count — the
+/// `Text(heading.uppercased()).font(.rcSectionLabel)…` line that recurs ~20×
+/// across the detail panes.
+public struct RCSectionHeader: View {
+    private let heading: String
+    private let count: Int?
+
+    public init(_ heading: String, count: Int? = nil) {
+        self.heading = heading
+        self.count = count
+    }
+
+    public var body: some View {
+        HStack {
+            Text(heading.uppercased())
+                .font(.rcSectionLabel)
+                .foregroundStyle(.rcTextTertiary)
+            if let count {
+                Text("\(count)")
+                    .font(.rcMonoSmall)
+                    .foregroundStyle(.rcTextTertiary)
+            }
+        }
+    }
+}
+
+/// A titled card on a raised surface — an `RCSectionHeader` above arbitrary
+/// content. Hoisted from `LocationDetailView`'s private `ReadoutCard`/`SectionCard`
+/// (the right abstraction, previously in the wrong place) so every detail pane
+/// shares one card instead of re-inlining the surface + heading.
+public struct RCReadoutCard<Content: View>: View {
+    private let heading: String
+    private let count: Int?
+    private let content: Content
+
+    public init(_ heading: String, count: Int? = nil, @ViewBuilder content: () -> Content) {
+        self.heading = heading
+        self.count = count
+        self.content = content()
+    }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: Space.s) {
+            RCSectionHeader(heading, count: count)
+            VStack(alignment: .leading, spacing: Space.xs) { content }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(Space.m)
+        .background(.rcSurfaceRaised, in: RoundedRectangle(cornerRadius: Radius.card))
+    }
+}
+
 // MARK: - Gallery (living spec — open the #Preview)
 
 public struct RCControlsGalleryView: View {

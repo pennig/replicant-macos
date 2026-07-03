@@ -219,6 +219,22 @@ public enum Radius {
     public static let pill:    CGFloat = 999
 }
 
+/// Hairline widths for separators/strokes. Formalizes the `0.5`/`1` literals that
+/// recur across cards, rows, and glyph tiles (`Rectangle().frame(height:)`,
+/// `strokeBorder(lineWidth:)`).
+public enum Hairline {
+    public static let thin:    CGFloat = 0.5
+    public static let regular: CGFloat = 1
+}
+
+/// Square dimensions for the icon/glyph tiles used in list rows (small) and
+/// detail headers (large). Owned here so the two recurring magic numbers live in
+/// one place; consumed by `RCGlyphTile`.
+public enum TileSize {
+    public static let small: CGFloat = 30
+    public static let large: CGFloat = 52
+}
+
 public extension Font {
     static let rcTitle        = Font.system(size: 20, weight: .bold)            // inspector / list title
     static let rcHeadline     = Font.system(size: 15, weight: .semibold)
@@ -228,6 +244,8 @@ public extension Font {
     static let rcSectionLabel = Font.system(size: 10, weight: .semibold)            // UPPERCASE + tracking
     static let rcMono         = Font.system(size: 13, weight: .regular, design: .monospaced) // IDs / codes
     static let rcMonoSmall    = Font.system(size: 11, weight: .medium, design: .monospaced)
+    static let rcDisplay      = Font.system(size: 28, weight: .semibold)            // large detail-header glyph / number
+    static let rcMicro        = Font.system(size: 9, weight: .semibold)             // micro badge / caption below rcSectionLabel
 }
 
 // MARK: - Tiny reusable views matching the mockups
