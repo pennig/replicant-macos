@@ -95,6 +95,7 @@ public struct RCActiveReplicantHeader: View {
                 .foregroundStyle(.rcTextTertiary)
 
             RCEntitySwitcher(replicants, selection: $selection, onCommission: onCommission)
+                .padding(.horizontal, -Space.xs) // kick out the sides for visual balance (round corners make it appear more narrow than it actually is)
 
             if let progress {
                 // Reset the fill's finish-line latch when the operation changes.
@@ -109,9 +110,6 @@ public struct RCActiveReplicantHeader: View {
                 planRow
             }
         }
-        .padding(.horizontal, Space.m)
-        .padding(.top, Space.m)
-        .padding(.bottom, Space.s)
     }
 
     /// The public plan — the replicant's current mission — with an inline edit
@@ -235,7 +233,12 @@ struct RCReplicantProgressView: View {
     @State private var reachedEnd = false
 
     var body: some View {
-        TimelineView(.periodic(from: progress.startedAt, by: 1)) { context in
+        // Anchor the 1s tick phase on `completesAt`, not `startedAt`: the readout
+        // is a countdown to arrival, so its integer-second boundaries land on
+        // `completesAt − n`. Phasing on `startedAt` puts each tick a fractional
+        // beat (the trip's sub-second remainder, ~0.5s on average) *after* the
+        // real boundary, so the readout lagged by that much.
+        TimelineView(.periodic(from: progress.completesAt, by: 1)) { context in
             let pending = reachedEnd || context.date >= progress.completesAt
             let fraction = pending
                 ? 1

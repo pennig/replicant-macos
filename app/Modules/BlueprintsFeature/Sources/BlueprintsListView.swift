@@ -2,24 +2,20 @@
 //  BlueprintsListView.swift
 //  Replicould — Blueprints feature
 //
-//  The blueprint catalog for the split view's content column. Rows render
-//  straight from the `Blueprint` table via a dynamic `@FetchAll` query that is
-//  reloaded whenever the search text changes, so filtering happens in SQLite
-//  rather than over an in-memory array. The store drives selection and the
-//  cold-load/refresh.
+//  The blueprint catalog for the split view's content column. It's a pure
+//  renderer of `store.blueprints` — the `Blueprint` table is observed as a
+//  dynamic `@FetchAll` in the reducer's state, and the reducer reloads that query
+//  from the search text (filtering in SQLite). So the list always matches state
+//  with no async reload in the view and no empty-state flash. The store drives
+//  selection and the cold-load/refresh.
 //
 
 import ComposableArchitecture
-import IssueReporting
-import SQLiteData
 import SwiftUI
 import UI
 
 public struct BlueprintsListView: View {
     @Bindable var store: StoreOf<BlueprintsFeature>
-    /// Loaded lazily by the search `.task(id:)` below so the query can react to
-    /// the search text.
-    @FetchAll(Blueprint.none) private var blueprints
 
     public init(store: StoreOf<BlueprintsFeature>) {
         self.store = store
@@ -27,7 +23,7 @@ public struct BlueprintsListView: View {
 
     public var body: some View {
         List(selection: $store.selectedDeviceType) {
-            ForEach(blueprints) { blueprint in
+            ForEach(store.blueprints) { blueprint in
                 BlueprintRow(blueprint: blueprint)
                     .tag(blueprint.deviceType)
                     .listRowSeparator(.hidden)
@@ -36,7 +32,7 @@ public struct BlueprintsListView: View {
         .listStyle(.inset)
         .scrollContentBackground(.hidden)
         .overlay {
-            if blueprints.isEmpty {
+            if store.blueprints.isEmpty {
                 if store.isLoading {
                     ProgressView()
                 } else if !store.searchText.isEmpty {
@@ -59,8 +55,8 @@ public struct BlueprintsListView: View {
         }
         .toolbar {
             ToolbarItem {
-                if !blueprints.isEmpty {
-                    Text("\(blueprints.count) blueprints")
+                if !store.blueprints.isEmpty {
+                    Text("\(store.blueprints.count) blueprints")
                         .font(.rcCaption)
                         .foregroundStyle(.rcTextTertiary)
                 }
@@ -77,22 +73,6 @@ public struct BlueprintsListView: View {
         }
         // Cold-load trigger (first run / empty catalog).
         .task { store.send(.task) }
-        // Reactive search: reload the query whenever the search text changes.
-        .task(id: store.searchText) {
-            _ = await withErrorReporting {
-                try await $blueprints.load(
-                    Blueprint
-                        .where {
-                            if !store.searchText.isEmpty {
-                                $0.deviceType.contains(store.searchText)
-                                    || $0.shortDescription.contains(store.searchText)
-                            }
-                        }
-                        .order { $0.deviceType },
-                    animation: .default
-                )
-            }
-        }
     }
 
     private func errorBanner(_ message: String) -> some View {

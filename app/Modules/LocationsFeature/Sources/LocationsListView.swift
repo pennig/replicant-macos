@@ -26,30 +26,12 @@ import UniverseModels
 public struct LocationsListView: View {
     @Bindable var store: StoreOf<LocationsFeature>
 
-    @FetchAll(Star.none) private var stars
-    @FetchAll(SystemDetail.all) private var systemDetails
-    @FetchAll(LocationFootprint.all) private var footprints
-    @FetchAll(Replicant.all) private var replicants
-    @FetchOne(Star.none) private var myStar: Star?
-
-    /// The built tree, recomputed off-main only when `forestKey` changes.
-    @State private var forest: [LocationNode] = []
-
     public init(store: StoreOf<LocationsFeature>) {
         self.store = store
     }
 
-    /// Cheap signature of everything the tree depends on. `@State` `forest` is
-    /// rebuilt only when this changes — not on every body eval (selection,
-    /// scroll, etc.). The detail revision folds in blob updates (same row count).
-    private var forestKey: String {
-        let detailRev = systemDetails.reduce(0.0) { $0 + $1.hydratedAt.timeIntervalSince1970 }
-        return [
-            store.filter.rawValue, store.sort.rawValue,
-            myStar?.designation ?? "-",
-            "\(stars.count)", "\(systemDetails.count)", "\(Int(detailRev))", "\(footprints.count)",
-        ].joined(separator: "|")
-    }
+    /// The built tree, assembled off-main by the state's `@Fetch` request.
+    private var forest: [LocationNode] { store.forest.nodes }
 
     public var body: some View {
         VStack(spacing: 0) {
@@ -89,49 +71,7 @@ public struct LocationsListView: View {
         .searchable(text: $store.searchText, placement: .sidebar, prompt: "Search systems")
         .toolbar { toolbarContent }
         .task { store.send(.task) }
-        .task(id: store.searchText) {
-            _ = await withErrorReporting {
-                try await $stars.load(
-                    Star.where { $0.designation.contains(store.searchText) }.order { $0.designation },
-                    animation: nil
-                )
-            }
-        }
-        .task(id: replicants.first?.currentStar) {
-            guard let current = replicants.first?.currentStar else { return }
-            _ = await withErrorReporting {
-                try await $myStar.load(Star.where { $0.designation.eq(current) })
-            }
-        }
-        .task(id: forestKey) { await rebuildForest() }
         .safeAreaInset(edge: .top) { errorBanner }
-    }
-
-    /// Build the tree off the main actor so a 5,770-node census never blocks a
-    /// render. Inputs are snapshotted (value types) before hopping off-main.
-    private func rebuildForest() async {
-        let starsSnapshot = Array(stars)
-        let detailRows = Array(systemDetails)
-        let footprintRows = Array(footprints)
-        let position = myStar?.position
-        let filter = store.filter
-        let sort = store.sort
-
-        let built = await Task.detached(priority: .userInitiated) {
-            let details = Dictionary(
-                detailRows.compactMap { row in (try? row.system()).map { (row.designation, $0) } },
-                uniquingKeysWith: { a, _ in a }
-            )
-            let footprintMap = Dictionary(
-                footprintRows.map { ($0.location, $0.counts) }, uniquingKeysWith: { a, _ in a }
-            )
-            return LocationTree.forest(
-                stars: starsSnapshot, details: details, footprints: footprintMap,
-                myPosition: position, filter: filter, sort: sort
-            )
-        }.value
-
-        forest = built
     }
 
     @ToolbarContentBuilder

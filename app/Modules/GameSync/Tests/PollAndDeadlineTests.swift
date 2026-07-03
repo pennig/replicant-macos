@@ -10,11 +10,11 @@
 
 import API
 import ComposableArchitecture
-import DependencyClients
 import Foundation
 import SQLiteData
 import Testing
 import Utils
+@testable import DependencyClients
 @testable import GameSync
 
 /// Disambiguate from `Foundation.Operation`.
@@ -182,6 +182,8 @@ private func budgetGameClient(remaining: Int) -> GameClient {
 @Suite struct DeadlineSchedulerTests {
 
     private func schedulerProcessing(now: Date, database: any DatabaseWriter, reads: LockIsolated<Int>) async {
+        let reconciler = Reconciler()
+        let coordinator = PollCoordinator(reconciler: reconciler)
         await withDependencies {
             $0.defaultDatabase = database
             $0.date = .constant(now)
@@ -189,9 +191,11 @@ private func budgetGameClient(remaining: Int) -> GameClient {
                 reads.withValue { $0 += 1 }
                 return device(code)
             }
+            $0.deviceRefresher = DeviceRefreshClient { code, priority in
+                await coordinator.refresh(code, priority: priority)
+            }
         } operation: {
-            let reconciler = Reconciler()
-            let scheduler = DeadlineScheduler(coordinator: PollCoordinator(reconciler: reconciler), reconciler: reconciler)
+            let scheduler = DeadlineScheduler(reconciler: reconciler)
             await scheduler.processDue(now: now)
         }
     }
@@ -229,6 +233,8 @@ private func budgetGameClient(remaining: Int) -> GameClient {
         let arrivesAt = now.addingTimeInterval(5)   // server now says 5 more seconds
         let reads = LockIsolated(0)
 
+        let reconciler = Reconciler()
+        let coordinator = PollCoordinator(reconciler: reconciler)
         await withDependencies {
             $0.defaultDatabase = database
             $0.date = .constant(now)
@@ -237,9 +243,11 @@ private func budgetGameClient(remaining: Int) -> GameClient {
                 reads.withValue { $0 += 1 }
                 return travellingDevice(code, arrivesAt: arrivesAt)
             }
+            $0.deviceRefresher = DeviceRefreshClient { code, priority in
+                await coordinator.refresh(code, priority: priority)
+            }
         } operation: {
-            let reconciler = Reconciler()
-            let scheduler = DeadlineScheduler(coordinator: PollCoordinator(reconciler: reconciler), reconciler: reconciler)
+            let scheduler = DeadlineScheduler(reconciler: reconciler)
             await scheduler.processDue(now: now)
         }
 

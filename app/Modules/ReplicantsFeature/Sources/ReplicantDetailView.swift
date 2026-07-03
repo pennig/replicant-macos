@@ -19,13 +19,6 @@ import UI
 
 public struct ReplicantDetailView: View {
     let store: StoreOf<ReplicantsFeature>
-    /// Loaded lazily by the selection `.task(id:)` below so the query tracks the
-    /// selected replicant code rather than fetching the whole directory.
-    @FetchOne(KnownReplicant.none) private var replicant: KnownReplicant?
-    /// The replicant's host device, resolved from the local `Device` table so the
-    /// host row shows its real type/glyph. Populated (or fetched) by the reducer
-    /// when we don't already hold it — see `.hostDeviceRequested`.
-    @FetchOne(Device.none) private var hostDevice: Device?
 
     public init(store: StoreOf<ReplicantsFeature>) {
         self.store = store
@@ -33,12 +26,12 @@ public struct ReplicantDetailView: View {
 
     /// Whether the inspector is waiting on the details fetch for this replicant.
     private var isLoadingDetails: Bool {
-        replicant.map { store.loadingDetailCode == $0.replicantCode } ?? false
+        store.selectedReplicant.map { store.loadingDetailCode == $0.replicantCode } ?? false
     }
 
     public var body: some View {
         Group {
-            if let replicant {
+            if let replicant = store.selectedReplicant {
                 ScrollView {
                     VStack(alignment: .leading, spacing: Space.xl) {
                         header(replicant)
@@ -65,30 +58,15 @@ public struct ReplicantDetailView: View {
                 )
             }
         }
-        // Reload the single-row query whenever the selection changes.
-        .task(id: store.selectedReplicantCode) {
-            _ = await withErrorReporting {
-                try await $replicant.load(
-                    KnownReplicant.where { $0.replicantCode.eq(store.selectedReplicantCode ?? "") },
-                    animation: .default
-                )
-            }
-        }
-        // Ask the reducer to refresh this replicant's full details on selection.
+        // Fetch this replicant's full details on selection; they merge into its
+        // record and surface via the observed `directory`.
         .task(id: store.selectedReplicantCode) {
             store.send(.detailsRequested(code: store.selectedReplicantCode))
         }
-        // Resolve the host device from the local table (fetching it if missing) so
-        // its row shows the real type/glyph. Re-runs when the host code changes.
-        .task(id: replicant?.hostedDeviceCode) {
-            let code = replicant?.hostedDeviceCode
-            _ = await withErrorReporting {
-                try await $hostDevice.load(
-                    Device.where { $0.deviceCode.eq(code ?? "") },
-                    animation: .default
-                )
-            }
-            store.send(.hostDeviceRequested(code: code))
+        // Ensure the host device is in the local fleet so its row can show the real
+        // type/glyph. Re-runs when the host code changes.
+        .task(id: store.selectedReplicant?.hostedDeviceCode) {
+            store.send(.hostDeviceRequested(code: store.selectedReplicant?.hostedDeviceCode))
         }
     }
 
@@ -243,7 +221,7 @@ public struct ReplicantDetailView: View {
                 if let host = replicant.hostedDeviceCode {
                     // The host resolves to a real device once we have it locally —
                     // show its type/glyph; otherwise fall back to the generic mark.
-                    let resolved = hostDevice?.deviceCode == host ? hostDevice : nil
+                    let resolved = store.selectedHostDevice?.deviceCode == host ? store.selectedHostDevice : nil
                     deviceRow(
                         code: host,
                         type: resolved.map { ReplicantPresentation.displayName($0.deviceType) } ?? "Host device",

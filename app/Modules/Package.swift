@@ -19,6 +19,7 @@ let package = Package(
         .library(name: "PrintQueueFeature", targets: ["PrintQueueFeature"]),
         .library(name: "RawAPIFeature", targets: ["RawAPIFeature"]),
         .library(name: "ReplicantsFeature", targets: ["ReplicantsFeature"]),
+        .library(name: "SidebarFeature", targets: ["SidebarFeature"]),
         .library(name: "StarMapFeature", targets: ["StarMapFeature"]),
         .library(name: "UI", targets: ["UI"]),
         .library(name: "UniverseModels", targets: ["UniverseModels"]),
@@ -120,8 +121,10 @@ let package = Package(
             dependencies: [
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
                 .product(name: "SQLiteData", package: "sqlite-data"),
+                "BlueprintsFeature",
                 "DependencyClients",
                 "UI",
+                "UniverseModels",
                 "Utils",
             ],
             path: "DevicesFeature/Sources"
@@ -216,8 +219,10 @@ let package = Package(
             dependencies: [
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
                 .product(name: "SQLiteData", package: "sqlite-data"),
+                "BlueprintsFeature",
                 "DependencyClients",
                 "UI",
+                "UniverseModels",
                 "Utils",
             ],
             path: "PrintQueueFeature/Sources"
@@ -270,6 +275,28 @@ let package = Package(
                 .product(name: "SQLiteData", package: "sqlite-data"),
             ],
             path: "ReplicantsFeature/Tests"
+        ),
+        .target(
+            name: "SidebarFeature",
+            dependencies: [
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "SQLiteData", package: "sqlite-data"),
+                "DependencyClients",
+                "MessagesFeature",
+                "ReplicantsFeature",
+                "UI",
+            ],
+            path: "SidebarFeature/Sources"
+        ),
+        .testTarget(
+            name: "SidebarFeatureTests",
+            dependencies: [
+                "SidebarFeature",
+                "DependencyClients",
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "SQLiteData", package: "sqlite-data"),
+            ],
+            path: "SidebarFeature/Tests"
         ),
         .target(
             name: "StarMapFeature",

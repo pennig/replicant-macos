@@ -45,9 +45,14 @@ public struct Device: Identifiable, Equatable, Sendable {
     /// The entire variable per-type tail, verbatim (snake_case keys, as on the
     /// wire), with the core-column keys stripped. Decoded on demand.
     @Column(as: JSONValue.JSONRepresentation.self) public var detail: JSONValue
-    /// Synthesized authoritative event-time used by the reconciliation guard
-    /// (§4.1 / §6): the relay event `timestamp` for events, or fetch wall-clock
-    /// for reads. The payload carries no server modified-time.
+    /// Synthesized event-time used by the reconciliation guard (§4.1 / §6).
+    /// Because the payload carries no server modified-time, this is the read's
+    /// *request-issue* time — captured before the round-trip so snapshots order
+    /// by when each read began, not by when its response arrived (a read issued
+    /// later reflects same-or-newer state, so a slow earlier read can't clobber a
+    /// newer one). Device rows are only ever written from authoritative reads —
+    /// never optimistically, never straight from an event — so read-issue order
+    /// is the only ordering the guard needs, and no provenance column is required.
     public var updatedAt: Date
     /// Local-only provenance — when this device was first seen. Preserved across
     /// upserts (like `Star.createdAt`).
@@ -100,9 +105,9 @@ public struct Device: Identifiable, Equatable, Sendable {
 
 extension Device {
     /// Map a generated device snapshot onto the local record. `fetchedAt` is the
-    /// synthesized event-time (the read's wall-clock) and seeds `firstSeenAt` on
-    /// first insert; the reconciliation guard preserves the stored `firstSeenAt`
-    /// thereafter.
+    /// synthesized event-time (the read's request-issue time) and seeds
+    /// `firstSeenAt` on first insert; the reconciliation guard preserves the
+    /// stored `firstSeenAt` thereafter.
     public init(
         schema: Components.Schemas.AppSchemasDevicesDeviceStatusSchema,
         fetchedAt: Date

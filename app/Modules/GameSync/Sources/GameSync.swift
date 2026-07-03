@@ -63,10 +63,9 @@ extension GameSync {
         // they're wired here rather than from the app. Feature-specific routes
         // (e.g. Messages) are still registered by the composition root.
         let reconciler = Reconciler()
-        let coordinator = PollCoordinator(reconciler: reconciler)
-        let scheduler = DeadlineScheduler(coordinator: coordinator, reconciler: reconciler)
+        let scheduler = DeadlineScheduler(reconciler: reconciler)
         routes.withValue { current in
-            current.append(Self.deviceRoute(coordinator: coordinator, reconciler: reconciler))
+            current.append(Self.deviceRoute(reconciler: reconciler))
             current.append(Self.bobnetRoute())
         }
 
@@ -165,12 +164,13 @@ extension GameSync {
     /// device fields out of the event). Phase 4 adds request coalescing, per-type
     /// TTL, and budget-aware deferral; Phase 2 does one read per device-naming
     /// event.
-    static func deviceRoute(coordinator: PollCoordinator, reconciler: Reconciler) -> RelayRoute {
+    static func deviceRoute(reconciler: Reconciler) -> RelayRoute {
         RelayRoute(id: "device.event", type: "event") { event in
+            @Dependency(\.deviceRefresher) var deviceRefresher
             logger.debug("event \(event.eventType ?? "?", privacy: .public) device=\(event.deviceCode ?? "-", privacy: .public)")
             // Completion events are truth for the action they close (§4.4): fold
             // the result into the device's open operation first (cheap, no read).
-            await reconciler.applyOperationEvent(event)
+            let completedOp = await reconciler.applyOperationEvent(event)
             // A finished print job spawns a brand-new device (the printed clone),
             // whose code isn't in the local fleet yet — a single-device confirm-read
             // of the printer can't surface it. Re-walk the whole account list so the
@@ -178,11 +178,16 @@ extension GameSync {
             if event.eventType == "print_complete" {
                 await refreshFleet(reconciler: reconciler)
             }
-            // Then refresh the device row via the poll coordinator — a low-priority
-            // (event-invalidation) trigger that coalesces, respects the TTL, and
-            // defers under read-budget pressure.
+            // Then refresh the device row via the poll coordinator. When the event
+            // just closed an operation, read authoritatively (high priority): the
+            // device's now-finished activity block (e.g. an arrived `travel` block)
+            // must clear from its snapshot promptly, or the UI keeps rendering the
+            // completed activity — a low-priority read can be TTL-suppressed and
+            // leave a travel bar stuck on "Arriving…" until a later poll. Otherwise
+            // it's a plain invalidation: a low-priority trigger that coalesces,
+            // respects the TTL, and defers under read-budget pressure.
             guard let code = event.deviceCode, !code.isEmpty else { return }
-            await coordinator.refresh(code, priority: .low)
+            await deviceRefresher.refresh(code, completedOp ? .high : .low)
         }
     }
 

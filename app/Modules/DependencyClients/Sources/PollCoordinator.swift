@@ -1,6 +1,6 @@
 //
 //  PollCoordinator.swift
-//  Replicould — GameSync
+//  Replicould — shared dependency clients
 //
 //  Spends the read budget where it matters (IMPLEMENTATION_PLAN §4.3 / Phase 4).
 //  Every device confirm-read — whether triggered by a relay event or by a
@@ -20,18 +20,17 @@
 //
 
 import ComposableArchitecture
-import DependencyClients
 import Foundation
 import OSLog
 
 private let logger = Logger(subsystem: "name.pennig.replicould", category: "PollCoordinator")
 
-actor PollCoordinator {
-    /// How urgent a refresh is. Deadline confirmations are `high` (always worth a
-    /// read); event-driven invalidations are `low` (skippable under pressure /
-    /// TTL).
-    enum Priority: Sendable { case low, high }
+/// How urgent a device refresh is. Deadline confirmations are `high` (always
+/// worth a read); event-driven invalidations are `low` (skippable under
+/// pressure / TTL). Public so the `deviceRefresher` client can vend it.
+public enum RefreshPriority: Sendable { case low, high }
 
+actor PollCoordinator {
     private let reconciler: Reconciler
     /// Suppress a low-priority re-read within this window of the last read.
     private let ttl: TimeInterval
@@ -51,7 +50,7 @@ actor PollCoordinator {
     /// budget. Returns the device if a read happened (or one was already in
     /// flight), or nil if the refresh was coalesced-away / suppressed / deferred.
     @discardableResult
-    func refresh(_ deviceCode: String, priority: Priority) async -> Device? {
+    func refresh(_ deviceCode: String, priority: RefreshPriority) async -> Device? {
         // Join an in-flight read rather than firing a second.
         if let existing = inFlight[deviceCode] {
             logger.debug("refresh \(deviceCode, privacy: .public) [\(String(describing: priority), privacy: .public)]: coalesced into in-flight read")

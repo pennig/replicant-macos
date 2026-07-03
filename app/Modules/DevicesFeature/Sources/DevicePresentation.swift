@@ -173,13 +173,16 @@ enum DeviceCommand: Hashable, Identifiable {
         /// A checkbox list — the user picks zero or more of `options` (used by
         /// `adopt`, which accepts multiple device codes at once).
         case multiSelect(label: String, options: [DeviceOption])
+        /// A blueprint picker — the options are the unlocked catalog, supplied by
+        /// the command grid from its `@FetchAll` (not carried in the enum).
+        case blueprint(label: String)
         case none
     }
 
     var parameter: Parameter {
         switch self {
         case .travel:          return .text(label: "Destination", placeholder: "ATIANFU-1")
-        case .print:           return .text(label: "Device type", placeholder: "ftl_beacon")
+        case .print:           return .blueprint(label: "Blueprint")
         case .mine, .retarget: return .choice(label: "Resource", options: Self.miningResources)
         case let .setDirective(available): return .choice(label: "Directive", options: available)
         case let .adopt(candidates): return .multiSelect(label: "Devices", options: candidates)

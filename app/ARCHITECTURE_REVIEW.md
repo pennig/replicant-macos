@@ -6,7 +6,140 @@ _Revised 2026-06-25 with answers to §7's open questions folded in. The most con
 
 _Revised again 2026-06-25: the relay is confirmed reachable (`https://replicant.pennig.name/api/stream`) and is a **single SSE connection multiplexing three logical streams** — game events, account messages, and Bobnet chat. `GameSync` must therefore be a router/demultiplexer, not just an event→row mapper. See §5.1 (now §5.1's "router" framing) and the new §4.5._
 
+_**V2 — 2026-07-03.** Most of the architecture prescribed below is now built, and built faithfully. This revision records conformance, the three points where the implementation drifted from the spec (one of them defeats the §5.3 correctness guarantee), and a concrete **shared-layer / module split** proposal for the `DependencyClients` god-module concern raised in §3.3. It is written as a self-contained update: the sections below (§1–§7) are preserved verbatim as the original design record. **Read the "V2 Update" section immediately below first.**_
+
 This is a reference document, not a change request. It is organized as: (1) verdict, (2) what the codebase gets right, (3) modularity/extensibility critique, (4) the core problem reframed, (5) candidate architectures for the core problem with trade-offs, (6) prioritized recommendations, (7) open questions for you to resolve with your product context.
+
+---
+
+# V2 Update — 2026-07-03
+
+_Scope of this pass: re-review against the original prescription across four axes — (a) the sync engine / operation model / plumbing, (b) modularity, (c) framework usage (TCA, SQLiteData/StructuredQueries, Dependencies, Sharing), (d) design-system consistency._
+
+## V2.1 Verdict
+
+The 2026-06-25 document was largely a to-build list. **Almost all of it now exists, and it was implemented faithfully.** `GameSync` is the single relay consumer + type-routed sink registry; the `Operation` table has the prescribed fields and the partial-unique "one open op per device" index; the command template is optimistic-insert → POST → confirm-read → reconcile with 4xx→`rejected` and no auto-retry; the deadline scheduler is a single-timer-to-nearest design that excludes nil-deadline ops and backs off to `unknown`; the poll coordinator does coalescing + TTL + budget deferral; the rate budget is surfaced through `GameClient`; progress is a local-clock `TimelineView`. **Nothing needs re-architecting.**
+
+Three things drifted from the design — one quietly defeats the correctness promise the whole real-time effort rests on — and the design system, pristine at the primitive level, has accumulated component-level duplication. Framework usage is reference-quality.
+
+## V2.2 Sync engine / operations / plumbing — appropriate, one load-bearing bug
+
+Still the right design; it has scaled to the full command surface (travel/mine/print/search/scan/census/directives/lifecycle) with the two-class (self-describing vs enqueued) completion model intact. Extending it is one line per surface: a new relay surface registers a `RelayRoute`; a new command adds an `OperationKind` + `Completion` case.
+
+- **[Correctness-critical] The §5.3 reconciliation guard is guarding the wrong clock.** §5.3 promised last-writer-wins *by event time, not arrival time*. But `Reconciler.ingest` compares `Device.updatedAt` (`Reconciler.swift:46`), and `updatedAt` is always fetch wall-clock (`Device.swift:127`, set at `DevicesClient.swift:51,67`) — never a server modification time or the relay event timestamp. Events never write the device row directly; the device route only triggers a confirm-read (`GameSync.swift:189-190`), which also stamps wall-clock. So the ordering key degrades to "whichever network response resolves last wins," and the central §3.3 hazard is **not actually guarded.** Compounding it: `Device` has no `source`/provenance column, so the optimistic/event/poll precedence rule (§5.3) is absent for entity snapshots (it exists only on `Operation`). Closing this requires flowing the relay event `timestamp` into event-driven device writes and adding an event-time/provenance column — a real design task, since payloads carry no server modified-time. **This is the only finding that can silently corrupt state.**
+- **`print_complete` re-walks the whole fleet on the relay hot path** (`GameSync.swift:178-180,198-208`): a full paged `GET /v1/devices` per completion event, bypassing the coordinator, so N concurrent completions = N simultaneous walks — exactly the §5.5 "never re-walk the list to learn about one item" anti-pattern. The new device code is already in the event payload (`new_device_code`); adopt it via one coordinated single-read instead.
+- **Tier-2 gap-repair is inert.** `RelayRoute.gapRepair` (`RelayRoute.swift:34`) is defined but never invoked; event catch-up is hardcoded as `backfillAllReplicants` in the engine (fine for events), but the **messages route has no tier-2**, so beyond Redis retention missed messages recover only incidentally. The registry's extension point exists in shape but is dead code.
+- Lesser: continuous mining ops (`completesAt == nil`) have no completion backstop if `site_resource_depleted` is lost (`Reconciler.swift:229`) — they linger until an incidental read; `RelayClient` retries a permanently-bad token forever (`RelayClient.swift:149-157`); backfill runs `since: nil` on every start despite the persisted cursor.
+
+## V2.3 Framework usage — exemplary, consistent
+
+TCA + SQLiteData usage is a reference-quality example. Thin reducers upheld **everywhere** (no reducer holds a domain collection); `@FetchAll`-in-state for every primary list; sophisticated correct touches (deriving selection synchronously to avoid inspector-blanking; `@Fetch` + custom `FetchKeyRequest` for the Locations forest; in-place `.load` on search to avoid empty-state flashes). Migrations are clean and centralized; **raw `#sql` appears only for DDL** (incl. the partial unique index), never for reads. `@Dependency` wiring is correct — every client is struct-of-closures with `liveValue` resolving `\.gameClient`, no client built in a feature, `testValue`/`unimplemented` throughout. **Zero Combine, zero legacy `ViewStore`.**
+
+One decision to record, not a bug: the "query lives in state, not view" convention is strict for *primary lists* but *secondary/derived* queries live view-side (`DeviceDetailView.swift:28,599-601`; `SidebarView.swift:22-31`) — a legitimate SQLiteData pattern applied unevenly. Recommendation: **amend the convention** to "primary lists in state; read-only leaf derivations may be view-local" rather than hoist them.
+
+## V2.4 Design system — thorough primitives, duplicated composites
+
+Hard rules upheld: colors all route through `rc*` tokens (only raw colors are legitimate SceneKit scenes + Login canvas art), and **status→color discipline is excellent** — everything goes through `DeviceStatus.tone(for:)`, no invented per-status palettes. The weakness is the **composite layer**: the same components are rebuilt per-feature and re-inline the same magic numbers (30/52 tiles, `0.5` hairlines, `size:15/32` fonts, `opacity 0.12/0.4` pills), which is the source of nearly all the ~18 font/spacing "violations." Promote to `Controls.swift`, by payoff:
+
+1. **`RCGlyphTile`** — duplicated ~8× (`DevicesView.swift:146`, `BlueprintsListView.swift:129`, `PrintQueueListView.swift:158`, `ReplicantsListView.swift:162`, + inlined large variants in the detail views).
+2. **`RCSectionHeader` + `RCReadoutCard`** — uppercase section header ~20×; `LocationDetailView.swift:301-337` already extracted it privately (right move, wrong place — hoist it).
+3. **`RCErrorBanner`** — byte-identical `errorBanner(_:)` in 5 list views.
+4. **`RCPill`** — the `rcAccent.opacity(0.12)` capsule (duplicates `StatusBadge`'s own treatment) rebuilt 4×.
+5. **`RCMeterBar`** — accent-over-separator bar reimplemented 5×.
+6. **`RCDetailRow`** — key-value row with arbitrary per-view label widths (72/80/88/120).
+
+Missing tokens the inlining reveals: a display font (~28–32) and a micro font (~9–10) beyond the current `rcTitle`/`rcCaption` range, a tile-size token, and a hairline (`0.5`) token. Secondary offender: **LoginFeature ignores `Space.*`** (`spacing: 13`, `padding 24/56/22`) even in non-canvas chrome.
+
+## V2.5 Modularity — still good, one narrow regression + the shared-layer proposal
+
+Graph is **still acyclic**, leaf/shared/feature layering intact, cross-feature *composition* still confined to `MainFeature`. But §2's headline "**no feature-to-feature edges**" is now **false** — three edges, every one caused by a shared *data* symbol homed inside a *feature*:
+
+| Edge | Reason it exists | Fix |
+|---|---|---|
+| `SidebarFeature → MessagesFeature` | just the `Message` `@Table` (`SidebarView.swift:14,22`) | move `Message` to the shared data layer |
+| `SidebarFeature → ReplicantsFeature` | just `ReplicantsClient` (`SidebarFeature.swift:16,43`) | move the client to the shared client layer |
+| `Devices/PrintQueue → BlueprintsFeature` | just the `Blueprint` `@Table` (`DeviceDetailView.swift:14,601`) | move `Blueprint` to the shared data layer |
+
+None introduces a cycle or couples feature *logic* to feature *logic* — they only reach shared *data*. But fixing them is the natural trigger for resolving the `DependencyClients` god-module question, because both problems have the same root cause: **there is no dedicated home for shared domain data, so it lands wherever it was first needed** — sometimes in `DependencyClients`, sometimes in a feature.
+
+### The shared layer, as I'd draw it
+
+`DependencyClients` today (19 files, ~3.4k LOC) is doing three distinguishable jobs that happen to be co-located because it is the designated cycle-breaker layer:
+
+1. **Session/auth** — `GameClient`, `KeychainClient` (the token lives here and nowhere else).
+2. **Domain data** — the `@Table` rows (`Account`, `Replicant`, `KnownReplicant`, `Device`, `BobnetMessage`, `Operation`) + their mapped display value types (`Mining`, `Printing`, `Diversion`, `TravelPlan`, `PrintRequirements`).
+3. **The command/refresh engine** — `CommandClient` (34 KB, the hottest-churn file), `Reconciler`, `PollCoordinator`, `DeviceRefreshClient`, `DevicesClient`.
+
+Job 2 (data) is the seam worth cutting **now**; the session-vs-engine cut is gold-plating **today** (see verdict below). Proposed target:
+
+```
+Leaves / foundation
+  Utils · UI                         (no internal deps)
+  API → Utils                        (generated OpenAPI client + governor)
+
+Shared layer
+  GameModels → API, Utils            NEW. The persisted domain: every @Table row + its
+                                     display value types + schema→domain mapping + each
+                                     table's registerMigrations. Depends on nothing but
+                                     API (for Components.Schemas) and Utils. No TCA.
+                                       ← Account, Replicant, KnownReplicant, Device,
+                                         BobnetMessage, Operation, Mining, Printing,
+                                         Diversion, TravelPlan, PrintRequirements,
+                                         + Message (from MessagesFeature),
+                                         + Blueprint (from BlueprintsFeature)
+
+  GameServices → GameModels, API     RENAMED residual of DependencyClients: the authed
+                                     clients + the command/reconciliation engine.
+                                       ← GameClient, KeychainClient, DevicesClient,
+                                         CommandClient, Reconciler, PollCoordinator,
+                                         DeviceRefreshClient,
+                                         + ReplicantsClient (from ReplicantsFeature)
+
+Orchestration / domain-plus
+  UniverseModels  → GameModels, GameServices, API
+  AccountManager  → GameModels, GameServices, API
+  GameSync        → GameServices, GameModels, API
+
+Features (+ TCA, SQLiteData, UI)
+  MessagesFeature   → GameModels, GameServices        (keeps its own MessagesClient)
+  BlueprintsFeature → GameModels, GameServices        (keeps its own BlueprintsClient)
+  DevicesFeature    → GameModels, GameServices, UniverseModels   (Blueprint via GameModels)
+  PrintQueueFeature → GameModels, GameServices, UniverseModels   (Blueprint via GameModels)
+  SidebarFeature    → GameModels, GameServices        (Message via GameModels;
+                                                       ReplicantsClient via GameServices)
+  ...
+App target → everything + GameSync
+```
+
+Key moves and why:
+- **`GameModels` is the missing home.** `Message` and `Blueprint` move here (not into `GameServices`) because they are pure data every layer reads; that single move erases all three feature→feature edges and restores the §2 invariant as a *side effect* of the split, not a separate chore. Features keep their own feature-specific clients (`MessagesClient`, `BlueprintsClient`) — only the tables move.
+- **`ReplicantsClient` is the one genuinely-shared client trapped in a feature** (Sidebar drives it). It moves to `GameServices` beside `DevicesClient`; `ReplicantsFeature` then imports it back — a feature→shared edge, which is allowed.
+- **The layering stays acyclic and gets sharper:** `GameServices → GameModels → API`. `Reconciler` and `CommandClient` stay co-located in `GameServices`, so the cycle-avoidance rationale documented in `Reconciler.swift:6-10` still holds.
+- **The concrete payoff beyond tidiness is incremental build:** today, touching `CommandClient` (highest churn) recompiles everything downstream of `DependencyClients` — i.e. every feature. After the split, read-only features depend on `GameModels` for the data and only pull `GameServices` where they actually dispatch/refresh, so a `CommandClient` edit stops rebuilding the read-only surface. That, plus test isolation, is what makes this more than cosmetic.
+
+Two principles govern the cut (agreed with the design owner, 2026-07-03):
+
+- **`GameModels` is TCA-free.** It carries only `@Table` rows, their mapped value types, and schema→domain mapping — no `@Reducer`, no `@ObservableState`, no TCA dependency at all. **TCA is for features.** Keeping the domain data layer free of it means the models can be read by `GameServices`, `GameSync`, `AccountManager`, and every feature without dragging the app-architecture framework into the foundation, and keeps "data" and "behavior/UI" cleanly separated.
+- **The "services layer" is already two modules, not one.** `GameServices` (the authed clients + command/reconciliation engine) and the *existing* `GameSync` (relay ingestion) together form the services tier over `GameModels`. So the mental model of "a domain-models layer + a services layer" is satisfied by this 2-module split — `GameSync` need not move or change; it simply re-points its `DependencyClients` import at `GameServices`/`GameModels`.
+
+### God-module verdict: gold-plating or not?
+
+**Split #1 (extract `GameModels`) — not gold-plating; do it now.** It is *forced anyway* by the feature→feature fix (the shared tables need a home that isn't a feature), it delivers a real incremental-build win, and it gives both resulting modules a one-sentence charter. Low risk (mostly moving files + `public` already in place + Package.swift edits).
+
+**Split #2 (further separate `GameSession` = `GameClient`/`KeychainClient` out of `GameServices`) — gold-plating today.** Those are two small, stable files; isolating them from the engine buys almost nothing until the engine grows enough that "session" and "engine" churn independently. Keep them together in `GameServices`; revisit only if `GameServices` crosses ~20 files or the two start changing for different reasons.
+
+Net (agreed 2026-07-03): a **2-way split now** — `GameModels` + `GameServices`, joining the existing `GameSync` — not the 3-way sketched in the original §3 remedy. The `GameSession` cut is real but premature; revisit per the trigger above.
+
+## V2.6 Prioritized punch list
+
+1. **Fix the reconciliation clock** — event-time + provenance on the device row (V2.2). The only correctness-critical item.
+2. **Take `print_complete` off the full-fleet walk** — adopt `new_device_code` via one coordinated read (§5.5).
+3. **Extract `GameModels`** and relocate `Message` / `Blueprint` / `ReplicantsClient` — restores "no feature-to-feature edges" and cuts build coupling in one move (V2.5).
+4. **Wire per-channel tier-2 `gapRepair`** (esp. messages) + a bounded completion sweep for silently-settled continuous mining ops.
+5. **Consolidate the six composite views into `Controls.swift`** + add display/micro/tile/hairline tokens (V2.4).
+6. Watch items: `RelayClient` bad-token infinite retry; defer the `GameSession` split; document the secondary-query convention.
+
+Items 1 and 2 are genuine divergences from the prescribed architecture; the rest are refinements.
 
 ---
 

@@ -23,12 +23,13 @@ private let logger = Logger(subsystem: "name.pennig.replicould", category: "Devi
 
 public struct DevicesClient: Sendable {
     /// Read one device's authoritative snapshot (`GET /v1/devices/{code}`),
-    /// stamped with the fetch wall-clock as its synthesized event-time (§4.1).
+    /// stamped with the request-issue time as its synthesized event-time (§4.1),
+    /// so out-of-order responses reconcile by initiation order.
     public var read: @Sendable (_ deviceCode: String) async throws -> Device
 
     /// Cold-load the whole account fleet (`GET /v1/devices`, paged). Each device
-    /// is stamped with the fetch time; callers reconcile them so local provenance
-    /// (`firstSeenAt`) is preserved.
+    /// is stamped with its page's request-issue time; callers reconcile them so
+    /// local provenance (`firstSeenAt`) is preserved.
     public var fetchAll: @Sendable () async throws -> [Device]
 
     /// Read the diversion defense state at a location (`GET /v1/locations/{code}`),
@@ -46,9 +47,15 @@ extension DevicesClient: DependencyKey {
         read: { deviceCode in
             @Dependency(\.gameClient) var gameClient
             @Dependency(\.date) var date
+            // Stamp the event-time at request *issue*, before the round-trip, so
+            // reconciliation orders snapshots by when each read was initiated —
+            // not by when its response happened to land. A read that starts later
+            // reflects same-or-newer server state, so a slow earlier read can no
+            // longer clobber a newer one on arrival (see `Reconciler`'s guard).
+            let issuedAt = date.now
             let output = try await gameClient().getV1DevicesDeviceCode(path: .init(deviceCode: deviceCode))
             let schema = try output.ok.body.json
-            return Device(schema: schema, fetchedAt: date.now)
+            return Device(schema: schema, fetchedAt: issuedAt)
         },
         fetchAll: {
             @Dependency(\.gameClient) var gameClient
@@ -61,10 +68,14 @@ extension DevicesClient: DependencyKey {
             var cursor: Int?
             var pages = 0
             repeat {
+                // Issue-time per page (before the round-trip), matching `read`: a
+                // page's devices reconcile by when the page was requested, so a
+                // slow page can't regress a newer single-device read that landed
+                // in the meantime.
+                let issuedAt = date.now
                 let output = try await client.getV1Devices(query: .init(cursor: cursor, limit: 100))
                 let body = try output.ok.body.json
-                let now = date.now
-                devices.append(contentsOf: (body.devices ?? []).map { Device(schema: $0, fetchedAt: now) })
+                devices.append(contentsOf: (body.devices ?? []).map { Device(schema: $0, fetchedAt: issuedAt) })
                 cursor = body.nextCursor
                 pages += 1
             } while cursor != nil

@@ -439,6 +439,67 @@ private typealias Operation = DependencyClients.Operation
         #expect(op?.status == OperationStatus.active)
     }
 
+    /// The reconciliation guard (§5.3) orders device snapshots by their
+    /// synthesized event-time (`updatedAt` = request-issue time), not by arrival:
+    /// a read that was *issued* earlier must not overwrite a newer one that
+    /// already landed, even though it arrives afterwards. Regression for the
+    /// "slow poll clobbers a fresh event's confirm-read" hazard.
+    @Test func staleIssuedSnapshotDoesNotClobberNewer() async throws {
+        let database = try makeDatabase()
+
+        // The newer read (issued at t=2_000) lands first: device is travelling.
+        var newer = travellingDevice("965AC2C3")
+        newer.updatedAt = Date(timeIntervalSince1970: 2_000)
+        // A slower read that was issued *earlier* (t=1_000) arrives afterwards,
+        // carrying the older "idle" state.
+        var staleButLate = idleDevice("965AC2C3")
+        staleButLate.updatedAt = Date(timeIntervalSince1970: 1_000)
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.uuid = .incrementing
+        } operation: {
+            await Reconciler().ingest(newer)
+            await Reconciler().ingest(staleButLate)
+        }
+
+        let stored = try await database.read { db in
+            try Device.where { $0.deviceCode.eq("965AC2C3") }.fetchOne(db)
+        }
+        // The stale-but-late read was dropped; the newer snapshot stands.
+        #expect(stored?.status == "travelling")
+        #expect(stored?.updatedAt == Date(timeIntervalSince1970: 2_000))
+    }
+
+    /// A newer read (later issue-time) overwrites the stored snapshot, and the
+    /// local-only `firstSeenAt` provenance survives the upsert.
+    @Test func newerSnapshotOverwritesAndPreservesFirstSeen() async throws {
+        let database = try makeDatabase()
+
+        var first = travellingDevice("965AC2C3")
+        first.updatedAt = Date(timeIntervalSince1970: 1_000)
+        first.firstSeenAt = Date(timeIntervalSince1970: 1_000)
+
+        var later = idleDevice("965AC2C3")
+        later.updatedAt = Date(timeIntervalSince1970: 3_000)
+        later.firstSeenAt = Date(timeIntervalSince1970: 3_000)  // ignored on upsert
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.uuid = .incrementing
+        } operation: {
+            await Reconciler().ingest(first)
+            await Reconciler().ingest(later)
+        }
+
+        let stored = try await database.read { db in
+            try Device.where { $0.deviceCode.eq("965AC2C3") }.fetchOne(db)
+        }
+        #expect(stored?.status == "idle")
+        #expect(stored?.updatedAt == Date(timeIntervalSince1970: 3_000))
+        #expect(stored?.firstSeenAt == Date(timeIntervalSince1970: 1_000))  // preserved
+    }
+
     /// A settled (idle) device carries no activity block, so nothing is adopted.
     @Test func settledDeviceAdoptsNothing() async throws {
         let database = try makeDatabase()

@@ -11,26 +11,19 @@
 
 import ComposableArchitecture
 import DependencyClients
-import SQLiteData
 import SwiftUI
 import UI
 
 public struct PrintQueueListView: View {
     @Bindable var store: StoreOf<PrintQueueFeature>
-    @FetchAll(Device.order { $0.deviceType }) private var devices
 
     public init(store: StoreOf<PrintQueueFeature>) {
         self.store = store
     }
 
-    /// The printers to list: those actively printing or with queued jobs.
-    private var printers: [Device] {
-        devices.filter(\.isPrintingOrQueued)
-    }
-
     public var body: some View {
         List(selection: $store.selectedDeviceCode) {
-            ForEach(printers) { device in
+            ForEach(store.printers) { device in
                 PrintQueueRow(device: device)
                     .tag(device.deviceCode)
                     .listRowSeparator(.hidden)
@@ -39,7 +32,7 @@ public struct PrintQueueListView: View {
         .listStyle(.inset)
         .scrollContentBackground(.hidden)
         .overlay {
-            if printers.isEmpty {
+            if store.printers.isEmpty {
                 if store.isLoading {
                     ProgressView()
                 } else {
@@ -59,8 +52,8 @@ public struct PrintQueueListView: View {
         }
         .toolbar {
             ToolbarItem {
-                if !printers.isEmpty {
-                    Text(printers.count == 1 ? "1 printer" : "\(printers.count) printers")
+                if !store.printers.isEmpty {
+                    Text(store.printers.count == 1 ? "1 printer" : "\(store.printers.count) printers")
                         .font(.rcCaption)
                         .foregroundStyle(.rcTextTertiary)
                 }

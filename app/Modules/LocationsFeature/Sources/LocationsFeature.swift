@@ -25,8 +25,30 @@ import UniverseModels
 public struct LocationsFeature {
     @ObservableState
     public struct State: Equatable {
+        /// The built disclosure forest, observed straight from SQLite in state via
+        /// a single `@Fetch` request that runs every query (census stars, hydrated
+        /// system blobs, holdings footprints, the probe's position) *and* assembles
+        /// the tree off the main actor. It re-runs automatically when any of those
+        /// tables change, and the reducer reloads it when the search/sort/filter
+        /// selections change — so the list always matches state with no view-side
+        /// query and no empty-state flash. `@ObservationStateIgnored` because
+        /// `@Fetch` drives its own observation.
+        @ObservationStateIgnored
+        @Fetch(LocationForest(search: "", sort: .distance, filter: .all)) public var forest = LocationForest.Value()
+        /// The hydrated system blobs, observed so the inspector resolves the
+        /// selected system synchronously (no view-local `@FetchOne` that resets to
+        /// nil — and reverts to "Uncharted" — when a hydration write re-emits).
+        @ObservationStateIgnored
+        @FetchAll(SystemDetail.all) public var systemDetails: [SystemDetail]
+        /// The roster, for the probe's current star (marks the "current system").
+        @ObservationStateIgnored
+        @FetchAll(Replicant.all) public var roster: [Replicant]
+
         /// Selected node designation (system or body).
         public var selection: String?
+        /// Sort / filter selections. Kept in state so they survive tab switches and
+        /// drive the `@Fetch` request via `forestRequest`; changes flow through
+        /// `BindingReducer`, which the reducer uses to reload the forest.
         public var sort: LocationSort
         public var filter: LocationFilter
         public var searchText: String
@@ -50,6 +72,33 @@ public struct LocationsFeature {
             self.hydrating = []
             self.isScanning = false
             self.errorMessage = nil
+        }
+
+        /// The forest query for the current selections — reloaded whenever search /
+        /// sort / filter change.
+        var forestRequest: LocationForest {
+            LocationForest(search: searchText, sort: sort, filter: filter)
+        }
+
+        /// The probe's current star (the roster's first replicant), to mark the
+        /// inspected system as the current one.
+        public var currentStar: String? { roster.first?.currentStar }
+
+        /// The system designation for the current selection (a system or one of its
+        /// bodies).
+        public var selectedSystemID: String? {
+            selection.map { String($0.split(separator: "-").first ?? "") }
+        }
+
+        /// The hydrated system for the current selection, decoded from its blob —
+        /// derived synchronously so the inspector never blanks on a re-emit. Nil
+        /// until the system is hydrated.
+        public var selectedSystem: StarSystem? {
+            guard
+                let id = selectedSystemID,
+                let row = systemDetails.first(where: { $0.designation == id })
+            else { return nil }
+            return try? row.system()
         }
     }
 
@@ -83,23 +132,39 @@ public struct LocationsFeature {
                 state.hydrating.insert(system)
                 return .send(.hydrate(system: system, body: id == system ? nil : id))
 
+            case .binding(\.searchText), .binding(\.sort), .binding(\.filter):
+                // Reload the forest for the new selections. `.load` keeps the prior
+                // tree until the new one is built (off-main), so the list updates in
+                // place with no empty flash.
+                return .run { [fetch = state.$forest, request = state.forestRequest] _ in
+                    _ = try? await fetch.load(request)
+                }
+
             case .binding:
                 return .none
 
             case .task:
-                // Refresh the footprint (holdings) overlay in the background.
+                // Load the forest for the current selections (in case they differ
+                // from the @Fetch's seed) and refresh the footprint overlay in the
+                // background. The @Fetch re-runs itself when the tables change, so
+                // the footprint write flows back without an explicit reload.
                 let database = self.database
                 let locationsClient = self.locationsClient
                 let now = self.now
-                return .run { _ in
-                    let footprint = try await locationsClient.footprint()
-                    let rows = footprint.map { LocationFootprint(location: $0.key, counts: $0.value, fetchedAt: now) }
-                    try await database.write { db in
-                        try LocationFootprint.upsert { rows }.execute(db)
+                return .merge(
+                    .run { [fetch = state.$forest, request = state.forestRequest] _ in
+                        _ = try? await fetch.load(request)
+                    },
+                    .run { _ in
+                        let footprint = try await locationsClient.footprint()
+                        let rows = footprint.map { LocationFootprint(location: $0.key, counts: $0.value, fetchedAt: now) }
+                        try await database.write { db in
+                            try LocationFootprint.upsert { rows }.execute(db)
+                        }
+                    } catch: { error, send in
+                        await send(.loadFailed(error.localizedDescription))
                     }
-                } catch: { error, send in
-                    await send(.loadFailed(error.localizedDescription))
-                }
+                )
 
             case let .hydrate(system, body):
                 let database = self.database
@@ -181,5 +246,64 @@ public struct LocationsFeature {
                 return .none
             }
         }
+    }
+}
+
+// MARK: - Forest query
+
+/// The one query behind the catalog list: it reads every table the disclosure
+/// tree depends on (census `Star`, hydrated `SystemDetail` blobs, holdings
+/// `LocationFootprint`, and the probe's position via the roster) and assembles
+/// the filtered, sorted forest — all inside `fetch`, which SQLiteData runs off
+/// the main actor. `@Fetch` re-runs it whenever any of those tables change; the
+/// reducer reloads it (new instance) when the search/sort/filter change.
+public struct LocationForest: FetchKeyRequest {
+    public var search: String
+    public var sort: LocationSort
+    public var filter: LocationFilter
+
+    public struct Value: Equatable, Sendable {
+        public var nodes: [LocationNode] = []
+        public init(nodes: [LocationNode] = []) { self.nodes = nodes }
+    }
+
+    public init(search: String, sort: LocationSort, filter: LocationFilter) {
+        self.search = search
+        self.sort = sort
+        self.filter = filter
+    }
+
+    public func fetch(_ db: Database) throws -> Value {
+        // Empty search → `contains("")` matches every system.
+        let stars = try Star
+            .where { $0.designation.contains(search) }
+            .order { $0.designation }
+            .fetchAll(db)
+        let detailRows = try SystemDetail.all.fetchAll(db)
+        let footprintRows = try LocationFootprint.all.fetchAll(db)
+        // The probe's position (for distance sort) — the first roster replicant's
+        // current star, matching the prior behavior.
+        let currentStar = try Replicant.all.fetchAll(db).first?.currentStar
+        let myStar = try currentStar.flatMap { code in
+            try Star.where { $0.designation.eq(code) }.fetchOne(db)
+        }
+
+        let details = Dictionary(
+            detailRows.compactMap { row in (try? row.system()).map { (row.designation, $0) } },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let footprints = Dictionary(
+            footprintRows.map { ($0.location, $0.counts) },
+            uniquingKeysWith: { first, _ in first }
+        )
+
+        return Value(nodes: LocationTree.forest(
+            stars: stars,
+            details: details,
+            footprints: footprints,
+            myPosition: myStar?.position,
+            filter: filter,
+            sort: sort
+        ))
     }
 }

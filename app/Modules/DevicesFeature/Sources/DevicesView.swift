@@ -15,7 +15,6 @@ import UI
 
 public struct DevicesListView: View {
     @Bindable var store: StoreOf<DevicesFeature>
-    @FetchAll(Device.order { $0.deviceType }) private var devices
 
     public init(store: StoreOf<DevicesFeature>) {
         self.store = store
@@ -23,7 +22,7 @@ public struct DevicesListView: View {
 
     public var body: some View {
         List(selection: $store.selectedDeviceCode) {
-            ForEach(devices) { device in
+            ForEach(store.devices) { device in
                 DeviceRow(device: device)
                     .tag(device.deviceCode)
                     .listRowSeparator(.hidden)
@@ -32,7 +31,7 @@ public struct DevicesListView: View {
         .listStyle(.inset)
         .scrollContentBackground(.hidden)
         .overlay {
-            if devices.isEmpty {
+            if store.devices.isEmpty {
                 if store.isLoading {
                     ProgressView()
                 } else {
@@ -52,8 +51,8 @@ public struct DevicesListView: View {
         }
         .toolbar {
             ToolbarItem {
-                if !devices.isEmpty {
-                    Text("\(devices.count) devices")
+                if !store.devices.isEmpty {
+                    Text("\(store.devices.count) devices")
                         .font(.rcCaption)
                         .foregroundStyle(.rcTextTertiary)
                 }

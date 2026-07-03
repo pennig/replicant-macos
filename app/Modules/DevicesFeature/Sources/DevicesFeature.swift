@@ -15,6 +15,7 @@ import DependencyClients
 import Foundation
 import OSLog
 import SQLiteData
+import UniverseModels
 
 private let logger = Logger(subsystem: "name.pennig.replicould.feature", category: "Devices")
 
@@ -22,6 +23,12 @@ private let logger = Logger(subsystem: "name.pennig.replicould.feature", categor
 public struct DevicesFeature {
     @ObservableState
     public struct State: Equatable {
+        /// The fleet, ordered by type — observed straight from SQLite in state so
+        /// the list view is a pure renderer. `@ObservationStateIgnored` because
+        /// `@FetchAll` drives its own observation.
+        @ObservationStateIgnored
+        @FetchAll(Device.order { $0.deviceType }) public var devices: [Device]
+
         /// The inspected device (drives the detail pane).
         public var selectedDeviceCode: String?
         public var isLoading: Bool
@@ -33,6 +40,10 @@ public struct DevicesFeature {
         /// A pending `travel` itinerary, shown as a confirmation sheet before the
         /// command is actually dispatched. Non-nil ⇒ the sheet is presented.
         public var travelPreview: TravelPreview?
+        /// A pending `enqueue_print` confirmation: the chosen blueprint's resource
+        /// cost checked against the current location's live inventory. Non-nil ⇒
+        /// the sheet is presented.
+        public var printPreview: PrintPreview?
         /// The diversion defense state for the selected device, when it's
         /// `diverting`. A diverting device carries no activity block of its own, so
         /// its active-task readout is fetched from the object it's attached to (see
@@ -45,7 +56,17 @@ public struct DevicesFeature {
             self.errorMessage = nil
             self.commandError = nil
             self.travelPreview = nil
+            self.printPreview = nil
             self.diversion = nil
+        }
+
+        /// The inspected device, resolved synchronously from the observed fleet.
+        /// Derived (not a separate `@FetchOne`) so the inspector can't revert to
+        /// "No Device Selected" when the store re-emits after a command writes the
+        /// device row. Nil only when nothing is selected or the code is unknown.
+        public var selectedDevice: Device? {
+            guard let code = selectedDeviceCode else { return nil }
+            return devices.first { $0.deviceCode == code }
         }
     }
 
@@ -89,6 +110,19 @@ public struct DevicesFeature {
         case travelPreviewResponse(TravelPreviewOutcome)
         case travelPreviewConfirmed
         case travelPreviewDismissed
+        /// Print command preview flow: refresh the location inventory and check
+        /// the blueprint's cost against it, then either confirm (enqueue for real)
+        /// or dismiss the sheet.
+        case printPreviewRequested(
+            deviceCode: String,
+            deviceType: String,
+            location: String?,
+            locationName: String?,
+            required: [PrintResourceLine]
+        )
+        case printPreviewResponse(PrintPreview.Phase)
+        case printPreviewConfirmed
+        case printPreviewDismissed
         /// The inspector is viewing a device whose activity refreshes in place
         /// (mining cycles, a diversion's slow progress). Non-nil starts a
         /// while-viewing refresh loop for that device; nil (deselect / settled)
@@ -102,7 +136,9 @@ public struct DevicesFeature {
 
     @Dependency(\.defaultDatabase) var database
     @Dependency(\.devicesClient) var devicesClient
+    @Dependency(\.deviceRefresher) var deviceRefresher
     @Dependency(\.commandClient) var commandClient
+    @Dependency(\.locationsClient) var locationsClient
     @Dependency(\.continuousClock) var clock
     @Dependency(\.date) var date
 
@@ -217,29 +253,65 @@ public struct DevicesFeature {
                 state.travelPreview = nil
                 return .none
 
+            case let .printPreviewRequested(deviceCode, deviceType, location, locationName, required):
+                state.printPreview = PrintPreview(deviceCode: deviceCode, deviceType: deviceType)
+                let locationsClient = self.locationsClient
+                logger.info("print preview \(deviceCode, privacy: .public) ⚒ \(deviceType, privacy: .public) requested")
+                return .run { send in
+                    let requirements = await locationsClient.printRequirements(
+                        deviceType: deviceType,
+                        location: location,
+                        locationName: locationName,
+                        required: required
+                    )
+                    await send(.printPreviewResponse(.loaded(requirements)))
+                }
+
+            case let .printPreviewResponse(phase):
+                // Ignore a late response if the user already dismissed the sheet.
+                guard state.printPreview != nil else { return .none }
+                state.printPreview?.phase = phase
+                return .none
+
+            case .printPreviewConfirmed:
+                guard let preview = state.printPreview else { return .none }
+                state.printPreview = nil
+                return .send(.commandConfirmed(
+                    kind: .print,
+                    deviceCode: preview.deviceCode,
+                    params: CommandParams(deviceType: preview.deviceType)
+                ))
+
+            case .printPreviewDismissed:
+                state.printPreview = nil
+                return .none
+
             case let .viewingChanged(deviceCode):
                 // Any prior device's overlay is stale the moment the selection
                 // changes; clear it before the new loop repopulates it.
                 state.diversion = nil
                 guard let deviceCode else { return .cancel(id: CancelID.refresh) }
+                let deviceRefresher = self.deviceRefresher
                 let devicesClient = self.devicesClient
                 let clock = self.clock
                 let date = self.date
                 return .run { send in
-                    // Refresh the viewed device in place: re-read its snapshot,
-                    // reconcile it into the tables the inspector observes, and — for
-                    // a diverting propulsor — refresh the object's defense readout.
-                    // The cadence tracks the mining cycle (or a slow tick for a
-                    // diversion); a settled device ends the loop.
-                    let reconciler = Reconciler()
+                    // Refresh the viewed device in place through the shared
+                    // coordinator, so this deliberate poll coalesces with any
+                    // relay-/deadline-driven read instead of firing a duplicate
+                    // (the coordinator reconciles the snapshot into the tables the
+                    // inspector observes). `.high` bypasses the coordinator's TTL —
+                    // this loop *is* the intended poller — while still joining an
+                    // in-flight read. A diverting propulsor also refreshes the
+                    // object's defense readout. The cadence tracks the mining cycle
+                    // (or a slow tick for a diversion); a settled device ends the loop.
                     while !Task.isCancelled {
-                        guard let device = try? await devicesClient.read(deviceCode) else {
-                            // Transient read failure — back off and retry rather than
-                            // abandoning the loop.
+                        guard let device = await deviceRefresher.refresh(deviceCode, .high) else {
+                            // Suppressed / failed read — back off and retry rather
+                            // than abandoning the loop.
                             try await clock.sleep(for: .seconds(15))
                             continue
                         }
-                        await reconciler.ingest(device)
                         if device.statusBase == "diverting", let location = device.location {
                             await send(.diversionResponse(try? await devicesClient.diversion(location)))
                         }

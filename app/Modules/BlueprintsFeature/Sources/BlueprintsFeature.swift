@@ -20,10 +20,17 @@ private let logger = Logger(subsystem: "name.pennig.replicould.feature", categor
 public struct BlueprintsFeature {
     @ObservableState
     public struct State: Equatable {
+        /// The catalog, observed straight from SQLite — a dynamic query the reducer
+        /// reloads from `searchText` (filtering in SQL). Seeded with the full
+        /// ordered set so the first render is correct with no async step, and
+        /// `@ObservationStateIgnored` because `@FetchAll` drives its own observation.
+        @ObservationStateIgnored
+        @FetchAll(Blueprint.order { $0.deviceType }, animation: .default) public var blueprints: [Blueprint]
+
         /// The inspected blueprint (drives the detail pane).
         public var selectedDeviceType: String?
-        /// The list's search query; the actual filtering is a `@FetchAll` query
-        /// in the view, not stored here.
+        /// The list's search query. Held in state (so it survives tab switches) and
+        /// drives the SQL query via `.searchTextChanged`.
         public var searchText: String
         public var isLoading: Bool
         /// Cold-load failure, shown as a banner over the list.
@@ -56,6 +63,24 @@ public struct BlueprintsFeature {
         BindingReducer()
         Reduce { state, action in
             switch action {
+            case .binding(\.searchText):
+                // Reload the SQL query in place whenever the search text changes.
+                // `.load` keeps the prior rows until the new results arrive, so the
+                // list updates atomically with no empty flash.
+                return .run { [reader = state.$blueprints, search = state.searchText] _ in
+                    try await reader.load(
+                        Blueprint
+                            .where {
+                                if !search.isEmpty {
+                                    $0.deviceType.contains(search)
+                                        || $0.shortDescription.contains(search)
+                                }
+                            }
+                            .order { $0.deviceType },
+                        animation: .default
+                    )
+                } catch: { _, _ in }
+
             case .binding:
                 return .none
 

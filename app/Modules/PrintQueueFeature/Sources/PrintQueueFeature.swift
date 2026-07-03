@@ -17,6 +17,7 @@ import DependencyClients
 import Foundation
 import OSLog
 import SQLiteData
+import UniverseModels
 
 private let logger = Logger(subsystem: "name.pennig.replicould.feature", category: "PrintQueue")
 
@@ -24,6 +25,12 @@ private let logger = Logger(subsystem: "name.pennig.replicould.feature", categor
 public struct PrintQueueFeature {
     @ObservableState
     public struct State: Equatable {
+        /// The whole fleet, ordered — observed straight from SQLite in state.
+        /// `@ObservationStateIgnored` because `@FetchAll` drives its own
+        /// observation; the printer list is derived from it in `printers`.
+        @ObservationStateIgnored
+        @FetchAll(Device.order { $0.deviceType }) public var fleet: [Device]
+
         /// The inspected printer (drives the detail pane).
         public var selectedDeviceCode: String?
         public var isLoading: Bool
@@ -32,12 +39,34 @@ public struct PrintQueueFeature {
         /// A rejected/failed command, shown as an alert in the inspector where the
         /// user fired it.
         public var commandError: String?
+        /// A pending `enqueue_print` confirmation: the chosen blueprint's resource
+        /// cost checked against the current location's live inventory. Non-nil ⇒
+        /// the sheet is presented.
+        public var printPreview: PrintPreview?
 
         public init(selectedDeviceCode: String? = nil) {
             self.selectedDeviceCode = selectedDeviceCode
             self.isLoading = false
             self.errorMessage = nil
             self.commandError = nil
+            self.printPreview = nil
+        }
+
+        /// The printers to list: those actively printing or with queued jobs. A
+        /// synchronous derivation of the fetched fleet (the `isPrintingOrQueued`
+        /// gate reads the device's JSON detail, so it can't be a SQL predicate).
+        public var printers: [Device] {
+            fleet.filter(\.isPrintingOrQueued)
+        }
+
+        /// The inspected printer, resolved synchronously from the observed fleet.
+        /// Derived (not a separate `@FetchOne`) so the inspector doesn't revert to
+        /// its empty state when a command writes the device row and the store
+        /// re-emits. Reads the full fleet (not just `printers`) so it persists even
+        /// if the device momentarily leaves the printing set.
+        public var selectedDevice: Device? {
+            guard let code = selectedDeviceCode else { return nil }
+            return fleet.first { $0.deviceCode == code }
         }
     }
 
@@ -54,6 +83,19 @@ public struct PrintQueueFeature {
         case commandConfirmed(kind: OperationKind, deviceCode: String, params: CommandParams)
         case commandFinished(CommandOutcome)
         case dismissCommandError
+        /// Print command preview flow: refresh the location inventory and check
+        /// the blueprint's cost against it, then either confirm (enqueue for real)
+        /// or dismiss the sheet.
+        case printPreviewRequested(
+            deviceCode: String,
+            deviceType: String,
+            location: String?,
+            locationName: String?,
+            required: [PrintResourceLine]
+        )
+        case printPreviewResponse(PrintPreview.Phase)
+        case printPreviewConfirmed
+        case printPreviewDismissed
     }
 
     public init() {}
@@ -61,6 +103,7 @@ public struct PrintQueueFeature {
     @Dependency(\.defaultDatabase) var database
     @Dependency(\.devicesClient) var devicesClient
     @Dependency(\.commandClient) var commandClient
+    @Dependency(\.locationsClient) var locationsClient
 
     public var body: some ReducerOf<Self> {
         BindingReducer()
@@ -132,6 +175,38 @@ public struct PrintQueueFeature {
 
             case .dismissCommandError:
                 state.commandError = nil
+                return .none
+
+            case let .printPreviewRequested(deviceCode, deviceType, location, locationName, required):
+                state.printPreview = PrintPreview(deviceCode: deviceCode, deviceType: deviceType)
+                let locationsClient = self.locationsClient
+                logger.info("print preview \(deviceCode, privacy: .public) ⚒ \(deviceType, privacy: .public) requested")
+                return .run { send in
+                    let requirements = await locationsClient.printRequirements(
+                        deviceType: deviceType,
+                        location: location,
+                        locationName: locationName,
+                        required: required
+                    )
+                    await send(.printPreviewResponse(.loaded(requirements)))
+                }
+
+            case let .printPreviewResponse(phase):
+                guard state.printPreview != nil else { return .none }
+                state.printPreview?.phase = phase
+                return .none
+
+            case .printPreviewConfirmed:
+                guard let preview = state.printPreview else { return .none }
+                state.printPreview = nil
+                return .send(.commandConfirmed(
+                    kind: .print,
+                    deviceCode: preview.deviceCode,
+                    params: CommandParams(deviceType: preview.deviceType)
+                ))
+
+            case .printPreviewDismissed:
+                state.printPreview = nil
                 return .none
             }
         }

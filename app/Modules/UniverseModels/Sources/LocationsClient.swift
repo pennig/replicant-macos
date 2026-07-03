@@ -61,6 +61,52 @@ public struct LocationsClient: Sendable {
     }
 }
 
+extension BodyDetail {
+    /// The stored resources at this body (planets, moons, belts carry inventory;
+    /// a special site carries none).
+    public var inventory: [InventoryItem] {
+        switch self {
+        case .planet(let p): return p.inventory
+        case .moon(let m):   return m.inventory
+        case .belt(let b):   return b.inventory
+        case .special:       return []
+        }
+    }
+}
+
+extension LocationsClient {
+    /// Fresh inventory at a location, fetched through `body(_:)`. Used by the
+    /// print confirmation to check a blueprint's cost against what's on hand.
+    public func inventory(at designation: String) async throws -> [InventoryItem] {
+        try await body(designation).inventory
+    }
+
+    /// Resolve a print's resource requirements by refreshing the location's live
+    /// inventory and filling in what's on hand for each required resource. A
+    /// location we can't read (unexplored, offline, or no location at all) leaves
+    /// the stock unknown rather than failing the preview.
+    public func printRequirements(
+        deviceType: String,
+        location: String?,
+        locationName: String?,
+        required: [PrintResourceLine]
+    ) async -> PrintRequirements {
+        var available: [String: Double]?
+        if let location, let items = try? await inventory(at: location) {
+            available = Dictionary(
+                items.map { ($0.resourceType.lowercased(), $0.quantity) },
+                uniquingKeysWith: +
+            )
+        }
+        return PrintRequirements.resolve(
+            deviceType: deviceType,
+            locationName: locationName,
+            required: required,
+            available: available
+        )
+    }
+}
+
 extension LocationsClient {
     /// Scan the replicant's current system and persist the result, overlaying it
     /// onto any already-hydrated `SystemDetail` (preserving per-body scan detail).

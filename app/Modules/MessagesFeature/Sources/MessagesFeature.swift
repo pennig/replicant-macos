@@ -17,6 +17,15 @@ import SQLiteData
 public struct MessagesFeature {
     @ObservableState
     public struct State: Equatable {
+        /// The inbox, newest first — observed straight from SQLite in state so the
+        /// view is a pure renderer. `@ObservationStateIgnored` because `@FetchAll`
+        /// drives its own observation.
+        @ObservationStateIgnored
+        @FetchAll(Message.order { $0.createdAt.desc() }) public var messages: [Message]
+        /// Live unread count, observed from SQLite (drives the toolbar + actions).
+        @ObservationStateIgnored
+        @FetchOne(Message.where { !$0.isRead }.count()) public var unreadCount = 0
+
         public var selectedMessageID: Message.ID?
         public var isLoading: Bool
         public var errorMessage: String?

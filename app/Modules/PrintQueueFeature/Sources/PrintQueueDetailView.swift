@@ -10,6 +10,7 @@
 //  `waiting_for` blocks, so a relay update re-renders the pane automatically.
 //
 
+import BlueprintsFeature
 import ComposableArchitecture
 import DependencyClients
 import SQLiteData
@@ -18,10 +19,10 @@ import UI
 
 public struct PrintQueueDetailView: View {
     let store: StoreOf<PrintQueueFeature>
-    /// Loaded lazily by the selection `.task(id:)` below so the query tracks the
-    /// selected device code rather than fetching the whole fleet to filter it.
-    @FetchOne(Device.none) private var device: Device?
+    /// The unlocked blueprint catalog, backing the enqueue dropdown.
+    @FetchAll(Blueprint.order { $0.deviceType }) private var blueprints
 
+    /// The selected blueprint's `device_type` for the enqueue dropdown.
     @State private var enqueueType: String = ""
 
     public init(store: StoreOf<PrintQueueFeature>) {
@@ -30,7 +31,7 @@ public struct PrintQueueDetailView: View {
 
     public var body: some View {
         Group {
-            if let device {
+            if let device = store.selectedDevice {
                 ScrollView {
                     VStack(alignment: .leading, spacing: Space.xl) {
                         header(device)
@@ -48,6 +49,13 @@ public struct PrintQueueDetailView: View {
                 } message: { message in
                     Text(message)
                 }
+                .sheet(isPresented: printPreviewBinding) {
+                    PrintPlanSheet(
+                        preview: store.printPreview,
+                        onConfirm: { store.send(.printPreviewConfirmed) },
+                        onDismiss: { store.send(.printPreviewDismissed) }
+                    )
+                }
             } else {
                 ContentUnavailableView(
                     "No Printer Selected",
@@ -56,21 +64,23 @@ public struct PrintQueueDetailView: View {
                 )
             }
         }
-        // Reload the single-row query whenever the selected device changes.
-        .task(id: store.selectedDeviceCode) {
-            _ = try? await $device.load(
-                Device.where { $0.deviceCode.eq(store.selectedDeviceCode ?? "") },
-                animation: .default
-            )
+        // Keep the enqueue selection valid as the catalog loads.
+        .onChange(of: blueprints.map(\.deviceType)) { _, types in
+            if !types.contains(enqueueType) { enqueueType = types.first ?? "" }
         }
-        // Reset the enqueue field when switching printers.
-        .onChange(of: store.selectedDeviceCode) { _, _ in enqueueType = "" }
     }
 
     private var commandErrorBinding: Binding<Bool> {
         Binding(
             get: { store.commandError != nil },
             set: { if !$0 { store.send(.dismissCommandError) } }
+        )
+    }
+
+    private var printPreviewBinding: Binding<Bool> {
+        Binding(
+            get: { store.printPreview != nil },
+            set: { if !$0 { store.send(.printPreviewDismissed) } }
         )
     }
 
@@ -291,25 +301,51 @@ public struct PrintQueueDetailView: View {
             Text("ENQUEUE PRINT")
                 .font(.rcSectionLabel).kerning(1)
                 .foregroundStyle(.rcTextTertiary)
-            RCField("Device type", text: $enqueueType, placeholder: "ftl_beacon", mono: true)
-            HStack(spacing: Space.s) {
-                Spacer()
-                Button("Enqueue") {
-                    let type = enqueueType.trimmingCharacters(in: .whitespaces)
-                    store.send(.commandConfirmed(
-                        kind: .print,
-                        deviceCode: device.deviceCode,
-                        params: CommandParams(deviceType: type)
-                    ))
-                    enqueueType = ""
+            if blueprints.isEmpty {
+                Text("No blueprints unlocked yet.")
+                    .font(.rcCaption)
+                    .foregroundStyle(.rcTextTertiary)
+            } else {
+                HStack(spacing: Space.s) {
+                    RCValueSelect(
+                        "Blueprint",
+                        options: blueprints.map {
+                            (label: PrintQueuePresentation.displayName($0.deviceType), value: $0.deviceType)
+                        },
+                        selection: $enqueueType
+                    )
+                    Spacer(minLength: 0)
+                    Button("Review Cost…") {
+                        store.send(.printPreviewRequested(
+                            deviceCode: device.deviceCode,
+                            deviceType: enqueueType,
+                            location: device.location,
+                            locationName: device.locationName,
+                            required: requiredLines(for: enqueueType)
+                        ))
+                    }
+                    .buttonStyle(RCButtonStyle(.primary))
+                    .disabled(enqueueType.isEmpty)
                 }
-                .buttonStyle(RCButtonStyle(.primary))
-                .disabled(enqueueType.trimmingCharacters(in: .whitespaces).isEmpty)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(Space.m)
         .background(cardBackground)
+    }
+
+    /// The resource cost of a blueprint as confirmation lines (stock filled in
+    /// later from the location's live inventory). Empty when the blueprint is
+    /// unknown or lists no cost.
+    private func requiredLines(for deviceType: String) -> [PrintResourceLine] {
+        guard let blueprint = blueprints.first(where: { $0.deviceType == deviceType }) else { return [] }
+        return blueprint.resources.lineItems.map { item in
+            PrintResourceLine(
+                resource: item.label.lowercased(),
+                label: item.label,
+                required: Double(item.amount)
+            )
+        }
     }
 
     // MARK: Shared chrome

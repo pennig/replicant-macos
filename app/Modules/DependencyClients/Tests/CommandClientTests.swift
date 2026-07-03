@@ -186,7 +186,7 @@ private typealias Operation = DependencyClients.Operation
             $0.defaultDatabase = database
             $0.date = .constant(Date(timeIntervalSince1970: 1_000))
             $0.uuid = .incrementing
-            $0.gameClient = stubGameClient { _ in jsonResponse(200, #"{"star":{"designation":"ATIANFU"}}"#) }
+            $0.gameClient = stubGameClient { _ in jsonResponse(200, #"{"star":"ATIANFU"}"#) }
             $0.devicesClient.read = { code in
                 readCount.withValue { $0 += 1 }
                 return makeDevice(code: code, status: "idle")

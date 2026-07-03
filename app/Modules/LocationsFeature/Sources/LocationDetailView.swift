@@ -17,28 +17,18 @@ import UniverseModels
 
 public struct LocationDetailView: View {
     let store: StoreOf<LocationsFeature>
-    @FetchOne(SystemDetail.none) private var systemDetail: SystemDetail?
-    @FetchAll(Replicant.all) private var replicants
 
     public init(store: StoreOf<LocationsFeature>) {
         self.store = store
     }
 
-    private var currentStar: String? { replicants.first?.currentStar }
-
-    private var systemID: String? {
-        store.selection.map { String($0.split(separator: "-").first ?? "") }
-    }
-
-    private var system: StarSystem? { try? systemDetail?.system() }
-
     public var body: some View {
         Group {
-            if let id = store.selection, let system {
+            if let id = store.selection, let system = store.selectedSystem {
                 if id == system.designation {
                     SystemInspector(
                         system: system,
-                        isCurrentSystem: system.designation == currentStar,
+                        isCurrentSystem: system.designation == store.currentStar,
                         isScanning: store.isScanning,
                         onScan: { store.send(.scanRequested) }
                     )
@@ -61,17 +51,11 @@ public struct LocationDetailView: View {
                 )
             }
         }
-        .task(id: systemID) {
-            guard let systemID else { return }
-            _ = await withErrorReporting {
-                try await $systemDetail.load(SystemDetail.where { $0.designation.eq(systemID) })
-            }
-        }
     }
 
     @ViewBuilder
     private var hydratingOrEmpty: some View {
-        if let id = systemID, store.hydrating.contains(id) {
+        if let id = store.selectedSystemID, store.hydrating.contains(id) {
             ProgressView("Scanning \(id)…").controlSize(.small)
         } else {
             ContentUnavailableView(

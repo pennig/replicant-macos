@@ -52,6 +52,10 @@ public struct ReplicantsFeature {
         /// The owned roster, to tag which directory entries are the account's own.
         @ObservationStateIgnored
         @FetchAll(Replicant.all) public var roster: [Replicant]
+        /// The local fleet, used to resolve a replicant's host device to its real
+        /// type/glyph in the inspector.
+        @ObservationStateIgnored
+        @FetchAll(Device.all) public var devices: [Device]
 
         /// The inspected replicant (drives the detail pane).
         public var selectedReplicantCode: String?
@@ -72,6 +76,24 @@ public struct ReplicantsFeature {
             self.isLoading = false
             self.errorMessage = nil
             self.loadingDetailCode = nil
+        }
+
+        /// The inspected replicant, resolved synchronously from the observed
+        /// directory. Derived (not a separate fetch) so it can't reset to nil when
+        /// the store re-emits after a details write — the flash-then-empty the
+        /// inspector otherwise showed. Nil only when nothing is selected or the
+        /// selected code genuinely isn't known.
+        public var selectedReplicant: KnownReplicant? {
+            guard let code = selectedReplicantCode else { return nil }
+            return directory.first { $0.replicantCode == code }
+        }
+
+        /// The selected replicant's host device, resolved from the local fleet —
+        /// nil until we hold that device (the reducer fetches it on demand). Also a
+        /// synchronous derivation, for the same reason as `selectedReplicant`.
+        public var selectedHostDevice: Device? {
+            guard let hostCode = selectedReplicant?.hostedDeviceCode else { return nil }
+            return devices.first { $0.deviceCode == hostCode }
         }
 
         /// The directory grouped into the account's own replicants, other players,

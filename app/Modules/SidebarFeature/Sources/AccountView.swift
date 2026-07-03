@@ -1,18 +1,17 @@
 //
 //  AccountView.swift
-//  Replicant
+//  Replicould — Sidebar feature
 //
-//  Account information, presented as a sheet from the main window. It reads the
-//  signed-in session's account + API key from `MainFeature` and offers logout.
+//  Account information, presented as a sheet from the sidebar footer. It reads
+//  the signed-in session's account + API key from `SidebarFeature` and offers
+//  logout (which bubbles up to the app root to tear the session down).
 //
 
 import ComposableArchitecture
-import DependencyClients
-import SQLiteData
 import SwiftUI
 
 struct AccountView: View {
-    let store: StoreOf<MainFeature>
+    let store: StoreOf<SidebarFeature>
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -48,19 +47,3 @@ struct AccountView: View {
         .frame(minWidth: 380, minHeight: 360)
     }
 }
-
-#Preview {
-    let _ = prepareDependencies {
-        let database = try! SQLiteData.defaultDatabase()
-        var migrator = DatabaseMigrator()
-        Replicant.registerMigrations(&migrator)
-        try! migrator.migrate(database)
-        $0.defaultDatabase = database
-    }
-    AccountView(
-        store: Store(initialState: MainFeature.State(apiKey: "rk_live_0123456789abcdef")) {
-            MainFeature()
-        }
-    )
-}
-

@@ -363,6 +363,17 @@ public struct RCValueSelect<Value: Hashable>: View {
         self._selection = selection
     }
 
+    /// Runtime pairs where the label differs from the value (e.g. a blueprint's
+    /// display name mapped to its `device_type`). Use this when the options are
+    /// built from data rather than a compile-time literal.
+    public init(_ title: String, systemImage: String? = nil,
+                options: [(label: String, value: Value)], selection: Binding<Value>) {
+        self.title = title
+        self.systemImage = systemImage
+        self.options = options
+        self._selection = selection
+    }
+
     /// The label shown in the trigger for the current selection.
     private var selectedLabel: String {
         options.first { $0.value == selection }?.label ?? String(describing: selection)
@@ -383,15 +394,25 @@ public struct RCValueSelect<Value: Hashable>: View {
                         .font(.system(size: 13))
                         .foregroundStyle(.rcTextTertiary)
                 }
-                Text(selectedLabel)
-                    .font(.rcMono)
-                    .foregroundStyle(.rcTextPrimary)
+                ZStack(alignment: .leading) {
+                    // Reserve width for the longest label so the trigger stays a
+                    // fixed size as the selection changes. The hidden copies are
+                    // laid out (establishing the max width) but never drawn.
+                    ForEach(options.indices, id: \.self) { index in
+                        Text(options[index].label)
+                            .font(.rcMono)
+                            .hidden()
+                    }
+                    Text(selectedLabel)
+                        .font(.rcMono)
+                        .foregroundStyle(.rcTextPrimary)
+                }
                 Spacer(minLength: Space.xs)
                 Image(systemName: "chevron.down")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.rcTextSecondary)
             }
-            .frame(minWidth: 214, minHeight: 36)
+            .frame(minHeight: 36)
             .padding(.horizontal, Space.m)
             .background(
                 RoundedRectangle(cornerRadius: Radius.control, style: .continuous)

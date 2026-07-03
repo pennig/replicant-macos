@@ -225,9 +225,9 @@ public extension Font {
     static let rcBody         = Font.system(size: 13, weight: .regular)
     static let rcBodyEmph     = Font.system(size: 13, weight: .semibold)
     static let rcCaption      = Font.system(size: 11, weight: .medium)
-    static let rcSectionLabel = Font.system(size: 11, weight: .bold)            // UPPERCASE + tracking
+    static let rcSectionLabel = Font.system(size: 10, weight: .semibold)            // UPPERCASE + tracking
     static let rcMono         = Font.system(size: 13, weight: .regular, design: .monospaced) // IDs / codes
-    static let rcMonoSmall    = Font.system(size: 11, weight: .semibold, design: .monospaced)
+    static let rcMonoSmall    = Font.system(size: 11, weight: .medium, design: .monospaced)
 }
 
 // MARK: - Tiny reusable views matching the mockups

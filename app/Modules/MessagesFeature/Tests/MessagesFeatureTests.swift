@@ -185,10 +185,13 @@ private struct StubError: LocalizedError {
 
     /// Dismissing an error clears it.
     @Test func dismissErrorClearsMessage() async throws {
+        let database = try makeDatabase()
         let store = TestStore(
             initialState: MessagesFeature.State(errorMessage: "boom")
         ) {
             MessagesFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
         }
 
         await store.send(.dismissError) {

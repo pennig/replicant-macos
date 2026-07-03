@@ -10,8 +10,10 @@
 //  `Device`/`Operation` tables and knows nothing about the relay.
 //
 //  Device snapshots: last-writer-wins by synthesized event-time
-//  (`Device.updatedAt`, §4.1); local-only provenance (`firstSeenAt`) survives
-//  every upsert; a stale or duplicate snapshot is a no-op.
+//  (`Device.updatedAt`, §4.1) — which is the read's *request-issue* time, so a
+//  slow read that started earlier can't overwrite a newer one that landed first.
+//  Local-only provenance (`firstSeenAt`) survives every upsert; a stale or
+//  duplicate snapshot is a no-op.
 //
 //  Operations: completion events (e.g. `print_complete`) are treated as truth
 //  for the action they close (§4.4) — they carry the result the dispatch
@@ -41,8 +43,9 @@ public struct Reconciler: Sendable {
                 .where { $0.deviceCode.eq(device.deviceCode) }
                 .fetchOne(db)
 
-            // Guard: never overwrite a row from a source whose event-time is
-            // older than what's stored (out-of-order / duplicate arrivals).
+            // Guard: never overwrite a row with a read that was *issued* earlier
+            // than the one already stored (out-of-order / duplicate arrivals) —
+            // its data is same-or-older, so applying it would regress the row.
             if let existing, device.updatedAt < existing.updatedAt {
                 logger.debug("ingest \(device.deviceCode, privacy: .public): dropped stale (incoming \(device.updatedAt.ISO8601Format(), privacy: .public) < stored \(existing.updatedAt.ISO8601Format(), privacy: .public))")
                 return
@@ -193,18 +196,23 @@ public struct Reconciler: Sendable {
     /// Apply a relay game-event's effect on the `Operation` table. Completion
     /// event types close the device's open operation and fold their result into
     /// its `detail`; everything else is left to the device confirm-read path.
-    public func applyOperationEvent(_ event: UnifiedEvent) async {
+    ///
+    /// Returns whether the event actually closed an open operation, so the caller
+    /// can escalate its follow-up device read (a completed activity block should
+    /// be re-read authoritatively, not left to a skippable low-priority refresh).
+    @discardableResult
+    public func applyOperationEvent(_ event: UnifiedEvent) async -> Bool {
         guard
             event.type == "event",
             let deviceCode = event.deviceCode,
             let eventType = event.eventType
-        else { return }
+        else { return false }
 
         // Event types that close the device's open operation. The event is truth
         // for the action it completes (§4.4); the deadline timer is only the
         // backstop for when one of these is lost.
-        guard Self.completionEventTypes.contains(eventType) else { return }
-        await completeOpenOperation(on: deviceCode, source: .event, eventTime: event.date, result: event.payload)
+        guard Self.completionEventTypes.contains(eventType) else { return false }
+        return await completeOpenOperation(on: deviceCode, source: .event, eventTime: event.date, result: event.payload)
     }
 
     /// Relay `event_type`s that complete an operation, keyed in one place so an
@@ -227,21 +235,24 @@ public struct Reconciler: Sendable {
 
     /// Mark the single open operation on a device completed, recording any event
     /// result (e.g. a print's `new_device_code`) under `detail.result`.
+    ///
+    /// Returns whether an open operation was found and closed.
+    @discardableResult
     public func completeOpenOperation(
         on deviceCode: String,
         source: OperationSource,
         eventTime: Date?,
         result: [String: JSONValue]?
-    ) async {
+    ) async -> Bool {
         @Dependency(\.defaultDatabase) var database
         @Dependency(\.date) var date
         let stamp = eventTime ?? date.now
-        try? await database.write { db in
+        return (try? await database.write { db -> Bool in
             guard var op = try Operation.where({
                 $0.entityCode.eq(deviceCode)
                     && $0.status.in(OperationStatus.liveCases)
             }).fetchOne(db)
-            else { return }
+            else { return false }
 
             if let result {
                 var dict: [String: JSONValue] = {
@@ -256,6 +267,7 @@ public struct Reconciler: Sendable {
             op.lastConfirmedAt = stamp
             try Operation.upsert { op }.execute(db)
             logger.info("completed op \(op.id, privacy: .public) (\(op.kind, privacy: .public)) on \(deviceCode, privacy: .public) via \(source.rawValue, privacy: .public)")
-        }
+            return true
+        }) ?? false
     }
 }

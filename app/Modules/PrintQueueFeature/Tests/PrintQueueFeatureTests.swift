@@ -26,10 +26,12 @@ private struct StubError: LocalizedError {
 
     /// A rejected command surfaces its message as the inspector command error.
     @Test func rejectedCommandSurfacesError() async throws {
+        let database = try makeDatabase()
         let captured = LockIsolated<(OperationKind, String, CommandParams)?>(nil)
         let store = TestStore(initialState: PrintQueueFeature.State()) {
             PrintQueueFeature()
         } withDependencies: {
+            $0.defaultDatabase = database
             $0.commandClient.dispatch = { kind, code, params in
                 captured.setValue((kind, code, params))
                 return .rejected("Printer is busy")
@@ -50,9 +52,11 @@ private struct StubError: LocalizedError {
     /// An accepted command mutates the observed tables, not feature state — no
     /// error is set.
     @Test func acceptedCommandStaysQuiet() async throws {
+        let database = try makeDatabase()
         let store = TestStore(initialState: PrintQueueFeature.State()) {
             PrintQueueFeature()
         } withDependencies: {
+            $0.defaultDatabase = database
             $0.commandClient.dispatch = { _, _, _ in .accepted(operationID: nil) }
         }
 
@@ -63,10 +67,13 @@ private struct StubError: LocalizedError {
 
     /// Dismissing the command error clears it.
     @Test func dismissCommandErrorClears() async throws {
-        var initial = PrintQueueFeature.State()
-        initial.commandError = "boom"
-        let store = TestStore(initialState: initial) {
-            PrintQueueFeature()
+        let database = try makeDatabase()
+        let store = withDependencies {
+            $0.defaultDatabase = database
+        } operation: {
+            var initial = PrintQueueFeature.State()
+            initial.commandError = "boom"
+            return TestStore(initialState: initial) { PrintQueueFeature() }
         }
         await store.send(.dismissCommandError) { $0.commandError = nil }
     }
@@ -90,10 +97,13 @@ private struct StubError: LocalizedError {
 
     /// Dismissing the load error clears it.
     @Test func dismissErrorClears() async throws {
-        var initial = PrintQueueFeature.State()
-        initial.errorMessage = "boom"
-        let store = TestStore(initialState: initial) {
-            PrintQueueFeature()
+        let database = try makeDatabase()
+        let store = withDependencies {
+            $0.defaultDatabase = database
+        } operation: {
+            var initial = PrintQueueFeature.State()
+            initial.errorMessage = "boom"
+            return TestStore(initialState: initial) { PrintQueueFeature() }
         }
         await store.send(.dismissError) { $0.errorMessage = nil }
     }

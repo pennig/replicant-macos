@@ -2,9 +2,11 @@
 //  MainFeature.swift
 //  Replicant
 //
-//  The signed-in experience: a three-column NavigationSplitView with a sidebar
-//  (header · grouped categories · footer) and per-category content + detail
-//  panes. The Account sheet lives in AccountView.swift.
+//  The signed-in experience: a three-column NavigationSplitView. The sidebar
+//  (header · grouped categories · footer) is its own `SidebarFeature`; this
+//  container just scopes the per-category content + detail features and lets the
+//  sidebar's selection drive which panes show. The Account sheet lives in the
+//  sidebar.
 //
 
 import AccountManager
@@ -18,77 +20,12 @@ import MessagesFeature
 import PrintQueueFeature
 import RawAPIFeature
 import ReplicantsFeature
+import SidebarFeature
 import SQLiteData
 import StarMapFeature
 import SwiftUI
 import UI
-
-// MARK: - Sidebar model
-
-/// The categories shown in the sidebar, grouped into three sections.
-enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
-    // Catalog
-    case stars, locations, devices, replicants, blueprints
-    // Operations
-    case printQueue
-    // Comms
-    case messages, bobnet, eventLog
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .stars: "Stars"
-        case .locations: "Locations"
-        case .devices: "Devices"
-        case .replicants: "Replicants"
-        case .blueprints: "Blueprints"
-        case .printQueue: "Print Queue"
-        case .messages: "Messages"
-        case .bobnet: "Bobnet"
-        case .eventLog: "Event Log"
-        }
-    }
-
-    var symbol: String {
-        switch self {
-        case .stars: "sparkles"
-        case .locations: "map"
-        case .devices: "circle.hexagongrid"
-        case .replicants: "point.3.connected.trianglepath.dotted"
-        case .blueprints: "doc.plaintext"
-        case .printQueue: "printer"
-        case .messages: "envelope"
-        case .bobnet: "bubble.left.and.bubble.right"
-        case .eventLog: "list.bullet.rectangle"
-        }
-    }
-
-    /// Some categories show content only — no detail pane (Galaxy Map, Bobnet,
-    /// and the live Event Log ledger).
-    var hasDetail: Bool {
-        switch self {
-        case .eventLog, .stars, .bobnet: false
-        default: true
-        }
-    }
-
-    /// Placeholder content rows for this category.
-    var sampleItems: [String] {
-        (1...8).map { "\(title) item \($0)" }
-    }
-
-    struct Group: Identifiable {
-        let id: String
-        let items: [SidebarItem]
-    }
-
-    static let groups: [Group] = [
-        Group(id: "Catalog", items: [.stars, .locations, .devices, .replicants, .blueprints]),
-        Group(id: "Operations", items: [.printQueue]),
-        Group(id: "Comms", items: [.messages, .bobnet, .eventLog]),
-    ]
-}
+import Utils
 
 // MARK: - Main feature
 
@@ -96,15 +33,13 @@ enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
 struct MainFeature {
     @ObservableState
     struct State: Equatable {
-        /// The signed-in account profile, persisted to disk and refreshed on
-        /// login. Reads back immediately on relaunch.
-        @Shared(.account) var account: Account
-        /// The account's replicant roster, observed straight from SQLite.
-        @FetchAll var replicants: [Replicant]
         var apiKey: String
-        var category: SidebarItem? = .devices
+        /// The content-pane selection for placeholder categories (real features
+        /// own their own selection). Reset whenever the sidebar category changes.
         var detailSelection: String?
-        var isShowingAccount = false
+        /// The sidebar: active-replicant header, category list, account footer.
+        /// Owns the category selection this container reads to pick its panes.
+        var sidebar: SidebarFeature.State
         /// The Messages inbox, persisted locally and seeded with the session key.
         var messages: MessagesFeature.State
         /// The Raw API Access experience, shown in its own window (Tools menu).
@@ -121,20 +56,17 @@ struct MainFeature {
         /// The Print Queue (Operations) — printers with an active job or queue.
         var printQueue: PrintQueueFeature.State
         /// The Replicants directory — the account's own replicants plus every
-        /// other player and NPC known in the galaxy. (Named to avoid colliding
-        /// with the owned-roster `replicants` array above.)
+        /// other player and NPC known in the galaxy.
         var replicantDirectory: ReplicantsFeature.State
 
         init(
             apiKey: String,
             category: SidebarItem? = .devices,
-            detailSelection: String? = nil,
-            isShowingAccount: Bool = false
+            detailSelection: String? = nil
         ) {
             self.apiKey = apiKey
-            self.category = category
             self.detailSelection = detailSelection
-            self.isShowingAccount = isShowingAccount
+            self.sidebar = SidebarFeature.State(apiKey: apiKey, category: category)
             self.messages = MessagesFeature.State()
             self.rawAPI = RawAPIFeature.State(apiKey: apiKey)
             self.starMap = StarMapFeature.State()
@@ -146,7 +78,6 @@ struct MainFeature {
         }
     }
 
-    @Dependency(\.replicantsClient) var replicantsClient
     @Dependency(\.accountManager) var accountManager
 
     enum Action: BindableAction {
@@ -155,12 +86,7 @@ struct MainFeature {
         /// server (login isn't re-run for a restored session).
         case task
         case delegate(Delegate)
-        /// Hydrate the active replicant's public details (its `plan`) so the
-        /// sidebar header can show and edit it.
-        case loadActivePlan(String)
-        case logoutButtonTapped
-        /// Persist an edited plan for the given replicant via PATCH.
-        case savePlan(code: String, plan: String)
+        case sidebar(SidebarFeature.Action)
         case messages(MessagesFeature.Action)
         case rawAPI(RawAPIFeature.Action)
         case starMap(StarMapFeature.Action)
@@ -177,6 +103,9 @@ struct MainFeature {
 
     var body: some Reducer<State, Action> {
         BindingReducer()
+        Scope(state: \.sidebar, action: \.sidebar) {
+            SidebarFeature()
+        }
         Scope(state: \.messages, action: \.messages) {
             MessagesFeature()
         }
@@ -203,11 +132,6 @@ struct MainFeature {
         }
         Reduce { state, action in
             switch action {
-            case .binding(\.category):
-                // Reset the detail selection whenever the category changes.
-                state.detailSelection = nil
-                return .none
-
             case .binding:
                 return .none
 
@@ -220,22 +144,15 @@ struct MainFeature {
             case .delegate:
                 return .none
 
-            case let .loadActivePlan(code):
-                // Best-effort: the sidebar reads the plan straight from SQLite, so
-                // a failed load just leaves the last-known value in place.
-                return .run { _ in try? await replicantsClient.loadDetails(code) }
-
-            case .logoutButtonTapped:
+            case .sidebar(.delegate(.loggedOut)):
                 return .send(.delegate(.loggedOut))
 
-            case let .savePlan(code, plan):
-                return .run { _ in
-                    _ = await withErrorReporting {
-                        try await replicantsClient.updatePlan(code, plan)
-                    }
-                }
+            case .sidebar(.delegate(.categoryChanged)):
+                // The category changed — the placeholder detail selection is stale.
+                state.detailSelection = nil
+                return .none
 
-            case .messages, .rawAPI, .starMap, .devices, .blueprints, .locations, .printQueue, .replicantDirectory:
+            case .sidebar, .messages, .rawAPI, .starMap, .devices, .blueprints, .locations, .printQueue, .replicantDirectory:
                 return .none
             }
         }
@@ -246,27 +163,18 @@ struct MainFeature {
 
 struct MainView: View {
     @Bindable var store: StoreOf<MainFeature>
-    /// Live unread-message count, observed straight from SQLite, used for the
-    /// Messages sidebar badge and the app's dock-tile badge.
+    /// Live unread-message count, observed straight from SQLite, mirrored onto the
+    /// app's dock-tile badge. (The sidebar renders its own badge independently.)
     @FetchOne(Message.where { !$0.isRead }.count()) private var unreadCount = 0
-    /// The whole fleet, observed from SQLite — the header reads it to resolve the
-    /// active replicant's host glyph and any running travel/print progress.
-    @FetchAll private var devices: [Device]
-    /// The known-replicant directory, observed from SQLite — the header reads the
-    /// active replicant's public `plan` from here (hydrated on appear/change).
-    @FetchAll private var knownReplicants: [KnownReplicant]
-    /// The app-wide active-replicant selection (shared with Locations / Stars).
-    /// The header's switcher writes here; other features read the same key.
-    @Shared(.appStorage(Account.activeReplicantCodeKey)) private var activeReplicantCode: String?
 
     var body: some View {
         Group {
-            if store.category?.hasDetail == false {
+            if store.sidebar.category?.hasDetail == false {
                 // Content-only category (Event Log): a two-column split view —
                 // sidebar + content, with no detail column at all.
                 NavigationSplitView {
                     sidebar
-                        .navigationSplitViewColumnWidth(min: 220, ideal: 240, max: 300)
+                        .navigationSplitViewColumnWidth(min: 240, ideal: 240, max: 300)
                 } detail: {
                     content
                         .background(.rcWindowBackground)
@@ -275,7 +183,7 @@ struct MainView: View {
             } else {
                 NavigationSplitView {
                     sidebar
-                        .navigationSplitViewColumnWidth(min: 220, ideal: 240, max: 300)
+                        .navigationSplitViewColumnWidth(min: 240, ideal: 240, max: 300)
                 } content: {
                     content
                         .navigationSplitViewColumnWidth(min: 280, ideal: 320, max: 420)
@@ -290,9 +198,6 @@ struct MainView: View {
                 .navigationTitle("Replicant")
             }
         }
-        .sheet(isPresented: $store.isShowingAccount) {
-            AccountView(store: store)
-        }
         // Re-sync the account roster on launch (a restored session skips login).
         .task { store.send(.task) }
         // Mirror the unread count onto the dock icon so it's visible when the
@@ -302,163 +207,9 @@ struct MainView: View {
         }
     }
 
-    // — Sidebar: header · grouped categories · footer —
+    // — Sidebar (its own feature) —
     private var sidebar: some View {
-        VStack(spacing: 0) {
-            sidebarHeader
-            Divider()
-            List(selection: $store.category) {
-                ForEach(SidebarItem.groups) { group in
-                    Section(group.id) {
-                        ForEach(group.items) { item in
-                            Label(item.title, systemImage: item.symbol)
-                                // `.badge(0)` renders nothing, so only Messages
-                                // shows a count, and only while unread > 0.
-                                .badge(item == .messages ? unreadCount : 0)
-                                .tag(item)
-                        }
-                    }
-                }
-            }
-            .listStyle(.sidebar)
-            Divider()
-            RCAccountFooter(
-                name: store.account.name,
-                email: store.account.email,
-                experiencePoints: store.account.experiencePointsTotal,
-                replicantCount: store.replicants.count
-            ) {
-                store.isShowingAccount = true
-            }
-        }
-    }
-
-    // — Active replicant header —
-    //
-    // The switcher writes the chosen replicant straight to the shared
-    // `activeReplicantCode` (the same appStorage key Locations/Stars read), so
-    // changing the active replicant here updates the whole app. Progress and host
-    // glyphs are derived from the local fleet.
-    @ViewBuilder private var sidebarHeader: some View {
-        if store.replicants.isEmpty {
-            // No roster yet (fresh session / mid-sync) — a quiet placeholder.
-            HStack(spacing: Space.s) {
-                Image(systemName: "point.3.connected.trianglepath.dotted")
-                    .foregroundStyle(.rcTextTertiary)
-                Text("No replicants yet")
-                    .font(.rcBody)
-                    .foregroundStyle(.rcTextSecondary)
-                Spacer()
-            }
-            .padding(.horizontal, Space.m)
-            .padding(.vertical, Space.m)
-        } else {
-            RCActiveReplicantHeader(
-                replicants: rosterOptions,
-                selection: switcherSelection,
-                location: activeReplicant?.currentLocationName ?? activeReplicant?.currentLocation,
-                experiencePoints: activeReplicant?.experiencePoints ?? 0,
-                deviceCount: activeReplicant?.deviceCount ?? 0,
-                progress: activeReplicantProgress,
-                plan: activePlan,
-                onShowInReplicants: { $store.category.wrappedValue = .replicants },
-                onEditPlan: { plan in
-                    if let code = activeReplicant?.replicantCode {
-                        store.send(.savePlan(code: code, plan: plan))
-                    }
-                }
-            )
-            // Hydrate the active replicant's public details (its plan) whenever the
-            // selection changes, so the plan line reflects the server.
-            .task(id: activeReplicant?.replicantCode) {
-                if let code = activeReplicant?.replicantCode {
-                    store.send(.loadActivePlan(code))
-                }
-            }
-        }
-    }
-
-    /// The active replicant's public plan, read from its known-replicant record.
-    private var activePlan: String? {
-        guard let code = activeReplicant?.replicantCode else { return nil }
-        return knownReplicants.first { $0.replicantCode == code }?.plan
-    }
-
-    // — Active replicant derivation —
-
-    /// The currently-active replicant, falling back to the first in the roster
-    /// when nothing (or a stale code) is selected.
-    private var activeReplicant: Replicant? {
-        store.replicants.first { $0.replicantCode == activeReplicantCode } ?? store.replicants.first
-    }
-
-    /// The roster mapped to switcher options, each carrying its host glyph.
-    private var rosterOptions: [RCReplicant] {
-        store.replicants.map { replicant in
-            RCReplicant(id: replicant.replicantCode, name: replicant.name, host: host(for: replicant))
-        }
-    }
-
-    /// A binding the switcher drives: reads the active option, writes the choice
-    /// back to the shared `activeReplicantCode`.
-    private var switcherSelection: Binding<RCReplicant> {
-        Binding(
-            get: {
-                rosterOptions.first { $0.id == activeReplicant?.replicantCode }
-                    ?? rosterOptions.first
-                    ?? RCReplicant(id: "", name: "—", host: .vessel)
-            },
-            set: { newValue in $activeReplicantCode.withLock { $0 = newValue.id } }
-        )
-    }
-
-    /// The host kind for a replicant, read from its hosting device's type when
-    /// that device is in the local fleet (defaults to a vessel otherwise).
-    private func host(for replicant: Replicant) -> HostKind {
-        guard
-            let code = replicant.hostedDeviceCode,
-            let device = devices.first(where: { $0.deviceCode == code })
-        else { return .vessel }
-        return HostKind(deviceType: device.deviceType)
-    }
-
-    /// The active replicant's most relevant running activity — its host device's
-    /// travel first (the replicant itself is moving), then any other device of
-    /// its that's mid-operation (printing, mining, scanning).
-    private var activeReplicantProgress: RCReplicantProgress? {
-        guard let active = activeReplicant else { return nil }
-        let fleet = devices.filter { $0.replicantCode == active.replicantCode }
-        let host = active.hostedDeviceCode.flatMap { code in fleet.first { $0.deviceCode == code } }
-        let ordered = [host].compactMap { $0 } + fleet.filter { $0.deviceCode != active.hostedDeviceCode }
-        for device in ordered {
-            if let progress = progress(for: device) { return progress }
-        }
-        return nil
-    }
-
-    /// Distill a device's in-progress snapshot into a header progress row, or nil
-    /// when it isn't running a timed operation we can chart.
-    private func progress(for device: Device) -> RCReplicantProgress? {
-        guard
-            let activity = device.derivedActivity,
-            let startedAt = activity.startedAt,
-            let completesAt = activity.completesAt
-        else { return nil }
-        let tint = DeviceStatus.tone(for: device.statusBase).color
-        let label: String
-        let symbol: String?
-        switch activity.kind {
-        case .travel:
-            label = device.travelSnapshot?.destinationLabel ?? device.locationName ?? device.location ?? "In transit"
-            symbol = "arrow.right"
-        case .print:
-            label = device.statusParameter.map { $0.replacingOccurrences(of: "_", with: " ").capitalized } ?? "Printing"
-            symbol = "printer"
-        default:
-            label = DeviceStatus.label(for: device.statusBase)
-            symbol = nil
-        }
-        return RCReplicantProgress(label: label, symbol: symbol, startedAt: startedAt, completesAt: completesAt, tint: tint)
+        SidebarView(store: store.scope(state: \.sidebar, action: \.sidebar))
     }
 
     /// The Messages inbox store, scoped from the main session.
@@ -498,25 +249,25 @@ struct MainView: View {
 
     // — Content: a selectable list (or, for the Event Log, a plain list) —
     @ViewBuilder private var content: some View {
-        if store.category == .messages {
+        if store.sidebar.category == .messages {
             MessagesListView(store: messagesStore)
-        } else if store.category == .stars {
+        } else if store.sidebar.category == .stars {
             StarMapView(store: starMapStore)
-        } else if store.category == .devices {
+        } else if store.sidebar.category == .devices {
             DevicesListView(store: devicesStore)
-        } else if store.category == .blueprints {
+        } else if store.sidebar.category == .blueprints {
             BlueprintsListView(store: blueprintsStore)
-        } else if store.category == .locations {
+        } else if store.sidebar.category == .locations {
             LocationsListView(store: locationsStore)
-        } else if store.category == .printQueue {
+        } else if store.sidebar.category == .printQueue {
             PrintQueueListView(store: printQueueStore)
-        } else if store.category == .replicants {
+        } else if store.sidebar.category == .replicants {
             ReplicantsListView(store: replicantsStore)
-        } else if store.category == .eventLog {
+        } else if store.sidebar.category == .eventLog {
             ActivityView()
-        } else if store.category == .bobnet {
+        } else if store.sidebar.category == .bobnet {
             BobnetView()
-        } else if let category = store.category {
+        } else if let category = store.sidebar.category {
             if category.hasDetail {
                 List(selection: $store.detailSelection) {
                     ForEach(category.sampleItems, id: \.self) { item in
@@ -540,19 +291,19 @@ struct MainView: View {
 
     // — Detail (three-column categories only) —
     @ViewBuilder private var detail: some View {
-        if store.category == .messages {
+        if store.sidebar.category == .messages {
             MessageDetailView(store: messagesStore)
-        } else if store.category == .devices {
+        } else if store.sidebar.category == .devices {
             DeviceDetailView(store: devicesStore)
-        } else if store.category == .blueprints {
+        } else if store.sidebar.category == .blueprints {
             BlueprintDetailView(store: blueprintsStore)
-        } else if store.category == .locations {
+        } else if store.sidebar.category == .locations {
             LocationDetailView(store: locationsStore)
-        } else if store.category == .printQueue {
+        } else if store.sidebar.category == .printQueue {
             PrintQueueDetailView(store: printQueueStore)
-        } else if store.category == .replicants {
+        } else if store.sidebar.category == .replicants {
             ReplicantDetailView(store: replicantsStore)
-        } else if let category = store.category, let selection = store.detailSelection {
+        } else if let category = store.sidebar.category, let selection = store.detailSelection {
             VStack(spacing: 12) {
                 Image(systemName: category.symbol).font(.system(size: 48)).foregroundStyle(.tint)
                 Text(selection).font(.title2.bold())
@@ -566,4 +317,3 @@ struct MainView: View {
         }
     }
 }
-

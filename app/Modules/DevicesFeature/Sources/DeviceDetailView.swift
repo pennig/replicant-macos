@@ -11,6 +11,7 @@
 //  the pane automatically.
 //
 
+import BlueprintsFeature
 import ComposableArchitecture
 import DependencyClients
 import IssueReporting
@@ -24,9 +25,6 @@ private typealias Operation = DependencyClients.Operation
 
 public struct DeviceDetailView: View {
     let store: StoreOf<DevicesFeature>
-    /// Loaded lazily by the selection `.task(id:)` below so the query tracks the
-    /// selected device code rather than fetching the whole fleet to filter it.
-    @FetchOne(Device.none) private var device: Device?
     @FetchAll(Operation.order { $0.startedAt.desc() }) private var operations
 
     public init(store: StoreOf<DevicesFeature>) {
@@ -43,7 +41,7 @@ public struct DeviceDetailView: View {
 
     public var body: some View {
         Group {
-            if let device {
+            if let device = store.selectedDevice {
                 ScrollView {
                     VStack(alignment: .leading, spacing: Space.xl) {
                         header(device)
@@ -63,20 +61,18 @@ public struct DeviceDetailView: View {
                 .sheet(isPresented: travelPreviewBinding) {
                     TravelPlanSheet(store: store)
                 }
+                .sheet(isPresented: printPreviewBinding) {
+                    PrintPlanSheet(
+                        preview: store.printPreview,
+                        onConfirm: { store.send(.printPreviewConfirmed) },
+                        onDismiss: { store.send(.printPreviewDismissed) }
+                    )
+                }
             } else {
                 ContentUnavailableView(
                     "No Device Selected",
                     systemImage: SidebarSymbol.devices,
                     description: Text("Select a device to inspect it.")
-                )
-            }
-        }
-        // Reload the single-row query whenever the selected device changes.
-        .task(id: store.selectedDeviceCode) {
-            _ = await withErrorReporting {
-                try await $device.load(
-                    Device.where { $0.deviceCode.eq(store.selectedDeviceCode ?? "") },
-                    animation: .default
                 )
             }
         }
@@ -95,7 +91,7 @@ public struct DeviceDetailView: View {
     /// Keying the task on this restarts the loop for a new device and stops it once
     /// the device settles.
     private var refreshKey: String? {
-        guard let device else { return nil }
+        guard let device = store.selectedDevice else { return nil }
         switch device.statusBase {
         case "mining", "diverting": return device.deviceCode
         default:                    return nil
@@ -124,6 +120,13 @@ public struct DeviceDetailView: View {
         Binding(
             get: { store.travelPreview != nil },
             set: { if !$0 { store.send(.travelPreviewDismissed) } }
+        )
+    }
+
+    private var printPreviewBinding: Binding<Bool> {
+        Binding(
+            get: { store.printPreview != nil },
+            set: { if !$0 { store.send(.printPreviewDismissed) } }
         )
     }
 
@@ -594,9 +597,13 @@ private struct CommandGrid: View {
     /// The whole fleet, for building the `adopt` candidate list (worker devices of
     /// the type this controller shepherds).
     @FetchAll(Device.order { $0.deviceCode }) private var fleet
+    /// The unlocked blueprint catalog, backing the `enqueue_print` dropdown.
+    @FetchAll(Blueprint.order { $0.deviceType }) private var blueprints
     @State private var pending: DeviceCommand?
     @State private var textValue: String = ""
     @State private var choiceValue: String = ""
+    /// The selected blueprint's `device_type` for a pending `enqueue_print`.
+    @State private var blueprintType: String = ""
     /// The checked device codes for a pending `adopt`.
     @State private var selectedCodes: Set<String> = []
     /// `survey_system` directive configuration, revealed when that directive is the
@@ -706,6 +713,10 @@ private struct CommandGrid: View {
         if pending == command { pending = nil; return }
         textValue = ""
         selectedCodes = []
+        if case .print = command {
+            // Seed the blueprint picker with the first catalog entry.
+            blueprintType = blueprints.first?.deviceType ?? ""
+        }
         if case let .choice(_, options) = command.parameter {
             // Seed the directive picker with the device's current directive when
             // it's a valid option, so re-opening reflects what's in force.
@@ -756,6 +767,8 @@ private struct CommandGrid: View {
                 }
             case let .multiSelect(label, options):
                 deviceCheckboxList(label, options: options)
+            case let .blueprint(label):
+                blueprintPicker(label)
             case .none:
                 Text("Run \(command.title) on \(device.deviceCode)?")
                     .font(.rcCaption)
@@ -774,6 +787,16 @@ private struct CommandGrid: View {
                         store.send(.travelPreviewRequested(
                             deviceCode: device.deviceCode,
                             destination: confirmValue(for: command)
+                        ))
+                    } else if command == .print {
+                        // Print reviews resource cost vs. location stock in a sheet
+                        // before enqueuing.
+                        store.send(.printPreviewRequested(
+                            deviceCode: device.deviceCode,
+                            deviceType: blueprintType,
+                            location: device.location,
+                            locationName: device.locationName,
+                            required: requiredLines(for: blueprintType)
                         ))
                     } else {
                         store.send(.commandConfirmed(
@@ -803,6 +826,7 @@ private struct CommandGrid: View {
     /// many devices are checked.
     private func confirmTitle(for command: DeviceCommand) -> String {
         if command == .travel { return "Review Route…" }
+        if command == .print { return "Review Cost…" }
         if !selectedCodes.isEmpty {
             if case .adopt = command { return "Adopt \(selectedCodes.count)" }
             if case .release = command { return "Release \(selectedCodes.count)" }
@@ -815,6 +839,7 @@ private struct CommandGrid: View {
         switch command.parameter {
         case .text:        return textValue
         case .choice:      return choiceValue
+        case .blueprint:   return blueprintType
         case .multiSelect: return ""
         case .none:        return ""
         }
@@ -941,8 +966,48 @@ private struct CommandGrid: View {
         switch command.parameter {
         case .text:        return !textValue.trimmingCharacters(in: .whitespaces).isEmpty
         case .choice:      return !choiceValue.isEmpty
+        case .blueprint:   return !blueprintType.isEmpty
         case .multiSelect: return !selectedCodes.isEmpty
         case .none:        return true
+        }
+    }
+
+    // MARK: Blueprint picker
+
+    /// The `enqueue_print` blueprint dropdown: every unlocked catalog entry,
+    /// labeled by display name and valued by `device_type`.
+    private func blueprintPicker(_ label: String) -> some View {
+        VStack(alignment: .leading, spacing: Space.xs) {
+            Text(label.uppercased())
+                .font(.rcSectionLabel)
+                .foregroundStyle(.rcTextTertiary)
+            if blueprints.isEmpty {
+                Text("No blueprints unlocked yet.")
+                    .font(.rcCaption)
+                    .foregroundStyle(.rcTextTertiary)
+            } else {
+                RCValueSelect(
+                    label,
+                    options: blueprints.map {
+                        (label: DevicePresentation.displayName($0.deviceType), value: $0.deviceType)
+                    },
+                    selection: $blueprintType
+                )
+            }
+        }
+    }
+
+    /// The resource cost of a blueprint as confirmation lines (stock filled in
+    /// later from the location's live inventory). Empty when the blueprint is
+    /// unknown or lists no cost.
+    private func requiredLines(for deviceType: String) -> [PrintResourceLine] {
+        guard let blueprint = blueprints.first(where: { $0.deviceType == deviceType }) else { return [] }
+        return blueprint.resources.lineItems.map { item in
+            PrintResourceLine(
+                resource: item.label.lowercased(),
+                label: item.label,
+                required: Double(item.amount)
+            )
         }
     }
 }

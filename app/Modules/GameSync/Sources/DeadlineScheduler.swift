@@ -25,7 +25,6 @@ private let logger = Logger(subsystem: "name.pennig.replicould", category: "Dead
 private typealias Operation = DependencyClients.Operation
 
 actor DeadlineScheduler {
-    private let coordinator: PollCoordinator
     private let reconciler: Reconciler
     /// Upper bound on a single sleep, so ops inserted after the current sleep
     /// began are still picked up promptly.
@@ -46,14 +45,12 @@ actor DeadlineScheduler {
     private let giveUpAfter: TimeInterval
 
     init(
-        coordinator: PollCoordinator,
         reconciler: Reconciler,
         cap: Duration = .seconds(30),
         confirmGrace: TimeInterval = 1,
         rearmBackoff: TimeInterval = 4,
         giveUpAfter: TimeInterval = 5 * 60
     ) {
-        self.coordinator = coordinator
         self.reconciler = reconciler
         self.cap = cap
         self.confirmGrace = confirmGrace
@@ -102,10 +99,11 @@ actor DeadlineScheduler {
     ///   • stuck far past dispatch → give up and mark `unknown`.
     func processDue(now: Date) async {
         @Dependency(\.defaultDatabase) var database
+        @Dependency(\.deviceRefresher) var deviceRefresher
 
         for due in await openDatedOps() where (due.completesAt ?? .distantFuture) <= now {
             logger.info("deadline reached for op \(due.id, privacy: .public) (\(due.kind, privacy: .public)) on \(due.entityCode, privacy: .public) — confirming")
-            await coordinator.refresh(due.entityCode, priority: .high)
+            await deviceRefresher.refresh(due.entityCode, .high)
 
             // A relay completion event may have closed it during the read.
             guard

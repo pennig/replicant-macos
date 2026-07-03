@@ -127,19 +127,18 @@ private func device(_ code: String) -> Device {
         let database = try makeDatabase()
         let dispatched = LockIsolated<(OperationKind, String, CommandParams)?>(nil)
 
-        var state = DevicesFeature.State()
-        state.travelPreview = DevicesFeature.TravelPreview(
-            deviceCode: "A", destination: "IZARUM", phase: .loaded(TravelPlan())
-        )
-
-        let store = TestStore(initialState: state) {
-            DevicesFeature()
-        } withDependencies: {
+        let store = withDependencies {
             $0.defaultDatabase = database
             $0.commandClient.dispatch = { kind, code, params in
                 dispatched.setValue((kind, code, params))
                 return .accepted(operationID: "op")
             }
+        } operation: {
+            var state = DevicesFeature.State()
+            state.travelPreview = DevicesFeature.TravelPreview(
+                deviceCode: "A", destination: "IZARUM", phase: .loaded(TravelPlan())
+            )
+            return TestStore(initialState: state) { DevicesFeature() }
         }
         store.exhaustivity = .off
 

@@ -17,8 +17,6 @@ import UI
 
 public struct MessagesListView: View {
     @Bindable var store: StoreOf<MessagesFeature>
-    @FetchAll(Message.order { $0.createdAt.desc() }) private var messages
-    @FetchOne(Message.where { !$0.isRead }.count()) private var unreadCount = 0
 
     public init(store: StoreOf<MessagesFeature>) {
         self.store = store
@@ -26,7 +24,7 @@ public struct MessagesListView: View {
 
     public var body: some View {
         List(selection: $store.selectedMessageID) {
-            ForEach(messages) { message in
+            ForEach(store.messages) { message in
                 MessageRow(message: message)
                     .tag(message.id)
                     .listRowSeparator(.hidden)
@@ -34,7 +32,7 @@ public struct MessagesListView: View {
         }
         .listStyle(.inset)
         .overlay {
-            if messages.isEmpty {
+            if store.messages.isEmpty {
                 if store.isLoading {
                     ProgressView()
                 } else {
@@ -54,8 +52,8 @@ public struct MessagesListView: View {
         }
         .toolbar {
             ToolbarItem(placement: .principal) {
-                if unreadCount > 0 {
-                    Text("\(unreadCount) unread")
+                if store.unreadCount > 0 {
+                    Text("\(store.unreadCount) unread")
                         .font(.rcCaption)
                         .foregroundStyle(.rcTextTertiary)
                 }
@@ -67,7 +65,7 @@ public struct MessagesListView: View {
                     Image(systemName: "envelope.open")
                 }
                 .help("Mark all as read")
-                .disabled(unreadCount == 0)
+                .disabled(store.unreadCount == 0)
 
                 Button {
                     store.send(.refreshButtonTapped)
@@ -143,7 +141,6 @@ private struct MessageRow: View {
 
 public struct MessageDetailView: View {
     let store: StoreOf<MessagesFeature>
-    @FetchAll(Message.order { $0.createdAt.desc() }) private var messages
 
     public init(store: StoreOf<MessagesFeature>) {
         self.store = store
@@ -151,7 +148,7 @@ public struct MessageDetailView: View {
 
     private var selected: Message? {
         guard let id = store.selectedMessageID else { return nil }
-        return messages.first { $0.id == id }
+        return store.messages.first { $0.id == id }
     }
 
     public var body: some View {

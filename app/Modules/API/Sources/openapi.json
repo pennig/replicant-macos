@@ -1502,6 +1502,10 @@
             "items": {
               "$ref": "#/components/schemas/app_schemas_devices_DeviceListItemSchema"
             }
+          },
+          "next_cursor": {
+            "type": "integer",
+            "nullable": true
           }
         },
         "additionalProperties": true
@@ -2030,7 +2034,9 @@
           "device_code": {
             "type": "string"
           },
-          "star": {},
+          "star": {
+            "type": "string"
+          },
           "location": {
             "type": "string"
           },
@@ -2559,6 +2565,14 @@
           },
           "strength": {
             "type": "number"
+          },
+          "components": {
+            "type": "object",
+            "default": null,
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "nullable": true
           }
         },
         "additionalProperties": true
@@ -3230,6 +3244,45 @@
           },
           "recipients": {
             "type": "integer"
+          }
+        },
+        "additionalProperties": true
+      },
+      "app_schemas_admin_StoryAdvanceRequestSchema": {
+        "type": "object",
+        "properties": {
+          "phase": {
+            "type": "string",
+            "description": "Target phase name"
+          },
+          "phase_data": {
+            "type": "object",
+            "default": null,
+            "description": "Optional phase metadata",
+            "additionalProperties": {},
+            "nullable": true
+          }
+        },
+        "required": [
+          "phase"
+        ],
+        "additionalProperties": true
+      },
+      "app_schemas_admin_StoryAdvanceResponseSchema": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string"
+          },
+          "season": {
+            "type": "integer"
+          },
+          "phase": {
+            "type": "string"
+          },
+          "phase_started_at": {
+            "type": "string",
+            "format": "date-time"
           }
         },
         "additionalProperties": true
@@ -4935,6 +4988,38 @@
               "nullable": true
             },
             "required": false
+          },
+          {
+            "in": "query",
+            "name": "device_type",
+            "description": "Filter by device type",
+            "schema": {
+              "type": "string",
+              "default": null,
+              "nullable": true
+            },
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "description": "Pagination cursor returned as next_cursor",
+            "schema": {
+              "type": "integer",
+              "default": null,
+              "nullable": true
+            },
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "description": "Number of devices to return (max 50)",
+            "schema": {
+              "type": "integer",
+              "default": 20
+            },
+            "required": false
           }
         ],
         "responses": {
@@ -5391,7 +5476,7 @@
           {
             "in": "query",
             "name": "cursor",
-            "description": "Device ID cursor for pagination",
+            "description": "Pagination cursor returned as next_cursor",
             "schema": {
               "type": "integer",
               "default": null,
@@ -7445,6 +7530,61 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/app_schemas_admin_AdminMessageRequestSchema"
+              }
+            }
+          }
+        },
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/v1/admin/story/advance": {
+      "post": {
+        "responses": {
+          "422": {
+            "$ref": "#/components/responses/UNPROCESSABLE_ENTITY"
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/app_schemas_common_ErrorSchema"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/app_schemas_common_ErrorSchema"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/app_schemas_admin_StoryAdvanceResponseSchema"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/DEFAULT_ERROR"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/app_schemas_admin_StoryAdvanceRequestSchema"
               }
             }
           }
