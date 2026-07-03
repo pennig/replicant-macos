@@ -204,16 +204,7 @@ private struct ResourceBar: View {
                 .font(.rcBody)
                 .foregroundStyle(.rcTextSecondary)
                 .frame(width: 88, alignment: .leading)
-            GeometryReader { proxy in
-                Capsule()
-                    .fill(.rcSeparator)
-                    .overlay(alignment: .leading) {
-                        Capsule()
-                            .fill(.rcAccent)
-                            .frame(width: proxy.size.width * fraction)
-                    }
-            }
-            .frame(height: 6)
+            RCMeterBar(fraction: Double(fraction), height: 6)
             Text("\(amount)")
                 .font(.rcMono)
                 .foregroundStyle(.rcTextPrimary)

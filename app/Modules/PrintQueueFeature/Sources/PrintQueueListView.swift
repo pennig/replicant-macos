@@ -130,10 +130,7 @@ private struct PrintQueueRow: View {
         Text("+\(count)")
             .font(.rcMonoSmall)
             .foregroundStyle(.rcAccent)
-            .padding(.vertical, 2)
-            .padding(.horizontal, 6)
-            .background(Capsule().fill(Color.rcAccent.opacity(0.12)))
-            .overlay(Capsule().stroke(Color.rcAccent.opacity(0.4), lineWidth: 0.5))
+            .rcPill(.accent)
             .help(count == 1 ? "1 job queued" : "\(count) jobs queued")
     }
 

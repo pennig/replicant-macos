@@ -98,9 +98,7 @@ public struct ReplicantDetailView: View {
                         Text("NPC")
                             .font(.rcMonoSmall)
                             .foregroundStyle(.rcTextTertiary)
-                            .padding(.vertical, 1)
-                            .padding(.horizontal, 5)
-                            .background(Capsule().fill(Color.rcSeparator.opacity(0.5)))
+                            .rcPill(.neutral)
                     }
                 }
                 if let status = replicant.status, !status.isEmpty {
@@ -264,10 +262,7 @@ public struct ReplicantDetailView: View {
                 Text("HOST")
                     .font(.rcSectionLabel).kerning(0.5)
                     .foregroundStyle(.rcAccent)
-                    .padding(.vertical, 1)
-                    .padding(.horizontal, 5)
-                    .background(Capsule().fill(Color.rcAccent.opacity(0.12)))
-                    .overlay(Capsule().stroke(Color.rcAccent.opacity(0.4), lineWidth: 0.5))
+                    .rcPill(.accent)
             }
             Spacer(minLength: Space.s)
             Text(code)

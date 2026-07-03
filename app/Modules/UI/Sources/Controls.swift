@@ -664,6 +664,67 @@ public struct RCReadoutCard<Content: View>: View {
     }
 }
 
+// MARK: - Pill badge (compact inline capsule)
+
+public enum RCPillTone { case accent, neutral }
+
+public extension View {
+    /// Wrap inline text as a compact capsule badge. `.accent` = amber fill +
+    /// hairline border (queue counts, HOST); `.neutral` = separator fill (NPC).
+    /// Standardizes the ad-hoc `Capsule().fill(…)`/`.overlay(…)` pills that were
+    /// re-inlined per feature; the text's own font/colour stay with the caller.
+    func rcPill(_ tone: RCPillTone) -> some View {
+        modifier(RCPillModifier(tone: tone))
+    }
+}
+
+struct RCPillModifier: ViewModifier {
+    let tone: RCPillTone
+    func body(content: Content) -> some View {
+        content
+            .padding(.vertical, 2)
+            .padding(.horizontal, 6)
+            .background(Capsule().fill(fill))
+            .overlay {
+                if tone == .accent {
+                    Capsule().stroke(Color.rcAccent.opacity(0.4), lineWidth: Hairline.thin)
+                }
+            }
+    }
+    private var fill: Color {
+        switch tone {
+        case .accent:  Color.rcAccent.opacity(0.12)
+        case .neutral: Color.rcSeparator.opacity(0.5)
+        }
+    }
+}
+
+// MARK: - Meter bar (accent fill over a track)
+
+/// A horizontal fill bar — accent over a separator track — that fills the width
+/// it's given (wrap in a `.frame` for a fixed size). Replaces the per-feature
+/// capacity/resource bars that each re-inlined the same capsule-over-capsule.
+public struct RCMeterBar: View {
+    private let fraction: Double
+    private let height: CGFloat
+
+    public init(fraction: Double, height: CGFloat = 4) {
+        self.fraction = min(1, max(0, fraction))
+        self.height = height
+    }
+
+    public var body: some View {
+        GeometryReader { proxy in
+            Capsule()
+                .fill(.rcSeparator)
+                .overlay(alignment: .leading) {
+                    Capsule().fill(.rcAccent).frame(width: proxy.size.width * fraction)
+                }
+        }
+        .frame(height: height)
+    }
+}
+
 // MARK: - Gallery (living spec — open the #Preview)
 
 public struct RCControlsGalleryView: View {
@@ -695,6 +756,9 @@ public struct RCControlsGalleryView: View {
                 section("Dropdowns") {
                     GalleryDropdowns()
                 }
+                section("Badges, tiles & meters") {
+                    GalleryBadges()
+                }
             }
             .padding(Space.xl)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -707,6 +771,34 @@ public struct RCControlsGalleryView: View {
         VStack(alignment: .leading, spacing: Space.m) {
             Text(title.uppercased()).font(.rcSectionLabel).kerning(1).foregroundStyle(Color.rcTextTertiary).opacity(0.8)
             content()
+        }
+    }
+}
+
+private struct GalleryBadges: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: Space.l) {
+            HStack(spacing: Space.m) {
+                Text("+3").font(.rcMonoSmall).foregroundStyle(.rcAccent).rcPill(.accent)
+                Text("HOST").font(.rcSectionLabel).kerning(0.5).foregroundStyle(.rcAccent).rcPill(.accent)
+                Text("NPC").font(.rcMonoSmall).foregroundStyle(.rcTextTertiary).rcPill(.neutral)
+                StatusBadge("mining", parameter: "iron")
+            }
+            HStack(spacing: Space.m) {
+                RCGlyphTile(Image(systemName: "cpu"))
+                RCGlyphTile(Image(systemName: "cpu"), size: TileSize.large)
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Meter · 72%").font(.rcCaption).foregroundStyle(Color.rcTextTertiary)
+                RCMeterBar(fraction: 0.72).frame(width: 160)
+            }
+            RCErrorBanner("Something went wrong while dispatching.") {}
+                .frame(width: 320)
+            RCReadoutCard("Readout Card", count: 2) {
+                Text("First line").font(.rcBody).foregroundStyle(.rcTextSecondary)
+                Text("Second line").font(.rcBody).foregroundStyle(.rcTextSecondary)
+            }
+            .frame(width: 320)
         }
     }
 }

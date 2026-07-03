@@ -127,13 +127,7 @@ private struct DeviceRow: View {
 
 
     private var capacityBar: some View {
-        Capsule()
-            .fill(.rcSeparator)
-            .frame(width: 30, height: 4)
-            .overlay(alignment: .leading) {
-                Capsule()
-                    .fill(.rcAccent)
-                    .frame(width: 30 * device.operationalCapacity / 100, height: 4)
-            }
+        RCMeterBar(fraction: device.operationalCapacity / 100)
+            .frame(width: 30)
     }
 }

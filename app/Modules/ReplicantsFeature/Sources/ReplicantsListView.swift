@@ -102,9 +102,7 @@ private struct ReplicantRow: View {
                         Text("NPC")
                             .font(.rcMonoSmall)
                             .foregroundStyle(.rcTextTertiary)
-                            .padding(.vertical, 1)
-                            .padding(.horizontal, 5)
-                            .background(Capsule().fill(Color.rcSeparator.opacity(0.5)))
+                            .rcPill(.neutral)
                     }
                     Spacer(minLength: Space.xs)
                     if replicant.experiencePoints > 0 {
