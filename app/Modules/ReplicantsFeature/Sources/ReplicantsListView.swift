@@ -11,8 +11,8 @@
 //
 
 import ComposableArchitecture
-import DependencyClients
 import GameModels
+import GameServices
 import SwiftUI
 import UI
 

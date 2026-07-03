@@ -10,10 +10,10 @@
 //  `waiting_for` blocks, so a relay update re-renders the pane automatically.
 //
 
-import PrintingUI
 import ComposableArchitecture
-import DependencyClients
 import GameModels
+import GameServices
+import PrintingUI
 import SQLiteData
 import SwiftUI
 import UI

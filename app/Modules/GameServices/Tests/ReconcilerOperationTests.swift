@@ -1,6 +1,6 @@
 //
 //  ReconcilerOperationTests.swift
-//  Replicould — DependencyClients
+//  Replicould — GameServices
 //
 //  A completion event (`print_complete`) closes the device's open operation and
 //  folds its result (the `new_device_code` the dispatch response withheld) into
@@ -14,7 +14,7 @@ import GameModels
 import SQLiteData
 import Testing
 import Utils
-@testable import DependencyClients
+@testable import GameServices
 
 /// Disambiguate from `Foundation.Operation`.
 private typealias Operation = GameModels.Operation

@@ -15,8 +15,8 @@
 
 import API
 import ComposableArchitecture
-import DependencyClients
 import Foundation
+import GameServices
 
 /// One page of the observable-stars listing.
 public struct StarPage: Equatable, Sendable {

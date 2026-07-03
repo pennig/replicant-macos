@@ -1,6 +1,6 @@
 //
 //  ReplicantsClient.swift
-//  Replicould — shared dependency clients
+//  Replicould — GameServices (shared clients + command engine)
 //
 //  Moved here from ReplicantsFeature: it's a shared domain client (the Sidebar
 //  drives it too), so it belongs beside the other clients rather than trapped in

@@ -1,6 +1,6 @@
 //
 //  Reconciler.swift
-//  Replicould — shared dependency clients
+//  Replicould — GameServices (shared clients + command engine)
 //
 //  The correctness core (IMPLEMENTATION_PLAN §6): one guarded write path that
 //  every ingestion source funnels through — relay-driven confirm reads and

@@ -11,9 +11,9 @@
 
 import API
 import ComposableArchitecture
-import DependencyClients
 import Foundation
 import GameModels
+import GameServices
 
 public struct MessagePage: Equatable, Sendable {
     public var messages: [Message]

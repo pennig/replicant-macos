@@ -11,11 +11,11 @@
 //  the pane automatically.
 //
 
-import PrintingUI
 import ComposableArchitecture
-import DependencyClients
 import GameModels
+import GameServices
 import IssueReporting
+import PrintingUI
 import SQLiteData
 import SwiftUI
 import UI

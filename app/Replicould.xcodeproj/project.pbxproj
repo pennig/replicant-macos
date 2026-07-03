@@ -25,7 +25,7 @@
 		C9B530972FE1D3AA006F79A8 /* UI in Frameworks */ = {isa = PBXBuildFile; productRef = C9B530962FE1D3AA006F79A8 /* UI */; };
 		C9B530992FE1D3AA006F79A8 /* Utils in Frameworks */ = {isa = PBXBuildFile; productRef = C9B530982FE1D3AA006F79A8 /* Utils */; };
 		C9B5309B2FE1DC5E006F79A8 /* LoginFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C9B5309A2FE1DC5E006F79A8 /* LoginFeature */; };
-		C9B5309D2FE1DEE2006F79A8 /* DependencyClients in Frameworks */ = {isa = PBXBuildFile; productRef = C9B5309C2FE1DEE2006F79A8 /* DependencyClients */; };
+		C9B5309D2FE1DEE2006F79A8 /* GameServices in Frameworks */ = {isa = PBXBuildFile; productRef = C9B5309C2FE1DEE2006F79A8 /* GameServices */; };
 		C9B5309F2FE72B0B006F79A8 /* RawAPIFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C9B5309E2FE72B0B006F79A8 /* RawAPIFeature */; };
 		C9B8FC732FF5BF5D0050BBDC /* UniverseModels in Frameworks */ = {isa = PBXBuildFile; productRef = C9B8FC722FF5BF5D0050BBDC /* UniverseModels */; };
 		C9D902132FE9DDC000781FBB /* MessagesFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C9D902122FE9DDC000781FBB /* MessagesFeature */; };
@@ -62,7 +62,7 @@
 				C961BC5F2FF6A58600D9C273 /* ReplicantsFeature in Frameworks */,
 				C9D902132FE9DDC000781FBB /* MessagesFeature in Frameworks */,
 				C9AB58FE2FEA4A3300536794 /* StarMapFeature in Frameworks */,
-				C9B5309D2FE1DEE2006F79A8 /* DependencyClients in Frameworks */,
+				C9B5309D2FE1DEE2006F79A8 /* GameServices in Frameworks */,
 				C9B5309B2FE1DC5E006F79A8 /* LoginFeature in Frameworks */,
 				C9F814C02FEEB96000ACFAC3 /* DevicesFeature in Frameworks */,
 				C9702B6D2FF202A5002E2CCE /* BlueprintsFeature in Frameworks */,
@@ -138,7 +138,7 @@
 				C9B530962FE1D3AA006F79A8 /* UI */,
 				C9B530982FE1D3AA006F79A8 /* Utils */,
 				C9B5309A2FE1DC5E006F79A8 /* LoginFeature */,
-				C9B5309C2FE1DEE2006F79A8 /* DependencyClients */,
+				C9B5309C2FE1DEE2006F79A8 /* GameServices */,
 				C9B5309E2FE72B0B006F79A8 /* RawAPIFeature */,
 				C9D902122FE9DDC000781FBB /* MessagesFeature */,
 				C9AB58FD2FEA4A3300536794 /* StarMapFeature */,
@@ -520,9 +520,9 @@
 			isa = XCSwiftPackageProductDependency;
 			productName = LoginFeature;
 		};
-		C9B5309C2FE1DEE2006F79A8 /* DependencyClients */ = {
+		C9B5309C2FE1DEE2006F79A8 /* GameServices */ = {
 			isa = XCSwiftPackageProductDependency;
-			productName = DependencyClients;
+			productName = GameServices;
 		};
 		C9B5309E2FE72B0B006F79A8 /* RawAPIFeature */ = {
 			isa = XCSwiftPackageProductDependency;

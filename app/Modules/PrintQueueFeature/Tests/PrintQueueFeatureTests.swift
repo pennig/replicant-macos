@@ -9,9 +9,9 @@
 //
 
 import ComposableArchitecture
-import DependencyClients
 import Foundation
 import GameModels
+import GameServices
 import SQLiteData
 import Testing
 @testable import PrintQueueFeature

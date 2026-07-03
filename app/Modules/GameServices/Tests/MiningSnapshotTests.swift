@@ -1,6 +1,6 @@
 //
 //  MiningSnapshotTests.swift
-//  Replicould — DependencyClients
+//  Replicould — GameServices
 //
 //  `MiningSnapshot(miningBlock:)` maps a mining drone's `mining` block to the
 //  cycle-aware readout the inspector shows. The load-bearing bit is `isProducing`:
@@ -13,7 +13,7 @@ import Foundation
 import GameModels
 import Testing
 import Utils
-@testable import DependencyClients
+@testable import GameServices
 
 @Suite struct MiningSnapshotTests {
 

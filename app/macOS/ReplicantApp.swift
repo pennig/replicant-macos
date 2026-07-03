@@ -10,8 +10,8 @@ import AccountManager
 import AppKit
 import BlueprintsFeature
 import ComposableArchitecture
-import DependencyClients
 import GameModels
+import GameServices
 import GameSync
 import MessagesFeature
 import SQLiteData

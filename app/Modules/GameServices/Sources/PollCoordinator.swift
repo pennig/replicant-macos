@@ -1,6 +1,6 @@
 //
 //  PollCoordinator.swift
-//  Replicould — shared dependency clients
+//  Replicould — GameServices (shared clients + command engine)
 //
 //  Spends the read budget where it matters (IMPLEMENTATION_PLAN §4.3 / Phase 4).
 //  Every device confirm-read — whether triggered by a relay event or by a

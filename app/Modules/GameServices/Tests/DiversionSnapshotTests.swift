@@ -1,6 +1,6 @@
 //
 //  DiversionSnapshotTests.swift
-//  Replicould — DependencyClients
+//  Replicould — GameServices
 //
 //  `DiversionSnapshot(objectBlock:fallbackDesignation:)` parses the `object` block
 //  of a `locations/{designation}` payload into the planetary-defense readout the
@@ -14,7 +14,7 @@ import Foundation
 import GameModels
 import Testing
 import Utils
-@testable import DependencyClients
+@testable import GameServices
 
 @Suite struct DiversionSnapshotTests {
 

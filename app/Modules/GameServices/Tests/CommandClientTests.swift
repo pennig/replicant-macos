@@ -1,6 +1,6 @@
 //
 //  CommandClientTests.swift
-//  Replicould — DependencyClients
+//  Replicould — GameServices
 //
 //  The Operation lifecycle (IMPLEMENTATION_PLAN §4 / §8): drive `CommandClient`
 //  over a canned transport and assert the optimistic row transitions correctly —
@@ -17,7 +17,7 @@ import OpenAPIRuntime
 import SQLiteData
 import Testing
 import Utils
-@testable import DependencyClients
+@testable import GameServices
 
 /// Disambiguate from `Foundation.Operation`.
 private typealias Operation = GameModels.Operation

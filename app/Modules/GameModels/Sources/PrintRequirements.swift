@@ -5,7 +5,7 @@
 //  The pre-flight resource check backing the `enqueue_print` confirmation shown
 //  in both the Devices and Print Queue inspectors: for a chosen blueprint, what
 //  each resource costs versus what's on hand at the device's current location
-//  (refreshed live before the sheet opens). Kept here in `DependencyClients` so
+//  (refreshed live before the sheet opens). Kept here in `GameServices` so
 //  both features share one model rather than each rolling its own.
 //
 

@@ -1,6 +1,6 @@
 //
 //  PrintingSnapshotTests.swift
-//  Replicould — DependencyClients
+//  Replicould — GameServices
 //
 //  `PrintingSnapshot(printingBlock:)` maps a printer's `printing` block to the
 //  active-job readout, and the `Device` extensions surface the queue
@@ -13,7 +13,7 @@ import Foundation
 import GameModels
 import Testing
 import Utils
-@testable import DependencyClients
+@testable import GameServices
 
 @Suite struct PrintingSnapshotTests {
 

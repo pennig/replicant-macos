@@ -1,6 +1,6 @@
 //
 //  DeviceDirectiveTests.swift
-//  Replicould — DependencyClients
+//  Replicould — GameServices
 //
 //  The AMI-directive accessors that back the inspector's `set_directive` picker:
 //  the available directive vocabulary and the directive currently in force are
@@ -11,7 +11,7 @@ import Foundation
 import GameModels
 import Testing
 import Utils
-@testable import DependencyClients
+@testable import GameServices
 
 @Suite struct DeviceDirectiveTests {
 

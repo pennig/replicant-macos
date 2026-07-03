@@ -12,7 +12,7 @@ import Foundation
 import GameModels
 import Testing
 import Utils
-@testable import DependencyClients
+@testable import GameServices
 @testable import DevicesFeature
 
 @Suite struct RefreshCadenceTests {

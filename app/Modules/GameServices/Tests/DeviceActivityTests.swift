@@ -1,6 +1,6 @@
 //
 //  DeviceActivityTests.swift
-//  Replicould — DependencyClients
+//  Replicould — GameServices
 //
 //  A survey drone's body `scan` and belt `search` surface an identical `scan`
 //  activity block, so `Device.derivedActivity` leans on the device status to tell
@@ -11,7 +11,7 @@ import Foundation
 import GameModels
 import Testing
 import Utils
-@testable import DependencyClients
+@testable import GameServices
 
 @Suite struct DeviceActivityTests {
 

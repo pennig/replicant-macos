@@ -7,9 +7,9 @@
 //  can actually dispatch (travel / print today) and how they're parameterized.
 //
 
-import DependencyClients
 import Foundation
 import GameModels
+import GameServices
 
 enum DevicePresentation {
     /// "heaven_vessel" → "Heaven Vessel".

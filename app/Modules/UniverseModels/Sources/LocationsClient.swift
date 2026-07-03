@@ -17,9 +17,9 @@
 
 import API
 import ComposableArchitecture
-import DependencyClients
 import Foundation
 import GameModels
+import GameServices
 
 public enum LocationsError: Error, Equatable, Sendable {
     /// The system hasn't been explored — no detail is available yet (HTTP 403).

@@ -8,8 +8,8 @@
 //  the app already links) so it needs no separate app-target wiring.
 //
 
-import DependencyClients
 import GameModels
+import GameServices
 import SQLiteData
 import SwiftUI
 import UI

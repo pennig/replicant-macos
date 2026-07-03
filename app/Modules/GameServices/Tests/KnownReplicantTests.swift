@@ -1,6 +1,6 @@
 //
 //  KnownReplicantTests.swift
-//  Replicould — DependencyClients
+//  Replicould — GameServices
 //
 //  `KnownReplicant` folds three sources into one record — the directory, the
 //  details endpoint, and scan sightings — preserving richer intel rather than
@@ -14,7 +14,7 @@ import Foundation
 import SQLiteData
 import Testing
 import Utils
-@testable import DependencyClients
+@testable import GameServices
 @testable import GameModels
 
 @Suite struct KnownReplicantTests {

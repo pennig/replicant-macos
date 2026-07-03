@@ -1,6 +1,6 @@
 //
 //  DevicesClient.swift
-//  Replicould — shared dependency clients
+//  Replicould — GameServices (shared clients + command engine)
 //
 //  Talks to the device endpoints through the shared generated client (so calls
 //  inherit bearer auth, rate limiting, and logging). Lives here, beside the

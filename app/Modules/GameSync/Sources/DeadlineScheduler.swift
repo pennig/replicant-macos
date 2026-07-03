@@ -21,9 +21,9 @@
 //
 
 import ComposableArchitecture
-import DependencyClients
 import Foundation
 import GameModels
+import GameServices
 import OSLog
 import SQLiteData
 

@@ -1,6 +1,6 @@
 //
 //  CommandClient.swift
-//  Replicould — shared dependency clients
+//  Replicould — GameServices (shared clients + command engine)
 //
 //  The action-dispatch template (IMPLEMENTATION_PLAN §5.1). Firing a command is
 //  one write path: insert an optimistic `Operation` (instant UI via @FetchAll) →

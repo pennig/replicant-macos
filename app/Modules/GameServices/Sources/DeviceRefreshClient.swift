@@ -1,6 +1,6 @@
 //
 //  DeviceRefreshClient.swift
-//  Replicould — shared dependency clients
+//  Replicould — GameServices (shared clients + command engine)
 //
 //  The single seam every feature and the sync engine use to request an
 //  authoritative device confirm-read. It fronts one process-shared

@@ -1,6 +1,6 @@
 //
 //  TravelSnapshotTests.swift
-//  Replicould — DependencyClients
+//  Replicould — GameServices
 //
 //  `TravelSnapshot(travelObject:)` parses a "travel-ish" JSON object into the
 //  itinerary the device inspector's segmented progress bar draws. The same
@@ -15,7 +15,7 @@ import Foundation
 import GameModels
 import Testing
 import Utils
-@testable import DependencyClients
+@testable import GameServices
 
 /// Disambiguate from `Foundation.Operation`.
 private typealias Operation = GameModels.Operation

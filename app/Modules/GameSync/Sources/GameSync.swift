@@ -15,9 +15,9 @@
 
 import API
 import ComposableArchitecture
-import DependencyClients
 import Foundation
 import GameModels
+import GameServices
 import OSLog
 import SQLiteData
 
@@ -60,7 +60,7 @@ extension GameSync {
         let routes = LockIsolated<[RelayRoute]>([])
 
         // Built-in routes for the shared-infrastructure tables `GameSync` owns
-        // (Device / BobnetMessage live in DependencyClients, not a feature), so
+        // (Device / BobnetMessage live in GameServices, not a feature), so
         // they're wired here rather than from the app. Feature-specific routes
         // (e.g. Messages) are still registered by the composition root.
         let reconciler = Reconciler()

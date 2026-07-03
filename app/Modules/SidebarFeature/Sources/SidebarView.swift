@@ -10,8 +10,8 @@
 //
 
 import ComposableArchitecture
-import DependencyClients
 import GameModels
+import GameServices
 import SQLiteData
 import SwiftUI
 import UI

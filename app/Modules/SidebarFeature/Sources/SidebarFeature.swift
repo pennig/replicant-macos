@@ -10,9 +10,9 @@
 //
 
 import ComposableArchitecture
-import DependencyClients
 import Foundation
 import GameModels
+import GameServices
 import SQLiteData
 
 @Reducer
