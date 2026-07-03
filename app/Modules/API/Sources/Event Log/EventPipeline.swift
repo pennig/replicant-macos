@@ -169,6 +169,27 @@ public actor EventPipeline {
         return emitted
     }
 
+    /// Wall-clock time of the last relay event we persisted, decoded from the
+    /// stored cursor (a Redis stream ID `<ms>-<seq>`). Nil on a cold start (no
+    /// cursor) or an unparseable value. Lets the tier-2 backfill skip itself when
+    /// the cursor is fresh — tier-1 replay from it already covers recent history,
+    /// so the per-replicant log walk would be redundant reads.
+    public func lastCursorDate() -> Date? {
+        Self.cursorDate(cursorStore.load())
+    }
+
+    /// Parse a Redis stream ID's leading millisecond timestamp into a `Date`.
+    /// Pure + static so it's unit-testable without the actor. Nil when absent or
+    /// malformed.
+    static func cursorDate(_ cursor: String?) -> Date? {
+        guard
+            let cursor,
+            let msPart = cursor.split(separator: "-").first,
+            let ms = Double(msPart)
+        else { return nil }
+        return Date(timeIntervalSince1970: ms / 1000)
+    }
+
     public func stop() {
         relayTask?.cancel()
         relayTask = nil

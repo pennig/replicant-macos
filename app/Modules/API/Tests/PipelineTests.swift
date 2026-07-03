@@ -85,4 +85,19 @@ final class PipelineTests: XCTestCase {
         XCTAssertTrue(set.insert("a"), "a was evicted, re-insertable")
         XCTAssertFalse(set.insert("c"))
     }
+
+    // A Redis stream ID's leading component is a millisecond timestamp; the
+    // pipeline decodes it to gate tier-2 backfill (skip when the cursor is fresh).
+    func testCursorDateParsesRedisStreamID() {
+        XCTAssertEqual(
+            EventPipeline.cursorDate("1779087998123-0")?.timeIntervalSince1970 ?? 0,
+            1779087998.123,
+            accuracy: 0.0005
+        )
+        // A bare ms value (no sequence suffix) still parses.
+        XCTAssertEqual(EventPipeline.cursorDate("1000")?.timeIntervalSince1970 ?? -1, 1, accuracy: 0.0005)
+        // Absent / malformed cursors degrade to nil (→ caller backfills).
+        XCTAssertNil(EventPipeline.cursorDate(nil))
+        XCTAssertNil(EventPipeline.cursorDate("not-a-number"))
+    }
 }

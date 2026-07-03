@@ -150,8 +150,17 @@ public struct RelayClient: Sendable {
                         logger.info("server closed connection. reconnecting...")
                         break
                     } catch {
-                        // Network or server error — back off before reconnecting.
                         guard !Task.isCancelled else { break }
+                        // A bad/expired relay token fails permanently — reconnecting
+                        // can't fix it, so stop the stream instead of looping forever.
+                        // The consumer (EventPipeline.resumeRelay) surfaces this via
+                        // onRelayError; the app keeps working over REST. Everything
+                        // else is transient (network blip, relay restart): back off.
+                        if case RelayError.badStatus(let code) = error, code == 401 || code == 403 {
+                            logger.error("relay auth failed (\(code)) — stopping (check the relay client token)")
+                            continuation.finish(throwing: error)
+                            return
+                        }
                         try? await Task.sleep(for: retryDelay)
                         continue
                     }

@@ -135,12 +135,28 @@ actor GameSyncEngine {
             // channels own their tier-2 as `RelayRoute.gapRepair` — the messages
             // route re-reads the REST inbox — so run every route's gapRepair here
             // too, recovering entries missed while disconnected beyond retention.
-            Task { await GameSyncEngine.backfillAllReplicants(pipeline) }
+            Task { await GameSyncEngine.backfillIfStale(pipeline) }
             Task { await router.runGapRepair() }
             for await event in stream {
                 await router.dispatch(event)
             }
         }
+    }
+
+    /// Run tier-2 game-log backfill only when the persisted relay cursor is stale
+    /// (or absent). A fresh cursor means tier-1 replay from it already recovers
+    /// recent history on connect, so the per-replicant log walk would be redundant
+    /// reads on every relaunch/wake. A long absence (or cold start) leaves the
+    /// cursor old — or gone — so we walk. `freshWindow` is generous: a needless
+    /// walk only costs a few reads (dedup absorbs them), whereas skipping a real
+    /// gap loses events, so we err toward walking.
+    static func backfillIfStale(_ pipeline: EventPipeline, freshWindow: TimeInterval = 15 * 60) async {
+        @Dependency(\.date) var date
+        if let last = await pipeline.lastCursorDate(), date.now.timeIntervalSince(last) < freshWindow {
+            logger.info("backfill skipped — relay cursor fresh (\(Int(date.now.timeIntervalSince(last)))s old); tier-1 replay covers it")
+            return
+        }
+        await backfillAllReplicants(pipeline)
     }
 
     /// Walk the (small) replicant roster and backfill each from the game log.

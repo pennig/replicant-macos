@@ -14,6 +14,7 @@
 		C9702B6D2FF202A5002E2CCE /* BlueprintsFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C9702B6C2FF202A5002E2CCE /* BlueprintsFeature */; };
 		C9AB58FE2FEA4A3300536794 /* StarMapFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C9AB58FD2FEA4A3300536794 /* StarMapFeature */; };
 		C9B188932FF72F130018FA8F /* SidebarFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C9B188922FF72F130018FA8F /* SidebarFeature */; };
+		C9B188952FF856310018FA8F /* GameModels in Frameworks */ = {isa = PBXBuildFile; productRef = C9B188942FF856310018FA8F /* GameModels */; };
 		C9B5305C2FDDD839006F79A8 /* ReplicantApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9B530592FDDD839006F79A8 /* ReplicantApp.swift */; };
 		C9B5305D2FDDD839006F79A8 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C9B530572FDDD839006F79A8 /* Assets.xcassets */; };
 		C9B530752FE0A5FC006F79A8 /* MainFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9B530742FE0A5FC006F79A8 /* MainFeature.swift */; };
@@ -51,6 +52,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				C9B5307A2FE0A6D1006F79A8 /* ComposableArchitecture in Frameworks */,
+				C9B188952FF856310018FA8F /* GameModels in Frameworks */,
 				C9F814BE2FEE1EED00ACFAC3 /* GameSync in Frameworks */,
 				C9B188932FF72F130018FA8F /* SidebarFeature in Frameworks */,
 				C9B5309F2FE72B0B006F79A8 /* RawAPIFeature in Frameworks */,
@@ -149,6 +151,7 @@
 				C961BC5C2FF69C7600D9C273 /* PrintQueueFeature */,
 				C961BC5E2FF6A58600D9C273 /* ReplicantsFeature */,
 				C9B188922FF72F130018FA8F /* SidebarFeature */,
+				C9B188942FF856310018FA8F /* GameModels */,
 			);
 			productName = Replicant;
 			productReference = C922A8B62FDC493200431320 /* Replicould.app */;
@@ -491,6 +494,10 @@
 		C9B188922FF72F130018FA8F /* SidebarFeature */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = SidebarFeature;
+		};
+		C9B188942FF856310018FA8F /* GameModels */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = GameModels;
 		};
 		C9B530792FE0A6D1006F79A8 /* ComposableArchitecture */ = {
 			isa = XCSwiftPackageProductDependency;
