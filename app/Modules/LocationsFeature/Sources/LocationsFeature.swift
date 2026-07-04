@@ -11,8 +11,9 @@
 //  Census population (the ~5,770-system survey) is owned by the Stars view; this
 //  feature reads that shared table. Selecting an explored system fetches its
 //  detail via `LocationsClient` and persists the `StarSystem` blob; selecting a
-//  body additionally fetches and merges that body's scanned detail. Unexplored
-//  systems return `.notExplored` and are simply left as census leaves.
+//  body additionally fetches and merges that body's scanned detail. A system with
+//  no replicant present returns `.noReplicantInSystem` and is left as a census
+//  leaf (falling back to any cached blob).
 //
 
 import ComposableArchitecture
@@ -172,18 +173,30 @@ public struct LocationsFeature {
                 let locationsClient = self.locationsClient
                 let now = self.now
                 return .run { send in
-                    // Start from the persisted detail so previously-hydrated
-                    // bodies (e.g. a planet's other moons) aren't clobbered by the
-                    // roster — the star-level response carries no moon/body detail.
-                    // Only fetch the roster when we have nothing cached yet.
-                    let cached = try await database.read { db in
-                        try SystemDetail.where { $0.designation.eq(system) }.fetchOne(db)
+                    // Start from any persisted detail, plus the census explored flag.
+                    let (cached, censusExplored) = try await database.read { db in
+                        let detail = try SystemDetail.where { $0.designation.eq(system) }.fetchOne(db)
+                        let explored = try Star.where { $0.designation.eq(system) }.fetchOne(db)?.explored ?? false
+                        return (detail, explored)
                     }
-                    var assembled: StarSystem
-                    if let existing = try cached?.system() {
-                        assembled = existing
-                    } else {
-                        assembled = try await locationsClient.system(system)
+                    var assembled = try cached?.system()
+                    // Refresh the star-level system detail on selection whenever the
+                    // system appears explored — the census says so, or we already
+                    // hold detail for it (a blob implies we once had access). Fetched
+                    // best-effort and merged, mirroring the body fetch below: a
+                    // since-departed system 403s ("no replicant in system") and falls
+                    // back to the cached blob, and `mergingSystemDetail` keeps richer
+                    // per-body detail (and scanned-only shops/structures) intact.
+                    if censusExplored || assembled != nil {
+                        if let fresh = try? await locationsClient.system(system) {
+                            assembled = assembled.map { $0.mergingSystemDetail(fresh) } ?? fresh
+                        }
+                    }
+                    // Nothing cached and nothing fetched (uncharted / no access) —
+                    // leave it as a census leaf.
+                    guard var assembled else {
+                        await send(.hydrated(system))
+                        return
                     }
                     // If a specific body was selected, fetch and merge its scan
                     // (this updates just that body, preserving its siblings).
@@ -198,8 +211,10 @@ public struct LocationsFeature {
                     }
                     await send(.hydrated(system))
                 } catch: { error, send in
-                    // Unexplored systems 403 — expected, not an error to surface.
-                    if let locErr = error as? LocationsError, locErr == .notExplored {
+                    // "No replicant in system" (403) is expected, not an error to
+                    // surface. The star-level fetch above swallows it via `try?`, so
+                    // this is a defensive fallback should any path surface it directly.
+                    if let locErr = error as? LocationsError, locErr == .noReplicantInSystem {
                         await send(.hydrated(system))
                     } else {
                         await send(.hydrateFailed(system: system, message: error.localizedDescription))

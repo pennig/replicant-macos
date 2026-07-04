@@ -12,6 +12,7 @@
 //
 
 import SwiftUI
+import UI
 
 // MARK: - Active replicant progress
 

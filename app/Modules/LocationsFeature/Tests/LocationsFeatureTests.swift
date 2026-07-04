@@ -42,4 +42,62 @@ import UniverseModels
         )
         #expect(explored.map(\.id) == ["SOL"])
     }
+
+    /// A system scanned while the app was closed reads `explored == false` in the
+    /// stale bulk census, but its hydrated detail shows it's scanned. It must still
+    /// land in the Explored filter (and out of Uncharted), matching its row's
+    /// "N/N scanned" subtitle.
+    @Test func hydratedScanOverridesStaleCensusExploredFlag() {
+        let krios = Star(
+            designation: "KRIOS", spectralType: "M6", color: "Red",
+            positionX: 0, positionY: 0, positionZ: 0, estimatedPlanets: 2,
+            explored: false, hasLife: true, entryPoint: "KRIOS-3-L4", createdAt: .distantPast
+        )
+        let scanned = StarSystem(
+            designation: "KRIOS", systemScanned: true, planetsScanned: 3, planetsTotal: 3,
+            planets: [Planet(designation: "KRIOS-3", type: "Terrestrial", recon: .scanned)]
+        )
+        let details = ["KRIOS": scanned]
+
+        let explored = LocationTree.forest(
+            stars: [krios], details: details, footprints: [:],
+            myPosition: nil, filter: .explored, sort: .alphabetical
+        )
+        #expect(explored.map(\.id) == ["KRIOS"])
+
+        let uncharted = LocationTree.forest(
+            stars: [krios], details: details, footprints: [:],
+            myPosition: nil, filter: .unexplored, sort: .alphabetical
+        )
+        #expect(uncharted.isEmpty)
+    }
+
+    /// Refreshing a cached system via the star-level `system(_:)` endpoint takes the
+    /// fresh scan counts but must keep scanned-only detail the star-level response
+    /// never carries — shops, megastructures, and richer per-body detail.
+    @Test func mergingSystemDetailKeepsScannedOnlyDetail() {
+        let cached = StarSystem(
+            designation: "KRIOS", systemScanned: true, planetsScanned: 2, planetsTotal: 3,
+            planets: [Planet(designation: "KRIOS-2", type: "Ocean World", recon: .scanned,
+                             moons: [Moon(designation: "KRIOS-2-1")])],
+            structures: [SpecialSite(designation: "KRIOS-MEGA-1", kind: .megastructure)],
+            shops: [Shop(controllerCode: "SHOP1", shopName: "Outfitter", location: "KRIOS-2")]
+        )
+        // Star-level refresh: newer counts, fuller roster, but no shops/structures.
+        let fresh = StarSystem(
+            designation: "KRIOS", systemScanned: true, planetsScanned: 3, planetsTotal: 3,
+            planets: [Planet(designation: "KRIOS-2", type: "Ocean World", recon: .visited),
+                      Planet(designation: "KRIOS-3", type: "Super Earth", recon: .visited)]
+        )
+
+        let merged = cached.mergingSystemDetail(fresh)
+        #expect(merged.planetsScanned == 3)                      // fresh counts win
+        #expect(merged.planets.map(\.designation) == ["KRIOS-2", "KRIOS-3"])
+        #expect(merged.shops.map(\.id) == ["SHOP1"])             // scanned-only, preserved
+        #expect(merged.structures.map(\.designation) == ["KRIOS-MEGA-1"])
+        // Richer body (scanned, with a moon) kept over the fresh estimated stub.
+        let krios2 = try! #require(merged.planets.first { $0.designation == "KRIOS-2" })
+        #expect(krios2.recon == .scanned)
+        #expect(krios2.moons.map(\.designation) == ["KRIOS-2-1"])
+    }
 }

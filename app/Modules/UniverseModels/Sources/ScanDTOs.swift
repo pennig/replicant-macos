@@ -201,4 +201,16 @@ extension StarSystem {
         if result.moonsScanned == nil { result.moonsScanned = moonsScanned }
         return result
     }
+
+    /// Overlay a fresh *star-level* (`system(_:)`) response onto this cached
+    /// system. Reuses `mergingScan` for the roster / counts / per-body preservation,
+    /// but the star-level endpoint never carries shops or megastructures (only a
+    /// full `scan` does) — so those are kept from the cached copy rather than wiped
+    /// by the empty rosters the star-level response brings.
+    public func mergingSystemDetail(_ fresh: StarSystem) -> StarSystem {
+        var result = mergingScan(fresh)
+        if result.shops.isEmpty { result.shops = shops }
+        if result.structures.isEmpty { result.structures = structures }
+        return result
+    }
 }

@@ -112,10 +112,20 @@ public enum LocationTree {
         sort: LocationSort
     ) -> [LocationNode] {
         let filtered = stars.filter { star in
-            switch filter {
+            // A system counts as explored if the bulk census says so *or* we hold
+            // hydrated detail for it. The census `Star` table is only refreshed by
+            // the Stars-view survey, so a system scanned while the app was closed
+            // can still read `explored == false` here even though its hydrated
+            // detail (and the "N/N scanned" subtitle) show it's been fully scanned.
+            // A detail blob is only ever obtained while a replicant is in the system
+            // (the endpoint 403s "No replicant in system" otherwise), and reaching a
+            // system marks it explored — so a persisted blob implies exploration and
+            // keeps the filter consistent with what the row shows.
+            let isExplored = star.explored || details[star.designation] != nil
+            return switch filter {
             case .all:        true
-            case .explored:   star.explored
-            case .unexplored: !star.explored
+            case .explored:   isExplored
+            case .unexplored: !isExplored
             }
         }
 

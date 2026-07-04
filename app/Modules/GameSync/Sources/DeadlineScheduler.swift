@@ -125,7 +125,7 @@ actor DeadlineScheduler {
 
         for due in await openDatedOps() where (due.completesAt ?? .distantFuture) <= now {
             logger.info("deadline reached for op \(due.id, privacy: .public) (\(due.kind, privacy: .public)) on \(due.entityCode, privacy: .public) — confirming")
-            await deviceRefresher.refresh(due.entityCode, .high)
+            _ = await deviceRefresher.refresh(due.entityCode, .high)
 
             // A relay completion event may have closed it during the read.
             guard
@@ -175,7 +175,7 @@ actor DeadlineScheduler {
         guard !ops.isEmpty else { return }
 
         for op in ops {
-            await deviceRefresher.refresh(op.entityCode, .low)
+            _ = await deviceRefresher.refresh(op.entityCode, .low)
             let device = try? await database.read { db in
                 try Device.where { $0.deviceCode.eq(op.entityCode) }.fetchOne(db)
             }

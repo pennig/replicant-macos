@@ -8,11 +8,13 @@
 //    - `system(_:)`    → GET /v1/locations/{star} (star-level roster + belts)
 //    - `body(_:)`      → GET /v1/locations/{code} (scanned body detail to merge)
 //
-//  Location detail is gated on having explored the system: an unexplored system
-//  responds 403, surfaced here as `LocationsError.notExplored` (not a failure —
-//  it just means "travel there first"). All decoding goes through the JSON
-//  round-trip in `LocationDTOs.swift`, since the generated client exposes the
-//  nested blocks only as opaque freeform containers.
+//  Location detail is gated on *presence*, not exploration: the endpoint returns
+//  detail only while one of your replicants is in the system, and otherwise
+//  responds 403 ("No replicant in system"), surfaced here as
+//  `LocationsError.noReplicantInSystem` (not a failure — it just means "travel
+//  there first"). All decoding goes through the JSON round-trip in
+//  `LocationDTOs.swift`, since the generated client exposes the nested blocks
+//  only as opaque freeform containers.
 //
 
 import API
@@ -22,8 +24,10 @@ import GameModels
 import GameServices
 
 public enum LocationsError: Error, Equatable, Sendable {
-    /// The system hasn't been explored — no detail is available yet (HTTP 403).
-    case notExplored
+    /// No replicant is currently in the system, so live detail is unavailable
+    /// (HTTP 403 "No replicant in system"). Presence-gated, *not* exploration —
+    /// a previously-scanned system the replicant has left returns this too.
+    case noReplicantInSystem
     case notFound
     case malformed
     case unexpected(Int)
@@ -37,7 +41,7 @@ public struct LocationsClient: Sendable {
 
     /// The star-level system: physical star, planet roster (types estimated
     /// until scanned), asteroid belts, counts, and system events. Throws
-    /// `.notExplored` if the system is uncharted.
+    /// `.noReplicantInSystem` if no replicant is currently in the system.
     public var system: @Sendable (_ designation: String) async throws -> StarSystem
 
     /// Scanned detail for a single body (planet/moon/belt/lagrange/…), merged
@@ -180,7 +184,7 @@ extension LocationsClient: DependencyKey {
         case .ok(let ok):
             return try LocationDecoding.reinterpret(try ok.body.json, as: RawLocation.self)
         case .forbidden:
-            throw LocationsError.notExplored
+            throw LocationsError.noReplicantInSystem
         case .notFound:
             throw LocationsError.notFound
         case .conflict:
@@ -198,7 +202,7 @@ extension LocationsClient: DependencyKey {
 extension LocationsClient: TestDependencyKey {
     public static let testValue = LocationsClient(
         footprint: { [:] },
-        system: { _ in throw LocationsError.notExplored },
+        system: { _ in throw LocationsError.noReplicantInSystem },
         body: { _ in throw LocationsError.notFound },
         scan: { _ in throw LocationsError.notFound }
     )

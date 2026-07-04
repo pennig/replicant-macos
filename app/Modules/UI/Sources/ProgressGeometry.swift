@@ -12,16 +12,16 @@
 import Foundation
 
 /// Elapsed-fraction and ETA math shared by the progress bars.
-enum ProgressMath {
+public enum ProgressMath {
     /// Elapsed fraction in `0...1`, clamped. A non-positive span reads as done.
-    static func fraction(now: Date, start: Date, end: Date) -> Double {
+    public static func fraction(now: Date, start: Date, end: Date) -> Double {
         let total = end.timeIntervalSince(start)
         guard total > 0 else { return 1 }
         return min(1, max(0, now.timeIntervalSince(start) / total))
     }
 
     /// Compact ETA string, e.g. "ETA 1m 23s", or "Arriving…" once due.
-    static func etaText(now: Date, end: Date) -> String {
+    public static func etaText(now: Date, end: Date) -> String {
         let remaining = Int(end.timeIntervalSince(now).rounded())
         guard remaining > 0 else { return "Arriving…" }
         let minutes = remaining / 60
@@ -33,13 +33,13 @@ enum ProgressMath {
     /// one-shot operation, mining loops: the bar fills over each `cycle` seconds
     /// then wraps. Anchored on the operation's start so every cycle boundary lands
     /// on the same phase the server ticks at.
-    static func cycleFraction(now: Date, start: Date, cycle: Double) -> Double {
+    public static func cycleFraction(now: Date, start: Date, cycle: Double) -> Double {
         guard cycle > 0 else { return 0 }
         return intoCycle(now: now, start: start, cycle: cycle) / cycle
     }
 
     /// Seconds left in the current cycle, as "next cycle 12s".
-    static func cycleText(now: Date, start: Date, cycle: Double) -> String {
+    public static func cycleText(now: Date, start: Date, cycle: Double) -> String {
         guard cycle > 0 else { return "" }
         let remaining = Int((cycle - intoCycle(now: now, start: start, cycle: cycle)).rounded())
         return "next cycle \(max(0, remaining))s"

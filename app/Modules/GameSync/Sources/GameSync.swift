@@ -208,7 +208,7 @@ extension GameSync {
             if event.eventType == "print_complete",
                let newCode = event.payload?["new_device_code"]?.stringValue,
                !newCode.isEmpty {
-                await deviceRefresher.refresh(newCode, .high)
+                _ = await deviceRefresher.refresh(newCode, .high)
             }
             // Then refresh the device row via the poll coordinator. When the event
             // just closed an operation, read authoritatively (high priority): the
@@ -219,7 +219,7 @@ extension GameSync {
             // it's a plain invalidation: a low-priority trigger that coalesces,
             // respects the TTL, and defers under read-budget pressure.
             guard let code = event.deviceCode, !code.isEmpty else { return }
-            await deviceRefresher.refresh(code, completedOp ? .high : .low)
+            _ = await deviceRefresher.refresh(code, completedOp ? .high : .low)
         }
     }
 
