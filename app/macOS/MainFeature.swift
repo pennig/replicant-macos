@@ -171,7 +171,7 @@ struct MainView: View {
     var body: some View {
         Group {
             if store.sidebar.category?.hasDetail == false {
-                // Content-only category (Event Log): a two-column split view —
+                // Content-only category (Operations Log): a two-column split view —
                 // sidebar + content, with no detail column at all.
                 NavigationSplitView {
                     sidebar
@@ -248,7 +248,7 @@ struct MainView: View {
         store.scope(state: \.replicantDirectory, action: \.replicantDirectory)
     }
 
-    // — Content: a selectable list (or, for the Event Log, a plain list) —
+    // — Content: a selectable list (or, for the Operations Log, a plain list) —
     @ViewBuilder private var content: some View {
         if store.sidebar.category == .messages {
             MessagesListView(store: messagesStore)
@@ -264,7 +264,7 @@ struct MainView: View {
             PrintQueueListView(store: printQueueStore)
         } else if store.sidebar.category == .replicants {
             ReplicantsListView(store: replicantsStore)
-        } else if store.sidebar.category == .eventLog {
+        } else if store.sidebar.category == .operationsLog {
             ActivityView()
         } else if store.sidebar.category == .bobnet {
             BobnetView()

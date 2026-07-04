@@ -13,10 +13,12 @@ import Foundation
 public enum SidebarItem: String, CaseIterable, Identifiable, Hashable, Sendable {
     // Catalog
     case stars, locations, devices, replicants, blueprints
+    // Missions
+    case locationEvents
     // Operations
-    case printQueue
+    case printQueue, operationsLog
     // Comms
-    case messages, bobnet, eventLog
+    case messages, bobnet
 
     public var id: String { rawValue }
 
@@ -27,10 +29,11 @@ public enum SidebarItem: String, CaseIterable, Identifiable, Hashable, Sendable 
         case .devices: "Devices"
         case .replicants: "Replicants"
         case .blueprints: "Blueprints"
+        case .locationEvents: "Location Events"
         case .printQueue: "Print Queue"
+        case .operationsLog: "Operations Log"
         case .messages: "Messages"
         case .bobnet: "Bobnet"
-        case .eventLog: "Event Log"
         }
     }
 
@@ -41,18 +44,19 @@ public enum SidebarItem: String, CaseIterable, Identifiable, Hashable, Sendable 
         case .devices: "circle.hexagongrid"
         case .replicants: "point.3.connected.trianglepath.dotted"
         case .blueprints: "doc.plaintext"
+        case .locationEvents: "flag"
         case .printQueue: "printer"
+        case .operationsLog: "list.bullet.rectangle"
         case .messages: "envelope"
         case .bobnet: "bubble.left.and.bubble.right"
-        case .eventLog: "list.bullet.rectangle"
         }
     }
 
     /// Some categories show content only — no detail pane (Galaxy Map, Bobnet,
-    /// and the live Event Log ledger).
+    /// and the live Operations Log ledger).
     public var hasDetail: Bool {
         switch self {
-        case .eventLog, .stars, .bobnet: false
+        case .operationsLog, .stars, .bobnet: false
         default: true
         }
     }
@@ -69,7 +73,8 @@ public enum SidebarItem: String, CaseIterable, Identifiable, Hashable, Sendable 
 
     public static let groups: [Group] = [
         Group(id: "Catalog", items: [.stars, .locations, .devices, .replicants, .blueprints]),
-        Group(id: "Operations", items: [.printQueue]),
-        Group(id: "Comms", items: [.messages, .bobnet, .eventLog]),
+        Group(id: "Missions", items: [.locationEvents]),
+        Group(id: "Operations", items: [.printQueue, .operationsLog]),
+        Group(id: "Comms", items: [.messages, .bobnet]),
     ]
 }

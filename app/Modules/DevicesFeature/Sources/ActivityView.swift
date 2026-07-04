@@ -39,7 +39,7 @@ public struct ActivityView: View {
                 )
             }
         }
-        .navigationTitle("Event Log")
+        .navigationTitle("Operations Log")
     }
 }
 
