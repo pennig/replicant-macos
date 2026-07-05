@@ -13,6 +13,7 @@
 
 import ComposableArchitecture
 import Foundation
+import GameDatabase
 import GameModels
 import GameServices
 import SQLiteData
@@ -30,7 +31,7 @@ private struct StubError: LocalizedError {
     /// A refresh walks the directory and clears the loading flag on success.
     @Test func refreshLoadsDirectory() async throws {
         try await withDependencies {
-            $0.defaultDatabase = try makeDatabase()
+            $0.defaultDatabase = try GameDatabase.bootstrap()
         } operation: {
             let store = TestStore(initialState: ReplicantsFeature.State()) {
                 ReplicantsFeature()
@@ -46,7 +47,7 @@ private struct StubError: LocalizedError {
     /// A failed refresh surfaces a banner and clears loading.
     @Test func refreshFailureSurfacesError() async throws {
         try await withDependencies {
-            $0.defaultDatabase = try makeDatabase()
+            $0.defaultDatabase = try GameDatabase.bootstrap()
         } operation: {
             let store = TestStore(initialState: ReplicantsFeature.State()) {
                 ReplicantsFeature()
@@ -65,7 +66,7 @@ private struct StubError: LocalizedError {
     /// A second refresh while one is in flight is ignored (the guard short-circuits).
     @Test func refreshIgnoredWhileLoading() async throws {
         try await withDependencies {
-            $0.defaultDatabase = try makeDatabase()
+            $0.defaultDatabase = try GameDatabase.bootstrap()
         } operation: {
             var loading = ReplicantsFeature.State()
             loading.isLoading = true
@@ -77,7 +78,7 @@ private struct StubError: LocalizedError {
     /// Selecting a replicant fetches its details and shows/hides the spinner.
     @Test func detailsRequestedLoadsAndClearsSpinner() async throws {
         try await withDependencies {
-            $0.defaultDatabase = try makeDatabase()
+            $0.defaultDatabase = try GameDatabase.bootstrap()
         } operation: {
             let loaded = LockIsolated<[String]>([])
             let store = TestStore(initialState: ReplicantsFeature.State()) {
@@ -99,7 +100,7 @@ private struct StubError: LocalizedError {
     /// Clearing the selection cancels any in-flight details fetch.
     @Test func detailsRequestedNilClearsSpinner() async throws {
         try await withDependencies {
-            $0.defaultDatabase = try makeDatabase()
+            $0.defaultDatabase = try GameDatabase.bootstrap()
         } operation: {
             var initial = ReplicantsFeature.State()
             initial.loadingDetailCode = "ABC"
@@ -113,7 +114,7 @@ private struct StubError: LocalizedError {
     /// A failed details fetch just stops the spinner; the row keeps prior intel.
     @Test func detailsFailureStopsSpinner() async throws {
         try await withDependencies {
-            $0.defaultDatabase = try makeDatabase()
+            $0.defaultDatabase = try GameDatabase.bootstrap()
         } operation: {
             let store = TestStore(initialState: ReplicantsFeature.State()) {
                 ReplicantsFeature()
@@ -131,7 +132,7 @@ private struct StubError: LocalizedError {
     /// Because the query lives in state, this is directly assertable — no view.
     @Test func sectionsDeriveFromDirectoryAndSearch() async throws {
         try await withDependencies {
-            $0.defaultDatabase = try makeDatabase()
+            $0.defaultDatabase = try GameDatabase.bootstrap()
         } operation: {
             @Dependency(\.defaultDatabase) var database
             let now = Date(timeIntervalSince1970: 1_000)
@@ -165,15 +166,5 @@ private struct StubError: LocalizedError {
             #expect(state.sections.map(\.id) == ["NPCs"])
             #expect(state.sections.first?.replicants.map(\.name) == ["Riker"])
         }
-    }
-
-    /// An in-memory database with the tables the directory list observes.
-    private func makeDatabase() throws -> any DatabaseWriter {
-        let database = try SQLiteData.defaultDatabase()
-        var migrator = DatabaseMigrator()
-        Replicant.registerMigrations(&migrator)
-        KnownReplicant.registerMigrations(&migrator)
-        try migrator.migrate(database)
-        return database
     }
 }

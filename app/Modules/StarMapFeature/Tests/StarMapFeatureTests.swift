@@ -1,5 +1,6 @@
 import ComposableArchitecture
 import Foundation
+import GameDatabase
 import GameModels
 import GameServices
 import SQLiteData
@@ -115,14 +116,6 @@ import UniverseModels
 
 @MainActor
 @Suite struct StarSurveyTests {
-    private func makeStarsDatabase() throws -> any DatabaseWriter {
-        let database = try SQLiteData.defaultDatabase()
-        var migrator = DatabaseMigrator()
-        Star.registerMigrations(&migrator)
-        try migrator.migrate(database)
-        return database
-    }
-
     private func item(_ designation: String, explored: Bool = true, spectral: String = "G2 V") -> StarItem {
         StarItem(
             designation: designation, spectralType: spectral, color: "#fff4ea",
@@ -139,7 +132,7 @@ import UniverseModels
     }
 
     @Test func surveyWalksPagesAndPersistsAllStars() async throws {
-        let database = try makeStarsDatabase()
+        let database = try GameDatabase.bootstrap()
         let defaults = UserDefaults.inMemory
         defaults.set("RC", forKey: Account.activeReplicantCodeKey)
         let page1 = page(1, totalPages: 2, ["AAA", "BBB"], totalStars: 3)
@@ -177,7 +170,7 @@ import UniverseModels
     }
 
     @Test func emptyDatabaseTriggersCorruptionModal() async throws {
-        let database = try makeStarsDatabase()   // empty
+        let database = try GameDatabase.bootstrap()   // empty
         let store = TestStore(initialState: StarMapFeature.State()) {
             StarMapFeature()
         } withDependencies: {
@@ -188,7 +181,7 @@ import UniverseModels
     }
 
     @Test func manualOverrideRebuildsThenAutoDismisses() async throws {
-        let database = try makeStarsDatabase()
+        let database = try GameDatabase.bootstrap()
         let defaults = UserDefaults.inMemory
         defaults.set("RC", forKey: Account.activeReplicantCodeKey)
         let clock = TestClock()
@@ -228,7 +221,7 @@ import UniverseModels
     }
 
     @Test func reSurveyRefreshesFieldsButPreservesTimestamps() async throws {
-        let database = try makeStarsDatabase()
+        let database = try GameDatabase.bootstrap()
         let created = Date(timeIntervalSince1970: 1_000)
         let initial = Star(item: item("AAA", explored: false, spectral: "G2 V"), createdAt: created)
         let resurvey = Star(item: item("AAA", explored: true, spectral: "M0 V"),

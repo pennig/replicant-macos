@@ -10,6 +10,7 @@
 import API
 import ComposableArchitecture
 import Foundation
+import GameDatabase
 import GameModels
 import SQLiteData
 import Testing
@@ -20,15 +21,6 @@ import Utils
 private typealias Operation = GameModels.Operation
 
 @Suite struct ReconcilerOperationTests {
-
-    private func makeDatabase() throws -> any DatabaseWriter {
-        let database = try SQLiteData.defaultDatabase()
-        var migrator = DatabaseMigrator()
-        Operation.registerMigrations(&migrator)
-        Device.registerMigrations(&migrator)
-        try migrator.migrate(database)
-        return database
-    }
 
     /// A device snapshot mid-`printing`, with the `started_at`/`completes_at`
     /// block the backend attaches to an in-progress device.
@@ -117,7 +109,7 @@ private typealias Operation = GameModels.Operation
     }
 
     @Test func printCompleteClosesOpenOpAndRecordsResult() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         try await database.write { db in
             try Operation.insert {
                 Operation(
@@ -150,7 +142,7 @@ private typealias Operation = GameModels.Operation
 
     /// No open op on the device → the event is a harmless no-op.
     @Test func printCompleteWithNoOpenOpIsNoOp() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         let raw = #"{"type":"event","event_type":"print_complete","device_code":"NOPE","payload":{},"timestamp":"2026-06-26T01:00:00Z"}"#
         let event = try UnifiedEvent(relayEvent: RelayEvent(id: "1-0", raw: Data(raw.utf8)))
 
@@ -168,7 +160,7 @@ private typealias Operation = GameModels.Operation
     /// own, adopts an active op carrying the snapshot's start/completion — so a
     /// cold-load or relaunch surfaces the running task and its progress bar.
     @Test func inProgressSnapshotAdoptsActiveOp() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
 
         await withDependencies {
             $0.defaultDatabase = database
@@ -194,7 +186,7 @@ private typealias Operation = GameModels.Operation
     /// once the snapshot shows it has actually started, so its progress bar can
     /// draw. Same row (id preserved), now carrying the snapshot's deadline/start.
     @Test func queuedOpPromotedToActiveWhenPrintingStarts() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         try await database.write { db in
             try Operation.insert {
                 Operation(
@@ -229,7 +221,7 @@ private typealias Operation = GameModels.Operation
     /// An `optimistic` op (dispatch still in flight) is left untouched — dispatch
     /// owns its confirmation; reconcile must not race it.
     @Test func optimisticOpLeftForDispatchToConfirm() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         try await database.write { db in
             try Operation.insert {
                 Operation(
@@ -260,7 +252,7 @@ private typealias Operation = GameModels.Operation
     /// deadline is the fetch event-time plus the remaining ETA — so a cold-load
     /// surfaces the search and its progress bar.
     @Test func searchingSnapshotAdoptsActiveSearchOpWithDeadline() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
 
         await withDependencies {
             $0.defaultDatabase = database
@@ -284,7 +276,7 @@ private typealias Operation = GameModels.Operation
     /// found a site and the drone now *tracks* it (it never settles to idle), so
     /// the event, not a settled status, is the completion signal.
     @Test func scanCompleteClosesOpenSearchOp() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         try await database.write { db in
             try Operation.insert {
                 Operation(
@@ -317,7 +309,7 @@ private typealias Operation = GameModels.Operation
     /// (`arrives_at`). Regression: keying off `arrives_at` ended the trip a leg
     /// early.
     @Test func multiLegTravelSnapshotAdoptsOpWithRouteDeadline() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
 
         await withDependencies {
             $0.defaultDatabase = database
@@ -342,7 +334,7 @@ private typealias Operation = GameModels.Operation
     /// `device_travel_arrived` closes the trip. Regression: completing on the leg
     /// event ended a multi-leg trip after its first leg.
     @Test func legArrivalDoesNotCompleteTravelButRouteArrivalDoes() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         try await database.write { db in
             try Operation.insert {
                 Operation(
@@ -384,7 +376,7 @@ private typealias Operation = GameModels.Operation
     /// and an early arrival can beat the estimated ETA. Mirrors the
     /// DeadlineScheduler's `isSettled → complete`, but on the confirm-read.
     @Test func settledDeviceCompletesOpenTravelOp() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         try await database.write { db in
             try Operation.insert {
                 Operation(
@@ -415,7 +407,7 @@ private typealias Operation = GameModels.Operation
     /// A settled device does *not* complete a continuous op with no deadline
     /// (mining runs until stopped by its own signals), so the open op survives.
     @Test func settledDeviceLeavesDeadlinelessOpOpen() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         try await database.write { db in
             try Operation.insert {
                 Operation(
@@ -446,7 +438,7 @@ private typealias Operation = GameModels.Operation
     /// already landed, even though it arrives afterwards. Regression for the
     /// "slow poll clobbers a fresh event's confirm-read" hazard.
     @Test func staleIssuedSnapshotDoesNotClobberNewer() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
 
         // The newer read (issued at t=2_000) lands first: device is travelling.
         var newer = travellingDevice("965AC2C3")
@@ -475,7 +467,7 @@ private typealias Operation = GameModels.Operation
     /// A newer read (later issue-time) overwrites the stored snapshot, and the
     /// local-only `firstSeenAt` provenance survives the upsert.
     @Test func newerSnapshotOverwritesAndPreservesFirstSeen() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
 
         var first = travellingDevice("965AC2C3")
         first.updatedAt = Date(timeIntervalSince1970: 1_000)
@@ -503,7 +495,7 @@ private typealias Operation = GameModels.Operation
 
     /// A settled (idle) device carries no activity block, so nothing is adopted.
     @Test func settledDeviceAdoptsNothing() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
 
         await withDependencies {
             $0.defaultDatabase = database

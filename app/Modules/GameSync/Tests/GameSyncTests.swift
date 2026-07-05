@@ -11,6 +11,7 @@
 import API
 import ComposableArchitecture
 import Foundation
+import GameDatabase
 import GameModels
 import GameServices
 import SQLiteData
@@ -81,15 +82,6 @@ import Utils
 
 @Suite struct ReconcilerTests {
 
-    private func makeDeviceDatabase() throws -> any DatabaseWriter {
-        let database = try SQLiteData.defaultDatabase()
-        var migrator = DatabaseMigrator()
-        Device.registerMigrations(&migrator)
-        Operation.registerMigrations(&migrator)  // ingest reconciles devices against open ops
-        try migrator.migrate(database)
-        return database
-    }
-
     private func device(_ code: String, status: String, at instant: Date) -> Device {
         Device(
             deviceCode: code, deviceType: "mining_drone", replicantCode: "R1", status: status,
@@ -103,7 +95,7 @@ import Utils
     /// A newer snapshot wins; a later-arriving older snapshot is dropped; the
     /// original `firstSeenAt` survives every upsert.
     @Test func newerWinsOlderDroppedAndFirstSeenPreserved() async throws {
-        let database = try makeDeviceDatabase()
+        let database = try GameDatabase.bootstrap()
         let t1 = Date(timeIntervalSince1970: 1_000)
         let t2 = Date(timeIntervalSince1970: 2_000)
 
@@ -127,7 +119,7 @@ import Utils
 
     /// Equal event-time still applies (guard is `>=`, last-writer-wins).
     @Test func equalEventTimeApplies() async throws {
-        let database = try makeDeviceDatabase()
+        let database = try GameDatabase.bootstrap()
         let t = Date(timeIntervalSince1970: 5_000)
 
         try await withDependencies {
@@ -148,15 +140,6 @@ import Utils
 
 @Suite struct PrintCompleteRouteTests {
 
-    private func makeDeviceDatabase() throws -> any DatabaseWriter {
-        let database = try SQLiteData.defaultDatabase()
-        var migrator = DatabaseMigrator()
-        Device.registerMigrations(&migrator)
-        Operation.registerMigrations(&migrator)
-        try migrator.migrate(database)
-        return database
-    }
-
     private func device(_ code: String, at instant: Date) -> Device {
         Device(
             deviceCode: code, deviceType: "mining_drone", replicantCode: "R1", status: "idle",
@@ -174,7 +157,7 @@ import Utils
     /// cold-load, §5.5). Regression: the old path re-walked `GET /v1/devices` on
     /// every print completion, bypassing the coordinator.
     @Test func printCompleteReadsNewDeviceWithoutFleetWalkOrPrune() async throws {
-        let database = try makeDeviceDatabase()
+        let database = try GameDatabase.bootstrap()
         let now = Date(timeIntervalSince1970: 10_000)
         let refreshed = LockIsolated<[(code: String, priority: RefreshPriority)]>([])
 

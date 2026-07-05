@@ -5,6 +5,7 @@
 
 import ComposableArchitecture
 import Foundation
+import GameDatabase
 import GameModels
 import SQLiteData
 import Testing
@@ -21,7 +22,7 @@ private struct StubError: LocalizedError {
 @Suite struct MessagesFeatureTests {
     /// Refreshing fetches a page and upserts it into the local store.
     @Test func refreshPersistsFetchedMessages() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         let inbox = [
             Message(id: 1, messageType: "system", title: "Welcome", body: "Hi", isRead: false,
                     createdAt: Date(timeIntervalSince1970: 100)),
@@ -51,7 +52,7 @@ private struct StubError: LocalizedError {
 
     /// A failed fetch surfaces an error and clears the loading flag.
     @Test func refreshFailureSurfacesError() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         let store = TestStore(initialState: MessagesFeature.State()) {
             MessagesFeature()
         } withDependencies: {
@@ -70,7 +71,7 @@ private struct StubError: LocalizedError {
 
     /// Selecting an unread message marks it read locally and tells the server.
     @Test func selectingUnreadMarksReadLocallyAndOnServer() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         try await seed(database, [
             Message(id: 1, messageType: "system", title: "A", body: "", isRead: false,
                     createdAt: Date(timeIntervalSince1970: 1)),
@@ -102,7 +103,7 @@ private struct StubError: LocalizedError {
     /// server — the guard that keeps arrow-key scrolling from tripping the API
     /// rate limiter.
     @Test func selectingAlreadyReadMessageDoesNotHitServer() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         try await seed(database, [
             Message(id: 1, messageType: "system", title: "A", body: "", isRead: true,
                     createdAt: Date(timeIntervalSince1970: 1)),
@@ -129,7 +130,7 @@ private struct StubError: LocalizedError {
     /// A failed server mark-read surfaces an error. The local row stays read —
     /// the optimistic write isn't rolled back.
     @Test func selectingUnreadSurfacesServerError() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         try await seed(database, [
             Message(id: 1, messageType: "system", title: "A", body: "", isRead: false,
                     createdAt: Date(timeIntervalSince1970: 1)),
@@ -154,7 +155,7 @@ private struct StubError: LocalizedError {
 
     /// A second `.task`/refresh while one is in flight is ignored.
     @Test func refreshIsIgnoredWhileLoading() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         let store = TestStore(initialState: MessagesFeature.State(isLoading: true)) {
             MessagesFeature()
         } withDependencies: {
@@ -168,7 +169,7 @@ private struct StubError: LocalizedError {
 
     /// A failed mark-all surfaces an error.
     @Test func markAllReadFailureSurfacesError() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         let store = TestStore(initialState: MessagesFeature.State()) {
             MessagesFeature()
         } withDependencies: {
@@ -186,7 +187,7 @@ private struct StubError: LocalizedError {
 
     /// Dismissing an error clears it.
     @Test func dismissErrorClearsMessage() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         let store = TestStore(
             initialState: MessagesFeature.State(errorMessage: "boom")
         ) {
@@ -202,7 +203,7 @@ private struct StubError: LocalizedError {
 
     /// Marking all read clears every unread flag in the store.
     @Test func markAllReadClearsUnread() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         try await database.write { db in
             try Message.upsert {
                 Message(id: 1, messageType: "system", title: "A", body: "", isRead: false,
@@ -230,16 +231,6 @@ private struct StubError: LocalizedError {
             try Message.where { !$0.isRead }.fetchCount(db)
         }
         #expect(unread == 0)
-    }
-
-    /// Builds a fresh, migrated database. SQLiteData vends an in-memory store in
-    /// the test context.
-    private func makeDatabase() throws -> any DatabaseWriter {
-        let database = try SQLiteData.defaultDatabase()
-        var migrator = DatabaseMigrator()
-        Message.registerMigrations(&migrator)
-        try migrator.migrate(database)
-        return database
     }
 
     /// Inserts the given messages into the store.

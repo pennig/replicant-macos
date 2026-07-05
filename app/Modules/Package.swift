@@ -11,6 +11,7 @@ let package = Package(
         .library(name: "API", targets: ["API"]),
         .library(name: "BlueprintsFeature", targets: ["BlueprintsFeature"]),
         .library(name: "DevicesFeature", targets: ["DevicesFeature"]),
+        .library(name: "GameDatabase", targets: ["GameDatabase"]),
         .library(name: "GameModels", targets: ["GameModels"]),
         .library(name: "GameServices", targets: ["GameServices"]),
         .library(name: "GameSync", targets: ["GameSync"]),
@@ -55,6 +56,7 @@ let package = Package(
             dependencies: [
                 "AccountManager",
                 "API",
+                "GameDatabase",
                 "GameModels",
                 "GameServices",
                 .product(name: "HTTPTypes", package: "swift-http-types"),
@@ -86,6 +88,7 @@ let package = Package(
             name: "BlueprintsFeature",
             dependencies: [
                 "API",
+                "GameDatabase",
                 "GameModels",
                 "GameServices",
                 "UI",
@@ -98,6 +101,7 @@ let package = Package(
             name: "BlueprintsFeatureTests",
             dependencies: [
                 "BlueprintsFeature",
+                "GameDatabase",
                 "GameModels",
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
                 .product(name: "SQLiteData", package: "sqlite-data"),
@@ -122,12 +126,31 @@ let package = Package(
             name: "DevicesFeatureTests",
             dependencies: [
                 "DevicesFeature",
+                "GameDatabase",
                 "GameModels",
                 "GameServices",
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
                 .product(name: "SQLiteData", package: "sqlite-data"),
             ],
             path: "DevicesFeature/Tests"
+        ),
+        .target(
+            name: "GameDatabase",
+            dependencies: [
+                "GameModels",
+                "UniverseModels",
+                .product(name: "SQLiteData", package: "sqlite-data"),
+            ],
+            path: "GameDatabase/Sources"
+        ),
+        .testTarget(
+            name: "GameDatabaseTests",
+            dependencies: [
+                "GameDatabase",
+                "GameModels",
+                .product(name: "SQLiteData", package: "sqlite-data"),
+            ],
+            path: "GameDatabase/Tests"
         ),
         .target(
             name: "GameModels",
@@ -154,6 +177,7 @@ let package = Package(
             name: "GameServicesTests",
             dependencies: [
                 "API",
+                "GameDatabase",
                 "GameModels",
                 "GameServices",
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
@@ -178,6 +202,7 @@ let package = Package(
             name: "GameSyncTests",
             dependencies: [
                 "API",
+                "GameDatabase",
                 "GameModels",
                 "GameServices",
                 "GameSync",
@@ -252,6 +277,7 @@ let package = Package(
             name: "MessagesFeature",
             dependencies: [
                 "API",
+                "GameDatabase",
                 "GameModels",
                 "GameServices",
                 "UI",
@@ -263,6 +289,7 @@ let package = Package(
         .testTarget(
             name: "MessagesFeatureTests",
             dependencies: [
+                "GameDatabase",
                 "GameModels",
                 "MessagesFeature",
             ],
@@ -293,6 +320,7 @@ let package = Package(
         .testTarget(
             name: "PrintQueueFeatureTests",
             dependencies: [
+                "GameDatabase",
                 "GameModels",
                 "GameServices",
                 "PrintQueueFeature",
@@ -334,6 +362,7 @@ let package = Package(
         .testTarget(
             name: "ReplicantsFeatureTests",
             dependencies: [
+                "GameDatabase",
                 "GameModels",
                 "GameServices",
                 "ReplicantsFeature",
@@ -356,6 +385,7 @@ let package = Package(
         .testTarget(
             name: "SidebarFeatureTests",
             dependencies: [
+                "GameDatabase",
                 "GameModels",
                 "GameServices",
                 "SidebarFeature",
@@ -380,6 +410,7 @@ let package = Package(
         .testTarget(
             name: "StarMapFeatureTests",
             dependencies: [
+                "GameDatabase",
                 "StarMapFeature",
                 "UniverseModels",
             ],

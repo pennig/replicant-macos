@@ -11,6 +11,7 @@
 import API
 import ComposableArchitecture
 import Foundation
+import GameDatabase
 import GameModels
 import SQLiteData
 import Testing
@@ -22,15 +23,6 @@ import Utils
 private typealias Operation = GameModels.Operation
 
 // MARK: - Shared fixtures
-
-private func makeDatabase() throws -> any DatabaseWriter {
-    let database = try SQLiteData.defaultDatabase()
-    var migrator = DatabaseMigrator()
-    Device.registerMigrations(&migrator)
-    Operation.registerMigrations(&migrator)
-    try migrator.migrate(database)
-    return database
-}
 
 private func device(_ code: String, status: String = "idle") -> Device {
     Device(
@@ -87,7 +79,7 @@ private func budgetGameClient(remaining: Int) -> GameClient {
 
     /// N concurrent refreshes for one device collapse into a single read.
     @Test func concurrentRefreshesCoalesceToOneRead() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         let reads = LockIsolated(0)
         let started = AsyncStream.makeStream(of: Void.self)
         let gate = LockIsolated<CheckedContinuation<Void, Never>?>(nil)
@@ -124,7 +116,7 @@ private func budgetGameClient(remaining: Int) -> GameClient {
 
     /// A low-priority trigger within the TTL of the last read is suppressed.
     @Test func ttlSuppressesLowPriorityReread() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         let reads = LockIsolated(0)
 
         await withDependencies {
@@ -147,7 +139,7 @@ private func budgetGameClient(remaining: Int) -> GameClient {
 
     /// Under read-budget pressure, a low-priority refresh is deferred (no read).
     @Test func budgetPressureDefersLowPriority() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         let reads = LockIsolated(0)
 
         await withDependencies {
@@ -169,7 +161,7 @@ private func budgetGameClient(remaining: Int) -> GameClient {
 
     /// A high-priority refresh ignores budget pressure (the deadline matters).
     @Test func highPriorityIgnoresBudget() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         let reads = LockIsolated(0)
 
         await withDependencies {
@@ -214,7 +206,7 @@ private func budgetGameClient(remaining: Int) -> GameClient {
 
     /// A due op is closed with exactly one confirm-read.
     @Test func dueOperationCompletesWithOneRead() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         let deadline = Date(timeIntervalSince1970: 1_000)
         try await database.write { db in
             try Operation.insert { activeOp("op1", device: "D", completesAt: deadline) }.execute(db)
@@ -233,7 +225,7 @@ private func budgetGameClient(remaining: Int) -> GameClient {
     /// continues. Guards against the deadline preempting a not-quite-finished
     /// action (and against a lost arrival event leaving it stuck).
     @Test func stillBusyAtDeadlineRearmsInsteadOfCompleting() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         let deadline = Date(timeIntervalSince1970: 1_000)
         try await database.write { db in
             // Started just before the deadline, so it's well within the give-up cap.
@@ -271,7 +263,7 @@ private func budgetGameClient(remaining: Int) -> GameClient {
 
     /// An op whose deadline is still in the future is left alone (no read).
     @Test func futureOperationIsUntouched() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         try await database.write { db in
             try Operation.insert {
                 activeOp("op1", device: "D", completesAt: Date(timeIntervalSince1970: 9_999))
@@ -290,7 +282,7 @@ private func budgetGameClient(remaining: Int) -> GameClient {
     /// silently settled to idle (its `site_resource_depleted` stop event was
     /// lost) is completed by the sweep — the read shows the mine is over.
     @Test func continuousOpOnSettledDeviceIsCompleted() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         try await database.write { db in
             try Operation.insert { miningOp("m1", device: "D") }.execute(db)
         }
@@ -319,7 +311,7 @@ private func budgetGameClient(remaining: Int) -> GameClient {
     /// The sweep must NOT complete a mine that's still running — a legitimately
     /// long mine stays open (only a settled device ends it).
     @Test func continuousOpOnStillMiningDeviceStaysOpen() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         try await database.write { db in
             try Operation.insert { miningOp("m1", device: "D") }.execute(db)
         }
@@ -347,7 +339,7 @@ private func budgetGameClient(remaining: Int) -> GameClient {
     /// If a relay event already completed the op, the deadline does nothing —
     /// no wasted read.
     @Test func alreadyCompletedOperationTriggersNoRead() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         try await database.write { db in
             var op = activeOp("op1", device: "D", completesAt: Date(timeIntervalSince1970: 1_000))
             op.status = OperationStatus.completed

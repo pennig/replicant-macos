@@ -9,6 +9,7 @@
 
 import ComposableArchitecture
 import Foundation
+import GameDatabase
 import GameModels
 import GameServices
 import SQLiteData
@@ -17,14 +18,6 @@ import Testing
 
 /// Disambiguate from `Foundation.Operation`.
 private typealias Operation = GameModels.Operation
-
-private func makeDatabase() throws -> any DatabaseWriter {
-    let database = try SQLiteData.defaultDatabase()
-    var migrator = DatabaseMigrator()
-    Replicant.registerMigrations(&migrator)
-    try migrator.migrate(database)
-    return database
-}
 
 private func device(_ code: String, replicant: String = "R1", status: String = "travelling") -> Device {
     Device(
@@ -56,7 +49,7 @@ private func travelOp(_ id: String, device: String, status: OperationStatus, com
     /// Selecting a category emits `categoryChanged` so the container can reset its
     /// detail selection.
     @Test func categoryChangeEmitsDelegate() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         let store = withDependencies {
             $0.defaultDatabase = database
         } operation: {
@@ -71,7 +64,7 @@ private func travelOp(_ id: String, device: String, status: OperationStatus, com
 
     /// The Account sheet's Log Out bubbles up as a `loggedOut` delegate.
     @Test func logoutEmitsDelegate() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         let store = withDependencies {
             $0.defaultDatabase = database
         } operation: {
@@ -84,7 +77,7 @@ private func travelOp(_ id: String, device: String, status: OperationStatus, com
 
     /// Saving a plan forwards to `replicantsClient.updatePlan`.
     @Test func savePlanCallsClient() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         let captured = LockIsolated<(String, String)?>(nil)
 
         let store = withDependencies {

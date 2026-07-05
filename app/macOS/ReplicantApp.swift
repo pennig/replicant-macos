@@ -10,6 +10,7 @@ import AccountManager
 import AppKit
 import BlueprintsFeature
 import ComposableArchitecture
+import GameDatabase
 import GameModels
 import GameServices
 import GameSync
@@ -139,17 +140,19 @@ struct ReplicantApp: App {
                 switch (event.eventType ?? "").lowercased() {
                 case "scan_complete":
                     // Full scanned body (physical, salvage, sites, inventory).
-                    if let payload { try? await locationsClient.ingestScanResult(payload: payload) }
+                    if let payload {
+                        _ = try? await locationsClient.ingestScanResult(payload: payload)
+                    }
                 case "salvage_depleted":
                     // A salvage site at `location` is fully spent.
                     if let location = payload?["location"]?.stringValue {
-                        try? await locationsClient.markSalvageDepleted(location: location)
+                        _ = try? await locationsClient.markSalvageDepleted(location: location)
                     }
                 case "salvage_resource_depleted":
                     // One resource ran out at `location`'s salvage.
                     if let location = payload?["location"]?.stringValue,
                        let resource = payload?["resource_type"]?.stringValue {
-                        try? await locationsClient.markSalvageResourceDepleted(location: location, resource: resource)
+                        _ = try? await locationsClient.markSalvageResourceDepleted(location: location, resource: resource)
                     }
                 default:
                     break
@@ -255,7 +258,6 @@ struct ReplicantApp: App {
         // so it never participates in state restoration.
         Window("Welcome", id: WindowID.login) {
             LoginWindow(store: store)
-//                .containerBackground(.rcWindowBackground, for: .window)
                 .ignoresSafeArea(.container, edges: .top)
         }
         .defaultSize(width: 640, height: 520)
@@ -268,7 +270,6 @@ struct ReplicantApp: App {
         // a session was restored synchronously from the Keychain.
         Window("Dashboard", id: WindowID.main) {
             MainWindow(store: store)
-//                .containerBackground(.rcWindowBackground, for: .window)
         }
         .defaultLaunchBehavior(store.isLoggedOut ? .suppressed : .presented)
         .commands {
@@ -286,7 +287,6 @@ struct ReplicantApp: App {
         // Tools menu (never at launch) and follows the appearance preference.
         Window("Raw API Access", id: WindowID.rawAPI) {
             RawAPIWindow(store: store)
-//                .containerBackground(.rcWindowBackground, for: .window)
         }
         .defaultLaunchBehavior(.suppressed)
 
@@ -294,7 +294,6 @@ struct ReplicantApp: App {
         // preference as the main window.
         Settings {
             PreferencesView(store: store.scope(state: \.preferences, action: \.preferences))
-//                .containerBackground(.rcWindowBackground, for: .window)
                 .applyAppAppearance(store.preferences.appearance)
         }
     }
@@ -305,34 +304,4 @@ enum WindowID {
     static let login = "login"
     static let main = "main"
     static let rawAPI = "rawAPI"
-}
-
-// MARK: - Database bootstrap
-
-extension DependencyValues {
-    /// Opens the default database and runs every feature's migrations. Called
-    /// once from the app entry point's `prepareDependencies`. SQLiteData vends an
-    /// in-memory store automatically in test and preview contexts. The app owns
-    /// this composition so each feature contributes its own table schema.
-    mutating func bootstrapDatabase() throws {
-        let database = try SQLiteData.defaultDatabase()
-        var migrator = DatabaseMigrator()
-        #if DEBUG
-        migrator.eraseDatabaseOnSchemaChange = true
-        #endif
-        Message.registerMigrations(&migrator)
-        Blueprint.registerMigrations(&migrator)
-        Star.registerMigrations(&migrator)
-        SystemDetail.registerMigrations(&migrator)
-        LocationFootprint.registerMigrations(&migrator)
-        LocationEvent.registerMigrations(&migrator)
-        Replicant.registerMigrations(&migrator)
-        KnownReplicant.registerMigrations(&migrator)
-        Device.registerMigrations(&migrator)
-        BobnetMessage.registerMigrations(&migrator)
-        // Qualified: `Operation` would otherwise be ambiguous with Foundation's.
-        GameModels.Operation.registerMigrations(&migrator)
-        try migrator.migrate(database)
-        defaultDatabase = database
-    }
 }

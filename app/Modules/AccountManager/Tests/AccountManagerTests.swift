@@ -12,6 +12,7 @@
 import API
 import ComposableArchitecture
 import Foundation
+import GameDatabase
 import GameModels
 import GameServices
 import HTTPTypes
@@ -28,7 +29,7 @@ import Testing
     /// A valid key is stored, the roster is persisted, and the active replicant
     /// defaults to the first in the list.
     @Test func validKeyPersistsRosterAndDefaultsActive() async throws {
-        let database = try makeAccountDatabase()
+        let database = try GameDatabase.bootstrap()
         let appStorage = UserDefaults.inMemory
         let saves = LockIsolated<[String]>([])
         let manager = AccountManager.makeLive()
@@ -62,7 +63,7 @@ import Testing
 
     /// A non-200 from /me throws `.rejected` and rolls the Keychain write back.
     @Test func rejectedKeyThrowsAndRollsBack() async throws {
-        let database = try makeAccountDatabase()
+        let database = try GameDatabase.bootstrap()
         let deletes = LockIsolated<[String]>([])
         let manager = AccountManager.makeLive()
 
@@ -86,7 +87,7 @@ import Testing
     /// Logout runs registered handlers, clears the roster + shared values, and
     /// deletes the session token.
     @Test func logOutClearsEverythingAndRunsHandlers() async throws {
-        let database = try makeAccountDatabase()
+        let database = try GameDatabase.bootstrap()
         let appStorage = UserDefaults.inMemory
         let deletes = LockIsolated<[String]>([])
         let handlerRan = LockIsolated(false)
@@ -148,19 +149,6 @@ import Testing
             }
         }
     }
-}
-
-// MARK: - In-memory database
-
-/// An in-memory database with the `replicants` and `knownReplicants` tables
-/// (login seeds both).
-private func makeAccountDatabase() throws -> any DatabaseWriter {
-    let database = try SQLiteData.defaultDatabase()
-    var migrator = DatabaseMigrator()
-    Replicant.registerMigrations(&migrator)
-    KnownReplicant.registerMigrations(&migrator)
-    try migrator.migrate(database)
-    return database
 }
 
 // MARK: - Stubbed game client

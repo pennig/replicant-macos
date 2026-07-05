@@ -11,6 +11,7 @@
 import API
 import ComposableArchitecture
 import Foundation
+import GameDatabase
 import GameModels
 import HTTPTypes
 import OpenAPIRuntime
@@ -25,15 +26,6 @@ private typealias Operation = GameModels.Operation
 @Suite struct CommandClientTests {
 
     // MARK: Fixtures
-
-    private func makeDatabase() throws -> any DatabaseWriter {
-        let database = try SQLiteData.defaultDatabase()
-        var migrator = DatabaseMigrator()
-        Device.registerMigrations(&migrator)
-        Operation.registerMigrations(&migrator)
-        try migrator.migrate(database)
-        return database
-    }
 
     private func openOp(_ id: String, device: String, status: OperationStatus) -> Operation {
         Operation(
@@ -55,7 +47,7 @@ private typealias Operation = GameModels.Operation
     /// A travel command whose 200 response carries `arrives_at` confirms the op
     /// active with a completion deadline, and takes the post-command device read.
     @Test func travelConfirmsActiveWithDeadline() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         let readCount = LockIsolated(0)
         let body = #"{"status":"travelling","arrives_at":"2026-06-26T01:00:00Z","destination":"ATIANFU-1"}"#
 
@@ -82,7 +74,7 @@ private typealias Operation = GameModels.Operation
     /// A 400 (busy device) rejects the optimistic op and never touches the
     /// device read.
     @Test func rejectionMarksRejectedAndSkipsRead() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         let readCount = LockIsolated(0)
 
         await withDependencies {
@@ -106,7 +98,7 @@ private typealias Operation = GameModels.Operation
 
     /// A successful dispatch supersedes a prior open op on the same device.
     @Test func successSupersedesPriorOpenOp() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         try await database.write { db in
             try Operation.insert { openOp("prior", device: "965AC2C3", status: .active) }.execute(db)
         }
@@ -138,7 +130,7 @@ private typealias Operation = GameModels.Operation
     /// Mining is continuous — its 200 carries no deadline, so the op confirms
     /// active with a nil `completesAt` (it runs until stopped, not toward an ETA).
     @Test func mineConfirmsActiveWithoutDeadline() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         let body = #"{"status":"mining_started","resource_type":"volatiles","cycle_time_seconds":25}"#
 
         await withDependencies {
@@ -161,7 +153,7 @@ private typealias Operation = GameModels.Operation
 
     /// A missing required parameter fails before any optimistic row is staged.
     @Test func missingParameterFailsWithoutStagingOp() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
 
         await withDependencies {
             $0.defaultDatabase = database
@@ -180,7 +172,7 @@ private typealias Operation = GameModels.Operation
     /// An immediate command (scan) creates no operation row but still takes the
     /// one authoritative post-command device read.
     @Test func immediateCommandCreatesNoOpButReads() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         let readCount = LockIsolated(0)
 
         await withDependencies {
@@ -204,7 +196,7 @@ private typealias Operation = GameModels.Operation
     /// A terminating immediate command (deactivate) closes the device's open
     /// operation, so a continuous mining row doesn't survive the in-place stop.
     @Test func terminatingCommandClosesOpenOp() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         try await database.write { db in
             try Operation.insert { openOp("running", device: "32658E70", status: .active) }.execute(db)
         }
@@ -229,7 +221,7 @@ private typealias Operation = GameModels.Operation
     /// returns `arrives_at`, so it confirms a tracked deadline op and supersedes
     /// any in-flight op (e.g. mining) rather than completing it in place.
     @Test func recallConfirmsDeadlineAndSupersedesPrior() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         try await database.write { db in
             try Operation.insert { openOp("mining", device: "32658E70", status: .active) }.execute(db)
         }
@@ -260,7 +252,7 @@ private typealias Operation = GameModels.Operation
     /// `retarget` is a mid-mining modifier — its valid `resource_type` builds the
     /// body and it dispatches as immediate (no new op; the mining op continues).
     @Test func retargetIsImmediateWithResource() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
 
         await withDependencies {
             $0.defaultDatabase = database
@@ -282,7 +274,7 @@ private typealias Operation = GameModels.Operation
     /// `directive` builds the body and it dispatches as immediate (no tracked op;
     /// the post-command read refreshes the controller's `ami_directive`).
     @Test func setDirectiveIsImmediateWithDirective() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         let readCount = LockIsolated(0)
 
         await withDependencies {
@@ -309,7 +301,7 @@ private typealias Operation = GameModels.Operation
     /// `system_scan`): its 200 carries `completes_at`, so it confirms a tracked
     /// deadline op, and it dispatches the bare `scan` verb.
     @Test func surveyScanConfirmsActiveWithDeadline() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         let command = LockIsolated<String?>(nil)
         let client = GameClient(make: {
             Client(
@@ -345,7 +337,7 @@ private typealias Operation = GameModels.Operation
     /// request body — the loosely-typed `{planets, moons, recall}` survives the
     /// bridge into the generated schema's untyped configuration bag.
     @Test func setDirectiveTransmitsConfiguration() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         let captured = LockIsolated<JSONValue?>(nil)
         let client = GameClient(make: {
             Client(
@@ -383,7 +375,7 @@ private typealias Operation = GameModels.Operation
     /// rejects it otherwise); the salvage-site designation and recall flag survive
     /// the bridge into the untyped configuration bag.
     @Test func gatherSalvageTransmitsLocation() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         let captured = LockIsolated<JSONValue?>(nil)
         let client = GameClient(make: {
             Client(
@@ -419,7 +411,7 @@ private typealias Operation = GameModels.Operation
     /// `adopt` is an immediate controller topology change (no tracked op): its
     /// `devices` array reaches the wire and the controller read refreshes.
     @Test func adoptSendsDevicesAndIsImmediate() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         let readCount = LockIsolated(0)
         let devices = LockIsolated<[String]?>(nil)
         let client = GameClient(make: {
@@ -459,7 +451,7 @@ private typealias Operation = GameModels.Operation
     /// `release` mirrors adopt — an immediate topology change whose `devices` array
     /// reaches the wire (the `release` verb, not `adopt`).
     @Test func releaseSendsDevicesAndIsImmediate() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         let command = LockIsolated<String?>(nil)
         let devices = LockIsolated<[String]?>(nil)
         let client = GameClient(make: {
@@ -496,7 +488,7 @@ private typealias Operation = GameModels.Operation
 
     /// `adopt` with no devices fails before any request is sent.
     @Test func adoptWithNoDevicesFails() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
 
         await withDependencies {
             $0.defaultDatabase = database
@@ -513,7 +505,7 @@ private typealias Operation = GameModels.Operation
     /// `dequeue_print` removes one queued job by index — an immediate command (no
     /// tracked op) whose `command` verb and `index` reach the wire.
     @Test func dequeuePrintSendsIndexAndIsImmediate() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         let command = LockIsolated<String?>(nil)
         let index = LockIsolated<Double?>(nil)
         let client = GameClient(make: {
@@ -550,7 +542,7 @@ private typealias Operation = GameModels.Operation
 
     /// `dequeue_print` with no index fails before any request is sent.
     @Test func dequeuePrintMissingIndexFails() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
 
         await withDependencies {
             $0.defaultDatabase = database
@@ -566,7 +558,7 @@ private typealias Operation = GameModels.Operation
 
     /// `set_directive` with no directive fails before any request is sent.
     @Test func setDirectiveMissingDirectiveFails() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
 
         await withDependencies {
             $0.defaultDatabase = database

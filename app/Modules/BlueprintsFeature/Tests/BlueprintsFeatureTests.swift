@@ -11,18 +11,11 @@
 import API
 import ComposableArchitecture
 import Foundation
+import GameDatabase
 import GameModels
 import SQLiteData
 import Testing
 @testable import BlueprintsFeature
-
-private func makeDatabase() throws -> any DatabaseWriter {
-    let database = try SQLiteData.defaultDatabase()
-    var migrator = DatabaseMigrator()
-    Blueprint.registerMigrations(&migrator)
-    try migrator.migrate(database)
-    return database
-}
 
 private struct LoadError: Error {}
 
@@ -31,7 +24,7 @@ private struct LoadError: Error {}
 
     /// An empty catalog triggers a cold-load on `.task`, persisting the rows.
     @Test func emptyCatalogColdLoadsOnTask() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         let store = TestStore(initialState: BlueprintsFeature.State()) {
             BlueprintsFeature()
         } withDependencies: {
@@ -50,7 +43,7 @@ private struct LoadError: Error {}
 
     /// A non-empty catalog does not cold-load on `.task`.
     @Test func nonEmptyCatalogSkipsColdLoad() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         try await database.write { db in
             try Blueprint.insert { Blueprint.previewCatalog[0] }.execute(db)
         }
@@ -68,7 +61,7 @@ private struct LoadError: Error {}
 
     /// A failed fetch surfaces an error banner and clears the loading flag.
     @Test func loadFailureSurfacesError() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         let store = TestStore(initialState: BlueprintsFeature.State()) {
             BlueprintsFeature()
         } withDependencies: {

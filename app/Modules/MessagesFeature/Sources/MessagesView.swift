@@ -9,6 +9,7 @@
 //
 
 import ComposableArchitecture
+import GameDatabase
 import GameModels
 import SQLiteData
 import SwiftUI
@@ -169,6 +170,7 @@ public struct MessageDetailView: View {
                         }
                     }
 
+                    
                     Rectangle().fill(.rcSeparator).frame(height: 0.5)
 
                     Text(message.body)
@@ -195,11 +197,9 @@ public struct MessageDetailView: View {
 
 #Preview("Inbox") {
     let _ = prepareDependencies {
-        let database = try! SQLiteData.defaultDatabase()
-        var migrator = DatabaseMigrator()
-        Message.registerMigrations(&migrator)
-        try! migrator.migrate(database)
-        $0.defaultDatabase = database
+        try! $0.bootstrapDatabase { db in
+            try db.seed { Message.previewInbox }
+        }
     }
     MessagesPreviewHarness()
         .frame(width: 820, height: 560)

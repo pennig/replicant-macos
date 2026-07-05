@@ -10,6 +10,7 @@
 
 import ComposableArchitecture
 import Foundation
+import GameDatabase
 import GameModels
 import GameServices
 import SQLiteData
@@ -27,7 +28,7 @@ private struct StubError: LocalizedError {
 
     /// A rejected command surfaces its message as the inspector command error.
     @Test func rejectedCommandSurfacesError() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         let captured = LockIsolated<(OperationKind, String, CommandParams)?>(nil)
         let store = TestStore(initialState: PrintQueueFeature.State()) {
             PrintQueueFeature()
@@ -53,7 +54,7 @@ private struct StubError: LocalizedError {
     /// An accepted command mutates the observed tables, not feature state — no
     /// error is set.
     @Test func acceptedCommandStaysQuiet() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         let store = TestStore(initialState: PrintQueueFeature.State()) {
             PrintQueueFeature()
         } withDependencies: {
@@ -68,7 +69,7 @@ private struct StubError: LocalizedError {
 
     /// Dismissing the command error clears it.
     @Test func dismissCommandErrorClears() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         let store = withDependencies {
             $0.defaultDatabase = database
         } operation: {
@@ -81,7 +82,7 @@ private struct StubError: LocalizedError {
 
     /// A cold-load failure surfaces a banner and clears the loading flag.
     @Test func loadFailureSurfacesError() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         let store = TestStore(initialState: PrintQueueFeature.State()) {
             PrintQueueFeature()
         } withDependencies: {
@@ -98,7 +99,7 @@ private struct StubError: LocalizedError {
 
     /// Dismissing the load error clears it.
     @Test func dismissErrorClears() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         let store = withDependencies {
             $0.defaultDatabase = database
         } operation: {
@@ -107,14 +108,5 @@ private struct StubError: LocalizedError {
             return TestStore(initialState: initial) { PrintQueueFeature() }
         }
         await store.send(.dismissError) { $0.errorMessage = nil }
-    }
-
-    private func makeDatabase() throws -> any DatabaseWriter {
-        let database = try SQLiteData.defaultDatabase()
-        var migrator = DatabaseMigrator()
-        Device.registerMigrations(&migrator)
-        Operation.registerMigrations(&migrator)
-        try migrator.migrate(database)
-        return database
     }
 }

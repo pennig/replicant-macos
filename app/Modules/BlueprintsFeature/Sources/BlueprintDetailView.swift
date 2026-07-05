@@ -10,6 +10,7 @@
 //
 
 import ComposableArchitecture
+import GameDatabase
 import GameModels
 import SQLiteData
 import SwiftUI
@@ -295,14 +296,9 @@ private struct FlowLayout: Layout {
 
 #Preview {
     let _ = prepareDependencies {
-        let database = try! SQLiteData.defaultDatabase()
-        var migrator = DatabaseMigrator()
-        Blueprint.registerMigrations(&migrator)
-        try! migrator.migrate(database)
-        try! database.write { db in
-            try Blueprint.upsert { Blueprint.previewCatalog }.execute(db)
+        try! $0.bootstrapDatabase { db in
+            try db.seed { Blueprint.previewCatalog }
         }
-        $0.defaultDatabase = database
     }
     BlueprintDetailView(
         store: Store(initialState: BlueprintsFeature.State(selectedDeviceType: "heaven_vessel")) {

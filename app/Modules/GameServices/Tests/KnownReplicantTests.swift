@@ -11,6 +11,7 @@
 
 import API
 import Foundation
+import GameDatabase
 import SQLiteData
 import Testing
 import Utils
@@ -109,7 +110,7 @@ import Utils
     // MARK: Persistence merge (fetch-merge-upsert survives across sources)
 
     @Test func scanThenDirectoryPreservesScanLocation() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
 
         // A scan records a precise sighting first…
         try await database.write { db in
@@ -135,7 +136,7 @@ import Utils
     }
 
     @Test func rosterSeedMarksOwnAndLocation() async throws {
-        let database = try makeDatabase()
+        let database = try GameDatabase.bootstrap()
         let roster = Replicant(
             replicantCode: "P1", name: "pennig-1", createdAt: now,
             currentLocation: "ATIANFU-BELT-1", currentLocationName: "The Belt",
@@ -150,13 +151,5 @@ import Utils
         #expect(row?.isNPC == false)
         #expect(row?.experiencePoints == 1124)
         #expect(row?.lastKnownLocation == "ATIANFU-BELT-1")
-    }
-
-    private func makeDatabase() throws -> any DatabaseWriter {
-        let database = try SQLiteData.defaultDatabase()
-        var migrator = DatabaseMigrator()
-        KnownReplicant.registerMigrations(&migrator)
-        try migrator.migrate(database)
-        return database
     }
 }
