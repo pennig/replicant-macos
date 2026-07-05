@@ -156,19 +156,18 @@ public enum DeviceStatus {
 // swap for custom symbols if you want the schematic look from the mockups.
 
 public enum HostKind: String, CaseIterable {
-    case vessel, matrix, hub
+    case heaven_vessel, matrix, hub
 
     public var label: String {
         switch self {
-        case .vessel: return "Vessel"
+        case .heaven_vessel: return "HEAVEN Vessel"
         case .matrix: return "Matrix"
         case .hub:    return "System Hub"
         }
     }
-    public var isMobile: Bool { self == .vessel } // only vessels can travel
     public var sfSymbol: String {
         switch self {
-        case .vessel: return "paperplane"            // spacecraft
+        case .heaven_vessel: return "paperplane"            // spacecraft
         case .matrix: return "square.grid.2x2"       // immobile container
         case .hub:    return "circle.circle"         // claimed system
         }
@@ -182,7 +181,7 @@ public enum HostKind: String, CaseIterable {
         let type = deviceType.lowercased()
         if type.contains("matrix") { self = .matrix }
         else if type.contains("hub") { self = .hub }
-        else { self = .vessel }
+        else { self = .heaven_vessel }
     }
 }
 
@@ -241,7 +240,7 @@ public extension Font {
     static let rcBody         = Font.system(size: 13, weight: .regular)
     static let rcBodyEmph     = Font.system(size: 13, weight: .semibold)
     static let rcCaption      = Font.system(size: 11, weight: .medium)
-    static let rcSectionLabel = Font.system(size: 10, weight: .semibold)            // UPPERCASE + tracking
+    static let rcSectionLabel = Font.system(size: 10, weight: .semibold).uppercaseSmallCaps()            // UPPERCASE + tracking
     static let rcMono         = Font.system(size: 13, weight: .regular, design: .monospaced) // IDs / codes
     static let rcMonoSmall    = Font.system(size: 11, weight: .medium, design: .monospaced)
     static let rcDisplay      = Font.system(size: 28, weight: .semibold)            // large detail-header glyph / number

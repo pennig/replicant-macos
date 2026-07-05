@@ -19,6 +19,7 @@ import StarMapFeature
 import SwiftUI
 import UI
 import UniverseModels
+import Utils
 
 @main
 struct ReplicantApp: App {
@@ -75,6 +76,22 @@ struct ReplicantApp: App {
             )
         )
 
+        // "event" (story): narrative beats (Bill/Riker updates, first-contact
+        // reports) are pushed over the relay for immediacy, but the backend also
+        // persists them to the inbox as ordinary messages (`message_type:
+        // "story"`). The relay copy carries no id/read-state, so — exactly like
+        // the "message" route — a story event triggers one authoritative inbox
+        // read; the new row lands in the same `Message` table the inbox observes,
+        // arriving live instead of on the next poll. No `gapRepair` needed: the
+        // "message" route's head-page re-read already recovers stories missed
+        // while disconnected.
+        gameSync.registerRoute(
+            RelayRoute(id: "messages.story", type: "event") { event in
+                guard (event.eventType ?? "").lowercased() == "story" else { return }
+                await refreshInbox()
+            }
+        )
+
         // "event" (Locations): passively refresh the catalog. Shops,
         // megastructures/objects, and the outer system live ONLY in the scan
         // response (never the locations endpoint), so when an event implies the
@@ -107,6 +124,64 @@ struct ReplicantApp: App {
                 guard let code, !code.isEmpty else { return }
                 try? await locationsClient.scanAndPersist(replicantCode: code)
             }
+        )
+
+        // "event" (Locations catalog): fold catalog data carried in event payloads
+        // straight into `SystemDetail`, so the Locations view and gather_salvage
+        // picker stay current with no `body(_:)`/`scan` API call. This is the one
+        // dispatch table for payload-scraped catalog updates — a new event that
+        // carries catalog data is a new `case` here plus one `LocationsClient`
+        // method, nothing more. Every handler is best-effort and idempotent.
+        gameSync.registerRoute(
+            RelayRoute(id: "locations.catalog", type: "event") { event in
+                @Dependency(\.locationsClient) var locationsClient
+                let payload = event.payload
+                switch (event.eventType ?? "").lowercased() {
+                case "scan_complete":
+                    // Full scanned body (physical, salvage, sites, inventory).
+                    if let payload { try? await locationsClient.ingestScanResult(payload: payload) }
+                case "salvage_depleted":
+                    // A salvage site at `location` is fully spent.
+                    if let location = payload?["location"]?.stringValue {
+                        try? await locationsClient.markSalvageDepleted(location: location)
+                    }
+                case "salvage_resource_depleted":
+                    // One resource ran out at `location`'s salvage.
+                    if let location = payload?["location"]?.stringValue,
+                       let resource = payload?["resource_type"]?.stringValue {
+                        try? await locationsClient.markSalvageResourceDepleted(location: location, resource: resource)
+                    }
+                default:
+                    break
+                }
+            }
+        )
+
+        // "event" (Location Events): the galaxy publishes quests — calls for
+        // resources or devices sited at a location. Discovery and progress both
+        // surface as relay events, but the authoritative shape (criteria, live
+        // progress, rewards) lives at `accounts/events`. So, like the inbox, a
+        // nudge triggers one authoritative re-read that upserts the quest log; the
+        // Location Events screen and its sidebar badge observe that table live.
+        // The same re-read is this channel's tier-2 gap repair (a cold-start /
+        // reconnect catch-up), so `apply` (gated on the trigger) and `gapRepair`
+        // (unconditional) share one closure.
+        let refreshEvents: @Sendable () async -> Void = {
+            @Dependency(\.locationEventsClient) var locationEventsClient
+            _ = try? await locationEventsClient.refresh()
+        }
+        gameSync.registerRoute(
+            RelayRoute(
+                id: "locationEvents",
+                type: "event",
+                apply: { event in
+                    let type = (event.eventType ?? "").lowercased()
+                    guard type.contains("location_event") || type.contains("scan_complete")
+                    else { return }
+                    await refreshEvents()
+                },
+                gapRepair: refreshEvents
+            )
         )
 
         // Start consuming the relay on login, stop on logout.
@@ -162,6 +237,12 @@ struct ReplicantApp: App {
             SessionLifecycleHandler(id: "operations", onLogout: {
                 @Dependency(\.defaultDatabase) var database
                 try? await database.write { db in try GameModels.Operation.delete().execute(db) }
+            })
+        )
+        accountManager.registerHandler(
+            SessionLifecycleHandler(id: "locationEvents", onLogout: {
+                @Dependency(\.defaultDatabase) var database
+                try? await database.write { db in try LocationEvent.delete().execute(db) }
             })
         )
     }
@@ -244,6 +325,7 @@ extension DependencyValues {
         Star.registerMigrations(&migrator)
         SystemDetail.registerMigrations(&migrator)
         LocationFootprint.registerMigrations(&migrator)
+        LocationEvent.registerMigrations(&migrator)
         Replicant.registerMigrations(&migrator)
         KnownReplicant.registerMigrations(&migrator)
         Device.registerMigrations(&migrator)

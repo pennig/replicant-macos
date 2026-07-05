@@ -19,23 +19,21 @@ import UI
 typealias Operation = GameModels.Operation
 
 enum SidebarProgress {
-    /// The active replicant's most relevant running operation as a header row, or
-    /// nil when nothing in its fleet is mid-op. The host device's travel comes
-    /// first (the replicant itself is moving), then any other device with an
-    /// active, deadline-bearing op (printing, mining, scanning).
+    /// The active replicant's running operation as a header row, or nil when its
+    /// host device isn't mid-op. Only the host device counts — the header
+    /// represents the replicant itself, so other owned devices' ops (printing,
+    /// mining, scanning elsewhere in the fleet) don't drive its progress bar.
     static func active(
         replicant: Replicant,
         devices: [Device],
         operations: [Operation]
     ) -> RCReplicantProgress? {
-        let fleet = devices.filter { $0.replicantCode == replicant.replicantCode }
-        let host = replicant.hostedDeviceCode.flatMap { code in fleet.first { $0.deviceCode == code } }
-        let ordered = [host].compactMap { $0 } + fleet.filter { $0.deviceCode != replicant.hostedDeviceCode }
-        for device in ordered {
-            let op = operations.first { $0.entityCode == device.deviceCode && $0.status == .active }
-            if let op, let row = row(for: device, operation: op) { return row }
-        }
-        return nil
+        guard
+            let code = replicant.hostedDeviceCode,
+            let host = devices.first(where: { $0.deviceCode == code && $0.replicantCode == replicant.replicantCode }),
+            let op = operations.first(where: { $0.entityCode == host.deviceCode && $0.status == .active })
+        else { return nil }
+        return row(for: host, operation: op)
     }
 
     /// Distill a device's active operation into a header progress row, or nil when

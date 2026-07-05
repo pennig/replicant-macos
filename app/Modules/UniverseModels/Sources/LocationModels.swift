@@ -99,6 +99,36 @@ public struct SalvageSite: Identifiable, Equatable, Sendable, Codable {
         self.resourcesAvailable = resourcesAvailable
         self.depleted = depleted
     }
+
+    /// The body that hosts this salvage — its `location` when known, else derived
+    /// by dropping the trailing `-SAL-N` from the designation
+    /// (`SHERATANON-7-4-SAL-1` → `SHERATANON-7-4`). This is what the
+    /// `gather_salvage` directive targets (a body, not the site itself).
+    public var bodyDesignation: String {
+        if let location, !location.isEmpty { return location }
+        var parts = designation.split(separator: "-")
+        if let i = parts.lastIndex(of: "SAL") { parts = Array(parts[..<i]) }
+        return parts.joined(separator: "-")
+    }
+}
+
+/// A body (planet or moon) that hosts one or more salvage sites — the unit the
+/// `gather_salvage` directive targets. Dispatching to the body works every
+/// salvage site on it, so the picker offers bodies rather than sites.
+public struct SalvageBody: Identifiable, Equatable, Sendable {
+    public var designation: String
+    public var name: String?
+    /// How many live salvage sites the body holds.
+    public var siteCount: Int
+    public var id: String { designation }
+    /// Body name when the server provides one, else its designation.
+    public var displayName: String { name ?? designation }
+
+    public init(designation: String, name: String? = nil, siteCount: Int = 1) {
+        self.designation = designation
+        self.name = name
+        self.siteCount = siteCount
+    }
 }
 
 /// Physical attributes of a planet or moon — populated only once the body is
@@ -520,6 +550,44 @@ extension StarSystem {
         planets.flatMap { $0.salvage + $0.moons.flatMap(\.salvage) }
     }
 
+    /// Salvage sites known in the system, tolerant of how the server (and older
+    /// catalog blobs) surface them: unions the dedicated salvage roster with any
+    /// resource-site rows whose designation marks them as salvage (`…-SAL-N`) —
+    /// the live API returns salvage inside `resource_sites`, and blobs persisted
+    /// before that was split out still carry them there. Deduped by designation.
+    public var knownSalvageSites: [SalvageSite] {
+        var byDesignation: [String: SalvageSite] = [:]
+        for site in allSalvageSites { byDesignation[site.designation] = site }
+        for site in allResourceSites where site.designation.contains("-SAL-") {
+            if byDesignation[site.designation] == nil {
+                byDesignation[site.designation] = SalvageSite(designation: site.designation, name: site.name)
+            }
+        }
+        return byDesignation.values.sorted { $0.designation < $1.designation }
+    }
+
+    /// Bodies holding at least one live (non-depleted) salvage site, each with its
+    /// site count — the targets the `gather_salvage` directive picker offers.
+    public var salvageBodies: [SalvageBody] {
+        var counts: [String: Int] = [:]
+        for site in knownSalvageSites where !site.depleted {
+            let body = site.bodyDesignation
+            if !body.isEmpty { counts[body, default: 0] += 1 }
+        }
+        return counts.keys.sorted().map {
+            SalvageBody(designation: $0, name: bodyName(for: $0), siteCount: counts[$0]!)
+        }
+    }
+
+    /// The display name of a planet or moon by designation, if the tree holds it.
+    private func bodyName(for designation: String) -> String? {
+        for planet in planets {
+            if planet.designation == designation { return planet.name }
+            for moon in planet.moons where moon.designation == designation { return moon.name }
+        }
+        return nil
+    }
+
     /// Every device stationed anywhere in the system.
     public var allDevices: [LocatedDevice] {
         planets.flatMap { $0.devices + $0.moons.flatMap(\.devices) }
@@ -600,6 +668,43 @@ extension StarSystem {
         return copy
     }
 
+    /// Update every salvage site at (or under) a body designation, in place.
+    /// Matches by designation prefix (`SHERATANON-7-4` → `SHERATANON-7-4-SAL-1`),
+    /// so it works whether the site sits on a planet or a moon, and by the site's
+    /// own `location` as a fallback. Returns the modified copy — a system with no
+    /// matching salvage comes back unchanged (`==` to the original).
+    public func updatingSalvage(
+        at location: String, _ transform: (inout SalvageSite) -> Void
+    ) -> StarSystem {
+        let prefix = location + "-"
+        func matches(_ s: SalvageSite) -> Bool { s.location == location || s.designation.hasPrefix(prefix) }
+        var copy = self
+        for pi in copy.planets.indices {
+            for si in copy.planets[pi].salvage.indices where matches(copy.planets[pi].salvage[si]) {
+                transform(&copy.planets[pi].salvage[si])
+            }
+            for mi in copy.planets[pi].moons.indices {
+                for si in copy.planets[pi].moons[mi].salvage.indices where matches(copy.planets[pi].moons[mi].salvage[si]) {
+                    transform(&copy.planets[pi].moons[mi].salvage[si])
+                }
+            }
+        }
+        return copy
+    }
+
+    /// Ensure the container a body attaches to exists before `applying`, so a
+    /// body from a relay scan isn't dropped for lack of a roster: a moon needs its
+    /// parent planet; planets, belts, and specials self-attach. Used when folding
+    /// a `scan_complete` result into a system we may not have hydrated yet.
+    public func seedingParent(of detail: BodyDetail) -> StarSystem {
+        guard case .moon(let m) = detail else { return self }
+        let parentID = m.designation.split(separator: "-").dropLast().joined(separator: "-")
+        guard !parentID.isEmpty, !planets.contains(where: { $0.designation == parentID }) else { return self }
+        var copy = self
+        copy.planets.append(Planet(designation: parentID, recon: .aware))
+        return copy
+    }
+
     private mutating func upsertPlanet(_ p: Planet) {
         if let idx = planets.firstIndex(where: { $0.designation == p.designation }) {
             // Preserve already-known salvage/lagrange from the roster if the
@@ -620,6 +725,18 @@ extension Planet {
             moons[idx] = m
         } else {
             moons.append(m)
+        }
+    }
+}
+
+extension BodyDetail {
+    /// The scanned body's designation, whichever kind it is.
+    public var designation: String {
+        switch self {
+        case .planet(let p): p.designation
+        case .moon(let m): m.designation
+        case .belt(let b): b.designation
+        case .special(let s): s.designation
         }
     }
 }

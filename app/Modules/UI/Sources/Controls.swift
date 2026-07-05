@@ -450,12 +450,27 @@ public struct RCReplicant: Identifiable, Hashable {
     public let id: String        // replicant_code
     public let name: String
     public let host: HostKind
+    /// The host device's raw `device_type`, when known — drives the leading glyph
+    /// via the design system's custom device symbols (e.g. `device.heaven_vessel`).
+    public let hostDeviceType: String?
     public let isNPC: Bool
-    public init(id: String, name: String, host: HostKind, isNPC: Bool = false) {
-        self.id = id; self.name = name; self.host = host; self.isNPC = isNPC
+    public init(id: String, name: String, host: HostKind, hostDeviceType: String? = nil, isNPC: Bool = false) {
+        self.id = id; self.name = name; self.host = host
+        self.hostDeviceType = hostDeviceType; self.isNPC = isNPC
     }
     /// Subtitle per spec: "<HostLabel>" (· NPC handled with a glyph in the row).
     var subtitle: String { host.label }
+
+    /// The leading host glyph: the design system's custom `device.<device_type>`
+    /// symbol when one ships for the host's type, otherwise the host kind's SF
+    /// Symbol. Falls back to the SF Symbol too when the host type is unknown.
+    var hostImage: Image {
+        if let hostDeviceType {
+            Image.rcSymbol("device.\(hostDeviceType)", fallback: host.sfSymbol)
+        } else {
+            Image(systemName: host.sfSymbol)
+        }
+    }
 }
 
 /// The titled ACTIVE-REPLICANT box: host icon · name · subtitle · chevron,
@@ -475,7 +490,7 @@ public struct RCEntitySwitcher: View {
         Menu {
             ForEach(replicants) { r in
                 Button { selection = r } label: {
-                    Label("\(r.name)  —  \(r.subtitle)", systemImage: r.host.sfSymbol)
+                    Label { Text("\(r.name)  —  \(r.subtitle)") } icon: { r.hostImage }
                 }
             }
             if let onCommission {
@@ -486,7 +501,7 @@ public struct RCEntitySwitcher: View {
             }
         } label: {
             HStack(spacing: Space.s + 2) {
-                hostTile(selection.host)
+                hostTile(selection)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(selection.name)
                         .font(.system(size: 14, weight: .bold))
@@ -526,7 +541,7 @@ public struct RCEntitySwitcher: View {
         .menuIndicator(.hidden)
     }
 
-    private func hostTile(_ host: HostKind) -> some View {
+    private func hostTile(_ replicant: RCReplicant) -> some View {
         ZStack {
             RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
                 .fill(.rcAccentMuted)
@@ -534,9 +549,9 @@ public struct RCEntitySwitcher: View {
                     RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
                         .strokeBorder(.rcAccentBorder, lineWidth: 0.5)
                 )
-            Image(systemName: host.sfSymbol)
+            replicant.hostImage
                 .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(.rcAccent)
+                .foregroundStyle(.rcTextPrimary, .rcAccent, .rcTextSecondary)
         }
         .frame(width: 30, height: 30)
     }
@@ -872,12 +887,12 @@ private struct GalleryDropdowns: View {
     private let stars = ["Tharsis Forge", "Elysium Shelf", "Olympus Rim", "Hellas Basin", "Valles Relay"]
 
     private let reps = [
-        RCReplicant(id: "B58FCC78", name: "Roy",   host: .vessel),
+        RCReplicant(id: "B58FCC78", name: "Roy",   host: .heaven_vessel),
         RCReplicant(id: "A21D90F3", name: "Pris",  host: .matrix),
         RCReplicant(id: "C77E1A2B", name: "Zhora", host: .hub),
-        RCReplicant(id: "D40B5E91", name: "Leon",  host: .vessel, isNPC: true),
+        RCReplicant(id: "D40B5E91", name: "Leon",  host: .heaven_vessel, isNPC: true),
     ]
-    @State private var active = RCReplicant(id: "B58FCC78", name: "Roy", host: .vessel)
+    @State private var active = RCReplicant(id: "B58FCC78", name: "Roy", host: .heaven_vessel)
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.l) {

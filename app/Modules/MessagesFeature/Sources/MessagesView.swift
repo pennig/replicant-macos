@@ -110,9 +110,18 @@ private struct MessageRow: View {
                     .font(.rcCaption)
                     .foregroundStyle(.rcTextSecondary)
                     .lineLimit(2)
-                Text(message.messageType.uppercased())
-                    .font(.rcMonoSmall)
-                    .foregroundStyle(.rcTextTertiary)
+                // Story beats get an accent pill so they stand out from routine
+                // system/achievement traffic in the inbox.
+                if message.messageType == "story" {
+                    Text("STORY")
+                        .font(.rcMonoSmall)
+                        .foregroundStyle(.rcAccent)
+                        .rcPill(.accent)
+                } else {
+                    Text(message.messageType.uppercased())
+                        .font(.rcMonoSmall)
+                        .foregroundStyle(.rcTextTertiary)
+                }
             }
         }
         .padding(.vertical, Space.xs)
@@ -142,9 +151,16 @@ public struct MessageDetailView: View {
                             .font(.rcTitle)
                             .foregroundStyle(.rcTextPrimary)
                         HStack(spacing: Space.s) {
-                            Text(message.messageType.uppercased())
-                                .font(.rcMonoSmall)
-                                .foregroundStyle(.rcAccent)
+                            if message.messageType == "story" {
+                                Text("STORY")
+                                    .font(.rcMonoSmall)
+                                    .foregroundStyle(.rcAccent)
+                                    .rcPill(.accent)
+                            } else {
+                                Text(message.messageType.uppercased())
+                                    .font(.rcMonoSmall)
+                                    .foregroundStyle(.rcAccent)
+                            }
                             Text("·")
                                 .foregroundStyle(.rcTextTertiary)
                             Text(message.createdAt, format: .dateTime.month().day().year().hour().minute())

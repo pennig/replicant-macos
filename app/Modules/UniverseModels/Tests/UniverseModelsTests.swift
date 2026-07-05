@@ -74,6 +74,148 @@ import Testing
         #expect(system.allSalvageSites.contains { $0.designation == "BETSU-3-SAL-1" })
     }
 
+    @Test func moonSalvageInResourceSitesMapsToSalvage() throws {
+        // The live API returns salvage wreckage inside `resource_sites` tagged
+        // `site_type: "salvage"` (not a dedicated `salvage` block). It must land
+        // in the salvage roster, not among mining sites.
+        let raw = try decode(Self.salvageMoonJSON)
+        let detail = try #require(raw.bodyDetail())
+        guard case .moon(let moon) = detail else { Issue.record("expected moon"); return }
+        // The mining site stays a site; the salvage-typed one becomes salvage.
+        #expect(moon.sites.map(\.designation) == ["SHERATANON-6-1-SITE-0"])
+        let salvage = try #require(moon.salvage.first)
+        #expect(salvage.designation == "SHERATANON-6-1-SAL-1")
+        #expect(salvage.name == "Abandoned Habitat Module")
+        // And it surfaces through the system-level salvage accessor used by the
+        // gather_salvage picker.
+        let system = StarSystem(
+            designation: "SHERATANON",
+            planets: [Planet(designation: "SHERATANON-6", recon: .scanned,
+                             moons: [Moon(designation: "SHERATANON-6-1")])]
+        ).applying(detail)
+        #expect(system.knownSalvageSites.contains { $0.designation == "SHERATANON-6-1-SAL-1" })
+    }
+
+    @Test func knownSalvageSitesRecoversLegacyResourceSiteSalvage() {
+        // A catalog blob persisted before salvage was split out still holds the
+        // salvage row among `sites` (a plain ResourceSite). `knownSalvageSites`
+        // recovers it by its `…-SAL-N` designation, so the picker isn't empty.
+        let system = StarSystem(
+            designation: "SHERATANON",
+            planets: [Planet(
+                designation: "SHERATANON-6", recon: .scanned,
+                moons: [Moon(
+                    designation: "SHERATANON-6-26", recon: .scanned,
+                    sites: [ResourceSite(designation: "SHERATANON-6-26-SAL-1", name: "Crashed Vessel")]
+                )]
+            )]
+        )
+        #expect(system.allSalvageSites.isEmpty)
+        #expect(system.knownSalvageSites.map(\.designation) == ["SHERATANON-6-26-SAL-1"])
+    }
+
+    @Test func scanCompleteResultDecodesMoonSalvage() throws {
+        // A `scan_complete` relay event's `result` folds salvage inside the body
+        // and keys it by `resources_remaining` — it must still decode to a moon
+        // BodyDetail with its salvage.
+        let raw = try LocationDecoding.decoder.decode(RawScanEventResult.self, from: Data(Self.scanResultJSON.utf8))
+        let detail = try #require(raw.bodyDetail())
+        guard case .moon(let moon) = detail else { Issue.record("expected moon"); return }
+        #expect(moon.designation == "SHERATANON-6-26")
+        #expect(moon.physical?.massEarth == 0.0185)  // physical block came along
+        let salvage = try #require(moon.salvage.first)
+        #expect(salvage.designation == "SHERATANON-6-26-SAL-1")
+        #expect(salvage.name == "Crashed Vessel")
+        #expect(salvage.salvageType == "crashed_vessel")
+        // `resources_remaining` keys become the available-resource list.
+        #expect(salvage.resourcesAvailable == ["carbon", "conductive", "structural"])
+    }
+
+    @Test func seedingParentFoldsScanResultIntoUnhydratedSystem() throws {
+        // Ingesting a scan result for a system we've never hydrated must not drop
+        // the moon for lack of a parent planet: seed the parent, then attach.
+        let raw = try LocationDecoding.decoder.decode(RawScanEventResult.self, from: Data(Self.scanResultJSON.utf8))
+        let detail = try #require(raw.bodyDetail())
+        let system = StarSystem(designation: "SHERATANON")
+            .seedingParent(of: detail)
+            .applying(detail)
+        #expect(system.knownSalvageSites.map(\.designation) == ["SHERATANON-6-26-SAL-1"])
+    }
+
+    @Test func updatingSalvageMarksBodySiteDepleted() {
+        // A `salvage_depleted` event names the body; every salvage site under it
+        // (matched by designation prefix) is marked spent.
+        let system = StarSystem(
+            designation: "SHERATANON",
+            planets: [Planet(
+                designation: "SHERATANON-7", recon: .scanned,
+                moons: [Moon(
+                    designation: "SHERATANON-7-4", recon: .scanned,
+                    salvage: [SalvageSite(designation: "SHERATANON-7-4-SAL-1",
+                                          resourcesAvailable: ["rares", "silicates"])]
+                )]
+            )]
+        )
+        let updated = system.updatingSalvage(at: "SHERATANON-7-4") { $0.depleted = true; $0.resourcesAvailable = [] }
+        let site = updated.knownSalvageSites.first { $0.designation == "SHERATANON-7-4-SAL-1" }
+        #expect(site?.depleted == true)
+        #expect(site?.resourcesAvailable.isEmpty == true)
+        // A body with no matching salvage is returned unchanged.
+        #expect(system.updatingSalvage(at: "SHERATANON-9-1") { $0.depleted = true } == system)
+    }
+
+    @Test func updatingSalvageDropsOneResource() {
+        // A `salvage_resource_depleted` event prunes just the named resource.
+        let system = StarSystem(
+            designation: "SHERATANON",
+            planets: [Planet(
+                designation: "SHERATANON-7", recon: .scanned,
+                moons: [Moon(
+                    designation: "SHERATANON-7-4", recon: .scanned,
+                    salvage: [SalvageSite(designation: "SHERATANON-7-4-SAL-1",
+                                          resourcesAvailable: ["rares", "silicates"])]
+                )]
+            )]
+        )
+        let updated = system.updatingSalvage(at: "SHERATANON-7-4") { $0.resourcesAvailable.removeAll { $0 == "rares" } }
+        let site = updated.knownSalvageSites.first { $0.designation == "SHERATANON-7-4-SAL-1" }
+        #expect(site?.resourcesAvailable == ["silicates"])
+        #expect(site?.depleted == false)
+    }
+
+    @Test func salvageBodiesGroupSitesAndSkipDepleted() {
+        // gather_salvage targets a body; the picker groups sites by body, counts
+        // them, and drops bodies whose salvage is all depleted.
+        let system = StarSystem(
+            designation: "SHERATANON",
+            planets: [Planet(
+                designation: "SHERATANON-7", recon: .scanned,
+                moons: [
+                    Moon(designation: "SHERATANON-7-4", name: "Wreckyard", recon: .scanned,
+                         salvage: [
+                            SalvageSite(designation: "SHERATANON-7-4-SAL-1"),
+                            SalvageSite(designation: "SHERATANON-7-4-SAL-2"),
+                         ]),
+                    Moon(designation: "SHERATANON-7-9", recon: .scanned,
+                         salvage: [SalvageSite(designation: "SHERATANON-7-9-SAL-1", depleted: true)]),
+                ]
+            )]
+        )
+        let bodies = system.salvageBodies
+        // Only the body with live salvage; the all-depleted one drops out.
+        #expect(bodies.map(\.designation) == ["SHERATANON-7-4"])
+        let body = try! #require(bodies.first)
+        #expect(body.siteCount == 2)
+        #expect(body.displayName == "Wreckyard")  // uses the body name when present
+    }
+
+    @Test func salvageBodyDesignationDerivesFromSiteWhenLocationMissing() {
+        // A site recovered from resource_sites carries no `location`; the body is
+        // still derived by stripping the trailing "-SAL-N".
+        let site = SalvageSite(designation: "SHERATANON-6-26-SAL-1")
+        #expect(site.bodyDesignation == "SHERATANON-6-26")
+    }
+
     @Test func applyingMoonDetailPreservesSiblingMoons() {
         // A planet already hydrated with two moons; scanning one must not drop
         // the other (regression: the reducer used to rebuild from the moonless
@@ -159,6 +301,40 @@ extension UniverseModelsTests {
                          "designation": "BETSU-3-SAL-1", "location": "BETSU-3",
                          "name": "Abandoned Research Station" } ] }
       ]
+    }
+    """
+
+    static let salvageMoonJSON = """
+    {
+      "location": "SHERATANON-6-1", "location_type": "moon",
+      "moon": { "designation": "SHERATANON-6-1", "type": "Rocky" },
+      "resource_sites": [
+        { "site_index": 0, "designation": "SHERATANON-6-1-SITE-0", "name": "Primary Site",
+          "site_type": "mining", "resources_remaining_pct": { "silicates": 80 } },
+        { "site_index": 1, "designation": "SHERATANON-6-1-SAL-1", "name": "Abandoned Habitat Module",
+          "site_type": "salvage", "resources_remaining_pct": { "conductive": 40, "rares": 12 } }
+      ],
+      "devices": [], "inventory": []
+    }
+    """
+
+    /// The `result` block of a real `scan_complete` relay event (moon scan).
+    static let scanResultJSON = """
+    {
+      "moon": {
+        "designation": "SHERATANON-6-26", "name": null, "type": "Rocky",
+        "orbital_distance_km": 840622.6, "orbital_period_hours": 361.88,
+        "mass_earth": 0.0185, "radius_earth": 0.3088, "density_gcc": 3.46,
+        "surface_gravity": 0.194, "surface_temp_k": 129, "surface_temp_c": -144,
+        "has_atmosphere": false, "tidally_locked": true, "has_subsurface_ocean": false,
+        "life_stage": "none", "tags": ["cratered", "rocky"],
+        "salvage": [
+          { "designation": "SHERATANON-6-26-SAL-1", "salvage_type": "crashed_vessel",
+            "name": "Crashed Vessel", "location": "SHERATANON-6-26",
+            "resources_remaining": { "structural": 339, "conductive": 226, "carbon": 113 },
+            "depleted": false }
+        ]
+      }
     }
     """
 

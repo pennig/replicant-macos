@@ -22,6 +22,7 @@ import ComposableArchitecture
 import Foundation
 import GameModels
 import GameServices
+import Utils
 
 public enum LocationsError: Error, Equatable, Sendable {
     /// No replicant is currently in the system, so live detail is unavailable
@@ -126,6 +127,97 @@ extension LocationsClient {
             let merged = (try existing?.system())?.mergingScan(scanned) ?? scanned
             let row = try SystemDetail(system: merged, hydratedAt: now)
             try SystemDetail.upsert { row }.execute(db)
+        }
+    }
+
+    /// Fetch a single body's scanned detail and merge it into the persisted
+    /// `SystemDetail` blob for its system, so callers reading `allSalvageSites`
+    /// from the local catalog (e.g. the gather_salvage location picker) see that
+    /// body's sites without opening the Locations feature. Best-effort: a system
+    /// with no replicant present (403), an uncharted system, or an unreadable
+    /// body simply leaves the catalog untouched rather than throwing.
+    public func hydrateBody(systemDesignation: String, bodyDesignation: String) async throws {
+        @Dependency(\.defaultDatabase) var database
+        @Dependency(\.date.now) var now
+        let cached = try await database.read { db in
+            try SystemDetail.where { $0.designation.eq(systemDesignation) }.fetchOne(db)
+        }
+        // Attach the body onto whatever base roster we have — the cached blob, or
+        // a fresh star-level fetch when the system isn't in the catalog yet.
+        var base = try cached?.system()
+        if base == nil { base = try? await system(systemDesignation) }
+        guard var assembled = base, let detail = try? await body(bodyDesignation) else { return }
+        assembled = assembled.applying(detail)
+        let row = try SystemDetail(system: assembled, hydratedAt: now)
+        try await database.write { db in
+            try SystemDetail.upsert { row }.execute(db)
+        }
+    }
+
+    /// Fold a `scan_complete` relay event's `result` body into the local catalog,
+    /// sparing a later `body(_:)` hydration call (the event already carries the
+    /// scanned body's physical block, salvage, sites, and inventory). Merges onto
+    /// the cached `SystemDetail` blob when present, else seeds a minimal system so
+    /// the body — and its salvage — isn't lost before the system is hydrated.
+    /// Best-effort and idempotent: an unrecognized or system-less payload is a
+    /// no-op. Returns whether a body was persisted.
+    @discardableResult
+    public func ingestScanResult(payload: [String: JSONValue]) async throws -> Bool {
+        guard
+            let result = payload["result"],
+            let raw = try? LocationDecoding.reinterpret(result, as: RawScanEventResult.self),
+            let detail = raw.bodyDetail()
+        else { return false }
+        let system = String(detail.designation.split(separator: "-").first ?? "")
+        guard !system.isEmpty else { return false }
+
+        @Dependency(\.defaultDatabase) var database
+        @Dependency(\.date.now) var now
+        try await database.write { db in
+            let cached = try SystemDetail.where { $0.designation.eq(system) }.fetchOne(db)
+            let base = (try? cached?.system()) ?? StarSystem(designation: system, recon: .visited)
+            let merged = base.seedingParent(of: detail).applying(detail)
+            let row = try SystemDetail(system: merged, hydratedAt: now)
+            try SystemDetail.upsert { row }.execute(db)
+        }
+        return true
+    }
+
+    /// Mark a body's salvage as fully spent in the catalog (a `salvage_depleted`
+    /// event). No-op if the system isn't cached or nothing matches. Returns
+    /// whether a row changed.
+    @discardableResult
+    public func markSalvageDepleted(location: String) async throws -> Bool {
+        try await mutateSalvage(atBody: location) { $0.depleted = true; $0.resourcesAvailable = [] }
+    }
+
+    /// Drop one depleted resource from a body's salvage (a
+    /// `salvage_resource_depleted` event). Full depletion arrives separately as
+    /// `salvage_depleted`, so this only prunes the resource list.
+    @discardableResult
+    public func markSalvageResourceDepleted(location: String, resource: String) async throws -> Bool {
+        try await mutateSalvage(atBody: location) { $0.resourcesAvailable.removeAll { $0 == resource } }
+    }
+
+    /// Shared body: load the cached system, apply the salvage transform, and
+    /// persist only if it actually changed something.
+    private func mutateSalvage(
+        atBody location: String, _ transform: @Sendable (inout SalvageSite) -> Void
+    ) async throws -> Bool {
+        let system = String(location.split(separator: "-").first ?? "")
+        guard !system.isEmpty else { return false }
+        @Dependency(\.defaultDatabase) var database
+        @Dependency(\.date.now) var now
+        return try await database.write { db in
+            guard
+                let cached = try SystemDetail.where { $0.designation.eq(system) }.fetchOne(db),
+                let starSystem = try? cached.system()
+            else { return false }
+            let updated = starSystem.updatingSalvage(at: location, transform)
+            guard updated != starSystem else { return false }
+            let row = try SystemDetail(system: updated, hydratedAt: now)
+            try SystemDetail.upsert { row }.execute(db)
+            return true
         }
     }
 }

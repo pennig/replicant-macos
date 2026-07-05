@@ -14,6 +14,7 @@ let package = Package(
         .library(name: "GameModels", targets: ["GameModels"]),
         .library(name: "GameServices", targets: ["GameServices"]),
         .library(name: "GameSync", targets: ["GameSync"]),
+        .library(name: "LocationEventsFeature", targets: ["LocationEventsFeature"]),
         .library(name: "LocationsFeature", targets: ["LocationsFeature"]),
         .library(name: "LoginFeature", targets: ["LoginFeature"]),
         .library(name: "MessagesFeature", targets: ["MessagesFeature"]),
@@ -185,6 +186,28 @@ let package = Package(
                 .product(name: "SQLiteData", package: "sqlite-data"),
             ],
             path: "GameSync/Tests"
+        ),
+        .target(
+            name: "LocationEventsFeature",
+            dependencies: [
+                "GameModels",
+                "GameServices",
+                "UI",
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "SQLiteData", package: "sqlite-data"),
+            ],
+            path: "LocationEventsFeature/Sources"
+        ),
+        .testTarget(
+            name: "LocationEventsFeatureTests",
+            dependencies: [
+                "LocationEventsFeature",
+                "GameModels",
+                "Utils",
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "SQLiteData", package: "sqlite-data"),
+            ],
+            path: "LocationEventsFeature/Tests"
         ),
         .target(
             name: "LocationsFeature",
@@ -383,6 +406,7 @@ let package = Package(
                 "API",
                 "GameModels",
                 "GameServices",
+                "Utils",
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
                 .product(name: "SQLiteData", package: "sqlite-data"),
             ],

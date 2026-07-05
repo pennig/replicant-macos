@@ -210,6 +210,7 @@ public struct RCActiveReplicantHeader: View {
             if let onShowInReplicants {
                 Button("Show in Replicants  ↗", action: onShowInReplicants)
                     .buttonStyle(RCButtonStyle(.text))
+                    .padding(.horizontal, -2)
             }
         }
     }
@@ -401,9 +402,9 @@ enum RCDuration {
 
 #Preview("Sidebar chrome") {
     struct Harness: View {
-        @State private var active = RCReplicant(id: "B58FCC78", name: "Sylphrena", host: .vessel)
+        @State private var active = RCReplicant(id: "B58FCC78", name: "Sylphrena", host: .heaven_vessel)
         private let reps = [
-            RCReplicant(id: "B58FCC78", name: "Sylphrena", host: .vessel),
+            RCReplicant(id: "B58FCC78", name: "Sylphrena", host: .heaven_vessel),
             RCReplicant(id: "A21D90F3", name: "Pattern", host: .matrix),
             RCReplicant(id: "C77E1A2B", name: "Testament", host: .hub),
         ]

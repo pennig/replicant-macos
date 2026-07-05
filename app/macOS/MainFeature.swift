@@ -16,6 +16,7 @@ import ComposableArchitecture
 import DevicesFeature
 import GameModels
 import GameServices
+import LocationEventsFeature
 import LocationsFeature
 import MessagesFeature
 import PrintQueueFeature
@@ -54,6 +55,8 @@ struct MainFeature {
         var blueprints: BlueprintsFeature.State
         /// The stellar-locations catalog (Locations view) — disclosure list + inspector.
         var locations: LocationsFeature.State
+        /// The Location Events quest log (Missions) — discovered events + quest sheet.
+        var locationEvents: LocationEventsFeature.State
         /// The Print Queue (Operations) — printers with an active job or queue.
         var printQueue: PrintQueueFeature.State
         /// The Replicants directory — the account's own replicants plus every
@@ -74,6 +77,7 @@ struct MainFeature {
             self.devices = DevicesFeature.State()
             self.blueprints = BlueprintsFeature.State()
             self.locations = LocationsFeature.State()
+            self.locationEvents = LocationEventsFeature.State()
             self.printQueue = PrintQueueFeature.State()
             self.replicantDirectory = ReplicantsFeature.State()
         }
@@ -94,6 +98,7 @@ struct MainFeature {
         case devices(DevicesFeature.Action)
         case blueprints(BlueprintsFeature.Action)
         case locations(LocationsFeature.Action)
+        case locationEvents(LocationEventsFeature.Action)
         case printQueue(PrintQueueFeature.Action)
         case replicantDirectory(ReplicantsFeature.Action)
 
@@ -125,6 +130,9 @@ struct MainFeature {
         Scope(state: \.locations, action: \.locations) {
             LocationsFeature()
         }
+        Scope(state: \.locationEvents, action: \.locationEvents) {
+            LocationEventsFeature()
+        }
         Scope(state: \.printQueue, action: \.printQueue) {
             PrintQueueFeature()
         }
@@ -153,7 +161,7 @@ struct MainFeature {
                 state.detailSelection = nil
                 return .none
 
-            case .sidebar, .messages, .rawAPI, .starMap, .devices, .blueprints, .locations, .printQueue, .replicantDirectory:
+            case .sidebar, .messages, .rawAPI, .starMap, .devices, .blueprints, .locations, .locationEvents, .printQueue, .replicantDirectory:
                 return .none
             }
         }
@@ -238,6 +246,11 @@ struct MainView: View {
         store.scope(state: \.locations, action: \.locations)
     }
 
+    /// The Location Events quest-log store, scoped from the main session.
+    private var locationEventsStore: StoreOf<LocationEventsFeature> {
+        store.scope(state: \.locationEvents, action: \.locationEvents)
+    }
+
     /// The Print Queue store, scoped from the main session.
     private var printQueueStore: StoreOf<PrintQueueFeature> {
         store.scope(state: \.printQueue, action: \.printQueue)
@@ -260,6 +273,8 @@ struct MainView: View {
             BlueprintsListView(store: blueprintsStore)
         } else if store.sidebar.category == .locations {
             LocationsListView(store: locationsStore)
+        } else if store.sidebar.category == .locationEvents {
+            LocationEventsListView(store: locationEventsStore)
         } else if store.sidebar.category == .printQueue {
             PrintQueueListView(store: printQueueStore)
         } else if store.sidebar.category == .replicants {
@@ -300,6 +315,8 @@ struct MainView: View {
             BlueprintDetailView(store: blueprintsStore)
         } else if store.sidebar.category == .locations {
             LocationDetailView(store: locationsStore)
+        } else if store.sidebar.category == .locationEvents {
+            LocationEventDetailView(store: locationEventsStore)
         } else if store.sidebar.category == .printQueue {
             PrintQueueDetailView(store: printQueueStore)
         } else if store.sidebar.category == .replicants {

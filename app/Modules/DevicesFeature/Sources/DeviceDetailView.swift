@@ -19,6 +19,7 @@ import PrintingUI
 import SQLiteData
 import SwiftUI
 import UI
+import UniverseModels
 import Utils
 
 /// Disambiguate from `Foundation.Operation`.
@@ -600,6 +601,9 @@ private struct CommandGrid: View {
     @FetchAll(Device.order { $0.deviceCode }) private var fleet
     /// The unlocked blueprint catalog, backing the `enqueue_print` dropdown.
     @FetchAll(Blueprint.order { $0.deviceType }) private var blueprints
+    /// The local locations catalog, source of the `gather_salvage` site picker.
+    /// One blob per explored system; the controller's system is decoded on demand.
+    @FetchAll(SystemDetail.all) private var systemDetails
     @State private var pending: DeviceCommand?
     @State private var textValue: String = ""
     @State private var choiceValue: String = ""
@@ -612,9 +616,46 @@ private struct CommandGrid: View {
     @State private var planetsScope: String = SurveyScope.all
     @State private var moonsScope: String = SurveyScope.none
     @State private var recall: Bool = true
+    /// `gather_salvage` directive configuration: the chosen salvage-site
+    /// designation, revealed when that directive is the pending selection.
+    @State private var salvageLocation: String = ""
 
     /// The `all` / `none` scope values the survey config dropdowns offer.
     private enum SurveyScope { static let all = "all", none = "none" }
+
+    /// The body the controller operates at — where its salvage drones are. A
+    /// stowed controller carries no location of its own, so fall back to a
+    /// controlled drone, then the stow-parent vessel, then any same-replicant
+    /// device that reports a location.
+    private var controllerBody: String? {
+        if let loc = device.location, !loc.isEmpty { return loc }
+        if let loc = device.controlledDevices.compactMap(\.location).first(where: { !$0.isEmpty }) { return loc }
+        if let parent = device.stowedInDeviceCode,
+           let loc = fleet.first(where: { $0.deviceCode == parent })?.location, !loc.isEmpty { return loc }
+        return fleet.first { $0.replicantCode == device.replicantCode && ($0.location?.isEmpty == false) }?.location
+    }
+
+    /// The controller's star system designation (the leading segment of its
+    /// operating body, e.g. "SHERATANON-7-4" → "SHERATANON").
+    private var controllerSystem: String? {
+        guard let body = controllerBody else { return nil }
+        let system = String(body.split(separator: "-").first ?? "")
+        return system.isEmpty ? nil : system
+    }
+
+    /// Salvage-bearing bodies in the controller's system, read from the local
+    /// catalog. `gather_salvage` targets a body (working every site on it), so the
+    /// picker offers bodies, not individual sites. Empty until the system is
+    /// hydrated (see `.salvageSitesRequested`); depleted bodies drop out (relay
+    /// depletion events keep this current — see LocationsClient.markSalvage*).
+    private var salvageBodies: [SalvageBody] {
+        guard
+            let system = controllerSystem,
+            let row = systemDetails.first(where: { $0.designation == system }),
+            let starSystem = try? row.system()
+        else { return [] }
+        return starSystem.salvageBodies
+    }
 
     /// The devices this controller can adopt: fleet members of the type it
     /// shepherds (mining drones for a mining controller, etc.) that it doesn't
@@ -727,23 +768,46 @@ private struct CommandGrid: View {
             } else {
                 choiceValue = options.first ?? ""
             }
+            // Load any data the initially-selected directive's config needs.
+            if case .setDirective = command { prepareDirective(choiceValue) }
         } else {
             choiceValue = ""
         }
         pending = command
     }
 
-    /// Seed the survey config controls from the directive currently in force, so
+    /// Prepare the config controls for a newly-selected directive: seed defaults
+    /// and, for `gather_salvage`, kick off a hydrate of the controller's system so
+    /// the salvage-body dropdown fills from the local catalog.
+    private func prepareDirective(_ directive: String) {
+        guard directive == "gather_salvage" else { return }
+        if salvageLocation.isEmpty { salvageLocation = salvageBodies.first?.designation ?? "" }
+        if let system = controllerSystem, let body = controllerBody {
+            store.send(.salvageSitesRequested(system: system, body: body))
+        }
+    }
+
+    /// Seed the config controls from the directive currently in force, so
     /// re-opening the picker mirrors what's running. Falls back to the documented
-    /// defaults (planets: all, moons: none, recall: on) when no config is present.
+    /// defaults (survey planets: all, moons: none, recall: on) when no config is
+    /// present.
     private func seedDirectiveConfig() {
         planetsScope = SurveyScope.all
         moonsScope = SurveyScope.none
         recall = true
-        guard device.currentDirective == "survey_system", let config = device.currentDirectiveConfig else { return }
-        planetsScope = config["planets"]?.stringValue ?? planetsScope
-        moonsScope = config["moons"]?.stringValue ?? moonsScope
-        recall = config["recall"]?.boolValue ?? recall
+        salvageLocation = ""
+        guard let config = device.currentDirectiveConfig else { return }
+        switch device.currentDirective {
+        case "survey_system":
+            planetsScope = config["planets"]?.stringValue ?? planetsScope
+            moonsScope = config["moons"]?.stringValue ?? moonsScope
+            recall = config["recall"]?.boolValue ?? recall
+        case "gather_salvage":
+            salvageLocation = config["location"]?.stringValue ?? ""
+            recall = config["recall"]?.boolValue ?? recall
+        default:
+            break
+        }
     }
 
     @ViewBuilder
@@ -761,9 +825,13 @@ private struct CommandGrid: View {
                         RCValueSelect(label, options: options, selection: $choiceValue)
                     }
                     // A directive with its own configuration reveals it inline once
-                    // selected (survey_system today; other directives take none).
+                    // selected (survey_system and gather_salvage; other directives
+                    // take none).
                     if case .setDirective = command {
                         directiveConfiguration(choiceValue)
+                            .onChange(of: choiceValue) { _, newValue in
+                                prepareDirective(newValue)
+                            }
                     }
                 }
             case let .multiSelect(label, options):
@@ -861,13 +929,19 @@ private struct CommandGrid: View {
     }
 
     /// The configuration object for a directive, or nil for directives that take
-    /// none (belt_search and the rest). Only `survey_system` is configurable today.
+    /// none (belt_search and the rest). `survey_system` and `gather_salvage` are
+    /// configurable today.
     private func directiveConfig(for directive: String) -> [String: JSONValue]? {
         switch directive {
         case "survey_system":
             return [
                 "planets": .string(planetsScope),
                 "moons": .string(moonsScope),
+                "recall": .bool(recall),
+            ]
+        case "gather_salvage":
+            return [
+                "location": .string(salvageLocation),
                 "recall": .bool(recall),
             ]
         default:
@@ -879,7 +953,8 @@ private struct CommandGrid: View {
     /// directives that carry no configuration.
     @ViewBuilder
     private func directiveConfiguration(_ directive: String) -> some View {
-        if directive == "survey_system" {
+        switch directive {
+        case "survey_system":
             VStack(alignment: .leading, spacing: Space.s) {
                 configField("Planets", selection: $planetsScope)
                 configField("Moons", selection: $moonsScope)
@@ -892,7 +967,59 @@ private struct CommandGrid: View {
                 .tint(.rcAccent)
             }
             .padding(.top, Space.xs)
+        case "gather_salvage":
+            salvageConfiguration
+        default:
+            EmptyView()
         }
+    }
+
+    /// The `gather_salvage` config: a required salvage-body picker (sourced from
+    /// the controller's system in the local catalog) plus the recall toggle. The
+    /// directive targets a body — its drones work every salvage site there — so
+    /// the picker offers bodies. The backend rejects the directive without a
+    /// `location`, so confirm stays disabled until a body is chosen.
+    @ViewBuilder
+    private var salvageConfiguration: some View {
+        VStack(alignment: .leading, spacing: Space.s) {
+            VStack(alignment: .leading, spacing: Space.xs) {
+                Text("SALVAGE LOCATION")
+                    .font(.rcSectionLabel)
+                    .foregroundStyle(.rcTextTertiary)
+                if salvageBodies.isEmpty {
+                    Text("No known salvage in this system yet. Scan its bodies in Locations to reveal them.")
+                        .font(.rcCaption)
+                        .foregroundStyle(.rcTextTertiary)
+                } else {
+                    RCValueSelect(
+                        "Salvage Location",
+                        options: salvageBodies.map {
+                            (label: salvageBodyLabel($0), value: $0.designation)
+                        },
+                        selection: $salvageLocation
+                    )
+                }
+            }
+            Toggle(isOn: $recall) {
+                Text("Recall when complete")
+                    .font(.rcCaption)
+                    .foregroundStyle(.rcTextSecondary)
+            }
+            .toggleStyle(.switch)
+            .tint(.rcAccent)
+        }
+        .padding(.top, Space.xs)
+        // Auto-select the first body once the catalog hydrates, unless one is
+        // already chosen (kept selection or a seeded running directive).
+        .onChange(of: salvageBodies.map(\.id)) { _, _ in
+            if salvageLocation.isEmpty { salvageLocation = salvageBodies.first?.designation ?? "" }
+        }
+    }
+
+    /// A salvage body's dropdown label — its name/designation, annotated with the
+    /// site count when it holds more than one (the drones work them all).
+    private func salvageBodyLabel(_ body: SalvageBody) -> String {
+        body.siteCount > 1 ? "\(body.displayName) · \(body.siteCount) sites" : body.displayName
     }
 
     /// A labeled all/none scope dropdown for a survey config field.
@@ -966,7 +1093,12 @@ private struct CommandGrid: View {
     private func isConfirmable(_ command: DeviceCommand) -> Bool {
         switch command.parameter {
         case .text:        return !textValue.trimmingCharacters(in: .whitespaces).isEmpty
-        case .choice:      return !choiceValue.isEmpty
+        case .choice:
+            // gather_salvage needs a salvage-site location or the backend rejects it.
+            if case .setDirective = command, choiceValue == "gather_salvage" {
+                return !salvageLocation.isEmpty
+            }
+            return !choiceValue.isEmpty
         case .blueprint:   return !blueprintType.isEmpty
         case .multiSelect: return !selectedCodes.isEmpty
         case .none:        return true

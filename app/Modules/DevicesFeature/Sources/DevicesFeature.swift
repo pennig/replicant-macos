@@ -131,6 +131,10 @@ public struct DevicesFeature {
         case viewingChanged(deviceCode: String?)
         /// A refreshed diversion snapshot for the viewed device (nil clears it).
         case diversionResponse(DiversionSnapshot?)
+        /// The inspector opened the `gather_salvage` directive for a controller in
+        /// `system`; hydrate that controller's operating `body` into the local
+        /// locations catalog so the salvage-site dropdown can offer its sites.
+        case salvageSitesRequested(system: String, body: String)
     }
 
     public init() {}
@@ -325,6 +329,16 @@ public struct DevicesFeature {
             case let .diversionResponse(snapshot):
                 state.diversion = snapshot
                 return .none
+
+            case let .salvageSitesRequested(system, body):
+                // Fill the local catalog for this controller's system in the
+                // background; the SystemDetail write flows back to the picker's
+                // @FetchAll. Best-effort — an unreadable system just leaves the
+                // dropdown empty with its "scan the system" hint.
+                let locationsClient = self.locationsClient
+                return .run { _ in
+                    try? await locationsClient.hydrateBody(systemDesignation: system, bodyDesignation: body)
+                }
             }
         }
     }

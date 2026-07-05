@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		C90D75CF2FED785C00B293DE /* AccountManager in Frameworks */ = {isa = PBXBuildFile; productRef = C90D75CE2FED785C00B293DE /* AccountManager */; };
+		C91E72192FF9931B0092DF05 /* LocationEventsFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C91E72182FF9931B0092DF05 /* LocationEventsFeature */; };
 		C961BC5B2FF5C7AD00D9C273 /* LocationsFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C961BC5A2FF5C7AD00D9C273 /* LocationsFeature */; };
 		C961BC5D2FF69C7600D9C273 /* PrintQueueFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C961BC5C2FF69C7600D9C273 /* PrintQueueFeature */; };
 		C961BC5F2FF6A58600D9C273 /* ReplicantsFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C961BC5E2FF6A58600D9C273 /* ReplicantsFeature */; };
@@ -61,6 +62,7 @@
 				C9B8FC732FF5BF5D0050BBDC /* UniverseModels in Frameworks */,
 				C961BC5F2FF6A58600D9C273 /* ReplicantsFeature in Frameworks */,
 				C9D902132FE9DDC000781FBB /* MessagesFeature in Frameworks */,
+				C91E72192FF9931B0092DF05 /* LocationEventsFeature in Frameworks */,
 				C9AB58FE2FEA4A3300536794 /* StarMapFeature in Frameworks */,
 				C9ACF1382FF865C900337F11 /* PrintingUI in Frameworks */,
 				C9B5309D2FE1DEE2006F79A8 /* GameServices in Frameworks */,
@@ -153,6 +155,7 @@
 				C9B188922FF72F130018FA8F /* SidebarFeature */,
 				C9B188942FF856310018FA8F /* GameModels */,
 				C9ACF1372FF865C900337F11 /* PrintingUI */,
+				C91E72182FF9931B0092DF05 /* LocationEventsFeature */,
 			);
 			productName = Replicant;
 			productReference = C922A8B62FDC493200431320 /* Replicould.app */;
@@ -471,6 +474,10 @@
 		C90D75CE2FED785C00B293DE /* AccountManager */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = AccountManager;
+		};
+		C91E72182FF9931B0092DF05 /* LocationEventsFeature */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = LocationEventsFeature;
 		};
 		C961BC5A2FF5C7AD00D9C273 /* LocationsFeature */ = {
 			isa = XCSwiftPackageProductDependency;

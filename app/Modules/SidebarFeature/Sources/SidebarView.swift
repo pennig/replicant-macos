@@ -20,6 +20,11 @@ public struct SidebarView: View {
     @Bindable var store: StoreOf<SidebarFeature>
     /// Live unread-message count, observed from SQLite, for the Messages badge.
     @FetchOne(Message.where { !$0.isRead }.count()) private var unreadCount = 0
+    /// Live count of unread *story* messages — surfaced as an accent pill ahead of
+    /// the plain unread count, so a narrative beat in the inbox reads at a glance.
+    @FetchOne(Message.where { !$0.isRead && $0.messageType.eq("story") }.count()) private var unreadStoryCount = 0
+    /// Live count of open location events ("quests"), for the Location Events badge.
+    @FetchOne(LocationEvent.where { $0.status.eq("active") }.count()) private var activeEventCount = 0
     /// The whole fleet — the header resolves the active replicant's host glyph
     /// (and the tint/label of any running progress) from it.
     @FetchAll private var devices: [Device]
@@ -36,24 +41,50 @@ public struct SidebarView: View {
         self.store = store
     }
 
+    /// The badge count for a category — Messages shows unread, Location Events
+    /// shows open quests, everything else stays silent (`.badge(0)` renders none).
+    private func badgeCount(for item: SidebarItem) -> Int {
+        switch item {
+        case .messages: unreadCount
+        case .locationEvents: activeEventCount
+        default: 0
+        }
+    }
+
+    /// A sidebar category row. Every row shares one structure — `Label` + a
+    /// trailing `SidebarCategoryBadge` — so the outline list's identity diffing
+    /// stays stable (a per-row structural conditional trips a `ViewListTree`
+    /// assertion). Only Messages passes a story count, so only it can show the
+    /// composite pill.
+    private func categoryRow(for item: SidebarItem) -> some View {
+        HStack(spacing: Space.xs) {
+            Label(item.title, systemImage: item.symbol)
+            Spacer(minLength: Space.xs)
+            SidebarCategoryBadge(
+                storyCount: item == .messages ? unreadStoryCount : 0,
+                otherCount: item == .messages
+                    ? max(0, unreadCount - unreadStoryCount)
+                    : badgeCount(for: item)
+            )
+        }
+        .padding(.vertical, Space.xs)
+        .padding(.trailing, Space.xs)
+    }
+
     public var body: some View {
         VStack(spacing: 0) {
             sidebarHeader
             Divider()
-            List(selection: $store.category) {
-                ForEach(SidebarItem.groups) { group in
-                    Section(group.id) {
-                        ForEach(group.items) { item in
-                            Label(item.title, systemImage: item.symbol)
-                                // `.badge(0)` renders nothing, so only Messages
-                                // shows a count, and only while unread > 0.
-                                .badge(item == .messages ? unreadCount : 0)
-                                .tag(item)
-                        }
-                    }
-                }
+            SelectableList(
+                selection: $store.category,
+                sections: SidebarItem.groups.map {
+                    SelectableSection(id: $0.id, title: $0.id, items: $0.items)
+                },
+                rowID: \.self
+            ) { item, isSelected in
+                categoryRow(for: item).rcSidebarRow(isSelected: isSelected)
             }
-            .listStyle(.sidebar)
+
             Divider()
             RCAccountFooter(
                 name: store.account.name,
@@ -128,7 +159,13 @@ public struct SidebarView: View {
     /// The roster mapped to switcher options, each carrying its host glyph.
     private var rosterOptions: [RCReplicant] {
         store.replicants.map { replicant in
-            RCReplicant(id: replicant.replicantCode, name: replicant.name, host: host(for: replicant))
+            let device = hostDevice(for: replicant)
+            return RCReplicant(
+                id: replicant.replicantCode,
+                name: replicant.name,
+                host: device.map { HostKind(deviceType: $0.deviceType) } ?? .heaven_vessel,
+                hostDeviceType: device?.deviceType
+            )
         }
     }
 
@@ -139,20 +176,17 @@ public struct SidebarView: View {
             get: {
                 rosterOptions.first { $0.id == activeReplicant?.replicantCode }
                     ?? rosterOptions.first
-                    ?? RCReplicant(id: "", name: "—", host: .vessel)
+                    ?? RCReplicant(id: "", name: "—", host: .heaven_vessel)
             },
             set: { newValue in $activeReplicantCode.withLock { $0 = newValue.id } }
         )
     }
 
-    /// The host kind for a replicant, read from its hosting device's type when
-    /// that device is in the local fleet (defaults to a vessel otherwise).
-    private func host(for replicant: Replicant) -> HostKind {
-        guard
-            let code = replicant.hostedDeviceCode,
-            let device = devices.first(where: { $0.deviceCode == code })
-        else { return .vessel }
-        return HostKind(deviceType: device.deviceType)
+    /// The hosting device for a replicant, when it's in the local fleet — the
+    /// source of both the host kind and the raw `device_type` glyph.
+    private func hostDevice(for replicant: Replicant) -> Device? {
+        guard let code = replicant.hostedDeviceCode else { return nil }
+        return devices.first { $0.deviceCode == code }
     }
 
     /// The active replicant's most relevant running operation — derived from the
@@ -162,4 +196,104 @@ public struct SidebarView: View {
         guard let active = activeReplicant else { return nil }
         return SidebarProgress.active(replicant: active, devices: devices, operations: operations)
     }
+}
+
+// MARK: - Category badge
+
+/// The trailing badge for a sidebar category. Messages passes a non-zero
+/// `storyCount` to get the composite treatment — an accent pill for the unread
+/// story count, then a plain `+N` for the remaining unread; every other category
+/// passes `storyCount: 0` and shows a plain count. A zero total renders nothing,
+/// so a category stays silent until it has something to report.
+struct SidebarCategoryBadge: View {
+    /// Unread *story* messages (Messages only) — the accent pill.
+    let storyCount: Int
+    /// The remainder — unread non-story messages, or a plain category count.
+    let otherCount: Int
+
+    var body: some View {
+        HStack(spacing: Space.xs) {
+            if storyCount > 0 {
+                Text("\(storyCount)")
+                    .font(.rcMonoSmall)
+                    .foregroundStyle(.rcAccent)
+                    .rcPill(.accent)
+                if otherCount > 0 {
+                    Text("+\(otherCount)")
+                        .font(.rcCaption)
+                        .foregroundStyle(.rcTextTertiary)
+                }
+            } else if otherCount > 0 {
+                Text("\(otherCount)")
+                    .font(.rcCaption)
+                    .foregroundStyle(.rcTextTertiary)
+                    .monospacedDigit()
+            }
+        }
+    }
+}
+
+// MARK: - Previews
+
+/// The sidebar's category list with the composite Messages badge — one unread
+/// story (accent pill) plus three other unread → ⟨1⟩ +3.
+///
+/// This drives the real row layout and `SidebarCategoryBadge` with fixed counts
+/// rather than mounting the live `SidebarView`: the headless preview agent can't
+/// host that view's TCA store + SQLite `@Fetch` observers (they re-publish during
+/// the outline list's first diff and trip a `ViewListTree` assertion). The list
+/// itself renders identically to the shipping sidebar.
+#Preview("Story badge · ⟨1⟩ +3") {
+    let prime = RCReplicant(id: "RPL-0001", name: "pennig-1", host: .heaven_vessel)
+    return NavigationSplitView {
+        // Mirror the real `SidebarView.body` — header · category list · footer —
+        // with fixed values in place of the live store/@Fetch layer.
+        VStack(spacing: 0) {
+            RCActiveReplicantHeader(
+                replicants: [prime],
+                selection: .constant(prime),
+                location: "SHERATONON-6-52",
+                experiencePoints: 4_536,
+                deviceCount: 3,
+                plan: "Make a Mac app to play this game",
+                onShowInReplicants: {},
+                onEditPlan: { _ in }
+            )
+            .padding(.horizontal, Space.m)
+            .padding(.bottom, Space.m)
+            Divider()
+            SelectableList(
+                selection: .constant(SidebarItem.locations),
+                sections: SidebarItem.groups.map {
+                    SelectableSection(id: $0.id, title: $0.id, items: $0.items)
+                },
+                rowID: \.self
+            ) { item, isSelected in
+                HStack(spacing: Space.xs) {
+                    Label(item.title, systemImage: item.symbol)
+                    Spacer(minLength: Space.xs)
+                    SidebarCategoryBadge(
+                        storyCount: item == .messages ? 1 : 0,
+                        otherCount: item == .messages ? 3 : (item == .locationEvents ? 2 : 0)
+                    )
+                }
+                .padding(.vertical, Space.xs)
+                .padding(.trailing, Space.xs)
+                .rcSidebarRow(isSelected: isSelected)
+            }
+            Divider()
+            RCAccountFooter(
+                name: "pennig",
+                email: "matt@pennig.name",
+                experiencePoints: 4_536,
+                replicantCount: 1,
+                action: {}
+            )
+        }
+        .navigationSplitViewColumnWidth(260)
+    } detail: {
+        Color.rcContentBackground
+    }
+    .frame(width: 720, height: 720)
+    .preferredColorScheme(.dark)
 }

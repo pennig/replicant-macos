@@ -153,6 +153,7 @@ struct RawResourceSite: Decodable {
     var designation: String?
     var name: String?
     var siteIndex: Int?
+    var siteType: String?
     var resourcesRemainingPct: [String: Double]?
 }
 
@@ -162,6 +163,10 @@ struct RawSalvage: Decodable {
     var salvageType: String?
     var location: String?
     var resourcesAvailable: [String]?
+    /// The scan_complete relay event keys salvage yield by `resources_remaining`
+    /// (a quantity map) instead of `resources_available` (a name array); fall back
+    /// to its keys so either shape produces `resourcesAvailable`.
+    var resourcesRemaining: [String: Double]?
     var depleted: Bool?
 }
 
@@ -285,6 +290,11 @@ extension RawDevice {
 }
 
 extension RawResourceSite {
+    /// True when the server tags this `resource_sites` entry as salvage — the
+    /// live API returns salvage wreckage inside `resource_sites` with
+    /// `site_type == "salvage"` rather than in a separate `salvage` block.
+    var isSalvage: Bool { siteType == "salvage" }
+
     var domain: ResourceSite? {
         guard let designation else { return nil }
         return ResourceSite(
@@ -292,14 +302,28 @@ extension RawResourceSite {
             remaining: resourcesRemainingPct ?? [:]
         )
     }
+
+    /// Reinterpret a salvage-typed resource site as a `SalvageSite`. Its
+    /// `resources_remaining_pct` keys are the yieldable resources; all-zero (or
+    /// empty) remaining means it's spent.
+    var salvageDomain: SalvageSite? {
+        guard let designation else { return nil }
+        let remaining = resourcesRemainingPct ?? [:]
+        return SalvageSite(
+            designation: designation, name: name,
+            resourcesAvailable: remaining.keys.sorted(),
+            depleted: !remaining.isEmpty && remaining.values.allSatisfy { $0 <= 0 }
+        )
+    }
 }
 
 extension RawSalvage {
     var domain: SalvageSite? {
         guard let designation else { return nil }
+        let available = resourcesAvailable ?? resourcesRemaining.map { $0.keys.sorted() } ?? []
         return SalvageSite(
             designation: designation, name: name, salvageType: salvageType,
-            location: location, resourcesAvailable: resourcesAvailable ?? [],
+            location: location, resourcesAvailable: available,
             depleted: depleted ?? false
         )
     }
@@ -416,8 +440,13 @@ extension RawLocation {
     /// Build the scanned detail for a single body from a planet/moon/belt-level
     /// response, to be merged into the tree in place of its roster stub.
     func bodyDetail() -> BodyDetail? {
-        let sites = (resourceSites ?? []).compactMap(\.domain)
-        let salvageSites = (salvage ?? []).compactMap(\.domain)
+        // Salvage arrives inside `resource_sites` (site_type == "salvage"), so
+        // split those out into the salvage roster and keep the rest as mining
+        // sites — plus any that come in a dedicated `salvage` block (spec drift).
+        let rawSites = resourceSites ?? []
+        let sites = rawSites.filter { !$0.isSalvage }.compactMap(\.domain)
+        let salvageSites = rawSites.filter(\.isSalvage).compactMap(\.salvageDomain)
+            + (salvage ?? []).compactMap(\.domain)
         let devs = (devices ?? []).compactMap(\.domain)
         let inv = (inventory ?? []).compactMap(\.domain)
         let events = ((locationEvent.map { [$0] } ?? []) + (activeLocationEvents ?? []))
@@ -491,4 +520,89 @@ public enum BodyDetail: Equatable, Sendable {
     case moon(Moon)
     case belt(Belt)
     case special(SpecialSite)
+}
+
+// MARK: - scan_complete relay event result
+
+/// The `result` block of a `scan_complete` relay event. Unlike the locations
+/// endpoint (which nests physical under `moon`/`planet`/`belt` and puts salvage/
+/// sites at the response top level), the event folds a body's collections
+/// *inside* the body object — so it needs its own decode path into `BodyDetail`.
+struct RawScanEventResult: Decodable {
+    var moon: RawScannedBody?
+    var planet: RawScannedBody?
+    var belt: RawScannedBody?
+
+    /// The scanned body as a `BodyDetail` ready to merge into a `StarSystem`.
+    func bodyDetail() -> BodyDetail? {
+        if let m = moon, let designation = m.physical.designation {
+            return .moon(Moon(
+                designation: designation, name: m.physical.name, type: m.physical.type,
+                recon: .scanned, physical: m.physical.physical,
+                sites: m.sites, salvage: m.salvageSites, devices: m.located, inventory: m.stored
+            ))
+        }
+        if let p = planet, let designation = p.physical.designation {
+            let moonDomains = (p.moons ?? []).compactMap { rm -> Moon? in
+                guard let md = rm.designation else { return nil }
+                return Moon(
+                    designation: md, name: rm.name, type: rm.type,
+                    recon: (rm.scanned ?? false) ? .scanned : .visited,
+                    salvage: (rm.salvage ?? []).compactMap(\.domain),
+                    inventory: (rm.inventory ?? []).compactMap(\.domain)
+                )
+            }
+            return .planet(Planet(
+                designation: designation, name: p.physical.name, type: p.physical.type,
+                typeEstimated: false, orbitalDistanceAu: p.physical.orbitalDistanceAu,
+                inHabitableZone: p.physical.inHabitableZone ?? false, lifeStage: p.physical.lifeStage,
+                recon: .scanned, moonCount: moonDomains.count, physical: p.physical.physical,
+                moons: moonDomains, sites: p.sites, salvage: p.salvageSites,
+                devices: p.located, inventory: p.stored
+            ))
+        }
+        if let b = belt, let designation = b.physical.designation {
+            return .belt(Belt(designation: designation, sites: b.sites, inventory: b.stored))
+        }
+        return nil
+    }
+}
+
+/// One scanned body from a relay `result`: its physical block (decoded from the
+/// same object) plus the salvage/sites/devices/inventory (and moons, for a
+/// planet) the event nests inside it.
+struct RawScannedBody: Decodable {
+    var physical: RawBodyPhysical
+    var salvage: [RawSalvage]?
+    var resourceSites: [RawResourceSite]?
+    var devices: [RawDevice]?
+    var inventory: [RawInventory]?
+    var moons: [RawMoon]?
+
+    private enum CodingKeys: String, CodingKey {
+        case salvage, resourceSites, devices, inventory, moons
+    }
+
+    init(from decoder: Decoder) throws {
+        // Physical attributes decode from the same object (unknown keys ignored).
+        physical = try RawBodyPhysical(from: decoder)
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        salvage = try c.decodeIfPresent([RawSalvage].self, forKey: .salvage)
+        resourceSites = try c.decodeIfPresent([RawResourceSite].self, forKey: .resourceSites)
+        devices = try c.decodeIfPresent([RawDevice].self, forKey: .devices)
+        inventory = try c.decodeIfPresent([RawInventory].self, forKey: .inventory)
+        moons = try c.decodeIfPresent([RawMoon].self, forKey: .moons)
+    }
+
+    /// Mining sites only — salvage-typed resource sites are pulled into salvage.
+    var sites: [ResourceSite] { (resourceSites ?? []).filter { !$0.isSalvage }.compactMap(\.domain) }
+
+    /// Salvage: the dedicated block plus any salvage-typed resource sites.
+    var salvageSites: [SalvageSite] {
+        (salvage ?? []).compactMap(\.domain)
+            + (resourceSites ?? []).filter(\.isSalvage).compactMap(\.salvageDomain)
+    }
+
+    var located: [LocatedDevice] { (devices ?? []).compactMap(\.domain) }
+    var stored: [InventoryItem] { (inventory ?? []).compactMap(\.domain) }
 }

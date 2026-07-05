@@ -124,4 +124,15 @@ private func travelOp(_ id: String, device: String, status: OperationStatus, com
         )
         #expect(row == nil)
     }
+
+    /// The header represents the replicant itself, so an active op on another owned
+    /// device (not the host) doesn't drive its progress bar.
+    @Test func nonHostDeviceOpDoesNotYieldRow() {
+        let row = SidebarProgress.active(
+            replicant: replicant("R1", host: "HOST"),
+            devices: [device("HOST", status: "idle"), device("MINER")],
+            operations: [travelOp("op1", device: "MINER", status: .active, completesAt: Date(timeIntervalSince1970: 5_000))]
+        )
+        #expect(row == nil)
+    }
 }

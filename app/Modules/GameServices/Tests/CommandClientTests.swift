@@ -379,6 +379,43 @@ private typealias Operation = GameModels.Operation
         #expect(body?["configuration"]?["recall"]?.boolValue == true)
     }
 
+    /// `gather_salvage` requires a `location` in its configuration (the backend
+    /// rejects it otherwise); the salvage-site designation and recall flag survive
+    /// the bridge into the untyped configuration bag.
+    @Test func gatherSalvageTransmitsLocation() async throws {
+        let database = try makeDatabase()
+        let captured = LockIsolated<JSONValue?>(nil)
+        let client = GameClient(make: {
+            Client(
+                serverURL: URL(string: "https://stub.invalid")!,
+                transport: CapturingTransport(
+                    onBody: { data in captured.setValue(try? JSONDecoder().decode(JSONValue.self, from: data)) },
+                    response: jsonResponse(200, #"{"status":"coordinating"}"#)
+                )
+            )
+        })
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.gameClient = client
+            $0.devicesClient.read = { code in makeDevice(code: code, status: "coordinating") }
+        } operation: {
+            _ = await CommandClient.liveValue.dispatch(
+                .setDirective, "18CA7C99",
+                CommandParams(directive: "gather_salvage", configuration: [
+                    "location": .string("SHERATANON-7-4-SAL-1"), "recall": .bool(true),
+                ])
+            )
+        }
+
+        let body = captured.value
+        #expect(body?["directive"]?.stringValue == "gather_salvage")
+        #expect(body?["configuration"]?["location"]?.stringValue == "SHERATANON-7-4-SAL-1")
+        #expect(body?["configuration"]?["recall"]?.boolValue == true)
+    }
+
     /// `adopt` is an immediate controller topology change (no tracked op): its
     /// `devices` array reaches the wire and the controller read refreshes.
     @Test func adoptSendsDevicesAndIsImmediate() async throws {
