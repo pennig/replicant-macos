@@ -79,7 +79,7 @@ extension Message {
             id: 4_021,
             messageType: "system",
             title: "Replication quota increased",
-            body: "Your probe's replication quota has been raised to 12 concurrent instances following a sustained uptime streak.",
+            body: "Your probe's replication quota has been raised to 12 concurrent instances following a sustained uptime streak. More info: https://replicant.space/changelog",
             isRead: false,
             createdAt: Date(timeIntervalSince1970: 1_750_000_000)
         ),
@@ -95,7 +95,7 @@ extension Message {
             id: 4_010,
             messageType: "trade",
             title: "Resource exchange settled",
-            body: "Your standing offer of 400 iron for 120 rare earths was filled by an NPC collective at Olympus Rim.",
+            body: "Your standing offer of 400 iron for 120 rare earths was filled by an NPC collective at Olympus Rim. ",
             isRead: true,
             createdAt: Date(timeIntervalSince1970: 1_749_700_000)
         ),

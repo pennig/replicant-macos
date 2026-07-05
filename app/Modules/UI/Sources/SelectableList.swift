@@ -18,6 +18,7 @@ public struct SelectableList<
 >: View {
 
     let orderedIDs: [ID]
+    let style: SelectableListStyle
     let pinnedViews: PinnedScrollableViews
 
     @Binding var selection: ID?
@@ -31,11 +32,13 @@ public struct SelectableList<
     public init(
         selection: Binding<ID?>,
         orderedIDs: [ID],
+        style: SelectableListStyle = .sidebar,
         pinnedViews: PinnedScrollableViews = [],
         @ViewBuilder content: @escaping () -> Content
     ) {
         self._selection = selection
         self.orderedIDs = orderedIDs
+        self.style = style
         self.pinnedViews = pinnedViews
         self.content = content
     }
@@ -62,12 +65,7 @@ public struct SelectableList<
                     }
                 )
             )
-            .onAppear {
-                if selection == nil,
-                   let first = orderedIDs.first {
-                    selection = first
-                }
-            }
+            .environment(\.selectableListStyle, style)
             .onChange(of: selection) { _, newSelection in
                 guard let newSelection else { return }
 
@@ -169,10 +167,31 @@ public struct SelectableRow<ID: Hashable & Sendable, Content: View>: View {
     public var body: some View {
         let isSelected = context.selectedID == AnyHashable(id)
 
-        content(isSelected)
+        // A button (not a tap gesture) so the row gets a pointer-down pressed
+        // state: `SelectableRowButtonStyle` publishes `isPressed` into the
+        // environment for the row style to highlight before the click commits,
+        // and drops the selection if the pointer is released outside the row.
+        Button {
+            context.select(AnyHashable(id))
+        } label: {
+            content(isSelected)
+        }
+        .buttonStyle(SelectableRowButtonStyle())
+        .id(id)
+    }
+}
+
+/// Renders a ``SelectableRow``'s label unchanged, but makes the whole row area
+/// the hit target and publishes the button's pressed state so the row style can
+/// show a pre-selection highlight.
+private struct SelectableRowButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
             .contentShape(Rectangle())
-            .id(id)
-            .onTapGesture { context.select(AnyHashable(id)) }
+            .environment(\.selectableRowIsPressed, configuration.isPressed)
+            // Focus lives on the list container (which drives arrow-key nav), not
+            // on individual rows — so no per-row focus ring.
+            .focusEffectDisabled()
     }
 }
 
@@ -204,11 +223,13 @@ public extension SelectableList {
         _ items: Data,
         id: KeyPath<Data.Element, ID>,
         selection: Binding<ID?>,
+        style: SelectableListStyle = .sidebar,
         @ViewBuilder rowContent: @escaping (Data.Element, Bool) -> RowContent
     ) where Content == ForEach<Data, ID, SelectableRow<ID, RowContent>> {
         self.init(
             selection: selection,
-            orderedIDs: items.map { $0[keyPath: id] }
+            orderedIDs: items.map { $0[keyPath: id] },
+            style: style
         ) {
             ForEach(items, id: id) { item in
                 SelectableRow(id: item[keyPath: id]) { isSelected in
@@ -225,6 +246,7 @@ public extension SelectableList {
     init<Data: RandomAccessCollection, RowContent: View>(
         _ items: Data,
         selection: Binding<ID?>,
+        style: SelectableListStyle = .sidebar,
         @ViewBuilder rowContent: @escaping (Data.Element, Bool) -> RowContent
     ) where Data.Element: Identifiable,
             ID == Data.Element.ID,
@@ -233,6 +255,7 @@ public extension SelectableList {
             items,
             id: \.id,
             selection: selection,
+            style: style,
             rowContent: rowContent
         )
     }
@@ -259,15 +282,36 @@ public struct SelectableSection<SectionID: Hashable, Element>: Identifiable {
 private struct SelectableSectionHeader: View {
     let title: String
 
+    @Environment(\.selectableListStyle)
+    private var listStyle
+
     var body: some View {
         Text(title.uppercased())
             .font(.rcSectionLabel)
             .kerning(1)
             .foregroundStyle(.rcTextTertiary)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.leading, 12)
-            .padding(.top, Space.m)
-            .padding(.bottom, Space.xs)
+            .padding(.leading, listStyle == .inline ? Space.l : 12)
+            .padding(.top, Space.s)
+            .padding(.bottom, Space.s)
+            // Liquid Glass backing so a pinned (sticky) inline header blurs the
+            // rows scrolling beneath it; sidebar headers stay unadorned.
+            .modifier(InlineHeaderGlass(isInline: listStyle == .inline))
+    }
+}
+
+/// The pinned inline section header's Liquid Glass backing — a full-width glass
+/// band the sticky header rides on, blurring the rows scrolling under it.
+private struct InlineHeaderGlass: ViewModifier {
+    let isInline: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if isInline {
+            content.glassEffect(.regular, in: Rectangle())
+        } else {
+            content
+        }
     }
 }
 
@@ -310,12 +354,14 @@ public extension SelectableList {
         selection: Binding<ID?>,
         sections: [SelectableSection<SectionID, Element>],
         rowID: KeyPath<Element, ID>,
+        style: SelectableListStyle = .sidebar,
         pinnedViews: PinnedScrollableViews = [],
         @ViewBuilder row: @escaping (Element, Bool) -> RowContent
     ) where Content == SelectableSections<SectionID, Element, ID, RowContent> {
         self.init(
             selection: selection,
             orderedIDs: sections.flatMap(\.items).map { $0[keyPath: rowID] },
+            style: style,
             pinnedViews: pinnedViews
         ) {
             SelectableSections(sections: sections, rowID: rowID, row: row)
@@ -327,6 +373,7 @@ public extension SelectableList {
     init<SectionID: Hashable, Element: Identifiable, RowContent: View>(
         selection: Binding<ID?>,
         sections: [SelectableSection<SectionID, Element>],
+        style: SelectableListStyle = .sidebar,
         pinnedViews: PinnedScrollableViews = [],
         @ViewBuilder row: @escaping (Element, Bool) -> RowContent
     ) where ID == Element.ID,
@@ -335,6 +382,7 @@ public extension SelectableList {
             selection: selection,
             sections: sections,
             rowID: \.id,
+            style: style,
             pinnedViews: pinnedViews,
             row: row
         )

@@ -23,15 +23,15 @@ public struct PrintQueueListView: View {
     }
 
     public var body: some View {
-        List(selection: $store.selectedDeviceCode) {
-            ForEach(store.printers) { device in
-                PrintQueueRow(device: device)
-                    .tag(device.deviceCode)
-                    .listRowSeparator(.hidden)
-            }
+        SelectableList(
+            store.printers,
+            id: \.deviceCode,
+            selection: $store.selectedDeviceCode,
+            style: .inline
+        ) { device, isSelected in
+            PrintQueueRow(device: device).rcSidebarRow(isSelected: isSelected)
         }
-        .listStyle(.inset)
-        .scrollContentBackground(.hidden)
+        .background(.rcContentBackground)
         .overlay {
             if store.printers.isEmpty {
                 if store.isLoading {
@@ -54,9 +54,10 @@ public struct PrintQueueListView: View {
         .toolbar {
             ToolbarItem {
                 if !store.printers.isEmpty {
-                    Text(store.printers.count == 1 ? "1 printer" : "\(store.printers.count) printers")
+                    Text("^[\(store.printers.count) printer](inflect: true)")
                         .font(.rcCaption)
                         .foregroundStyle(.rcTextTertiary)
+                        .padding(.horizontal, Space.m)
                 }
             }
             ToolbarItem {

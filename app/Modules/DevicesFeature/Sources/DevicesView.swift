@@ -22,15 +22,15 @@ public struct DevicesListView: View {
     }
 
     public var body: some View {
-        List(selection: $store.selectedDeviceCode) {
-            ForEach(store.devices) { device in
-                DeviceRow(device: device)
-                    .tag(device.deviceCode)
-                    .listRowSeparator(.hidden)
-            }
+        SelectableList(
+            store.devices,
+            id: \.deviceCode,
+            selection: $store.selectedDeviceCode,
+            style: .inline
+        ) { device, isSelected in
+            DeviceRow(device: device).rcSidebarRow(isSelected: isSelected)
         }
-        .listStyle(.inset)
-        .scrollContentBackground(.hidden)
+        .background(.rcContentBackground)
         .overlay {
             if store.devices.isEmpty {
                 if store.isLoading {
@@ -56,6 +56,7 @@ public struct DevicesListView: View {
                     Text("\(store.devices.count) devices")
                         .font(.rcCaption)
                         .foregroundStyle(.rcTextTertiary)
+                        .padding(.horizontal, Space.m)
                 }
             }
             ToolbarItem {

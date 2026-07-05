@@ -25,24 +25,23 @@ public struct LocationEventsListView: View {
             if store.events.isEmpty {
                 emptyState
             } else {
-                List(selection: $store.selection) {
-                    if !store.active.isEmpty {
-                        Section("Active") {
-                            ForEach(store.active) { event in
-                                LocationEventRow(event: event).tag(event.designation)
-                            }
-                        }
-                    }
-                    if !store.inactive.isEmpty {
-                        Section("Completed") {
-                            ForEach(store.inactive) { event in
-                                LocationEventRow(event: event).tag(event.designation)
-                            }
-                        }
-                    }
+                SelectableList(
+                    selection: $store.selection,
+                    sections: [
+                        store.active.isEmpty
+                            ? nil
+                            : SelectableSection(id: "active", title: "Active", items: store.active),
+                        store.inactive.isEmpty
+                            ? nil
+                            : SelectableSection(id: "completed", title: "Completed", items: store.inactive),
+                    ].compactMap { $0 },
+                    rowID: \.designation,
+                    style: .inline,
+                    pinnedViews: [.sectionHeaders]
+                ) { event, isSelected in
+                    LocationEventRow(event: event).rcSidebarRow(isSelected: isSelected)
                 }
-                .listStyle(.inset)
-                .scrollContentBackground(.hidden)
+                .background(.rcContentBackground)
             }
         }
         .navigationTitle("Location Events")
@@ -82,40 +81,5 @@ public struct LocationEventsListView: View {
             .padding(.horizontal, Space.m).padding(.vertical, Space.s)
             .background(.rcSurfaceRaised)
         }
-    }
-}
-
-// MARK: - Row
-
-struct LocationEventRow: View {
-    let event: LocationEvent
-
-    var body: some View {
-        HStack(spacing: Space.s) {
-            Image(systemName: "flag")
-                .font(.system(size: 13))
-                .foregroundStyle(event.isActive ? .rcAccent : .rcTextTertiary)
-                .frame(width: 20)
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text(event.title.isEmpty ? event.designation : event.title)
-                    .font(.rcBodyEmph)
-                    .foregroundStyle(.rcTextPrimary)
-                Text(event.locationLabel)
-                    .font(.rcCaption)
-                    .foregroundStyle(.rcTextTertiary)
-            }
-
-            Spacer(minLength: Space.s)
-
-            if event.tier > 0 {
-                Text("T\(event.tier)")
-                    .font(.rcMonoSmall)
-                    .foregroundStyle(.rcTextSecondary)
-                    .rcPill(.neutral)
-            }
-            StatusBadge(event.status)
-        }
-        .padding(.vertical, 2)
     }
 }

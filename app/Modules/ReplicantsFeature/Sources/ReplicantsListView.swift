@@ -24,19 +24,21 @@ public struct ReplicantsListView: View {
     }
 
     public var body: some View {
-        List(selection: $store.selectedReplicantCode) {
-            ForEach(store.sections) { section in
-                Section(section.id) {
-                    ForEach(section.replicants) { replicant in
-                        ReplicantRow(replicant: replicant, isOwn: section.id == "Yours")
-                            .tag(replicant.replicantCode)
-                            .listRowSeparator(.hidden)
-                    }
-                }
-            }
+        // The account's own replicants — tags which rows get the accent host glyph
+        // (the section grouping isn't visible inside the row closure).
+        let ownCodes = Set(store.roster.map(\.replicantCode))
+        return SelectableList(
+            selection: $store.selectedReplicantCode,
+            sections: store.sections.map {
+                SelectableSection(id: $0.id, title: $0.id, items: $0.replicants)
+            },
+            rowID: \.replicantCode,
+            style: .inline
+        ) { replicant, isSelected in
+            ReplicantRow(replicant: replicant, isOwn: ownCodes.contains(replicant.replicantCode))
+                .rcSidebarRow(isSelected: isSelected)
         }
-        .listStyle(.inset)
-        .scrollContentBackground(.hidden)
+        .background(.rcContentBackground)
         .overlay {
             if store.sections.isEmpty {
                 if store.isDirectoryEmpty && store.isLoading {

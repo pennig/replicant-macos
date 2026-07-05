@@ -23,15 +23,15 @@ public struct BlueprintsListView: View {
     }
 
     public var body: some View {
-        List(selection: $store.selectedDeviceType) {
-            ForEach(store.blueprints) { blueprint in
-                BlueprintRow(blueprint: blueprint)
-                    .tag(blueprint.deviceType)
-                    .listRowSeparator(.hidden)
-            }
+        SelectableList(
+            store.blueprints,
+            id: \.deviceType,
+            selection: $store.selectedDeviceType,
+            style: .inline
+        ) { blueprint, isSelected in
+            BlueprintRow(blueprint: blueprint).rcSidebarRow(isSelected: isSelected)
         }
-        .listStyle(.inset)
-        .scrollContentBackground(.hidden)
+        .background(.rcContentBackground)
         .overlay {
             if store.blueprints.isEmpty {
                 if store.isLoading {
@@ -60,6 +60,7 @@ public struct BlueprintsListView: View {
                     Text("\(store.blueprints.count) blueprints")
                         .font(.rcCaption)
                         .foregroundStyle(.rcTextTertiary)
+                        .padding(.horizontal, Space.m)
                 }
             }
             ToolbarItem {
@@ -74,38 +75,6 @@ public struct BlueprintsListView: View {
         }
         // Cold-load trigger (first run / empty catalog).
         .task { store.send(.task) }
-    }
-
-}
-
-// MARK: - Row
-
-private struct BlueprintRow: View {
-    let blueprint: Blueprint
-
-    var body: some View {
-        HStack(spacing: Space.s) {
-            RCGlyphTile(Image.rcSymbol("device.\(blueprint.deviceType)"))
-            VStack(alignment: .leading, spacing: Space.xs) {
-                HStack(spacing: Space.s) {
-                    Text(BlueprintPresentation.displayName(blueprint.deviceType))
-                        .font(.rcBodyEmph)
-                        .foregroundStyle(.rcTextPrimary)
-                        .lineLimit(1)
-                    Spacer(minLength: Space.xs)
-                    Label(BlueprintPresentation.printTimeText(blueprint.printTime), systemImage: "clock")
-                        .font(.rcMonoSmall)
-                        .foregroundStyle(.rcTextTertiary)
-                        .labelStyle(.titleAndIcon)
-                }
-                Text(blueprint.shortDescription)
-                    .font(.rcCaption)
-                    .foregroundStyle(.rcTextSecondary)
-                    .lineLimit(2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        }
-        .padding(.vertical, Space.xs)
     }
 
 }

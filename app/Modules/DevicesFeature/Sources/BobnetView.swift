@@ -39,34 +39,3 @@ public struct BobnetView: View {
         .navigationTitle("Bobnet")
     }
 }
-
-private struct BobnetRow: View {
-    let message: BobnetMessage
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: Space.xs) {
-            HStack(spacing: Space.s) {
-                Text(message.replicantName)
-                    .font(.rcBodyEmph)
-                    .foregroundStyle(.rcTextPrimary)
-                Text(message.channel)
-                    .font(.rcMonoSmall)
-                    .foregroundStyle(.rcAccent)
-                if let star = message.currentStar {
-                    Text(star)
-                        .font(.rcMonoSmall)
-                        .foregroundStyle(.rcTextTertiary)
-                }
-                Spacer(minLength: Space.s)
-                Text(message.time, format: .relative(presentation: .named))
-                    .font(.rcMonoSmall)
-                    .foregroundStyle(.rcTextTertiary)
-            }
-            Text(message.message)
-                .font(.rcBody)
-                .foregroundStyle(.rcTextSecondary)
-                .textSelection(.enabled)
-        }
-        .padding(.vertical, Space.xs)
-    }
-}

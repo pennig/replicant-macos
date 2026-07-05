@@ -25,14 +25,15 @@ public struct MessagesListView: View {
     }
 
     public var body: some View {
-        List(selection: $store.selectedMessageID) {
-            ForEach(store.messages) { message in
-                MessageRow(message: message)
-                    .tag(message.id)
-                    .listRowSeparator(.hidden)
-            }
+        SelectableList(
+            store.messages,
+            id: \.id,
+            selection: $store.selectedMessageID,
+            style: .inline
+        ) { message, isSelected in
+            MessageRow(message: message).rcSidebarRow(isSelected: isSelected)
         }
-        .listStyle(.inset)
+        .background(.rcContentBackground)
         .overlay {
             if store.messages.isEmpty {
                 if store.isLoading {
@@ -58,6 +59,7 @@ public struct MessagesListView: View {
                     Text("\(store.unreadCount) unread")
                         .font(.rcCaption)
                         .foregroundStyle(.rcTextTertiary)
+                        .padding(.horizontal, Space.m)
                 }
             }
             ToolbarItemGroup {
@@ -83,52 +85,6 @@ public struct MessagesListView: View {
 
 }
 
-// MARK: - Row
-
-private struct MessageRow: View {
-    let message: Message
-
-    var body: some View {
-        HStack(alignment: .top, spacing: Space.s) {
-            Circle()
-                .fill(message.isRead ? Color.clear : Color.rcAccent)
-                .frame(width: 7, height: 7)
-                .padding(.top, 5)
-
-            VStack(alignment: .leading, spacing: Space.xs) {
-                HStack(spacing: Space.s) {
-                    Text(message.title)
-                        .font(message.isRead ? .rcBody : .rcBodyEmph)
-                        .foregroundStyle(.rcTextPrimary)
-                        .lineLimit(1)
-                    Spacer(minLength: Space.xs)
-                    Text(message.createdAt, format: .relative(presentation: .named))
-                        .font(.rcCaption)
-                        .foregroundStyle(.rcTextTertiary)
-                        .fixedSize()
-                }
-                Text(message.body)
-                    .font(.rcCaption)
-                    .foregroundStyle(.rcTextSecondary)
-                    .lineLimit(2)
-                // Story beats get an accent pill so they stand out from routine
-                // system/achievement traffic in the inbox.
-                if message.messageType == "story" {
-                    Text("STORY")
-                        .font(.rcMonoSmall)
-                        .foregroundStyle(.rcAccent)
-                        .rcPill(.accent)
-                } else {
-                    Text(message.messageType.uppercased())
-                        .font(.rcMonoSmall)
-                        .foregroundStyle(.rcTextTertiary)
-                }
-            }
-        }
-        .padding(.vertical, Space.xs)
-    }
-}
-
 // MARK: - Detail / reader
 
 public struct MessageDetailView: View {
@@ -143,6 +99,26 @@ public struct MessageDetailView: View {
         return store.messages.first { $0.id == id }
     }
 
+    /// Builds an `AttributedString` from the message body with any detected URLs
+    /// turned into tappable links.
+    private func linkified(_ text: String) -> AttributedString {
+        var attributed = AttributedString(text)
+        guard
+            let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+        else {
+            return attributed
+        }
+        let range = NSRange(text.startIndex..., in: text)
+        for match in detector.matches(in: text, range: range) {
+            guard
+                let url = match.url,
+                let attrRange = Range(match.range, in: attributed)
+            else { continue }
+            attributed[attrRange].link = url
+        }
+        return attributed
+    }
+
     public var body: some View {
         if let message = selected {
             ScrollView {
@@ -153,7 +129,7 @@ public struct MessageDetailView: View {
                             .foregroundStyle(.rcTextPrimary)
                         HStack(spacing: Space.s) {
                             if message.messageType == "story" {
-                                Text("STORY")
+                                Text(message.messageType.uppercased())
                                     .font(.rcMonoSmall)
                                     .foregroundStyle(.rcAccent)
                                     .rcPill(.accent)
@@ -170,12 +146,12 @@ public struct MessageDetailView: View {
                         }
                     }
 
-                    
-                    Rectangle().fill(.rcSeparator).frame(height: 0.5)
+                    Divider().overlay(.rcSeparator)
 
-                    Text(message.body)
+                    Text(linkified(message.body))
                         .font(.rcBody)
                         .foregroundStyle(.rcTextPrimary)
+                        .tint(.rcAccent)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -204,12 +180,27 @@ public struct MessageDetailView: View {
     MessagesPreviewHarness()
         .frame(width: 820, height: 560)
 }
+#Preview("Detail") {
+    let _ = prepareDependencies {
+        try! $0.bootstrapDatabase { db in
+            try db.seed { Message.previewInbox }
+        }
+    }
+    MessageDetailView(
+        store: Store(
+            initialState: MessagesFeature.State(selectedMessageID: Message.previewInbox[0].id)
+        ) {
+            MessagesFeature()
+        }
+    )
+    .frame(width: 560, height: 560)
+}
 
 private struct MessagesPreviewHarness: View {
     @State private var store = Store(initialState: MessagesFeature.State()) {
         MessagesFeature()
     }
-
+    
     var body: some View {
         NavigationSplitView {
             List { Label("Messages", systemImage: SidebarSymbol.messages) }
