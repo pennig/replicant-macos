@@ -48,6 +48,11 @@ public struct LocationsFeature {
 
         /// Selected node designation (system or body).
         public var selection: String?
+        /// Expanded node designations (systems and bodies). Drives the flattened
+        /// row list — a node's children are only emitted when its id is here. Kept
+        /// in state so expansion survives tab switches, like sort/filter.
+        public var expanded: Set<String>
+
         /// Sort / filter selections. Kept in state so they survive tab switches and
         /// drive the `@Fetch` request via `forestRequest`; changes flow through
         /// `BindingReducer`, which the reducer uses to reload the forest.
@@ -71,6 +76,7 @@ public struct LocationsFeature {
             self.sort = sort
             self.filter = filter
             self.searchText = ""
+            self.expanded = []
             self.hydrating = []
             self.isScanning = false
             self.errorMessage = nil
@@ -107,6 +113,7 @@ public struct LocationsFeature {
     public enum Action: BindableAction {
         case binding(BindingAction<State>)
         case task
+        case toggleExpansion(String)
         case hydrate(system: String, body: String?)
         case hydrated(String)
         case hydrateFailed(system: String, message: String)
@@ -145,6 +152,14 @@ public struct LocationsFeature {
             case .binding:
                 return .none
 
+            case let .toggleExpansion(id):
+                if state.expanded.contains(id) {
+                    state.expanded.remove(id)
+                } else {
+                    state.expanded.insert(id)
+                }
+                return .none
+
             case .task:
                 // Load the forest for the current selections (in case they differ
                 // from the @Fetch's seed) and refresh the footprint overlay in the
@@ -172,7 +187,7 @@ public struct LocationsFeature {
                 let database = self.database
                 let locationsClient = self.locationsClient
                 let now = self.now
-                return .run { send in
+                return .run { [fetch = state.$forest, request = state.forestRequest] send in
                     // Start from any persisted detail, plus the census explored flag.
                     let (cached, censusExplored) = try await database.read { db in
                         let detail = try SystemDetail.where { $0.designation.eq(system) }.fetchOne(db)
@@ -209,6 +224,13 @@ public struct LocationsFeature {
                     try await database.write { db in
                         try SystemDetail.upsert { row }.execute(db)
                     }
+                    // Reload the forest explicitly (as `.task` does) rather than
+                    // waiting on `@Fetch`'s implicit DB observation: the catalog list
+                    // is an AppKit-hosted table that only repaints when the forest
+                    // value is current at re-render time, so the freshly-hydrated
+                    // body's badges appear immediately instead of on the next
+                    // selection change.
+                    _ = try? await fetch.load(request)
                     await send(.hydrated(system))
                 } catch: { error, send in
                     // "No replicant in system" (403) is expected, not an error to

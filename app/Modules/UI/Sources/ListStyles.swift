@@ -10,6 +10,11 @@ public enum SelectableListStyle: Sendable {
     case inline
 }
 
+public enum SelectableListMetrics {
+    public static let leadingPadding = Space.l
+    public static let trailingPadding = Space.m
+}
+
 struct SelectableListStyleKey: EnvironmentKey {
     static let defaultValue: SelectableListStyle = .sidebar
 }
@@ -39,16 +44,34 @@ extension View {
     public func rcSidebarRow(isSelected: Bool) -> some View {
         modifier(RCSidebarRowStyle(isSelected: isSelected))
     }
+
+    /// Applies the row treatment for an explicit style (and, optionally, an
+    /// explicit pressed state), independent of the `\.selectableListStyle` /
+    /// `\.selectableRowIsPressed` environment. Use when hosting a row outside a
+    /// ``SelectableList`` (e.g. an AppKit-backed list) where the environment
+    /// isn't set — the host supplies the pressed state itself.
+    public func rcSidebarRow(isSelected: Bool, isPressed: Bool = false, style: SelectableListStyle) -> some View {
+        modifier(RCSidebarRowStyle(isSelected: isSelected, explicitStyle: style, explicitPressed: isPressed))
+    }
 }
 
 public struct RCSidebarRowStyle: ViewModifier {
     let isSelected: Bool
+    var explicitStyle: SelectableListStyle? = nil
+    var explicitPressed: Bool? = nil
 
     @Environment(\.selectableListStyle)
-    private var listStyle
+    private var envStyle
 
     @Environment(\.selectableRowIsPressed)
-    private var isPressed
+    private var envPressed
+
+    /// An explicit style (passed by the AppKit-hosted path) wins; otherwise fall
+    /// back to the environment a `SelectableList` sets.
+    private var listStyle: SelectableListStyle { explicitStyle ?? envStyle }
+
+    /// Likewise for the pressed state — the AppKit host publishes it directly.
+    private var isPressed: Bool { explicitPressed ?? envPressed }
 
     @ViewBuilder
     public func body(content: Content) -> some View {
@@ -92,7 +115,9 @@ public struct RCSidebarRowStyle: ViewModifier {
     private func inlineBody(_ content: Content) -> some View {
         content
             .padding(.vertical, Space.s)
-            .padding(.horizontal, Space.l)
+            .padding(.leading, SelectableListMetrics.leadingPadding)
+            .padding(.trailing, SelectableListMetrics.trailingPadding)
+        
             .frame(maxWidth: .infinity, alignment: .leading)
             // Muted-accent fill for both the committed selection and the
             // transient pressed state; the leading capsule stays selection-only.

@@ -60,6 +60,66 @@ import Testing
         #expect(belt.inventory.contains { $0.resourceType == "rares" && $0.quantity == 153 })
     }
 
+    @Test func unscannedPlanetBodyDetailStaysVisited() throws {
+        // The location endpoint is presence-gated, so it returns a body we're
+        // sitting in even when `scanned: false` (estimated type, no physical
+        // block). The mapped body must stay `.visited` — marking it `.scanned`
+        // made unscanned planets read as "Scanned" in the inspector.
+        let raw = try decode(Self.unscannedPlanetJSON)
+        let detail = try #require(raw.bodyDetail())
+        guard case .planet(let planet) = detail else { Issue.record("expected planet"); return }
+        #expect(planet.recon == .visited)
+        #expect(planet.typeEstimated == true)
+        #expect(planet.physical == nil)          // no physical block until scanned
+    }
+
+    @Test func unscannedMoonBodyDetailStaysVisited() throws {
+        let raw = try decode(Self.unscannedMoonJSON)
+        let detail = try #require(raw.bodyDetail())
+        guard case .moon(let moon) = detail else { Issue.record("expected moon"); return }
+        #expect(moon.recon == .visited)
+        #expect(moon.physical == nil)
+    }
+
+    @Test func scannedMoonOmittingFlagStaysScanned() throws {
+        // A scanned moon OMITS `scanned` (the endpoint only sends `scanned: false`
+        // for unscanned bodies) but carries a full physical block. A missing flag
+        // must read as scanned — `scanned ?? false` would wrongly demote it.
+        let raw = try decode(Self.scannedMoonNoFlagJSON)
+        let detail = try #require(raw.bodyDetail())
+        guard case .moon(let moon) = detail else { Issue.record("expected moon"); return }
+        #expect(moon.recon == .scanned)
+        #expect(moon.physical?.massEarth == 0.003169)   // physical block preserved
+    }
+
+    @Test func planetRefetchKeepsPreviouslyScannedMoonDetail() {
+        // A moon fetched individually carries salvage (a `-SAL-` site) + physical.
+        // The planet-level response lists that moon as a bare stub — merging the
+        // planet must NOT wipe the richer moon detail (the bug behind salvage
+        // badges intermittently disappearing after a planet re-fetch).
+        let richMoon = Moon(
+            designation: "SAFANA-7-15", type: "Rocky", recon: .scanned,
+            physical: BodyPhysical(massEarth: 0.0115),
+            salvage: [SalvageSite(designation: "SAFANA-7-15-SAL-1", name: "Orbital Debris Field")]
+        )
+        let system = StarSystem(
+            designation: "SAFANA",
+            planets: [Planet(designation: "SAFANA-7", recon: .scanned, moons: [richMoon])]
+        )
+        // Planet-level re-fetch: the moon comes back as a stub with no salvage.
+        let stubPlanet = Planet(
+            designation: "SAFANA-7", recon: .scanned,
+            moons: [Moon(designation: "SAFANA-7-15", type: "Rocky", recon: .scanned)]
+        )
+
+        let merged = system.applying(.planet(stubPlanet))
+        let moon = try! #require(merged.planets.first?.moons.first { $0.designation == "SAFANA-7-15" })
+        #expect(moon.salvage.map(\.designation) == ["SAFANA-7-15-SAL-1"])
+        #expect(moon.physical?.massEarth == 0.0115)
+        // And it still bubbles up to the system-level salvage roll-up.
+        #expect(merged.allSalvageSites.contains { $0.designation == "SAFANA-7-15-SAL-1" })
+    }
+
     @Test func planetSalvageDecodesAsOwnType() throws {
         // BETSU-3 roster entry carries a salvage site (research station).
         let raw = try decode(Self.betsuStarJSON)
@@ -284,6 +344,41 @@ extension UniverseModelsTests {
       "devices": [], "inventory": [ { "quantity": 153, "resource_type": "rares" } ],
       "belt": { "density": "moderate", "inner_radius_au": 2.1, "outer_radius_au": 3.3,
                 "designation": "SOL-BELT-1", "resources": { "carbon": "moderate" } }
+    }
+    """
+
+    // Captured live `locations/SAFANA-1`: a planet we're present in but haven't
+    // scanned (`scanned: false`, estimated type, no physical fields).
+    static let unscannedPlanetJSON = """
+    {
+      "location": "SAFANA-1", "location_type": "planet", "scanned": false,
+      "planet": { "scanned": false, "type": "Desert World", "location_type": "Desert World",
+                  "moon_count": 1, "moon_count_estimated": true, "designation": "SAFANA-1",
+                  "orbital_distance_au": 0.312, "name": null, "in_habitable_zone": false },
+      "resource_sites": [], "devices": [], "inventory": []
+    }
+    """
+
+    static let unscannedMoonJSON = """
+    {
+      "location": "SAFANA-1-1", "location_type": "moon", "scanned": false,
+      "moon": { "scanned": false, "type": "Rocky", "designation": "SAFANA-1-1", "name": null },
+      "resource_sites": [], "devices": [], "inventory": []
+    }
+    """
+
+    // Captured live `locations/SAFANA-5-2`: a scanned moon that OMITS `scanned`
+    // yet carries a full physical block.
+    static let scannedMoonNoFlagJSON = """
+    {
+      "location": "SAFANA-5-2", "location_type": "moon",
+      "moon": { "designation": "SAFANA-5-2", "type": "Icy", "location_type": "Icy", "name": null,
+                "mass_earth": 0.003169, "radius_earth": 0.1194, "density_gcc": 10.26,
+                "surface_gravity": 0.2222, "surface_temp_c": -80, "surface_temp_k": 193,
+                "orbital_distance_km": 174286.7, "orbital_period_hours": 165.19,
+                "tidally_locked": true, "has_atmosphere": false, "has_subsurface_ocean": false,
+                "life_stage": "none", "tags": ["frozen_surface", "icy"] },
+      "resource_sites": [], "devices": [], "inventory": []
     }
     """
 

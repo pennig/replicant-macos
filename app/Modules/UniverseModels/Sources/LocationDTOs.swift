@@ -452,6 +452,16 @@ extension RawLocation {
         let events = ((locationEvent.map { [$0] } ?? []) + (activeLocationEvents ?? []))
             .compactMap(\.domain)
 
+        // The location endpoint is gated on *presence*, not scanning, so it returns
+        // a body we're sitting in even when it's never been scanned. It signals an
+        // unscanned body by sending `scanned: false` explicitly; an already-scanned
+        // body OMITS the flag (and carries a full physical block). So "unscanned"
+        // means `scanned == false` specifically — a missing flag reads as scanned.
+        // (Marking every fetched body `.scanned` is what made unscanned bodies read
+        // as "Scanned"; keying off `scanned ?? false` would then wrongly demote the
+        // scanned bodies that omit the flag.)
+        let isScanned = scanned != false
+        let bodyRecon: Recon = isScanned ? .scanned : .visited
         switch locationType {
         case "planet":
             guard let p = planet, let designation = p.designation ?? location else { return nil }
@@ -465,10 +475,10 @@ extension RawLocation {
                 )
             }
             let planetDomain = Planet(
-                designation: designation, name: p.name, type: p.type, typeEstimated: false,
+                designation: designation, name: p.name, type: p.type, typeEstimated: !isScanned,
                 orbitalDistanceAu: p.orbitalDistanceAu, inHabitableZone: p.inHabitableZone ?? false,
-                lifeStage: p.lifeStage, recon: .scanned, moonCount: moonDomains.count,
-                physical: p.physical, moons: moonDomains, sites: sites, salvage: salvageSites,
+                lifeStage: p.lifeStage, recon: bodyRecon, moonCount: moonDomains.count,
+                physical: isScanned ? p.physical : nil, moons: moonDomains, sites: sites, salvage: salvageSites,
                 devices: devs, inventory: inv, events: events
             )
             return .planet(planetDomain)
@@ -476,8 +486,8 @@ extension RawLocation {
         case "moon":
             guard let m = moon, let designation = m.designation ?? location else { return nil }
             return .moon(Moon(
-                designation: designation, name: m.name, type: m.type, recon: .scanned,
-                physical: m.physical, sites: sites, salvage: salvageSites,
+                designation: designation, name: m.name, type: m.type, recon: bodyRecon,
+                physical: isScanned ? m.physical : nil, sites: sites, salvage: salvageSites,
                 devices: devs, inventory: inv
             ))
 
@@ -500,13 +510,13 @@ extension RawLocation {
                 status: megastructure?.status, stage: megastructure?.stage,
                 orbitalDistanceAu: megastructure?.orbitalDistanceAu,
                 progressPercentage: megastructure?.progressPercentage, deadline: megastructure?.deadline,
-                requirements: (megastructure?.requirements ?? [:]).domain
+                requirements: (megastructure?.requirements ?? [:]).domain, inventory: inv
             ))
 
         case "kuiper", "oort", "object":
             guard let designation = location else { return nil }
             let kind: SpecialSiteKind = SpecialSiteKind(rawValue: locationType ?? "object") ?? .object
-            return .special(SpecialSite(designation: designation, kind: kind))
+            return .special(SpecialSite(designation: designation, kind: kind, inventory: inv))
 
         default:
             return nil

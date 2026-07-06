@@ -6,10 +6,7 @@
 //  (belts + planets) → moons, filterable by explored/uncharted and sortable by
 //  name, distance-from-probe, or inventory.
 //
-//  Performance notes (the census is ~5,770 systems):
-//    - Rows render through the lazy `List(_:children:selection:)` initializer, so
-//      only visible rows are realized (a `List { OutlineGroup }` realizes the
-//      whole tree eagerly — death on scroll).
+//  Performance notes (the census is >10k systems):
 //    - The tree is built OFF the render path: a detached task recomputes it into
 //      `@State` only when its inputs actually change (`forestKey`), never per
 //      body evaluation. Selection/scroll no longer rebuild 5,770 nodes.
@@ -33,6 +30,13 @@ public struct LocationsListView: View {
     /// The built tree, assembled off-main by the state's `@Fetch` request.
     private var forest: [LocationNode] { store.forest.nodes }
 
+    /// The flattened, currently-visible rows — the forest walked in render order,
+    /// emitting a node's children only when it's expanded. Cheap to rebuild (a
+    /// linear walk producing lightweight structs) and fed to a flat, lazy `List`.
+    private var rows: [LocationFlatRow] {
+        LocationTree.flatten(forest, expanded: store.expanded)
+    }
+
     public var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: Space.m) {
@@ -41,12 +45,6 @@ public struct LocationsListView: View {
                     .foregroundStyle(.rcTextTertiary)
                     .monospacedDigit()
                 Spacer(minLength: Space.s)
-                RCValueSelect(
-                    "Filter",
-                    systemImage: "line.3.horizontal.decrease.circle",
-                    options: ["All": LocationFilter.all, "Explored": .explored, "Uncharted": .unexplored],
-                    selection: $store.filter
-                )
             }
             .padding(.horizontal, Space.m)
             .padding(.vertical, Space.s)
@@ -55,16 +53,15 @@ public struct LocationsListView: View {
                 if forest.isEmpty {
                     emptyState
                 } else {
-                    // Flat `List { ForEach }` (lazily realizes only visible rows)
-                    // with per-row `DisclosureGroup`s (children built on expand) —
-                    // reliably lazy at 5,770 systems, unlike `List(_:children:)`.
-                    List(selection: $store.selection) {
-                        ForEach(forest) { node in
-                            LocationOutlineRow(node: node)
-                        }
+                    // Flat, pre-flattened visible rows rendered by an AppKit
+                    // `NSTableView` (see `LocationsOutlineView`): the only way on
+                    // macOS to get BOTH cell recycling (essential at 10,000+ systems)
+                    // and animated row insert/remove on expand/collapse. The store
+                    // stays the source of truth — this is a pure renderer over `rows`,
+                    // `selection`, and the toggle callback.
+                    LocationsOutlineView(rows: rows, selection: $store.selection) { id in
+                        store.send(.toggleExpansion(id))
                     }
-                    .listStyle(.inset)
-                    .scrollContentBackground(.hidden)
                 }
             }
         }
@@ -78,13 +75,18 @@ public struct LocationsListView: View {
     private var toolbarContent: some ToolbarContent {
         ToolbarItem(placement: .primaryAction) {
             Menu {
+                Picker("Filter", selection: $store.filter) {
+                    ForEach(LocationFilter.allCases) { option in
+                        Text(option.label).tag(option)
+                    }
+                }
                 Picker("Sort", selection: $store.sort) {
                     ForEach(LocationSort.allCases) { option in
                         Label(option.label, systemImage: option.symbol).tag(option)
                     }
                 }
             } label: {
-                Label("Sort", systemImage: "arrow.up.arrow.down")
+                Label("Sort/Filter", systemImage: "line.3.horizontal.decrease.circle")
             }
         }
     }

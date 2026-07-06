@@ -15,30 +15,11 @@ import SwiftUI
 import UI
 import UniverseModels
 
-// MARK: - Recursive outline row
-
-/// One node and (lazily, on expand) its children. Leaves render a plain tagged
-/// row; nodes with children render a `DisclosureGroup` whose contents are only
-/// built when the user expands it — so an unexpanded system costs one row.
-struct LocationOutlineRow: View {
-    let node: LocationNode
-
-    var body: some View {
-        if let children = node.children, !children.isEmpty {
-            DisclosureGroup {
-                ForEach(children) { LocationOutlineRow(node: $0) }
-            } label: {
-                LocationRow(node: node).tag(node.id)
-            }
-        } else {
-            LocationRow(node: node)
-                .tag(node.id)
-                .listRowSeparator(.hidden)
-        }
-    }
-}
-
 // MARK: - Row
+//
+// The row content (`LocationRow`) is hosted per cell by the AppKit-backed
+// `LocationsOutlineView`; indentation, the disclosure chevron, and selection
+// styling live in `LocationOutlineRowContent` there.
 
 struct LocationRow: View {
     let node: LocationNode
@@ -47,7 +28,7 @@ struct LocationRow: View {
         HStack(spacing: Space.s) {
             Image(systemName: node.kind.symbol)
                 .font(.system(size: 13))
-                .foregroundStyle(node.recon == .aware ? .rcTextTertiary : .rcAccent)
+                .foregroundStyle(iconColor)
                 .frame(width: 20)
 
             VStack(alignment: .leading, spacing: 1) {
@@ -66,14 +47,23 @@ struct LocationRow: View {
             ForEach(node.badges) { badge in
                 HStack(spacing: 2) {
                     Image(systemName: badge.symbol).font(.system(size: 9))
-                    Text("\(badge.count)").font(.rcMonoSmall)
+                    if let count = badge.count {
+                        Text("\(count)").font(.rcMonoSmall)
+                    }
                 }
                 .foregroundStyle(.rcTextSecondary)
             }
-
-            ReconDot(recon: node.recon)
         }
         .padding(.vertical, 2)
+    }
+
+    /// Icon tint by recon depth: scanned = accent, visited = primary, aware = tertiary.
+    private var iconColor: Color {
+        switch node.recon {
+        case .scanned: .rcAccent
+        case .visited: .rcTextPrimary
+        case .aware:   .rcTextSecondary
+        }
     }
 }
 

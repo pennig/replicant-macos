@@ -28,7 +28,7 @@
             "additionalProperties": {}
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "flask_smorest_pagination_PaginationMetadataSchema": {
         "type": "object",
@@ -62,7 +62,7 @@
             "description": "Next page number."
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_accounts_RegisterRequestSchema": {
         "type": "object",
@@ -82,7 +82,7 @@
             "nullable": true
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_common_ErrorSchema": {
         "type": "object",
@@ -92,7 +92,7 @@
             "description": "Error message"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_accounts_AccountInfoSchema": {
         "type": "object",
@@ -110,7 +110,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_accounts_AccountResponseSchema": {
         "type": "object",
@@ -127,7 +127,7 @@
             "nullable": true
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_accounts_RecoverRequestSchema": {
         "type": "object",
@@ -137,7 +137,7 @@
             "description": "Email address to recover"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_accounts_RecoverResponseSchema": {
         "type": "object",
@@ -146,7 +146,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_accounts_ReplicantBriefSchema": {
         "type": "object",
@@ -158,7 +158,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_accounts_VerificationResponseSchema": {
         "type": "object",
@@ -184,7 +184,7 @@
             ]
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_accounts_ReplicantSummarySchema": {
         "type": "object",
@@ -225,7 +225,7 @@
             "type": "integer"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_accounts_AccountMeResponseSchema": {
         "type": "object",
@@ -274,7 +274,7 @@
             }
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_achievements_AchievementSchema": {
         "type": "object",
@@ -298,7 +298,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_achievements_AchievementListResponseSchema": {
         "type": "object",
@@ -310,7 +310,7 @@
             }
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_accounts_AccountUpdateRequestSchema": {
         "type": "object",
@@ -352,7 +352,7 @@
             "nullable": true
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_accounts_AccountUpdateResponseSchema": {
         "type": "object",
@@ -380,7 +380,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_accounts_AccountWipeRequestedSchema": {
         "type": "object",
@@ -389,7 +389,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_accounts_WebhookInfoSchema": {
         "type": "object",
@@ -403,7 +403,7 @@
             "nullable": true
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_accounts_WebhookRegisterSchema": {
         "type": "object",
@@ -416,7 +416,7 @@
         "required": [
           "url"
         ],
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_accounts_WebhookResponseSchema": {
         "type": "object",
@@ -434,7 +434,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_accounts_WebhookRemovedSchema": {
         "type": "object",
@@ -443,7 +443,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_replicants_ReplicantSearchItemSchema": {
         "type": "object",
@@ -462,7 +462,7 @@
             "nullable": true
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_replicants_ReplicantSearchResponseSchema": {
         "type": "object",
@@ -478,7 +478,7 @@
             "nullable": true
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_common_PositionSchema": {
         "type": "object",
@@ -493,7 +493,7 @@
             "type": "number"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_replicants_TravelInfoSchema": {
         "type": "object",
@@ -552,7 +552,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_replicants_MiningInfoSchema": {
         "type": "object",
@@ -579,7 +579,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_replicants_PrintingInfoSchema": {
         "type": "object",
@@ -600,7 +600,7 @@
             "type": "number"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_replicants_TeleportInfoSchema": {
         "type": "object",
@@ -618,7 +618,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_replicants_ReplicantStatusSchema": {
         "type": "object",
@@ -715,7 +715,7 @@
             "$ref": "#/components/schemas/app_schemas_replicants_TeleportInfoSchema"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_replicants_ReplicantUpdateRequestSchema": {
         "type": "object",
@@ -753,7 +753,7 @@
             "description": "Cooperation permission: 'private' or 'public'"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_replicants_ReplicantUpdateResponseSchema": {
         "type": "object",
@@ -790,7 +790,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_replicants_TeleportRequestSchema": {
         "type": "object",
@@ -803,7 +803,7 @@
         "required": [
           "target"
         ],
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_replicants_TeleportResponseSchema": {
         "type": "object",
@@ -833,7 +833,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_replicants_ReplicantMessageRequestSchema": {
         "type": "object",
@@ -851,7 +851,7 @@
           "channel",
           "text"
         ],
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_replicants_ReplicantMessageResponseSchema": {
         "type": "object",
@@ -885,7 +885,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_replicants_TransferRequestSchema": {
         "type": "object",
@@ -898,7 +898,7 @@
         "required": [
           "target"
         ],
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_replicants_TransferResponseSchema": {
         "type": "object",
@@ -916,7 +916,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_stars_StarItemSchema": {
         "type": "object",
@@ -954,7 +954,7 @@
             "nullable": true
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_stars_StarListResponseSchema": {
         "type": "object",
@@ -984,7 +984,7 @@
             }
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_stars_StarDetailResponseSchema": {
         "type": "object",
@@ -996,7 +996,7 @@
             "$ref": "#/components/schemas/app_schemas_stars_StarItemSchema"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_travel_TravelRequestSchema": {
         "type": "object",
@@ -1022,7 +1022,7 @@
             "description": "If true, return the computed route without initiating travel."
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_travel_RouteLegSchema": {
         "type": "object",
@@ -1065,7 +1065,7 @@
             "nullable": true
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_travel_TravelResponseSchema": {
         "type": "object",
@@ -1133,7 +1133,7 @@
             "nullable": true
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_scanning_HabitableZoneSchema": {
         "type": "object",
@@ -1145,7 +1145,7 @@
             "type": "number"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_scanning_StarDetailSchema": {
         "type": "object",
@@ -1181,7 +1181,7 @@
             "$ref": "#/components/schemas/app_schemas_common_PositionSchema"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_scanning_AsteroidBeltDetailSchema": {
         "type": "object",
@@ -1205,7 +1205,7 @@
             }
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_scanning_AsteroidBeltSchema": {
         "type": "object",
@@ -1220,7 +1220,7 @@
             }
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_scanning_InventoryItemSchema": {
         "type": "object",
@@ -1232,7 +1232,7 @@
             "type": "number"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_scanning_PlanetSummarySchema": {
         "type": "object",
@@ -1272,7 +1272,7 @@
             }
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_scanning_ActiveLocationEventSummarySchema": {
         "type": "object",
@@ -1293,7 +1293,7 @@
             "type": "integer"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_scanning_ShopTradeSchema": {
         "type": "object",
@@ -1316,7 +1316,7 @@
             "type": "integer"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_scanning_ShopSummarySchema": {
         "type": "object",
@@ -1351,7 +1351,7 @@
             }
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_scanning_SystemScanResponseSchema": {
         "type": "object",
@@ -1416,7 +1416,7 @@
             }
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_devices_DeviceListItemSchema": {
         "type": "object",
@@ -1492,7 +1492,7 @@
             "format": "date-time"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_devices_DeviceListResponseSchema": {
         "type": "object",
@@ -1508,7 +1508,7 @@
             "nullable": true
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_devices_TravelInfoSchema": {
         "type": "object",
@@ -1576,7 +1576,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_devices_MiningInfoSchema": {
         "type": "object",
@@ -1607,9 +1607,12 @@
           },
           "pending_quantity": {
             "type": "number"
+          },
+          "quantity_mined": {
+            "type": "integer"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_devices_ScanInfoSchema": {
         "type": "object",
@@ -1620,6 +1623,9 @@
           "started_at": {
             "type": "string"
           },
+          "completes_at": {
+            "type": "string"
+          },
           "progress_percent": {
             "type": "number"
           },
@@ -1627,7 +1633,7 @@
             "type": "number"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_devices_ProspectInfoSchema": {
         "type": "object",
@@ -1645,7 +1651,7 @@
             "type": "number"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_devices_RepairInfoSchema": {
         "type": "object",
@@ -1663,7 +1669,7 @@
             "type": "number"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_devices_PrintingInfoSchema": {
         "type": "object",
@@ -1684,7 +1690,7 @@
             "type": "number"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_devices_CargoItemSchema": {
         "type": "object",
@@ -1696,7 +1702,7 @@
             "type": "integer"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_devices_DeviceStatusSchema": {
         "type": "object",
@@ -1838,6 +1844,9 @@
           "stow_used": {
             "type": "integer"
           },
+          "in_control_range": {
+            "type": "boolean"
+          },
           "beacon_only": {
             "type": "boolean"
           },
@@ -1886,7 +1895,7 @@
             "format": "date-time"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_devices_DeviceConfigurationSchema": {
         "type": "object",
@@ -1919,7 +1928,7 @@
             "nullable": true
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_devices_DeviceConfigurationRequestSchema": {
         "type": "object",
@@ -1931,7 +1940,7 @@
         "required": [
           "configuration"
         ],
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_devices_DeviceConfigurationResponseSchema": {
         "type": "object",
@@ -1946,7 +1955,7 @@
             }
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_devices_DeviceTagListResponseSchema": {
         "type": "object",
@@ -1962,7 +1971,7 @@
             "nullable": true
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_devices_AccountDeviceListResponseSchema": {
         "type": "object",
@@ -1978,7 +1987,7 @@
             "nullable": true
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_events_EventSchema": {
         "type": "object",
@@ -2007,7 +2016,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_events_EventListResponseSchema": {
         "type": "object",
@@ -2023,7 +2032,7 @@
             "nullable": true
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_devices_DeviceCommandResponseSchema": {
         "type": "object",
@@ -2274,7 +2283,7 @@
             }
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_devices_NetworkConnectionSchema": {
         "type": "object",
@@ -2289,7 +2298,7 @@
             "type": "number"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_devices_DeviceNetworkSchema": {
         "type": "object",
@@ -2307,7 +2316,7 @@
             }
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_devices_ChannelItemSchema": {
         "type": "object",
@@ -2321,7 +2330,7 @@
             "description": "ISO 8601 timestamp of the last message"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_devices_DeviceChannelsResponseSchema": {
         "type": "object",
@@ -2334,7 +2343,7 @@
             }
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_devices_BobnetMessageItemSchema": {
         "type": "object",
@@ -2364,7 +2373,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_devices_DeviceMessagesResponseSchema": {
         "type": "object",
@@ -2386,7 +2395,7 @@
             "type": "integer"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_inventory_InventoryItemSchema": {
         "type": "object",
@@ -2398,7 +2407,7 @@
             "type": "integer"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_inventory_LocationInventorySchema": {
         "type": "object",
@@ -2416,7 +2425,7 @@
             }
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_inventory_SystemInventorySchema": {
         "type": "object",
@@ -2452,7 +2461,7 @@
             "nullable": true
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_inventory_AccountInventoryResponseSchema": {
         "type": "object",
@@ -2468,7 +2477,7 @@
             "nullable": true
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_printing_PrintRequestSchema": {
         "type": "object",
@@ -2487,7 +2496,7 @@
             "nullable": true
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_printing_PrintResponseSchema": {
         "type": "object",
@@ -2511,7 +2520,7 @@
             "type": "boolean"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_blueprints_BlueprintSchema": {
         "type": "object",
@@ -2575,7 +2584,7 @@
             "nullable": true
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_blueprints_BlueprintListSchema": {
         "type": "object",
@@ -2587,7 +2596,7 @@
             }
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_messages_MessageSchema": {
         "type": "object",
@@ -2611,7 +2620,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_messages_MessageListResponseSchema": {
         "type": "object",
@@ -2630,7 +2639,7 @@
             "type": "integer"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_messages_MessagesReadRequestSchema": {
         "type": "object",
@@ -2648,7 +2657,7 @@
             "default": false
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_messages_MessagesReadResponseSchema": {
         "type": "object",
@@ -2657,7 +2666,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_locations_LocationCountsSchema": {
         "type": "object",
@@ -2678,7 +2687,7 @@
             "type": "integer"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_locations_LocationSystemMapSchema": {
         "type": "object",
@@ -2690,7 +2699,7 @@
             }
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_locations_LocationResponseSchema": {
         "type": "object",
@@ -2813,7 +2822,7 @@
             }
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_locations_LocationContributionRequestSchema": {
         "type": "object",
@@ -2829,7 +2838,7 @@
         "required": [
           "devices"
         ],
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_inventory_InventoryLookupSchema": {
         "type": "object",
@@ -2865,7 +2874,7 @@
             "nullable": true
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_mining_ReplicantMineRequestSchema": {
         "type": "object",
@@ -2890,7 +2899,7 @@
         "required": [
           "resource_type"
         ],
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_mining_ReplicantMineResponseSchema": {
         "type": "object",
@@ -2938,7 +2947,7 @@
             "type": "number"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_leaderboards_LeaderboardBoardSchema": {
         "type": "object",
@@ -2953,7 +2962,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_leaderboards_LeaderboardIndexResponseSchema": {
         "type": "object",
@@ -2965,7 +2974,7 @@
             }
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_leaderboards_LeaderboardEntrySchema": {
         "type": "object",
@@ -2990,7 +2999,7 @@
             "type": "integer"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_leaderboards_LeaderboardResponseSchema": {
         "type": "object",
@@ -3005,7 +3014,7 @@
             }
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_location_events_LocationEventSchema": {
         "type": "object",
@@ -3068,7 +3077,7 @@
             "nullable": true
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_location_events_LocationEventListResponseSchema": {
         "type": "object",
@@ -3084,7 +3093,7 @@
             "nullable": true
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_species_SpeciesSchema": {
         "type": "object",
@@ -3114,7 +3123,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_species_SpeciesListResponseSchema": {
         "type": "object",
@@ -3126,7 +3135,7 @@
             }
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_species_AccountReputationEntrySchema": {
         "type": "object",
@@ -3147,7 +3156,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_species_AccountReputationResponseSchema": {
         "type": "object",
@@ -3159,7 +3168,7 @@
             }
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_species_ReplicantReputationEntrySchema": {
         "type": "object",
@@ -3174,7 +3183,7 @@
             "type": "number"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_species_ReplicantReputationResponseSchema": {
         "type": "object",
@@ -3186,7 +3195,7 @@
             }
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_feedback_FeedbackSubmitRequestSchema": {
         "type": "object",
@@ -3204,7 +3213,7 @@
             "nullable": true
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_feedback_FeedbackSubmitResponseSchema": {
         "type": "object",
@@ -3213,7 +3222,7 @@
             "type": "string"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_admin_AdminMessageRequestSchema": {
         "type": "object",
@@ -3234,7 +3243,7 @@
           "targets",
           "title"
         ],
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_admin_AdminMessageResponseSchema": {
         "type": "object",
@@ -3246,7 +3255,7 @@
             "type": "integer"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_admin_StoryAdvanceRequestSchema": {
         "type": "object",
@@ -3266,7 +3275,7 @@
         "required": [
           "phase"
         ],
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_admin_StoryAdvanceResponseSchema": {
         "type": "object",
@@ -3285,7 +3294,7 @@
             "format": "date-time"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_device_commands_NoParamSchema": {
         "type": "object",
@@ -3297,7 +3306,7 @@
         "required": [
           "command"
         ],
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_device_commands_TravelSchema": {
         "type": "object",
@@ -3323,7 +3332,7 @@
           "command",
           "destination"
         ],
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_device_commands_StartMiningSchema": {
         "type": "object",
@@ -3353,7 +3362,7 @@
           "command",
           "resource_type"
         ],
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_device_commands_RetargetSchema": {
         "type": "object",
@@ -3377,7 +3386,7 @@
           "command",
           "resource_type"
         ],
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_device_commands_StowSchema": {
         "type": "object",
@@ -3395,7 +3404,7 @@
         "required": [
           "command"
         ],
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_device_commands_ConfigureSchema": {
         "type": "object",
@@ -3413,7 +3422,7 @@
         "required": [
           "command"
         ],
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_device_commands_CollectResourcesSchema": {
         "type": "object",
@@ -3432,7 +3441,7 @@
           "command",
           "resources"
         ],
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_device_commands_DepositResourcesSchema": {
         "type": "object",
@@ -3452,7 +3461,7 @@
         "required": [
           "command"
         ],
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_device_commands_RepairSchema": {
         "type": "object",
@@ -3474,7 +3483,7 @@
         "required": [
           "command"
         ],
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_device_commands_EnqueuePrintSchema": {
         "type": "object",
@@ -3512,7 +3521,7 @@
           "command",
           "device_type"
         ],
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_device_commands_DequeuePrintSchema": {
         "type": "object",
@@ -3530,7 +3539,7 @@
         "required": [
           "command"
         ],
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_device_commands_AdoptSchema": {
         "type": "object",
@@ -3560,7 +3569,7 @@
         "required": [
           "command"
         ],
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_device_commands_ReleaseSchema": {
         "type": "object",
@@ -3590,7 +3599,7 @@
         "required": [
           "command"
         ],
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_device_commands_SetDirectiveSchema": {
         "type": "object",
@@ -3620,7 +3629,7 @@
           "command",
           "directive"
         ],
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_device_commands_ReplicateSchema": {
         "type": "object",
@@ -3643,7 +3652,7 @@
           "command",
           "target"
         ],
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_device_commands_RenameSchema": {
         "type": "object",
@@ -3665,7 +3674,7 @@
           "designation",
           "name"
         ],
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_device_commands_SetWelcomeMessageSchema": {
         "type": "object",
@@ -3683,7 +3692,7 @@
         "required": [
           "command"
         ],
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_device_commands_ChangeOwnerSchema": {
         "type": "object",
@@ -3700,7 +3709,7 @@
           "command",
           "target"
         ],
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_device_commands_MessageSchema": {
         "type": "object",
@@ -3722,7 +3731,7 @@
           "command",
           "text"
         ],
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_device_commands_StellarCensusSchema": {
         "type": "object",
@@ -3744,7 +3753,7 @@
         "required": [
           "command"
         ],
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_device_commands_ProspectSchema": {
         "type": "object",
@@ -3765,7 +3774,7 @@
         "required": [
           "command"
         ],
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_device_commands_AttachSchema": {
         "type": "object",
@@ -3795,7 +3804,7 @@
         "required": [
           "command"
         ],
-        "additionalProperties": true
+        "additionalProperties": false
       },
       "app_schemas_device_commands_DetachSchema": {
         "type": "object",
@@ -3825,7 +3834,7 @@
         "required": [
           "command"
         ],
-        "additionalProperties": true
+        "additionalProperties": false
       }
     },
     "responses": {

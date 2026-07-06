@@ -152,9 +152,11 @@ public struct RawAPIView: View {
         } content: {
             RequestEditor(store: store)
                 .navigationSplitViewColumnWidth(min: 380, ideal: 400, max: 620)
+                .background(.rcWindowBackground)
         } detail: {
             detail
                 .navigationSplitViewColumnWidth(min: 380, ideal: 500)
+                .background(.rcContentBackground)
                 .navigationTitle("Response")
         }
     }
@@ -233,7 +235,7 @@ private struct HistorySidebar: View {
                 }
             }
         }
-        .background(.rcSidebarBackground)
+//        .background(.rcSidebarBackground)
         .navigationTitle("History")
     }
 }

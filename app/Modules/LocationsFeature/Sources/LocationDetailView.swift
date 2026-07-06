@@ -38,6 +38,8 @@ public struct LocationDetailView: View {
                     MoonInspector(moon: moon)
                 } else if let belt = system.belts.first(where: { $0.designation == id }) {
                     BeltInspector(belt: belt)
+                } else if let object = system.structures.first(where: { $0.designation == id }) {
+                    ObjectInspector(site: object)
                 } else {
                     hydratingOrEmpty
                 }
@@ -138,6 +140,15 @@ private struct SystemInspector: View {
                 }
             }
 
+            let holdings = system.inventoryHoldings
+            if !holdings.isEmpty {
+                RCReadoutCard("Inventory", count: holdings.count) {
+                    ForEach(holdings) { holding in
+                        InventoryHoldingRow(holding: holding)
+                    }
+                }
+            }
+
             if !system.structures.isEmpty {
                 RCReadoutCard("Structures & Objects", count: system.structures.count) {
                     ForEach(system.structures) { site in
@@ -177,6 +188,14 @@ private struct PlanetInspector: View {
             }
             if let phys = planet.physical { PhysicalCard(phys) }
             SiteSalvageSections(sites: planet.sites, salvage: planet.salvage)
+            // Roll up the planet's own stock plus any held on its moons, attributed
+            // per body.
+            let holdings = planet.inventoryHoldings
+            if !holdings.isEmpty {
+                RCReadoutCard("Inventory", count: holdings.count) {
+                    ForEach(holdings) { InventoryHoldingRow(holding: $0) }
+                }
+            }
         }
     }
 }
@@ -190,6 +209,7 @@ private struct MoonInspector: View {
             }
             if let phys = moon.physical { PhysicalCard(phys) }
             SiteSalvageSections(sites: moon.sites, salvage: moon.salvage)
+            InventoryCard(moon.inventory)
         }
     }
 }
@@ -220,18 +240,80 @@ private struct BeltInspector: View {
                     }
                 }
             }
-            if !belt.inventory.isEmpty {
-                RCReadoutCard("Stock", count: belt.inventory.count) {
-                    ForEach(belt.inventory, id: \.resourceType) { item in
-                        Readout(item.resourceType.capitalized, String(format: "%.0f", item.quantity))
+            InventoryCard(belt.inventory)
+        }
+    }
+}
+
+private struct ObjectInspector: View {
+    let site: SpecialSite
+    var body: some View {
+        InspectorScroll(title: site.title ?? site.name ?? site.designation, code: site.designation, recon: .scanned) {
+            RCReadoutCard(site.kind.label) {
+                Readout("Type", (site.objectType ?? site.kind.rawValue)
+                    .replacingOccurrences(of: "_", with: " ").capitalized)
+                if let status = site.status { Readout("Status", status.capitalized) }
+                if let stage = site.stage { Readout("Stage", stage.capitalized) }
+                if let au = site.orbitalDistanceAu { Readout("Orbit", String(format: "%.2f AU", au)) }
+                if let deadline = site.deadline { Readout("Deadline", deadline, mono: true) }
+            }
+            if let p = site.progressPercentage {
+                RCReadoutCard("Construction") {
+                    ProgressView(value: min(max(p / 100, 0), 1)).tint(.rcAccent)
+                    Text("\(Int(p))% complete").font(.rcCaption).foregroundStyle(.rcTextTertiary)
+                }
+            }
+            if !site.requirements.isEmpty {
+                RCReadoutCard("Requirements", count: site.requirements.count) {
+                    ForEach(site.requirements) { req in
+                        Readout(req.deviceType.replacingOccurrences(of: "_", with: " ").capitalized,
+                                "\(req.current)/\(req.required)")
                     }
+                }
+            }
+            InventoryCard(site.inventory)
+        }
+    }
+}
+
+// MARK: - Building blocks
+
+/// The stored-inventory card shared by every body inspector (belt, planet, moon,
+/// object). Renders nothing when the body holds no inventory.
+private struct InventoryCard: View {
+    let items: [InventoryItem]
+    init(_ items: [InventoryItem]) { self.items = items }
+    var body: some View {
+        if !items.isEmpty {
+            RCReadoutCard("Inventory", count: items.count) {
+                ForEach(items, id: \.resourceType) { item in
+                    Readout(item.resourceType.capitalized, String(format: "%.0f", item.quantity))
                 }
             }
         }
     }
 }
 
-// MARK: - Building blocks
+/// One body's holdings in the system inspector's Inventory card: the body header
+/// over its per-resource quantities.
+private struct InventoryHoldingRow: View {
+    let holding: InventoryHolding
+    var body: some View {
+        VStack(alignment: .leading, spacing: Space.xs) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(holding.displayName).font(.rcBody).foregroundStyle(.rcTextPrimary)
+                Text(holding.designation).font(.rcMonoSmall).foregroundStyle(.rcTextTertiary)
+            }
+            ForEach(holding.inventory, id: \.resourceType) { item in
+                HStack {
+                    Text(item.resourceType.capitalized).font(.rcCaption).foregroundStyle(.rcTextSecondary)
+                    Spacer()
+                    Text(String(format: "%.0f", item.quantity)).font(.rcMonoSmall).foregroundStyle(.rcTextPrimary)
+                }
+            }
+        }
+    }
+}
 
 private struct SiteSalvageSections: View {
     let sites: [ResourceSite]

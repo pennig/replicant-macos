@@ -53,7 +53,7 @@ public enum LocationFilter: String, CaseIterable, Sendable, Identifiable {
 // MARK: - Node
 
 public enum LocationKind: String, Equatable, Sendable {
-    case system, belt, planet, moon
+    case system, belt, planet, moon, object
 
     public var symbol: String {
         switch self {
@@ -61,6 +61,7 @@ public enum LocationKind: String, Equatable, Sendable {
         case .belt:   "circle.dotted"
         case .planet: "globe.americas"
         case .moon:   "moon"
+        case .object: "cube.transparent"
         }
     }
 }
@@ -68,9 +69,9 @@ public enum LocationKind: String, Equatable, Sendable {
 /// A little count chip on a row (sites, salvage, shops, devices).
 public struct LocationBadge: Equatable, Sendable, Identifiable {
     public let symbol: String
-    public let count: Int
+    public let count: Int?
     public var id: String { symbol }
-    public init(symbol: String, count: Int) {
+    public init(symbol: String, count: Int?) {
         self.symbol = symbol
         self.count = count
     }
@@ -99,9 +100,54 @@ public struct LocationNode: Identifiable, Equatable, Sendable {
     }
 }
 
+// MARK: - Flattened row
+
+/// One line in the flattened, currently-visible outline. Expansion collapses the
+/// system → (belt/planet) → moon tree into a single lazy `List` of lightweight
+/// rows: only on-screen rows are realized and each carries no nested view type,
+/// so a toggle splices a few rows into a flat array instead of reconstructing a
+/// 5,770-node graph of nested generic `DisclosureGroup`s (which the runtime spent
+/// all its time instantiating metadata for + ARC-churning). Mirrors the
+/// flatten-to-visible-rows approach in `JSONTreeView`, but over a `List` for
+/// cell recycling + native selection.
+public struct LocationFlatRow: Identifiable, Equatable, Sendable {
+    public let node: LocationNode
+    public let depth: Int
+    public let hasChildren: Bool
+    public let isExpanded: Bool
+    public var id: String { node.id }
+
+    public init(node: LocationNode, depth: Int, hasChildren: Bool, isExpanded: Bool) {
+        self.node = node
+        self.depth = depth
+        self.hasChildren = hasChildren
+        self.isExpanded = isExpanded
+    }
+}
+
 // MARK: - Builder
 
 public enum LocationTree {
+    /// Walk the forest in render order, emitting only the currently-visible rows:
+    /// a node's children are emitted only when its id is in `expanded`. Skipping
+    /// collapsed subtrees is what keeps the fully-collapsed 5,770-system list a
+    /// flat array of cheap rows.
+    public static func flatten(_ forest: [LocationNode], expanded: Set<String>) -> [LocationFlatRow] {
+        var rows: [LocationFlatRow] = []
+        rows.reserveCapacity(forest.count)
+        func walk(_ node: LocationNode, depth: Int) {
+            let children = node.children ?? []
+            let hasChildren = !children.isEmpty
+            let isExpanded = hasChildren && expanded.contains(node.id)
+            rows.append(LocationFlatRow(node: node, depth: depth, hasChildren: hasChildren, isExpanded: isExpanded))
+            if isExpanded {
+                for child in children { walk(child, depth: depth + 1) }
+            }
+        }
+        for node in forest { walk(node, depth: 0) }
+        return rows
+    }
+
     /// Build the filtered, sorted forest of system nodes.
     public static func forest(
         stars: [Star],
@@ -151,68 +197,100 @@ public enum LocationTree {
 
     static func node(for star: Star, detail: StarSystem?, footprints: [String: LocationCounts]) -> LocationNode {
         guard let system = detail else {
-            // Census-only: uncharted or charted-but-not-hydrated. Leaf.
+            // Census-only: uncharted or charted-but-not-hydrated. Leaf. It carries
+            // no hydrated inventory, but the footprint overlay can still flag that
+            // it holds resources before it's been scanned.
+            let inventory = hasInventory(star.designation, own: [], footprints: footprints, includeDescendants: true)
             return LocationNode(
                 id: star.designation,
                 kind: .system,
                 title: star.designation,
                 subtitle: censusSubtitle(star),
                 recon: star.explored ? .visited : .aware,
-                badges: [],
+                badges: inventory ? [inventoryBadge] : [],
                 children: nil
             )
         }
 
-        let children = system.belts.map(beltNode) + system.planets.map(planetNode)
+        let children = system.belts.map { beltNode($0, footprints) }
+            + system.planets.map { planetNode($0, footprints) }
+            + system.structures.map { objectNode($0, footprints) }
         return LocationNode(
             id: system.designation,
             kind: .system,
             title: system.name ?? system.designation,
             subtitle: systemSubtitle(star: star, system: system),
             recon: system.recon,
-            badges: systemBadges(system),
+            badges: systemBadges(system, footprints: footprints),
             children: children.isEmpty ? nil : children
         )
     }
 
-    static func planetNode(_ p: Planet) -> LocationNode {
-        LocationNode(
+    static func planetNode(_ p: Planet, _ footprints: [String: LocationCounts]) -> LocationNode {
+        // A planet's badges reflect it *and* its moons, so sites/salvage/devices/
+        // inventory held on a moon still flag the planet row while it's collapsed.
+        let inventory = p.inventory + p.moons.flatMap(\.inventory)
+        let devices = p.devices.count + p.moons.reduce(0) { $0 + $1.devices.count }
+        return LocationNode(
             id: p.designation,
             kind: .planet,
             title: p.name ?? p.designation,
             subtitle: [p.type, p.orbitalDistanceAu.map { String(format: "%.2f AU", $0) }]
                 .compactMap { $0 }.joined(separator: " · "),
             recon: p.recon,
-            badges: bodyBadges(sites: p.sites.count, salvage: p.salvage.count, devices: p.devices.count),
-            children: p.moons.isEmpty ? nil : p.moons.map(moonNode)
+            badges: bodyBadges(
+                sites: p.allResourceSites.count, salvage: p.allSalvageSites.count, devices: devices,
+                hasInventory: hasInventory(p.designation, own: inventory, footprints: footprints, includeDescendants: true)
+            ),
+            children: p.moons.isEmpty ? nil : p.moons.map { moonNode($0, footprints) }
         )
     }
 
-    static func moonNode(_ m: Moon) -> LocationNode {
+    static func moonNode(_ m: Moon, _ footprints: [String: LocationCounts]) -> LocationNode {
         LocationNode(
             id: m.designation,
             kind: .moon,
             title: m.name ?? m.designation,
             subtitle: m.type,
             recon: m.recon,
-            badges: bodyBadges(sites: m.sites.count, salvage: m.salvage.count, devices: m.devices.count)
+            badges: bodyBadges(
+                sites: m.sites.count, salvage: m.salvage.count, devices: m.devices.count,
+                hasInventory: hasInventory(m.designation, own: m.inventory, footprints: footprints, includeDescendants: false)
+            )
         )
     }
 
-    static func beltNode(_ b: Belt) -> LocationNode {
+    static func beltNode(_ b: Belt, _ footprints: [String: LocationCounts]) -> LocationNode {
         LocationNode(
             id: b.designation,
             kind: .belt,
             title: b.designation,
             subtitle: b.density.map { "\($0.capitalized) belt" } ?? "Asteroid belt",
             recon: .scanned,
-            badges: bodyBadges(sites: b.sites.count, salvage: 0, devices: 0)
+            badges: bodyBadges(
+                sites: b.sites.count, salvage: 0, devices: 0,
+                hasInventory: hasInventory(b.designation, own: b.inventory, footprints: footprints, includeDescendants: false)
+            )
+        )
+    }
+
+    static func objectNode(_ s: SpecialSite, _ footprints: [String: LocationCounts]) -> LocationNode {
+        LocationNode(
+            id: s.designation,
+            kind: .object,
+            title: s.title ?? s.name ?? s.designation,
+            subtitle: (s.objectType ?? s.kind.rawValue).replacingOccurrences(of: "_", with: " ").capitalized,
+            recon: .scanned,
+            badges: bodyBadges(
+                sites: 0, salvage: 0, devices: 0,
+                hasInventory: hasInventory(s.designation, own: s.inventory, footprints: footprints, includeDescendants: false)
+            )
         )
     }
 
     // MARK: Badges & subtitles
 
-    static func systemBadges(_ s: StarSystem) -> [LocationBadge] {
+    static func systemBadges(_ s: StarSystem, footprints: [String: LocationCounts]) -> [LocationBadge] {
         var out: [LocationBadge] = []
         let sites = s.allResourceSites.count
         let salvage = s.allSalvageSites.count
@@ -222,15 +300,42 @@ public enum LocationTree {
         if salvage > 0 { out.append(.init(symbol: "wrench.and.screwdriver", count: salvage)) }
         if shops > 0 { out.append(.init(symbol: "cart", count: shops)) }
         if devices > 0 { out.append(.init(symbol: "circle.hexagongrid", count: devices)) }
+        if hasInventory(s.designation, own: s.allInventory, footprints: footprints, includeDescendants: true) {
+            out.append(inventoryBadge)
+        }
         return out
     }
 
-    static func bodyBadges(sites: Int, salvage: Int, devices: Int) -> [LocationBadge] {
+    static func bodyBadges(sites: Int, salvage: Int, devices: Int, hasInventory: Bool) -> [LocationBadge] {
         var out: [LocationBadge] = []
         if sites > 0 { out.append(.init(symbol: "diamond", count: sites)) }
         if salvage > 0 { out.append(.init(symbol: "wrench.and.screwdriver", count: salvage)) }
         if devices > 0 { out.append(.init(symbol: "circle.hexagongrid", count: devices)) }
+        if hasInventory { out.append(inventoryBadge) }
         return out
+    }
+
+    /// The unnumbered "holds inventory" chip (matches the Inventory sort's icon).
+    static let inventoryBadge = LocationBadge(symbol: "shippingbox", count: nil)
+
+    /// Whether a location holds stored resources — itself, or (for a container)
+    /// anywhere beneath it. Prefers hydrated inventory; falls back to the
+    /// `LocationFootprint` overlay's resource count so a census-only system still
+    /// flags holdings before it's hydrated.
+    static func hasInventory(
+        _ designation: String,
+        own inventory: [InventoryItem],
+        footprints: [String: LocationCounts],
+        includeDescendants: Bool
+    ) -> Bool {
+        if !inventory.isEmpty { return true }
+        if includeDescendants {
+            let prefix = designation + "-"
+            return footprints.contains { location, counts in
+                (location == designation || location.hasPrefix(prefix)) && counts.resources > 0
+            }
+        }
+        return (footprints[designation]?.resources ?? 0) > 0
     }
 
     static func censusSubtitle(_ star: Star) -> String {

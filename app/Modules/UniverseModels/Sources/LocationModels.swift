@@ -40,6 +40,21 @@ public struct InventoryItem: Equatable, Sendable, Codable {
     }
 }
 
+/// A body (belt, planet, moon, or object) that holds stored inventory, paired
+/// with its holdings — the unit the system inspector lists under "Inventory".
+public struct InventoryHolding: Identifiable, Equatable, Sendable {
+    public var designation: String
+    public var name: String?
+    public var inventory: [InventoryItem]
+    public var id: String { designation }
+    public var displayName: String { name ?? designation }
+    public init(designation: String, name: String? = nil, inventory: [InventoryItem]) {
+        self.designation = designation
+        self.name = name
+        self.inventory = inventory
+    }
+}
+
 /// A device stationed at a body/belt, as location detail reports it.
 public struct LocatedDevice: Identifiable, Equatable, Sendable, Codable {
     public var deviceCode: String
@@ -236,6 +251,9 @@ public struct SpecialSite: Identifiable, Equatable, Sendable, Codable {
     public var progressPercentage: Double?
     public var deadline: String?
     public var requirements: [StructureRequirement]
+    /// Resources stored at this object (megastructures/outer-system objects can
+    /// accumulate holdings just like bodies). Empty for most objects.
+    public var inventory: [InventoryItem]
     public var id: String { designation }
 
     public init(
@@ -243,7 +261,7 @@ public struct SpecialSite: Identifiable, Equatable, Sendable, Codable {
         title: String? = nil, siteDescription: String? = nil, label: String? = nil,
         status: String? = nil, stage: String? = nil, parentBody: String? = nil,
         orbitalDistanceAu: Double? = nil, progressPercentage: Double? = nil, deadline: String? = nil,
-        requirements: [StructureRequirement] = []
+        requirements: [StructureRequirement] = [], inventory: [InventoryItem] = []
     ) {
         self.designation = designation
         self.kind = kind
@@ -259,6 +277,35 @@ public struct SpecialSite: Identifiable, Equatable, Sendable, Codable {
         self.progressPercentage = progressPercentage
         self.deadline = deadline
         self.requirements = requirements
+        self.inventory = inventory
+    }
+
+    // Custom decoding so blobs persisted before `inventory` (and `requirements`)
+    // existed still decode — a missing key defaults to empty rather than throwing
+    // and dropping the whole cached system. Encoding stays synthesized.
+    private enum CodingKeys: String, CodingKey {
+        case designation, kind, objectType, name, title, siteDescription, label
+        case status, stage, parentBody, orbitalDistanceAu, progressPercentage
+        case deadline, requirements, inventory
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        designation = try c.decode(String.self, forKey: .designation)
+        kind = try c.decode(SpecialSiteKind.self, forKey: .kind)
+        objectType = try c.decodeIfPresent(String.self, forKey: .objectType)
+        name = try c.decodeIfPresent(String.self, forKey: .name)
+        title = try c.decodeIfPresent(String.self, forKey: .title)
+        siteDescription = try c.decodeIfPresent(String.self, forKey: .siteDescription)
+        label = try c.decodeIfPresent(String.self, forKey: .label)
+        status = try c.decodeIfPresent(String.self, forKey: .status)
+        stage = try c.decodeIfPresent(String.self, forKey: .stage)
+        parentBody = try c.decodeIfPresent(String.self, forKey: .parentBody)
+        orbitalDistanceAu = try c.decodeIfPresent(Double.self, forKey: .orbitalDistanceAu)
+        progressPercentage = try c.decodeIfPresent(Double.self, forKey: .progressPercentage)
+        deadline = try c.decodeIfPresent(String.self, forKey: .deadline)
+        requirements = try c.decodeIfPresent([StructureRequirement].self, forKey: .requirements) ?? []
+        inventory = try c.decodeIfPresent([InventoryItem].self, forKey: .inventory) ?? []
     }
 }
 
@@ -604,6 +651,28 @@ extension StarSystem {
         allInventory.reduce(0) { $0 + $1.quantity }
     }
 
+    /// Every body (belt, planet, moon, or object) that holds stored inventory,
+    /// each paired with its holdings — what the system inspector lists so the
+    /// interesting stock is visible without drilling into each body.
+    public var inventoryHoldings: [InventoryHolding] {
+        var out: [InventoryHolding] = []
+        for belt in belts where !belt.inventory.isEmpty {
+            out.append(InventoryHolding(designation: belt.designation, inventory: belt.inventory))
+        }
+        for planet in planets {
+            if !planet.inventory.isEmpty {
+                out.append(InventoryHolding(designation: planet.designation, name: planet.name, inventory: planet.inventory))
+            }
+            for moon in planet.moons where !moon.inventory.isEmpty {
+                out.append(InventoryHolding(designation: moon.designation, name: moon.name, inventory: moon.inventory))
+            }
+        }
+        for object in structures where !object.inventory.isEmpty {
+            out.append(InventoryHolding(designation: object.designation, name: object.title ?? object.name, inventory: object.inventory))
+        }
+        return out
+    }
+
     /// Every event anywhere in the system (system-level + per-planet).
     public var allEvents: [LocationEventInfo] {
         events + planets.flatMap(\.events)
@@ -624,6 +693,20 @@ extension Planet {
     /// Salvage sites on this planet and its moons.
     public var allSalvageSites: [SalvageSite] {
         salvage + moons.flatMap(\.salvage)
+    }
+
+    /// The planet and any of its moons that hold stored inventory, each paired
+    /// with its holdings — what the planet inspector lists so a moon's stock rolls
+    /// up to the planet view.
+    public var inventoryHoldings: [InventoryHolding] {
+        var out: [InventoryHolding] = []
+        if !inventory.isEmpty {
+            out.append(InventoryHolding(designation: designation, name: name, inventory: inventory))
+        }
+        for moon in moons where !moon.inventory.isEmpty {
+            out.append(InventoryHolding(designation: moon.designation, name: moon.name, inventory: moon.inventory))
+        }
+        return out
     }
 }
 
@@ -712,10 +795,35 @@ extension StarSystem {
             var merged = p
             if merged.salvage.isEmpty { merged.salvage = planets[idx].salvage }
             if merged.lagrange.isEmpty { merged.lagrange = planets[idx].lagrange }
+            // A planet-level fetch lists its moons as bare stubs (no salvage,
+            // sites, or physical) — merging them in verbatim would wipe the richer
+            // detail a prior per-moon `body(_:)` fetch established. Keep the richer
+            // moon where we have one.
+            merged.moons = Self.mergingMoons(fresh: p.moons, into: planets[idx].moons)
             planets[idx] = merged
         } else {
             planets.append(p)
         }
+    }
+
+    /// Merge a fresh moon roster over existing moons, keeping whichever copy of
+    /// each moon carries more detail (physical / sites / salvage) so a per-moon
+    /// scan isn't clobbered by a later planet-level fetch's stub. Existing moons
+    /// absent from the fresh roster are retained.
+    private static func mergingMoons(fresh: [Moon], into existing: [Moon]) -> [Moon] {
+        guard !existing.isEmpty else { return fresh }
+        let existingByID = Dictionary(existing.map { ($0.designation, $0) }, uniquingKeysWith: { first, _ in first })
+        var result = fresh.map { f -> Moon in
+            guard let e = existingByID[f.designation] else { return f }
+            let existingIsRicher = e.physical != nil || !e.sites.isEmpty || !e.salvage.isEmpty
+            var kept = existingIsRicher ? e : f
+            if kept.salvage.isEmpty { kept.salvage = f.salvage }
+            if kept.inventory.isEmpty { kept.inventory = f.inventory }
+            return kept
+        }
+        let freshIDs = Set(fresh.map(\.designation))
+        result += existing.filter { !freshIDs.contains($0.designation) }
+        return result
     }
 }
 
