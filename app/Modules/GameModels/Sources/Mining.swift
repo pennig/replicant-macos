@@ -29,6 +29,10 @@ public struct MiningSnapshot: Equatable, Sendable {
     public var pendingCycles: Int?
     /// Uncollected resource quantity accrued so far.
     public var pendingQuantity: Double?
+    /// Total quantity of the resource this drone has mined this session
+    /// (cumulative, `quantity_mined`) — distinct from `pendingQuantity`, which is
+    /// only the yet-uncollected haul.
+    public var quantityMined: Double?
     /// How plentiful the resource is (`abundant` / `scarce` / …) — governs yield.
     public var availability: String?
     /// Belt density (`sparse` / `dense` / …) — governs cycle length.
@@ -41,6 +45,7 @@ public struct MiningSnapshot: Equatable, Sendable {
         cycleTimeSeconds: Double? = nil,
         pendingCycles: Int? = nil,
         pendingQuantity: Double? = nil,
+        quantityMined: Double? = nil,
         availability: String? = nil,
         density: String? = nil
     ) {
@@ -50,6 +55,7 @@ public struct MiningSnapshot: Equatable, Sendable {
         self.cycleTimeSeconds = cycleTimeSeconds
         self.pendingCycles = pendingCycles
         self.pendingQuantity = pendingQuantity
+        self.quantityMined = quantityMined
         self.availability = availability
         self.density = density
     }
@@ -73,6 +79,7 @@ extension MiningSnapshot {
             cycleTimeSeconds: value?["cycle_time_seconds"]?.numberValue,
             pendingCycles: value?["pending_cycles"]?.numberValue.map(Int.init),
             pendingQuantity: value?["pending_quantity"]?.numberValue,
+            quantityMined: value?["quantity_mined"]?.numberValue,
             availability: value?["availability"]?.stringValue,
             density: value?["density"]?.stringValue
         )

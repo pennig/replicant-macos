@@ -35,6 +35,25 @@ import Utils
         )
     }
 
+    /// `in_control_range` lands in the detail tail and reads back through the
+    /// accessor; `false` is the only state flagged as out of range (a missing
+    /// field stays nil / not-out-of-range).
+    @Test func inControlRangeReadsFromDetail() {
+        var device = drone(status: "idle")
+
+        device.detail = .object(["in_control_range": .bool(true)])
+        #expect(device.inControlRange == true)
+        #expect(device.isOutOfControlRange == false)
+
+        device.detail = .object(["in_control_range": .bool(false)])
+        #expect(device.inControlRange == false)
+        #expect(device.isOutOfControlRange == true)
+
+        device.detail = .object([:])
+        #expect(device.inControlRange == nil)
+        #expect(device.isOutOfControlRange == false)
+    }
+
     /// A `scanning` drone's scan block is a body scan.
     @Test func scanningDeviceDerivesSurveyScan() {
         #expect(drone(status: "scanning").derivedActivity?.kind == .surveyScan)
@@ -45,9 +64,30 @@ import Utils
         #expect(drone(status: "searching").derivedActivity?.kind == .search)
     }
 
-    /// The eta_seconds countdown seeds the deadline off the fetch event-time.
+    /// The eta_seconds countdown seeds the deadline off the fetch event-time (the
+    /// fallback used when the server omits `completes_at`).
     @Test func scanBlockDeadlineFromEta() {
         let activity = drone(status: "scanning").derivedActivity
         #expect(activity?.completesAt == Date(timeIntervalSince1970: 1_000).addingTimeInterval(147))
+    }
+
+    /// The scan block now reports an absolute `completes_at`; it must win over the
+    /// derived `eta_seconds` deadline (both `derivedActivity` and the
+    /// `activityDeadline` re-arm), so a slightly-stale eta can't end the op early.
+    @Test func scanBlockPrefersCompletesAtOverEta() {
+        var device = drone(status: "scanning")
+        let completesAt = "2026-07-01T02:45:00Z"
+        let expected = try! Date(completesAt, strategy: .iso8601)
+        device.detail = .object([
+            "scan": .object([
+                "progress_percent": .number(50),
+                "started_at": .string("2026-07-01T02:40:58Z"),
+                "target": .string("ATIANFU-1"),
+                "eta_seconds": .number(147),          // would derive an earlier, staler deadline
+                "completes_at": .string(completesAt),
+            ]),
+        ])
+        #expect(device.derivedActivity?.completesAt == expected)
+        #expect(device.activityDeadline == expected)
     }
 }

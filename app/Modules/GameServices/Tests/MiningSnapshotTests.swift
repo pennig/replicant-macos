@@ -27,6 +27,7 @@ import Utils
             "cycle_time_seconds": .number(37),
             "pending_cycles": .number(0),
             "pending_quantity": .number(0),
+            "quantity_mined": .number(148),
             "resource_type": .string("structural"),
         ])
     }
@@ -40,6 +41,8 @@ import Utils
         #expect(m.cycleTimeSeconds == 37)
         #expect(m.pendingCycles == 0)
         #expect(m.pendingQuantity == 0)
+        // Cumulative session total — distinct from the (0) uncollected pending haul.
+        #expect(m.quantityMined == 148)
     }
 
     @Test func parsesStartedAtAsOffsetTimestamp() throws {

@@ -507,6 +507,9 @@ private struct ActiveTaskCard: View {
                 taskRow("Resource", DevicePresentation.displayName(availability))
             }
             taskRow("Yield", yieldValue(m))
+            if let mined = m.quantityMined, mined > 0 {
+                taskRow("Session", "\(Self.number(mined)) unit\(mined == 1 ? "" : "s") mined")
+            }
         }
         .padding(.top, Space.xs)
     }
@@ -728,6 +731,11 @@ private struct CommandGrid: View {
                     .font(.rcCaption)
                     .foregroundStyle(.rcTextTertiary)
             } else {
+                // A device out of its controller's range can't be issued commands —
+                // disable the whole grid (and suppress any confirm panel) until it's
+                // back in range. The status badge already conveys "out of range", so
+                // this just gates interaction rather than restating it loudly.
+                let outOfRange = device.isOutOfControlRange
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: Space.s)], spacing: Space.s) {
                     ForEach(commands) { command in
                         Button {
@@ -741,8 +749,9 @@ private struct CommandGrid: View {
                         .buttonStyle(RCButtonStyle(pending == command ? .primary : .secondary))
                     }
                 }
+                .disabled(outOfRange)
 
-                if let pending {
+                if let pending, !outOfRange {
                     parameterPanel(pending)
                 }
             }

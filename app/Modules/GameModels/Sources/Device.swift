@@ -162,6 +162,24 @@ extension Device {
     }
 }
 
+// MARK: - Control range
+
+extension Device {
+    /// Whether the device is currently within its controller's control range
+    /// (`in_control_range`). A device out of range is cut off from its AMI
+    /// controller — it keeps running its current activity but can't be issued new
+    /// commands until it's back in range. Nil when the field is absent (older
+    /// payloads / device types that never report it).
+    public var inControlRange: Bool? {
+        detail["in_control_range"]?.boolValue
+    }
+
+    /// True only when the device explicitly reports it is *out* of control range —
+    /// the actionable state worth flagging in the UI (a missing field is not
+    /// treated as out of range).
+    public var isOutOfControlRange: Bool { inControlRange == false }
+}
+
 // MARK: - Status parsing
 
 extension Device {
@@ -309,11 +327,13 @@ extension Device {
            let date = detailDate("travel", "final_arrives_at") ?? detailDate("travel", "arrives_at") {
             soonest = soonest.map { Swift.min($0, date) } ?? date
         }
-        // The survey `scan`/search block reports *remaining* time as
-        // `eta_seconds` rather than an absolute `completes_at`, so derive its
-        // deadline off the fetch event-time. (Folded in after the loop so a
-        // future scan variant carrying `completes_at` still wins via the table.)
-        if case .object = detail["scan"], let eta = detail["scan"]?["eta_seconds"]?.numberValue {
+        // The survey `scan`/search block now reports an absolute `completes_at`
+        // (picked up by the table above). Only when the server omits it do we fall
+        // back to deriving the deadline from the *remaining* `eta_seconds` off the
+        // fetch event-time — deriving it alongside a present `completes_at` risks
+        // `min()` picking a stale, earlier eta and ending the op a beat early.
+        if case .object = detail["scan"], detailDate("scan", "completes_at") == nil,
+           let eta = detail["scan"]?["eta_seconds"]?.numberValue {
             let date = updatedAt.addingTimeInterval(eta)
             soonest = soonest.map { Swift.min($0, date) } ?? date
         }
