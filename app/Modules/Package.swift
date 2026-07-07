@@ -19,6 +19,7 @@ let package = Package(
         .library(name: "LocationsFeature", targets: ["LocationsFeature"]),
         .library(name: "LoginFeature", targets: ["LoginFeature"]),
         .library(name: "MessagesFeature", targets: ["MessagesFeature"]),
+        .library(name: "NewStarMapFeature", targets: ["NewStarMapFeature"]),
         .library(name: "PrintingUI", targets: ["PrintingUI"]),
         .library(name: "PrintQueueFeature", targets: ["PrintQueueFeature"]),
         .library(name: "RawAPIFeature", targets: ["RawAPIFeature"]),
@@ -295,6 +296,39 @@ let package = Package(
                 "MessagesFeature",
             ],
             path: "MessagesFeature/Tests"
+        ),
+        // The Metal reimplementation of the star map (ported from the standalone
+        // prototype). `CStarMapShaderTypes` is the shared CPU<->GPU struct header
+        // (single source of truth), imported by Swift and #included by the
+        // bundled Shaders.metal. Default MainActor isolation matches the
+        // prototype's build environment (SWIFT_DEFAULT_ACTOR_ISOLATION).
+        .target(
+            name: "CStarMapShaderTypes",
+            path: "NewStarMapFeature/CShaderTypes"
+        ),
+        .target(
+            name: "NewStarMapFeature",
+            dependencies: [
+                "CStarMapShaderTypes",
+                "GameModels",
+                "UI",
+                "UniverseModels",
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "SQLiteData", package: "sqlite-data"),
+            ],
+            path: "NewStarMapFeature/Sources",
+            resources: [
+                // Compiled into the target's default.metallib, loaded at runtime
+                // via `device.makeDefaultLibrary(bundle: .module)`.
+                .process("Shaders.metal"),
+            ]
+        ),
+        .testTarget(
+            name: "NewStarMapFeatureTests",
+            dependencies: [
+                "NewStarMapFeature",
+            ],
+            path: "NewStarMapFeature/Tests"
         ),
         .target(
             name: "PrintingUI",

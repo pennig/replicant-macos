@@ -19,6 +19,7 @@ import GameServices
 import LocationEventsFeature
 import LocationsFeature
 import MessagesFeature
+import NewStarMapFeature
 import PrintQueueFeature
 import RawAPIFeature
 import ReplicantsFeature
@@ -49,6 +50,9 @@ struct MainFeature {
         var rawAPI: RawAPIFeature.State
         /// The Galaxy Map (Stars view) — currently seeded with static galaxy data.
         var starMap: StarMapFeature.State
+        /// The Metal reimplementation of the star map (Stars (New) view), being
+        /// ported from the standalone prototype. Coexists with `starMap`.
+        var newStarMap: NewStarMapFeature.State
         /// The live fleet (Devices view) — list + inspector + command dispatch.
         var devices: DevicesFeature.State
         /// The unlocked blueprint catalog (Blueprints view) — list + inspector.
@@ -74,6 +78,7 @@ struct MainFeature {
             self.messages = MessagesFeature.State()
             self.rawAPI = RawAPIFeature.State(apiKey: apiKey)
             self.starMap = StarMapFeature.State()
+            self.newStarMap = NewStarMapFeature.State()
             self.devices = DevicesFeature.State()
             self.blueprints = BlueprintsFeature.State()
             self.locations = LocationsFeature.State()
@@ -95,6 +100,7 @@ struct MainFeature {
         case messages(MessagesFeature.Action)
         case rawAPI(RawAPIFeature.Action)
         case starMap(StarMapFeature.Action)
+        case newStarMap(NewStarMapFeature.Action)
         case devices(DevicesFeature.Action)
         case blueprints(BlueprintsFeature.Action)
         case locations(LocationsFeature.Action)
@@ -120,6 +126,9 @@ struct MainFeature {
         }
         Scope(state: \.starMap, action: \.starMap) {
             StarMapFeature()
+        }
+        Scope(state: \.newStarMap, action: \.newStarMap) {
+            NewStarMapFeature()
         }
         Scope(state: \.devices, action: \.devices) {
             DevicesFeature()
@@ -161,7 +170,7 @@ struct MainFeature {
                 state.detailSelection = nil
                 return .none
 
-            case .sidebar, .messages, .rawAPI, .starMap, .devices, .blueprints, .locations, .locationEvents, .printQueue, .replicantDirectory:
+            case .sidebar, .messages, .rawAPI, .starMap, .newStarMap, .devices, .blueprints, .locations, .locationEvents, .printQueue, .replicantDirectory:
                 return .none
             }
         }
@@ -231,6 +240,11 @@ struct MainView: View {
         store.scope(state: \.starMap, action: \.starMap)
     }
 
+    /// The Metal star map store, scoped from the main session.
+    private var newStarMapStore: StoreOf<NewStarMapFeature> {
+        store.scope(state: \.newStarMap, action: \.newStarMap)
+    }
+
     /// The Devices store, scoped from the main session.
     private var devicesStore: StoreOf<DevicesFeature> {
         store.scope(state: \.devices, action: \.devices)
@@ -267,6 +281,8 @@ struct MainView: View {
             MessagesListView(store: messagesStore)
         } else if store.sidebar.category == .stars {
             StarMapView(store: starMapStore)
+        } else if store.sidebar.category == .starsNew {
+            NewStarMapView(store: newStarMapStore)
         } else if store.sidebar.category == .devices {
             DevicesListView(store: devicesStore)
         } else if store.sidebar.category == .blueprints {

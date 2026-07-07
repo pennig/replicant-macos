@@ -10,6 +10,7 @@
 		C90D75CF2FED785C00B293DE /* AccountManager in Frameworks */ = {isa = PBXBuildFile; productRef = C90D75CE2FED785C00B293DE /* AccountManager */; };
 		C91E72192FF9931B0092DF05 /* LocationEventsFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C91E72182FF9931B0092DF05 /* LocationEventsFeature */; };
 		C91E721B2FFA954A0092DF05 /* GameDatabase in Frameworks */ = {isa = PBXBuildFile; productRef = C91E721A2FFA954A0092DF05 /* GameDatabase */; };
+		C927E7662FFD5C2900D443E8 /* NewStarMapFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C927E7652FFD5C2900D443E8 /* NewStarMapFeature */; };
 		C961BC5B2FF5C7AD00D9C273 /* LocationsFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C961BC5A2FF5C7AD00D9C273 /* LocationsFeature */; };
 		C961BC5D2FF69C7600D9C273 /* PrintQueueFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C961BC5C2FF69C7600D9C273 /* PrintQueueFeature */; };
 		C961BC5F2FF6A58600D9C273 /* ReplicantsFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C961BC5E2FF6A58600D9C273 /* ReplicantsFeature */; };
@@ -18,12 +19,7 @@
 		C9ACF1382FF865C900337F11 /* PrintingUI in Frameworks */ = {isa = PBXBuildFile; productRef = C9ACF1372FF865C900337F11 /* PrintingUI */; };
 		C9B188932FF72F130018FA8F /* SidebarFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C9B188922FF72F130018FA8F /* SidebarFeature */; };
 		C9B188952FF856310018FA8F /* GameModels in Frameworks */ = {isa = PBXBuildFile; productRef = C9B188942FF856310018FA8F /* GameModels */; };
-		C9B5305C2FDDD839006F79A8 /* ReplicantApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9B530592FDDD839006F79A8 /* ReplicantApp.swift */; };
-		C9B5305D2FDDD839006F79A8 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C9B530572FDDD839006F79A8 /* Assets.xcassets */; };
-		C9B530752FE0A5FC006F79A8 /* MainFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9B530742FE0A5FC006F79A8 /* MainFeature.swift */; };
-		C9B530772FE0A60B006F79A8 /* AppFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9B530762FE0A60B006F79A8 /* AppFeature.swift */; };
 		C9B5307A2FE0A6D1006F79A8 /* ComposableArchitecture in Frameworks */ = {isa = PBXBuildFile; productRef = C9B530792FE0A6D1006F79A8 /* ComposableArchitecture */; };
-		C9B5307E2FE0E38E006F79A8 /* PreferencesFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9B5307D2FE0E38E006F79A8 /* PreferencesFeature.swift */; };
 		C9B530952FE1D3AA006F79A8 /* API in Frameworks */ = {isa = PBXBuildFile; productRef = C9B530942FE1D3AA006F79A8 /* API */; };
 		C9B530972FE1D3AA006F79A8 /* UI in Frameworks */ = {isa = PBXBuildFile; productRef = C9B530962FE1D3AA006F79A8 /* UI */; };
 		C9B530992FE1D3AA006F79A8 /* Utils in Frameworks */ = {isa = PBXBuildFile; productRef = C9B530982FE1D3AA006F79A8 /* Utils */; };
@@ -39,14 +35,22 @@
 /* Begin PBXFileReference section */
 		C922A8B62FDC493200431320 /* Replicould.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Replicould.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C9B530562FDC9D00006F79A8 /* Modules */ = {isa = PBXFileReference; lastKnownFileType = wrapper; path = Modules; sourceTree = "<group>"; };
-		C9B530572FDDD839006F79A8 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		C9B530592FDDD839006F79A8 /* ReplicantApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplicantApp.swift; sourceTree = "<group>"; };
 		C9B5305F2FDDD93C006F79A8 /* CLAUDE.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = CLAUDE.md; sourceTree = "<group>"; };
-		C9B530742FE0A5FC006F79A8 /* MainFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainFeature.swift; sourceTree = "<group>"; };
-		C9B530762FE0A60B006F79A8 /* AppFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppFeature.swift; sourceTree = "<group>"; };
-		C9B5307D2FE0E38E006F79A8 /* PreferencesFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesFeature.swift; sourceTree = "<group>"; };
 		C9F814C12FEEC06100ACFAC3 /* ARCHITECTURE_REVIEW.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = ARCHITECTURE_REVIEW.md; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		C927E74C2FFD571800D443E8 /* Incoming */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Incoming;
+			sourceTree = "<group>";
+		};
+		C927E75F2FFD5AC800D443E8 /* macOS */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = macOS;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		C922A8B32FDC493200431320 /* Frameworks */ = {
@@ -71,6 +75,7 @@
 				C91E721B2FFA954A0092DF05 /* GameDatabase in Frameworks */,
 				C9F814C02FEEB96000ACFAC3 /* DevicesFeature in Frameworks */,
 				C9702B6D2FF202A5002E2CCE /* BlueprintsFeature in Frameworks */,
+				C927E7662FFD5C2900D443E8 /* NewStarMapFeature in Frameworks */,
 				C9B530992FE1D3AA006F79A8 /* Utils in Frameworks */,
 				C961BC5B2FF5C7AD00D9C273 /* LocationsFeature in Frameworks */,
 				C9B530952FE1D3AA006F79A8 /* API in Frameworks */,
@@ -86,10 +91,11 @@
 			children = (
 				C9F814C12FEEC06100ACFAC3 /* ARCHITECTURE_REVIEW.md */,
 				C9B5305F2FDDD93C006F79A8 /* CLAUDE.md */,
-				C9B5305A2FDDD839006F79A8 /* macOS */,
+				C927E75F2FFD5AC800D443E8 /* macOS */,
 				C9B530562FDC9D00006F79A8 /* Modules */,
 				C9B5308D2FE1D2CA006F79A8 /* Frameworks */,
 				C922A8B72FDC493200431320 /* Products */,
+				C927E74C2FFD571800D443E8 /* Incoming */,
 			);
 			sourceTree = "<group>";
 		};
@@ -99,18 +105,6 @@
 				C922A8B62FDC493200431320 /* Replicould.app */,
 			);
 			name = Products;
-			sourceTree = "<group>";
-		};
-		C9B5305A2FDDD839006F79A8 /* macOS */ = {
-			isa = PBXGroup;
-			children = (
-				C9B530572FDDD839006F79A8 /* Assets.xcassets */,
-				C9B530592FDDD839006F79A8 /* ReplicantApp.swift */,
-				C9B530742FE0A5FC006F79A8 /* MainFeature.swift */,
-				C9B530762FE0A60B006F79A8 /* AppFeature.swift */,
-				C9B5307D2FE0E38E006F79A8 /* PreferencesFeature.swift */,
-			);
-			path = macOS;
 			sourceTree = "<group>";
 		};
 		C9B5308D2FE1D2CA006F79A8 /* Frameworks */ = {
@@ -134,6 +128,9 @@
 			buildRules = (
 			);
 			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				C927E75F2FFD5AC800D443E8 /* macOS */,
 			);
 			name = Replicould;
 			packageProductDependencies = (
@@ -159,6 +156,7 @@
 				C9ACF1372FF865C900337F11 /* PrintingUI */,
 				C91E72182FF9931B0092DF05 /* LocationEventsFeature */,
 				C91E721A2FFA954A0092DF05 /* GameDatabase */,
+				C927E7652FFD5C2900D443E8 /* NewStarMapFeature */,
 			);
 			productName = Replicant;
 			productReference = C922A8B62FDC493200431320 /* Replicould.app */;
@@ -206,7 +204,6 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				C9B5305D2FDDD839006F79A8 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -217,10 +214,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				C9B530752FE0A5FC006F79A8 /* MainFeature.swift in Sources */,
-				C9B530772FE0A60B006F79A8 /* AppFeature.swift in Sources */,
-				C9B5305C2FDDD839006F79A8 /* ReplicantApp.swift in Sources */,
-				C9B5307E2FE0E38E006F79A8 /* PreferencesFeature.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -485,6 +478,10 @@
 		C91E721A2FFA954A0092DF05 /* GameDatabase */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = GameDatabase;
+		};
+		C927E7652FFD5C2900D443E8 /* NewStarMapFeature */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NewStarMapFeature;
 		};
 		C961BC5A2FF5C7AD00D9C273 /* LocationsFeature */ = {
 			isa = XCSwiftPackageProductDependency;
