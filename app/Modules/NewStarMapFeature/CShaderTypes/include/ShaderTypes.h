@@ -102,6 +102,17 @@ typedef struct {
     simd_float4 color;      // rgba
 } OrreryLineVertex;
 
+// A small billboard annotation over an orrery body: an indicator dot (a device /
+// salvage / mining / inventory / life feature on a planet) or the pulsing
+// incoming-asteroid hazard marker. Billboarded at a constant pixel radius with a
+// screen-space cluster offset, so several pips sit in a tidy row above the body.
+typedef struct {
+    simd_float4 worldPosRadius;  // xyz = body world position, w = pip radius (pixels)
+    simd_float4 color;           // rgb = pip color, a = pulse speed (0 = steady)
+    simd_float2 pixelOffset;     // screen-space offset from the projected center (px)
+    simd_float2 _pad;            // 16-byte alignment
+} OrreryPip;
+
 // A single vertex of an FTL-link ribbon. Each link expands to a screen-space quad
 // (6 vertices); the vertex shader offsets by `side` along the screen-perpendicular
 // so links have real, pixel-constant thickness. `along` (0 at A, 1 at B) is here

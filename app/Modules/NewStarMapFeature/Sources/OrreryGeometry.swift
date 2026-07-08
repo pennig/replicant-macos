@@ -14,6 +14,41 @@ enum OrreryGeometry {
     private static let kuiperColor = SIMD4<Float>(0.50, 0.55, 0.70, 0.28)
     private static let hzColor = SIMD4<Float>(0.40, 0.82, 0.55, 0.5)
     private static let beltColor = SIMD3<Float>(0.90, 0.72, 0.42)
+    private static let hazardLineColor = SIMD4<Float>(0.95, 0.36, 0.30, 0.55)
+
+    // Indicator-pip colours. The orrery renders in Metal and can't read the asset
+    // catalog, so — like the scaffold colours above — the pip tints live here as the
+    // single source, approximating the `SystemHUD` glyph tokens.
+    static let lifeColor      = SIMD3<Float>(0.40, 0.82, 0.55)   // rcStatusReady
+    static let deviceColor    = SIMD3<Float>(0.35, 0.75, 1.00)   // rcAccent
+    static let salvageColor   = SIMD3<Float>(0.92, 0.74, 0.42)   // rcStatusWaiting
+    static let miningColor    = SIMD3<Float>(0.86, 0.60, 0.32)   // rcStatusWaiting (deeper)
+    static let inventoryColor = SIMD3<Float>(0.72, 0.74, 0.80)   // rcTextSecondary
+    static let hazardColor    = SIMD3<Float>(0.95, 0.36, 0.30)   // rcError
+
+    /// The indicator dots for a body, in a stable priority order (life first), each
+    /// with its pip colour. Empty when the body carries no notable features — so a
+    /// plain planet draws no pips. Order matches the `SystemHUD` glyph row.
+    static func pipEntries(_ indicators: BodyIndicators) -> [(indicator: BodyIndicators, color: SIMD3<Float>)] {
+        var out: [(BodyIndicators, SIMD3<Float>)] = []
+        if indicators.contains(.life)       { out.append((.life, lifeColor)) }
+        if indicators.contains(.device)     { out.append((.device, deviceColor)) }
+        if indicators.contains(.salvage)    { out.append((.salvage, salvageColor)) }
+        if indicators.contains(.miningSite) { out.append((.miningSite, miningColor)) }
+        if indicators.contains(.inventory)  { out.append((.inventory, inventoryColor)) }
+        return out
+    }
+
+    /// The scene-space offset (from the star, y = 0) of an incoming hazard along its
+    /// inbound radial: it starts at its reported orbit distance and closes toward the
+    /// star as `progressPct` climbs (100% = impact). Angle is deterministic per
+    /// designation, so the trajectory is stable across launches.
+    static func hazardOffset(_ hazard: OrreryHazard) -> SIMD3<Float> {
+        let angle = Float(OrreryMapping.phaseDeg(hazard.designation)) * .pi / 180
+        let progress = Float(min(max((hazard.progressPct ?? 0) / 100, 0), 1))
+        let r = Float(hazard.orbitScene) * (1 - progress * 0.9)
+        return SIMD3(cos(angle) * r, 0, sin(angle) * r)
+    }
 
     /// A unit sphere (radius 1) as indexed triangles. On a unit sphere the normal
     /// equals the position, so it survives the per-body uniform scale + translate.
@@ -66,6 +101,18 @@ enum OrreryGeometry {
         if let kuiper = model.kuiperScene { addRing(radius: kuiper, color: kuiperColor) }
         if let inner = model.hzInnerScene { addRing(radius: inner, color: hzColor) }
         if let outer = model.hzOuterScene { addRing(radius: outer, color: hzColor) }
+
+        // Incoming-hazard approach vectors: a short red radial from the asteroid's
+        // current position inward toward the star, so the impact course reads at a
+        // glance. Grows with reveal like the rings (the shader scales about center).
+        for hazard in model.hazards where hazard.orbitScene > 0 {
+            let angle = Float(OrreryMapping.phaseDeg(hazard.designation)) * .pi / 180
+            let dir = SIMD3<Float>(cos(angle), 0, sin(angle))
+            let from = center + hazardOffset(hazard) * scale
+            let to = center + dir * (Float(hazard.orbitScene) * scale * 0.08)   // near the star
+            verts.append(OrreryLineVertex(position: SIMD4(from, 1), color: hazardLineColor))
+            verts.append(OrreryLineVertex(position: SIMD4(to, 1), color: hazardLineColor))
+        }
         return verts
     }
 

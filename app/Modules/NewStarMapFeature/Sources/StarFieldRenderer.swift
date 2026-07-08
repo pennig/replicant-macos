@@ -19,6 +19,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     private let orreryBodyPipeline: MTLRenderPipelineState  // lit sun/planets (over-blend, depth-write)
     private let orreryLinePipeline: MTLRenderPipelineState  // orbit rings / HZ / kuiper (additive)
     private let orreryPointPipeline: MTLRenderPipelineState // asteroid belt (additive points)
+    private let orreryPipPipeline: MTLRenderPipelineState   // body indicator + hazard pips (additive)
 
     // Depth: only the resolved bodies write it; the dense additive field never
     // does (Invariant 8). Overlays test against it to occlude behind bodies.
@@ -301,6 +302,13 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         Self.configureAdditiveHDR(orreryPointDesc.colorAttachments[0]!)
         orreryPointDesc.depthAttachmentPixelFormat = depthPF
 
+        // Orrery pips: small billboard indicator dots + hazard markers, additive.
+        let orreryPipDesc = MTLRenderPipelineDescriptor()
+        orreryPipDesc.vertexFunction = library.makeFunction(name: "orrery_pip_vertex")
+        orreryPipDesc.fragmentFunction = library.makeFunction(name: "orrery_pip_fragment")
+        Self.configureAdditiveHDR(orreryPipDesc.colorAttachments[0]!)
+        orreryPipDesc.depthAttachmentPixelFormat = depthPF
+
         // Mesh links (additive, depth-tested so a body in front occludes them).
         let meshDesc = MTLRenderPipelineDescriptor()
         meshDesc.vertexFunction = library.makeFunction(name: "mesh_vertex")
@@ -355,6 +363,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
             orreryBodyPipeline = try device.makeRenderPipelineState(descriptor: orreryBodyDesc)
             orreryLinePipeline = try device.makeRenderPipelineState(descriptor: orreryLineDesc)
             orreryPointPipeline = try device.makeRenderPipelineState(descriptor: orreryPointDesc)
+            orreryPipPipeline = try device.makeRenderPipelineState(descriptor: orreryPipDesc)
         } catch {
             assertionFailure("Pipeline creation failed: \(error)")
             return nil
@@ -544,6 +553,22 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
                 for var body in orreryBodies(model: model, time: t) {
                     enc.setVertexBytes(&body, length: MemoryLayout<OrreryBodyUniform>.stride, index: 2)
                     enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+                }
+                // Annotation pips: indicator dots + hazard markers, on top of the
+                // bodies (depth-read so a pip behind the sun is occluded), additive.
+                var pips = orreryPips(model: model, time: t)
+                if !pips.isEmpty {
+                    var pipParams = MeshParams(
+                        viewportPixels: SIMD2<Float>(Float(size.width), Float(size.height)),
+                        halfWidthPixels: 0, nodeRadiusPixels: 0)
+                    enc.setRenderPipelineState(orreryPipPipeline)
+                    enc.setDepthStencilState(readDepthState)
+                    pips.withUnsafeBytes { enc.setVertexBytes($0.baseAddress!, length: $0.count, index: 0) }
+                    enc.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
+                    enc.setVertexBytes(&pipParams, length: MemoryLayout<MeshParams>.stride, index: 2)
+                    enc.setFragmentBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
+                    enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6,
+                                       instanceCount: pips.count)
                 }
             }
             enc.endEncoding()
@@ -781,6 +806,48 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
                 sunEmissive: SIMD4(orreryCenter, 0)))
         }
         return bodies
+    }
+
+    /// The per-frame annotation pips: a centred row of indicator dots above each
+    /// body that carries notable features, plus a pulsing marker on each incoming
+    /// hazard. Positions mirror `orreryBodies` (same orbit math, same reveal scale)
+    /// so the pips track their bodies as they orbit and emerge on drill-in.
+    private func orreryPips(model: SystemModel, time: Float) -> [OrreryPip] {
+        let orbitSpeed: Float = 0.6      // matches orreryBodies
+        let pipRadius: Float = 3
+        let pipSpacing: Float = 8
+        let clusterY: Float = -13        // above the body (screen y grows downward)
+        var pips: [OrreryPip] = []
+
+        for planet in model.planets {
+            let entries = OrreryGeometry.pipEntries(planet.indicators)
+            guard !entries.isEmpty else { continue }
+            let period = max(Float(planet.periodDays) * orbitSpeed, 0.001)
+            let angle = Float(planet.phase0Deg) * .pi / 180 + (time / period) * 2 * .pi
+            let r = Float(planet.semiMajorScene) * orreryScale * orreryReveal
+            let pos = orreryCenter + SIMD3<Float>(cos(angle) * r, 0, sin(angle) * r)
+            let n = Float(entries.count)
+            for (i, entry) in entries.enumerated() {
+                let x = (Float(i) - (n - 1) / 2) * pipSpacing
+                pips.append(OrreryPip(
+                    worldPosRadius: SIMD4(pos, pipRadius),
+                    color: SIMD4(entry.color, 0),                       // steady (no pulse)
+                    pixelOffset: SIMD2(x, clusterY), _pad: .zero))
+            }
+        }
+
+        // Incoming hazards: one pulsing red marker at the asteroid's position; the
+        // pulse quickens as its progress climbs toward impact.
+        for hazard in model.hazards where hazard.orbitScene > 0 {
+            let pos = orreryCenter + OrreryGeometry.hazardOffset(hazard) * orreryScale * orreryReveal
+            let progress = Float(min(max((hazard.progressPct ?? 0) / 100, 0), 1))
+            let pulseSpeed = 2.5 + 5 * progress
+            pips.append(OrreryPip(
+                worldPosRadius: SIMD4(pos, 5),
+                color: SIMD4(OrreryGeometry.hazardColor, pulseSpeed),
+                pixelOffset: .zero, _pad: .zero))
+        }
+        return pips
     }
 
     /// Marks live viewport input (scroll / pinch / click) so the auto-rotate idle

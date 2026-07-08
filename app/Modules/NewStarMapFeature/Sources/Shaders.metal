@@ -628,3 +628,50 @@ fragment float4 orrery_point_fragment(OrreryPointVaryings in [[stage_in]],
     float a = saturate(1.0 - d * 2.0);
     return float4(in.color.rgb * (in.color.a * a), 1.0);
 }
+
+// Body annotation pips — indicator dots + the pulsing incoming-asteroid marker.
+// Billboarded at a constant pixel radius (with a screen-space cluster offset), so
+// they hug the body at any zoom. Additive, faded by reveal; depth-read so a pip on
+// a body behind the sun is occluded. The pip's depth is the body's projected depth.
+struct OrreryPipVaryings {
+    float4 position [[position]];
+    float2 uv;        // [-1,1] across the dot
+    float3 color;
+    float  pulse;     // pulse speed (0 = steady)
+};
+
+vertex OrreryPipVaryings orrery_pip_vertex(uint vid                     [[vertex_id]],
+                                           uint iid                     [[instance_id]],
+                                           const device OrreryPip* pips [[buffer(0)]],
+                                           constant Uniforms&      u    [[buffer(1)]],
+                                           constant MeshParams&    p    [[buffer(2)]])
+{
+    OrreryPip pip = pips[iid];
+    float2 corner = kCorners[vid];
+
+    float4 clip = u.projection * (u.view * float4(pip.worldPosRadius.xyz, 1.0));
+    // Billboard: a pixel-sized quad plus the cluster offset, both in pixels → NDC.
+    float2 px = corner * pip.worldPosRadius.w + pip.pixelOffset;
+    clip.xy += px * 2.0 / p.viewportPixels * clip.w;
+
+    OrreryPipVaryings out;
+    out.position = clip;
+    out.uv = corner;
+    out.color = pip.color.rgb;
+    out.pulse = pip.color.a;
+    return out;
+}
+
+fragment float4 orrery_pip_fragment(OrreryPipVaryings in [[stage_in]],
+                                    constant Uniforms&   u [[buffer(1)]])
+{
+    float d = length(in.uv);
+    if (d > 1.0) discard_fragment();
+    // Soft-edged filled dot with a small hot core.
+    float aa = max(fwidth(d), 1e-4);
+    float disc = 1.0 - smoothstep(1.0 - aa, 1.0, d);
+    float core = pow(saturate(1.0 - d), 3.0);
+    // Pulse: an incoming-asteroid marker breathes faster as the deadline nears.
+    float pulse = in.pulse > 0.0 ? mix(0.45, 1.0, 0.5 + 0.5 * sin(u.time * in.pulse)) : 1.0;
+    return float4(in.color * ((disc + core) * u.orreryReveal * pulse), 1.0);
+}

@@ -91,6 +91,45 @@ struct OrreryGeometryTests {
         #expect(OrreryGeometry.rgb(hex: "bad") == SIMD3<Float>(1, 1, 1))
     }
 
+    @Test func pipEntriesAreOrderedAndEmptyWhenNoneSet() {
+        #expect(OrreryGeometry.pipEntries([]).isEmpty)
+        let all: BodyIndicators = [.inventory, .device, .life, .miningSite, .salvage]
+        let kinds = OrreryGeometry.pipEntries(all).map(\.indicator)
+        // Stable priority order regardless of insertion order (life first).
+        #expect(kinds == [.life, .device, .salvage, .miningSite, .inventory])
+    }
+
+    @Test func hazardOffsetIsDeterministicAndClosesWithProgress() {
+        let far = OrreryHazard(designation: "OBJ-1", objectType: "incoming_asteroid",
+                               title: nil, orbitScene: 10, targetScene: nil,
+                               progressPct: 0, deadline: nil)
+        let near = OrreryHazard(designation: "OBJ-1", objectType: "incoming_asteroid",
+                                title: nil, orbitScene: 10, targetScene: nil,
+                                progressPct: 90, deadline: nil)
+        // Same angle (same designation), nearer the star as progress climbs.
+        #expect(OrreryGeometry.hazardOffset(far) == OrreryGeometry.hazardOffset(far))
+        #expect(simd_length(OrreryGeometry.hazardOffset(near))
+                    < simd_length(OrreryGeometry.hazardOffset(far)))
+    }
+
+    @Test func scaffoldIncludesHazardApproachSegment() {
+        let base = SystemModel(
+            star: StarDetail(designation: "S", name: nil, spectralType: nil, color: nil,
+                             position: Position(x: 0, y: 0, z: 0), temperatureK: nil,
+                             massSolar: nil, luminositySolar: nil, ageMy: nil,
+                             habitableZone: nil, miningBonusPct: nil),
+            hzInnerScene: nil, hzOuterScene: nil, planets: [], belts: [], hazards: [],
+            kuiperScene: nil, frameScene: 20, deviceCount: 0, vesselCount: 0)
+        let withHazard = SystemModel(
+            star: base.star, hzInnerScene: nil, hzOuterScene: nil, planets: [], belts: [],
+            hazards: [OrreryHazard(designation: "OBJ-1", objectType: "incoming_asteroid",
+                                   title: nil, orbitScene: 10, targetScene: nil,
+                                   progressPct: 20, deadline: nil)],
+            kuiperScene: nil, frameScene: 20, deviceCount: 0, vesselCount: 0)
+        let none = OrreryGeometry.scaffoldLines(model: base, center: .zero, scale: 1)
+        let some = OrreryGeometry.scaffoldLines(model: withHazard, center: .zero, scale: 1)
+        #expect(some.count == none.count + 2)   // one 2-vertex approach segment
+    }
 }
 
 struct OrreryMappingTests {
