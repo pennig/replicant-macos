@@ -159,6 +159,83 @@ enum OrreryMapping {
             || !m.sites.isEmpty || !m.inventory.isEmpty
     }
 
+    // MARK: - Body level (a planet + its moons)
+
+    /// Moon display radius (scene units) — from real `radiusEarth` when scanned,
+    /// else a small default. Moons read smaller than planets.
+    static func moonDisplayRadius(_ m: Moon) -> Double {
+        if let re = m.physical?.radiusEarth, re > 0 { return 0.25 + 0.25 * re.squareRoot() }
+        return 0.35
+    }
+
+    /// Moon schematic colour by type — icy/rocky/lava/ocean, else a neutral grey.
+    static func moonColor(type: String?) -> String {
+        let t = (type ?? "").lowercased()
+        if t.contains("ice") || t.contains("frozen") { return "#cdd6e6" }
+        if t.contains("lava") || t.contains("volcanic") { return "#d8613a" }
+        if t.contains("ocean") { return "#5f8fc0" }
+        if t.contains("rock") || t.contains("barren") { return "#9a9086" }
+        return "#b8b0a4"
+    }
+
+    /// A body-level orrery `SystemModel`: the drilled planet as the lit `centralBody`
+    /// with its moons as the orbiting `planets`. Moons ring outward from the planet
+    /// (interesting moons + nearest first, capped for the 60+-moon systems); orbits
+    /// are index-stepped (real `orbitalDistanceKm` only orders them) so the roster
+    /// stays legible. Empty moons → just the central planet (shown before the
+    /// `hydrateBody` roster lands, like the star-only system fallback).
+    static func bodyModel(planet: Planet, maxMoons: Int = 18) -> SystemModel {
+        let centralRadius = displayRadius(planet: planet)
+        let central = CentralBody(
+            displayRadius: centralRadius,
+            colorHex: planetColor(type: planet.type),
+            hasRing: planet.physical?.rings ?? false)
+
+        let ordered = planet.moons.sorted { a, b in
+            let ai = moonIsInteresting(a), bi = moonIsInteresting(b)
+            if ai != bi { return ai }
+            let ad = a.physical?.orbitalDistanceKm ?? .greatestFiniteMagnitude
+            let bd = b.physical?.orbitalDistanceKm ?? .greatestFiniteMagnitude
+            if ad != bd { return ad < bd }
+            return a.designation < b.designation
+        }
+        let shown = Array(ordered.prefix(maxMoons))
+        let base = centralRadius + 1.4
+        let step = 0.85
+        let moons: [OrreryPlanet] = shown.enumerated().map { i, m in
+            var indicators: BodyIndicators = []
+            if !m.devices.isEmpty { indicators.insert(.device) }
+            if m.salvage.contains(where: { !$0.depleted }) { indicators.insert(.salvage) }
+            if !m.sites.isEmpty { indicators.insert(.miningSite) }
+            if !m.inventory.isEmpty { indicators.insert(.inventory) }
+            return OrreryPlanet(
+                designation: m.designation, name: m.name, type: m.type,
+                orbitalDistanceAu: 0, inHabitableZone: false,
+                scanned: m.recon == .scanned, moonCount: 0, lifeStage: nil,
+                inventory: m.inventory,
+                semiMajorScene: base + Double(i) * step,
+                periodDays: m.physical?.orbitalPeriodDays ?? (8 + Double(i) * 3),
+                phase0Deg: phaseDeg(m.designation),
+                displayRadius: moonDisplayRadius(m),
+                colorHex: moonColor(type: m.type),
+                hasRing: false, indicators: indicators,
+                hasInterestingMoon: false, moons: [])
+        }
+        let frame = (moons.map(\.semiMajorScene).max() ?? (centralRadius + 2)) * 1.12
+        let deviceCount = planet.devices.count + planet.moons.reduce(0) { $0 + $1.devices.count }
+
+        return SystemModel(
+            star: StarDetail(
+                designation: planet.designation, name: planet.name,
+                spectralType: planet.type, color: nil,
+                position: Position(x: 0, y: 0, z: 0),
+                temperatureK: nil, massSolar: nil, luminositySolar: nil, ageMy: nil,
+                habitableZone: nil, miningBonusPct: nil),
+            centralBody: central, hzInnerScene: nil, hzOuterScene: nil,
+            planets: moons, belts: [], hazards: [], kuiperScene: nil,
+            frameScene: frame, deviceCount: deviceCount, vesselCount: 0)
+    }
+
     // MARK: - Helpers
 
     private static func parseDate(_ s: String) -> Date? {

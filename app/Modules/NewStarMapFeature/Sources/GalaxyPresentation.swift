@@ -67,10 +67,22 @@ struct GalaxySystem: Identifiable, Equatable, Sendable {
 
 // MARK: - Focus
 
-/// Which scale the map is showing: the whole galaxy, or one drilled-in system.
+/// Which scale the map is showing: the whole galaxy, one drilled-in system, or a
+/// single body (planet) within a system, showing its moons.
 enum StarMapFocus: Equatable, Sendable {
     case galaxy
     case system(String)   // system designation
+    case body(String)     // planet designation ("SYSTEM-n"); parent inferred from the prefix
+
+    /// The system this focus belongs to: itself for `.system`, the parent for
+    /// `.body`, nil for `.galaxy`. Body designations are `SYSTEM-n`.
+    var systemDesignation: String? {
+        switch self {
+        case .galaxy:          nil
+        case let .system(id):  id
+        case let .body(id):    String(id.split(separator: "-").first ?? "")
+        }
+    }
 }
 
 // MARK: - Database rebuild (first-run survey)

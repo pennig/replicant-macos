@@ -106,9 +106,22 @@ struct OrreryHazard: Identifiable, Equatable, Sendable {
     var id: String { designation }
 }
 
-/// The full orrery presentation aggregate for one system.
+/// The body at the centre of a *body-level* orrery — the drilled planet, drawn as
+/// a lit impostor with its moons orbiting. Nil at system level, where the centre is
+/// the focused field-star sun (a real star instance, not an orrery body).
+struct CentralBody: Equatable, Sendable {
+    var displayRadius: Double     // scene units
+    var colorHex: String
+    var hasRing: Bool
+}
+
+/// The full orrery presentation aggregate for one focus level. At system level the
+/// `planets` orbit the focused field star; at body level they are the drilled
+/// planet's moons orbiting `centralBody`.
 struct SystemModel: Equatable, Sendable {
     var star: StarDetail
+    /// Set only at body level — the drilled planet drawn at the centre.
+    var centralBody: CentralBody? = nil
     var hzInnerScene: Double?
     var hzOuterScene: Double?
     var planets: [OrreryPlanet]

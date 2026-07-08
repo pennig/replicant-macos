@@ -48,10 +48,11 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     // uses the star field's angular clamp so it matches the star it grew from.
     private var systemFocused = false
     private var orreryModel: SystemModel?
-    private var orreryCenter = SIMD3<Float>(repeating: 0)
-    private var orreryScale: Float = 1          // scene-unit → world (ly) around the star
-    private var focusedStarIndex: Int?          // the drilled-in star = the orrery sun (uncapped, unfaded)
-    private var savedCamera: TurntableCamera?   // pre-drill pose, restored on zoom-out
+    private var orreryCenter = SIMD3<Float>(repeating: 0)   // world centre of the orrery (star, or a planet at body level)
+    private var orrerySunWorldPos = SIMD3<Float>(repeating: 0)  // light source (the system star), for lit bodies
+    private var orreryScale: Float = 1          // scene-unit → world (ly) around the centre
+    private var focusedStarIndex: Int?          // the system star = the orrery sun (uncapped, unfaded); kept at body level too
+    private var cameraStack: [TurntableCamera] = []   // pose per drilled level, restored on zoom-out
     private var orreryLineBuffer: MTLBuffer?
     private var orreryLineVertexCount = 0
     private var orreryBeltBuffer: MTLBuffer?
@@ -708,43 +709,91 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
 
     // MARK: System focus (orrery)
 
-    /// Drill into a system: build its orrery around the star, clear galaxy focus,
-    /// and ease the camera in to frame it. The field fades and the orrery reveals
-    /// via `fieldDim`/`orreryReveal` (advanced in `draw`).
+    /// Drill from the galaxy into a system: build its orrery around the star and
+    /// ease the camera in to frame it. The field fades and the orrery reveals via
+    /// `fieldDim`/`orreryReveal` (systemProgress 0→1, advanced in `draw`).
     func enterSystem(starIndex: Int, model: SystemModel) {
         guard stars.indices.contains(starIndex) else { return }
-        let center = stars[starIndex].position
-        orreryCenter = center
-        focusedStarIndex = starIndex
-        rebuildOrrery(model: model)              // sets orreryModel + scale + buffers
-
-        // Frame the orrery in the focused star's own angular terms: the camera
-        // dives in until the star fills `maxAngularSize` (dFinal), where the sun
-        // takes over at the same size. The orrery is scaled so its outer edge fits
-        // the view at that distance — so drilling reads as a zoom IN.
+        focusedStarIndex = starIndex             // the star IS the orrery sun (unfaded, uncapped)
+        orreryCenter = stars[starIndex].position
+        orrerySunWorldPos = orreryCenter         // the sun sits at the centre
+        // Frame the orrery in the star's own angular terms: dive until the star
+        // fills `maxAngularSize` (dFinal) — the sun takes over at the same size, so
+        // drilling reads as a zoom IN — and scale the orrery to fit the view there.
         let dFinal = stars[starIndex].worldRadius / maxAngularSize
-        savedCamera = camera                     // to restore the pre-drill pose on zoom-out
+        orreryScale = orreryScaleToFit(frameScene: model.frameScene, atDistance: dFinal)
+        setOrreryModel(model)
+
         // Keep the existing relevance focus: the other stars are already dimmed
         // around the selection, so they just fade out with `fieldDim` — resetting
-        // to full here would snap them bright right before fading them away. The
-        // selection also persists so the star stays "focused" back in the galaxy.
+        // to full here would snap them bright right before fading them away.
+        cameraStack.append(camera)               // restore this galaxy pose on zoom-out
         systemFocused = true
         camera.focusFloor = dFinal * 0.6         // limit how far you can zoom in
         let now = CACurrentMediaTime()
         beginTransition(to: 1, duration: drillDurationBase * transitionDurationScale, now: now)
-        camera.dive(on: center, radius: dFinal, now: now, duration: transitionDuration)   // zoom IN toward the star
+        camera.dive(on: orreryCenter, radius: dFinal, now: now, duration: transitionDuration)
     }
 
-    /// (Re)build the orrery geometry for `model` around the focused star — scale
-    /// from the star's angular framing; the camera is untouched. Used on drill-in
-    /// and again when the hydrate lands with the real roster.
-    private func rebuildOrrery(model: SystemModel) {
-        guard let idx = focusedStarIndex, stars.indices.contains(idx) else { return }
-        orreryModel = model
-        let dFinal = stars[idx].worldRadius / maxAngularSize
-        let visibleRadius = dFinal * tan(camera.fovy * 0.5) * 0.9
-        orreryScale = visibleRadius / Float(max(model.frameScene, 1))
+    /// Drill from a system into one of its planets: the planet (captured at its
+    /// current orbit position in the system orrery we're leaving) becomes the lit
+    /// central body with its moons orbiting. The galaxy stays receded
+    /// (systemProgress holds at 1) and the star stays the (now distant) sun that
+    /// lights the scene — only the camera flies and the orrery model swaps.
+    func enterBody(starIndex: Int, planetID: String, model: SystemModel) {
+        guard stars.indices.contains(starIndex) else { return }
+        // Where the planet is right now, in the system orrery still loaded.
+        let planetCenter = currentOrbiterWorldPosition(id: planetID) ?? orreryCenter
+        focusedStarIndex = starIndex             // keep the system star as the (unfaded) light source
+        orreryCenter = planetCenter
+        orrerySunWorldPos = stars[starIndex].position
+        // Body orrery: scale to a fixed world frame, dive to fill the view with it.
+        let frameWorld: Float = 14
+        orreryScale = frameWorld / Float(max(model.frameScene, 1))
+        setOrreryModel(model)
 
+        cameraStack.append(camera)               // restore this system pose on zoom-out
+        systemFocused = true
+        let dFinal = frameWorld / (tan(camera.fovy * 0.5) * 0.9)
+        camera.focusFloor = dFinal * 0.6
+        let now = CACurrentMediaTime()
+        // Reveal already at 1 (still focused) — beginTransition only drives the fly.
+        beginTransition(to: 1, duration: drillDurationBase * transitionDurationScale, now: now)
+        camera.dive(on: planetCenter, radius: dFinal, now: now, duration: transitionDuration)
+    }
+
+    /// Zoom out from a body back to its system: restore the system pose, put the
+    /// star back at the centre as the sun, and rebuild the system orrery. The
+    /// galaxy stays receded (systemProgress holds at 1).
+    func exitToSystem(starIndex: Int, model: SystemModel) {
+        guard stars.indices.contains(starIndex) else { return }
+        focusedStarIndex = starIndex
+        orreryCenter = stars[starIndex].position
+        orrerySunWorldPos = orreryCenter
+        let dFinal = stars[starIndex].worldRadius / maxAngularSize
+        orreryScale = orreryScaleToFit(frameScene: model.frameScene, atDistance: dFinal)
+        setOrreryModel(model)
+
+        let now = CACurrentMediaTime()
+        beginTransition(to: 1, duration: zoomDurationBase * transitionDurationScale, now: now)
+        if let saved = cameraStack.popLast() {
+            camera.focusFloor = saved.focusFloor
+            camera.restore(saved, now: now, duration: transitionDuration)
+        }
+    }
+
+    /// Scale (scene-unit → world) that fits an orrery of outer radius `frameScene`
+    /// into the view at camera distance `d`.
+    private func orreryScaleToFit(frameScene: Double, atDistance d: Float) -> Float {
+        let visibleRadius = d * tan(camera.fovy * 0.5) * 0.9
+        return visibleRadius / Float(max(frameScene, 1))
+    }
+
+    /// Set the orrery roster and rebuild its scaffold/belt buffers at the current
+    /// centre + scale (set by the enter methods; untouched here). Used on drill-in
+    /// and again when the hydrate lands with the real roster — no camera change.
+    private func setOrreryModel(_ model: SystemModel) {
+        orreryModel = model
         let lines = OrreryGeometry.scaffoldLines(model: model, center: orreryCenter, scale: orreryScale)
         orreryLineVertexCount = lines.count
         orreryLineBuffer = lines.isEmpty ? nil : device.makeBuffer(
@@ -758,21 +807,21 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
             options: .storageModeShared)
     }
 
-    /// Refresh the orrery in place when the persisted system detail updates while
-    /// focused (planets/belts pop in without restarting the transition).
+    /// Refresh the orrery in place when the persisted detail updates while focused
+    /// (planets/moons/belts pop in without restarting the transition or re-framing).
     func updateOrrery(model: SystemModel) {
-        guard systemFocused, focusedStarIndex != nil else { return }
-        rebuildOrrery(model: model)
+        guard systemFocused else { return }
+        setOrreryModel(model)
     }
 
     /// Zoom back out to the galaxy: ease the camera back to the exact pre-drill
     /// pose. The orrery reveal fades out in `draw`; its buffers drop on next drill.
     func exitSystem() {
         systemFocused = false
-        camera.focusFloor = savedCamera?.focusFloor
         let now = CACurrentMediaTime()
         beginTransition(to: 0, duration: zoomDurationBase * transitionDurationScale, now: now)
-        if let saved = savedCamera {
+        if let saved = cameraStack.popLast() {
+            camera.focusFloor = saved.focusFloor
             camera.restore(saved, now: now, duration: transitionDuration)
         }
     }
@@ -793,17 +842,26 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     private func orreryBodies(model: SystemModel, time: Float) -> [OrreryBodyUniform] {
         let orbitSpeed: Float = 0.6      // seconds of animation per "period day" (matches SceneKit)
         var bodies: [OrreryBodyUniform] = []
-        bodies.reserveCapacity(model.planets.count)
+        bodies.reserveCapacity(model.planets.count + 1)
+
+        // Body level: the drilled planet as a lit impostor at the centre (no orbit),
+        // lit — like the moons — by the system star's distant position.
+        if let central = model.centralBody {
+            bodies.append(OrreryBodyUniform(
+                centerRadius: SIMD4(orreryCenter, Float(central.displayRadius) * orreryScale),
+                color: SIMD4(OrreryGeometry.rgb(hex: central.colorHex), 1),
+                sunEmissive: SIMD4(orrerySunWorldPos, 1)))
+        }
 
         for planet in model.planets {
             let period = max(Float(planet.periodDays) * orbitSpeed, 0.001)
             let angle = Float(planet.phase0Deg) * .pi / 180 + (time / period) * 2 * .pi
-            let r = Float(planet.semiMajorScene) * orreryScale * orreryReveal   // emerge from the star
+            let r = Float(planet.semiMajorScene) * orreryScale * orreryReveal   // emerge from the centre
             let pos = orreryCenter + SIMD3<Float>(cos(angle) * r, 0, sin(angle) * r)
             bodies.append(OrreryBodyUniform(
                 centerRadius: SIMD4(pos, Float(planet.displayRadius) * orreryScale),
                 color: SIMD4(OrreryGeometry.rgb(hex: planet.colorHex), 1),
-                sunEmissive: SIMD4(orreryCenter, 0)))
+                sunEmissive: SIMD4(orrerySunWorldPos, 0)))
         }
         return bodies
     }
@@ -848,6 +906,19 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
                 pixelOffset: .zero, _pad: .zero))
         }
         return pips
+    }
+
+    /// The current world position of an orbiter (planet) in the loaded orrery, at
+    /// this instant's orbit angle — same math as `orreryBodies`. Used to capture a
+    /// planet's live position when drilling from the system into it.
+    private func currentOrbiterWorldPosition(id: String) -> SIMD3<Float>? {
+        guard let planet = orreryModel?.planets.first(where: { $0.id == id }) else { return nil }
+        let orbitSpeed: Float = 0.6
+        let time = Float(CACurrentMediaTime() - startTime)
+        let period = max(Float(planet.periodDays) * orbitSpeed, 0.001)
+        let angle = Float(planet.phase0Deg) * .pi / 180 + (time / period) * 2 * .pi
+        let r = Float(planet.semiMajorScene) * orreryScale * orreryReveal
+        return orreryCenter + SIMD3<Float>(cos(angle) * r, 0, sin(angle) * r)
     }
 
     /// Marks live viewport input (scroll / pinch / click) so the auto-rotate idle

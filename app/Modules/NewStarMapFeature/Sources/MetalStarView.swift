@@ -215,26 +215,49 @@ struct MetalStarView: NSViewRepresentable {
             }
         }
 
-        /// Drives the galaxy↔system fly on a focus change (once per change), and
-        /// refreshes the orrery in place when the focused system's model updates
-        /// (e.g. the drill-in hydrate lands with the real planet roster).
+        /// Drives the galaxy → system → body fly on a focus change (once per change,
+        /// stepping one level), and refreshes the orrery in place when the focused
+        /// model updates (e.g. a drill-in hydrate lands with the real roster). The
+        /// `model` is whatever the current level renders: the system's `SystemModel`
+        /// at `.system`, or the drilled planet's body model at `.body`.
         func applyFocus(_ focus: StarMapFocus, model: SystemModel?, stars: [Star], view: StarMTKView) {
-            view.focused = { if case .system = focus { return true } else { return false } }()
+            view.focused = { if case .galaxy = focus { return false } else { return true } }()
             if focus == lastFocus {
-                if case .system = focus, let model, model != lastModel {
+                if case .galaxy = focus {} else if let model, model != lastModel {
                     lastModel = model
                     renderer?.updateOrrery(model: model)
                 }
                 return
             }
+            let previous = lastFocus
             lastFocus = focus
             lastModel = model
-            switch focus {
-            case let .system(id):
-                guard let model, let index = stars.firstIndex(where: { $0.name == id }) else { return }
-                renderer?.enterSystem(starIndex: index, model: model)
-            case .galaxy:
+
+            func index(_ id: String) -> Int? { stars.firstIndex(where: { $0.name == id }) }
+
+            switch (previous, focus) {
+            case let (.galaxy, .system(id)):
+                if let model, let idx = index(id) { renderer?.enterSystem(starIndex: idx, model: model) }
+            case let (.system, .body(bodyID)):
+                if let model, let sys = focus.systemDesignation, let idx = index(sys) {
+                    renderer?.enterBody(starIndex: idx, planetID: bodyID, model: model)
+                }
+            case let (.body, .system(id)):
+                if let model, let idx = index(id) { renderer?.exitToSystem(starIndex: idx, model: model) }
+            case (.system, .galaxy):
                 renderer?.exitSystem()
+            default:
+                // Any non-adjacent jump: land at the target level directly.
+                switch focus {
+                case .galaxy:
+                    renderer?.exitSystem()
+                case let .system(id):
+                    if let model, let idx = index(id) { renderer?.enterSystem(starIndex: idx, model: model) }
+                case let .body(bodyID):
+                    if let model, let sys = focus.systemDesignation, let idx = index(sys) {
+                        renderer?.enterBody(starIndex: idx, planetID: bodyID, model: model)
+                    }
+                }
             }
         }
     }

@@ -82,27 +82,47 @@ public struct NewStarMapView: View {
         return gs
     }
 
-    /// The drilled-in system (when focused) resolved from the live row, and its
-    /// orrery presentation model.
-    private var focusedSystem: GalaxySystem? {
-        guard case let .system(id) = store.focus,
-              let row = surveyed.first(where: { $0.designation == id })
-        else { return nil }
-        return GalaxySystem(surveyed: row.item, isCurrentLocation: row.designation == currentLocationID)
-    }
-    /// The focused system's orrery model, built from the persisted real
-    /// `StarSystem` when available, else a minimal star-only model from the census
-    /// row (so the sun appears immediately while the drill-in hydrate lands).
+    /// The focused orrery model. At `.system` it's the whole system (real
+    /// `StarSystem` when persisted, else a minimal star-only model so the sun
+    /// appears immediately while the hydrate lands). At `.body` it's the drilled
+    /// planet + its moons, decoded from the persisted parent system.
     private var focusedModel: SystemModel? {
-        guard case let .system(id) = store.focus else { return nil }
-        if let detail = systemDetails.first(where: { $0.designation == id }),
-           let system = try? detail.system() {
-            return OrreryMapping.systemModel(from: system)
+        switch store.focus {
+        case .galaxy:
+            return nil
+        case let .system(id):
+            if let system = persistedSystem(id) {
+                return OrreryMapping.systemModel(from: system)
+            }
+            guard let row = surveyed.first(where: { $0.designation == id }) else { return nil }
+            return OrreryMapping.minimal(
+                designation: id, position: row.item.position,
+                spectralType: row.item.spectralType, color: row.item.color, name: nil)
+        case let .body(bodyID):
+            guard let sys = store.focus.systemDesignation,
+                  let system = persistedSystem(sys),
+                  let planet = system.planets.first(where: { $0.designation == bodyID })
+            else { return nil }
+            return OrreryMapping.bodyModel(planet: planet)
         }
-        guard let row = surveyed.first(where: { $0.designation == id }) else { return nil }
-        return OrreryMapping.minimal(
-            designation: id, position: row.item.position,
-            spectralType: row.item.spectralType, color: row.item.color, name: nil)
+    }
+
+    /// The decoded persisted `StarSystem` for a designation, if we hold one.
+    private func persistedSystem(_ designation: String) -> StarSystem? {
+        systemDetails.first(where: { $0.designation == designation })
+            .flatMap { try? $0.system() }
+    }
+
+    /// Window title reflecting the current focus level.
+    private var navTitle: String {
+        switch store.focus {
+        case .galaxy:
+            return "Galaxy"
+        case .system:
+            return focusedModel.map { "Galaxy · \($0.star.name ?? $0.star.designation)" } ?? "Galaxy"
+        case .body:
+            return focusedModel.map { "System · \($0.star.name ?? $0.star.designation)" } ?? "Galaxy"
+        }
     }
 
     public var body: some View {
@@ -113,12 +133,15 @@ public struct NewStarMapView: View {
             switch store.focus {
             case .galaxy:
                 galaxyHUD.transition(.opacity)
-            case .system:
+            case .system, .body:
                 if let model = focusedModel {
                     SystemHUD(
-                        model: model, isTransitioning: store.isTransitioning,
+                        model: model,
+                        level: { if case .body = store.focus { return .body } else { return .system } }(),
+                        isTransitioning: store.isTransitioning,
                         onBack: { store.send(.zoomOutRequested) },
-                        onScan: { store.send(.scanCurrentSystemTapped) }
+                        onScan: { store.send(.scanCurrentSystemTapped) },
+                        onDrillBody: { store.send(.drillIntoBodyRequested($0)) }
                     )
                     .transition(.opacity)
                 }
@@ -136,7 +159,7 @@ public struct NewStarMapView: View {
         .animation(.easeInOut(duration: 0.22), value: store.selectedStar)
         .animation(.easeInOut(duration: 0.22), value: store.activeFilterName)
         .animation(.easeInOut(duration: 0.4), value: store.bootPhase)
-        .navigationTitle(focusedSystem.map { "Galaxy · \($0.name)" } ?? "Galaxy")
+        .navigationTitle(navTitle)
         .task { store.send(.task) }
     }
 
@@ -479,13 +502,22 @@ private struct SystemDossier: View {
 
 // MARK: - System HUD (orrery focus)
 
-/// The system-focus HUD: a star dossier (top-leading) and a bodies list
-/// (bottom-trailing), with a Back control that zooms out to the galaxy.
+/// Which orrery scale the HUD is describing — a whole system, or one planet and
+/// its moons.
+private enum OrreryLevel { case system, body }
+
+/// The orrery-focus HUD: a central-body dossier (top-leading) and a satellites
+/// list (bottom-trailing), with a Back control that zooms out one level. At system
+/// level the satellite rows drill into a planet; at body level they list moons.
 private struct SystemHUD: View {
     let model: SystemModel
+    let level: OrreryLevel
     let isTransitioning: Bool
     let onBack: () -> Void
     let onScan: () -> Void
+    let onDrillBody: (String) -> Void
+
+    private var isBody: Bool { level == .body }
 
     var body: some View {
         ZStack {
@@ -510,7 +542,8 @@ private struct SystemHUD: View {
     private var starCard: some View {
         VStack(alignment: .leading, spacing: Space.s) {
             Button(action: onBack) {
-                Label("Back to Galaxy", systemImage: "arrow.up.left").font(.rcCaption)
+                Label(isBody ? "Back to System" : "Back to Galaxy", systemImage: "arrow.up.left")
+                    .font(.rcCaption)
             }
             .buttonStyle(.plain)
             .foregroundStyle(.rcAccent)
@@ -535,14 +568,19 @@ private struct SystemHUD: View {
                 fact("Habitable zone", String(format: "%.2f–%.2f AU", hz.innerAu, hz.outerAu))
             }
             HStack(spacing: Space.l) {
-                fact("Planets", "\(model.planets.count)")
-                fact("Belts", model.belts.isEmpty ? "None"
-                     : model.belts.compactMap(\.density).first.map { $0.capitalized } ?? "\(model.belts.count)")
-                if model.star.habitableZone == nil {
-                    Button(action: onScan) {
-                        Label("Scan", systemImage: "dot.radiowaves.left.and.right").font(.rcCaption)
+                if isBody {
+                    fact("Moons", "\(model.planets.count)")
+                } else {
+                    fact("Planets", "\(model.planets.count)")
+                    fact("Belts", model.belts.isEmpty ? "None"
+                         : model.belts.compactMap(\.density).first.map { $0.capitalized } ?? "\(model.belts.count)")
+                    // Scan is only meaningful at system level (fills HZ / outer system).
+                    if model.star.habitableZone == nil {
+                        Button(action: onScan) {
+                            Label("Scan", systemImage: "dot.radiowaves.left.and.right").font(.rcCaption)
+                        }
+                        .buttonStyle(.plain).foregroundStyle(.rcAccent)
                     }
-                    .buttonStyle(.plain).foregroundStyle(.rcAccent)
                 }
             }
         }
@@ -553,24 +591,12 @@ private struct SystemHUD: View {
 
     private var bodiesCard: some View {
         VStack(alignment: .leading, spacing: Space.s) {
-            Text("Bodies")
+            Text(isBody ? "Moons" : "Bodies")
                 .font(.rcSectionLabel)
                 .textCase(.uppercase)
                 .foregroundStyle(.rcTextTertiary)
             ForEach(model.planets) { planet in
-                HStack(spacing: Space.s) {
-                    Circle()
-                        .fill(planet.inHabitableZone ? .rcStatusReady : .rcTextSecondary)
-                        .frame(width: 7, height: 7)
-                    Text(planet.name.map { "\(planet.designation) · \($0)" } ?? planet.designation)
-                        .font(.rcBody).foregroundStyle(.rcTextPrimary)
-                    indicatorGlyphs(planet.indicators)
-                    if planet.moonCount > 0 {
-                        Text("\(planet.moonCount)☾").font(.rcCaption).foregroundStyle(.rcTextTertiary)
-                    }
-                    Spacer()
-                    Text(planet.type ?? "—").font(.rcCaption).foregroundStyle(.rcTextTertiary)
-                }
+                bodyRow(planet)
             }
             if let hazard = model.hazards.first {
                 Divider().overlay(.rcSeparator)
@@ -592,6 +618,37 @@ private struct SystemHUD: View {
         .padding(Space.m)
         .frame(maxWidth: 240, alignment: .leading)
         .hudGlass()
+    }
+
+    /// One satellite row. At system level the row drills into the planet (chevron +
+    /// tap → `onDrillBody`); at body level it's a static moon entry.
+    @ViewBuilder private func bodyRow(_ planet: OrreryPlanet) -> some View {
+        let content = HStack(spacing: Space.s) {
+            Circle()
+                .fill(planet.inHabitableZone ? .rcStatusReady : .rcTextSecondary)
+                .frame(width: 7, height: 7)
+            Text(planet.name.map { "\(planet.designation) · \($0)" } ?? planet.designation)
+                .font(.rcBody).foregroundStyle(.rcTextPrimary)
+            indicatorGlyphs(planet.indicators)
+            if planet.moonCount > 0 {
+                Text("\(planet.moonCount)☾").font(.rcCaption).foregroundStyle(.rcTextTertiary)
+            }
+            Spacer()
+            Text(planet.type ?? "—").font(.rcCaption).foregroundStyle(.rcTextTertiary)
+            if !isBody {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9)).foregroundStyle(.rcTextTertiary)
+            }
+        }
+        .contentShape(Rectangle())
+
+        if isBody {
+            content
+        } else {
+            Button { onDrillBody(planet.designation) } label: { content }
+                .buttonStyle(.plain)
+                .disabled(isTransitioning)
+        }
     }
 
     @ViewBuilder private func indicatorGlyphs(_ ind: BodyIndicators) -> some View {

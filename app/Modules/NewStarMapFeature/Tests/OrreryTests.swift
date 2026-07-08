@@ -74,6 +74,60 @@ struct OrreryFocusReducerTests {
         }
         await store.send(.zoomOutRequested)   // already in the galaxy → nothing happens
     }
+
+    @Test func drillIntoBodyThenZoomOutStepsThroughLevels() async {
+        let clock = TestClock()
+        let store = TestStore(initialState: NewStarMapFeature.State()) {
+            NewStarMapFeature()
+        } withDependencies: {
+            $0.continuousClock = clock
+            $0.locationsClient.system = { _ in throw LocationsError.notFound }
+            $0.locationsClient.body = { _ in throw LocationsError.notFound }
+            $0.date = .constant(Date(timeIntervalSince1970: 0))
+            $0.defaultDatabase = try! DatabaseQueue()
+        }
+
+        await store.send(.drillInRequested("SHERATANON")) {
+            $0.focus = .system("SHERATANON")
+            $0.isTransitioning = true
+        }
+        await clock.advance(by: .milliseconds(1150))
+        await store.receive(\.transitionCompleted) { $0.isTransitioning = false }
+
+        // System → body.
+        await store.send(.drillIntoBodyRequested("SHERATANON-6")) {
+            $0.focus = .body("SHERATANON-6")
+            $0.isTransitioning = true
+        }
+        await clock.advance(by: .milliseconds(1150))
+        await store.receive(\.transitionCompleted) { $0.isTransitioning = false }
+
+        // Zoom out steps exactly one level: body → system.
+        await store.send(.zoomOutRequested) {
+            $0.focus = .system("SHERATANON")
+            $0.isTransitioning = true
+        }
+        await clock.advance(by: .milliseconds(950))
+        await store.receive(\.transitionCompleted) { $0.isTransitioning = false }
+
+        // Then system → galaxy.
+        await store.send(.zoomOutRequested) {
+            $0.focus = .galaxy
+            $0.isTransitioning = true
+        }
+        await clock.advance(by: .milliseconds(950))
+        await store.receive(\.transitionCompleted) { $0.isTransitioning = false }
+    }
+
+    @Test func drillIntoBodyFromGalaxyIsIgnored() async {
+        let store = TestStore(initialState: NewStarMapFeature.State()) {
+            NewStarMapFeature()
+        } withDependencies: {
+            $0.continuousClock = TestClock()
+        }
+        // Body drill is only valid from a system view.
+        await store.send(.drillIntoBodyRequested("SHERATANON-6"))
+    }
 }
 
 struct OrreryGeometryTests {
@@ -182,5 +236,29 @@ struct OrreryMappingTests {
         #expect(m.hazards.contains { $0.objectType == "incoming_asteroid" })
         #expect(m.star.habitableZone != nil)
         #expect(m.hzInnerScene != nil)
+    }
+
+    @Test func bodyModelBuildsCentralPlanetAndMoons() {
+        let planet = Planet(
+            designation: "SHERATANON-6", name: "Zeta", type: "Gas Giant",
+            orbitalDistanceAu: 5.2, recon: .scanned, moonCount: 3,
+            physical: BodyPhysical(radiusEarth: 9, rings: true),
+            moons: [
+                Moon(designation: "SHERATANON-6-a", type: "Icy", recon: .scanned,
+                     physical: BodyPhysical(radiusEarth: 0.3, orbitalPeriodDays: 2,
+                                            orbitalDistanceKm: 200_000)),
+                Moon(designation: "SHERATANON-6-b", recon: .scanned,
+                     salvage: [SalvageSite(designation: "SHERATANON-6-b-SAL-1")]),
+            ])
+        let m = OrreryMapping.bodyModel(planet: planet)
+        #expect(m.centralBody != nil)
+        #expect(m.centralBody?.hasRing == true)
+        #expect(m.planets.count == 2)                       // moons became orbiters
+        // The interesting moon (a live salvage site) sorts to the front.
+        #expect(m.planets.first?.designation == "SHERATANON-6-b")
+        #expect(m.planets.first?.indicators.contains(.salvage) == true)
+        // Every moon orbits outside the central planet.
+        let central = m.centralBody?.displayRadius ?? 0
+        #expect(m.planets.allSatisfy { $0.semiMajorScene > central })
     }
 }

@@ -90,9 +90,10 @@ public struct NewStarMapFeature {
         case layerToggled(InfoLayer)
         case autoRotateToggled
         case recenterTapped
-        // Drill-in / zoom-out between the galaxy and a single system's orrery.
-        case drillInRequested(String)   // system designation
-        case zoomOutRequested
+        // Drill-in / zoom-out across the galaxy → system → body scales.
+        case drillInRequested(String)         // system designation
+        case drillIntoBodyRequested(String)   // planet designation (from a system view)
+        case zoomOutRequested                 // steps out one level
         case transitionCompleted
         case transitionDurationScaleChanged(Double)
         /// Full re-scan of the replicant's current system (the only source of HZ /
@@ -179,9 +180,35 @@ public struct NewStarMapFeature {
                 // orrery shows live planets/belts; the `@Fetch` picks it up.
                 return .merge(transition, hydrateSystem(id))
 
-            case .zoomOutRequested:
+            case let .drillIntoBodyRequested(bodyID):
+                // Only from a system view, not mid-fly. Rows are only offered for a
+                // scanned system, so the reducer trusts the affordance.
                 guard !state.isTransitioning, case .system = state.focus else { return .none }
-                state.focus = .galaxy
+                state.focus = .body(bodyID)
+                state.isTransitioning = true
+                let clock = self.clock
+                let ms = Int(Double(Self.drillInBaseMs) * state.transitionDurationScale)
+                let transition: Effect<Action> = .run { send in
+                    try await clock.sleep(for: .milliseconds(ms))
+                    await send(.transitionCompleted)
+                }
+                .cancellable(id: CancelID.transition)
+                // Fetch the body's moon roster (the scan only gives moon_count); the
+                // `@Fetch` re-renders the body orrery when it merges.
+                return .merge(transition, hydrateBody(bodyID))
+
+            case .zoomOutRequested:
+                // Steps out exactly one level: body → system → galaxy.
+                guard !state.isTransitioning else { return .none }
+                switch state.focus {
+                case .galaxy:
+                    return .none
+                case .system:
+                    state.focus = .galaxy
+                case .body:
+                    guard let parent = state.focus.systemDesignation else { return .none }
+                    state.focus = .system(parent)
+                }
                 state.isTransitioning = true
                 let clock = self.clock
                 let ms = Int(Double(Self.zoomOutBaseMs) * state.transitionDurationScale)
@@ -280,6 +307,19 @@ public struct NewStarMapFeature {
                 let row = try SystemDetail(system: merged, hydratedAt: date.now)
                 try SystemDetail.upsert { row }.execute(db)
             }
+        }
+    }
+
+    /// Best-effort fetch of one body's detail (its moon roster + per-moon sites),
+    /// merged into the persisted `SystemDetail` blob — the body orrery's `@Fetch`
+    /// then re-renders with the moons. Silently no-ops for a system the server
+    /// won't serve. The parent system is the body designation's prefix (`SYSTEM-n`).
+    private func hydrateBody(_ bodyDesignation: String) -> Effect<Action> {
+        let client = locationsClient
+        let system = String(bodyDesignation.split(separator: "-").first ?? "")
+        guard !system.isEmpty else { return .none }
+        return .run { _ in
+            try? await client.hydrateBody(systemDesignation: system, bodyDesignation: bodyDesignation)
         }
     }
 
