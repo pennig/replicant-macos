@@ -690,31 +690,15 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         guard stars.indices.contains(starIndex) else { return }
         let center = stars[starIndex].position
         orreryCenter = center
-        orreryModel = model
+        focusedStarIndex = starIndex
+        rebuildOrrery(model: model)              // sets orreryModel + scale + buffers
 
         // Frame the orrery in the focused star's own angular terms: the camera
         // dives in until the star fills `maxAngularSize` (dFinal), where the sun
-        // takes over at the same size. The orrery is scaled so its outer edge
-        // (kuiper) fits the view at that distance — so drilling reads as a zoom IN.
-        let wr = stars[starIndex].worldRadius
-        let dFinal = wr / maxAngularSize
-        let visibleRadius = dFinal * tan(camera.fovy * 0.5) * 0.9
-        orreryScale = visibleRadius / Float(max(model.kuiperScene, 1))
-
-        let lines = OrreryGeometry.scaffoldLines(model: model, center: center, scale: orreryScale)
-        orreryLineVertexCount = lines.count
-        orreryLineBuffer = lines.isEmpty ? nil : device.makeBuffer(
-            bytes: lines, length: lines.count * MemoryLayout<OrreryLineVertex>.stride,
-            options: .storageModeShared)
-
-        let belt = OrreryGeometry.beltPoints(model: model, center: center, scale: orreryScale)
-        orreryBeltCount = belt.count
-        orreryBeltBuffer = belt.isEmpty ? nil : device.makeBuffer(
-            bytes: belt, length: belt.count * MemoryLayout<AmbientVertex>.stride,
-            options: .storageModeShared)
-
+        // takes over at the same size. The orrery is scaled so its outer edge fits
+        // the view at that distance — so drilling reads as a zoom IN.
+        let dFinal = stars[starIndex].worldRadius / maxAngularSize
         savedCamera = camera                     // to restore the pre-drill pose on zoom-out
-        focusedStarIndex = starIndex             // this star IS the sun (uncapped + unfaded)
         // Keep the existing relevance focus: the other stars are already dimmed
         // around the selection, so they just fade out with `fieldDim` — resetting
         // to full here would snap them bright right before fading them away. The
@@ -724,6 +708,36 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         let now = CACurrentMediaTime()
         beginTransition(to: 1, duration: drillDurationBase * transitionDurationScale, now: now)
         camera.dive(on: center, radius: dFinal, now: now, duration: transitionDuration)   // zoom IN toward the star
+    }
+
+    /// (Re)build the orrery geometry for `model` around the focused star — scale
+    /// from the star's angular framing; the camera is untouched. Used on drill-in
+    /// and again when the hydrate lands with the real roster.
+    private func rebuildOrrery(model: SystemModel) {
+        guard let idx = focusedStarIndex, stars.indices.contains(idx) else { return }
+        orreryModel = model
+        let dFinal = stars[idx].worldRadius / maxAngularSize
+        let visibleRadius = dFinal * tan(camera.fovy * 0.5) * 0.9
+        orreryScale = visibleRadius / Float(max(model.frameScene, 1))
+
+        let lines = OrreryGeometry.scaffoldLines(model: model, center: orreryCenter, scale: orreryScale)
+        orreryLineVertexCount = lines.count
+        orreryLineBuffer = lines.isEmpty ? nil : device.makeBuffer(
+            bytes: lines, length: lines.count * MemoryLayout<OrreryLineVertex>.stride,
+            options: .storageModeShared)
+
+        let belt = OrreryGeometry.beltPoints(model: model, center: orreryCenter, scale: orreryScale)
+        orreryBeltCount = belt.count
+        orreryBeltBuffer = belt.isEmpty ? nil : device.makeBuffer(
+            bytes: belt, length: belt.count * MemoryLayout<AmbientVertex>.stride,
+            options: .storageModeShared)
+    }
+
+    /// Refresh the orrery in place when the persisted system detail updates while
+    /// focused (planets/belts pop in without restarting the transition).
+    func updateOrrery(model: SystemModel) {
+        guard systemFocused, focusedStarIndex != nil else { return }
+        rebuildOrrery(model: model)
     }
 
     /// Zoom back out to the galaxy: ease the camera back to the exact pre-drill

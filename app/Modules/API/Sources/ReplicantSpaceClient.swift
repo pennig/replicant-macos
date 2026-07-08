@@ -18,12 +18,15 @@ public enum ReplicantSpace {
     /// same API token — the limits are token-scoped, not client-scoped. The
     /// default parameter creates a fresh governor, which is correct for the
     /// common case of a single client in the app.
+    /// Returns `any APIProtocol` (not the concrete `Client`) so it can be wrapped
+    /// in `DiagnosticAPIClient` — every operation is routed through decode-error
+    /// diagnostics from one place, transparently to call sites.
     public static func client(
         apiKey: String,
         serverURL: URL = defaultServerURL,
         governor: RateLimitGovernor = RateLimitGovernor()
-    ) -> Client {
-        Client(
+    ) -> any APIProtocol {
+        DiagnosticAPIClient(wrapped: Client(
             serverURL: serverURL,
             transport: URLSessionTransport(),
             middlewares: [
@@ -31,6 +34,6 @@ public enum ReplicantSpace {
                 BearerAuthMiddleware(token: apiKey),
                 RateLimitMiddleware(governor: governor),
             ]
-        )
+        ))
     }
 }

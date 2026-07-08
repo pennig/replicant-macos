@@ -12,7 +12,7 @@ import Foundation
 /// The categories shown in the sidebar, grouped into three sections.
 public enum SidebarItem: String, CaseIterable, Identifiable, Hashable, Sendable {
     // Catalog
-    case stars, starsNew, locations, devices, replicants, blueprints
+    case stars, locations, devices, replicants, blueprints
     // Missions
     case locationEvents
     // Operations
@@ -25,7 +25,6 @@ public enum SidebarItem: String, CaseIterable, Identifiable, Hashable, Sendable 
     public var title: String {
         switch self {
         case .stars: "Stars"
-        case .starsNew: "Stars (New)"
         case .locations: "Locations"
         case .devices: "Devices"
         case .replicants: "Replicants"
@@ -41,7 +40,6 @@ public enum SidebarItem: String, CaseIterable, Identifiable, Hashable, Sendable 
     public var symbol: String {
         switch self {
         case .stars: "sparkles"
-        case .starsNew: "cube.transparent"
         case .locations: "map"
         case .devices: "circle.hexagongrid"
         case .replicants: "point.3.connected.trianglepath.dotted"
@@ -58,7 +56,7 @@ public enum SidebarItem: String, CaseIterable, Identifiable, Hashable, Sendable 
     /// and the live Operations Log ledger).
     public var hasDetail: Bool {
         switch self {
-        case .operationsLog, .stars, .starsNew, .bobnet: false
+        case .operationsLog, .stars, .bobnet: false
         default: true
         }
     }
@@ -74,7 +72,7 @@ public enum SidebarItem: String, CaseIterable, Identifiable, Hashable, Sendable 
     }
 
     public static let groups: [Group] = [
-        Group(id: "Catalog", items: [.stars, .starsNew, .locations, .devices, .replicants, .blueprints]),
+        Group(id: "Catalog", items: [.stars, .locations, .devices, .replicants, .blueprints]),
         Group(id: "Missions", items: [.locationEvents]),
         Group(id: "Operations", items: [.printQueue, .operationsLog]),
         Group(id: "Comms", items: [.messages, .bobnet]),

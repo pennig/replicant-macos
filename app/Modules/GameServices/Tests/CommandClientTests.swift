@@ -571,6 +571,38 @@ private typealias Operation = GameModels.Operation
             if case .failed = outcome {} else { Issue.record("expected failed, got \(outcome)") }
         }
     }
+
+    /// Regression for the `DeviceCommandResponseSchema` `additionalProperties:false`
+    /// drift: the device-command 200 body carries confirmation/travel fields the
+    /// hand-maintained spec had omitted — `activated`/`deactivated` on the
+    /// lifecycle toggles, `relay_active`/`origin_name`/`travel_type` on travel — so
+    /// the generated client (which eagerly decodes the body when building `.ok`)
+    /// used to *throw* on the unknown key, failing dispatch. Each must now decode
+    /// as its typed property. Same generated `Codable` path the client uses, so a
+    /// direct decode is the tightest guard.
+    @Test func commandResponseDecodesDriftFields() throws {
+        let body = Data(#"""
+        {
+          "status": "travelling",
+          "activated": "mining",
+          "deactivated": "mining",
+          "relay_active": true,
+          "origin": "ATIANFU-1",
+          "origin_name": "Atianfu I",
+          "travel_type": "cruise"
+        }
+        """#.utf8)
+
+        let response = try JSONDecoder().decode(
+            Components.Schemas.AppSchemasDevicesDeviceCommandResponseSchema.self, from: body
+        )
+
+        #expect(response.activated == "mining")
+        #expect(response.deactivated == "mining")
+        #expect(response.relayActive == true)
+        #expect(response.originName == "Atianfu I")
+        #expect(response.travelType == "cruise")
+    }
 }
 
 // MARK: - Helpers

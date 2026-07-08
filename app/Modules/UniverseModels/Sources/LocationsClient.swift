@@ -210,7 +210,7 @@ extension LocationsClient {
         @Dependency(\.date.now) var now
         return try await database.write { db in
             guard
-                let cached = try SystemDetail.where { $0.designation.eq(system) }.fetchOne(db),
+                let cached = try SystemDetail.where({ $0.designation.eq(system) }).fetchOne(db),
                 let starSystem = try? cached.system()
             else { return false }
             let updated = starSystem.updatingSalvage(at: location, transform)

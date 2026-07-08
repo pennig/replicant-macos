@@ -2,15 +2,16 @@ import Foundation
 import OpenAPIRuntime
 import Utils
 
-extension Client {
+/// One page of a replicant's event log, mapped to stable DTOs. (File-scope, not
+/// nested — a type can't be nested in a protocol extension.)
+struct EventLogPage {
+    let entries: [GameLogEntry]
+    /// Position to resume from for the next (older) page, or nil when the log's
+    /// beginning has been reached.
+    let nextCursor: Int?
+}
 
-    /// One page of a replicant's event log, mapped to stable DTOs.
-    struct EventLogPage {
-        let entries: [GameLogEntry]
-        /// Position to resume from for the next (older) page, or nil when the
-        /// log's beginning has been reached.
-        let nextCursor: Int?
-    }
+extension APIProtocol {
 
     /// Fetch one page of `GET /v1/replicants/{code}/events`.
     ///

@@ -508,6 +508,10 @@ public struct Planet: Identifiable, Equatable, Sendable, Codable {
 }
 
 /// Physical attributes of the system's star.
+///
+/// `temperatureK`/`massSolar`/`luminositySolar` and the habitable-zone bounds are
+/// only reported by the full system scan (`POST .../scan`), not the `locations`
+/// GET — so they stay nil for systems we've explored but not scanned.
 public struct SystemStar: Equatable, Sendable, Codable {
     public var designation: String
     public var name: String?
@@ -517,11 +521,18 @@ public struct SystemStar: Equatable, Sendable, Codable {
     public var miningBonusPct: Double?
     public var distanceFromSol: Double?
     public var position: Position?
+    public var temperatureK: Double?
+    public var massSolar: Double?
+    public var luminositySolar: Double?
+    public var habitableZoneInnerAu: Double?
+    public var habitableZoneOuterAu: Double?
 
     public init(
         designation: String, name: String? = nil, stellarClass: String? = nil, color: String? = nil,
         ageMy: Double? = nil, miningBonusPct: Double? = nil, distanceFromSol: Double? = nil,
-        position: Position? = nil
+        position: Position? = nil, temperatureK: Double? = nil, massSolar: Double? = nil,
+        luminositySolar: Double? = nil, habitableZoneInnerAu: Double? = nil,
+        habitableZoneOuterAu: Double? = nil
     ) {
         self.designation = designation
         self.name = name
@@ -531,6 +542,11 @@ public struct SystemStar: Equatable, Sendable, Codable {
         self.miningBonusPct = miningBonusPct
         self.distanceFromSol = distanceFromSol
         self.position = position
+        self.temperatureK = temperatureK
+        self.massSolar = massSolar
+        self.luminositySolar = luminositySolar
+        self.habitableZoneInnerAu = habitableZoneInnerAu
+        self.habitableZoneOuterAu = habitableZoneOuterAu
     }
 }
 

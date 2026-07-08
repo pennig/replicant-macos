@@ -48,10 +48,7 @@ struct MainFeature {
         /// The Raw API Access experience, shown in its own window (Tools menu).
         /// Seeded with the session API key so requests authenticate as this user.
         var rawAPI: RawAPIFeature.State
-        /// The Galaxy Map (Stars view) — currently seeded with static galaxy data.
-        var starMap: StarMapFeature.State
-        /// The Metal reimplementation of the star map (Stars (New) view), being
-        /// ported from the standalone prototype. Coexists with `starMap`.
+        /// The Galaxy Map (Stars view)
         var newStarMap: NewStarMapFeature.State
         /// The live fleet (Devices view) — list + inspector + command dispatch.
         var devices: DevicesFeature.State
@@ -77,7 +74,6 @@ struct MainFeature {
             self.sidebar = SidebarFeature.State(apiKey: apiKey, category: category)
             self.messages = MessagesFeature.State()
             self.rawAPI = RawAPIFeature.State(apiKey: apiKey)
-            self.starMap = StarMapFeature.State()
             self.newStarMap = NewStarMapFeature.State()
             self.devices = DevicesFeature.State()
             self.blueprints = BlueprintsFeature.State()
@@ -123,9 +119,6 @@ struct MainFeature {
         }
         Scope(state: \.rawAPI, action: \.rawAPI) {
             RawAPIFeature()
-        }
-        Scope(state: \.starMap, action: \.starMap) {
-            StarMapFeature()
         }
         Scope(state: \.newStarMap, action: \.newStarMap) {
             NewStarMapFeature()
@@ -235,11 +228,6 @@ struct MainView: View {
         store.scope(state: \.messages, action: \.messages)
     }
 
-    /// The Galaxy Map store, scoped from the main session.
-    private var starMapStore: StoreOf<StarMapFeature> {
-        store.scope(state: \.starMap, action: \.starMap)
-    }
-
     /// The Metal star map store, scoped from the main session.
     private var newStarMapStore: StoreOf<NewStarMapFeature> {
         store.scope(state: \.newStarMap, action: \.newStarMap)
@@ -280,8 +268,6 @@ struct MainView: View {
         if store.sidebar.category == .messages {
             MessagesListView(store: messagesStore)
         } else if store.sidebar.category == .stars {
-            StarMapView(store: starMapStore)
-        } else if store.sidebar.category == .starsNew {
             NewStarMapView(store: newStarMapStore)
         } else if store.sidebar.category == .devices {
             DevicesListView(store: devicesStore)

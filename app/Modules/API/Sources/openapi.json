@@ -2043,6 +2043,15 @@
           "device_code": {
             "type": "string"
           },
+          "activated": {
+            "type": "string"
+          },
+          "deactivated": {
+            "type": "string"
+          },
+          "relay_active": {
+            "type": "boolean"
+          },
           "star": {
             "type": "string"
           },
@@ -2050,6 +2059,12 @@
             "type": "string"
           },
           "origin": {
+            "type": "string"
+          },
+          "origin_name": {
+            "type": "string"
+          },
+          "travel_type": {
             "type": "string"
           },
           "destination": {
@@ -2102,6 +2117,9 @@
             "type": "string"
           },
           "resource_type": {
+            "type": "string"
+          },
+          "new_resource": {
             "type": "string"
           },
           "availability": {
@@ -2704,6 +2722,9 @@
       "app_schemas_locations_LocationResponseSchema": {
         "type": "object",
         "properties": {
+          "asteroid_belt": {
+            "$ref": "#/components/schemas/app_schemas_scanning_AsteroidBeltSchema"
+          },
           "location": {
             "type": "string"
           },

@@ -79,6 +79,32 @@ struct RawStar: Decodable {
     var miningBonusPct: Double?
     var distanceFromSol: Double?
     var position: Position?
+    // Scan-only (absent from the `locations` GET).
+    var temperatureK: Double?
+    var massSolar: Double?
+    var luminositySolar: Double?
+    var habitableZone: RawHabitableZone?
+}
+
+struct RawHabitableZone: Decodable {
+    var innerAu: Double?
+    var outerAu: Double?
+}
+
+extension RawStar {
+    /// Map to the domain star. Shared by the `locations` GET and the scan mapping
+    /// (the scan populates temperature/mass/luminosity/HZ; the GET leaves them nil).
+    func systemStar(fallbackDesignation: String) -> SystemStar {
+        SystemStar(
+            designation: designation ?? fallbackDesignation, name: name,
+            stellarClass: stellarClass, color: color, ageMy: ageMy,
+            miningBonusPct: miningBonusPct, distanceFromSol: distanceFromSol,
+            position: position, temperatureK: temperatureK, massSolar: massSolar,
+            luminositySolar: luminositySolar,
+            habitableZoneInnerAu: habitableZone?.innerAu,
+            habitableZoneOuterAu: habitableZone?.outerAu
+        )
+    }
 }
 
 /// Star-level planet roster entry: known once the system is explored, with
@@ -417,14 +443,7 @@ extension RawLocation {
         return StarSystem(
             designation: designation,
             name: star?.name,
-            star: star.map {
-                SystemStar(
-                    designation: $0.designation ?? designation, name: $0.name,
-                    stellarClass: $0.stellarClass, color: $0.color, ageMy: $0.ageMy,
-                    miningBonusPct: $0.miningBonusPct, distanceFromSol: $0.distanceFromSol,
-                    position: $0.position
-                )
-            },
+            star: star.map { $0.systemStar(fallbackDesignation: designation) },
             recon: recon,
             systemScanned: systemScanned ?? false,
             entryPoint: entryPoint,

@@ -95,6 +95,9 @@ public struct NewStarMapFeature {
         case zoomOutRequested
         case transitionCompleted
         case transitionDurationScaleChanged(Double)
+        /// Full re-scan of the replicant's current system (the only source of HZ /
+        /// outer-system / hazards); refreshes the persisted `SystemDetail`.
+        case scanCurrentSystemTapped
         // First-run survey / boot sequence.
         case task
         case surveyButtonTapped
@@ -119,6 +122,7 @@ public struct NewStarMapFeature {
     @Dependency(\.continuousClock) var clock
     @Dependency(\.defaultDatabase) var database
     @Dependency(\.starsClient) var starsClient
+    @Dependency(\.locationsClient) var locationsClient
     @Dependency(\.date) var date
 
     public init() {}
@@ -166,11 +170,14 @@ public struct NewStarMapFeature {
                 state.isTransitioning = true
                 let clock = self.clock
                 let ms = Int(Double(Self.drillInBaseMs) * state.transitionDurationScale)
-                return .run { send in
+                let transition: Effect<Action> = .run { send in
                     try await clock.sleep(for: .milliseconds(ms))
                     await send(.transitionCompleted)
                 }
                 .cancellable(id: CancelID.transition)
+                // Best-effort refresh of the system roster (GET locations) so the
+                // orrery shows live planets/belts; the `@Fetch` picks it up.
+                return .merge(transition, hydrateSystem(id))
 
             case .zoomOutRequested:
                 guard !state.isTransitioning, case .system = state.focus else { return .none }
@@ -187,6 +194,11 @@ public struct NewStarMapFeature {
             case .transitionCompleted:
                 state.isTransitioning = false
                 return .none
+
+            case .scanCurrentSystemTapped:
+                guard let code = state.activeReplicantCode, !code.isEmpty else { return .none }
+                let client = locationsClient
+                return .run { _ in try? await client.scanAndPersist(replicantCode: code) }
 
             case let .transitionDurationScaleChanged(scale):
                 state.transitionDurationScale = scale
@@ -246,6 +258,27 @@ public struct NewStarMapFeature {
             case .bootDismissed:
                 state.bootPhase = .idle
                 return .none
+            }
+        }
+    }
+
+    /// Best-effort refresh of one system's roster (GET locations), merged onto any
+    /// existing (possibly scanned) `SystemDetail` and re-persisted — the orrery's
+    /// `@Fetch` then re-renders. Preserves richer per-body/scan detail via
+    /// `mergingSystemDetail`. Silently no-ops for systems the server won't serve.
+    private func hydrateSystem(_ designation: String) -> Effect<Action> {
+        let client = locationsClient
+        let database = self.database
+        let date = self.date
+        return .run { _ in
+            // Nothing to persist (and no clock/db touched) unless the fetch lands.
+            guard let fresh = try? await client.system(designation) else { return }
+            try? await database.write { db in
+                let existing = try SystemDetail
+                    .where { $0.designation.eq(designation) }.fetchOne(db)
+                let merged = (try existing?.system())?.mergingSystemDetail(fresh) ?? fresh
+                let row = try SystemDetail(system: merged, hydratedAt: date.now)
+                try SystemDetail.upsert { row }.execute(db)
             }
         }
     }

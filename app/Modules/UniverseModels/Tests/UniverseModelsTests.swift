@@ -7,6 +7,7 @@
 //  DTO → domain assembly against the real server shapes.
 //
 
+import API
 import Foundation
 import Testing
 @testable import UniverseModels
@@ -44,6 +45,50 @@ import Testing
         #expect(earth.moonCount == 1)
         // All planets scanned + systemScanned ⇒ system reads as fully scanned.
         #expect(system.recon == .scanned)
+    }
+
+    @Test func scanStarDecodesTemperatureMassLuminosityAndHabitableZone() throws {
+        // These come only from the full scan (`RawScan`); the `locations` GET omits
+        // them, so `SystemStar` carries them as optionals.
+        let json = """
+        {"star": {"designation": "AINALRAM", "stellar_class": "M2", "color": "Red",
+                  "temperature_k": 3411, "mass_solar": 0.37, "luminosity_solar": 0.06,
+                  "habitable_zone": {"inner_au": 0.24, "outer_au": 0.42}},
+         "planets": []}
+        """
+        let raw = try LocationDecoding.decoder.decode(RawScan.self, from: Data(json.utf8))
+        let star = try #require(raw.system()?.star)
+        #expect(star.temperatureK == 3411)
+        #expect(star.massSolar == 0.37)
+        #expect(star.luminositySolar == 0.06)
+        #expect(star.habitableZoneInnerAu == 0.24)
+        #expect(star.habitableZoneOuterAu == 0.42)
+    }
+
+    @Test func generatedLocationDecodeToleratesStarAsteroidBelt() throws {
+        // Regression for openapi drift: the location schema omitted `asteroid_belt`
+        // with additionalProperties:false, so the GENERATED strict decode
+        // (`ok.body.json`) threw on every star location — silently killing GET
+        // hydration. Our other tests decode `RawLocation` directly and so missed
+        // it. This one goes through the generated type + reinterpret, the real
+        // production path. Must not throw, and belts/planets must survive.
+        let json = """
+        {"location":"TEST","location_type":"star","system_scanned":true,
+         "planets_total":2,"planets_scanned":2,
+         "star":{"designation":"TEST","stellar_class":"G2","color":"Yellow","position":{"x":1,"y":2,"z":3}},
+         "planets":[
+           {"designation":"TEST-1","type":"Barren","orbital_distance_au":0.4,"in_habitable_zone":false,"scanned":true,"moon_count":0},
+           {"designation":"TEST-2","type":"Ocean World","orbital_distance_au":1.0,"in_habitable_zone":true,"scanned":true,"moon_count":1}],
+         "asteroid_belt":{"present":true,"belts":[
+           {"designation":"TEST-BELT-1","inner_radius_au":2.0,"outer_radius_au":2.5,"density":"moderate","resources":{"iron":"rich"}}]}}
+        """
+        let generated = try JSONDecoder().decode(
+            Components.Schemas.AppSchemasLocationsLocationResponseSchema.self, from: Data(json.utf8))
+        let raw = try LocationDecoding.reinterpret(generated, as: RawLocation.self)
+        let system = try #require(raw.starSystem())
+        #expect(system.planets.count == 2)
+        #expect(system.belts.count == 1)
+        #expect(system.belts.first?.designation == "TEST-BELT-1")
     }
 
     @Test func beltLevelDecodesSitesRemainingAndInventory() throws {

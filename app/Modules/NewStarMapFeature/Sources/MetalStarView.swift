@@ -192,6 +192,8 @@ struct MetalStarView: NSViewRepresentable {
         var lastResetToken = 0
         /// The last focus applied, so a drill-in / zoom-out fires exactly once.
         var lastFocus: StarMapFocus = .galaxy
+        /// The last orrery model applied, so a hydrate refresh rebuilds in place.
+        var lastModel: SystemModel?
 
         /// (Re)builds the renderer for `stars` if they differ from what's loaded.
         func syncTerrain(_ stars: [Star], into view: StarMTKView) {
@@ -213,11 +215,20 @@ struct MetalStarView: NSViewRepresentable {
             }
         }
 
-        /// Drives the galaxy↔system fly on a focus change (once per change).
+        /// Drives the galaxy↔system fly on a focus change (once per change), and
+        /// refreshes the orrery in place when the focused system's model updates
+        /// (e.g. the drill-in hydrate lands with the real planet roster).
         func applyFocus(_ focus: StarMapFocus, model: SystemModel?, stars: [Star], view: StarMTKView) {
             view.focused = { if case .system = focus { return true } else { return false } }()
-            guard focus != lastFocus else { return }
+            if focus == lastFocus {
+                if case .system = focus, let model, model != lastModel {
+                    lastModel = model
+                    renderer?.updateOrrery(model: model)
+                }
+                return
+            }
             lastFocus = focus
+            lastModel = model
             switch focus {
             case let .system(id):
                 guard let model, let index = stars.firstIndex(where: { $0.name == id }) else { return }

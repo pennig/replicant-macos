@@ -149,12 +149,9 @@ extension RawScan {
             designation: designation,
             name: star?.name,
             star: star.map {
-                SystemStar(
-                    designation: $0.designation ?? designation, name: $0.name,
-                    stellarClass: $0.stellarClass, color: $0.color, ageMy: $0.ageMy,
-                    miningBonusPct: $0.miningBonusPct ?? miningBonusPct,
-                    distanceFromSol: $0.distanceFromSol, position: $0.position
-                )
+                var s = $0.systemStar(fallbackDesignation: designation)
+                s.miningBonusPct = s.miningBonusPct ?? miningBonusPct   // scan-level fallback
+                return s
             },
             recon: scannedAll ? .scanned : .visited,
             systemScanned: true,

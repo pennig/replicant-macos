@@ -63,26 +63,28 @@ enum OrreryGeometry {
         }
 
         for planet in model.planets { addRing(radius: planet.semiMajorScene, color: orbitColor) }
-        addRing(radius: model.kuiperScene, color: kuiperColor)
-        addRing(radius: model.hzInnerScene, color: hzColor)
-        addRing(radius: model.hzOuterScene, color: hzColor)
+        if let kuiper = model.kuiperScene { addRing(radius: kuiper, color: kuiperColor) }
+        if let inner = model.hzInnerScene { addRing(radius: inner, color: hzColor) }
+        if let outer = model.hzOuterScene { addRing(radius: outer, color: hzColor) }
         return verts
     }
 
-    /// The asteroid belt as a deterministic world-space additive point ring.
+    /// The asteroid belt(s) as a deterministic world-space additive point ring.
     /// Reuses `AmbientVertex` (position+size / color+brightness). `scale` as above.
-    static func beltPoints(model: SystemModel, center: SIMD3<Float>, scale: Float, count: Int = 260) -> [AmbientVertex] {
+    static func beltPoints(model: SystemModel, center: SIMD3<Float>, scale: Float, countPerBelt: Int = 260) -> [AmbientVertex] {
         var rng = SeededLCG(seed: 0xBE17)
-        let inner = model.belt.innerScene, outer = model.belt.outerScene
         var pts: [AmbientVertex] = []
-        pts.reserveCapacity(count)
-        for _ in 0..<count {
-            let r = (inner + rng.next() * (outer - inner)) * Double(scale)
-            let a = rng.next(in: 0...(2 * .pi))
-            let y = (rng.next() - 0.5) * 0.8 * Double(scale)
-            let p = center + SIMD3<Float>(Float(cos(a) * r), Float(y), Float(sin(a) * r))
-            let brightness = Float(rng.next(in: 0.3...0.85))
-            pts.append(AmbientVertex(positionSize: SIMD4(p, 2.0), color: SIMD4(beltColor, brightness)))
+        pts.reserveCapacity(model.belts.count * countPerBelt)
+        for belt in model.belts {
+            let inner = belt.innerScene, outer = belt.outerScene
+            for _ in 0..<countPerBelt {
+                let r = (inner + rng.next() * (outer - inner)) * Double(scale)
+                let a = rng.next(in: 0...(2 * .pi))
+                let y = (rng.next() - 0.5) * 0.8 * Double(scale)
+                let p = center + SIMD3<Float>(Float(cos(a) * r), Float(y), Float(sin(a) * r))
+                let brightness = Float(rng.next(in: 0.3...0.85))
+                pts.append(AmbientVertex(positionSize: SIMD4(p, 2.0), color: SIMD4(beltColor, brightness)))
+            }
         }
         return pts
     }

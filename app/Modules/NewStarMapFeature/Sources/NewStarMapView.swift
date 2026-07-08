@@ -23,14 +23,47 @@ public struct NewStarMapView: View {
     /// The charted galaxy, straight from SQLite — the same table the SceneKit map
     /// reads. Sorted by insertion order so new survey rows append deterministically.
     @FetchAll(UniverseModels.Star.order(by: \.createdAt)) private var surveyed
+    /// Persisted per-system detail (planets/belts/scan), the same blobs the
+    /// Locations catalog hydrates. The orrery reads the focused system from here.
+    @FetchAll(SystemDetail.all) private var systemDetails
 
     public init(store: StoreOf<NewStarMapFeature>) {
         self.store = store
     }
 
-    /// The render-domain terrain fed to the Metal view.
-    private var stars: [Star] { surveyed.map(Star.init(surveyed:)) }
+    /// The render-domain terrain fed to the Metal view. The census `Star` row's
+    /// exploration flag lags real scan state, so overlay the recon we actually
+    /// hold in `systemDetails` — otherwise a fully-scanned system reads (and
+    /// glyphs) as unexplored on the map.
+    private var stars: [Star] {
+        surveyed.map { row in
+            var s = Star(surveyed: row)
+            switch detailRecon(row.designation) {
+            case .scanned: s.scan = .full
+            case .visited: if s.scan == .unexplored { s.scan = .partial }
+            default: break
+            }
+            return s
+        }
+    }
     private var chartedStarCount: Int { surveyed.count }
+
+    /// Recon we actually hold for a system, from the denormalized `systemDetails`
+    /// column (no JSON decode) — authoritative over the census row's stale flag.
+    private func detailRecon(_ designation: String) -> Recon? {
+        systemDetails.first { $0.designation == designation }
+            .flatMap { Recon(rawValue: $0.recon) }
+    }
+
+    /// Exact planet count once a system is scanned (from its persisted roster);
+    /// nil otherwise, so the HUD can fall back to the census estimate.
+    private func exactPlanetCount(_ designation: String) -> Int? {
+        guard detailRecon(designation) == .scanned,
+              let detail = systemDetails.first(where: { $0.designation == designation }),
+              let system = try? detail.system()
+        else { return nil }
+        return system.planets.count
+    }
 
     /// The current-location system — the one nearest Sol (the origin), matching
     /// the renderer's gold player reticle. Used to flag the dossier.
@@ -38,12 +71,15 @@ public struct NewStarMapView: View {
         surveyed.min { lhs, rhs in distanceFromSol(lhs) < distanceFromSol(rhs) }?.designation
     }
 
-    /// The selected star, resolved to its full presentation system via the live row.
+    /// The selected star as a presentation system, with recon upgraded from any
+    /// real detail we hold (so a scanned system reads as scanned + is drillable).
     private var selectedSystem: GalaxySystem? {
         guard let designation = store.selectedStar?.name,
               let row = surveyed.first(where: { $0.designation == designation })
         else { return nil }
-        return GalaxySystem(surveyed: row.item, isCurrentLocation: row.designation == currentLocationID)
+        var gs = GalaxySystem(surveyed: row.item, isCurrentLocation: row.designation == currentLocationID)
+        if let recon = detailRecon(designation) { gs.recon = recon }
+        return gs
     }
 
     /// The drilled-in system (when focused) resolved from the live row, and its
@@ -54,7 +90,20 @@ public struct NewStarMapView: View {
         else { return nil }
         return GalaxySystem(surveyed: row.item, isCurrentLocation: row.designation == currentLocationID)
     }
-    private var focusedModel: SystemModel? { focusedSystem.map(ChamakuyData.model(for:)) }
+    /// The focused system's orrery model, built from the persisted real
+    /// `StarSystem` when available, else a minimal star-only model from the census
+    /// row (so the sun appears immediately while the drill-in hydrate lands).
+    private var focusedModel: SystemModel? {
+        guard case let .system(id) = store.focus else { return nil }
+        if let detail = systemDetails.first(where: { $0.designation == id }),
+           let system = try? detail.system() {
+            return OrreryMapping.systemModel(from: system)
+        }
+        guard let row = surveyed.first(where: { $0.designation == id }) else { return nil }
+        return OrreryMapping.minimal(
+            designation: id, position: row.item.position,
+            spectralType: row.item.spectralType, color: row.item.color, name: nil)
+    }
 
     public var body: some View {
         ZStack {
@@ -66,9 +115,11 @@ public struct NewStarMapView: View {
                 galaxyHUD.transition(.opacity)
             case .system:
                 if let model = focusedModel {
-                    SystemHUD(model: model, isTransitioning: store.isTransitioning) {
-                        store.send(.zoomOutRequested)
-                    }
+                    SystemHUD(
+                        model: model, isTransitioning: store.isTransitioning,
+                        onBack: { store.send(.zoomOutRequested) },
+                        onScan: { store.send(.scanCurrentSystemTapped) }
+                    )
                     .transition(.opacity)
                 }
             }
@@ -100,7 +151,8 @@ public struct NewStarMapView: View {
                     if let system = selectedSystem {
                         SystemDossier(
                             system: system,
-                            canDrill: system.star.explored && !store.isTransitioning,
+                            exactPlanetCount: exactPlanetCount(system.id),
+                            canDrill: system.recon != .aware && !store.isTransitioning,
                             onDrill: { store.send(.drillInRequested(system.id)) },
                             onClose: { store.send(.selectionCleared) }
                         )
@@ -302,9 +354,16 @@ private struct LayerToggle: View {
 
 private struct SystemDossier: View {
     let system: GalaxySystem
+    /// Exact count when the system is scanned; nil → show the census estimate.
+    let exactPlanetCount: Int?
     let canDrill: Bool
     let onDrill: () -> Void
     let onClose: () -> Void
+
+    /// "3" when we know exactly, "~2" when it's still an estimate.
+    private var planetCountText: String {
+        exactPlanetCount.map(String.init) ?? "~\(system.star.estimatedPlanets)"
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.s) {
@@ -342,7 +401,7 @@ private struct SystemDossier: View {
             HStack(spacing: Space.l) {
                 stat("Devices", "\(system.deviceCount)")
                 stat("Vessels", "\(system.vesselCount)")
-                stat("Planets", "\(system.star.estimatedPlanets)")
+                stat("Planets", planetCountText)
             }
 
             HStack(spacing: Space.l) {
@@ -355,11 +414,12 @@ private struct SystemDossier: View {
                 }
             }
 
-            Text("\(distanceText) · \(system.star.estimatedPlanets) est. planets")
+            Text(exactPlanetCount.map { "\(distanceText) · \($0) planets" }
+                 ?? "\(distanceText) · ~\(system.star.estimatedPlanets) est. planets")
                 .font(.rcCaption)
                 .foregroundStyle(.rcTextTertiary)
 
-            if system.star.explored {
+            if system.recon != .aware {
                 Button(action: onDrill) {
                     Label("View system", systemImage: "arrow.down.right.and.arrow.up.left.rectangle")
                         .font(.rcCaption)
@@ -425,6 +485,7 @@ private struct SystemHUD: View {
     let model: SystemModel
     let isTransitioning: Bool
     let onBack: () -> Void
+    let onScan: () -> Void
 
     var body: some View {
         ZStack {
@@ -457,25 +518,36 @@ private struct SystemHUD: View {
 
             Divider().overlay(.rcSeparator)
 
-            Text(model.star.name).font(.rcTitle).foregroundStyle(.rcTextPrimary)
-            Text("\(model.star.designation) · \(model.star.spectralType) · \(model.star.temperatureK) K")
+            Text(model.star.name ?? model.star.designation)
+                .font(.rcTitle).foregroundStyle(.rcTextPrimary)
+            Text([model.star.designation, model.star.spectralType,
+                  model.star.temperatureK.map { "\(Int($0)) K" }]
+                    .compactMap { $0 }.joined(separator: " · "))
                 .font(.rcMonoSmall).foregroundStyle(.rcTextTertiary)
 
-            HStack(spacing: Space.l) {
-                fact("Mass", String(format: "%.2f M☉", model.star.massSolar))
-                fact("Lum", String(format: "%.2f L☉", model.star.luminositySolar))
+            if model.star.massSolar != nil || model.star.luminositySolar != nil {
+                HStack(spacing: Space.l) {
+                    if let m = model.star.massSolar { fact("Mass", String(format: "%.2f M☉", m)) }
+                    if let l = model.star.luminositySolar { fact("Lum", String(format: "%.2f L☉", l)) }
+                }
             }
-            HStack(spacing: Space.l) {
-                fact("Habitable zone", String(format: "%.2f–%.2f AU",
-                                              model.star.habitableZone.innerAu, model.star.habitableZone.outerAu))
+            if let hz = model.star.habitableZone {
+                fact("Habitable zone", String(format: "%.2f–%.2f AU", hz.innerAu, hz.outerAu))
             }
             HStack(spacing: Space.l) {
                 fact("Planets", "\(model.planets.count)")
-                fact("Belt", model.belt.detail.density)
+                fact("Belts", model.belts.isEmpty ? "None"
+                     : model.belts.compactMap(\.density).first.map { $0.capitalized } ?? "\(model.belts.count)")
+                if model.star.habitableZone == nil {
+                    Button(action: onScan) {
+                        Label("Scan", systemImage: "dot.radiowaves.left.and.right").font(.rcCaption)
+                    }
+                    .buttonStyle(.plain).foregroundStyle(.rcAccent)
+                }
             }
         }
         .padding(Space.m)
-        .frame(maxWidth: 260, alignment: .leading)
+        .frame(maxWidth: 280, alignment: .leading)
         .hudGlass()
     }
 
@@ -488,27 +560,52 @@ private struct SystemHUD: View {
             ForEach(model.planets) { planet in
                 HStack(spacing: Space.s) {
                     Circle()
-                        .fill(planet.summary.inHabitableZone ? .rcStatusReady : .rcTextSecondary)
+                        .fill(planet.inHabitableZone ? .rcStatusReady : .rcTextSecondary)
                         .frame(width: 7, height: 7)
-                    Text("\(planet.summary.designation) · \(planet.summary.name)")
-                        .font(.rcBody)
-                        .foregroundStyle(.rcTextPrimary)
+                    Text(planet.name.map { "\(planet.designation) · \($0)" } ?? planet.designation)
+                        .font(.rcBody).foregroundStyle(.rcTextPrimary)
+                    indicatorGlyphs(planet.indicators)
+                    if planet.moonCount > 0 {
+                        Text("\(planet.moonCount)☾").font(.rcCaption).foregroundStyle(.rcTextTertiary)
+                    }
                     Spacer()
-                    Text(planet.summary.type)
-                        .font(.rcCaption)
-                        .foregroundStyle(.rcTextTertiary)
+                    Text(planet.type ?? "—").font(.rcCaption).foregroundStyle(.rcTextTertiary)
+                }
+            }
+            if let hazard = model.hazards.first {
+                Divider().overlay(.rcSeparator)
+                HStack(spacing: Space.s) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 11)).foregroundStyle(.rcError)
+                    Text(hazard.title ?? hazard.objectType.replacingOccurrences(of: "_", with: " ").capitalized)
+                        .font(.rcCaption).foregroundStyle(.rcTextSecondary)
+                    Spacer()
+                    if let d = hazard.deadline {
+                        Text(d, format: .relative(presentation: .named))
+                            .font(.rcMonoSmall).foregroundStyle(.rcError)
+                    }
                 }
             }
             Divider().overlay(.rcSeparator)
-            HStack(spacing: Space.l) {
-                fact("Devices", "\(model.devices.count)")
-                fact("Vessels", "\(model.vessels.count)")
-                fact("Lagrange", "\(model.lagrange.count)")
-            }
+            fact("Devices", "\(model.deviceCount)")
         }
         .padding(Space.m)
         .frame(maxWidth: 240, alignment: .leading)
         .hudGlass()
+    }
+
+    @ViewBuilder private func indicatorGlyphs(_ ind: BodyIndicators) -> some View {
+        HStack(spacing: 3) {
+            if ind.contains(.life) { icon("leaf.fill", .rcStatusReady) }
+            if ind.contains(.device) { icon("cpu", .rcAccent) }
+            if ind.contains(.salvage) { icon("wrench.adjustable", .rcStatusWaiting) }
+            if ind.contains(.miningSite) { icon("hammer.fill", .rcStatusWaiting) }
+            if ind.contains(.inventory) { icon("shippingbox.fill", .rcTextSecondary) }
+        }
+    }
+
+    private func icon(_ name: String, _ color: Color) -> some View {
+        Image(systemName: name).font(.system(size: 9)).foregroundStyle(color)
     }
 
     private func fact(_ label: String, _ value: String) -> some View {

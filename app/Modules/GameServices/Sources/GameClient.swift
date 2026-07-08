@@ -17,10 +17,12 @@ import GameModels
 
 public struct GameClient: Sendable {
     /// Build a fully-wired generated client: bearer auth from the current
-    /// session token, plus the shared rate-limit governor and request logging.
-    /// The token is read fresh each call, so the client tracks login/logout
-    /// without any reconfiguration.
-    public var make: @Sendable () -> Client
+    /// session token, plus the shared rate-limit governor, request logging, and
+    /// decode-error diagnostics. The token is read fresh each call, so the client
+    /// tracks login/logout without any reconfiguration. Vends `any APIProtocol`
+    /// (a `DiagnosticAPIClient` wrapping the generated `Client`) — call sites use
+    /// operations exactly as before.
+    public var make: @Sendable () -> any APIProtocol
 
     /// A read-only view of the process-shared rate-limit budget for a bucket,
     /// for surfacing remaining reads/actions in the UI (e.g. a debug HUD). The
@@ -28,7 +30,7 @@ public struct GameClient: Sendable {
     public var budget: @Sendable (RateLimitGovernor.Bucket) async -> RateLimitGovernor.Snapshot
 
     public init(
-        make: @escaping @Sendable () -> Client,
+        make: @escaping @Sendable () -> any APIProtocol,
         budget: @escaping @Sendable (RateLimitGovernor.Bucket) async -> RateLimitGovernor.Snapshot = { _ in
             RateLimitGovernor.Snapshot(limit: 0, remaining: 0, resetAt: nil)
         }
@@ -38,7 +40,7 @@ public struct GameClient: Sendable {
     }
 
     /// Convenience: build a client now.
-    public func callAsFunction() -> Client { make() }
+    public func callAsFunction() -> any APIProtocol { make() }
 }
 
 extension GameClient: DependencyKey {

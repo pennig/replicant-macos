@@ -42,7 +42,7 @@ public struct UserDefaultsCursorStore: RelayCursorStore {
 public actor EventPipeline {
 
     private let relay: RelayClient
-    private let client: Client
+    private let client: any APIProtocol
     private let cursorStore: RelayCursorStore
 
     private var seen: BoundedFingerprintSet
@@ -59,7 +59,7 @@ public actor EventPipeline {
     ///     comfortably exceed the largest backfill overlap (default: plenty).
     public init(
         relay: RelayClient,
-        client: Client,
+        client: any APIProtocol,
         cursorStore: RelayCursorStore = UserDefaultsCursorStore(),
         dedupCapacity: Int = 4096
     ) {
