@@ -164,7 +164,9 @@ struct TurntableCamera {
     /// from `point` along the current viewing ray, regardless of the present
     /// radius. Unlike `focus`, this always changes the pose (a double-click "get
     /// closer") — but keeps the same orientation. Same eased framing.
-    mutating func dive(on point: SIMD3<Float>, radius diveRadius: Float, now: Double) {
+    /// `duration` overrides the auto-scaled framing time (used to sync the drill
+    /// fly with the crossfade).
+    mutating func dive(on point: SIMD3<Float>, radius diveRadius: Float, now: Double, duration: Double? = nil) {
         let v = eye - point
         let dist = length(v)
         // Direction from the star back to the eye; fall back to the current orbit
@@ -173,7 +175,7 @@ struct TurntableCamera {
         let ca = cos(azimuth),   sa = sin(azimuth)
         let u = dist > 1e-4 ? v / dist : SIMD3<Float>(ce * sa, se, ce * ca)
         let r = min(max(diveRadius, minRadius), maxRadius)
-        beginFraming(goalEye: point + u * r, goalTarget: point, now: now)
+        beginFraming(goalEye: point + u * r, goalTarget: point, now: now, duration: duration)
     }
 
     /// Ease to an overview: move the eye so it sits `radius` from `target`,
@@ -185,14 +187,21 @@ struct TurntableCamera {
         beginFraming(goalEye: goalEye, goalTarget: newTarget, now: now)
     }
 
-    private mutating func beginFraming(goalEye: SIMD3<Float>, goalTarget: SIMD3<Float>, now: Double) {
+    /// Ease back to a previously-captured pose (used to restore the pre-drill
+    /// camera on zoom-out). Interpolates to the saved eye + pivot; azimuth /
+    /// elevation / radius are re-derived from them as the move settles.
+    mutating func restore(_ saved: TurntableCamera, now: Double, duration: Double? = nil) {
+        beginFraming(goalEye: saved.eye, goalTarget: saved.target, now: now, duration: duration)
+    }
+
+    private mutating func beginFraming(goalEye: SIMD3<Float>, goalTarget: SIMD3<Float>, now: Double, duration: Double? = nil) {
         let startEye = eye
         framing = Framing(
             startEye: startEye, goalEye: goalEye,
             startTarget: target, goalTarget: goalTarget,
             startTime: now,
-            duration: framingDuration(fromEye: startEye, toEye: goalEye,
-                                      fromPivot: target, toPivot: goalTarget))
+            duration: duration ?? framingDuration(fromEye: startEye, toEye: goalEye,
+                                                  fromPivot: target, toPivot: goalTarget))
     }
 
     /// Advance any in-flight framing move. Returns true while still animating so

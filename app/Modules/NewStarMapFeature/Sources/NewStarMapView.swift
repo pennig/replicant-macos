@@ -46,12 +46,32 @@ public struct NewStarMapView: View {
         return GalaxySystem(surveyed: row.item, isCurrentLocation: row.designation == currentLocationID)
     }
 
+    /// The drilled-in system (when focused) resolved from the live row, and its
+    /// orrery presentation model.
+    private var focusedSystem: GalaxySystem? {
+        guard case let .system(id) = store.focus,
+              let row = surveyed.first(where: { $0.designation == id })
+        else { return nil }
+        return GalaxySystem(surveyed: row.item, isCurrentLocation: row.designation == currentLocationID)
+    }
+    private var focusedModel: SystemModel? { focusedSystem.map(ChamakuyData.model(for:)) }
+
     public var body: some View {
         ZStack {
-            MetalStarView(store: store, stars: stars)
+            MetalStarView(store: store, stars: stars, focus: store.focus, systemModel: focusedModel)
                 .ignoresSafeArea()
 
-            galaxyHUD.transition(.opacity)
+            switch store.focus {
+            case .galaxy:
+                galaxyHUD.transition(.opacity)
+            case .system:
+                if let model = focusedModel {
+                    SystemHUD(model: model, isTransitioning: store.isTransitioning) {
+                        store.send(.zoomOutRequested)
+                    }
+                    .transition(.opacity)
+                }
+            }
 
             // The themed first-run "database rebuild" sequence, over everything.
             if store.bootPhase != .idle {
@@ -61,10 +81,11 @@ public struct NewStarMapView: View {
         }
         .background(.black)
         .environment(\.colorScheme, .dark)
+        .animation(.easeInOut(duration: 0.5), value: store.focus)
         .animation(.easeInOut(duration: 0.22), value: store.selectedStar)
         .animation(.easeInOut(duration: 0.22), value: store.activeFilterName)
         .animation(.easeInOut(duration: 0.4), value: store.bootPhase)
-        .navigationTitle("Galaxy")
+        .navigationTitle(focusedSystem.map { "Galaxy · \($0.name)" } ?? "Galaxy")
         .task { store.send(.task) }
     }
 
@@ -77,10 +98,13 @@ public struct NewStarMapView: View {
                 Spacer()
                 HStack(alignment: .bottom) {
                     if let system = selectedSystem {
-                        SystemDossier(system: system) {
-                            store.send(.selectionCleared)
-                        }
-                        .frame(maxWidth: 280)
+                        SystemDossier(
+                            system: system,
+                            canDrill: system.star.explored && !store.isTransitioning,
+                            onDrill: { store.send(.drillInRequested(system.id)) },
+                            onClose: { store.send(.selectionCleared) }
+                        )
+                        .frame(width: 280)
                         .transition(.move(edge: .leading).combined(with: .opacity))
                     }
                     Spacer()
@@ -154,6 +178,24 @@ public struct NewStarMapView: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(.rcTextSecondary)
+
+            Divider().overlay(.rcSeparator)
+
+            // Debug: scrub the drill/zoom animation timing to review it slowly.
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Transition \(store.transitionDurationScale, format: .number.precision(.fractionLength(1)))×")
+                    .font(.rcCaption)
+                    .foregroundStyle(.rcTextSecondary)
+                Slider(
+                    value: Binding(
+                        get: { store.transitionDurationScale },
+                        set: { store.send(.transitionDurationScaleChanged($0)) }
+                    ),
+                    in: 1...8
+                )
+                .controlSize(.small)
+                .tint(.rcAccent)
+            }
         }
         .padding(.horizontal, Space.m)
         .padding(.vertical, Space.s)
@@ -260,6 +302,8 @@ private struct LayerToggle: View {
 
 private struct SystemDossier: View {
     let system: GalaxySystem
+    let canDrill: Bool
+    let onDrill: () -> Void
     let onClose: () -> Void
 
     var body: some View {
@@ -314,6 +358,27 @@ private struct SystemDossier: View {
             Text("\(distanceText) · \(system.star.estimatedPlanets) est. planets")
                 .font(.rcCaption)
                 .foregroundStyle(.rcTextTertiary)
+
+            if system.star.explored {
+                Button(action: onDrill) {
+                    Label("View system", systemImage: "arrow.down.right.and.arrow.up.left.rectangle")
+                        .font(.rcCaption)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 5)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(canDrill ? .rcAccent : .rcTextTertiary)
+                .background(
+                    RoundedRectangle(cornerRadius: Radius.control)
+                        .fill(.rcAccent.opacity(canDrill ? 0.14 : 0.05))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: Radius.control)
+                        .strokeBorder(.rcAccent.opacity(canDrill ? 0.4 : 0.12), lineWidth: 0.5)
+                )
+                .disabled(!canDrill)
+                .padding(.top, 2)
+            }
         }
         .padding(Space.m)
         .hudGlass()
@@ -348,6 +413,108 @@ private struct SystemDossier: View {
                 Capsule().fill(.rcSurfaceRaised).frame(width: 64, height: 5)
                 Capsule().fill(color).frame(width: 64 * value, height: 5)
             }
+        }
+    }
+}
+
+// MARK: - System HUD (orrery focus)
+
+/// The system-focus HUD: a star dossier (top-leading) and a bodies list
+/// (bottom-trailing), with a Back control that zooms out to the galaxy.
+private struct SystemHUD: View {
+    let model: SystemModel
+    let isTransitioning: Bool
+    let onBack: () -> Void
+
+    var body: some View {
+        ZStack {
+            VStack(alignment: .leading, spacing: Space.m) {
+                starCard
+                Spacer()
+            }
+            .padding(Space.l)
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            VStack {
+                Spacer()
+                HStack {
+                    Spacer()
+                    bodiesCard
+                }
+            }
+            .padding(Space.l)
+        }
+    }
+
+    private var starCard: some View {
+        VStack(alignment: .leading, spacing: Space.s) {
+            Button(action: onBack) {
+                Label("Back to Galaxy", systemImage: "arrow.up.left").font(.rcCaption)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.rcAccent)
+            .disabled(isTransitioning)
+
+            Divider().overlay(.rcSeparator)
+
+            Text(model.star.name).font(.rcTitle).foregroundStyle(.rcTextPrimary)
+            Text("\(model.star.designation) · \(model.star.spectralType) · \(model.star.temperatureK) K")
+                .font(.rcMonoSmall).foregroundStyle(.rcTextTertiary)
+
+            HStack(spacing: Space.l) {
+                fact("Mass", String(format: "%.2f M☉", model.star.massSolar))
+                fact("Lum", String(format: "%.2f L☉", model.star.luminositySolar))
+            }
+            HStack(spacing: Space.l) {
+                fact("Habitable zone", String(format: "%.2f–%.2f AU",
+                                              model.star.habitableZone.innerAu, model.star.habitableZone.outerAu))
+            }
+            HStack(spacing: Space.l) {
+                fact("Planets", "\(model.planets.count)")
+                fact("Belt", model.belt.detail.density)
+            }
+        }
+        .padding(Space.m)
+        .frame(maxWidth: 260, alignment: .leading)
+        .hudGlass()
+    }
+
+    private var bodiesCard: some View {
+        VStack(alignment: .leading, spacing: Space.s) {
+            Text("Bodies")
+                .font(.rcSectionLabel)
+                .textCase(.uppercase)
+                .foregroundStyle(.rcTextTertiary)
+            ForEach(model.planets) { planet in
+                HStack(spacing: Space.s) {
+                    Circle()
+                        .fill(planet.summary.inHabitableZone ? .rcStatusReady : .rcTextSecondary)
+                        .frame(width: 7, height: 7)
+                    Text("\(planet.summary.designation) · \(planet.summary.name)")
+                        .font(.rcBody)
+                        .foregroundStyle(.rcTextPrimary)
+                    Spacer()
+                    Text(planet.summary.type)
+                        .font(.rcCaption)
+                        .foregroundStyle(.rcTextTertiary)
+                }
+            }
+            Divider().overlay(.rcSeparator)
+            HStack(spacing: Space.l) {
+                fact("Devices", "\(model.devices.count)")
+                fact("Vessels", "\(model.vessels.count)")
+                fact("Lagrange", "\(model.lagrange.count)")
+            }
+        }
+        .padding(Space.m)
+        .frame(maxWidth: 240, alignment: .leading)
+        .hudGlass()
+    }
+
+    private func fact(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(label).font(.rcCaption).foregroundStyle(.rcTextTertiary)
+            Text(value).font(.rcBodyEmph).foregroundStyle(.rcTextPrimary)
         }
     }
 }
@@ -485,12 +652,11 @@ private extension View {
     /// The HUD glass card recipe (spec §2).
     func hudGlass(_ radius: CGFloat = Radius.card) -> some View {
         self
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: radius))
+            .background(.rcSurfaceRaised, in: RoundedRectangle(cornerRadius: radius))
             .overlay(
                 RoundedRectangle(cornerRadius: radius)
                     .strokeBorder(.white.opacity(0.10), lineWidth: 0.5)
             )
-            .shadow(color: .black.opacity(0.45), radius: 30, y: 12)
     }
 }
 

@@ -41,6 +41,9 @@ public struct NewStarMapFeature {
         var focus: StarMapFocus
         /// True while a drill-in / zoom-out camera fly is in progress.
         var isTransitioning: Bool
+        /// Debug knob: multiplies the drill/zoom animation duration (1× = normal,
+        /// higher = slower) so the transition can be reviewed in slow motion.
+        var transitionDurationScale: Double
 
         // Survey (nearby-stars fetch + persist) + the themed first-run rebuild.
         /// The active replicant whose nearby stars we survey, from the signed-in
@@ -66,6 +69,7 @@ public struct NewStarMapFeature {
             self.cameraResetToken = 0
             self.focus = .galaxy
             self.isTransitioning = false
+            self.transitionDurationScale = 1
             self.isSurveying = false
             self.surveyPagesDone = 0
             self.surveyTotalPages = nil
@@ -90,6 +94,7 @@ public struct NewStarMapFeature {
         case drillInRequested(String)   // system designation
         case zoomOutRequested
         case transitionCompleted
+        case transitionDurationScaleChanged(Double)
         // First-run survey / boot sequence.
         case task
         case surveyButtonTapped
@@ -106,9 +111,10 @@ public struct NewStarMapFeature {
     /// The server caps `per_page` at 50.
     static let surveyPageSize = 50
 
-    /// Fly durations (must match the camera eases in `StarFieldRenderer`).
-    static let drillInDuration: Duration = .milliseconds(1150)
-    static let zoomOutDuration: Duration = .milliseconds(950)
+    /// Base fly durations, in ms (scaled by `transitionDurationScale`). Must match
+    /// the camera eases in `StarFieldRenderer`.
+    static let drillInBaseMs = 1150
+    static let zoomOutBaseMs = 950
 
     @Dependency(\.continuousClock) var clock
     @Dependency(\.defaultDatabase) var database
@@ -159,8 +165,9 @@ public struct NewStarMapFeature {
                 state.focus = .system(id)
                 state.isTransitioning = true
                 let clock = self.clock
+                let ms = Int(Double(Self.drillInBaseMs) * state.transitionDurationScale)
                 return .run { send in
-                    try await clock.sleep(for: Self.drillInDuration)
+                    try await clock.sleep(for: .milliseconds(ms))
                     await send(.transitionCompleted)
                 }
                 .cancellable(id: CancelID.transition)
@@ -170,14 +177,19 @@ public struct NewStarMapFeature {
                 state.focus = .galaxy
                 state.isTransitioning = true
                 let clock = self.clock
+                let ms = Int(Double(Self.zoomOutBaseMs) * state.transitionDurationScale)
                 return .run { send in
-                    try await clock.sleep(for: Self.zoomOutDuration)
+                    try await clock.sleep(for: .milliseconds(ms))
                     await send(.transitionCompleted)
                 }
                 .cancellable(id: CancelID.transition)
 
             case .transitionCompleted:
                 state.isTransitioning = false
+                return .none
+
+            case let .transitionDurationScaleChanged(scale):
+                state.transitionDurationScale = scale
                 return .none
 
             case .surveyButtonTapped:

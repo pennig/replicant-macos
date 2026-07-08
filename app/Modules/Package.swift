@@ -327,6 +327,7 @@ let package = Package(
             name: "NewStarMapFeatureTests",
             dependencies: [
                 "NewStarMapFeature",
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
             ],
             path: "NewStarMapFeature/Tests"
         ),

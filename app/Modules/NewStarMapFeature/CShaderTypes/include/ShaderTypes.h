@@ -55,7 +55,52 @@ typedef struct {
     float lodFull;
 
     float time;       // seconds, for surface animation (granulation spin)
+
+    // System-focus (orrery) blend. `fieldDim` fades the galaxy field + ambient as
+    // the camera flies into a system (1 = full galaxy, 0 = hidden); `orreryReveal`
+    // ramps the orrery in/out (0…1).
+    float fieldDim;
+    float orreryReveal;
+    // System-focus recession. As the camera drills in (`orreryReveal` 0→1) the
+    // background field is pushed radially away from the focused star and shrunk
+    // toward pinpricks, so the amplified parallax reads as "flying in" rather than
+    // the field merely fading. `systemPush` is the extra radial distance factor
+    // (0 = no push); `fieldShrink` is the non-focused angular-size multiplier at
+    // full focus (1 = unchanged, <1 = collapse to dust). The focused star (the
+    // orrery sun) is exempt from both. Both unwind on zoom-out for free.
+    float systemPush;
+    float fieldShrink;
+    // The drilled-in star's instance index (-1 = none). That star becomes the
+    // orrery's sun: it never fades (kept at full `fieldDim`) and its angular-size
+    // ceiling is lifted so it keeps growing as you zoom in — no separate sun body,
+    // so the star→sun transition is the same object throughout.
+    int focusedStar;
+    // Orrery centre (the focused star, world space) — the scaffold rings/belt scale
+    // out from it by `orreryReveal` so they grow in step with the planets.
+    simd_float4 orreryCenter;
 } Uniforms;
+
+// One vertex of a lit orrery body mesh (sun / planet). The shared unit sphere,
+// scaled + translated per body via OrreryBodyUniform. Normal == position on a
+// unit sphere, so it survives uniform scale + translation.
+typedef struct {
+    simd_float3 position;
+    simd_float3 normal;
+} OrreryMeshVertex;
+
+// Per-body params for one orrery sphere draw.
+typedef struct {
+    simd_float4 centerRadius;   // xyz = world center, w = radius
+    simd_float4 color;          // rgb = body color, a = reserved
+    simd_float4 sunEmissive;    // xyz = sun world position (light), w = emissive flag (1 = sun)
+} OrreryBodyUniform;
+
+// One vertex of the orrery scaffold: orbit rings, HZ band, kuiper — colored line
+// segments in world space, drawn additively.
+typedef struct {
+    simd_float4 position;   // xyz = world position, w unused
+    simd_float4 color;      // rgba
+} OrreryLineVertex;
 
 // A single vertex of an FTL-link ribbon. Each link expands to a screen-space quad
 // (6 vertices); the vertex shader offsets by `side` along the screen-perpendicular
@@ -92,6 +137,42 @@ typedef struct {
     float tailLength;       // fraction of the trajectory the fading tail spans
     float dashPeriod;       // dashes along the not-yet-travelled remainder
 } ShipParams;
+
+// Tuning knobs for the solar-flare playground (FlarePlayground.swift). Every value
+// the production star_fragment bakes as a constant is exposed here as a live
+// uniform so it can be driven from sliders; dial it in, then copy the winners back
+// into Shaders.metal's constants. All scalars first (kept a multiple of four for
+// 16-byte alignment), then the three colours.
+typedef struct {
+    float lod;             // simulated on-screen LOD (0 = glow, 1 = resolved disc)
+    float discEdge;        // sphere radius within the sprite quad
+    float spinRate;        // surface spin speed (rad/s scale), shared by disc + flares
+    float intensity;       // additive flare intensity
+
+    float baseFreq;        // slow noise-layer frequency (tongue count)
+    float baseTimeScale;   // slow layer temporal drift
+    float baseWeight;      // slow layer weight into tongue height
+    float flickFreq;       // fast noise-layer frequency (flicker detail)
+
+    float flickTimeScale;  // fast layer temporal drift (flicker speed)
+    float flickWeight;     // fast layer weight into tongue height
+    float heightPower;     // sharpen exponent (spiky vs. blobby)
+    float tongueBand;      // smoothstep fill band along the tongue
+
+    float radialFalloff;   // base→tip dimming
+    float edgeFadeStart;   // where the sprite-edge fade begins
+    float hotMix;          // star→hot-base colour mix
+    float coolMix;         // star→cool-tip colour mix
+
+    float discBrightness;  // disc look (context)
+    float exposure;        // inline tone-map exposure
+    float time;            // seconds, animation clock (set per frame)
+    float aspect;          // drawable aspect, to keep the star circular
+
+    simd_float4 starColor; // rgb star spectral colour
+    simd_float4 hotColor;  // rgb hot near-limb tint
+    simd_float4 coolColor; // rgb cool ember tip tint
+} FlareParams;
 
 // Per-label params for the text-quad pass (all in pixels, top-left origin).
 typedef struct {

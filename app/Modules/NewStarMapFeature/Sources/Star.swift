@@ -212,9 +212,18 @@ extension Star {
         }
 
         let rgb = SIMD3<Float>(r, g, b) / 255
-        return SIMD3<Float>(min(max(rgb.x, 0), 1),
-                            min(max(rgb.y, 0), 1),
-                            min(max(rgb.z, 0), 1))
+
+        // Push the palette's extremes apart: a chroma lift makes hot stars read
+        // bluer and cool stars redder, while the near-neutral middle (F/G suns,
+        // ~#dcdcdc) barely moves — low-chroma colors sit close to their own luma,
+        // so scaling distance-from-luma leaves them alone and only the saturated
+        // ends travel.
+        let luma = dot(rgb, SIMD3<Float>(0.2126, 0.7152, 0.0722))
+        let skewed = SIMD3<Float>(repeating: luma) + (rgb - SIMD3<Float>(repeating: luma)) * 1.5
+
+        return SIMD3<Float>(min(max(skewed.x, 0), 1),
+                            min(max(skewed.y, 0), 1),
+                            min(max(skewed.z, 0), 1))
     }
 
     /// Deterministic 0..1 hash of a position — stable per star, no RNG state.

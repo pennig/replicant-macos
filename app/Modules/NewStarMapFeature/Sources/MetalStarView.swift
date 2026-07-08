@@ -20,6 +20,8 @@ final class StarMTKView: MTKView {
     weak var renderer: StarFieldRenderer?
     /// Forwards user-facing outcomes into the store. Set by the representable.
     var send: ((NewStarMapFeature.Action) -> Void)?
+    /// Whether we're focused into a system (orrery) — gates picking and Esc.
+    var focused = false
     private var pendingClick: DispatchWorkItem?
 
     override var acceptsFirstResponder: Bool { true }
@@ -119,7 +121,7 @@ final class StarMTKView: MTKView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        guard let r = renderer else { return }
+        guard let r = renderer, !focused else { return }   // the orrery isn't interactive yet
         r.registerInteraction()
         let loc = convert(event.locationInWindow, from: nil)
         // AppKit origin is bottom-left; flip to match the renderer's top-left.
@@ -148,9 +150,13 @@ final class StarMTKView: MTKView {
     override func keyDown(with event: NSEvent) {
         guard let r = renderer else { return }
         switch event.keyCode {
-        case 53:                                     // esc → back to full terrain
-            r.clearFocus()
-            send?(.selectionCleared)
+        case 53:                                     // esc → zoom out of a system, else clear focus
+            if focused {
+                send?(.zoomOutRequested)
+            } else {
+                r.clearFocus()
+                send?(.selectionCleared)
+            }
         case 4:                                       // H → eased pull-back to overview
             r.home()
             send?(.homeRequested)
@@ -171,6 +177,11 @@ struct MetalStarView: NSViewRepresentable {
     let store: StoreOf<NewStarMapFeature>
     /// The live terrain, already mapped from the persisted `Star` table.
     let stars: [Star]
+    /// Current scale (galaxy vs a drilled-in system).
+    let focus: StarMapFocus
+    /// The orrery to show when `focus` is `.system` — built by the view from the
+    /// live row. Nil in galaxy mode.
+    let systemModel: SystemModel?
 
     final class Coordinator {
         var renderer: StarFieldRenderer?
@@ -179,6 +190,8 @@ struct MetalStarView: NSViewRepresentable {
         var loadedStars: [Star] = []
         /// The last recenter token applied, so a bump fires exactly one recenter.
         var lastResetToken = 0
+        /// The last focus applied, so a drill-in / zoom-out fires exactly once.
+        var lastFocus: StarMapFocus = .galaxy
 
         /// (Re)builds the renderer for `stars` if they differ from what's loaded.
         func syncTerrain(_ stars: [Star], into view: StarMTKView) {
@@ -191,11 +204,26 @@ struct MetalStarView: NSViewRepresentable {
         }
 
         /// Pushes the declarative HUD controls into the imperative renderer.
-        func applyControls(autoRotate: Bool, recenterToken: Int) {
+        func applyControls(autoRotate: Bool, recenterToken: Int, transitionDurationScale: Double) {
             renderer?.autoRotate = autoRotate
+            renderer?.transitionDurationScale = transitionDurationScale
             if recenterToken != lastResetToken {
                 lastResetToken = recenterToken
                 renderer?.recenterOnPlayer()
+            }
+        }
+
+        /// Drives the galaxy↔system fly on a focus change (once per change).
+        func applyFocus(_ focus: StarMapFocus, model: SystemModel?, stars: [Star], view: StarMTKView) {
+            view.focused = { if case .system = focus { return true } else { return false } }()
+            guard focus != lastFocus else { return }
+            lastFocus = focus
+            switch focus {
+            case let .system(id):
+                guard let model, let index = stars.firstIndex(where: { $0.name == id }) else { return }
+                renderer?.enterSystem(starIndex: index, model: model)
+            case .galaxy:
+                renderer?.exitSystem()
             }
         }
     }
@@ -203,6 +231,7 @@ struct MetalStarView: NSViewRepresentable {
     func makeCoordinator() -> Coordinator {
         let c = Coordinator()
         c.lastResetToken = store.cameraResetToken   // don't recenter on first appear
+        c.lastFocus = store.focus
         return c
     }
 
@@ -216,13 +245,17 @@ struct MetalStarView: NSViewRepresentable {
         view.send = { [store] action in store.send(action) }
         context.coordinator.syncTerrain(stars, into: view)
         context.coordinator.applyControls(autoRotate: store.autoRotate,
-                                          recenterToken: store.cameraResetToken)
+                                          recenterToken: store.cameraResetToken,
+                                          transitionDurationScale: store.transitionDurationScale)
+        context.coordinator.applyFocus(focus, model: systemModel, stars: stars, view: view)
         return view
     }
 
     func updateNSView(_ nsView: StarMTKView, context: Context) {
         context.coordinator.syncTerrain(stars, into: nsView)
         context.coordinator.applyControls(autoRotate: store.autoRotate,
-                                          recenterToken: store.cameraResetToken)
+                                          recenterToken: store.cameraResetToken,
+                                          transitionDurationScale: store.transitionDurationScale)
+        context.coordinator.applyFocus(focus, model: systemModel, stars: stars, view: nsView)
     }
 }

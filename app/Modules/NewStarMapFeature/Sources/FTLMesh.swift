@@ -58,7 +58,8 @@ struct FTLMesh {
                 nearestSq = min(nearestSq, simd_length_squared(np - p))
             }
             let t = 1 - min(sqrt(nearestSq) / falloffRadius, 1)
-            out[i] = floor + (1 - floor) * (t * t)
+            let sharp = pow(t, 2.5)  // steep ease-in: lighting hugs the mesh, drops off fast
+            out[i] = floor + (1 - floor) * sharp
         }
         return out
     }

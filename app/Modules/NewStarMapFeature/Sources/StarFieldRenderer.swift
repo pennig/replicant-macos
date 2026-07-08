@@ -16,6 +16,9 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     private let stateMarkerPipeline: MTLRenderPipelineState
     private let labelPipeline: MTLRenderPipelineState
     private let ambientPipeline: MTLRenderPipelineState     // interstellar medium (additive, no depth)
+    private let orreryBodyPipeline: MTLRenderPipelineState  // lit sun/planets (over-blend, depth-write)
+    private let orreryLinePipeline: MTLRenderPipelineState  // orbit rings / HZ / kuiper (additive)
+    private let orreryPointPipeline: MTLRenderPipelineState // asteroid belt (additive points)
 
     // Depth: only the resolved bodies write it; the dense additive field never
     // does (Invariant 8). Overlays test against it to occlude behind bodies.
@@ -38,6 +41,36 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     private let ambientBuffer: MTLBuffer?
     private let ambientVertexCount: Int
 
+    // System-focus (orrery). Bodies are billboard sphere-impostors (no mesh);
+    // scaffold/belt buffers are rebuilt per drill-in. The orrery is scaled to the
+    // focused star's angular framing so drilling reads as a zoom IN, and the sun
+    // uses the star field's angular clamp so it matches the star it grew from.
+    private var systemFocused = false
+    private var orreryModel: SystemModel?
+    private var orreryCenter = SIMD3<Float>(repeating: 0)
+    private var orreryScale: Float = 1          // scene-unit → world (ly) around the star
+    private var focusedStarIndex: Int?          // the drilled-in star = the orrery sun (uncapped, unfaded)
+    private var savedCamera: TurntableCamera?   // pre-drill pose, restored on zoom-out
+    private var orreryLineBuffer: MTLBuffer?
+    private var orreryLineVertexCount = 0
+    private var orreryBeltBuffer: MTLBuffer?
+    private var orreryBeltCount = 0
+    // One time-based transition progress (0 = galaxy, 1 = system focus). The
+    // crossfade, orrery reveal + emerge, and camera fly are ALL driven from this
+    // over ONE shared duration, so they start and land together in both directions.
+    private var systemProgress: Float = 0
+    private var transitionFrom: Float = 0
+    private var transitionTarget: Float = 0
+    private var transitionStart: Double = 0
+    private var transitionDuration: Double = 0.0001
+    private var fieldDim: Float { 1 - systemProgress * (1 - fieldFloor) }   // terrain fade to a faint backdrop
+    private var orreryReveal: Float { systemProgress }   // orrery reveal + emerge scale
+    /// Base drill/zoom durations (seconds); match the reducer's transition lock.
+    private let drillDurationBase = 1.15
+    private let zoomDurationBase = 0.95
+    /// Debug: multiplies the drill/zoom animation duration (crossfade + camera fly).
+    var transitionDurationScale: Double = 1
+
     // Labels: the curated annotation layer. Rasterized-text cache + which star is
     // selected (always labelled), plus how many context labels to show.
     private let labelCache: LabelTextureCache
@@ -49,6 +82,13 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     private var labelOpacity: [Int: Float] = [:]   // per-star eased fade (starIndex → 0…1)
     private var lastLabelTime: Double = 0
     private let labelFadeTau: Double = 0.06        // fade time constant (quick)
+    // Labels belong to the galaxy overview. They fade to nothing as the camera
+    // drills into a system — decoupled from `fieldDim` (which now floors at a
+    // faint backdrop) so they reach true 0 and stay silent while orbiting the
+    // orrery. Gain > 1 clears them within the first fraction of the drill, so the
+    // whole layout/projection pass can be skipped for the rest of the transition.
+    private let labelFadeGain: Float = 2         // 0 at systemProgress = 1/gain
+    private var labelDim: Float { max(0, 1 - systemProgress * labelFadeGain) }
 
     // FTL mesh overlay: precomputed once (links as quad-ribbon vertices, relay
     // marker positions, and the per-star relevance contribution), toggled at runtime.
@@ -80,7 +120,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     /// spin only begins after a calm period (no viewport input, no eased camera
     /// move) and eases in/out via `spinEnvelope`; advanced per-frame in `draw`.
     var autoRotate = false
-    private let autoRotateRate: Float = 0.12       // radians / second at full spin
+    private let autoRotateRate: Float = -0.12       // radians / second at full spin
     private var lastFrameTime = CACurrentMediaTime()
     private var lastInteractionTime = CACurrentMediaTime()
     private var spinEnvelope: Float = 0            // eased 0…1 rate scale
@@ -99,6 +139,13 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     private var lodFull: Float = 0.018           // angular size where it's a full luminous disc
     private var overviewRadius: Float = 180      // home / overview pull-back distance
     private var diveRadius: Float = 6           // double-click close-focus distance
+    // System-focus recession (see ShaderTypes.Uniforms): how far the background
+    // field is pushed away from the focused star and how far it shrinks at full
+    // drill-in, plus the residual field brightness kept as a backdrop (so the
+    // galaxy recedes to faint dust behind the orrery instead of fading to black).
+    private var systemPush: Float = 2.0
+    private var fieldShrink: Float = 0.4
+    private var fieldFloor: Float = 0.15
 
     /// Builds the renderer for a fixed terrain of `stars`. The domain `[Star]` is
     /// the source of truth (now supplied by the caller from the live `Star` table
@@ -131,7 +178,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         // contribution once. `meshFalloff` sets how far off-mesh the lighting
         // reaches before receding to the field's floor.
         let mesh = FTLMesh.build(stars: stars)
-        let meshFalloff: Float = 35
+        let meshFalloff: Float = 15
         let lineVerts = mesh.lineVertices(for: stars)
         meshLineVertexCount = lineVerts.count
         meshLineBuffer = lineVerts.isEmpty ? nil : device.makeBuffer(
@@ -226,6 +273,34 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         Self.configureAdditiveHDR(ambientDesc.colorAttachments[0]!)
         ambientDesc.depthAttachmentPixelFormat = depthPF
 
+        // Orrery bodies: lit sun/planets, over-blend + depth write so they occlude.
+        let orreryBodyDesc = MTLRenderPipelineDescriptor()
+        orreryBodyDesc.vertexFunction = library.makeFunction(name: "orrery_body_vertex")
+        orreryBodyDesc.fragmentFunction = library.makeFunction(name: "orrery_body_fragment")
+        let oba = orreryBodyDesc.colorAttachments[0]!
+        oba.pixelFormat = .rgba16Float
+        oba.isBlendingEnabled = true
+        oba.rgbBlendOperation = .add
+        oba.alphaBlendOperation = .add
+        oba.sourceRGBBlendFactor = .sourceAlpha
+        oba.destinationRGBBlendFactor = .oneMinusSourceAlpha
+        oba.sourceAlphaBlendFactor = .one
+        oba.destinationAlphaBlendFactor = .oneMinusSourceAlpha
+        orreryBodyDesc.depthAttachmentPixelFormat = depthPF
+
+        // Orrery scaffold lines + belt points: additive HDR, depth-read only.
+        let orreryLineDesc = MTLRenderPipelineDescriptor()
+        orreryLineDesc.vertexFunction = library.makeFunction(name: "orrery_line_vertex")
+        orreryLineDesc.fragmentFunction = library.makeFunction(name: "orrery_line_fragment")
+        Self.configureAdditiveHDR(orreryLineDesc.colorAttachments[0]!)
+        orreryLineDesc.depthAttachmentPixelFormat = depthPF
+
+        let orreryPointDesc = MTLRenderPipelineDescriptor()
+        orreryPointDesc.vertexFunction = library.makeFunction(name: "orrery_point_vertex")
+        orreryPointDesc.fragmentFunction = library.makeFunction(name: "orrery_point_fragment")
+        Self.configureAdditiveHDR(orreryPointDesc.colorAttachments[0]!)
+        orreryPointDesc.depthAttachmentPixelFormat = depthPF
+
         // Mesh links (additive, depth-tested so a body in front occludes them).
         let meshDesc = MTLRenderPipelineDescriptor()
         meshDesc.vertexFunction = library.makeFunction(name: "mesh_vertex")
@@ -277,6 +352,9 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
             tonemapPipeline = try device.makeRenderPipelineState(descriptor: tmDesc)
             labelPipeline = try device.makeRenderPipelineState(descriptor: labelDesc)
             ambientPipeline = try device.makeRenderPipelineState(descriptor: ambientDesc)
+            orreryBodyPipeline = try device.makeRenderPipelineState(descriptor: orreryBodyDesc)
+            orreryLinePipeline = try device.makeRenderPipelineState(descriptor: orreryLineDesc)
+            orreryPointPipeline = try device.makeRenderPipelineState(descriptor: orreryPointDesc)
         } catch {
             assertionFailure("Pipeline creation failed: \(error)")
             return nil
@@ -326,6 +404,15 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         relevance.step()                     // advance eased relevance transitions
         camera.step(now: now)                // advance eased camera framing
 
+        // Advance the shared transition progress (time-based smoothstep — a real
+        // start and end), then drop the orrery only once fully back to the galaxy,
+        let raw = Float(min(max((now - transitionStart) / transitionDuration, 0), 1))
+        let eased = raw * raw * (3 - 2 * raw)
+        systemProgress = transitionFrom + (transitionTarget - transitionFrom) * eased
+        // `focusedStarIndex` is intentionally NOT cleared on zoom-out: the star that
+        // was drilled stays "focused" (it's the sun throughout, so no snap-flicker,
+        // and it remains the focused star back in the galaxy).
+
         guard let hdr = hdrTexture,
               let drawable = view.currentDrawable,
               let screenPass = view.currentRenderPassDescriptor,
@@ -361,6 +448,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
             enc.setVertexBuffer(starBuffer, offset: 0, index: 0)
             enc.setVertexBuffer(relevance.buffer, offset: 0, index: 1)
             enc.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 2)
+            enc.setFragmentBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 2)  // time, for animated flares
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6,
                                instanceCount: stars.count)
 
@@ -371,6 +459,9 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
             //   dim slice (relevance < threshold) — drawn after, transparent,
             //     depth-tested but NOT writing, so a receded star never hard-occludes
             //     a lit one behind it (you see the lit star through the ghost).
+            // Always drawn: in system focus the non-focused stars fade to zero and
+            // DISCARD (writing no depth, so the orrery shows through), while the
+            // focused star stays — it IS the sun, growing seamlessly.
             enc.setRenderPipelineState(bodyPipeline)
             enc.setVertexBuffer(starBuffer, offset: 0, index: 0)
             enc.setVertexBuffer(relevance.buffer, offset: 0, index: 1)
@@ -397,30 +488,64 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
                 halfWidthPixels: meshLineHalfWidth,
                 nodeRadiusPixels: 0)
 
-            // FTL mesh (reference overlay, toggled), depth-tested so a body in front
-            // occludes it: link ribbons, then relay rings on top.
-            if meshActive {
-                enc.setDepthStencilState(readDepthState)
-                if let meshLineBuffer, meshLineVertexCount > 0 {
-                    enc.setRenderPipelineState(meshPipeline)
-                    enc.setVertexBuffer(meshLineBuffer, offset: 0, index: 0)
-                    enc.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
-                    enc.setVertexBytes(&params, length: MemoryLayout<MeshParams>.stride, index: 2)
-                    enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: meshLineVertexCount)
+            // Galaxy overlays (mesh + state) — hidden once the orrery dominates.
+            if orreryReveal < 0.5 {
+                // FTL mesh (reference overlay, toggled), depth-tested so a body in
+                // front occludes it: link ribbons, then relay rings on top.
+                if meshActive {
+                    enc.setDepthStencilState(readDepthState)
+                    if let meshLineBuffer, meshLineVertexCount > 0 {
+                        enc.setRenderPipelineState(meshPipeline)
+                        enc.setVertexBuffer(meshLineBuffer, offset: 0, index: 0)
+                        enc.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
+                        enc.setVertexBytes(&params, length: MemoryLayout<MeshParams>.stride, index: 2)
+                        enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: meshLineVertexCount)
+                    }
+                    if let relayMarkerBuffer, relayMarkerCount > 0 {
+                        enc.setRenderPipelineState(stateMarkerPipeline)
+                        enc.setVertexBuffer(relayMarkerBuffer, offset: 0, index: 0)
+                        enc.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
+                        enc.setVertexBytes(&params, length: MemoryLayout<MeshParams>.stride, index: 2)
+                        enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6,
+                                           instanceCount: relayMarkerCount)
+                    }
                 }
-                if let relayMarkerBuffer, relayMarkerCount > 0 {
-                    enc.setRenderPipelineState(stateMarkerPipeline)
-                    enc.setVertexBuffer(relayMarkerBuffer, offset: 0, index: 0)
-                    enc.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
-                    enc.setVertexBytes(&params, length: MemoryLayout<MeshParams>.stride, index: 2)
-                    enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6,
-                                       instanceCount: relayMarkerCount)
-                }
+
+                // State overlay (always on, top of the hierarchy, never dimmed).
+                encodeStateOverlay(enc, uniforms: &uniforms, params: &params,
+                                   now: CACurrentMediaTime())
             }
 
-            // State overlay (always on, top of the hierarchy, never dimmed).
-            encodeStateOverlay(enc, uniforms: &uniforms, params: &params,
-                               now: CACurrentMediaTime())
+            // --- Orrery (system focus): scaffold rings + belt (additive), then the
+            // lit sun/planets (over-blend, depth-write) so bodies occlude correctly.
+            if orreryReveal > 0.001, let model = orreryModel {
+                let t = Float(now - startTime)
+                if let lineBuf = orreryLineBuffer, orreryLineVertexCount > 0 {
+                    enc.setRenderPipelineState(orreryLinePipeline)
+                    enc.setDepthStencilState(readDepthState)
+                    enc.setVertexBuffer(lineBuf, offset: 0, index: 0)
+                    enc.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
+                    enc.setFragmentBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
+                    enc.drawPrimitives(type: .line, vertexStart: 0, vertexCount: orreryLineVertexCount)
+                }
+                if let beltBuf = orreryBeltBuffer, orreryBeltCount > 0 {
+                    enc.setRenderPipelineState(orreryPointPipeline)
+                    enc.setDepthStencilState(readDepthState)
+                    enc.setVertexBuffer(beltBuf, offset: 0, index: 0)
+                    enc.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
+                    enc.drawPrimitives(type: .point, vertexStart: 0, vertexCount: orreryBeltCount)
+                }
+                // Planets: billboard sphere-impostors (round, no facets), depth-tested
+                // so they occlude one another and hide behind the sun (the focused star).
+                enc.setRenderPipelineState(orreryBodyPipeline)
+                enc.setDepthStencilState(bodyDepthState)
+                enc.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
+                enc.setFragmentBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
+                for var body in orreryBodies(model: model, time: t) {
+                    enc.setVertexBytes(&body, length: MemoryLayout<OrreryBodyUniform>.stride, index: 2)
+                    enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+                }
+            }
             enc.endEncoding()
         }
 
@@ -451,6 +576,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     /// when the click lands on no disc do we fall back to the nearest center
     /// within `pixelRadius` (for far stars whose disc is sub-pixel).
     func pickStar(atViewPoint p: CGPoint, viewSize: CGSize, pixelRadius: CGFloat = 14) -> Int? {
+        guard !systemFocused else { return nil }   // orrery isn't selectable yet
         let view = camera.viewMatrix()
         let proj = camera.projectionMatrix(aspect: aspect)
         let w = Float(viewSize.width), h = Float(viewSize.height)
@@ -555,6 +681,94 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
                         radius: overviewRadius, now: CACurrentMediaTime())
     }
 
+    // MARK: System focus (orrery)
+
+    /// Drill into a system: build its orrery around the star, clear galaxy focus,
+    /// and ease the camera in to frame it. The field fades and the orrery reveals
+    /// via `fieldDim`/`orreryReveal` (advanced in `draw`).
+    func enterSystem(starIndex: Int, model: SystemModel) {
+        guard stars.indices.contains(starIndex) else { return }
+        let center = stars[starIndex].position
+        orreryCenter = center
+        orreryModel = model
+
+        // Frame the orrery in the focused star's own angular terms: the camera
+        // dives in until the star fills `maxAngularSize` (dFinal), where the sun
+        // takes over at the same size. The orrery is scaled so its outer edge
+        // (kuiper) fits the view at that distance — so drilling reads as a zoom IN.
+        let wr = stars[starIndex].worldRadius
+        let dFinal = wr / maxAngularSize
+        let visibleRadius = dFinal * tan(camera.fovy * 0.5) * 0.9
+        orreryScale = visibleRadius / Float(max(model.kuiperScene, 1))
+
+        let lines = OrreryGeometry.scaffoldLines(model: model, center: center, scale: orreryScale)
+        orreryLineVertexCount = lines.count
+        orreryLineBuffer = lines.isEmpty ? nil : device.makeBuffer(
+            bytes: lines, length: lines.count * MemoryLayout<OrreryLineVertex>.stride,
+            options: .storageModeShared)
+
+        let belt = OrreryGeometry.beltPoints(model: model, center: center, scale: orreryScale)
+        orreryBeltCount = belt.count
+        orreryBeltBuffer = belt.isEmpty ? nil : device.makeBuffer(
+            bytes: belt, length: belt.count * MemoryLayout<AmbientVertex>.stride,
+            options: .storageModeShared)
+
+        savedCamera = camera                     // to restore the pre-drill pose on zoom-out
+        focusedStarIndex = starIndex             // this star IS the sun (uncapped + unfaded)
+        // Keep the existing relevance focus: the other stars are already dimmed
+        // around the selection, so they just fade out with `fieldDim` — resetting
+        // to full here would snap them bright right before fading them away. The
+        // selection also persists so the star stays "focused" back in the galaxy.
+        systemFocused = true
+        camera.focusFloor = dFinal * 0.6         // limit how far you can zoom in
+        let now = CACurrentMediaTime()
+        beginTransition(to: 1, duration: drillDurationBase * transitionDurationScale, now: now)
+        camera.dive(on: center, radius: dFinal, now: now, duration: transitionDuration)   // zoom IN toward the star
+    }
+
+    /// Zoom back out to the galaxy: ease the camera back to the exact pre-drill
+    /// pose. The orrery reveal fades out in `draw`; its buffers drop on next drill.
+    func exitSystem() {
+        systemFocused = false
+        camera.focusFloor = savedCamera?.focusFloor
+        let now = CACurrentMediaTime()
+        beginTransition(to: 0, duration: zoomDurationBase * transitionDurationScale, now: now)
+        if let saved = savedCamera {
+            camera.restore(saved, now: now, duration: transitionDuration)
+        }
+    }
+
+    /// Start the shared galaxy↔system transition (crossfade + orrery + camera fly
+    /// all read `systemProgress` over `transitionDuration`, so they land together).
+    private func beginTransition(to target: Float, duration: Double, now: Double) {
+        transitionFrom = systemProgress
+        transitionTarget = target
+        transitionStart = now
+        transitionDuration = max(duration, 0.0001)
+    }
+
+    /// The per-frame lit planets at their current orbit angle (`phase0 + time/period`),
+    /// lit by the sun (the focused star at `orreryCenter`). Orbit radii scale with
+    /// `orreryReveal` so planets EMERGE from the star on drill-in and retreat into
+    /// it on zoom-out. The sun is not here — it's the persistent focused field star.
+    private func orreryBodies(model: SystemModel, time: Float) -> [OrreryBodyUniform] {
+        let orbitSpeed: Float = 0.6      // seconds of animation per "period day" (matches SceneKit)
+        var bodies: [OrreryBodyUniform] = []
+        bodies.reserveCapacity(model.planets.count)
+
+        for planet in model.planets {
+            let period = max(Float(planet.periodDays) * orbitSpeed, 0.001)
+            let angle = Float(planet.phase0Deg) * .pi / 180 + (time / period) * 2 * .pi
+            let r = Float(planet.semiMajorScene) * orreryScale * orreryReveal   // emerge from the star
+            let pos = orreryCenter + SIMD3<Float>(cos(angle) * r, 0, sin(angle) * r)
+            bodies.append(OrreryBodyUniform(
+                centerRadius: SIMD4(pos, Float(planet.displayRadius) * orreryScale),
+                color: SIMD4(OrreryGeometry.rgb(hex: planet.colorHex), 1),
+                sunEmissive: SIMD4(orreryCenter, 0)))
+        }
+        return bodies
+    }
+
     /// Marks live viewport input (scroll / pinch / click) so the auto-rotate idle
     /// clock resets — the spin eases out and won't resume until things are calm
     /// again for `autoRotateIdleDelay`.
@@ -571,7 +785,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         // An in-flight framing move counts as motion — hold the idle clock at now.
         if camera.isFraming { lastInteractionTime = now }
         let idle = now - lastInteractionTime
-        let target: Float = (autoRotate && idle >= autoRotateIdleDelay) ? 1 : 0
+        let target: Float = (autoRotate && !systemFocused && idle >= autoRotateIdleDelay) ? 1 : 0
         let tau = target > spinEnvelope ? spinEaseInTau : spinEaseOutTau
         spinEnvelope += (target - spinEnvelope) * (1 - exp(-dt / max(tau, 1e-3)))
         if spinEnvelope > 0.001 {
@@ -669,17 +883,48 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     /// star plus the nearest on-screen systems, measure each name, resolve overlaps
     /// (LabelEngine), and draw the surviving labels as textured quads.
     private func encodeLabels(_ enc: MTLRenderCommandEncoder, viewportPx: SIMD2<Float>) {
+        // Once labels have faded out (deep enough into the drill / orbiting the
+        // orrery), stop the whole subsystem — no projection, layout, or rasterize.
+        let labelDim = self.labelDim
+        if labelDim <= 0.001 {
+            labelOpacity.removeAll()   // already invisible; snapping the bookkeeping is unseen
+            return
+        }
+
         let view = camera.viewMatrix()
         let proj = camera.projectionMatrix(aspect: aspect)
         let ys = proj.columns.1.y                 // = 1/tan(fovy/2), for pixel sizing
         let eye = camera.eye
         let w = viewportPx.x, h = viewportPx.y
 
+        // Mirror the shader's system-focus recession (Shaders.metal star_vertex) so a
+        // label tracks its star as the field pushes away — they recede together while
+        // fading. The focused star (orrery sun) is exempt, matching the shader.
+        func pushed(_ i: Int) -> SIMD3<Float> {
+            let p = stars[i].position
+            guard i != focusedStarIndex, orreryReveal > 0 else { return p }
+            return orreryCenter + (p - orreryCenter) * (1 + systemPush * orreryReveal)
+        }
+
+        // Labels are normally constant pixel size regardless of distance. During the
+        // drill-in, shrink each one to match its star's recession so it reads as
+        // attached: the perspective shrink from the push alone (near/far distance
+        // ratio, independent of the camera dive) times the same `fieldShrink` the
+        // star body gets. 1 when not focusing.
+        func recessionScale(_ i: Int) -> Float {
+            guard i != focusedStarIndex, orreryReveal > 0 else { return 1 }
+            let near = simd_length((view * SIMD4<Float>(stars[i].position, 1)).xyz)
+            let far  = simd_length((view * SIMD4<Float>(pushed(i), 1)).xyz)
+            let perspective = far > 1e-4 ? near / far : 1
+            return perspective * (1 + (fieldShrink - 1) * orreryReveal)
+        }
+
         // Project a star and return its screen point, eye distance, and the pixel
         // radius of its reticle ring (the same size-encodes-depth math the markers
         // use), so the label can be placed just outside that ring.
         func screen(_ i: Int) -> (px: SIMD2<Float>, dist: Float, ringR: Float)? {
-            let vpos = view * SIMD4<Float>(stars[i].position, 1)
+            let wp = pushed(i)
+            let vpos = view * SIMD4<Float>(wp, 1)
             let clip = proj * vpos
             if clip.w <= 0 { return nil }                  // behind the camera
             let ndc = SIMD2<Float>(clip.x / clip.w, clip.y / clip.w)
@@ -689,7 +934,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
             let rv = min(max(stars[i].worldRadius, camDist * minAngularSize), camDist * maxAngularSize)
             let starPixels = ys * rv / clip.w * (h * 0.5)
             let ringR = max(starPixels * 1.3, labelRingFloor)
-            return (px, simd_length(stars[i].position - eye), ringR)
+            return (px, simd_length(wp - eye), ringR)
         }
 
         var onscreen: [(i: Int, px: SIMD2<Float>, dist: Float, ringR: Float)] = []
@@ -743,7 +988,8 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         for (id, opacity) in labelOpacity {
             if opacity < 0.01 { stale.append(id); continue }
 
-            let origin: SIMD2<Float>, size: SIMD2<Float>, tex: MTLTexture
+            var origin: SIMD2<Float>, size: SIMD2<Float>
+            let tex: MTLTexture
             if let p = placedById[id], let t = textures[id] {
                 origin = p.origin; size = p.size; tex = t
             } else if let s = screen(id),
@@ -756,8 +1002,17 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
                 stale.append(id); continue   // gone off-screen mid-fade → drop
             }
 
+            // Shrink with the star's recession, keeping the top-centre point (the edge
+            // nearest the star) fixed so the label stays hugging the reticle ring.
+            let scale = recessionScale(id)
+            if scale < 0.999 {
+                let centerX = origin.x + size.x * 0.5
+                size *= scale
+                origin = SIMD2<Float>(centerX - size.x * 0.5, origin.y)
+            }
+
             var lp = LabelParams(originPx: origin, sizePx: size, viewportPx: viewportPx,
-                                 opacity: opacity, _pad: 0)
+                                 opacity: opacity * labelDim, _pad: 0)   // fade out on drill-in
             enc.setVertexBytes(&lp, length: MemoryLayout<LabelParams>.stride, index: 0)
             enc.setFragmentTexture(tex, index: 0)
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
@@ -790,7 +1045,13 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
             exposure: exposure,
             lodStart: lodStart,
             lodFull: lodFull,
-            time: Float(CACurrentMediaTime() - startTime)
+            time: Float(CACurrentMediaTime() - startTime),
+            fieldDim: fieldDim,
+            orreryReveal: orreryReveal,
+            systemPush: systemPush,
+            fieldShrink: fieldShrink,
+            focusedStar: Int32(focusedStarIndex ?? -1),
+            orreryCenter: SIMD4(orreryCenter, 0)
         )
     }
 
