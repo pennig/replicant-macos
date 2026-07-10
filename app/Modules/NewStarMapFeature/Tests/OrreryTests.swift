@@ -259,6 +259,34 @@ struct OrreryMappingTests {
         #expect(m.planets.first?.indicators.contains(.salvage) == true)
         // Every moon orbits outside the central planet.
         let central = m.centralBody?.displayRadius ?? 0
-        #expect(m.planets.allSatisfy { $0.semiMajorScene > central })
+        #expect(m.planets.allSatisfy { $0.semiMajorScene - $0.displayRadius > central })
+    }
+
+    @Test func crowdedInnerPlanetsClearSunAndEachOther() {
+        // Modelled on SHERATANON: several close-in planets whose sqrt-mapped orbits land
+        // inside the large sun and near one another. They must clear the star and never
+        // stack on the same ring.
+        let aus: [Double] = [0.251, 0.44, 0.805, 1.362, 1.856, 3.154, 5.343, 9.482, 18.881, 31.058]
+        let planets = aus.enumerated().map { i, au in
+            Planet(designation: "SHERATANON-\(i + 1)", type: "Barren",
+                   orbitalDistanceAu: au, recon: .scanned)
+        }
+        let system = StarSystem(
+            designation: "SHERATANON",
+            star: SystemStar(designation: "SHERATANON", stellarClass: "K3", color: "Orange"),
+            recon: .scanned, systemScanned: true, planets: planets)
+        let m = OrreryMapping.systemModel(from: system)
+        let sunScene = OrreryMapping.sunSceneFraction * m.frameScene
+
+        // Every planet is smaller than the sun and orbits outside its sphere.
+        #expect(m.planets.allSatisfy { $0.displayRadius < sunScene })
+        #expect(m.planets.allSatisfy { $0.semiMajorScene - $0.displayRadius >= sunScene })
+
+        // No two adjacent orbits intersect: the gap between neighbouring orbit radii
+        // exceeds the sum of the two planet radii.
+        let sorted = m.planets.sorted { $0.semiMajorScene < $1.semiMajorScene }
+        for (a, b) in zip(sorted, sorted.dropFirst()) {
+            #expect(b.semiMajorScene - a.semiMajorScene > a.displayRadius + b.displayRadius)
+        }
     }
 }

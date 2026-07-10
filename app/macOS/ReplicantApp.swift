@@ -16,7 +16,6 @@ import GameServices
 import GameSync
 import MessagesFeature
 import SQLiteData
-import StarMapFeature
 import SwiftUI
 import UI
 import UniverseModels

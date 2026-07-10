@@ -692,6 +692,37 @@ private struct CommandGrid: View {
         return status
     }
 
+    /// The devices this carrier could attach: fleet members sharing its location
+    /// that aren't already attached to something. Empty when the device can't
+    /// attach or reports no location of its own. Capacity is *not* filtered here —
+    /// a full carrier still lists candidates so the command surfaces its "full"
+    /// notice rather than vanishing. The subtitle is the device's display type, so
+    /// an entry reads "Mining Drone · 32658E70".
+    private var attachCandidates: [DeviceOption] {
+        guard device.features.contains("attach"), device.attachCapacity > 0 else { return [] }
+        guard let location = device.location, !location.isEmpty else { return [] }
+        let attached = Set(device.attachedDeviceCodes)
+        return fleet
+            .filter {
+                $0.deviceCode != device.deviceCode
+                    && $0.location == location
+                    && $0.attachedToDeviceCode == nil
+                    && !attached.contains($0.deviceCode)
+            }
+            .map { DeviceOption(id: $0.deviceCode, subtitle: DevicePresentation.displayName($0.deviceType)) }
+    }
+
+    /// The devices currently attached to this carrier, for the detach dropdown. The
+    /// codes come from the carrier's `attached_devices` tail; the display type is
+    /// looked up in the fleet so the entry reads "Autofactory · 43C9B54A". Empty
+    /// when nothing is attached.
+    private var detachCandidates: [DeviceOption] {
+        device.attachedDeviceCodes.map { code in
+            let type = fleet.first { $0.deviceCode == code }?.deviceType
+            return DeviceOption(id: code, subtitle: type.map(DevicePresentation.displayName) ?? "Attached")
+        }
+    }
+
     /// The dispatchable subset of the device's available commands. `retarget` is
     /// gated on the device actually mining (the server rejects it otherwise);
     /// `set_directive` only surfaces when the device offers directives, and
@@ -700,13 +731,21 @@ private struct CommandGrid: View {
     private var commands: [DeviceCommand] {
         let adopt = adoptCandidates
         let release = releaseCandidates
+        let attach = attachCandidates
+        let detach = detachCandidates
+        let attachedNow = device.attachedDeviceCodes.count
+        let capacity = device.attachCapacity
         return device.availableCommands
             .compactMap {
                 DeviceCommand(
                     command: $0,
                     availableDirectives: device.availableDirectives,
                     adoptCandidates: adopt,
-                    releaseCandidates: release
+                    releaseCandidates: release,
+                    attachCandidates: attach,
+                    attachedCount: attachedNow,
+                    attachCapacity: capacity,
+                    detachCandidates: detach
                 )
             }
             .filter { command in
@@ -715,6 +754,8 @@ private struct CommandGrid: View {
                 case let .setDirective(opts):  return !opts.isEmpty
                 case let .adopt(candidates):   return !candidates.isEmpty
                 case let .release(controlled): return !controlled.isEmpty
+                case let .attach(candidates, _, _): return !candidates.isEmpty
+                case let .detach(attached):    return !attached.isEmpty
                 default:                      return true
                 }
             }
@@ -768,7 +809,8 @@ private struct CommandGrid: View {
             // Seed the blueprint picker with the first catalog entry.
             blueprintType = blueprints.first?.deviceType ?? ""
         }
-        if case let .choice(_, options) = command.parameter {
+        switch command.parameter {
+        case let .choice(_, options):
             // Seed the directive picker with the device's current directive when
             // it's a valid option, so re-opening reflects what's in force.
             if case .setDirective = command, let current = device.currentDirective, options.contains(current) {
@@ -779,7 +821,10 @@ private struct CommandGrid: View {
             }
             // Load any data the initially-selected directive's config needs.
             if case .setDirective = command { prepareDirective(choiceValue) }
-        } else {
+        case let .deviceChoice(_, options):
+            // Seed the dropdown with the first candidate device code.
+            choiceValue = options.first?.id ?? ""
+        default:
             choiceValue = ""
         }
         pending = command
@@ -843,10 +888,17 @@ private struct CommandGrid: View {
                             }
                     }
                 }
-            case let .multiSelect(label, options):
-                deviceCheckboxList(label, options: options)
+            case let .multiSelect(label, options, limit):
+                deviceCheckboxList(label, options: options, limit: limit)
+            case let .deviceChoice(label, options):
+                deviceChoicePicker(label, options: options)
             case let .blueprint(label):
                 blueprintPicker(label)
+            case let .notice(message):
+                Text(message)
+                    .font(.rcCaption)
+                    .foregroundStyle(.rcTextSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
             case .none:
                 Text("Run \(command.title) on \(device.deviceCode)?")
                     .font(.rcCaption)
@@ -908,6 +960,8 @@ private struct CommandGrid: View {
         if !selectedCodes.isEmpty {
             if case .adopt = command { return "Adopt \(selectedCodes.count)" }
             if case .release = command { return "Release \(selectedCodes.count)" }
+            if case .attach = command { return "Attach \(selectedCodes.count)" }
+            if case .detach = command { return "Detach \(selectedCodes.count)" }
         }
         return command.title
     }
@@ -915,11 +969,13 @@ private struct CommandGrid: View {
     /// The value passed to `params(_:)` for the pending command's parameter kind.
     private func confirmValue(for command: DeviceCommand) -> String {
         switch command.parameter {
-        case .text:        return textValue
-        case .choice:      return choiceValue
-        case .blueprint:   return blueprintType
-        case .multiSelect: return ""
-        case .none:        return ""
+        case .text:         return textValue
+        case .choice:       return choiceValue
+        case .deviceChoice: return choiceValue
+        case .blueprint:    return blueprintType
+        case .multiSelect:  return ""
+        case .notice:       return ""
+        case .none:         return ""
         }
     }
 
@@ -931,6 +987,13 @@ private struct CommandGrid: View {
         case .setDirective:
             return CommandParams(directive: choiceValue, configuration: directiveConfig(for: choiceValue))
         case .adopt, .release:
+            return CommandParams(devices: Array(selectedCodes))
+        case .attach, .detach:
+            // Either a single-slot dropdown (one chosen code) or a multi-select
+            // (the checked codes), depending on how many slots / attachments there are.
+            if case .deviceChoice = command.parameter {
+                return CommandParams(devices: [choiceValue])
+            }
             return CommandParams(devices: Array(selectedCodes))
         default:
             return command.params(confirmValue(for: command))
@@ -1041,18 +1104,39 @@ private struct CommandGrid: View {
         }
     }
 
-    /// The `adopt` checkbox list: one selectable row per eligible device, capped in
-    /// height so a large fleet scrolls rather than pushing the confirm out of view.
-    private func deviceCheckboxList(_ label: String, options: [DeviceOption]) -> some View {
+    /// A multi-select checkbox list: one selectable row per eligible device, capped
+    /// in height so a large fleet scrolls rather than pushing the confirm out of
+    /// view. `limit` (attach's free slots) caps how many can be checked; a header
+    /// counter shows the running total and a Select-All/Clear toggle fills or
+    /// empties the selection (respecting `limit`).
+    private func deviceCheckboxList(_ label: String, options: [DeviceOption], limit: Int?) -> some View {
         VStack(alignment: .leading, spacing: Space.xs) {
-            Text(label.uppercased())
-                .font(.rcSectionLabel)
-                .foregroundStyle(.rcTextTertiary)
+            HStack(spacing: Space.xs) {
+                Text(label.uppercased())
+                    .font(.rcSectionLabel)
+                    .foregroundStyle(.rcTextTertiary)
+                if let limit {
+                    Text("\(selectedCodes.count)/\(limit)")
+                        .font(.rcCaption)
+                        .foregroundStyle(.rcTextTertiary)
+                } else if !selectedCodes.isEmpty {
+                    Text("\(selectedCodes.count)")
+                        .font(.rcCaption)
+                        .foregroundStyle(.rcTextTertiary)
+                }
+                Spacer(minLength: 0)
+                Button(selectAllFilled(options, limit: limit) ? "Clear" : "Select All") {
+                    toggleSelectAll(options, limit: limit)
+                }
+                .buttonStyle(.plain)
+                .font(.rcCaption)
+                .foregroundStyle(.rcAccent)
+            }
             ScrollView {
                 VStack(spacing: 0) {
                     ForEach(Array(options.enumerated()), id: \.element.id) { index, option in
                         if index > 0 { Divider().overlay(Color.rcSeparator) }
-                        checkboxRow(option)
+                        checkboxRow(option, limit: limit)
                     }
                 }
             }
@@ -1068,12 +1152,55 @@ private struct CommandGrid: View {
         }
     }
 
+    /// The codes Select-All would check: every option, or the first `limit` when
+    /// capped. "Filled" means all of those are already selected.
+    private func selectAllTargets(_ options: [DeviceOption], limit: Int?) -> [String] {
+        let ids = options.map(\.id)
+        return limit.map { Array(ids.prefix($0)) } ?? ids
+    }
+
+    private func selectAllFilled(_ options: [DeviceOption], limit: Int?) -> Bool {
+        let target = selectAllTargets(options, limit: limit)
+        return !target.isEmpty && target.allSatisfy(selectedCodes.contains)
+    }
+
+    /// Toggle between fully selected (up to `limit`) and cleared.
+    private func toggleSelectAll(_ options: [DeviceOption], limit: Int?) {
+        if selectAllFilled(options, limit: limit) {
+            selectedCodes.subtract(options.map(\.id))
+        } else {
+            selectedCodes = Set(selectAllTargets(options, limit: limit))
+        }
+    }
+
+    /// The `attach` device dropdown: one entry per same-location candidate, labeled
+    /// "Type · CODE" and valued by device code. A single-select carrier (surge
+    /// plate) holds one device at a time, so a dropdown fits better than a checkbox
+    /// list.
+    private func deviceChoicePicker(_ label: String, options: [DeviceOption]) -> some View {
+        VStack(alignment: .leading, spacing: Space.xs) {
+            Text(label.uppercased())
+                .font(.rcSectionLabel)
+                .foregroundStyle(.rcTextTertiary)
+            RCValueSelect(
+                label,
+                options: options.map { (label: "\($0.subtitle) · \($0.id)", value: $0.id) },
+                selection: $choiceValue
+            )
+        }
+    }
+
     /// One device row — a checkbox glyph, the device code, and a status subtitle —
-    /// toggling the code in/out of the pending selection.
-    private func checkboxRow(_ option: DeviceOption) -> some View {
+    /// toggling the code in/out of the pending selection. When `limit` is reached,
+    /// unchecked rows dim and stop responding so the selection can't exceed the
+    /// carrier's free slots.
+    private func checkboxRow(_ option: DeviceOption, limit: Int?) -> some View {
         let selected = selectedCodes.contains(option.id)
+        let atLimit = limit.map { selectedCodes.count >= $0 } ?? false
+        let blocked = !selected && atLimit
         return Button {
-            if selected { selectedCodes.remove(option.id) } else { selectedCodes.insert(option.id) }
+            if selected { selectedCodes.remove(option.id) }
+            else if !blocked { selectedCodes.insert(option.id) }
         } label: {
             HStack(spacing: Space.s) {
                 Image(systemName: selected ? "checkmark.square.fill" : "square")
@@ -1092,8 +1219,10 @@ private struct CommandGrid: View {
             .contentShape(Rectangle())
             .padding(.horizontal, Space.m)
             .padding(.vertical, Space.s)
+            .opacity(blocked ? 0.4 : 1)
         }
         .buttonStyle(.plain)
+        .disabled(blocked)
     }
 
     /// Whether the confirm button is enabled — text must be non-empty and a
@@ -1108,8 +1237,10 @@ private struct CommandGrid: View {
                 return !salvageLocation.isEmpty
             }
             return !choiceValue.isEmpty
+        case .deviceChoice: return !choiceValue.isEmpty
         case .blueprint:   return !blueprintType.isEmpty
         case .multiSelect: return !selectedCodes.isEmpty
+        case .notice:      return false
         case .none:        return true
         }
     }

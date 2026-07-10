@@ -301,7 +301,7 @@ private struct InventoryHoldingRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Space.xs) {
             VStack(alignment: .leading, spacing: 1) {
-                Text(holding.displayName).font(.rcBody).foregroundStyle(.rcTextPrimary)
+                Text(holding.displayName).font(.rcMono).foregroundStyle(.rcTextPrimary)
                 Text(holding.designation).font(.rcMonoSmall).foregroundStyle(.rcTextTertiary)
             }
             ForEach(holding.inventory, id: \.resourceType) { item in
@@ -364,7 +364,7 @@ private struct InspectorScroll<Content: View>: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Space.l) {
                 VStack(alignment: .leading, spacing: Space.xs) {
-                    Text(title).font(.rcTitle).foregroundStyle(.rcTextPrimary)
+                    Text(title).font(.rcTitleMono).foregroundStyle(.rcTextPrimary)
                     HStack(spacing: Space.s) {
                         Text(code).font(.rcMono).foregroundStyle(.rcTextTertiary)
                         ReconDot(recon: recon)
@@ -408,7 +408,7 @@ private struct StructureRow: View {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(site.title ?? site.name ?? site.designation)
-                        .font(.rcBody).foregroundStyle(.rcTextPrimary)
+                        .font(.rcMono).foregroundStyle(.rcTextPrimary)
                     Text(site.designation).font(.rcMonoSmall).foregroundStyle(.rcTextTertiary)
                 }
                 Spacer()
@@ -435,7 +435,7 @@ private struct BubbleRow: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 1) {
-                Text(title).font(.rcBody).foregroundStyle(.rcTextPrimary)
+                Text(title).font(.rcMono).foregroundStyle(.rcTextPrimary)
                 Text(code).font(.rcMonoSmall).foregroundStyle(.rcTextTertiary)
             }
             Spacer()

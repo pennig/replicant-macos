@@ -46,6 +46,14 @@ enum DeviceCommand: Hashable, Identifiable {
     /// Release devices from an AMI controller, chosen from the ones it currently
     /// controls. The inverse of `adopt`.
     case release(controlled: [DeviceOption])
+    /// Attach devices to a carrier (surge plate). `candidates` are the devices
+    /// sharing the carrier's location; `attachedCount`/`capacity` gate the UI —
+    /// a single free slot shows a dropdown, several a capped multi-select, none a
+    /// "full" notice.
+    case attach(candidates: [DeviceOption], attachedCount: Int, capacity: Int)
+    /// Detach devices from a carrier, chosen from the ones it currently carries.
+    /// The inverse of `attach`.
+    case detach(attached: [DeviceOption])
     /// A parameter-less lifecycle command, by backend verb (e.g. `deactivate`).
     case simple(String)
 
@@ -58,7 +66,11 @@ enum DeviceCommand: Hashable, Identifiable {
         command: String,
         availableDirectives: [String] = [],
         adoptCandidates: [DeviceOption] = [],
-        releaseCandidates: [DeviceOption] = []
+        releaseCandidates: [DeviceOption] = [],
+        attachCandidates: [DeviceOption] = [],
+        attachedCount: Int = 0,
+        attachCapacity: Int = 0,
+        detachCandidates: [DeviceOption] = []
     ) {
         switch command {
         case "travel":         self = .travel
@@ -72,6 +84,8 @@ enum DeviceCommand: Hashable, Identifiable {
         case "set_directive":  self = .setDirective(available: availableDirectives)
         case "adopt":          self = .adopt(candidates: adoptCandidates)
         case "release":        self = .release(controlled: releaseCandidates)
+        case "attach":         self = .attach(candidates: attachCandidates, attachedCount: attachedCount, capacity: attachCapacity)
+        case "detach":         self = .detach(attached: detachCandidates)
         default:
             // Surface only the parameter-less commands CommandClient can dispatch.
             guard CommandClient.supportedSimpleCommands.contains(command) else { return nil }
@@ -93,6 +107,8 @@ enum DeviceCommand: Hashable, Identifiable {
         case .setDirective:  return "set_directive"
         case .adopt:         return "adopt"
         case .release:       return "release"
+        case .attach:        return "attach"
+        case .detach:        return "detach"
         case let .simple(c): return c
         }
     }
@@ -110,6 +126,8 @@ enum DeviceCommand: Hashable, Identifiable {
         case .setDirective:  return .setDirective
         case .adopt:         return .adopt
         case .release:       return .release
+        case .attach:        return .attach
+        case .detach:        return .detach
         case let .simple(c): return .simple(c)
         }
     }
@@ -127,6 +145,8 @@ enum DeviceCommand: Hashable, Identifiable {
         case .setDirective:  return "Directive"
         case .adopt:         return "Adopt"
         case .release:       return "Release"
+        case .attach:        return "Attach"
+        case .detach:        return "Detach"
         case let .simple(c): return DevicePresentation.displayName(c)
         }
     }
@@ -144,6 +164,8 @@ enum DeviceCommand: Hashable, Identifiable {
         case .setDirective:  return "brain.head.profile"
         case .adopt:         return "rectangle.stack.badge.plus"
         case .release:       return "rectangle.stack.badge.minus"
+        case .attach:        return "link"
+        case .detach:        return "link.badge.minus"
         case let .simple(c): return Self.simpleSymbols[c] ?? "bolt"
         }
     }
@@ -171,12 +193,19 @@ enum DeviceCommand: Hashable, Identifiable {
     enum Parameter: Hashable {
         case text(label: String, placeholder: String)
         case choice(label: String, options: [String])
-        /// A checkbox list — the user picks zero or more of `options` (used by
-        /// `adopt`, which accepts multiple device codes at once).
-        case multiSelect(label: String, options: [DeviceOption])
+        /// A checkbox list — the user picks zero or more of `options` (adopt/release
+        /// take any number; attach caps the selection at `limit` free slots, and a
+        /// nil `limit` means uncapped).
+        case multiSelect(label: String, options: [DeviceOption], limit: Int?)
+        /// A single-select dropdown of devices — the user picks exactly one of
+        /// `options` (attach into a single free slot, or detach a lone attachment).
+        case deviceChoice(label: String, options: [DeviceOption])
         /// A blueprint picker — the options are the unlocked catalog, supplied by
         /// the command grid from its `@FetchAll` (not carried in the enum).
         case blueprint(label: String)
+        /// An informational message with no input and a disabled confirm — e.g. a
+        /// carrier that's at capacity, so attach can't proceed until a slot frees.
+        case notice(String)
         case none
     }
 
@@ -186,8 +215,19 @@ enum DeviceCommand: Hashable, Identifiable {
         case .print:           return .blueprint(label: "Blueprint")
         case .mine, .retarget: return .choice(label: "Resource", options: Self.miningResources)
         case let .setDirective(available): return .choice(label: "Directive", options: available)
-        case let .adopt(candidates): return .multiSelect(label: "Devices", options: candidates)
-        case let .release(controlled): return .multiSelect(label: "Devices", options: controlled)
+        case let .adopt(candidates): return .multiSelect(label: "Devices", options: candidates, limit: nil)
+        case let .release(controlled): return .multiSelect(label: "Devices", options: controlled, limit: nil)
+        case let .attach(candidates, attachedCount, capacity):
+            let remaining = max(0, capacity - attachedCount)
+            switch remaining {
+            case 0:  return .notice("Carrier at capacity (\(attachedCount)/\(capacity)). Detach a device to free a slot.")
+            case 1:  return .deviceChoice(label: "Device", options: candidates)
+            default: return .multiSelect(label: "Devices", options: candidates, limit: remaining)
+            }
+        case let .detach(attached):
+            return attached.count == 1
+                ? .deviceChoice(label: "Device", options: attached)
+                : .multiSelect(label: "Devices", options: attached, limit: nil)
         case .scan, .surveyScan, .census, .stow, .simple: return .none
         }
     }
@@ -213,9 +253,9 @@ enum DeviceCommand: Hashable, Identifiable {
         case .print:           return CommandParams(deviceType: value)
         case .mine, .retarget: return CommandParams(resourceType: value)
         case .setDirective:    return CommandParams(directive: value)
-        // adopt/release are multi-select — their params are built from the checkbox
-        // selection in the command grid, not this single-value mapping.
-        case .adopt, .release, .scan, .surveyScan, .census, .stow, .simple: return CommandParams()
+        // adopt/release/attach build their params from the picker selection in the
+        // command grid, not this single-value mapping.
+        case .adopt, .release, .attach, .detach, .scan, .surveyScan, .census, .stow, .simple: return CommandParams()
         }
     }
 }

@@ -149,14 +149,14 @@ extension CommandClient: DependencyKey {
                                 on: deviceCode, source: .poll, eventTime: date.now, result: nil
                             )
                         }
+                        let responseJSON = (try? ok.body.json).map(jsonValue(from:)) ?? .object([:])
                         // A `system_scan` response carries a `replicants` block —
                         // everyone detected in the scanned system, with a precise
                         // `location` and `last_active`. Record those sightings so
                         // player replicants (whose position the directory withholds)
                         // get an accurate last-known-location.
                         if kind == .scan {
-                            let json = (try? ok.body.json).map(jsonValue(from:)) ?? .object([:])
-                            let sightings = KnownReplicant.scanSightings(from: json)
+                            let sightings = KnownReplicant.scanSightings(from: responseJSON)
                             if !sightings.isEmpty {
                                 try? await database.write { db in
                                     try KnownReplicant.record(sightings: sightings, into: db, now: date.now)
@@ -166,6 +166,17 @@ extension CommandClient: DependencyKey {
                         }
                         if let device = try? await devicesClient.read(deviceCode) {
                             await Reconciler().ingest(device)
+                        }
+                        // Topology commands (attach/detach/adopt/release) move *other*
+                        // devices onto or off this one — the response names them in an
+                        // `attached`/`detached`/`adopted`/`released` block. Read each so
+                        // its status/carrier/controller reflects the new topology now,
+                        // rather than lagging until the next poll.
+                        let affected = affectedDeviceCodes(in: responseJSON).filter { $0 != deviceCode }
+                        for code in affected {
+                            if let device = try? await devicesClient.read(code) {
+                                await Reconciler().ingest(device)
+                            }
                         }
                         return .accepted(operationID: nil)
                     case let .badRequest(response):
@@ -371,6 +382,8 @@ extension CommandClient: DependencyKey {
     private typealias SetDirectiveSchema = Components.Schemas.AppSchemasDeviceCommandsSetDirectiveSchema
     private typealias AdoptSchema = Components.Schemas.AppSchemasDeviceCommandsAdoptSchema
     private typealias ReleaseSchema = Components.Schemas.AppSchemasDeviceCommandsReleaseSchema
+    private typealias AttachSchema = Components.Schemas.AppSchemasDeviceCommandsAttachSchema
+    private typealias DetachSchema = Components.Schemas.AppSchemasDeviceCommandsDetachSchema
     private typealias CommandResponse = Components.Schemas.AppSchemasDevicesDeviceCommandResponseSchema
 
     /// How a command reports completion — derived from live probing of the API
@@ -399,8 +412,10 @@ extension CommandClient: DependencyKey {
     /// tracked-path supersede ends any in-flight mining/travel op). `search` is a
     /// long-running survey scan whose deadline lives in the device's `scan` block
     /// (`eta_seconds`) rather than the dispatch response, so it's tracked here and
-    /// its `completesAt` is back-filled from the post-command read below.
-    private static let deadlineCommands: Set<String> = ["recall", "search"]
+    /// its `completesAt` is back-filled from the post-command read below. `compact`
+    /// packs the device down for transport over a fixed window and returns
+    /// `completes_at`, so it's a tracked deadline op too.
+    private static let deadlineCommands: Set<String> = ["recall", "search", "compact"]
 
     /// Immediate commands that stop a device's running action — closing its open
     /// operation so a lingering mining/travel row doesn't survive the stop.
@@ -451,6 +466,18 @@ extension CommandClient: DependencyKey {
         case .release:
             guard let devices = params.devices, !devices.isEmpty else { throw CommandError.missingParameter("devices") }
             return .json(.release(try devicesSchema(ReleaseSchema.self, command: "release", devices: devices)))
+        case .attach:
+            // Attach carries its device codes under `targets` (per the API docs),
+            // not `devices` like adopt/release. Same untyped-container shape, so
+            // reuse the JSON round-trip with the `targets` key.
+            guard let devices = params.devices, !devices.isEmpty else { throw CommandError.missingParameter("targets") }
+            return .json(.attach(try devicesSchema(AttachSchema.self, command: "attach", devices: devices, key: "targets")))
+        case .detach:
+            // Detach names the target(s) to remove (the server would detach
+            // everything if omitted, but the UI always picks a device). Same
+            // `targets` shape as attach.
+            guard let devices = params.devices, !devices.isEmpty else { throw CommandError.missingParameter("targets") }
+            return .json(.detach(try devicesSchema(DetachSchema.self, command: "detach", devices: devices, key: "targets")))
         case .print:
             guard let deviceType = params.deviceType else { throw CommandError.missingParameter("device_type") }
             return .json(.enqueuePrint(.init(command: "enqueue_print", deviceType: deviceType)))
@@ -476,20 +503,39 @@ extension CommandClient: DependencyKey {
         return try JSONDecoder().decode(SetDirectiveSchema.ConfigurationPayload.self, from: data)
     }
 
-    /// Build an `adopt`/`release` body carrying a `devices` array. Both generated
-    /// schemas type `devices` as an untyped `OpenAPIValueContainer` (the spec
-    /// leaves it schemaless), so round-trip a `{command, devices}` object through
+    /// Build an `adopt`/`release`/`attach` body carrying a device-code array under
+    /// `key` (`devices` for adopt/release, `targets` for attach). Those generated
+    /// schemas type the field as an untyped `OpenAPIValueContainer` (the spec
+    /// leaves it schemaless), so round-trip a `{command, <key>}` object through
     /// JSON — the decoder wraps the string array into the container without
     /// hand-bridging.
     private static func devicesSchema<Schema: Decodable>(
-        _ type: Schema.Type, command: String, devices: [String]
+        _ type: Schema.Type, command: String, devices: [String], key: String = "devices"
     ) throws -> Schema {
         let json = JSONValue.object([
             "command": .string(command),
-            "devices": .array(devices.map(JSONValue.string)),
+            key: .array(devices.map(JSONValue.string)),
         ])
         let data = try jsonEncoder.encode(json)
         return try JSONDecoder().decode(Schema.self, from: data)
+    }
+
+    /// The device codes a topology command reports it moved, gathered from the
+    /// response's `attached`/`detached`/`adopted`/`released` blocks. Each block is
+    /// an array of bare codes or `{device_code, …}` objects (both handled), so a
+    /// dispatch can refresh those devices too — their carrier/controller, and thus
+    /// status, changed alongside the device the command targeted.
+    private static func affectedDeviceCodes(in json: JSONValue) -> [String] {
+        var codes: [String] = []
+        for key in ["attached", "detached", "adopted", "released"] {
+            guard let items = json[key]?.arrayValue else { continue }
+            for item in items {
+                if let code = item["device_code"]?.stringValue ?? item.stringValue {
+                    codes.append(code)
+                }
+            }
+        }
+        return codes
     }
 
     /// The supported parameter-less commands, each routed to its discriminated

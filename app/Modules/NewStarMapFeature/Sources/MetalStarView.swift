@@ -190,29 +190,43 @@ struct MetalStarView: NSViewRepresentable {
         var loadedStars: [Star] = []
         /// The last recenter token applied, so a bump fires exactly one recenter.
         var lastResetToken = 0
+        /// The last search-focus token applied, so a bump fires exactly one re-aim.
+        var lastStarFocusToken = 0
         /// The last focus applied, so a drill-in / zoom-out fires exactly once.
         var lastFocus: StarMapFocus = .galaxy
         /// The last orrery model applied, so a hydrate refresh rebuilds in place.
         var lastModel: SystemModel?
 
         /// (Re)builds the renderer for `stars` if they differ from what's loaded.
-        func syncTerrain(_ stars: [Star], into view: StarMTKView) {
+        @MainActor func syncTerrain(_ stars: [Star], into view: StarMTKView) {
             guard stars != loadedStars else { return }
             loadedStars = stars
-            let renderer = StarFieldRenderer(mtkView: view, stars: stars)
+            let renderer = StarFieldRenderer(mtkView: view, stars: stars, viewpoint: .shared)
             self.renderer = renderer
             view.renderer = renderer
             view.delegate = renderer          // nil for an empty terrain → draws black
         }
 
         /// Pushes the declarative HUD controls into the imperative renderer.
-        func applyControls(autoRotate: Bool, recenterToken: Int, transitionDurationScale: Double) {
+        func applyControls(autoRotate: Bool, recenterToken: Int) {
             renderer?.autoRotate = autoRotate
-            renderer?.transitionDurationScale = transitionDurationScale
             if recenterToken != lastResetToken {
                 lastResetToken = recenterToken
                 renderer?.recenterOnPlayer()
             }
+        }
+
+        /// Flies the camera to the searched star when the search token bumps —
+        /// diving to a close framing (same as a double-click), not just re-aiming.
+        /// Resolves the star by designation in the current terrain; a no-op if it
+        /// isn't charted (e.g. terrain not yet rebuilt).
+        func applyStarFocus(token: Int, designation: String?, stars: [Star]) {
+            guard token != lastStarFocusToken else { return }
+            lastStarFocusToken = token
+            guard let designation,
+                  let idx = stars.firstIndex(where: { $0.name == designation })
+            else { return }
+            renderer?.dive(onStarAt: idx)
         }
 
         /// Drives the galaxy → system → body fly on a focus change (once per change,
@@ -220,7 +234,7 @@ struct MetalStarView: NSViewRepresentable {
         /// model updates (e.g. a drill-in hydrate lands with the real roster). The
         /// `model` is whatever the current level renders: the system's `SystemModel`
         /// at `.system`, or the drilled planet's body model at `.body`.
-        func applyFocus(_ focus: StarMapFocus, model: SystemModel?, stars: [Star], view: StarMTKView) {
+        @MainActor func applyFocus(_ focus: StarMapFocus, model: SystemModel?, stars: [Star], view: StarMTKView) {
             view.focused = { if case .galaxy = focus { return false } else { return true } }()
             if focus == lastFocus {
                 if case .galaxy = focus {} else if let model, model != lastModel {
@@ -265,6 +279,7 @@ struct MetalStarView: NSViewRepresentable {
     func makeCoordinator() -> Coordinator {
         let c = Coordinator()
         c.lastResetToken = store.cameraResetToken   // don't recenter on first appear
+        c.lastStarFocusToken = store.starFocusToken // don't re-aim on first appear
         c.lastFocus = store.focus
         return c
     }
@@ -279,8 +294,9 @@ struct MetalStarView: NSViewRepresentable {
         view.send = { [store] action in store.send(action) }
         context.coordinator.syncTerrain(stars, into: view)
         context.coordinator.applyControls(autoRotate: store.autoRotate,
-                                          recenterToken: store.cameraResetToken,
-                                          transitionDurationScale: store.transitionDurationScale)
+                                          recenterToken: store.cameraResetToken)
+        context.coordinator.applyStarFocus(token: store.starFocusToken,
+                                           designation: store.selectedStar?.name, stars: stars)
         context.coordinator.applyFocus(focus, model: systemModel, stars: stars, view: view)
         return view
     }
@@ -288,8 +304,9 @@ struct MetalStarView: NSViewRepresentable {
     func updateNSView(_ nsView: StarMTKView, context: Context) {
         context.coordinator.syncTerrain(stars, into: nsView)
         context.coordinator.applyControls(autoRotate: store.autoRotate,
-                                          recenterToken: store.cameraResetToken,
-                                          transitionDurationScale: store.transitionDurationScale)
+                                          recenterToken: store.cameraResetToken)
+        context.coordinator.applyStarFocus(token: store.starFocusToken,
+                                           designation: store.selectedStar?.name, stars: stars)
         context.coordinator.applyFocus(focus, model: systemModel, stars: stars, view: nsView)
     }
 }

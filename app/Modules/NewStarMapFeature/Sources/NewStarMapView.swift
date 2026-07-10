@@ -13,6 +13,7 @@
 //
 
 import ComposableArchitecture
+import simd
 import SQLiteData
 import SwiftUI
 import UI
@@ -47,6 +48,24 @@ public struct NewStarMapView: View {
         }
     }
     private var chartedStarCount: Int { surveyed.count }
+
+    /// Charted stars whose designation matches the live search query (case-
+    /// insensitive substring). Prefix matches rank first, then nearer stars; the
+    /// list is capped so the dropdown stays compact.
+    private var searchResults: [Star] {
+        let query = store.searchQuery.trimmingCharacters(in: .whitespaces).uppercased()
+        guard !query.isEmpty else { return [] }
+        return stars
+            .filter { $0.name.uppercased().contains(query) }
+            .sorted { lhs, rhs in
+                let lPrefix = lhs.name.uppercased().hasPrefix(query)
+                let rPrefix = rhs.name.uppercased().hasPrefix(query)
+                if lPrefix != rPrefix { return lPrefix }
+                return simd_length(lhs.position) < simd_length(rhs.position)
+            }
+            .prefix(8)
+            .map { $0 }
+    }
 
     /// Recon we actually hold for a system, from the denormalized `systemDetails`
     /// column (no JSON decode) — authoritative over the census row's stale flag.
@@ -157,6 +176,7 @@ public struct NewStarMapView: View {
         .environment(\.colorScheme, .dark)
         .animation(.easeInOut(duration: 0.5), value: store.focus)
         .animation(.easeInOut(duration: 0.22), value: store.selectedStar)
+        .animation(.easeInOut(duration: 0.15), value: store.searchQuery)
         .animation(.easeInOut(duration: 0.22), value: store.activeFilterName)
         .animation(.easeInOut(duration: 0.4), value: store.bootPhase)
         .navigationTitle(navTitle)
@@ -168,7 +188,16 @@ public struct NewStarMapView: View {
     private var galaxyHUD: some View {
         ZStack {
             VStack(alignment: .leading, spacing: Space.m) {
-                header
+                GalaxyNavigator(
+                    chartedStarCount: chartedStarCount,
+                    query: Binding(
+                        get: { store.searchQuery },
+                        set: { store.send(.searchQueryChanged($0)) }
+                    ),
+                    results: searchResults,
+                    currentLocationID: currentLocationID,
+                    onSelect: { store.send(.searchResultSelected($0)) }
+                )
                 Spacer()
                 HStack(alignment: .bottom) {
                     if let system = selectedSystem {
@@ -216,20 +245,6 @@ public struct NewStarMapView: View {
         }
     }
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text("Galaxy Explorer")
-                .font(.rcTitle)
-                .foregroundStyle(.rcTextPrimary)
-            Text(chartedStarCount > 0 ? "\(chartedStarCount.formatted()) charted stars" : "Uncharted")
-                .font(.rcCaption)
-                .foregroundStyle(.rcTextTertiary)
-        }
-        .padding(.horizontal, Space.m)
-        .padding(.vertical, Space.s)
-        .hudGlass()
-    }
-
     private var controls: some View {
         VStack(alignment: .leading, spacing: Space.s) {
             surveyControl
@@ -253,24 +268,6 @@ public struct NewStarMapView: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(.rcTextSecondary)
-
-            Divider().overlay(.rcSeparator)
-
-            // Debug: scrub the drill/zoom animation timing to review it slowly.
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Transition \(store.transitionDurationScale, format: .number.precision(.fractionLength(1)))×")
-                    .font(.rcCaption)
-                    .foregroundStyle(.rcTextSecondary)
-                Slider(
-                    value: Binding(
-                        get: { store.transitionDurationScale },
-                        set: { store.send(.transitionDurationScaleChanged($0)) }
-                    ),
-                    in: 1...8
-                )
-                .controlSize(.small)
-                .tint(.rcAccent)
-            }
         }
         .padding(.horizontal, Space.m)
         .padding(.vertical, Space.s)
@@ -318,6 +315,119 @@ public struct NewStarMapView: View {
         (star.positionX * star.positionX
             + star.positionY * star.positionY
             + star.positionZ * star.positionZ).squareRoot()
+    }
+}
+
+// MARK: - Galaxy navigator (header + search)
+
+/// The galaxy HUD's primary navigation lockup: the "Galaxy Explorer" title and
+/// charted-star count over a search field, in one glass card. Typing filters the
+/// charted catalog; picking a result (click or ↩ on the top hit) flies the camera
+/// to that star. Uses the design system's field styling (`rcField`) and focus ring.
+private struct GalaxyNavigator: View {
+    let chartedStarCount: Int
+    @Binding var query: String
+    let results: [Star]
+    let currentLocationID: String?
+    let onSelect: (Star) -> Void
+
+    @FocusState private var searchFocused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Space.s) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Galaxy Explorer")
+                    .font(.rcTitle)
+                    .foregroundStyle(.rcTextPrimary)
+                Text(chartedStarCount > 0 ? "\(chartedStarCount.formatted()) charted stars" : "Uncharted")
+                    .font(.rcCaption)
+                    .foregroundStyle(.rcTextTertiary)
+            }
+
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.rcTextTertiary)
+                TextField("Search stars…", text: $query)
+                    .textFieldStyle(.plain)
+                    .focused($searchFocused)
+                    .onSubmit { if let first = results.first { onSelect(first) } }
+                if !query.isEmpty {
+                    Button { query = "" } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 13))
+                            .foregroundStyle(.rcTextTertiary)
+                            .padding(6)                   // enlarge the hit target…
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(-6)                          // …without affecting layout
+                }
+            }
+            .rcField(focused: searchFocused)
+
+            if !query.isEmpty {
+                if results.isEmpty {
+                    Text("No charted stars match")
+                        .font(.rcCaption)
+                        .foregroundStyle(.rcTextTertiary)
+                        .padding(.top, 2)
+                } else {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(results, id: \.name) { star in
+                            SearchResultRow(
+                                star: star,
+                                isCurrentLocation: star.name == currentLocationID,
+                                onSelect: { onSelect(star) }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        .padding(Space.m)
+        .frame(width: 280, alignment: .leading)
+        .hudGlass()
+    }
+}
+
+/// One search-result row: designation on the leading edge, distance (or the
+/// current-location flag) trailing, with a hover highlight so it reads as tappable.
+private struct SearchResultRow: View {
+    let star: Star
+    let isCurrentLocation: Bool
+    let onSelect: () -> Void
+
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: onSelect) {
+            HStack(spacing: Space.s) {
+                Text(star.name)
+                    .font(.rcMonoSmall)
+                    .foregroundStyle(.rcTextPrimary)
+                    .lineLimit(1)
+                Spacer(minLength: Space.s)
+                Text(trailing)
+                    .font(.rcCaption)
+                    .foregroundStyle(isCurrentLocation ? .rcAccent : .rcTextTertiary)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, Space.s)
+            .padding(.vertical, Space.xs)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: Radius.control)
+                    .fill(.rcAccent.opacity(hovered ? 0.12 : 0))
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+    }
+
+    private var trailing: String {
+        isCurrentLocation ? "Current Location" : String(format: "%.1f ly", simd_length(star.position))
     }
 }
 
@@ -393,7 +503,7 @@ private struct SystemDossier: View {
             HStack {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(system.name)
-                        .font(.rcHeadline)
+                        .font(.rcHeadlineMono)
                         .foregroundStyle(.rcTextPrimary)
                     Text("\(system.id) · \(system.spectralType)")
                         .font(.rcMonoSmall)
@@ -552,7 +662,7 @@ private struct SystemHUD: View {
             Divider().overlay(.rcSeparator)
 
             Text(model.star.name ?? model.star.designation)
-                .font(.rcTitle).foregroundStyle(.rcTextPrimary)
+                .font(.rcTitleMono).foregroundStyle(.rcTextPrimary)
             Text([model.star.designation, model.star.spectralType,
                   model.star.temperatureK.map { "\(Int($0)) K" }]
                     .compactMap { $0 }.joined(separator: " · "))
@@ -628,7 +738,7 @@ private struct SystemHUD: View {
                 .fill(planet.inHabitableZone ? .rcStatusReady : .rcTextSecondary)
                 .frame(width: 7, height: 7)
             Text(planet.name.map { "\(planet.designation) · \($0)" } ?? planet.designation)
-                .font(.rcBody).foregroundStyle(.rcTextPrimary)
+                .font(.rcMono).foregroundStyle(.rcTextPrimary)
             indicatorGlyphs(planet.indicators)
             if planet.moonCount > 0 {
                 Text("\(planet.moonCount)☾").font(.rcCaption).foregroundStyle(.rcTextTertiary)

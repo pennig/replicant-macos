@@ -282,6 +282,26 @@ extension Device {
     public var controlledDeviceCodes: [String] { controlledDevices.map(\.deviceCode) }
 }
 
+// MARK: - Attachment
+
+extension Device {
+    /// How many devices this carrier can hold attached at once (`attach_capacity`),
+    /// from the variable tail. 0 when the field is absent (the device can't attach).
+    public var attachCapacity: Int {
+        detail["attach_capacity"]?.numberValue.map(Int.init) ?? 0
+    }
+
+    /// The codes of the devices currently attached to this carrier
+    /// (`attached_devices`), from the variable tail. Entries may be bare codes or
+    /// `{device_code, …}` objects (like `stowed_devices`); both are handled. Empty
+    /// when none are attached or the field is absent.
+    public var attachedDeviceCodes: [String] {
+        detail["attached_devices"]?.arrayValue?.compactMap {
+            $0["device_code"]?.stringValue ?? $0.stringValue
+        } ?? []
+    }
+}
+
 // MARK: - Operation completion signals
 
 extension Device {
@@ -307,6 +327,7 @@ extension Device {
             ("scan", ["completes_at"]),
             ("prospect", ["completes_at"]),
             ("repair", ["completes_at"]),
+            ("compact", ["completes_at"]),
         ]
         var soonest: Date?
         for (block, fields) in blocks {
@@ -390,6 +411,16 @@ extension Device {
                 kind: .mine,
                 startedAt: detailDate("mining", "started_at"),
                 completesAt: detailDate("mining", "completes_at") ?? detailDate("mining", "cycle_completes_at")
+            )
+        }
+        // Compacting for transport: a `compact` block with an absolute
+        // `completes_at`, so a device found mid-compact (cold-load) adopts a
+        // deadline op that the generic progress bar can draw.
+        if case .object = detail["compact"] {
+            return DerivedActivity(
+                kind: .compact,
+                startedAt: detailDate("compact", "started_at"),
+                completesAt: detailDate("compact", "completes_at")
             )
         }
         // Survey-drone scan/search: a `scan` block with an `eta_seconds` countdown

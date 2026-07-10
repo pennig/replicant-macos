@@ -118,19 +118,25 @@ enum OrreryGeometry {
 
     /// The asteroid belt(s) as a deterministic world-space additive point ring.
     /// Reuses `AmbientVertex` (position+size / color+brightness). `scale` as above.
-    static func beltPoints(model: SystemModel, center: SIMD3<Float>, scale: Float, countPerBelt: Int = 260) -> [AmbientVertex] {
+    static func beltPoints(model: SystemModel, center: SIMD3<Float>, scale: Float, countPerBelt: Int = 440) -> [AmbientVertex] {
         var rng = SeededLCG(seed: 0xBE17)
         var pts: [AmbientVertex] = []
         pts.reserveCapacity(model.belts.count * countPerBelt)
         for belt in model.belts {
             let inner = belt.innerScene, outer = belt.outerScene
-            for _ in 0..<countPerBelt {
+            // Denser belts read as a more substantial ring (density is a qualifier string).
+            let d = (belt.density ?? "").lowercased()
+            let densityFactor: Float = d.contains("dense") ? 1.0
+                : d.contains("moderate") ? 0.65
+                : d.contains("sparse") ? 0.35 : 0.5
+            let count = Int(Float(countPerBelt) * (0.8 + 0.5 * densityFactor))
+            for _ in 0..<count {
                 let r = (inner + rng.next() * (outer - inner)) * Double(scale)
                 let a = rng.next(in: 0...(2 * .pi))
-                let y = (rng.next() - 0.5) * 0.8 * Double(scale)
+                let y = (rng.next() - 0.5) * 0.5 * Double(scale)   // tighter band → defined ring
                 let p = center + SIMD3<Float>(Float(cos(a) * r), Float(y), Float(sin(a) * r))
-                let brightness = Float(rng.next(in: 0.3...0.85))
-                pts.append(AmbientVertex(positionSize: SIMD4(p, 2.0), color: SIMD4(beltColor, brightness)))
+                let brightness = Float(rng.next(in: 0.55...1.0))
+                pts.append(AmbientVertex(positionSize: SIMD4(p, 3.0), color: SIMD4(beltColor, brightness)))
             }
         }
         return pts

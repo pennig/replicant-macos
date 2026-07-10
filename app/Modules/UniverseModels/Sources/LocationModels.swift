@@ -5,8 +5,8 @@
 //  The canonical "what we know" domain for the stellar-locations catalog. These
 //  are pure value types shared by the catalog feature and (eventually) anything
 //  else that needs charted-universe data. They are deliberately decoupled from
-//  the StarMap orrery's presentation models (which carry SceneKit scene units) —
-//  see `StarMapFeature/SystemModels.swift`.
+//  the star-map orrery's presentation models (which carry renderer scene units) —
+//  see `NewStarMapFeature`.
 //
 //  The designation hierarchy *is* the tree:
 //    SOL · SOL-3 · SOL-3-1 · SOL-BELT-1 · SOL-BELT-1-SITE-0 · SOL-5-L4

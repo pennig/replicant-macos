@@ -53,7 +53,7 @@ private func travelOp(_ id: String, device: String, status: OperationStatus, com
         let store = withDependencies {
             $0.defaultDatabase = database
         } operation: {
-            TestStore(initialState: SidebarFeature.State(apiKey: "k")) { SidebarFeature() }
+            TestStore(initialState: SidebarFeature.State()) { SidebarFeature() }
         }
 
         await store.send(.binding(.set(\.category, .messages))) {
@@ -62,17 +62,18 @@ private func travelOp(_ id: String, device: String, status: OperationStatus, com
         await store.receive(\.delegate.categoryChanged)
     }
 
-    /// The Account sheet's Log Out bubbles up as a `loggedOut` delegate.
-    @Test func logoutEmitsDelegate() async throws {
+    /// Tapping the account footer bubbles up so the container can present the
+    /// Account sheet (which now owns logout itself).
+    @Test func accountButtonEmitsDelegate() async throws {
         let database = try GameDatabase.bootstrap()
         let store = withDependencies {
             $0.defaultDatabase = database
         } operation: {
-            TestStore(initialState: SidebarFeature.State(apiKey: "k")) { SidebarFeature() }
+            TestStore(initialState: SidebarFeature.State()) { SidebarFeature() }
         }
 
-        await store.send(.logoutButtonTapped)
-        await store.receive(\.delegate.loggedOut)
+        await store.send(.accountButtonTapped)
+        await store.receive(\.delegate.accountButtonTapped)
     }
 
     /// Saving a plan forwards to `replicantsClient.updatePlan`.
@@ -84,7 +85,7 @@ private func travelOp(_ id: String, device: String, status: OperationStatus, com
             $0.defaultDatabase = database
             $0.replicantsClient.updatePlan = { code, plan in captured.setValue((code, plan)) }
         } operation: {
-            TestStore(initialState: SidebarFeature.State(apiKey: "k")) { SidebarFeature() }
+            TestStore(initialState: SidebarFeature.State()) { SidebarFeature() }
         }
         store.exhaustivity = .off
 

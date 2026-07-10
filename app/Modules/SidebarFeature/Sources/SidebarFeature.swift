@@ -19,23 +19,17 @@ import SQLiteData
 public struct SidebarFeature {
     @ObservableState
     public struct State: Equatable {
-        /// The signed-in account profile (footer + Account sheet).
+        /// The signed-in account profile (sidebar footer).
         @Shared(.account) public var account: Account
         /// The account's replicant roster, observed from SQLite (switcher + footer).
         @ObservationStateIgnored
         @FetchAll public var replicants: [Replicant]
-        /// The session API key, shown (read-only) in the Account sheet.
-        public var apiKey: String
         /// The selected category — the split view's navigation spine. `MainView`
         /// reads this to choose the content/detail panes.
         public var category: SidebarItem?
-        /// Whether the Account sheet is presented (opened from the footer).
-        public var isShowingAccount: Bool
 
-        public init(apiKey: String, category: SidebarItem? = .devices) {
-            self.apiKey = apiKey
+        public init(category: SidebarItem? = .devices) {
             self.category = category
-            self.isShowingAccount = false
         }
     }
 
@@ -48,13 +42,16 @@ public struct SidebarFeature {
         case loadActivePlan(String)
         /// Persist an edited plan for the given replicant via PATCH.
         case savePlan(code: String, plan: String)
-        case logoutButtonTapped
+        /// The account footer was tapped — bubbles up so the container presents
+        /// the Account sheet (its own feature, which owns logout).
+        case accountButtonTapped
         case delegate(Delegate)
 
         @CasePathable
         public enum Delegate: Equatable {
-            /// The Account sheet's Log Out was tapped — the app root tears down.
-            case loggedOut
+            /// The account footer was tapped — the container presents the Account
+            /// sheet.
+            case accountButtonTapped
             /// The category selection changed — the container resets its detail
             /// selection. (The category itself lives here; only the reset bridges.)
             case categoryChanged
@@ -87,8 +84,8 @@ public struct SidebarFeature {
                     }
                 }
 
-            case .logoutButtonTapped:
-                return .send(.delegate(.loggedOut))
+            case .accountButtonTapped:
+                return .send(.delegate(.accountButtonTapped))
 
             case .delegate:
                 return .none

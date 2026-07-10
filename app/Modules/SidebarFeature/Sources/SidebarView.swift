@@ -92,11 +92,8 @@ public struct SidebarView: View {
                 experiencePoints: store.account.experiencePointsTotal,
                 replicantCount: store.replicants.count
             ) {
-                store.isShowingAccount = true
+                store.send(.accountButtonTapped)
             }
-        }
-        .sheet(isPresented: $store.isShowingAccount) {
-            AccountView(store: store)
         }
     }
 

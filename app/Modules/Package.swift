@@ -7,6 +7,7 @@ let package = Package(
         .macOS(.v26),
     ],
     products: [
+        .library(name: "AccountFeature", targets: ["AccountFeature"]),
         .library(name: "AccountManager", targets: ["AccountManager"]),
         .library(name: "API", targets: ["API"]),
         .library(name: "BlueprintsFeature", targets: ["BlueprintsFeature"]),
@@ -25,7 +26,6 @@ let package = Package(
         .library(name: "RawAPIFeature", targets: ["RawAPIFeature"]),
         .library(name: "ReplicantsFeature", targets: ["ReplicantsFeature"]),
         .library(name: "SidebarFeature", targets: ["SidebarFeature"]),
-        .library(name: "StarMapFeature", targets: ["StarMapFeature"]),
         .library(name: "UI", targets: ["UI"]),
         .library(name: "UniverseModels", targets: ["UniverseModels"]),
         .library(name: "Utils", targets: ["Utils"]),
@@ -41,6 +41,31 @@ let package = Package(
         .package(url: "https://github.com/siteline/swiftui-introspect", exact: "26.0.1"),
     ],
     targets: [
+        .target(
+            name: "AccountFeature",
+            dependencies: [
+                "AccountManager",
+                "API",
+                "GameModels",
+                "GameServices",
+                "UI",
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "SQLiteData", package: "sqlite-data"),
+            ],
+            path: "AccountFeature/Sources"
+        ),
+        .testTarget(
+            name: "AccountFeatureTests",
+            dependencies: [
+                "AccountFeature",
+                "GameDatabase",
+                "GameModels",
+                "GameServices",
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "SQLiteData", package: "sqlite-data"),
+            ],
+            path: "AccountFeature/Tests"
+        ),
         .target(
             name: "AccountManager",
             dependencies: [
@@ -429,28 +454,6 @@ let package = Package(
                 .product(name: "SQLiteData", package: "sqlite-data"),
             ],
             path: "SidebarFeature/Tests"
-        ),
-        .target(
-            name: "StarMapFeature",
-            dependencies: [
-                "API",
-                "GameModels",
-                "GameServices",
-                "UI",
-                "UniverseModels",
-                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
-                .product(name: "SQLiteData", package: "sqlite-data"),
-            ],
-            path: "StarMapFeature/Sources"
-        ),
-        .testTarget(
-            name: "StarMapFeatureTests",
-            dependencies: [
-                "GameDatabase",
-                "StarMapFeature",
-                "UniverseModels",
-            ],
-            path: "StarMapFeature/Tests"
         ),
         .target(
             name: "UI",

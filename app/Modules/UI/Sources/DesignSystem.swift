@@ -243,6 +243,11 @@ public extension Font {
     static let rcSectionLabel = Font.system(size: 10, weight: .semibold).uppercaseSmallCaps()            // UPPERCASE + tracking
     static let rcMono         = Font.system(size: 13, weight: .regular, design: .monospaced) // IDs / codes
     static let rcMonoSmall    = Font.system(size: 11, weight: .medium, design: .monospaced)
+    // Monospaced variants at title/headline/emphasized-body prominence, for the
+    // system-name rule: any system name (a designation code) is always monospace.
+    static let rcTitleMono    = Font.system(size: 20, weight: .bold, design: .monospaced)     // system name, title prominence
+    static let rcHeadlineMono = Font.system(size: 15, weight: .semibold, design: .monospaced) // system name, headline prominence
+    static let rcBodyEmphMono  = Font.system(size: 13, weight: .semibold, design: .monospaced) // system name, list-row prominence
     static let rcDisplay      = Font.system(size: 28, weight: .semibold)            // large detail-header glyph / number
     static let rcMicro        = Font.system(size: 9, weight: .semibold)             // micro badge / caption below rcSectionLabel
 }

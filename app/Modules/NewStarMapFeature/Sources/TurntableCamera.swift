@@ -144,20 +144,32 @@ struct TurntableCamera {
 
     // MARK: Eased framing
 
-    /// Re-aim at `point`: pivot to look at the star. If the star is within
-    /// `maxFocusRadius` the eye stays exactly where it is (tilt-only — an
-    /// orientation change); if it's farther, the eye glides in along the viewing
-    /// ray to sit `maxFocusRadius` from it (zoom-toward — a change of full pose).
-    /// The cap is applied once here, to the goal eye. `now` is the current time
+    /// Re-aim at `point`: pivot to look at the star, settling at a distance bounded
+    /// by the star's dolly floor and the re-aim cap:
+    ///   • inside the `focusFloor` (dollied in too close while unfocused) → pull the
+    ///     eye back out to the floor, so a focused star can't over-fill the view;
+    ///   • between the floor and `maxFocusRadius` → hold the eye exactly where it is
+    ///     (tilt-only — an orientation change);
+    ///   • beyond `maxFocusRadius` → glide the eye in along the viewing ray to sit
+    ///     `maxFocusRadius` from it (zoom-toward).
+    /// The bound is applied once here, to the goal eye. `now` is the current time
     /// (seconds, monotonic) — injected so the camera is a pure, testable value.
     mutating func focus(on point: SIMD3<Float>, now: Double) {
-        let anchor = eye
-        let v = anchor - point
+        let v = eye - point
         let dist = length(v)
-        let goalEye = (dist <= maxFocusRadius || dist < 1e-4)
-            ? anchor                                  // tilt-only, eye pinned
-            : point + (v / dist) * maxFocusRadius     // zoom-toward
-        beginFraming(goalEye: goalEye, goalTarget: point, now: now)
+        // Direction from the star back to the eye; fall back to the current orbit
+        // direction if the eye is essentially on the star.
+        let u: SIMD3<Float>
+        if dist > 1e-4 {
+            u = v / dist
+        } else {
+            let ce = cos(elevation), se = sin(elevation), ca = cos(azimuth), sa = sin(azimuth)
+            u = SIMD3<Float>(ce * sa, se, ce * ca)
+        }
+        let floor = max(minRadius, focusFloor ?? minRadius)
+        let goalDist = dist < floor ? floor
+                     : (dist <= maxFocusRadius ? dist : maxFocusRadius)
+        beginFraming(goalEye: point + u * goalDist, goalTarget: point, now: now)
     }
 
     /// Dive to a fixed distance: always reposition the eye to sit `diveRadius`
@@ -177,6 +189,20 @@ struct TurntableCamera {
         let r = min(max(diveRadius, minRadius), maxRadius)
         beginFraming(goalEye: point + u * r, goalTarget: point, now: now, duration: duration)
     }
+
+    /// Immediately settle at a dived pose on `point` (no eased framing), keeping
+    /// the current orbit angles. Seeds the first-run viewpoint — a close frame on
+    /// the current-location star rather than the far overview.
+    mutating func settle(on point: SIMD3<Float>, radius r: Float) {
+        framing = nil
+        target = point
+        radius = min(max(r, minRadius), maxRadius)
+    }
+
+    /// Cancel any in-flight eased move, holding the current pose. Used when a
+    /// cached pose is restored so a fly that was mid-flight when the view went away
+    /// doesn't resume from a stale start time.
+    mutating func cancelFraming() { framing = nil }
 
     /// Ease to an overview: move the eye so it sits `radius` from `target`,
     /// recentring there. Used for Home — a deliberate pull-back, not a re-aim.

@@ -8,6 +8,11 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     private let device: MTLDevice
     private let queue: MTLCommandQueue
 
+    /// Process-lived cache of the camera pose + orrery focus, so this renderer
+    /// (rebuilt on every tab switch / survey) restores where the player was rather
+    /// than snapping back to the overview.
+    private let viewpoint: StarMapViewpoint
+
     private let starPipeline: MTLRenderPipelineState        // additive glow field (no depth)
     private let bodyPipeline: MTLRenderPipelineState        // opaque resolved discs (write depth)
     private let tonemapPipeline: MTLRenderPipelineState
@@ -67,11 +72,9 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     private var transitionDuration: Double = 0.0001
     private var fieldDim: Float { 1 - systemProgress * (1 - fieldFloor) }   // terrain fade to a faint backdrop
     private var orreryReveal: Float { systemProgress }   // orrery reveal + emerge scale
-    /// Base drill/zoom durations (seconds); match the reducer's transition lock.
+    /// Drill/zoom durations (seconds); match the reducer's transition lock.
     private let drillDurationBase = 1.15
     private let zoomDurationBase = 0.95
-    /// Debug: multiplies the drill/zoom animation duration (crossfade + camera fly).
-    var transitionDurationScale: Double = 1
 
     // Labels: the curated annotation layer. Rasterized-text cache + which star is
     // selected (always labelled), plus how many context labels to show.
@@ -133,6 +136,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     // Tunables (all the knobs the design discussion surfaced, in one place).
     private var minAngularSize: Float = 0.0015   // floor: distant stars stay visible
     private var maxAngularSize: Float = 0.05     // ceiling: near stars can't fill the view
+    private let orreryOrbitSpeed: Float = 1.2    // seconds of animation per "period day" — larger = slower
     private var atmoNear: Float = 40             // depth dimming band
     private var atmoFar: Float = 420
     private var atmoFloor: Float = 0.35          // atmospheric floor (≠ semantic floor)
@@ -154,7 +158,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     /// rather than `Galaxy.generate()`); the GPU buffer is its render projection.
     /// Returns nil for an empty terrain — the view shows a placeholder until the
     /// galaxy has been surveyed.
-    init?(mtkView: MTKView, stars: [Star]) {
+    init?(mtkView: MTKView, stars: [Star], viewpoint: StarMapViewpoint) {
         guard !stars.isEmpty,
               let device = mtkView.device ?? MTLCreateSystemDefaultDevice(),
               let queue = device.makeCommandQueue(),
@@ -163,6 +167,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
 
         self.device = device
         self.queue = queue
+        self.viewpoint = viewpoint
 
         // Static terrain geometry — uploaded once.
         let instances = stars.map(\.renderInstance)
@@ -397,6 +402,16 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         var clamp: Set<Int> = [player]
         for s in fleet { clamp.insert(s.fromStar); clamp.insert(s.toStar) }
         relevance.setStateClamp(clamp)
+
+        // Restore where the player last was (survives tab switches + surveys), or
+        // seed the first-run dive on the current-location star.
+        if viewpoint.isSeeded {
+            restoreViewpoint()
+        } else {
+            frameInitialDive()
+            viewpoint.markSeeded()
+            persistViewpoint()
+        }
     }
 
     // MARK: MTKViewDelegate
@@ -422,6 +437,10 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         // `focusedStarIndex` is intentionally NOT cleared on zoom-out: the star that
         // was drilled stays "focused" (it's the sun throughout, so no snap-flicker,
         // and it remains the focused star back in the galaxy).
+
+        // Capture the live viewpoint each frame so the next renderer rebuild (tab
+        // switch / survey) lands exactly here. Cheap: value types + COW model arrays.
+        persistViewpoint()
 
         guard let hdr = hdrTexture,
               let drawable = view.currentDrawable,
@@ -557,7 +576,8 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
                 }
                 // Annotation pips: indicator dots + hazard markers, on top of the
                 // bodies (depth-read so a pip behind the sun is occluded), additive.
-                var pips = orreryPips(model: model, time: t)
+                let pips = orreryPips(model: model, time: t,
+                                      viewportPx: SIMD2<Float>(Float(size.width), Float(size.height)))
                 if !pips.isEmpty {
                     var pipParams = MeshParams(
                         viewportPixels: SIMD2<Float>(Float(size.width), Float(size.height)),
@@ -701,10 +721,68 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     /// "recenter" control brings you home to where you actually are.
     func recenterOnPlayer() {
         selectedStarIndex = nil
-        camera.focusFloor = nil
+        // Centred on a star → keep that star's dolly floor, so you can't then pinch
+        // in past its angular-size limit (which would break a later enterSystem).
+        camera.focusFloor = dollyFloor(for: playerStarIndex)
         relevance.clearFocus()
         camera.overview(target: stars[playerStarIndex].position,
                         radius: overviewRadius, now: CACurrentMediaTime())
+    }
+
+    // MARK: Viewpoint persistence
+
+    /// Seed the very first viewpoint: a close dive on the current-location star (the
+    /// gold player reticle) rather than the far galaxy overview. Mirrors the
+    /// end-state of a double-click dive, and sets the star's dolly floor so you
+    /// can't push past where it stops growing.
+    private func frameInitialDive() {
+        let floor = dollyFloor(for: playerStarIndex)
+        camera.focusFloor = floor
+        camera.settle(on: stars[playerStarIndex].position, radius: max(diveRadius, floor))
+    }
+
+    /// Restore the imperative viewpoint captured before the last teardown, so
+    /// returning to the map lands exactly where you were — same pose, same
+    /// drilled-in system/planet. The orrery scaffold/belt buffers are rebuilt at the
+    /// restored centre + scale.
+    private func restoreViewpoint() {
+        camera = viewpoint.camera
+        camera.cancelFraming()            // don't resume a fly that was mid-flight at teardown
+        cameraStack = viewpoint.cameraStack
+        systemProgress = viewpoint.systemProgress
+        transitionFrom = systemProgress   // pin the transition so `draw` doesn't animate it
+        transitionTarget = systemProgress
+        systemFocused = viewpoint.systemFocused
+        orreryCenter = viewpoint.orreryCenter
+        orrerySunWorldPos = viewpoint.orrerySunWorldPos
+        orreryScale = viewpoint.orreryScale
+        focusedStarIndex = viewpoint.focusedStarIndex
+        selectedStarIndex = viewpoint.selectedStarIndex
+        if let model = viewpoint.orreryModel {
+            setOrreryModel(model)         // rebuilds scaffold/belt buffers at the restored centre+scale
+        }
+        // Re-light the relevance field the fresh GPU state lost: the pre-drill focus
+        // in a system, else the picked star in the galaxy.
+        if systemFocused, let focused = focusedStarIndex {
+            relevance.focus(on: focused)
+        } else if let selected = selectedStarIndex {
+            relevance.focus(on: selected)
+        }
+    }
+
+    /// Snapshot the live viewpoint into the shared cache so it survives the next
+    /// teardown (tab switch / survey rebuild).
+    private func persistViewpoint() {
+        viewpoint.camera = camera
+        viewpoint.cameraStack = cameraStack
+        viewpoint.systemProgress = systemProgress
+        viewpoint.systemFocused = systemFocused
+        viewpoint.orreryModel = orreryModel
+        viewpoint.orreryCenter = orreryCenter
+        viewpoint.orrerySunWorldPos = orrerySunWorldPos
+        viewpoint.orreryScale = orreryScale
+        viewpoint.focusedStarIndex = focusedStarIndex
+        viewpoint.selectedStarIndex = selectedStarIndex
     }
 
     // MARK: System focus (orrery)
@@ -731,7 +809,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         systemFocused = true
         camera.focusFloor = dFinal * 0.6         // limit how far you can zoom in
         let now = CACurrentMediaTime()
-        beginTransition(to: 1, duration: drillDurationBase * transitionDurationScale, now: now)
+        beginTransition(to: 1, duration: drillDurationBase, now: now)
         camera.dive(on: orreryCenter, radius: dFinal, now: now, duration: transitionDuration)
     }
 
@@ -758,7 +836,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         camera.focusFloor = dFinal * 0.6
         let now = CACurrentMediaTime()
         // Reveal already at 1 (still focused) — beginTransition only drives the fly.
-        beginTransition(to: 1, duration: drillDurationBase * transitionDurationScale, now: now)
+        beginTransition(to: 1, duration: drillDurationBase, now: now)
         camera.dive(on: planetCenter, radius: dFinal, now: now, duration: transitionDuration)
     }
 
@@ -775,7 +853,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         setOrreryModel(model)
 
         let now = CACurrentMediaTime()
-        beginTransition(to: 1, duration: zoomDurationBase * transitionDurationScale, now: now)
+        beginTransition(to: 1, duration: zoomDurationBase, now: now)
         if let saved = cameraStack.popLast() {
             camera.focusFloor = saved.focusFloor
             camera.restore(saved, now: now, duration: transitionDuration)
@@ -819,7 +897,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     func exitSystem() {
         systemFocused = false
         let now = CACurrentMediaTime()
-        beginTransition(to: 0, duration: zoomDurationBase * transitionDurationScale, now: now)
+        beginTransition(to: 0, duration: zoomDurationBase, now: now)
         if let saved = cameraStack.popLast() {
             camera.focusFloor = saved.focusFloor
             camera.restore(saved, now: now, duration: transitionDuration)
@@ -840,7 +918,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     /// `orreryReveal` so planets EMERGE from the star on drill-in and retreat into
     /// it on zoom-out. The sun is not here — it's the persistent focused field star.
     private func orreryBodies(model: SystemModel, time: Float) -> [OrreryBodyUniform] {
-        let orbitSpeed: Float = 0.6      // seconds of animation per "period day" (matches SceneKit)
+        let orbitSpeed = orreryOrbitSpeed
         var bodies: [OrreryBodyUniform] = []
         bodies.reserveCapacity(model.planets.count + 1)
 
@@ -870,12 +948,26 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     /// body that carries notable features, plus a pulsing marker on each incoming
     /// hazard. Positions mirror `orreryBodies` (same orbit math, same reveal scale)
     /// so the pips track their bodies as they orbit and emerge on drill-in.
-    private func orreryPips(model: SystemModel, time: Float) -> [OrreryPip] {
-        let orbitSpeed: Float = 0.6      // matches orreryBodies
+    private func orreryPips(model: SystemModel, time: Float, viewportPx: SIMD2<Float>) -> [OrreryPip] {
+        let orbitSpeed = orreryOrbitSpeed    // matches orreryBodies
         let pipRadius: Float = 3
-        let pipSpacing: Float = 8
-        let clusterY: Float = -13        // above the body (screen y grows downward)
+        let gap: Float = 4               // px between the planet rim and the pip row
+        let minSpacing: Float = 8
         var pips: [OrreryPip] = []
+
+        // Project a view-space point to view pixels (mirrors `pickStar`), so the pip
+        // row can be anchored to each planet's on-screen radius rather than a fixed
+        // pixel distance — the cluster then hugs the rim at every zoom instead of
+        // floating off into a detached speck when the planet shrinks.
+        let view = camera.viewMatrix()
+        let proj = camera.projectionMatrix(aspect: aspect)
+        let w = viewportPx.x, h = viewportPx.y
+        func project(_ vpos: SIMD4<Float>) -> SIMD2<Float>? {
+            var clip = proj * vpos
+            if clip.w <= 0 { return nil }
+            clip /= clip.w
+            return SIMD2<Float>((clip.x * 0.5 + 0.5) * w, (1 - (clip.y * 0.5 + 0.5)) * h)
+        }
 
         for planet in model.planets {
             let entries = OrreryGeometry.pipEntries(planet.indicators)
@@ -884,9 +976,21 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
             let angle = Float(planet.phase0Deg) * .pi / 180 + (time / period) * 2 * .pi
             let r = Float(planet.semiMajorScene) * orreryScale * orreryReveal
             let pos = orreryCenter + SIMD3<Float>(cos(angle) * r, 0, sin(angle) * r)
+
+            // The planet's on-screen radius: project a point offset by its world
+            // radius along view-x and measure the pixel span (same trick as the
+            // star disc in `pickStar`). Scale the row's offset + spacing to it.
+            let worldRadius = Float(planet.displayRadius) * orreryScale
+            let viewPos = view * SIMD4<Float>(pos, 1)
+            let screenR = project(viewPos).flatMap { c in
+                project(viewPos + SIMD4<Float>(worldRadius, 0, 0, 0)).map { length($0 - c) }
+            } ?? 0
+
+            let clusterY = -(screenR + gap + pipRadius)     // just above the rim (screen y grows downward)
+            let spacing = max(minSpacing, screenR * 0.7)
             let n = Float(entries.count)
             for (i, entry) in entries.enumerated() {
-                let x = (Float(i) - (n - 1) / 2) * pipSpacing
+                let x = (Float(i) - (n - 1) / 2) * spacing
                 pips.append(OrreryPip(
                     worldPosRadius: SIMD4(pos, pipRadius),
                     color: SIMD4(entry.color, 0),                       // steady (no pulse)
@@ -913,7 +1017,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     /// planet's live position when drilling from the system into it.
     private func currentOrbiterWorldPosition(id: String) -> SIMD3<Float>? {
         guard let planet = orreryModel?.planets.first(where: { $0.id == id }) else { return nil }
-        let orbitSpeed: Float = 0.6
+        let orbitSpeed = orreryOrbitSpeed
         let time = Float(CACurrentMediaTime() - startTime)
         let period = max(Float(planet.periodDays) * orbitSpeed, 0.001)
         let angle = Float(planet.phase0Deg) * .pi / 180 + (time / period) * 2 * .pi
@@ -1018,7 +1122,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
 
         // Ship comet heads — the ONE exception: always on top, never occluded
         // (never lose a ship behind a star). Rebuilt each frame as the heads move.
-        var heads = ships.map { ship in
+        let heads = ships.map { ship in
             StateMarker(position: ship.position(at: now, stars: stars),
                         color: shipColor, radiusPixels: shipHeadRadius,
                         style: 1, worldRadius: 0)

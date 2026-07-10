@@ -196,7 +196,7 @@ fragment float4 star_fragment(StarVaryings in [[stage_in]],
     // (star_body_fragment), so flares and surface features turn together.
     float3x3 viewRot = float3x3(u.view[0].xyz, u.view[1].xyz, u.view[2].xyz);
     float3 surfDir = transpose(viewRot) * normalize(float3(in.uv, 0.0));
-    float a = u.time * 0.065, ca = cos(a), sa = sin(a);
+    float a = u.time * 0.12, ca = cos(a), sa = sin(a);
     surfDir = float3(surfDir.x * ca - surfDir.z * sa, surfDir.y, surfDir.x * sa + surfDir.z * ca);
     float flare = starFlare(surfDir, d, in.lod, u.time);
 
@@ -240,10 +240,12 @@ fragment float4 star_body_fragment(StarVaryings in [[stage_in]],
     float3 hemi = float3(in.uv / discEdge, mu);
     float3x3 viewRot = float3x3(u.view[0].xyz, u.view[1].xyz, u.view[2].xyz);
     float3 wd = transpose(viewRot) * hemi;
-    float a = u.time * 0.065;                        // slow spin (locked to the flare spin)
+    float a = u.time * 0.12;                         // slow spin (locked to the flare spin)
     float ca = cos(a), sa = sin(a);
     wd = float3(wd.x * ca - wd.z * sa, wd.y, wd.x * sa + wd.z * ca);
-    float gran = fbm(wd * 9.0);
+    // Drift the noise field over time so the granulation cells boil/evolve rather
+    // than only rigidly rotating with the spinning surface.
+    float gran = fbm(wd * 9.0 + float3(0.0, 0.0, u.time * 0.29));
     // Every star gets a visible granulation floor (so a near-white ~#dcdcdc sun
     // isn't a flat disc), with cool stars mottled a touch harder on top of it.
     float coolness = saturate(in.color.r - in.color.b + 0.15);

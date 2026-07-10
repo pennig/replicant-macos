@@ -37,13 +37,16 @@ public struct NewStarMapFeature {
         var autoRotate: Bool
         /// Incremented to request a one-shot recenter on the current location.
         var cameraResetToken: Int
+        /// Live text in the galaxy HUD's star-search field. Empty hides the
+        /// results list; the view filters the charted catalog against it.
+        var searchQuery: String
+        /// Incremented to request a one-shot eased camera re-aim on `selectedStar`
+        /// — the search's "navigate there" (mirrors `cameraResetToken`).
+        var starFocusToken: Int
         /// Which scale the map shows — the whole galaxy, or one drilled-in system.
         var focus: StarMapFocus
         /// True while a drill-in / zoom-out camera fly is in progress.
         var isTransitioning: Bool
-        /// Debug knob: multiplies the drill/zoom animation duration (1× = normal,
-        /// higher = slower) so the transition can be reviewed in slow motion.
-        var transitionDurationScale: Double
 
         // Survey (nearby-stars fetch + persist) + the themed first-run rebuild.
         /// The active replicant whose nearby stars we survey, from the signed-in
@@ -67,9 +70,10 @@ public struct NewStarMapFeature {
             self.activeLayers = [.presence]
             self.autoRotate = true
             self.cameraResetToken = 0
+            self.searchQuery = ""
+            self.starFocusToken = 0
             self.focus = .galaxy
             self.isTransitioning = false
-            self.transitionDurationScale = 1
             self.isSurveying = false
             self.surveyPagesDone = 0
             self.surveyTotalPages = nil
@@ -90,12 +94,14 @@ public struct NewStarMapFeature {
         case layerToggled(InfoLayer)
         case autoRotateToggled
         case recenterTapped
+        // Star search: query edits, and picking a result to fly to.
+        case searchQueryChanged(String)
+        case searchResultSelected(Star)
         // Drill-in / zoom-out across the galaxy → system → body scales.
         case drillInRequested(String)         // system designation
         case drillIntoBodyRequested(String)   // planet designation (from a system view)
         case zoomOutRequested                 // steps out one level
         case transitionCompleted
-        case transitionDurationScaleChanged(Double)
         /// Full re-scan of the replicant's current system (the only source of HZ /
         /// outer-system / hazards); refreshes the persisted `SystemDetail`.
         case scanCurrentSystemTapped
@@ -115,8 +121,7 @@ public struct NewStarMapFeature {
     /// The server caps `per_page` at 50.
     static let surveyPageSize = 50
 
-    /// Base fly durations, in ms (scaled by `transitionDurationScale`). Must match
-    /// the camera eases in `StarFieldRenderer`.
+    /// Fly durations, in ms. Must match the camera eases in `StarFieldRenderer`.
     static let drillInBaseMs = 1150
     static let zoomOutBaseMs = 950
 
@@ -163,6 +168,18 @@ public struct NewStarMapFeature {
                 state.cameraResetToken += 1
                 return .none
 
+            case let .searchQueryChanged(text):
+                state.searchQuery = text
+                return .none
+
+            case let .searchResultSelected(star):
+                // Select it (surfaces the dossier) and request the camera fly.
+                // The search UI only shows in the galaxy HUD, so focus is `.galaxy`.
+                state.selectedStar = star
+                state.searchQuery = ""
+                state.starFocusToken += 1
+                return .none
+
             case let .drillInRequested(id):
                 // Only from the galaxy, not mid-fly. The dossier only offers the
                 // control for explored systems, so the reducer trusts it.
@@ -170,9 +187,8 @@ public struct NewStarMapFeature {
                 state.focus = .system(id)
                 state.isTransitioning = true
                 let clock = self.clock
-                let ms = Int(Double(Self.drillInBaseMs) * state.transitionDurationScale)
                 let transition: Effect<Action> = .run { send in
-                    try await clock.sleep(for: .milliseconds(ms))
+                    try await clock.sleep(for: .milliseconds(Self.drillInBaseMs))
                     await send(.transitionCompleted)
                 }
                 .cancellable(id: CancelID.transition)
@@ -187,9 +203,8 @@ public struct NewStarMapFeature {
                 state.focus = .body(bodyID)
                 state.isTransitioning = true
                 let clock = self.clock
-                let ms = Int(Double(Self.drillInBaseMs) * state.transitionDurationScale)
                 let transition: Effect<Action> = .run { send in
-                    try await clock.sleep(for: .milliseconds(ms))
+                    try await clock.sleep(for: .milliseconds(Self.drillInBaseMs))
                     await send(.transitionCompleted)
                 }
                 .cancellable(id: CancelID.transition)
@@ -211,9 +226,8 @@ public struct NewStarMapFeature {
                 }
                 state.isTransitioning = true
                 let clock = self.clock
-                let ms = Int(Double(Self.zoomOutBaseMs) * state.transitionDurationScale)
                 return .run { send in
-                    try await clock.sleep(for: .milliseconds(ms))
+                    try await clock.sleep(for: .milliseconds(Self.zoomOutBaseMs))
                     await send(.transitionCompleted)
                 }
                 .cancellable(id: CancelID.transition)
@@ -226,10 +240,6 @@ public struct NewStarMapFeature {
                 guard let code = state.activeReplicantCode, !code.isEmpty else { return .none }
                 let client = locationsClient
                 return .run { _ in try? await client.scanAndPersist(replicantCode: code) }
-
-            case let .transitionDurationScaleChanged(scale):
-                state.transitionDurationScale = scale
-                return .none
 
             case .surveyButtonTapped:
                 guard !state.isSurveying else { return .none }

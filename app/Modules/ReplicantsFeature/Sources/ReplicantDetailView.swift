@@ -147,7 +147,7 @@ public struct ReplicantDetailView: View {
                         .font(.system(size: 12))
                         .foregroundStyle(.rcAccent)
                     Text(location)
-                        .font(.rcHeadline)
+                        .font(.rcHeadlineMono)
                         .foregroundStyle(.rcTextPrimary)
                         .textSelection(.enabled)
                 }

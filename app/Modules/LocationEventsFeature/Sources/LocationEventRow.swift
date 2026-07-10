@@ -29,7 +29,7 @@ struct LocationEventRow: View {
                     .font(.rcBodyEmph)
                     .foregroundStyle(.rcTextPrimary)
                 Text(event.locationLabel)
-                    .font(.rcCaption)
+                    .font(.rcMonoSmall)
                     .foregroundStyle(.rcTextTertiary)
             }
 

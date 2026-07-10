@@ -180,6 +180,11 @@ typedef struct {
     float time;            // seconds, animation clock (set per frame)
     float aspect;          // drawable aspect, to keep the star circular
 
+    float granTimeScale;   // disc granulation temporal drift (surface "boil" speed)
+    float _pad0;           // (padding — keep the scalar count a multiple of four)
+    float _pad1;
+    float _pad2;
+
     simd_float4 starColor; // rgb star spectral colour
     simd_float4 hotColor;  // rgb hot near-limb tint
     simd_float4 coolColor; // rgb cool ember tip tint

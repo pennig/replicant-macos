@@ -15,22 +15,23 @@ extension FlareParams {
     static var playgroundDefault: FlareParams {
         var p = FlareParams()
         p.lod = 1.0
-        p.discEdge = 0.72
-        p.spinRate = 0.15
-        p.intensity = 3.0
+        p.discEdge = 0.798
+        p.spinRate = 0.12
+        p.intensity = 0.348
         p.baseFreq = 3.0
         p.baseTimeScale = 0.30
-        p.baseWeight = 0.9
-        p.flickFreq = 8.0
-        p.flickTimeScale = 1.20
-        p.flickWeight = 0.4
-        p.heightPower = 1.4
-        p.tongueBand = 0.16
-        p.radialFalloff = 0.7
-        p.edgeFadeStart = 0.9
-        p.hotMix = 0.65
-        p.coolMix = 0.85
+        p.baseWeight = 0.528
+        p.flickFreq = 10.548
+        p.flickTimeScale = 0.55
+        p.flickWeight = 0.536
+        p.heightPower = 1.953
+        p.tongueBand = 0.457
+        p.radialFalloff = 0.455
+        p.edgeFadeStart = 0.749
+        p.hotMix = 0.604
+        p.coolMix = 0.896
         p.discBrightness = 2.2
+        p.granTimeScale = 0.29
         p.exposure = 1.3
         p.starColor = SIMD4(1.00, 0.88, 0.70, 1)
         p.hotColor = SIMD4(1.00, 0.82, 0.50, 1)
@@ -52,7 +53,7 @@ final class FlareRenderer: NSObject, MTKViewDelegate {
     private var lastTime = CACurrentMediaTime()
     private var orbitAngle: Float = 0
 
-    func configure(view: MTKView) {
+    @MainActor func configure(view: MTKView) {
         guard let device = view.device ?? MTLCreateSystemDefaultDevice(),
               let queue = device.makeCommandQueue(),
               let library = try? device.makeDefaultLibrary(bundle: .module)
@@ -161,6 +162,7 @@ public struct FlarePlaygroundView: View {
                         slider("Spin rate", $params.spinRate, 0...1)
                         slider("Disc edge", $params.discEdge, 0.30...0.95)
                         slider("Disc bright", $params.discBrightness, 0...4)
+                        slider("Gran boil", $params.granTimeScale, 0...0.5)
                         slider("Exposure", $params.exposure, 0.2...3)
                     }
                     group("Tongue shape") {
@@ -250,6 +252,7 @@ public struct FlarePlaygroundView: View {
         // Flare tuning
         discEdge        = \(f(p.discEdge))
         spinRate        = \(f(p.spinRate))
+        granTimeScale   = \(f(p.granTimeScale))
         intensity       = \(f(p.intensity))
         baseFreq        = \(f(p.baseFreq))
         baseTimeScale   = \(f(p.baseTimeScale))

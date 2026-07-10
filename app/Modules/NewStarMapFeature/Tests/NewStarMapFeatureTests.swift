@@ -194,6 +194,39 @@ import Metal
         #expect(abs(simd_length(cam.eye - star) - 12) < 1e-3)   // pulled back out to 12
     }
 
+    @Test func focusPullsBackToTheFloorWhenTooClose() {
+        // Dollied in past where the star stops growing, THEN focus → the eye pulls
+        // back out to the focus floor (a focused star can't over-fill the view).
+        var cam = TurntableCamera()
+        let star = SIMD3<Float>.zero
+        cam.dolly(200)                     // slam all the way in, well under the floor
+        #expect(cam.radius < 8)
+        cam.focusFloor = 8                 // this star's angular-size limit sits at 8 ly
+        cam.focus(on: star, now: 0)
+        _ = cam.step(now: 1.0)
+        #expect(abs(simd_length(cam.eye - star) - 8) < 1e-3)   // pulled back out to the floor
+    }
+
+    @Test func settleImmediatelyFramesWithoutAnimating() {
+        var cam = TurntableCamera()
+        let star = SIMD3<Float>(10, 0, 0)
+        cam.settle(on: star, radius: 6)
+        #expect(cam.step(now: 0) == false)                     // already settled — nothing to animate
+        #expect(simd_length(cam.target - star) < 1e-3)
+        #expect(abs(cam.radius - 6) < 1e-3)
+        #expect(abs(simd_length(cam.eye - star) - 6) < 1e-3)   // eye sits the dive distance from the star
+    }
+
+    @Test func cancelFramingHoldsThePoseMidFlight() {
+        var cam = TurntableCamera()
+        cam.focus(on: .zero, now: 0)          // start an eased move (origin is beyond the cap)
+        _ = cam.step(now: 0.1)                // advance partway
+        let held = cam.eye
+        cam.cancelFraming()
+        #expect(cam.step(now: 0.2) == false)  // move dropped, not resumed
+        #expect(simd_length(cam.eye - held) < 1e-3)   // holds exactly where it was
+    }
+
     @Test func homeEasesBackToOverview() {
         var cam = TurntableCamera()
         cam.dolly(2.0)

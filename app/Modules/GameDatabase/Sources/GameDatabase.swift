@@ -55,18 +55,18 @@ public enum GameDatabase {
     public static var configuration: Configuration {
         var configuration = Configuration()
         #if DEBUG
-        configuration.prepareDatabase { db in
-            db.trace(options: .profile) { event in
-                @Dependency(\.context) var context
-                let sql = event.expandedDescription
-                guard !sql.hasPrefix("--") else { return }
-                switch context {
-                case .live: logger.debug("\(sql)")
-                case .preview: print(sql)
-                case .test: break
-                }
-            }
-        }
+//        configuration.prepareDatabase { db in
+//            db.trace(options: .profile) { event in
+//                @Dependency(\.context) var context
+//                let sql = event.expandedDescription
+//                guard !sql.hasPrefix("--") else { return }
+//                switch context {
+//                case .live: logger.debug("\(sql)")
+//                case .preview: print(sql)
+//                case .test: break
+//                }
+//            }
+//        }
         #endif
         return configuration
     }

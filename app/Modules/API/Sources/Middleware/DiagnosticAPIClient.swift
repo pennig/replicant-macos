@@ -51,6 +51,12 @@ public struct DiagnosticAPIClient: APIProtocol {
     public func deleteV1AccountsWebhook(_ input: Operations.DeleteV1AccountsWebhook.Input) async throws -> Operations.DeleteV1AccountsWebhook.Output {
         try await DecodingDiagnostics.capture("deleteV1AccountsWebhook") { try await wrapped.deleteV1AccountsWebhook(input) }
     }
+    public func getV1Achievements(_ input: Operations.GetV1Achievements.Input) async throws -> Operations.GetV1Achievements.Output {
+        try await DecodingDiagnostics.capture("getV1Achievements") { try await wrapped.getV1Achievements(input) }
+    }
+    public func getV1AchievementsAchievementKey(_ input: Operations.GetV1AchievementsAchievementKey.Input) async throws -> Operations.GetV1AchievementsAchievementKey.Output {
+        try await DecodingDiagnostics.capture("getV1AchievementsAchievementKey") { try await wrapped.getV1AchievementsAchievementKey(input) }
+    }
     public func getV1Replicants(_ input: Operations.GetV1Replicants.Input) async throws -> Operations.GetV1Replicants.Output {
         try await DecodingDiagnostics.capture("getV1Replicants") { try await wrapped.getV1Replicants(input) }
     }

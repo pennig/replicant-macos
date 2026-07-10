@@ -88,7 +88,9 @@ fragment float4 fp_fragment(FPVaryings in [[stage_in]],
         float3 hemi = float3(uv / P.discEdge, mu);
         float3 wd = transpose(viewRot) * hemi;
         wd = float3(wd.x * cs - wd.z * sn, wd.y, wd.x * sn + wd.z * cs);
-        float gran = pgFbm(wd * 9.0);
+        // Drift the noise field over time so the granulation cells boil/evolve
+        // rather than only rigidly rotating with the spinning surface.
+        float gran = pgFbm(wd * 9.0 + float3(0.0, 0.0, P.time * P.granTimeScale));
         float coolness = saturate(col.r - col.b + 0.15);
         float mott = 1.0 + (gran - 0.5) * (0.7 + 0.6 * coolness);
         hdr += col * (P.discBrightness * shade * mott) * fade;

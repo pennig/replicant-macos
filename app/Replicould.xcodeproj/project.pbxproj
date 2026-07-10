@@ -15,7 +15,7 @@
 		C961BC5D2FF69C7600D9C273 /* PrintQueueFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C961BC5C2FF69C7600D9C273 /* PrintQueueFeature */; };
 		C961BC5F2FF6A58600D9C273 /* ReplicantsFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C961BC5E2FF6A58600D9C273 /* ReplicantsFeature */; };
 		C9702B6D2FF202A5002E2CCE /* BlueprintsFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C9702B6C2FF202A5002E2CCE /* BlueprintsFeature */; };
-		C9AB58FE2FEA4A3300536794 /* StarMapFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C9AB58FD2FEA4A3300536794 /* StarMapFeature */; };
+		C98EDC7C2FFFD6EF0033AF54 /* AccountFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C98EDC7B2FFFD6EF0033AF54 /* AccountFeature */; };
 		C9ACF1382FF865C900337F11 /* PrintingUI in Frameworks */ = {isa = PBXBuildFile; productRef = C9ACF1372FF865C900337F11 /* PrintingUI */; };
 		C9B188932FF72F130018FA8F /* SidebarFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C9B188922FF72F130018FA8F /* SidebarFeature */; };
 		C9B188952FF856310018FA8F /* GameModels in Frameworks */ = {isa = PBXBuildFile; productRef = C9B188942FF856310018FA8F /* GameModels */; };
@@ -62,13 +62,13 @@
 				C9F814BE2FEE1EED00ACFAC3 /* GameSync in Frameworks */,
 				C9B188932FF72F130018FA8F /* SidebarFeature in Frameworks */,
 				C9B5309F2FE72B0B006F79A8 /* RawAPIFeature in Frameworks */,
+				C98EDC7C2FFFD6EF0033AF54 /* AccountFeature in Frameworks */,
 				C90D75CF2FED785C00B293DE /* AccountManager in Frameworks */,
 				C9B530972FE1D3AA006F79A8 /* UI in Frameworks */,
 				C9B8FC732FF5BF5D0050BBDC /* UniverseModels in Frameworks */,
 				C961BC5F2FF6A58600D9C273 /* ReplicantsFeature in Frameworks */,
 				C9D902132FE9DDC000781FBB /* MessagesFeature in Frameworks */,
 				C91E72192FF9931B0092DF05 /* LocationEventsFeature in Frameworks */,
-				C9AB58FE2FEA4A3300536794 /* StarMapFeature in Frameworks */,
 				C9ACF1382FF865C900337F11 /* PrintingUI in Frameworks */,
 				C9B5309D2FE1DEE2006F79A8 /* GameServices in Frameworks */,
 				C9B5309B2FE1DC5E006F79A8 /* LoginFeature in Frameworks */,
@@ -142,7 +142,6 @@
 				C9B5309C2FE1DEE2006F79A8 /* GameServices */,
 				C9B5309E2FE72B0B006F79A8 /* RawAPIFeature */,
 				C9D902122FE9DDC000781FBB /* MessagesFeature */,
-				C9AB58FD2FEA4A3300536794 /* StarMapFeature */,
 				C90D75CE2FED785C00B293DE /* AccountManager */,
 				C9F814BD2FEE1EED00ACFAC3 /* GameSync */,
 				C9F814BF2FEEB96000ACFAC3 /* DevicesFeature */,
@@ -157,6 +156,7 @@
 				C91E72182FF9931B0092DF05 /* LocationEventsFeature */,
 				C91E721A2FFA954A0092DF05 /* GameDatabase */,
 				C927E7652FFD5C2900D443E8 /* NewStarMapFeature */,
+				C98EDC7B2FFFD6EF0033AF54 /* AccountFeature */,
 			);
 			productName = Replicant;
 			productReference = C922A8B62FDC493200431320 /* Replicould.app */;
@@ -499,9 +499,9 @@
 			isa = XCSwiftPackageProductDependency;
 			productName = BlueprintsFeature;
 		};
-		C9AB58FD2FEA4A3300536794 /* StarMapFeature */ = {
+		C98EDC7B2FFFD6EF0033AF54 /* AccountFeature */ = {
 			isa = XCSwiftPackageProductDependency;
-			productName = StarMapFeature;
+			productName = AccountFeature;
 		};
 		C9ACF1372FF865C900337F11 /* PrintingUI */ = {
 			isa = XCSwiftPackageProductDependency;

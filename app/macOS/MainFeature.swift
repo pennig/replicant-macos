@@ -9,6 +9,7 @@
 //  sidebar.
 //
 
+import AccountFeature
 import AccountManager
 import AppKit
 import BlueprintsFeature
@@ -25,7 +26,6 @@ import RawAPIFeature
 import ReplicantsFeature
 import SQLiteData
 import SidebarFeature
-import StarMapFeature
 import SwiftUI
 import UI
 import Utils
@@ -43,6 +43,9 @@ struct MainFeature {
         /// The sidebar: active-replicant header, category list, account footer.
         /// Owns the category selection this container reads to pick its panes.
         var sidebar: SidebarFeature.State
+        /// The Account sheet (identity · settings · achievements), presented from
+        /// the sidebar footer. Its own feature; owns logout.
+        @Presents var account: AccountFeature.State?
         /// The Messages inbox, persisted locally and seeded with the session key.
         var messages: MessagesFeature.State
         /// The Raw API Access experience, shown in its own window (Tools menu).
@@ -71,7 +74,7 @@ struct MainFeature {
         ) {
             self.apiKey = apiKey
             self.detailSelection = detailSelection
-            self.sidebar = SidebarFeature.State(apiKey: apiKey, category: category)
+            self.sidebar = SidebarFeature.State(category: category)
             self.messages = MessagesFeature.State()
             self.rawAPI = RawAPIFeature.State(apiKey: apiKey)
             self.newStarMap = NewStarMapFeature.State()
@@ -93,9 +96,9 @@ struct MainFeature {
         case task
         case delegate(Delegate)
         case sidebar(SidebarFeature.Action)
+        case account(PresentationAction<AccountFeature.Action>)
         case messages(MessagesFeature.Action)
         case rawAPI(RawAPIFeature.Action)
-        case starMap(StarMapFeature.Action)
         case newStarMap(NewStarMapFeature.Action)
         case devices(DevicesFeature.Action)
         case blueprints(BlueprintsFeature.Action)
@@ -155,7 +158,14 @@ struct MainFeature {
             case .delegate:
                 return .none
 
-            case .sidebar(.delegate(.loggedOut)):
+            case .sidebar(.delegate(.accountButtonTapped)):
+                // Present the Account sheet, seeded with the session key.
+                state.account = AccountFeature.State(apiKey: state.apiKey)
+                return .none
+
+            case .account(.presented(.delegate(.loggedOut))):
+                // Dismiss the sheet, then bubble logout to the app root.
+                state.account = nil
                 return .send(.delegate(.loggedOut))
 
             case .sidebar(.delegate(.categoryChanged)):
@@ -163,9 +173,12 @@ struct MainFeature {
                 state.detailSelection = nil
                 return .none
 
-            case .sidebar, .messages, .rawAPI, .starMap, .newStarMap, .devices, .blueprints, .locations, .locationEvents, .printQueue, .replicantDirectory:
+            case .sidebar, .account, .messages, .rawAPI, .newStarMap, .devices, .blueprints, .locations, .locationEvents, .printQueue, .replicantDirectory:
                 return .none
             }
+        }
+        .ifLet(\.$account, action: \.account) {
+            AccountFeature()
         }
     }
 }
@@ -184,7 +197,7 @@ struct MainView: View {
                 // Content-only category (Operations Log): a two-column split view —
                 // sidebar + content, with no detail column at all.
                 NavigationSplitView {
-                    sidebar
+                    sidebar  
                         .navigationSplitViewColumnWidth(min: 240, ideal: 240, max: 300)
                 } detail: {
                     content
@@ -208,6 +221,11 @@ struct MainView: View {
                 }
                 .navigationTitle("Replicant")
             }
+        }
+        // The Account sheet (identity · settings · achievements), driven from the
+        // sidebar footer via `MainFeature`'s presentation state.
+        .sheet(item: $store.scope(state: \.account, action: \.account)) { accountStore in
+            AccountView(store: accountStore)
         }
         // Re-sync the account roster on launch (a restored session skips login).
         .task { store.send(.task) }

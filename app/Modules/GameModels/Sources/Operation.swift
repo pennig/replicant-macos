@@ -119,6 +119,14 @@ public struct OperationKind: RawRepresentable, Hashable, Sendable {
     public static let mine   = OperationKind(rawValue: "mine")
     public static let print  = OperationKind(rawValue: "print")
 
+    /// Compact for transport — the device packs itself down so it can be stowed
+    /// and carried. Long-running and self-describing: both the POST response and
+    /// the device's `compact` block report `completes_at`, so it's a tracked
+    /// deadline op (like travel), completed by the settled-device path (or the
+    /// deadline scheduler) once the device finishes compacting. Fires from the
+    /// backend verb `compact`, so its `rawValue` matches `simple("compact")`.
+    public static let compact = OperationKind(rawValue: "compact")
+
     /// Survey-drone belt search — the drone scours rocks until it locates a
     /// mining cluster (status `searching`, a `scan` activity block with an
     /// `eta_seconds` countdown). Tracked as a deadline op that completes when the
@@ -169,6 +177,17 @@ public struct OperationKind: RawRepresentable, Hashable, Sendable {
     /// direct control. The inverse of `adopt`; likewise an immediate topology
     /// change (removes from `controlled_devices`), no tracked op.
     public static let release = OperationKind(rawValue: "release")
+
+    /// Attach one or more devices to a carrier (e.g. a surge plate) so they ride
+    /// along when it moves between systems. The target(s) must be at the carrier's
+    /// location. Immediate: a synchronous topology change (adds to the carrier's
+    /// `attached_devices`); no tracked op.
+    public static let attach = OperationKind(rawValue: "attach")
+
+    /// Detach one or more devices from a carrier, releasing them at its current
+    /// location. The inverse of `attach`; likewise an immediate topology change
+    /// (removes from `attached_devices`), no tracked op.
+    public static let detach = OperationKind(rawValue: "detach")
 
     /// A simple, parameter-less lifecycle command, identified by its backend
     /// verb (e.g. `deactivate`, `deploy`, `recall`). Status-only, completes at

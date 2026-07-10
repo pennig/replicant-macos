@@ -10,20 +10,27 @@ import OSLog
 /// separately by `RateLimitMiddleware` rather than reprinted here. A side
 /// benefit is that the `Authorization` header is injected further in, so the
 /// bearer token never reaches the log.
+///
+/// Body buffering is gated: a body is only collected into memory when debug
+/// logging is actually being captured for this subsystem AND its length is known
+/// to fit within `maxBodyBytes`. Otherwise the original `HTTPBody` is passed
+/// through untouched and logged as a metadata placeholder — so a large payload
+/// (e.g. the global achievements catalog) is neither held in memory nor able to
+/// overflow the collect limit and surface as a spurious transport error.
 public struct LoggingMiddleware: ClientMiddleware {
 
     private let logger: Logger
-    /// Max body size to buffer for logging. A body larger than this causes
-    /// `Data(collecting:upTo:)` to throw, which is caught and logged as a
-    /// transport error before being rethrown — so keep this comfortably above
-    /// the largest expected payload (game bodies are tiny JSON).
+    /// Max body size to buffer for logging. Bodies whose known length exceeds it
+    /// (or whose length is unknown) are passed through unbuffered and logged as a
+    /// placeholder rather than collected into memory.
     private let maxBodyBytes: Int
 
     public init(
-        logger: Logger = Logger(subsystem: "name.pennig.replicould.api", category: "http"),
-        maxBodyBytes: Int = 64 * 1024
+        subsystem: String = "name.pennig.replicould.api",
+        category: String = "http",
+        maxBodyBytes: Int = 4 * 1024 * 1024
     ) {
-        self.logger = logger
+        self.logger = Logger(subsystem: subsystem, category: category)
         self.maxBodyBytes = maxBodyBytes
     }
 
@@ -34,42 +41,59 @@ public struct LoggingMiddleware: ClientMiddleware {
         operationID: String,
         next: @Sendable (HTTPRequest, HTTPBody?, URL) async throws -> (HTTPResponse, HTTPBody?)
     ) async throws -> (HTTPResponse, HTTPBody?) {
-        let requestBody = try await buffer(body)
+        // Only pay the buffering cost when someone is actually capturing these
+        // debug logs; otherwise the `logger.debug` lines are dropped anyway.
+        let capturing = logger.isEnabled(type: .debug)
+
+        let loggedRequestBody = capturing ? await bufferForLogging(body) : nil
         logger.debug("""
             → \(request.method.rawValue, privacy: .public) \
             \(baseURL.absoluteString, privacy: .public)\(request.path ?? "", privacy: .public) \
             [\(operationID, privacy: .public)]
             headers: \(redacted(request.headerFields), privacy: .public)
-            body: \(describe(requestBody), privacy: .public)
+            body: \(describe(loggedRequestBody, orLengthOf: body), privacy: .public)
             """)
 
         do {
             let (response, responseBody) = try await next(
                 request,
-                requestBody.map { HTTPBody($0) } ?? body,
+                loggedRequestBody.map { HTTPBody($0) } ?? body,
                 baseURL
             )
-            let buffered = try await buffer(responseBody)
+            let loggedResponseBody = capturing ? await bufferForLogging(responseBody) : nil
             logger.debug("""
                 ← \(response.status.code, privacy: .public) [\(operationID, privacy: .public)]
                 headers: \(redacted(response.headerFields), privacy: .public)
-                body: \(describe(buffered), privacy: .public)
+                body: \(describe(loggedResponseBody, orLengthOf: responseBody), privacy: .public)
                 """)
-            return (response, buffered.map { HTTPBody($0) } ?? responseBody)
+            return (response, loggedResponseBody.map { HTTPBody($0) } ?? responseBody)
         } catch {
             logger.error("✗ [\(operationID, privacy: .public)] transport error: \(error, privacy: .public)")
             throw error
         }
     }
 
-    private func buffer(_ body: HTTPBody?) async throws -> Data? {
-        guard let body else { return nil }
-        return try await Data(collecting: body, upTo: maxBodyBytes)
+    /// Collect a body into `Data` for logging — but only when it's safe to do so
+    /// without consuming a body we then couldn't replay. We buffer only bodies
+    /// whose length is *known* and within `maxBodyBytes`; anything larger (or of
+    /// unknown length) returns nil so the caller passes the original body through
+    /// untouched. This makes the collect below unable to overflow or partially
+    /// consume the stream.
+    private func bufferForLogging(_ body: HTTPBody?) async -> Data? {
+        guard let body, case let .known(length) = body.length, length <= Int64(maxBodyBytes)
+        else { return nil }
+        return try? await Data(collecting: body, upTo: maxBodyBytes)
     }
 
-    private func describe(_ data: Data?) -> String {
-        guard let data else { return "<none>" }
-        return String(decoding: data, as: UTF8.self)
+    /// Render a body for the log: its decoded contents when we buffered it, else a
+    /// placeholder noting why (absent / too large / unknown length).
+    private func describe(_ data: Data?, orLengthOf body: HTTPBody?) -> String {
+        if let data { return String(decoding: data, as: UTF8.self) }
+        guard let body else { return "<none>" }
+        switch body.length {
+        case let .known(length): return "<\(length) bytes, not buffered>"
+        case .unknown: return "<streamed, not buffered>"
+        }
     }
 
     private func redacted(_ fields: HTTPFields) -> [String] {
@@ -78,4 +102,3 @@ public struct LoggingMiddleware: ClientMiddleware {
         return fields.map({ "\($0.name): \($0.value)" })
     }
 }
-

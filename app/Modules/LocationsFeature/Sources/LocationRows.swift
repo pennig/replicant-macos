@@ -33,7 +33,9 @@ struct LocationRow: View {
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(node.title)
-                    .font(node.kind == .system ? .rcBodyEmph : .rcBody)
+                    // Location names (designation codes) are always monospace;
+                    // the system row keeps its heavier emphasis.
+                    .font(node.kind == .system ? .rcBodyEmphMono : .rcMono)
                     .foregroundStyle(.rcTextPrimary)
                 if let subtitle = node.subtitle {
                     Text(subtitle)

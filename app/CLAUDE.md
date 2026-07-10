@@ -18,6 +18,7 @@ Look in the `Modules/UI` folder for the Swift package that represents the design
 - Map backend status strings through `DeviceStatus.tone(for:)` — don't invent per‑status colors.
 - Dark‑first, but every screen must read correctly in light mode (the catalog handles both; verify with `.preferredColorScheme`).
 - Prefer `NavigationSplitView`, system materials for chrome, SF for text, SF Mono for IDs/codes/readouts.
+- **Always render system names and location names (e.g. SOL, SOL-3, SOL-3-1, etc) in monospace.** A system/location name is a designation code, so anywhere one is displayed — map labels/dossiers, list rows, headers — use a monospaced font token (`.rcMono`, `.rcMonoSmall`, or the prominence-matched `.rcTitleMono` / `.rcHeadlineMono` / `.rcBodyEmphMono`). Add a new mono token to `DesignSystem.swift` if you need a size/weight that doesn't exist yet rather than inlining `design: .monospaced`.
 - Keep data‑model names aligned with the backend payload (`device_code`, `device_type`, `replicant_code`, `available_commands`, `operational_capacity`, `status`).
 
 ## Don't
