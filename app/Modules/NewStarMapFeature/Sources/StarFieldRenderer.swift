@@ -97,19 +97,22 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
 
     // FTL mesh overlay: precomputed once (links as quad-ribbon vertices, relay
     // marker positions, and the per-star relevance contribution), toggled at runtime.
-    private let meshLineBuffer: MTLBuffer?
-    private let meshLineVertexCount: Int
-    private let relayMarkerBuffer: MTLBuffer?     // one ring StateMarker per relay
-    private let relayMarkerCount: Int
-    private let meshContribution: [Float]
+    // Overlay geometry/relevance are rebuilt in place by `applyOverlays` (from
+    // `init`, and again when the live FTL mesh / ships change) so an overlay
+    // refresh never tears down the renderer — the live camera + interaction survive.
+    private var meshLineBuffer: MTLBuffer?
+    private var meshLineVertexCount = 0
+    private var relayMarkerBuffer: MTLBuffer?     // one ring StateMarker per relay
+    private var relayMarkerCount = 0
+    private var meshContribution: [Float] = []
     private(set) var meshActive = false
     private var activeFilter: DataFilter?   // active data-filter overlay, if any
     private var meshLineHalfWidth: Float = 0.6   // link half-thickness in pixels
 
     // State overlay: the player and their ships. Always drawn, never dimmed.
-    private let playerStarIndex: Int
-    private let ships: [Ship]
-    private let shipLineBuffer: MTLBuffer?        // 6 ribbon vertices per ship
+    private var playerStarIndex = 0
+    private var ships: [Ship] = []
+    private var shipLineBuffer: MTLBuffer?        // 6 ribbon vertices per ship
     private var shipLineHalfWidth: Float = 1.6    // trajectory thickness in pixels
     private var playerMarkerRadius: Float = 11    // player reticle radius in pixels
     private var shipHeadRadius: Float = 6         // ship comet-head radius in pixels
@@ -153,12 +156,13 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     private var fieldShrink: Float = 0.4
     private var fieldFloor: Float = 0.15
 
-    /// Builds the renderer for a fixed terrain of `stars`. The domain `[Star]` is
-    /// the source of truth (now supplied by the caller from the live `Star` table
-    /// rather than `Galaxy.generate()`); the GPU buffer is its render projection.
-    /// Returns nil for an empty terrain — the view shows a placeholder until the
-    /// galaxy has been surveyed.
-    init?(mtkView: MTKView, stars: [Star], viewpoint: StarMapViewpoint) {
+    /// Builds the renderer for a fixed terrain of `stars` plus the live `overlays`
+    /// (FTL mesh links + ships in transit). The domain `[Star]` is the source of
+    /// truth (supplied by the caller from the live `Star` table rather than
+    /// `Galaxy.generate()`); the GPU buffer is its render projection. Returns nil
+    /// for an empty terrain — the view shows a placeholder until the galaxy has
+    /// been surveyed.
+    init?(mtkView: MTKView, stars: [Star], overlays: StarMapOverlays, viewpoint: StarMapViewpoint) {
         guard !stars.isEmpty,
               let device = mtkView.device ?? MTLCreateSystemDefaultDevice(),
               let queue = device.makeCommandQueue(),
@@ -180,60 +184,6 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         self.stars = stars
         self.starBuffer = starBuffer
         self.relevance = relevance
-
-        // FTL mesh: build the graph, its link/marker geometry, and its relevance
-        // contribution once. `meshFalloff` sets how far off-mesh the lighting
-        // reaches before receding to the field's floor.
-        let mesh = FTLMesh.build(stars: stars)
-        let meshFalloff: Float = 15
-        let lineVerts = mesh.lineVertices(for: stars)
-        meshLineVertexCount = lineVerts.count
-        meshLineBuffer = lineVerts.isEmpty ? nil : device.makeBuffer(
-            bytes: lineVerts,
-            length: lineVerts.count * MemoryLayout<MeshLineVertex>.stride,
-            options: .storageModeShared)
-
-        // Relay rings: one per relay system, sized to encircle its star (its
-        // `worldRadius`) with a pixel floor so they stay visible at overview.
-        let relayRingColor = SIMD3<Float>(0.30, 0.68, 1.0)
-        let relayMarkers = mesh.nodes.map { i in
-            StateMarker(position: stars[i].position, color: relayRingColor,
-                        radiusPixels: 8, style: 0, worldRadius: stars[i].worldRadius)
-        }
-        relayMarkerCount = relayMarkers.count
-        relayMarkerBuffer = relayMarkers.isEmpty ? nil : device.makeBuffer(
-            bytes: relayMarkers,
-            length: relayMarkers.count * MemoryLayout<StateMarker>.stride,
-            options: .storageModeShared)
-        meshContribution = mesh.relevance(for: stars, floor: relevance.floor, falloffRadius: meshFalloff)
-
-        // State overlay demo: player at the system nearest Sol; two ships in
-        // transit (one outbound, one inbound) to mid-range systems.
-        let player = stars.indices.min {
-            simd_length_squared(stars[$0].position) < simd_length_squared(stars[$1].position)
-        } ?? 0
-        playerStarIndex = player
-        func systemNear(_ target: Float, excluding excluded: Set<Int>) -> Int {
-            let p = stars[player].position
-            return stars.indices
-                .filter { $0 != player && !excluded.contains($0) }
-                .min { abs(simd_length(stars[$0].position - p) - target)
-                     < abs(simd_length(stars[$1].position - p) - target) } ?? player
-        }
-        let destA = systemNear(45, excluding: [])
-        let destB = systemNear(32, excluding: [destA])
-        let fleet = [
-            Ship(fromStar: player, toStar: destA, tripDuration: 14, phase: 0.0),
-            Ship(fromStar: destB, toStar: player, tripDuration: 20, phase: 0.35),
-        ]
-        ships = fleet
-        let shipVerts = fleet.flatMap {
-            MeshLineVertex.ribbon(stars[$0.fromStar].position, stars[$0.toStar].position)
-        }
-        shipLineBuffer = shipVerts.isEmpty ? nil : device.makeBuffer(
-            bytes: shipVerts,
-            length: shipVerts.count * MemoryLayout<MeshLineVertex>.stride,
-            options: .storageModeShared)
 
         labelCache = LabelTextureCache(device: device)
 
@@ -397,11 +347,10 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         // sit far beyond the charted bubble.
         camera.far = 6000
 
-        // State-tier clamp: the player and every ship endpoint can never dim,
-        // whatever the reference overlays want (Invariant 2).
-        var clamp: Set<Int> = [player]
-        for s in fleet { clamp.insert(s.fromStar); clamp.insert(s.toStar) }
-        relevance.setStateClamp(clamp)
+        // Bake the initial overlays (FTL mesh + ships) into their buffers/relevance.
+        // Later overlay changes route through `updateOverlays` (in place), so the
+        // renderer is never torn down while the player is interacting with it.
+        applyOverlays(overlays)
 
         // Restore where the player last was (survives tab switches + surveys), or
         // seed the first-run dive on the current-location star.
@@ -1050,6 +999,87 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     }
 
     // MARK: Overlays
+
+    /// Refresh the live overlays (FTL mesh + ships) in place — WITHOUT rebuilding
+    /// the renderer — so the camera and any in-flight interaction survive an
+    /// overlay change (the async FTL links landing, a trip starting or ending).
+    func updateOverlays(_ overlays: StarMapOverlays) {
+        applyOverlays(overlays)
+    }
+
+    /// (Re)build the overlay geometry + relevance for `overlays`: the FTL mesh
+    /// links/relay rings, the player reticle index, and the ships-in-transit
+    /// ribbons, plus the state-tier relevance clamp so those systems never dim.
+    /// Called from `init` (initial bake) and `updateOverlays` (live refresh).
+    private func applyOverlays(_ overlays: StarMapOverlays) {
+        // FTL mesh: build the graph, its link/marker geometry, and its relevance
+        // contribution. `meshFalloff` sets how far off-mesh the lighting reaches
+        // before receding to the field's floor.
+        let mesh = FTLMesh.build(stars: stars, links: overlays.ftlLinks)
+        let meshFalloff: Float = 15
+        let lineVerts = mesh.lineVertices(for: stars)
+        meshLineVertexCount = lineVerts.count
+        meshLineBuffer = lineVerts.isEmpty ? nil : device.makeBuffer(
+            bytes: lineVerts,
+            length: lineVerts.count * MemoryLayout<MeshLineVertex>.stride,
+            options: .storageModeShared)
+
+        // Relay rings: one per relay system, sized to encircle its star (its
+        // `worldRadius`) with a pixel floor so they stay visible at overview.
+        let relayRingColor = SIMD3<Float>(0.30, 0.68, 1.0)
+        let relayMarkers = mesh.nodes.map { i in
+            StateMarker(position: stars[i].position, color: relayRingColor,
+                        radiusPixels: 8, style: 0, worldRadius: stars[i].worldRadius)
+        }
+        relayMarkerCount = relayMarkers.count
+        relayMarkerBuffer = relayMarkers.isEmpty ? nil : device.makeBuffer(
+            bytes: relayMarkers,
+            length: relayMarkers.count * MemoryLayout<StateMarker>.stride,
+            options: .storageModeShared)
+        meshContribution = mesh.relevance(for: stars, floor: relevance.floor, falloffRadius: meshFalloff)
+        // If the mesh overlay is currently on, re-publish its (recomputed) relevance.
+        if meshActive { relevance.write(.mesh, meshContribution) }
+
+        // State overlay: the player reticle sits on the replicant's current-location
+        // system (flagged on the terrain), falling back to the system nearest Sol
+        // when no current location is known yet (e.g. before the account loads).
+        let player = stars.firstIndex(where: \.isCurrentLocation)
+            ?? stars.indices.min {
+                simd_length_squared(stars[$0].position) < simd_length_squared(stars[$1].position)
+            } ?? 0
+        playerStarIndex = player
+
+        // Ships in transit: resolve each real route's endpoint systems to star
+        // indices and convert its wall-clock trip window into the renderer's
+        // media-time domain (captured now), so `draw` places each ship along its
+        // trajectory with a cheap linear map. Routes whose endpoints aren't in the
+        // charted terrain are skipped.
+        let indexByName = Dictionary(
+            stars.enumerated().map { ($1.name, $0) }, uniquingKeysWith: { first, _ in first })
+        let buildMedia = CACurrentMediaTime()
+        let buildDate = Date()
+        func media(_ date: Date) -> Double { buildMedia + date.timeIntervalSince(buildDate) }
+        let fleet: [Ship] = overlays.ships.compactMap { route in
+            guard let from = indexByName[route.from], let to = indexByName[route.to], from != to
+            else { return nil }
+            return Ship(fromStar: from, toStar: to,
+                        departedMedia: media(route.departedAt), arrivesMedia: media(route.arrivesAt))
+        }
+        ships = fleet
+        let shipVerts = fleet.flatMap {
+            MeshLineVertex.ribbon(stars[$0.fromStar].position, stars[$0.toStar].position)
+        }
+        shipLineBuffer = shipVerts.isEmpty ? nil : device.makeBuffer(
+            bytes: shipVerts,
+            length: shipVerts.count * MemoryLayout<MeshLineVertex>.stride,
+            options: .storageModeShared)
+
+        // State-tier clamp: the player and every ship endpoint can never dim,
+        // whatever the reference overlays want (Invariant 2).
+        var clamp: Set<Int> = [player]
+        for s in fleet { clamp.insert(s.fromStar); clamp.insert(s.toStar) }
+        relevance.setStateClamp(clamp)
+    }
 
     /// Toggle the FTL mesh: draw its links, and write (or clear) its relevance
     /// contribution — max-combined with any active focus so on-mesh systems stay

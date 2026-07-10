@@ -39,6 +39,29 @@ public struct DevicesClient: Sendable {
     /// deflection progress all live on the object it's attached to. Nil when the
     /// location carries no divertible object (or isn't readable).
     public var diversion: @Sendable (_ locationDesignation: String) async throws -> DiversionSnapshot?
+
+    /// Resolve the live FTL mesh for a set of relay devices by reading each one's
+    /// network view (`GET /v1/devices/{code}/network`). Every reported connection
+    /// becomes an undirected link between the relay's own star and the peer's
+    /// star; reciprocal reports collapse under `FTLLink`'s canonical ordering. A
+    /// relay whose network read fails (or a beacon that doesn't support the view)
+    /// is skipped rather than failing the whole mesh.
+    public var relayLinks: @Sendable (_ relays: [RelayNode]) async throws -> [FTLLink]
+
+    /// Replace a device's tag set (`PATCH /v1/devices/{code}`, `configuration.tags`).
+    /// The declarative `tags` field replaces every tag at once, so the inspector —
+    /// which manages the whole set — reduces both add and remove to sending the new
+    /// list. The PATCH response carries only `{device_code, tags}`, so on success
+    /// this takes one authoritative device read (stamped at issue time, like
+    /// `read`) and returns the fresh snapshot for the caller to reconcile. Throws
+    /// `TagUpdateError` carrying the server's message on a rejection.
+    public var updateTags: @Sendable (_ deviceCode: String, _ tags: [String]) async throws -> Device
+
+    /// A rejected tag update, carrying a user-facing message.
+    public struct TagUpdateError: Error, Equatable {
+        public var message: String
+        public init(_ message: String) { self.message = message }
+    }
 }
 
 // MARK: - Live implementation
@@ -93,6 +116,60 @@ extension DevicesClient: DependencyKey {
             let data = try Self.locationEncoder.encode(try ok.body.json)
             let value = try JSONDecoder().decode(JSONValue.self, from: data)
             return DiversionSnapshot(objectBlock: value["object"], fallbackDesignation: designation)
+        },
+        relayLinks: { relays in
+            guard !relays.isEmpty else { return [] }
+            @Dependency(\.gameClient) var gameClient
+            // Resolve the client once and reuse it across the per-relay reads (the
+            // governor is process-shared, but one client per walk is the clean
+            // shape — mirrors `fetchAll`).
+            let client = gameClient()
+            var links: Set<FTLLink> = []
+            for relay in relays {
+                // A relay may briefly be undeployed / recalled, or the read may be
+                // refused (a beacon returns 400 "Device does not support relay").
+                // Skip it — a single unreachable relay shouldn't drop the mesh.
+                guard let output = try? await client.getV1DevicesDeviceCodeNetwork(
+                    path: .init(deviceCode: relay.deviceCode)),
+                      case let .ok(ok) = output,
+                      let body = try? ok.body.json
+                else { continue }
+                for connection in body.connections ?? [] {
+                    guard let peer = connection.star, !peer.isEmpty else { continue }
+                    links.insert(FTLLink(relay.star, peer))
+                }
+            }
+            // Deterministic order so the render terrain's equality is stable
+            // across fetches that return the same set.
+            return links.sorted { $0.a == $1.a ? $0.b < $1.b : $0.a < $1.a }
+        },
+        updateTags: { deviceCode, tags in
+            @Dependency(\.gameClient) var gameClient
+            @Dependency(\.date) var date
+            let client = gameClient()
+            let output = try await client.patchV1DevicesDeviceCode(
+                path: .init(deviceCode: deviceCode),
+                body: .json(.init(configuration: .init(tags: tags)))
+            )
+            switch output {
+            case .ok:
+                // The PATCH response returns only `{device_code, tags}`; take a
+                // full authoritative read so the whole row stays consistent,
+                // stamped at issue time exactly like `read`.
+                let issuedAt = date.now
+                let readOutput = try await client.getV1DevicesDeviceCode(path: .init(deviceCode: deviceCode))
+                return Device(schema: try readOutput.ok.body.json, fetchedAt: issuedAt)
+            case let .badRequest(response):
+                throw TagUpdateError((try? response.body.json.error) ?? "Couldn’t update tags.")
+            case let .forbidden(response):
+                throw TagUpdateError((try? response.body.json.error) ?? "Not permitted.")
+            case let .notFound(response):
+                throw TagUpdateError((try? response.body.json.error) ?? "Device not found.")
+            case let .unprocessableContent(response):
+                throw TagUpdateError((try? response.body.json.message) ?? "Those tags weren’t accepted.")
+            case let .default(statusCode, _):
+                throw TagUpdateError("Server error (\(statusCode)).")
+            }
         }
     )
 
@@ -105,7 +182,9 @@ extension DevicesClient: TestDependencyKey {
     public static let testValue = DevicesClient(
         read: unimplemented("DevicesClient.read"),
         fetchAll: unimplemented("DevicesClient.fetchAll", placeholder: []),
-        diversion: unimplemented("DevicesClient.diversion", placeholder: nil)
+        diversion: unimplemented("DevicesClient.diversion", placeholder: nil),
+        relayLinks: unimplemented("DevicesClient.relayLinks", placeholder: []),
+        updateTags: unimplemented("DevicesClient.updateTags")
     )
 }
 

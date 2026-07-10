@@ -135,6 +135,12 @@ public struct DevicesFeature {
         /// `system`; hydrate that controller's operating `body` into the local
         /// locations catalog so the salvage-site dropdown can offer its sites.
         case salvageSitesRequested(system: String, body: String)
+        /// The inspector edited the selected device's tags (added or removed one).
+        /// `tags` is the full new set — the PATCH replaces all tags at once, and
+        /// the fresh device row reconciles back into the observed tables on success.
+        case tagsEdited(deviceCode: String, tags: [String])
+        /// A rejected/failed tag update, surfaced in the inspector's command alert.
+        case tagUpdateFailed(String)
     }
 
     public init() {}
@@ -339,6 +345,24 @@ public struct DevicesFeature {
                 return .run { _ in
                     try? await locationsClient.hydrateBody(systemDesignation: system, bodyDesignation: body)
                 }
+
+            case let .tagsEdited(deviceCode, tags):
+                let devicesClient = self.devicesClient
+                logger.info("tags edit → \(deviceCode, privacy: .public): \(tags.count, privacy: .public) tag(s)")
+                return .run { _ in
+                    // Replace the set server-side, then reconcile the authoritative
+                    // snapshot so the inspector's chips reflect confirmed state.
+                    let device = try await devicesClient.updateTags(deviceCode, tags)
+                    await Reconciler().ingest(device)
+                } catch: { error, send in
+                    let message = (error as? DevicesClient.TagUpdateError)?.message ?? error.localizedDescription
+                    await send(.tagUpdateFailed(message))
+                }
+
+            case let .tagUpdateFailed(message):
+                logger.warning("tag update failed: \(message, privacy: .public)")
+                state.commandError = message
+                return .none
             }
         }
     }

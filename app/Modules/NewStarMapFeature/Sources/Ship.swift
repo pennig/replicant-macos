@@ -5,21 +5,28 @@ import simd
 // the mesh), so a ship is just its two endpoint systems plus where it is along
 // the straight line between them. Position is a pure function of time, so it's
 // deterministic and testable; the renderer feeds it the clock each frame.
+//
+// The trip window is expressed in the renderer's monotonic media-time domain
+// (the same `CACurrentMediaTime()` clock `draw` runs on). The renderer converts
+// the real wall-clock `ShipRoute` timestamps into this domain once, when it's
+// built, so per-frame progress is a cheap linear map with no date arithmetic.
 
 struct Ship {
     /// Endpoint systems (indices into the star array). Both are state-clamped so
     /// they never dim, and both anchor the trajectory.
     let fromStar: Int
     let toStar: Int
-    /// One-way trip duration in seconds (demo pacing; the game uses a real ETA).
-    var tripDuration: Double
-    /// Phase offset in [0,1) so multiple ships aren't in lockstep.
-    var phase: Double
+    /// Trip window in media-time seconds (see file note).
+    let departedMedia: Double
+    let arrivesMedia: Double
 
-    /// Progress 0…1 along the trajectory at `time`, looping.
+    /// Progress 0…1 along the trajectory at `time`, clamped at the endpoints (a
+    /// real trip neither loops nor runs past arrival — an arrived ship simply
+    /// sits at its destination until the device roster drops it).
     func progress(at time: Double) -> Float {
-        let p = (time / max(tripDuration, 1e-4) + phase).truncatingRemainder(dividingBy: 1)
-        return Float(p < 0 ? p + 1 : p)
+        let span = arrivesMedia - departedMedia
+        guard span > 1e-4 else { return 1 }
+        return Float(min(max((time - departedMedia) / span, 0), 1))
     }
 
     /// Current world position, interpolating between the two systems.

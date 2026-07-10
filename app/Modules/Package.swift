@@ -336,6 +336,7 @@ let package = Package(
             dependencies: [
                 "CStarMapShaderTypes",
                 "GameModels",
+                "GameServices",
                 "UI",
                 "UniverseModels",
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),

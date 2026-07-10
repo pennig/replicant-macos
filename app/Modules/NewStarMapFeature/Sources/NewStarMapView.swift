@@ -13,6 +13,7 @@
 //
 
 import ComposableArchitecture
+import GameModels
 import simd
 import SQLiteData
 import SwiftUI
@@ -27,6 +28,12 @@ public struct NewStarMapView: View {
     /// Persisted per-system detail (planets/belts/scan), the same blobs the
     /// Locations catalog hydrates. The orrery reads the focused system from here.
     @FetchAll(SystemDetail.all) private var systemDetails
+    /// The account's replicant roster — for the current-location system (the gold
+    /// reticle follows `currentStar`) of the active replicant.
+    @FetchAll(Replicant.all) private var replicants
+    /// The live device roster — the source of the real FTL relay nodes (relay
+    /// device locations) and the ships in transit (devices with a travel block).
+    @FetchAll(Device.all) private var devices
 
     public init(store: StoreOf<NewStarMapFeature>) {
         self.store = store
@@ -37,17 +44,75 @@ public struct NewStarMapView: View {
     /// hold in `systemDetails` — otherwise a fully-scanned system reads (and
     /// glyphs) as unexplored on the map.
     private var stars: [Star] {
-        surveyed.map { row in
+        let current = currentStar
+        let relays = relaySystems
+        return surveyed.map { row in
             var s = Star(surveyed: row)
             switch detailRecon(row.designation) {
             case .scanned: s.scan = .full
             case .visited: if s.scan == .unexplored { s.scan = .partial }
             default: break
             }
+            s.isCurrentLocation = row.designation == current
+            s.hasFTLRelay = relays.contains(row.designation)
             return s
         }
     }
     private var chartedStarCount: Int { surveyed.count }
+
+    /// The overlays handed to the renderer: the real FTL mesh links (from the
+    /// store, resolved off each relay's backend network view) and the ships in
+    /// transit (from the live device roster).
+    private var overlays: StarMapOverlays {
+        StarMapOverlays(ftlLinks: store.ftlLinks, ships: ships)
+    }
+
+    /// The active replicant's current-location *system* designation (e.g. `AINALRAM`),
+    /// where the gold player reticle sits. Prefers the session's active replicant;
+    /// falls back to the sole replicant when only one is on the roster.
+    private var currentStar: String? {
+        let active = replicants.first { $0.replicantCode == store.activeReplicantCode }
+        return (active ?? (replicants.count == 1 ? replicants.first : nil))?.currentStar
+    }
+
+    /// The relay-capable devices, reduced to their star systems — the FTL mesh
+    /// nodes. Only `ftl_relay` devices participate; the `ftl_beacon` is not a mesh
+    /// node (the backend refuses its network view).
+    private var relayNodes: [RelayNode] {
+        devices
+            .filter { $0.deviceType == "ftl_relay" }
+            .compactMap { device in
+                device.location
+                    .map(Self.systemDesignation)
+                    .map { RelayNode(deviceCode: device.deviceCode, star: $0) }
+            }
+    }
+
+    /// The set of systems holding one of the player's relays — the mesh node flag.
+    private var relaySystems: Set<String> { Set(relayNodes.map(\.star)) }
+
+    /// Ships in transit, built from devices carrying a live travel activity: the
+    /// origin/destination *systems* and the real trip window. Skips a device whose
+    /// endpoints or timing can't be resolved, or that isn't going anywhere.
+    private var ships: [ShipRoute] {
+        devices.compactMap { device -> ShipRoute? in
+            guard let activity = device.derivedActivity, activity.kind == .travel,
+                  let departedAt = activity.startedAt, let arrivesAt = activity.completesAt,
+                  let snapshot = device.travelSnapshot,
+                  let origin = snapshot.origin.map(Self.systemDesignation),
+                  let destination = snapshot.destination.map(Self.systemDesignation),
+                  origin != destination
+            else { return nil }
+            return ShipRoute(from: origin, to: destination,
+                             departedAt: departedAt, arrivesAt: arrivesAt)
+        }
+    }
+
+    /// The star system a location code belongs to — the designation up to the
+    /// first hyphen (`AINALRAM-1-L4` → `AINALRAM`, `SOL-3` → `SOL`).
+    private static func systemDesignation(_ location: String) -> String {
+        String(location.split(separator: "-").first ?? "")
+    }
 
     /// Charted stars whose designation matches the live search query (case-
     /// insensitive substring). Prefix matches rank first, then nearer stars; the
@@ -84,11 +149,9 @@ public struct NewStarMapView: View {
         return system.planets.count
     }
 
-    /// The current-location system — the one nearest Sol (the origin), matching
-    /// the renderer's gold player reticle. Used to flag the dossier.
-    private var currentLocationID: String? {
-        surveyed.min { lhs, rhs in distanceFromSol(lhs) < distanceFromSol(rhs) }?.designation
-    }
+    /// The current-location system — the replicant's `currentStar`, matching the
+    /// renderer's gold player reticle. Used to flag the dossier + search row.
+    private var currentLocationID: String? { currentStar }
 
     /// The selected star as a presentation system, with recon upgraded from any
     /// real detail we hold (so a scanned system reads as scanned + is drillable).
@@ -146,7 +209,8 @@ public struct NewStarMapView: View {
 
     public var body: some View {
         ZStack {
-            MetalStarView(store: store, stars: stars, focus: store.focus, systemModel: focusedModel)
+            MetalStarView(store: store, stars: stars, overlays: overlays,
+                          focus: store.focus, systemModel: focusedModel)
                 .ignoresSafeArea()
 
             switch store.focus {
@@ -181,6 +245,11 @@ public struct NewStarMapView: View {
         .animation(.easeInOut(duration: 0.4), value: store.bootPhase)
         .navigationTitle(navTitle)
         .task { store.send(.task) }
+        // Resolve the real FTL links whenever the relay roster changes (and once
+        // on appear), off each relay's backend network view.
+        .onChange(of: relayNodes, initial: true) { _, nodes in
+            store.send(.relayNodesChanged(nodes))
+        }
     }
 
     // MARK: - Galaxy HUD
@@ -311,11 +380,6 @@ public struct NewStarMapView: View {
         }
     }
 
-    private func distanceFromSol(_ star: UniverseModels.Star) -> Double {
-        (star.positionX * star.positionX
-            + star.positionY * star.positionY
-            + star.positionZ * star.positionZ).squareRoot()
-    }
 }
 
 // MARK: - Galaxy navigator (header + search)

@@ -1604,8 +1604,16 @@
             "type": "string",
             "nullable": true
           },
+          "origin_name": {
+            "type": "string",
+            "nullable": true
+          },
           "destination": {
             "type": "string"
+          },
+          "destination_name": {
+            "type": "string",
+            "nullable": true
           },
           "distance_ly": {
             "type": "number",
@@ -1887,6 +1895,10 @@
             "$ref": "#/components/schemas/app_schemas_devices_ProspectInfoSchema"
           },
           "compact": {
+              "type": "object",
+              "additionalProperties": {}
+          },
+          "unfurl": {
               "type": "object",
               "additionalProperties": {}
           },

@@ -414,8 +414,9 @@ extension CommandClient: DependencyKey {
     /// (`eta_seconds`) rather than the dispatch response, so it's tracked here and
     /// its `completesAt` is back-filled from the post-command read below. `compact`
     /// packs the device down for transport over a fixed window and returns
-    /// `completes_at`, so it's a tracked deadline op too.
-    private static let deadlineCommands: Set<String> = ["recall", "search", "compact"]
+    /// `completes_at`, so it's a tracked deadline op too; `unfurl` is its inverse
+    /// (expanding a packed device back) and behaves identically.
+    private static let deadlineCommands: Set<String> = ["recall", "search", "compact", "unfurl"]
 
     /// Immediate commands that stop a device's running action — closing its open
     /// operation so a lingering mining/travel row doesn't survive the stop.

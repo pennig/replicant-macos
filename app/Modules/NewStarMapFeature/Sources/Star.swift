@@ -22,10 +22,14 @@ public struct Star: Equatable {
     var stellarClass: StellarClass
     /// Age in millions of years.
     var ageMyr: Float
-    /// Whether this system has an FTL relay installed. Relays within 7.5 ly of
-    /// each other form the comms mesh; a lone relay is an orphan node. (Game state
-    /// in the real thing; assigned procedurally here as a stand-in.)
+    /// Whether this system has one of the player's FTL relays installed — a mesh
+    /// node. Set from the live `Device` roster (relay device locations); the mesh
+    /// links between nodes come from the backend's network view, not proximity.
     var hasFTLRelay: Bool
+    /// Whether this is the replicant's current-location system — the gold player
+    /// reticle sits here. Set from the active `Replicant.currentStar`; defaults
+    /// off so procedural/fallback terrains simply have no current location.
+    var isCurrentLocation: Bool = false
     /// Biological development of the system.
     var life: LifeLevel
     /// Resource abundances, each 0…1.

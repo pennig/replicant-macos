@@ -1,4 +1,5 @@
 import CStarMapShaderTypes
+import GameModels
 import simd
 
 // The FTL comms mesh — the first REFERENCE overlay (HANDOFF §2): a toggleable
@@ -8,34 +9,34 @@ import simd
 // systems stay lit and the surrounding galaxy recedes, max-combined with any
 // other active concern.
 //
-// The graph model matches the game: nodes are systems with an FTL relay
-// installed, and two relays share a link iff they are within `maxEdgeLength` ly
-// of each other (a proximity graph). Orphan relays and separate sub-networks
-// fall out naturally — which is why the relays are drawn as markers too, so a
-// lone relay with no links is still visible. Stateless and symmetric; it renders
-// as faint static links, never the bright directed comet of a ship.
+// The graph is the player's real relay network: nodes are the systems holding
+// one of the player's relay devices, and links come straight from the backend's
+// per-relay network view (`FTLLink` pairs), not a proximity guess. Orphan relays
+// and separate sub-networks fall out naturally — which is why the relays are
+// drawn as markers too, so a lone relay with no links is still visible. Stateless
+// and symmetric; it renders as faint static links, never the bright directed
+// comet of a ship.
 
 struct FTLMesh {
     /// Indices (into the star array) of the relay systems — the mesh nodes.
     let nodes: [Int]
-    /// Undirected links as ordered index pairs (a < b); relay pairs within range.
+    /// Undirected links as ordered index pairs (a < b), resolved from the real
+    /// `FTLLink` system pairs (endpoints absent from the terrain are dropped).
     let edges: [(a: Int, b: Int)]
 
-    /// Build the proximity graph over the relay-equipped systems. `maxEdgeLength`
-    /// is the FTL link range (7.5 ly in the game).
-    static func build(stars: [Star], maxEdgeLength: Float = 7.5) -> FTLMesh {
+    /// Build the mesh: relay-bearing systems as nodes, and the backend-reported
+    /// `links` (system-designation pairs) resolved to index edges against `stars`.
+    static func build(stars: [Star], links: [FTLLink]) -> FTLMesh {
         let nodes = stars.indices.filter { stars[$0].hasFTLRelay }   // ascending
-        let maxSq = maxEdgeLength * maxEdgeLength
+        let indexByName = Dictionary(
+            stars.enumerated().map { ($1.name, $0) }, uniquingKeysWith: { first, _ in first })
+        var seen: Set<Int> = []          // (i * count + j) keys, so a link isn't drawn twice
         var edges: [(a: Int, b: Int)] = []
-        for x in 0..<nodes.count {
-            let i = nodes[x]
-            let pi = stars[i].position
-            for y in (x + 1)..<nodes.count {
-                let j = nodes[y]
-                if simd_length_squared(stars[j].position - pi) <= maxSq {
-                    edges.append((i, j))   // i < j since `nodes` is ascending
-                }
-            }
+        for link in links {
+            guard let i = indexByName[link.a], let j = indexByName[link.b], i != j else { continue }
+            let (a, b) = i < j ? (i, j) : (j, i)
+            let key = a * stars.count + b
+            if seen.insert(key).inserted { edges.append((a, b)) }
         }
         return FTLMesh(nodes: nodes, edges: edges)
     }

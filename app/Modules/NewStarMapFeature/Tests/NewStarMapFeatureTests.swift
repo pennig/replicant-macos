@@ -1,3 +1,4 @@
+import GameModels
 import Testing
 import simd
 import Metal
@@ -303,47 +304,55 @@ import Metal
 @MainActor
 @Suite struct FTLMeshTests {
 
+    /// Distinct designations of the relay-bearing systems in a generated galaxy.
+    private func relayNames(_ stars: [Star]) -> [String] {
+        var seen: Set<String> = []
+        return stars.indices
+            .filter { stars[$0].hasFTLRelay }
+            .map { stars[$0].name }
+            .filter { seen.insert($0).inserted }
+    }
+
     @Test func nodesAreExactlyTheRelaySystems() {
         let stars = Galaxy.generate()
-        let mesh = FTLMesh.build(stars: stars)
+        let mesh = FTLMesh.build(stars: stars, links: [])
         #expect(!mesh.nodes.isEmpty)
         #expect(mesh.nodes.allSatisfy { stars[$0].hasFTLRelay })
         #expect(mesh.nodes.count == stars.indices.filter { stars[$0].hasFTLRelay }.count)
     }
 
-    @Test func edgesLinkRelayPairsWithinRange() {
+    @Test func edgesResolveLinksToRelayIndices() throws {
         let stars = Galaxy.generate()
-        let maxLen: Float = 7.5
-        let mesh = FTLMesh.build(stars: stars, maxEdgeLength: maxLen)
-        for e in mesh.edges {
-            #expect(e.a < e.b)                                          // canonical, no self-loops
-            #expect(stars[e.a].hasFTLRelay && stars[e.b].hasFTLRelay)   // only relays
-            #expect(simd_length(stars[e.a].position - stars[e.b].position) <= maxLen + 1e-4)
-        }
+        let relays = relayNames(stars)
+        try #require(relays.count >= 2)
+        let mesh = FTLMesh.build(stars: stars, links: [FTLLink(relays[0], relays[1])])
+        #expect(mesh.edges.count == 1)
+        let e = try #require(mesh.edges.first)
+        #expect(e.a < e.b)                                              // canonical, no self-loops
+        #expect(Set([stars[e.a].name, stars[e.b].name]) == Set([relays[0], relays[1]]))
     }
 
-    @Test func edgeSetIsCompleteAndDeduplicated() {
-        // Every relay pair within range appears exactly once — the proximity graph.
+    @Test func reciprocalLinksDeduplicate() throws {
+        // Both relays report the same connection; the two directions collapse to one.
         let stars = Galaxy.generate()
-        let maxLen: Float = 7.5
-        let mesh = FTLMesh.build(stars: stars, maxEdgeLength: maxLen)
-        #expect(Set(mesh.edges.map { Int64($0.a) << 32 | Int64($0.b) }).count == mesh.edges.count)
+        let relays = relayNames(stars)
+        try #require(relays.count >= 2)
+        let mesh = FTLMesh.build(
+            stars: stars, links: [FTLLink(relays[0], relays[1]), FTLLink(relays[1], relays[0])])
+        #expect(mesh.edges.count == 1)
+    }
 
-        let nodes = mesh.nodes
-        var expected = 0
-        for x in 0..<nodes.count {
-            for y in (x + 1)..<nodes.count where
-                simd_length(stars[nodes[x]].position - stars[nodes[y]].position) <= maxLen {
-                expected += 1
-            }
-        }
-        #expect(mesh.edges.count == expected)
+    @Test func unknownEndpointsAreDropped() throws {
+        let stars = Galaxy.generate()
+        let relays = relayNames(stars)
+        try #require(!relays.isEmpty)
+        let mesh = FTLMesh.build(stars: stars, links: [FTLLink(relays[0], "NOWHERE")])
+        #expect(mesh.edges.isEmpty)
     }
 
     @Test func allowsOrphanRelays() {
-        // With a vanishing range, no relay has a neighbor → all orphans, no links,
-        // but the nodes (relays) still exist and will be drawn as markers.
-        let mesh = FTLMesh.build(stars: Galaxy.generate(), maxEdgeLength: 0.0001)
+        // No links → no edges, but the nodes (relays) still exist as markers.
+        let mesh = FTLMesh.build(stars: Galaxy.generate(), links: [])
         #expect(mesh.edges.isEmpty)
         #expect(!mesh.nodes.isEmpty)
     }
@@ -351,16 +360,18 @@ import Metal
     @Test func relevancePinsNodesAndStaysInRange() {
         let stars = Galaxy.generate()
         let floor: Float = 0.04
-        let mesh = FTLMesh.build(stars: stars)
+        let mesh = FTLMesh.build(stars: stars, links: [])
         let rel = mesh.relevance(for: stars, floor: floor, falloffRadius: 35)
         #expect(rel.count == stars.count)
         for n in mesh.nodes { #expect(rel[n] == 1) }
         for v in rel { #expect(v >= floor - 1e-6 && v <= 1 + 1e-6) }
     }
 
-    @Test func geometryCountsMatch() {
+    @Test func geometryCountsMatch() throws {
         let stars = Galaxy.generate()
-        let mesh = FTLMesh.build(stars: stars)
+        let relays = relayNames(stars)
+        try #require(relays.count >= 2)
+        let mesh = FTLMesh.build(stars: stars, links: [FTLLink(relays[0], relays[1])])
         #expect(mesh.lineVertices(for: stars).count == mesh.edges.count * 6)   // quad = 6 verts
         #expect(mesh.nodePositions(for: stars).count == mesh.nodes.count)
     }
@@ -449,21 +460,21 @@ import Metal
 @MainActor
 @Suite struct ShipTests {
 
-    @Test func progressLoopsWithinUnitRange() {
-        let ship = Ship(fromStar: 0, toStar: 1, tripDuration: 10, phase: 0)
-        #expect(ship.progress(at: 0) == 0)
-        #expect(abs(ship.progress(at: 5) - 0.5) < 1e-4)
-        #expect(ship.progress(at: 10) < 1e-4)       // one full trip wraps back to 0
-        let p = ship.progress(at: 23)
-        #expect(p >= 0 && p < 1)
+    @Test func progressClampsToTheTripWindow() {
+        let ship = Ship(fromStar: 0, toStar: 1, departedMedia: 100, arrivesMedia: 110)
+        #expect(ship.progress(at: 90) == 0)             // before departure → held at origin
+        #expect(ship.progress(at: 100) == 0)
+        #expect(abs(ship.progress(at: 105) - 0.5) < 1e-4)
+        #expect(ship.progress(at: 110) == 1)            // arrival
+        #expect(ship.progress(at: 130) == 1)            // past arrival → held at destination
     }
 
     @Test func positionInterpolatesBetweenSystems() {
         let stars = Galaxy.generate()
         let a = stars[0].position, b = stars[1].position
-        let ship = Ship(fromStar: 0, toStar: 1, tripDuration: 10, phase: 0)
-        #expect(simd_length(ship.position(at: 0, stars: stars) - a) < 1e-4)
-        #expect(simd_length(ship.position(at: 5, stars: stars) - (a + (b - a) * 0.5)) < 1e-3)
+        let ship = Ship(fromStar: 0, toStar: 1, departedMedia: 100, arrivesMedia: 110)
+        #expect(simd_length(ship.position(at: 100, stars: stars) - a) < 1e-4)
+        #expect(simd_length(ship.position(at: 105, stars: stars) - (a + (b - a) * 0.5)) < 1e-3)
     }
 }
 

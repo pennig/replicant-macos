@@ -328,6 +328,7 @@ extension Device {
             ("prospect", ["completes_at"]),
             ("repair", ["completes_at"]),
             ("compact", ["completes_at"]),
+            ("unfurl", ["completes_at"]),
         ]
         var soonest: Date?
         for (block, fields) in blocks {
@@ -421,6 +422,15 @@ extension Device {
                 kind: .compact,
                 startedAt: detailDate("compact", "started_at"),
                 completesAt: detailDate("compact", "completes_at")
+            )
+        }
+        // Unfurling from transport: the inverse of compact, an `unfurl` block with
+        // an absolute `completes_at`, adopted the same way.
+        if case .object = detail["unfurl"] {
+            return DerivedActivity(
+                kind: .unfurl,
+                startedAt: detailDate("unfurl", "started_at"),
+                completesAt: detailDate("unfurl", "completes_at")
             )
         }
         // Survey-drone scan/search: a `scan` block with an `eta_seconds` countdown

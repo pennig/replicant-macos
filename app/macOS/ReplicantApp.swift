@@ -98,31 +98,72 @@ struct ReplicantApp: App {
         // current system's observable state changed — an arrival, a megastructure
         // contribution, a new object/threat, a shop or location event — re-scan
         // (free, current-system) and merge into `SystemDetail`. Excludes
-        // scan-echo event types so our own scan can't feed back into a loop, and
-        // coalesces so at most one passive scan runs at a time.
-        let passiveScanInFlight = LockIsolated(false)
+        // scan-echo event types so our own scan can't feed back into a loop.
+        //
+        // A scan only ever reads *this replicant's current location*, so an event
+        // is worth a scan only when it actually concerns that location, and a
+        // host-vessel arrival additionally advances the roster location. That whole
+        // policy — the arrival host-device gate, the location-scoped current-system
+        // gate, and the arrival→location derivation — lives in (and is tested by)
+        // `LocationEventPolicy.decide`; this route just applies its decision.
+        //
+        // A scan reads the current location's *current* state, so a burst of
+        // relevant events needs exactly one scan to converge — not one per event.
+        // This matters most at launch: tier-2 backfill replays a batch of recent
+        // events through the routes, and events dispatch *serially* (see
+        // `RelayRouter.dispatch`), so a per-event scan fires a redundant scan for
+        // each replayed event. A trailing debounce collapses the burst: each
+        // relevant event (re)arms a short timer, and a single scan runs once the
+        // events quiet — the same live state one immediate scan would have read.
+        let pendingPassiveScan = LockIsolated<Task<Void, Never>?>(nil)
         gameSync.registerRoute(
             RelayRoute(id: "locations.scan", type: "event") { event in
-                let triggers = ["arrived", "megastructure", "contribut", "object", "asteroid", "shop", "location_event"]
-                let type = (event.eventType ?? "").lowercased()
-                guard triggers.contains(where: type.contains) else { return }
-                // Atomic test-and-set: skip if a passive scan is already running.
-                let claimed = passiveScanInFlight.withValue { inFlight -> Bool in
-                    if inFlight { return false }
-                    inFlight = true
-                    return true
-                }
-                guard claimed else { return }
-                defer { passiveScanInFlight.withValue { $0 = false } }
-
-                @Dependency(\.locationsClient) var locationsClient
                 @Dependency(\.defaultDatabase) var database
-                var code = event.replicantCode
-                if code == nil {
-                    code = try? await database.read { db in try Replicant.fetchAll(db).first?.replicantCode }
+                // The replicant the event pertains to (else the sole/first on the
+                // roster) — the source of the host-device and current-system gates.
+                let replicant = try? await database.read { db -> Replicant? in
+                    if let code = event.replicantCode,
+                       let match = try Replicant.where({ $0.replicantCode.eq(code) }).fetchOne(db) {
+                        return match
+                    }
+                    return try Replicant.fetchAll(db).first
                 }
-                guard let code, !code.isEmpty else { return }
-                try? await locationsClient.scanAndPersist(replicantCode: code)
+                guard let replicant, !replicant.replicantCode.isEmpty else { return }
+                let code = replicant.replicantCode
+
+                let decision = LocationEventPolicy.decide(event: event, replicant: replicant)
+
+                // A host-vessel arrival IS the authoritative location change: fold
+                // the destination straight into the roster row so `currentStar` /
+                // `currentLocation` are never stale between the move and the next
+                // `accounts/me` refresh. The name columns are cleared (the arrival
+                // carries no display names, and the UI falls back to the mono
+                // designation) — except the star name survives an intra-system hop.
+                if let update = decision.rosterUpdate {
+                    let priorStarName = replicant.currentStarName
+                    try? await database.write { db in
+                        try Replicant.where { $0.replicantCode.eq(code) }.update {
+                            $0.currentStar = #bind(update.star)
+                            $0.currentLocation = #bind(update.location)
+                            $0.currentStarName = #bind(update.systemChanged ? nil : priorStarName)
+                            $0.currentLocationName = #bind(String?.none)
+                        }
+                        .execute(db)
+                    }
+                }
+
+                guard decision.shouldScan else { return }
+
+                // Debounce: cancel any scan still waiting out its window and re-arm.
+                pendingPassiveScan.withValue { pending in
+                    pending?.cancel()
+                    pending = Task {
+                        try? await Task.sleep(for: .seconds(2))
+                        guard !Task.isCancelled else { return }
+                        @Dependency(\.locationsClient) var locationsClient
+                        try? await locationsClient.scanAndPersist(replicantCode: code)
+                    }
+                }
             }
         )
 
@@ -167,10 +208,26 @@ struct ReplicantApp: App {
         // Location Events screen and its sidebar badge observe that table live.
         // The same re-read is this channel's tier-2 gap repair (a cold-start /
         // reconnect catch-up), so `apply` (gated on the trigger) and `gapRepair`
-        // (unconditional) share one closure.
-        let refreshEvents: @Sendable () async -> Void = {
-            @Dependency(\.locationEventsClient) var locationEventsClient
-            _ = try? await locationEventsClient.refresh()
+        // (unconditional) share one trigger.
+        //
+        // Each trigger re-reads the *whole* `accounts/events` list (cursor-paged
+        // from the top), so a burst of qualifying events — tier-1 replay + tier-2
+        // backfill at launch, or several quests landing together — would fire a
+        // stack of identical full re-reads. As with the passive-scan route above,
+        // one re-read after the burst reads the same live state, so a trailing
+        // debounce collapses the burst: each trigger re-arms a short timer and a
+        // single refresh runs once events quiet.
+        let pendingEventsRefresh = LockIsolated<Task<Void, Never>?>(nil)
+        let refreshEvents: @Sendable () -> Void = {
+            pendingEventsRefresh.withValue { pending in
+                pending?.cancel()
+                pending = Task {
+                    try? await Task.sleep(for: .seconds(2))
+                    guard !Task.isCancelled else { return }
+                    @Dependency(\.locationEventsClient) var locationEventsClient
+                    _ = try? await locationEventsClient.refresh()
+                }
+            }
         }
         gameSync.registerRoute(
             RelayRoute(
@@ -180,9 +237,9 @@ struct ReplicantApp: App {
                     let type = (event.eventType ?? "").lowercased()
                     guard type.contains("location_event") || type.contains("scan_complete")
                     else { return }
-                    await refreshEvents()
+                    refreshEvents()
                 },
-                gapRepair: refreshEvents
+                gapRepair: { refreshEvents() }
             )
         )
 

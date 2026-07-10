@@ -26,9 +26,10 @@ extension Star {
             temperature: stellarClass.representativeTemperature,
             stellarClass: stellarClass,
             ageMyr: stellarClass.stableAge(seed: row.designation),
-            // No relay data on the row yet; a gated entry point is the closest
-            // signal the survey carries, so treat it as the relay stand-in.
-            hasFTLRelay: row.entryPoint != nil,
+            // Relay membership isn't a property of the star row — it's player
+            // state (which systems hold one of your relay devices). The view sets
+            // it from the live `Device` roster; the census row can't know it.
+            hasFTLRelay: false,
             // The row only knows presence/absence of life, not its tier.
             life: row.hasLife == true ? .complex : .none,
             // Resource abundances aren't surveyed into the star table yet.

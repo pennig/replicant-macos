@@ -177,6 +177,8 @@ struct MetalStarView: NSViewRepresentable {
     let store: StoreOf<NewStarMapFeature>
     /// The live terrain, already mapped from the persisted `Star` table.
     let stars: [Star]
+    /// Live overlays (FTL mesh links + ships) the renderer draws over the terrain.
+    let overlays: StarMapOverlays
     /// Current scale (galaxy vs a drilled-in system).
     let focus: StarMapFocus
     /// The orrery to show when `focus` is `.system` — built by the view from the
@@ -188,6 +190,10 @@ struct MetalStarView: NSViewRepresentable {
         /// The terrain the current renderer was built on, so we only rebuild when
         /// the survey data actually changes (not on every selection/redraw).
         var loadedStars: [Star] = []
+        /// The overlays the current renderer was built on, so a change to the FTL
+        /// mesh or the ships in transit rebuilds it (ship *motion* animates in the
+        /// renderer from the timestamps, so this only changes on trip start/end).
+        var loadedOverlays: StarMapOverlays = .empty
         /// The last recenter token applied, so a bump fires exactly one recenter.
         var lastResetToken = 0
         /// The last search-focus token applied, so a bump fires exactly one re-aim.
@@ -197,14 +203,24 @@ struct MetalStarView: NSViewRepresentable {
         /// The last orrery model applied, so a hydrate refresh rebuilds in place.
         var lastModel: SystemModel?
 
-        /// (Re)builds the renderer for `stars` if they differ from what's loaded.
-        @MainActor func syncTerrain(_ stars: [Star], into view: StarMTKView) {
-            guard stars != loadedStars else { return }
-            loadedStars = stars
-            let renderer = StarFieldRenderer(mtkView: view, stars: stars, viewpoint: .shared)
-            self.renderer = renderer
-            view.renderer = renderer
-            view.delegate = renderer          // nil for an empty terrain → draws black
+        /// Reconciles the renderer with the live terrain + overlays. A terrain
+        /// change (a survey adding stars, a moved replicant flipping the current-
+        /// location flag) rebuilds the renderer; an overlays-only change (the async
+        /// FTL links landing, a trip starting or ending) is applied IN PLACE so the
+        /// live camera + any in-flight interaction survive — rebuilding underneath
+        /// the player's hands is what made pan/zoom feel dead on first load.
+        @MainActor func syncTerrain(_ stars: [Star], overlays: StarMapOverlays, into view: StarMTKView) {
+            if stars != loadedStars {
+                loadedStars = stars
+                loadedOverlays = overlays
+                let renderer = StarFieldRenderer(mtkView: view, stars: stars, overlays: overlays, viewpoint: .shared)
+                self.renderer = renderer
+                view.renderer = renderer
+                view.delegate = renderer      // nil for an empty terrain → draws black
+            } else if overlays != loadedOverlays {
+                loadedOverlays = overlays
+                renderer?.updateOverlays(overlays)
+            }
         }
 
         /// Pushes the declarative HUD controls into the imperative renderer.
@@ -292,7 +308,7 @@ struct MetalStarView: NSViewRepresentable {
         view.isPaused = false                      // continuous for slice 1; see note
         view.enableSetNeedsDisplay = false
         view.send = { [store] action in store.send(action) }
-        context.coordinator.syncTerrain(stars, into: view)
+        context.coordinator.syncTerrain(stars, overlays: overlays, into: view)
         context.coordinator.applyControls(autoRotate: store.autoRotate,
                                           recenterToken: store.cameraResetToken)
         context.coordinator.applyStarFocus(token: store.starFocusToken,
@@ -302,7 +318,7 @@ struct MetalStarView: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: StarMTKView, context: Context) {
-        context.coordinator.syncTerrain(stars, into: nsView)
+        context.coordinator.syncTerrain(stars, overlays: overlays, into: nsView)
         context.coordinator.applyControls(autoRotate: store.autoRotate,
                                           recenterToken: store.cameraResetToken)
         context.coordinator.applyStarFocus(token: store.starFocusToken,

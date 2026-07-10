@@ -49,6 +49,9 @@ public struct DeviceDetailView: View {
                         header(device)
                         readouts(device)
                         details(device)
+                        if device.features.contains("attach") {
+                            AttachedDevicesSection(device: device, store: store)
+                        }
                         CommandGrid(device: device, store: store)
                     }
                     .padding(Space.xl)
@@ -208,9 +211,7 @@ public struct DeviceDetailView: View {
             if !device.features.isEmpty {
                 detailRow("Features", device.features.joined(separator: ", "))
             }
-            if !device.tags.isEmpty {
-                detailRow("Tags", device.tags.joined(separator: ", "))
-            }
+            TagsEditor(device: device, store: store)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(Space.m)
@@ -235,6 +236,162 @@ public struct DeviceDetailView: View {
                 .foregroundStyle(.rcTextSecondary)
                 .textSelection(.enabled)
             Spacer(minLength: 0)
+        }
+    }
+}
+
+// MARK: - Tags editor
+
+/// The editable "Tags" row in the details card: the device's current tags as
+/// removable chips plus an inline field to add one. Every edit sends the *whole*
+/// new set through `.tagsEdited` (the PATCH replaces all tags at once); the chips
+/// update once the authoritative device row reconciles back, so they reflect
+/// confirmed state rather than an optimistic guess.
+private struct TagsEditor: View {
+    let device: Device
+    let store: StoreOf<DevicesFeature>
+
+    @State private var newTag: String = ""
+    @FocusState private var focused: Bool
+
+    private var trimmedTag: String { newTag.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    /// Enabled once the field holds a non-empty tag the device doesn't already carry.
+    private var canAdd: Bool { !trimmedTag.isEmpty && !device.tags.contains(trimmedTag) }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: Space.m) {
+            Text("Tags")
+                .font(.rcCaption)
+                .foregroundStyle(.rcTextTertiary)
+                .frame(width: 80, alignment: .leading)
+            VStack(alignment: .leading, spacing: Space.s) {
+                if !device.tags.isEmpty {
+                    FlowLayout(spacing: Space.xs) {
+                        ForEach(device.tags, id: \.self) { tag in
+                            chip(tag)
+                        }
+                    }
+                }
+                addField
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// One removable tag chip — the tag text with a trailing ✕ that drops it.
+    private func chip(_ tag: String) -> some View {
+        HStack(spacing: Space.xs) {
+            Text(tag)
+                .font(.rcMonoSmall)
+                .foregroundStyle(.rcTextSecondary)
+                .textSelection(.enabled)
+            Button {
+                remove(tag)
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(.rcTextTertiary)
+                    .padding(2)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Remove tag \(tag)")
+        }
+        .padding(.vertical, 3)
+        .padding(.horizontal, 7)
+        .background(.rcSurfaceRaisedStrong, in: Capsule())
+        .overlay(Capsule().strokeBorder(.rcSeparator, lineWidth: 0.5))
+    }
+
+    /// The inline add-a-tag field: a compact input with a + affordance, committing
+    /// on Return or the button.
+    private var addField: some View {
+        HStack(spacing: Space.xs) {
+            TextField("Add tag…", text: $newTag)
+                .textFieldStyle(.plain)
+                .font(.rcMonoSmall)
+                .foregroundStyle(.rcTextPrimary)
+                .focused($focused)
+                .onSubmit(commit)
+            Button {
+                commit()
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(canAdd ? Color.rcAccent : .rcTextTertiary)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!canAdd)
+            .accessibilityLabel("Add tag")
+        }
+        .padding(.vertical, 5)
+        .padding(.horizontal, Space.s)
+        .frame(maxWidth: 200)
+        .background(.rcSurfaceRaisedStrong, in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                .strokeBorder(focused ? Color.rcAccentBorder : .rcSeparator, lineWidth: focused ? 1.5 : 1)
+        )
+        .animation(.easeOut(duration: 0.12), value: focused)
+    }
+
+    private func commit() {
+        let tag = trimmedTag
+        newTag = ""
+        guard !tag.isEmpty, !device.tags.contains(tag) else { return }
+        store.send(.tagsEdited(deviceCode: device.deviceCode, tags: device.tags + [tag]))
+    }
+
+    private func remove(_ tag: String) {
+        store.send(.tagsEdited(deviceCode: device.deviceCode, tags: device.tags.filter { $0 != tag }))
+    }
+}
+
+/// A minimal flow layout: lays subviews left-to-right, wrapping to the next row
+/// when the proposed width is exceeded.
+private struct FlowLayout: Layout {
+    var spacing: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Void) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var rowWidth: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        var totalHeight: CGFloat = 0
+        var totalWidth: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if rowWidth > 0, rowWidth + spacing + size.width > maxWidth {
+                totalHeight += rowHeight + spacing
+                totalWidth = max(totalWidth, rowWidth)
+                rowWidth = size.width
+                rowHeight = size.height
+            } else {
+                rowWidth += (rowWidth > 0 ? spacing : 0) + size.width
+                rowHeight = max(rowHeight, size.height)
+            }
+        }
+        totalHeight += rowHeight
+        totalWidth = max(totalWidth, rowWidth)
+        return CGSize(width: maxWidth == .infinity ? totalWidth : maxWidth, height: totalHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Void) {
+        let maxWidth = bounds.width
+        var x = bounds.minX
+        var y = bounds.minY
+        var rowHeight: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > bounds.minX, x + size.width - bounds.minX > maxWidth {
+                x = bounds.minX
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            subview.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
         }
     }
 }
@@ -590,6 +747,116 @@ private struct ActiveTaskCard: View {
     /// Whole numbers stay whole (`24`), fractions keep one place (`1.5`).
     private static func number(_ value: Double) -> String {
         value == value.rounded() ? String(Int(value)) : String(format: "%.1f", value)
+    }
+}
+
+// MARK: - Attached devices
+
+/// The roster of devices currently attached to a carrier (a vessel with the
+/// `attach` feature). The codes come from the carrier's `attached_devices` tail;
+/// each is resolved against the observed fleet so the row can show the device's
+/// type, status, and location. Tapping a row selects that device in the inspector.
+/// Shown only for carriers; an empty carrier still renders the section with its
+/// capacity so the affordance to attach is discoverable.
+private struct AttachedDevicesSection: View {
+    let device: Device
+    let store: StoreOf<DevicesFeature>
+
+    /// The whole fleet, so each attached code can be resolved to its full record.
+    @FetchAll(Device.order { $0.deviceCode }) private var fleet
+
+    /// The attached devices, resolved to full records where the fleet knows them.
+    /// An unknown code (not yet loaded) still yields a row so the count is honest.
+    private var attached: [(code: String, device: Device?)] {
+        device.attachedDeviceCodes.map { code in
+            (code, fleet.first { $0.deviceCode == code })
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Space.s) {
+            HStack(spacing: Space.s) {
+                Text("ATTACHED DEVICES")
+                    .font(.rcSectionLabel).kerning(1)
+                    .foregroundStyle(.rcTextTertiary)
+                Spacer(minLength: 0)
+                if device.attachCapacity > 0 {
+                    Text("\(attached.count)/\(device.attachCapacity)")
+                        .font(.rcCaption)
+                        .foregroundStyle(.rcTextTertiary)
+                }
+            }
+
+            if attached.isEmpty {
+                Text("No devices attached.")
+                    .font(.rcCaption)
+                    .foregroundStyle(.rcTextTertiary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(Space.m)
+                    .background(cardBackground)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(Array(attached.enumerated()), id: \.element.code) { index, entry in
+                        if index > 0 { Divider().overlay(Color.rcSeparator) }
+                        row(code: entry.code, attached: entry.device)
+                    }
+                }
+                .background(cardBackground)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// One attached-device row — glyph, display name + code, and a status badge
+    /// with its location. Selects the device in the inspector when tapped.
+    @ViewBuilder
+    private func row(code: String, attached: Device?) -> some View {
+        Button {
+            store.send(.binding(.set(\.selectedDeviceCode, code)))
+        } label: {
+            HStack(spacing: Space.s) {
+                RCGlyphTile(Image.rcSymbol("device.\(attached?.deviceType ?? "unknown")"))
+                VStack(alignment: .leading, spacing: Space.xs) {
+                    HStack(spacing: Space.s) {
+                        Text(attached.map { DevicePresentation.displayName($0.deviceType) } ?? "Attached Device")
+                            .font(.rcBodyEmph)
+                            .foregroundStyle(.rcTextPrimary)
+                            .lineLimit(1)
+                        Text(code)
+                            .font(.rcMonoSmall)
+                            .foregroundStyle(.rcTextTertiary)
+                    }
+                    if let attached {
+                        HStack(spacing: Space.s) {
+                            StatusBadge(attached.statusBase)
+                            if let location = attached.location {
+                                Text(attached.locationName ?? location)
+                                    .font(.rcMonoSmall)
+                                    .foregroundStyle(.rcTextTertiary)
+                                    .lineLimit(1)
+                            }
+                        }
+                    }
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.rcTextTertiary)
+            }
+            .contentShape(Rectangle())
+            .padding(.horizontal, Space.m)
+            .padding(.vertical, Space.s)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var cardBackground: some View {
+        RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+            .fill(.rcSurfaceRaised)
+            .overlay(
+                RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                    .strokeBorder(.rcSeparator, lineWidth: 0.5)
+            )
     }
 }
 

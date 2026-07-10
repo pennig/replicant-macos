@@ -127,6 +127,13 @@ public struct OperationKind: RawRepresentable, Hashable, Sendable {
     /// backend verb `compact`, so its `rawValue` matches `simple("compact")`.
     public static let compact = OperationKind(rawValue: "compact")
 
+    /// Unfurl from transport — the inverse of `compact`: a packed device expands
+    /// back to operational form. Same long-running, self-describing shape (an
+    /// `unfurl` block and a POST response reporting `completes_at`), so it's a
+    /// tracked deadline op resolved the same way. `rawValue` matches the backend
+    /// verb `unfurl` (and `simple("unfurl")`).
+    public static let unfurl = OperationKind(rawValue: "unfurl")
+
     /// Survey-drone belt search — the drone scours rocks until it locates a
     /// mining cluster (status `searching`, a `scan` activity block with an
     /// `eta_seconds` countdown). Tracked as a deadline op that completes when the

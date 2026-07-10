@@ -18,6 +18,7 @@
 import ComposableArchitecture
 import Foundation
 import GameModels
+import GameServices
 import SQLiteData
 import UniverseModels
 
@@ -47,6 +48,10 @@ public struct NewStarMapFeature {
         var focus: StarMapFocus
         /// True while a drill-in / zoom-out camera fly is in progress.
         var isTransitioning: Bool
+        /// The live FTL mesh links (system-designation pairs) from the backend's
+        /// per-relay network view, refreshed whenever the relay roster changes.
+        /// The view folds these into the overlays it hands the renderer.
+        var ftlLinks: [FTLLink]
 
         // Survey (nearby-stars fetch + persist) + the themed first-run rebuild.
         /// The active replicant whose nearby stars we survey, from the signed-in
@@ -74,6 +79,7 @@ public struct NewStarMapFeature {
             self.starFocusToken = 0
             self.focus = .galaxy
             self.isTransitioning = false
+            self.ftlLinks = []
             self.isSurveying = false
             self.surveyPagesDone = 0
             self.surveyTotalPages = nil
@@ -102,6 +108,11 @@ public struct NewStarMapFeature {
         case drillIntoBodyRequested(String)   // planet designation (from a system view)
         case zoomOutRequested                 // steps out one level
         case transitionCompleted
+        // FTL mesh: the view reports the current relay roster (derived from the
+        // live `Device` table); the reducer resolves the real links off each
+        // relay's backend network view.
+        case relayNodesChanged([RelayNode])
+        case ftlLinksLoaded([FTLLink])
         /// Full re-scan of the replicant's current system (the only source of HZ /
         /// outer-system / hazards); refreshes the persisted `SystemDetail`.
         case scanCurrentSystemTapped
@@ -116,7 +127,7 @@ public struct NewStarMapFeature {
         case bootDismissed
     }
 
-    private enum CancelID { case survey, transition }
+    private enum CancelID { case survey, transition, relayLinks }
 
     /// The server caps `per_page` at 50.
     static let surveyPageSize = 50
@@ -129,6 +140,7 @@ public struct NewStarMapFeature {
     @Dependency(\.defaultDatabase) var database
     @Dependency(\.starsClient) var starsClient
     @Dependency(\.locationsClient) var locationsClient
+    @Dependency(\.devicesClient) var devicesClient
     @Dependency(\.date) var date
 
     public init() {}
@@ -234,6 +246,23 @@ public struct NewStarMapFeature {
 
             case .transitionCompleted:
                 state.isTransitioning = false
+                return .none
+
+            case let .relayNodesChanged(nodes):
+                // No relays → clear the mesh (and cancel any in-flight fetch).
+                guard !nodes.isEmpty else {
+                    state.ftlLinks = []
+                    return .cancel(id: CancelID.relayLinks)
+                }
+                let client = devicesClient
+                return .run { send in
+                    let links = (try? await client.relayLinks(nodes)) ?? []
+                    await send(.ftlLinksLoaded(links))
+                }
+                .cancellable(id: CancelID.relayLinks, cancelInFlight: true)
+
+            case let .ftlLinksLoaded(links):
+                state.ftlLinks = links
                 return .none
 
             case .scanCurrentSystemTapped:
