@@ -68,6 +68,10 @@ extension GameSync {
         routes.withValue { current in
             current.append(Self.deviceRoute(reconciler: reconciler))
             current.append(Self.bobnetRoute())
+            // Registered after the device route so, when both fire for the same
+            // relay event, the relay device's confirm-read lands first and the
+            // roster the mesh rebuild reads is current.
+            current.append(Self.ftlMeshRoute())
         }
 
         let engine = GameSyncEngine(
@@ -222,6 +226,28 @@ extension GameSync {
             _ = await deviceRefresher.refresh(code, completedOp ? .high : .low)
         }
     }
+
+    /// Relay-liveness events (`relay_activated` / `relay_deactivated`) change the
+    /// FTL mesh without changing the relay device roster — the device stays put,
+    /// only its status flips — so the star map's roster-change trigger can't see
+    /// them, and neither can any confirm-read of the device row (the mesh is edges
+    /// between relays, not a device field). Rebuild and persist the mesh here
+    /// whenever one arrives, independent of whether the map is on screen. Other
+    /// `event` types fall through untouched (the guard makes this a cheap no-op).
+    static func ftlMeshRoute() -> RelayRoute {
+        RelayRoute(id: "ftl.mesh", type: "event") { event in
+            guard let eventType = event.eventType,
+                  Self.relayLivenessEventTypes.contains(eventType)
+            else { return }
+            @Dependency(\.ftlMeshRefresher) var ftlMeshRefresher
+            logger.debug("ftl mesh: \(eventType, privacy: .public) → rebuild")
+            await ftlMeshRefresher.refresh()
+        }
+    }
+
+    /// Relay `event_type`s that flip a relay's liveness and thus reshape the mesh,
+    /// keyed in one place so an evolving taxonomy is a localized edit.
+    static let relayLivenessEventTypes: Set<String> = ["relay_activated", "relay_deactivated"]
 
     /// `bobnet`: relay-only chat with no authoritative re-read source, so the
     /// route decodes the envelope's `messages[]` from the raw bytes and appends

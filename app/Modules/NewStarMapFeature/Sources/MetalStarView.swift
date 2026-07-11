@@ -138,10 +138,14 @@ final class StarMTKView: MTKView {
 
         // First click: defer the re-aim by the system double-click interval, so a
         // following second click can preempt it. Otherwise every double-click
-        // fires a re-aim before the dive.
+        // fires a re-aim before the dive. Resolve the renderer AT FIRE TIME (not the
+        // one captured now): a terrain rebuild during the delay would orphan the
+        // captured renderer, so the re-aim would run on a view that no longer draws
+        // (dossier appears, camera never moves).
         let work = DispatchWorkItem { [weak self] in
-            self?.send?(.starFocused(r.focus(onStarAt: idx)))   // eased re-aim
-            self?.pendingClick = nil
+            guard let self, let current = self.renderer else { return }
+            self.send?(.starFocused(current.focus(onStarAt: idx)))   // eased re-aim
+            self.pendingClick = nil
         }
         pendingClick = work
         DispatchQueue.main.asyncAfter(deadline: .now() + NSEvent.doubleClickInterval, execute: work)
@@ -203,20 +207,28 @@ struct MetalStarView: NSViewRepresentable {
         /// The last orrery model applied, so a hydrate refresh rebuilds in place.
         var lastModel: SystemModel?
 
-        /// Reconciles the renderer with the live terrain + overlays. A terrain
-        /// change (a survey adding stars, a moved replicant flipping the current-
-        /// location flag) rebuilds the renderer; an overlays-only change (the async
-        /// FTL links landing, a trip starting or ending) is applied IN PLACE so the
-        /// live camera + any in-flight interaction survive — rebuilding underneath
-        /// the player's hands is what made pan/zoom feel dead on first load.
+        /// Reconciles the renderer with the live terrain + overlays. The renderer is
+        /// built EXACTLY ONCE (the first time a non-empty terrain arrives); every
+        /// later change — a survey streaming stars in, a moved replicant flipping the
+        /// current-location flag, the async FTL links landing, a trip starting or
+        /// ending — is applied IN PLACE. Tearing the renderer down per change is what
+        /// left the viewport black through the initial survey and made the camera
+        /// feel dead on first load (each rebuild cancelled the in-flight camera fly).
         @MainActor func syncTerrain(_ stars: [Star], overlays: StarMapOverlays, into view: StarMTKView) {
-            if stars != loadedStars {
+            if renderer == nil {
+                // Empty terrain → nothing to draw yet (stays black until stars arrive).
+                guard let renderer = StarFieldRenderer(
+                    mtkView: view, stars: stars, overlays: overlays, viewpoint: .shared)
+                else { return }
                 loadedStars = stars
                 loadedOverlays = overlays
-                let renderer = StarFieldRenderer(mtkView: view, stars: stars, overlays: overlays, viewpoint: .shared)
                 self.renderer = renderer
                 view.renderer = renderer
-                view.delegate = renderer      // nil for an empty terrain → draws black
+                view.delegate = renderer
+            } else if stars != loadedStars {
+                loadedStars = stars
+                loadedOverlays = overlays
+                renderer?.updateTerrain(stars, overlays: overlays)
             } else if overlays != loadedOverlays {
                 loadedOverlays = overlays
                 renderer?.updateOverlays(overlays)

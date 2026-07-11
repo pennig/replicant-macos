@@ -71,28 +71,6 @@ public struct DevicesFeature {
         }
     }
 
-    /// The in-flight or loaded dry-run travel preview backing the confirmation
-    /// sheet: which device is going where, and the current phase of the request.
-    public struct TravelPreview: Equatable, Identifiable {
-        public let deviceCode: String
-        public let destination: String
-        public var phase: Phase
-
-        public var id: String { "\(deviceCode)→\(destination)" }
-
-        public enum Phase: Equatable {
-            case loading
-            case loaded(TravelPlan)
-            case failed(String)
-        }
-
-        public init(deviceCode: String, destination: String, phase: Phase = .loading) {
-            self.deviceCode = deviceCode
-            self.destination = destination
-            self.phase = phase
-        }
-    }
-
     public enum Action: BindableAction {
         case binding(BindingAction<State>)
         case task

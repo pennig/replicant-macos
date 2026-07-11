@@ -20,12 +20,13 @@ let package = Package(
         .library(name: "LocationsFeature", targets: ["LocationsFeature"]),
         .library(name: "LoginFeature", targets: ["LoginFeature"]),
         .library(name: "MessagesFeature", targets: ["MessagesFeature"]),
-        .library(name: "NewStarMapFeature", targets: ["NewStarMapFeature"]),
+        .library(name: "NewStarMapFeature", targets: ["NewStarMapFeature", "CStarMapShaderTypes"]),
         .library(name: "PrintingUI", targets: ["PrintingUI"]),
         .library(name: "PrintQueueFeature", targets: ["PrintQueueFeature"]),
         .library(name: "RawAPIFeature", targets: ["RawAPIFeature"]),
         .library(name: "ReplicantsFeature", targets: ["ReplicantsFeature"]),
         .library(name: "SidebarFeature", targets: ["SidebarFeature"]),
+        .library(name: "TravelUI", targets: ["TravelUI"]),
         .library(name: "UI", targets: ["UI"]),
         .library(name: "UniverseModels", targets: ["UniverseModels"]),
         .library(name: "Utils", targets: ["Utils"]),
@@ -140,6 +141,7 @@ let package = Package(
                 "GameModels",
                 "GameServices",
                 "PrintingUI",
+                "TravelUI",
                 "UI",
                 "UniverseModels",
                 "Utils",
@@ -337,6 +339,7 @@ let package = Package(
                 "CStarMapShaderTypes",
                 "GameModels",
                 "GameServices",
+                "TravelUI",
                 "UI",
                 "UniverseModels",
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
@@ -352,6 +355,8 @@ let package = Package(
         .testTarget(
             name: "NewStarMapFeatureTests",
             dependencies: [
+                "GameModels",
+                "GameServices",
                 "NewStarMapFeature",
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
             ],
@@ -455,6 +460,14 @@ let package = Package(
                 .product(name: "SQLiteData", package: "sqlite-data"),
             ],
             path: "SidebarFeature/Tests"
+        ),
+        .target(
+            name: "TravelUI",
+            dependencies: [
+                "GameModels",
+                "UI",
+            ],
+            path: "TravelUI/Sources"
         ),
         .target(
             name: "UI",

@@ -39,9 +39,13 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     private let bodyOpaqueThreshold: Float = 0.9
     private let startTime = CACurrentMediaTime()   // base for surface animation (keeps Float precise)
 
-    private let starBuffer: MTLBuffer
-    private let stars: [Star]
-    let relevance: RelevanceField
+    // Terrain: the star instance buffer, the domain array, and the relevance field
+    // are swapped in place by `updateTerrain` (surveyed stars stream in) so the
+    // renderer — and thus the live camera / framing / selection — is never torn
+    // down. Rebuilding per survey page is what left the viewport black on first load.
+    private var starBuffer: MTLBuffer
+    private var stars: [Star]
+    private(set) var relevance: RelevanceField
 
     // The interstellar medium behind the charted field: one additive point buffer.
     private let ambientBuffer: MTLBuffer?
@@ -72,6 +76,20 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     private var transitionDuration: Double = 0.0001
     private var fieldDim: Float { 1 - systemProgress * (1 - fieldFloor) }   // terrain fade to a faint backdrop
     private var orreryReveal: Float { systemProgress }   // orrery reveal + emerge scale
+    /// Galaxy-overlay opacity (FTL mesh, ships, player/relay markers). Direction-aware
+    /// off the active `transitionTarget` (1 = drilling into a system, 0 = zooming back
+    /// to the galaxy): fades OUT fast over the first half of a drill in (reveal 0→0.5),
+    /// then fades back IN gently over the WHOLE zoom out (reveal 1→0). Full-span on the
+    /// way out matters because the transition's smoothstep is fastest at the midpoint —
+    /// starting the fade there (as a symmetric curve would) coincides with peak camera
+    /// velocity and reads as a pop; spreading it across the pull-back keeps it gradual.
+    /// At the settled ends both branches agree (reveal 0 → 1, reveal 1 → 0), so
+    /// direction only matters mid-flight. Body-level moves hold reveal at 1 → hidden.
+    private var overlayDim: Float {
+        transitionTarget >= 0.5
+            ? max(0, 1 - orreryReveal * 2)   // drilling in: gone by reveal 0.5
+            : 1 - orreryReveal               // zooming out: fade in across the whole pull-back
+    }
     /// Drill/zoom durations (seconds); match the reducer's transition lock.
     private let drillDurationBase = 1.15
     private let zoomDurationBase = 0.95
@@ -114,7 +132,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     private var ships: [Ship] = []
     private var shipLineBuffer: MTLBuffer?        // 6 ribbon vertices per ship
     private var shipLineHalfWidth: Float = 1.6    // trajectory thickness in pixels
-    private var playerMarkerRadius: Float = 11    // player reticle radius in pixels
+    private var playerMarkerRadius: Float = 14    // player reticle radius in pixels (clears the relay ring's 8px floor)
     private var shipHeadRadius: Float = 6         // ship comet-head radius in pixels
     private let playerColor = SIMD3<Float>(1.0, 0.82, 0.35)   // gold
     private let shipColor   = SIMD3<Float>(0.55, 0.95, 1.0)   // bright cyan-white
@@ -466,8 +484,10 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
                 halfWidthPixels: meshLineHalfWidth,
                 nodeRadiusPixels: 0)
 
-            // Galaxy overlays (mesh + state) — hidden once the orrery dominates.
-            if orreryReveal < 0.5 {
+            // Galaxy overlays (mesh + state) — encoded whenever they carry any opacity;
+            // the shader fades them via `overlayDim` (out fast on drill-in, in gently
+            // across the whole zoom-out). Skipped entirely once fully faded.
+            if overlayDim > 0.001 {
                 // FTL mesh (reference overlay, toggled), depth-tested so a body in
                 // front occludes it: link ribbons, then relay rings on top.
                 if meshActive {
@@ -998,6 +1018,46 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         }
     }
 
+    // MARK: Terrain
+
+    /// Swap the terrain to `newStars` (plus its `overlays`) IN PLACE — without
+    /// tearing the renderer down — so a survey's stars stream in incrementally and
+    /// the live camera / framing / selection all survive. The star table only ever
+    /// appends (ordered by `createdAt`), so existing indices — the selection, the
+    /// drilled star, ship endpoints — stay valid across the update.
+    ///
+    /// Rebuilds the instance buffer + relevance field for the new star set, then
+    /// re-applies the overlays and re-lights the active focus/filter the fresh
+    /// relevance field would otherwise have lost. A no-op for an empty set (keeps
+    /// the last terrain rather than blanking to black).
+    func updateTerrain(_ newStars: [Star], overlays: StarMapOverlays) {
+        guard !newStars.isEmpty else { return }
+        let instances = newStars.map(\.renderInstance)
+        guard let buffer = device.makeBuffer(
+            bytes: instances,
+            length: instances.count * MemoryLayout<StarInstance>.stride,
+            options: .storageModeShared),
+              let field = RelevanceField(device: device, positions: newStars.map(\.position))
+        else { return }
+        stars = newStars
+        starBuffer = buffer
+        relevance = field
+
+        // Rebuild overlays against the new indices (also re-sets the state clamp and
+        // republishes the mesh contribution if the mesh overlay is on).
+        applyOverlays(overlays)
+
+        // Re-light the focus/filter the fresh relevance field started neutral.
+        if let filter = activeFilter {
+            relevance.write(.filter, filter.relevance(for: stars, floor: relevance.floor))
+        }
+        if systemFocused, let focused = focusedStarIndex, focused < stars.count {
+            relevance.focus(on: focused)
+        } else if let selected = selectedStarIndex, selected < stars.count {
+            relevance.focus(on: selected)
+        }
+    }
+
     // MARK: Overlays
 
     /// Refresh the live overlays (FTL mesh + ships) in place — WITHOUT rebuilding
@@ -1141,10 +1201,12 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         enc.setVertexBytes(&params, length: MemoryLayout<MeshParams>.stride, index: 2)
 
         // Player reticle — a ring on its star, depth-tested so a nearer body
-        // occludes it (reads with the bodies, not through them).
+        // occludes it (reads with the bodies, not through them). Style 2 = the bold
+        // current-location reticle: a thicker ring at a wider clearance than a relay
+        // ring (style 0), so it stays obvious on a star that is both.
         var playerMarker = StateMarker(
             position: stars[playerStarIndex].position, color: playerColor,
-            radiusPixels: playerMarkerRadius, style: 0,
+            radiusPixels: playerMarkerRadius, style: 2,
             worldRadius: stars[playerStarIndex].worldRadius)
         enc.setDepthStencilState(readDepthState)
         enc.setVertexBytes(&playerMarker, length: MemoryLayout<StateMarker>.stride, index: 0)
@@ -1334,6 +1396,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
             time: Float(CACurrentMediaTime() - startTime),
             fieldDim: fieldDim,
             orreryReveal: orreryReveal,
+            overlayDim: overlayDim,
             systemPush: systemPush,
             fieldShrink: fieldShrink,
             focusedStar: Int32(focusedStarIndex ?? -1),

@@ -270,10 +270,22 @@ fragment float4 star_body_fragment(StarVaryings in [[stage_in]],
 // flow are all shader-only changes later. `along`/`side` carry what those need.
 // ---------------------------------------------------------------------------
 
+// Mirror star_vertex's system-focus recession so overlays anchored to stars track
+// them as the field pushes radially away from the focused star during a drill. A
+// point at the focused star (which sits exactly at orreryCenter) has zero offset,
+// so it stays put — matching the sun's exemption in star_vertex without needing a
+// per-vertex index check.
+static inline float3 overlayPushed(float3 worldPos, constant Uniforms& u) {
+    if (u.orreryReveal <= 0.0) return worldPos;
+    float3 toStar = worldPos - u.orreryCenter.xyz;
+    return u.orreryCenter.xyz + toStar * (1.0 + u.systemPush * u.orreryReveal);
+}
+
 struct MeshVaryings {
     float4 position [[position]];
     float  along;
     float  side;
+    float  fade;
 };
 
 vertex MeshVaryings mesh_vertex(uint vid                          [[vertex_id]],
@@ -283,8 +295,8 @@ vertex MeshVaryings mesh_vertex(uint vid                          [[vertex_id]],
 {
     MeshLineVertex v = verts[vid];
     float4x4 vp = u.projection * u.view;
-    float4 ca = vp * float4(v.a, 1.0);
-    float4 cb = vp * float4(v.b, 1.0);
+    float4 ca = vp * float4(overlayPushed(v.a, u), 1.0);
+    float4 cb = vp * float4(overlayPushed(v.b, u), 1.0);
 
     // Screen-space perpendicular, so thickness is constant in pixels regardless
     // of depth or zoom. (Endpoints behind the camera aren't near-plane clipped
@@ -303,6 +315,7 @@ vertex MeshVaryings mesh_vertex(uint vid                          [[vertex_id]],
     out.position = clip;
     out.along = v.along;
     out.side = v.side;
+    out.fade = u.overlayDim;
     return out;
 }
 
@@ -311,7 +324,7 @@ fragment float4 mesh_fragment(MeshVaryings in [[stage_in]])
     // Feather the ribbon edges for a smooth line. `along` is available here for
     // dashes/gradients later without touching geometry.
     float aa = 1.0 - smoothstep(0.5, 1.0, abs(in.side));
-    return float4(float3(0.16, 0.40, 0.62) * aa, 1.0);
+    return float4(float3(0.16, 0.40, 0.62) * (aa * in.fade), 1.0);
 }
 
 // ---------------------------------------------------------------------------
@@ -328,6 +341,7 @@ struct ShipLineVaryings {
     float4 position [[position]];
     float along;
     float side;
+    float fade;
 };
 
 vertex ShipLineVaryings ship_line_vertex(uint vid                          [[vertex_id]],
@@ -338,8 +352,8 @@ vertex ShipLineVaryings ship_line_vertex(uint vid                          [[ver
 {
     MeshLineVertex v = verts[vid];
     float4x4 vp = u.projection * u.view;
-    float4 ca = vp * float4(v.a, 1.0);
-    float4 cb = vp * float4(v.b, 1.0);
+    float4 ca = vp * float4(overlayPushed(v.a, u), 1.0);
+    float4 cb = vp * float4(overlayPushed(v.b, u), 1.0);
     float2 screenA = (ca.xy / ca.w) * 0.5 * p.viewportPixels;
     float2 screenB = (cb.xy / cb.w) * 0.5 * p.viewportPixels;
     float2 delta = screenB - screenA;
@@ -351,6 +365,7 @@ vertex ShipLineVaryings ship_line_vertex(uint vid                          [[ver
     out.position = clip;
     out.along = v.along;
     out.side = v.side;
+    out.fade = u.overlayDim;
     return out;
 }
 
@@ -368,7 +383,7 @@ fragment float4 ship_line_fragment(ShipLineVaryings in [[stage_in]],
         // Ahead: faint dashed line to the destination.
         b = step(0.5, fract(in.along * s.dashPeriod)) * 0.22;
     }
-    return float4(s.color * (b * aa), 1.0);
+    return float4(s.color * (b * aa * in.fade), 1.0);
 }
 
 // Player / ship-head markers: billboarded at a constant pixel radius, additive.
@@ -378,6 +393,7 @@ struct StateMarkerVaryings {
     float3 color;
     float  style;
     float  radiusPixels;   // marker radius in pixels, for crisp screen-space edges
+    float  fade;           // galaxy-overlay fade on drill-in (1 = full, 0 = hidden)
 };
 
 vertex StateMarkerVaryings state_marker_vertex(uint vid                        [[vertex_id]],
@@ -389,7 +405,7 @@ vertex StateMarkerVaryings state_marker_vertex(uint vid                        [
     StateMarker m = markers[iid];
     float2 corner = kCorners[vid];
 
-    float4 viewPos = u.view * float4(m.position, 1.0);
+    float4 viewPos = u.view * float4(overlayPushed(m.position, u), 1.0);
     float dist = length(viewPos.xyz);
     float w = max(-viewPos.z, 1e-4);
 
@@ -400,9 +416,14 @@ vertex StateMarkerVaryings state_marker_vertex(uint vid                        [
     float radiusPixels = m.radiusPixels;
     if (m.worldRadius > 0.0) {
         float rv = clamp(m.worldRadius, dist * u.minAngularSize, dist * u.maxAngularSize);
+        rv *= mix(1.0, u.fieldShrink, u.orreryReveal);    // collapse with the receding field star
         float ys = u.projection[1][1];                    // = 1/tan(fovy/2)
         float starPixels = ys * rv / w * (p.viewportPixels.y * 0.5);
-        radiusPixels = max(radiusPixels, starPixels * 1.3);   // 1.3 → ring clears the star disc
+        // Ring clearance past the star disc. The player reticle (style 2) rides a
+        // wider multiple so it forms a bold ring OUTSIDE a relay ring on the same
+        // star (additive can't occlude); the relay/standard ring hugs the disc.
+        float clearance = (m.style > 1.5) ? 1.85 : 1.3;
+        radiusPixels = max(radiusPixels, starPixels * clearance);
     }
 
     float4 clip = u.projection * viewPos;
@@ -414,31 +435,36 @@ vertex StateMarkerVaryings state_marker_vertex(uint vid                        [
     out.color = m.color;
     out.style = m.style;
     out.radiusPixels = radiusPixels;
+    out.fade = u.overlayDim;
     return out;
 }
 
 fragment float4 state_marker_fragment(StateMarkerVaryings in [[stage_in]])
 {
-    if (in.style < 0.5) {
-        // Crisp reticle ring: a constant PIXEL-thickness annulus whose edges are
-        // anti-aliased to ~1px via fwidth — so it stays sharp at any marker size
-        // (a fixed UV feather would blur as the marker grows on screen).
-        float pd = length(in.uv) * in.radiusPixels;   // distance from centre, in pixels
-        float outer = in.radiusPixels;                 // outer edge at the quad edge
-        float thickness = 6.0;                         // ring thickness in pixels
-        // Keep a visible hole even at the minimum marker size: never let the ring
-        // eat past 60% of the radius, so it always reads as a ring, not a disc.
-        float inner = max(outer - thickness, outer * 0.8);
-        float aa = max(fwidth(pd), 1e-4);
-        float ring = smoothstep(inner - aa, inner + aa, pd)
-                   - smoothstep(outer - aa, outer + aa, pd);
-        return float4(in.color * saturate(ring), 1.0);
+    if (in.style > 0.5 && in.style < 1.5) {
+        // Ship comet head: hot core with a soft halo (soft by design).
+        float d = length(in.uv);
+        float glow = pow(saturate(1.0 - d), 2.0);
+        float core = pow(saturate(1.0 - d), 8.0);
+        return float4(in.color * ((glow + core * 2.0) * in.fade), 1.0);
     }
-    // Ship comet head: hot core with a soft halo (soft by design).
-    float d = length(in.uv);
-    float glow = pow(saturate(1.0 - d), 2.0);
-    float core = pow(saturate(1.0 - d), 8.0);
-    return float4(in.color * (glow + core * 2.0), 1.0);
+    // Crisp reticle ring: a constant PIXEL-thickness annulus whose edges are
+    // anti-aliased to ~1px via fwidth — so it stays sharp at any marker size (a
+    // fixed UV feather would blur as the marker grows on screen). Style 0 is the
+    // relay ring; style 2 is the player's current-location reticle, drawn thicker
+    // (and, via the vertex clearance, larger) so it stays unmistakable even when it
+    // rides over a relay ring on the same star — additive blending can't occlude,
+    // so it has to read by weight and radius.
+    float pd = length(in.uv) * in.radiusPixels;   // distance from centre, in pixels
+    float outer = in.radiusPixels;                 // outer edge at the quad edge
+    float thickness = (in.style > 1.5) ? 9.0 : 6.0;   // player reticle rides heavier
+    // Keep a visible hole even at the minimum marker size: never let the ring
+    // eat past 60% of the radius, so it always reads as a ring, not a disc.
+    float inner = max(outer - thickness, outer * 0.8);
+    float aa = max(fwidth(pd), 1e-4);
+    float ring = smoothstep(inner - aa, inner + aa, pd)
+               - smoothstep(outer - aa, outer + aa, pd);
+    return float4(in.color * (saturate(ring) * in.fade), 1.0);
 }
 
 // ---------------------------------------------------------------------------

@@ -17,6 +17,7 @@ import GameModels
 import simd
 import SQLiteData
 import SwiftUI
+import TravelUI
 import UI
 import UniverseModels
 
@@ -34,6 +35,10 @@ public struct NewStarMapView: View {
     /// The live device roster — the source of the real FTL relay nodes (relay
     /// device locations) and the ships in transit (devices with a travel block).
     @FetchAll(Device.all) private var devices
+    /// The persisted FTL mesh — the edges the reducer rebuilds off each relay's
+    /// network view. Read straight from SQLite so the mesh draws instantly on
+    /// launch and survives a moment where a relay's network read fails.
+    @FetchAll(FTLLinkRecord.all) private var ftlLinkRecords
 
     public init(store: StoreOf<NewStarMapFeature>) {
         self.store = store
@@ -60,11 +65,11 @@ public struct NewStarMapView: View {
     }
     private var chartedStarCount: Int { surveyed.count }
 
-    /// The overlays handed to the renderer: the real FTL mesh links (from the
-    /// store, resolved off each relay's backend network view) and the ships in
-    /// transit (from the live device roster).
+    /// The overlays handed to the renderer: the real FTL mesh links (persisted
+    /// from each relay's backend network view) and the ships in transit (from the
+    /// live device roster).
     private var overlays: StarMapOverlays {
-        StarMapOverlays(ftlLinks: store.ftlLinks, ships: ships)
+        StarMapOverlays(ftlLinks: ftlLinkRecords.map(\.link), ships: ships)
     }
 
     /// The active replicant's current-location *system* designation (e.g. `AINALRAM`),
@@ -73,6 +78,25 @@ public struct NewStarMapView: View {
     private var currentStar: String? {
         let active = replicants.first { $0.replicantCode == store.activeReplicantCode }
         return (active ?? (replicants.count == 1 ? replicants.first : nil))?.currentStar
+    }
+
+    /// The active replicant's host device (its vessel), resolved from the live
+    /// roster via `hostedDeviceCode`. Nil when there's no active replicant or the
+    /// host isn't on the roster. Prefers the session's active replicant; falls
+    /// back to the sole replicant, mirroring `currentStar`.
+    private var activeHostDevice: Device? {
+        let active = replicants.first { $0.replicantCode == store.activeReplicantCode }
+            ?? (replicants.count == 1 ? replicants.first : nil)
+        guard let code = active?.hostedDeviceCode else { return nil }
+        return devices.first { $0.deviceCode == code }
+    }
+
+    /// Whether the active replicant's host can plot *interstellar* travel — a
+    /// vessel carrying the `surge` feature. Gates the dossier's Travel button.
+    /// Intra-system (`cruise`-only) travel is deferred until planets/moons are
+    /// selectable on the map.
+    private var canTravelFromHost: Bool {
+        activeHostDevice?.features.contains("surge") == true
     }
 
     /// The relay-capable devices, reduced to their star systems — the FTL mesh
@@ -244,11 +268,25 @@ public struct NewStarMapView: View {
         .animation(.easeInOut(duration: 0.22), value: store.activeFilterName)
         .animation(.easeInOut(duration: 0.4), value: store.bootPhase)
         .navigationTitle(navTitle)
+        .sheet(
+            isPresented: Binding(
+                get: { store.travelPreview != nil },
+                set: { if !$0 { store.send(.travelPreviewDismissed) } }
+            )
+        ) {
+            TravelPlanSheet(
+                preview: store.travelPreview,
+                onConfirm: { store.send(.travelPreviewConfirmed) },
+                onDismiss: { store.send(.travelPreviewDismissed) }
+            )
+        }
         .task { store.send(.task) }
-        // Resolve the real FTL links whenever the relay roster changes (and once
-        // on appear), off each relay's backend network view.
-        .onChange(of: relayNodes, initial: true) { _, nodes in
-            store.send(.relayNodesChanged(nodes))
+        // Rebuild + persist the mesh whenever the relay roster changes (and once on
+        // appear). Relay liveness flips that don't change the roster are handled by
+        // GameSync's relay event route, so the persisted mesh stays fresh even when
+        // this view isn't on screen.
+        .onChange(of: relayNodes, initial: true) { _, _ in
+            store.send(.refreshMesh)
         }
     }
 
@@ -274,7 +312,13 @@ public struct NewStarMapView: View {
                             system: system,
                             exactPlanetCount: exactPlanetCount(system.id),
                             canDrill: system.recon != .aware && !store.isTransitioning,
+                            canTravel: canTravelFromHost && !system.isCurrentLocation,
                             onDrill: { store.send(.drillInRequested(system.id)) },
+                            onTravel: {
+                                if let code = activeHostDevice?.deviceCode {
+                                    store.send(.travelPreviewRequested(deviceCode: code, destination: system.id))
+                                }
+                            },
                             onClose: { store.send(.selectionCleared) }
                         )
                         .frame(width: 280)
@@ -554,7 +598,12 @@ private struct SystemDossier: View {
     /// Exact count when the system is scanned; nil → show the census estimate.
     let exactPlanetCount: Int?
     let canDrill: Bool
+    /// Whether the active replicant's host vessel can plot travel to this system
+    /// (a surge-capable vessel, and not the current location). Drives the Travel
+    /// button's presence.
+    let canTravel: Bool
     let onDrill: () -> Void
+    let onTravel: () -> Void
     let onClose: () -> Void
 
     /// "3" when we know exactly, "~2" when it's still an estimate.
@@ -616,24 +665,22 @@ private struct SystemDossier: View {
                 .font(.rcCaption)
                 .foregroundStyle(.rcTextTertiary)
 
-            if system.recon != .aware {
-                Button(action: onDrill) {
-                    Label("View system", systemImage: "arrow.down.right.and.arrow.up.left.rectangle")
-                        .font(.rcCaption)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 5)
+            if system.recon != .aware || canTravel {
+                VStack(spacing: Space.xs) {
+                    if system.recon != .aware {
+                        Button(action: onDrill) {
+                            Label("View system", systemImage: "arrow.down.right.and.arrow.up.left.rectangle")
+                        }
+                        .buttonStyle(RCButtonStyle(.secondary, fullWidth: true))
+                        .disabled(!canDrill)
+                    }
+                    if canTravel {
+                        Button(action: onTravel) {
+                            Label("Travel", systemImage: "location.north.line")
+                        }
+                        .buttonStyle(RCButtonStyle(.primary, fullWidth: true))
+                    }
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(canDrill ? .rcAccent : .rcTextTertiary)
-                .background(
-                    RoundedRectangle(cornerRadius: Radius.control)
-                        .fill(.rcAccent.opacity(canDrill ? 0.14 : 0.05))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: Radius.control)
-                        .strokeBorder(.rcAccent.opacity(canDrill ? 0.4 : 0.12), lineWidth: 0.5)
-                )
-                .disabled(!canDrill)
                 .padding(.top, 2)
             }
         }

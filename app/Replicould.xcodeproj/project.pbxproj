@@ -28,6 +28,7 @@
 		C9B5309F2FE72B0B006F79A8 /* RawAPIFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C9B5309E2FE72B0B006F79A8 /* RawAPIFeature */; };
 		C9B8FC732FF5BF5D0050BBDC /* UniverseModels in Frameworks */ = {isa = PBXBuildFile; productRef = C9B8FC722FF5BF5D0050BBDC /* UniverseModels */; };
 		C9D902132FE9DDC000781FBB /* MessagesFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C9D902122FE9DDC000781FBB /* MessagesFeature */; };
+		C9E7D9793001D264002C2A16 /* TravelUI in Frameworks */ = {isa = PBXBuildFile; productRef = C9E7D9783001D264002C2A16 /* TravelUI */; };
 		C9F814BE2FEE1EED00ACFAC3 /* GameSync in Frameworks */ = {isa = PBXBuildFile; productRef = C9F814BD2FEE1EED00ACFAC3 /* GameSync */; };
 		C9F814C02FEEB96000ACFAC3 /* DevicesFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C9F814BF2FEEB96000ACFAC3 /* DevicesFeature */; };
 /* End PBXBuildFile section */
@@ -61,6 +62,7 @@
 				C9B188952FF856310018FA8F /* GameModels in Frameworks */,
 				C9F814BE2FEE1EED00ACFAC3 /* GameSync in Frameworks */,
 				C9B188932FF72F130018FA8F /* SidebarFeature in Frameworks */,
+				C9E7D9793001D264002C2A16 /* TravelUI in Frameworks */,
 				C9B5309F2FE72B0B006F79A8 /* RawAPIFeature in Frameworks */,
 				C98EDC7C2FFFD6EF0033AF54 /* AccountFeature in Frameworks */,
 				C90D75CF2FED785C00B293DE /* AccountManager in Frameworks */,
@@ -157,6 +159,7 @@
 				C91E721A2FFA954A0092DF05 /* GameDatabase */,
 				C927E7652FFD5C2900D443E8 /* NewStarMapFeature */,
 				C98EDC7B2FFFD6EF0033AF54 /* AccountFeature */,
+				C9E7D9783001D264002C2A16 /* TravelUI */,
 			);
 			productName = Replicant;
 			productReference = C922A8B62FDC493200431320 /* Replicould.app */;
@@ -551,6 +554,10 @@
 		C9D902122FE9DDC000781FBB /* MessagesFeature */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = MessagesFeature;
+		};
+		C9E7D9783001D264002C2A16 /* TravelUI */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TravelUI;
 		};
 		C9F814BD2FEE1EED00ACFAC3 /* GameSync */ = {
 			isa = XCSwiftPackageProductDependency;

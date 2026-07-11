@@ -112,6 +112,31 @@ public struct TravelPlan: Sendable, Equatable, Codable {
     }
 }
 
+/// The in-flight or loaded dry-run travel preview backing the confirmation
+/// sheet: which device is going where, and the current phase of the request.
+/// Shared by the Devices inspector and the star map (both plot the same
+/// `travel` command), so the confirmation sheet can read a plain value rather
+/// than any feature's store — parallel to `PrintPreview`.
+public struct TravelPreview: Equatable, Identifiable, Sendable {
+    public let deviceCode: String
+    public let destination: String
+    public var phase: Phase
+
+    public var id: String { "\(deviceCode)→\(destination)" }
+
+    public enum Phase: Equatable, Sendable {
+        case loading
+        case loaded(TravelPlan)
+        case failed(String)
+    }
+
+    public init(deviceCode: String, destination: String, phase: Phase = .loading) {
+        self.deviceCode = deviceCode
+        self.destination = destination
+        self.phase = phase
+    }
+}
+
 /// The result of a `dry_run` travel preview. `plan` is the itinerary; `rejected`
 /// is a server 4xx (e.g. unreachable destination, with the server's message);
 /// `failed` is a transport/decoding error.

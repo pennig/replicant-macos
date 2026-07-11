@@ -48,10 +48,10 @@ public struct NewStarMapFeature {
         var focus: StarMapFocus
         /// True while a drill-in / zoom-out camera fly is in progress.
         var isTransitioning: Bool
-        /// The live FTL mesh links (system-designation pairs) from the backend's
-        /// per-relay network view, refreshed whenever the relay roster changes.
-        /// The view folds these into the overlays it hands the renderer.
-        var ftlLinks: [FTLLink]
+        /// A pending `travel` itinerary for the active replicant's host vessel,
+        /// shown as a confirmation sheet before the command is dispatched — the
+        /// same dry-run review the Devices inspector uses. Non-nil ⇒ presented.
+        var travelPreview: TravelPreview?
 
         // Survey (nearby-stars fetch + persist) + the themed first-run rebuild.
         /// The active replicant whose nearby stars we survey, from the signed-in
@@ -79,7 +79,7 @@ public struct NewStarMapFeature {
             self.starFocusToken = 0
             self.focus = .galaxy
             self.isTransitioning = false
-            self.ftlLinks = []
+            self.travelPreview = nil
             self.isSurveying = false
             self.surveyPagesDone = 0
             self.surveyTotalPages = nil
@@ -108,14 +108,22 @@ public struct NewStarMapFeature {
         case drillIntoBodyRequested(String)   // planet designation (from a system view)
         case zoomOutRequested                 // steps out one level
         case transitionCompleted
-        // FTL mesh: the view reports the current relay roster (derived from the
-        // live `Device` table); the reducer resolves the real links off each
-        // relay's backend network view.
-        case relayNodesChanged([RelayNode])
-        case ftlLinksLoaded([FTLLink])
+        // FTL mesh: the view fires this when the relay roster changes (and once on
+        // appear); the reducer rebuilds and persists the mesh off each relay's
+        // backend network view. The view then renders the persisted `FTLLinkRecord`
+        // rows directly, so the drawn mesh survives relaunch and a failed read.
+        case refreshMesh
         /// Full re-scan of the replicant's current system (the only source of HZ /
         /// outer-system / hazards); refreshes the persisted `SystemDetail`.
         case scanCurrentSystemTapped
+        // Travel command preview flow, driven from the galaxy dossier's Travel
+        // button: request a dry-run plan for the active replicant's host vessel,
+        // receive it, then either confirm (dispatch for real) or dismiss the sheet.
+        // Mirrors the Devices inspector's travel flow.
+        case travelPreviewRequested(deviceCode: String, destination: String)
+        case travelPreviewResponse(TravelPreviewOutcome)
+        case travelPreviewConfirmed
+        case travelPreviewDismissed
         // First-run survey / boot sequence.
         case task
         case surveyButtonTapped
@@ -127,7 +135,7 @@ public struct NewStarMapFeature {
         case bootDismissed
     }
 
-    private enum CancelID { case survey, transition, relayLinks }
+    private enum CancelID { case survey, transition, meshRefresh }
 
     /// The server caps `per_page` at 50.
     static let surveyPageSize = 50
@@ -140,7 +148,8 @@ public struct NewStarMapFeature {
     @Dependency(\.defaultDatabase) var database
     @Dependency(\.starsClient) var starsClient
     @Dependency(\.locationsClient) var locationsClient
-    @Dependency(\.devicesClient) var devicesClient
+    @Dependency(\.ftlMeshRefresher) var ftlMeshRefresher
+    @Dependency(\.commandClient) var commandClient
     @Dependency(\.date) var date
 
     public init() {}
@@ -248,27 +257,53 @@ public struct NewStarMapFeature {
                 state.isTransitioning = false
                 return .none
 
-            case let .relayNodesChanged(nodes):
-                // No relays → clear the mesh (and cancel any in-flight fetch).
-                guard !nodes.isEmpty else {
-                    state.ftlLinks = []
-                    return .cancel(id: CancelID.relayLinks)
-                }
-                let client = devicesClient
-                return .run { send in
-                    let links = (try? await client.relayLinks(nodes)) ?? []
-                    await send(.ftlLinksLoaded(links))
-                }
-                .cancellable(id: CancelID.relayLinks, cancelInFlight: true)
-
-            case let .ftlLinksLoaded(links):
-                state.ftlLinks = links
-                return .none
+            case .refreshMesh:
+                // Rebuild and persist the mesh off the current relay roster (read
+                // from the Device table inside the refresher) and each relay's live
+                // network view. An empty roster correctly persists an empty mesh.
+                let refresher = ftlMeshRefresher
+                return .run { _ in await refresher.refresh() }
+                    .cancellable(id: CancelID.meshRefresh, cancelInFlight: true)
 
             case .scanCurrentSystemTapped:
                 guard let code = state.activeReplicantCode, !code.isEmpty else { return .none }
                 let client = locationsClient
                 return .run { _ in try? await client.scanAndPersist(replicantCode: code) }
+
+            case let .travelPreviewRequested(deviceCode, destination):
+                state.travelPreview = TravelPreview(deviceCode: deviceCode, destination: destination)
+                let commandClient = self.commandClient
+                return .run { send in
+                    await send(.travelPreviewResponse(commandClient.previewTravel(deviceCode, destination)))
+                }
+
+            case let .travelPreviewResponse(outcome):
+                // Ignore a late response if the user already dismissed the sheet.
+                guard state.travelPreview != nil else { return .none }
+                switch outcome {
+                case let .plan(plan):
+                    state.travelPreview?.phase = .loaded(plan)
+                case let .rejected(message), let .failed(message):
+                    state.travelPreview?.phase = .failed(message)
+                }
+                return .none
+
+            case .travelPreviewConfirmed:
+                guard let preview = state.travelPreview else { return .none }
+                state.travelPreview = nil
+                let commandClient = self.commandClient
+                let deviceCode = preview.deviceCode
+                let destination = preview.destination
+                // The dispatched op surfaces via table observation (GameSync +
+                // reconciler drive it to completion); the map never inspects the
+                // response, matching the Devices inspector's fire-and-forget.
+                return .run { _ in
+                    _ = await commandClient.dispatch(.travel, deviceCode, CommandParams(destination: destination))
+                }
+
+            case .travelPreviewDismissed:
+                state.travelPreview = nil
+                return .none
 
             case .surveyButtonTapped:
                 guard !state.isSurveying else { return .none }

@@ -107,7 +107,7 @@ private func device(_ code: String) -> Device {
         }
 
         await store.send(.travelPreviewRequested(deviceCode: "A", destination: "IZARUM")) {
-            $0.travelPreview = DevicesFeature.TravelPreview(deviceCode: "A", destination: "IZARUM")
+            $0.travelPreview = TravelPreview(deviceCode: "A", destination: "IZARUM")
         }
         await store.receive(\.travelPreviewResponse) {
             $0.travelPreview?.phase = .loaded(plan)
@@ -128,7 +128,7 @@ private func device(_ code: String) -> Device {
             }
         } operation: {
             var state = DevicesFeature.State()
-            state.travelPreview = DevicesFeature.TravelPreview(
+            state.travelPreview = TravelPreview(
                 deviceCode: "A", destination: "IZARUM", phase: .loaded(TravelPlan())
             )
             return TestStore(initialState: state) { DevicesFeature() }

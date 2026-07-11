@@ -61,6 +61,12 @@ typedef struct {
     // ramps the orrery in/out (0…1).
     float fieldDim;
     float orreryReveal;
+    // Galaxy-overlay opacity (FTL mesh, ship vectors, player/relay markers). These
+    // belong to the overview and fade with the drill ASYMMETRICALLY, so the CPU
+    // computes it (the shader can't see the transition direction): out fast over the
+    // first half of a drill IN (reveal 0→0.5), then back in gently over the WHOLE
+    // zoom OUT (reveal 1→0). 1 = full, 0 = hidden.
+    float overlayDim;
     // System-focus recession. As the camera drills in (`orreryReveal` 0→1) the
     // background field is pushed radially away from the focused star and shrunk
     // toward pinpricks, so the amplified parallax reads as "flying in" rather than
