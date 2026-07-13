@@ -42,6 +42,9 @@ public struct DiagnosticAPIClient: APIProtocol {
     public func getV1AccountsAchievements(_ input: Operations.GetV1AccountsAchievements.Input) async throws -> Operations.GetV1AccountsAchievements.Output {
         try await DecodingDiagnostics.capture("getV1AccountsAchievements") { try await wrapped.getV1AccountsAchievements(input) }
     }
+    public func getV1AccountsSimulations(_ input: Operations.GetV1AccountsSimulations.Input) async throws -> Operations.GetV1AccountsSimulations.Output {
+        try await DecodingDiagnostics.capture("getV1AccountsSimulations") { try await wrapped.getV1AccountsSimulations(input) }
+    }
     public func getV1AccountsWebhook(_ input: Operations.GetV1AccountsWebhook.Input) async throws -> Operations.GetV1AccountsWebhook.Output {
         try await DecodingDiagnostics.capture("getV1AccountsWebhook") { try await wrapped.getV1AccountsWebhook(input) }
     }
@@ -135,6 +138,18 @@ public struct DiagnosticAPIClient: APIProtocol {
     public func getV1DevicesDeviceCodeAudit(_ input: Operations.GetV1DevicesDeviceCodeAudit.Input) async throws -> Operations.GetV1DevicesDeviceCodeAudit.Output {
         try await DecodingDiagnostics.capture("getV1DevicesDeviceCodeAudit") { try await wrapped.getV1DevicesDeviceCodeAudit(input) }
     }
+    public func getV1DevicesDeviceCodeSimulate(_ input: Operations.GetV1DevicesDeviceCodeSimulate.Input) async throws -> Operations.GetV1DevicesDeviceCodeSimulate.Output {
+        try await DecodingDiagnostics.capture("getV1DevicesDeviceCodeSimulate") { try await wrapped.getV1DevicesDeviceCodeSimulate(input) }
+    }
+    public func postV1DevicesDeviceCodeSimulate(_ input: Operations.PostV1DevicesDeviceCodeSimulate.Input) async throws -> Operations.PostV1DevicesDeviceCodeSimulate.Output {
+        try await DecodingDiagnostics.capture("postV1DevicesDeviceCodeSimulate") { try await wrapped.postV1DevicesDeviceCodeSimulate(input) }
+    }
+    public func getV1DevicesDeviceCodeSimulateActive(_ input: Operations.GetV1DevicesDeviceCodeSimulateActive.Input) async throws -> Operations.GetV1DevicesDeviceCodeSimulateActive.Output {
+        try await DecodingDiagnostics.capture("getV1DevicesDeviceCodeSimulateActive") { try await wrapped.getV1DevicesDeviceCodeSimulateActive(input) }
+    }
+    public func deleteV1DevicesDeviceCodeSimulateSimId(_ input: Operations.DeleteV1DevicesDeviceCodeSimulateSimId.Input) async throws -> Operations.DeleteV1DevicesDeviceCodeSimulateSimId.Output {
+        try await DecodingDiagnostics.capture("deleteV1DevicesDeviceCodeSimulateSimId") { try await wrapped.deleteV1DevicesDeviceCodeSimulateSimId(input) }
+    }
     public func getV1ReplicantsReplicantCodeInventory(_ input: Operations.GetV1ReplicantsReplicantCodeInventory.Input) async throws -> Operations.GetV1ReplicantsReplicantCodeInventory.Output {
         try await DecodingDiagnostics.capture("getV1ReplicantsReplicantCodeInventory") { try await wrapped.getV1ReplicantsReplicantCodeInventory(input) }
     }
@@ -201,6 +216,12 @@ public struct DiagnosticAPIClient: APIProtocol {
     public func getV1LeaderboardsMegastructure(_ input: Operations.GetV1LeaderboardsMegastructure.Input) async throws -> Operations.GetV1LeaderboardsMegastructure.Output {
         try await DecodingDiagnostics.capture("getV1LeaderboardsMegastructure") { try await wrapped.getV1LeaderboardsMegastructure(input) }
     }
+    public func getV1LeaderboardsSimulations(_ input: Operations.GetV1LeaderboardsSimulations.Input) async throws -> Operations.GetV1LeaderboardsSimulations.Output {
+        try await DecodingDiagnostics.capture("getV1LeaderboardsSimulations") { try await wrapped.getV1LeaderboardsSimulations(input) }
+    }
+    public func getV1LeaderboardsSimulationsScenarioCode(_ input: Operations.GetV1LeaderboardsSimulationsScenarioCode.Input) async throws -> Operations.GetV1LeaderboardsSimulationsScenarioCode.Output {
+        try await DecodingDiagnostics.capture("getV1LeaderboardsSimulationsScenarioCode") { try await wrapped.getV1LeaderboardsSimulationsScenarioCode(input) }
+    }
     public func getV1AccountsEvents(_ input: Operations.GetV1AccountsEvents.Input) async throws -> Operations.GetV1AccountsEvents.Output {
         try await DecodingDiagnostics.capture("getV1AccountsEvents") { try await wrapped.getV1AccountsEvents(input) }
     }
@@ -233,6 +254,9 @@ public struct DiagnosticAPIClient: APIProtocol {
     }
     public func getV1ReplicantsReplicantCodeTraders(_ input: Operations.GetV1ReplicantsReplicantCodeTraders.Input) async throws -> Operations.GetV1ReplicantsReplicantCodeTraders.Output {
         try await DecodingDiagnostics.capture("getV1ReplicantsReplicantCodeTraders") { try await wrapped.getV1ReplicantsReplicantCodeTraders(input) }
+    }
+    public func getV1Stars(_ input: Operations.GetV1Stars.Input) async throws -> Operations.GetV1Stars.Output {
+        try await DecodingDiagnostics.capture("getV1Stars") { try await wrapped.getV1Stars(input) }
     }
     public func postV1Feedback(_ input: Operations.PostV1Feedback.Input) async throws -> Operations.PostV1Feedback.Output {
         try await DecodingDiagnostics.capture("postV1Feedback") { try await wrapped.postV1Feedback(input) }
