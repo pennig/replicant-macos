@@ -132,10 +132,22 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     private var ships: [Ship] = []
     private var shipLineBuffer: MTLBuffer?        // 6 ribbon vertices per ship
     private var shipLineHalfWidth: Float = 1.6    // trajectory thickness in pixels
+    // Trajectory dash cadence. Each visible dash aims for `shipDashWorldLength` in
+    // world units, but is clamped to a screen-space pixel band so dashes never
+    // balloon on zoom-in or vanish on zoom-out (see `encodeStateOverlay`).
+    private var shipDashWorldLength: Float = 0.25   // target visible-dash length (world units / ly)
+    private var shipDashMinPixels: Float = 4        // clamp: shortest visible dash on screen
+    private var shipDashMaxPixels: Float = 40       // clamp: longest visible dash on screen
     private var playerMarkerRadius: Float = 14    // player reticle radius in pixels (clears the relay ring's 8px floor)
     private var shipHeadRadius: Float = 6         // ship comet-head radius in pixels
     private let playerColor = SIMD3<Float>(1.0, 0.82, 0.35)   // gold
     private let shipColor   = SIMD3<Float>(0.55, 0.95, 1.0)   // bright cyan-white
+
+    /// Pushed each frame with the ships' projected screen points (view points,
+    /// top-left) so the SwiftUI overlay can float a tappable device icon over each
+    /// pip. Set by `MetalStarView`; nil until then. Invoked on the main thread (the
+    /// MTKView draws there), so the closure may hop to the main-actor overlay model.
+    var onShipsProjected: (([ProjectedShip]) -> Void)?
 
     private var hdrTexture: MTLTexture?
     private var aspect: Float = 1
@@ -578,6 +590,41 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
 
         cmd.present(drawable)
         cmd.commit()
+
+        // Publish the ships' screen positions for the SwiftUI icon overlay, using
+        // the same camera pose just rendered so the icons are frame-locked to the pips.
+        emitShipProjection(view: view, now: now)
+    }
+
+    /// Project each in-transit ship's comet head to view points (top-left origin,
+    /// mirroring `pickStar`) and push them to the SwiftUI overlay via
+    /// `onShipsProjected`. Emits an empty set while drilled into a system — the pips
+    /// fade out via `overlayDim`, so the icons vanish with them (same gate as the
+    /// pip encode at `overlayDim > 0.001`). Uses `bounds.size` (POINTS), not
+    /// `drawableSize` (pixels), so the points land in SwiftUI's local space.
+    private func emitShipProjection(view: MTKView, now: Double) {
+        guard let emit = onShipsProjected else { return }
+        let dim = overlayDim
+        guard dim > 0.001, !ships.isEmpty else { emit([]); return }
+        let viewM = camera.viewMatrix()
+        let proj = camera.projectionMatrix(aspect: aspect)
+        let size = view.bounds.size
+        let w = Float(size.width), h = Float(size.height)
+        guard w > 0, h > 0 else { emit([]); return }
+
+        var projected: [ProjectedShip] = []
+        projected.reserveCapacity(ships.count)
+        for ship in ships {
+            let vpos = viewM * SIMD4<Float>(ship.position(at: now, stars: stars), 1)
+            var clip = proj * vpos
+            if clip.w <= 0 { continue }                       // behind the camera
+            clip /= clip.w
+            let px = CGFloat((clip.x * 0.5 + 0.5) * w)
+            let py = CGFloat((1 - (clip.y * 0.5 + 0.5)) * h)
+            projected.append(ProjectedShip(
+                deviceCode: ship.deviceCode, point: CGPoint(x: px, y: py), opacity: Double(dim)))
+        }
+        emit(projected)
     }
 
     // MARK: Picking
@@ -1122,7 +1169,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         let fleet: [Ship] = overlays.ships.compactMap { route in
             guard let from = indexByName[route.from], let to = indexByName[route.to], from != to
             else { return nil }
-            return Ship(fromStar: from, toStar: to,
+            return Ship(deviceCode: route.deviceCode, fromStar: from, toStar: to,
                         departedMedia: media(route.departedAt), arrivesMedia: media(route.arrivesAt))
         }
         ships = fleet
@@ -1189,7 +1236,8 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
             for (i, ship) in ships.enumerated() {
                 var sp = ShipParams(color: shipColor, progress: ship.progress(at: now),
                                     halfWidthPixels: shipLineHalfWidth,
-                                    tailLength: 0.35, dashPeriod: 24)
+                                    tailLength: 0.35,
+                                    dashCyclePixels: shipDashCyclePixels(ship, uniforms: uniforms, params: params))
                 enc.setVertexBytes(&sp, length: MemoryLayout<ShipParams>.stride, index: 3)
                 enc.setFragmentBytes(&sp, length: MemoryLayout<ShipParams>.stride, index: 0)
                 enc.drawPrimitives(type: .triangle, vertexStart: i * 6, vertexCount: 6)
@@ -1225,6 +1273,47 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6,
                                instanceCount: heads.count)
         }
+    }
+
+    /// The screen-pixel length of one dash+gap cycle for a ship's trajectory. Each
+    /// visible dash targets `shipDashWorldLength` in world units, clamped to a
+    /// screen-space pixel band, so dashes never balloon on zoom-in or vanish on
+    /// zoom-out. The shader lays these cycles down along the ribbon's true screen
+    /// arc-length (`in.screenDist`), so the cadence is uniform even under perspective.
+    private func shipDashCyclePixels(_ ship: Ship, uniforms: Uniforms, params: MeshParams) -> Float {
+        // Mirror the shader's system-focus recession (Shaders.metal overlayPushed) so
+        // the CPU measures the same endpoints the GPU draws. Identity at overview.
+        func pushed(_ p: SIMD3<Float>) -> SIMD3<Float> {
+            guard uniforms.orreryReveal > 0 else { return p }
+            let center = SIMD3<Float>(uniforms.orreryCenter.x, uniforms.orreryCenter.y, uniforms.orreryCenter.z)
+            return center + (p - center) * (1 + uniforms.systemPush * uniforms.orreryReveal)
+        }
+        let a = pushed(stars[ship.fromStar].position)
+        let b = pushed(stars[ship.toStar].position)
+        let worldLen = simd_length(b - a)
+        // Fallback cycle (~mid-band) when the trajectory is degenerate or off-screen.
+        let fallback = (shipDashMinPixels + shipDashMaxPixels)
+        guard worldLen > 1e-4 else { return fallback }
+
+        // Project both endpoints to screen pixels the same way the vertex shader does.
+        // This only sets the world→screen scale for the world-length TARGET; the dash
+        // *distribution* is handled per-fragment in screen space by the shader.
+        let vp = uniforms.projection * uniforms.view
+        let half = params.viewportPixels * 0.5
+        func screen(_ p: SIMD3<Float>) -> SIMD2<Float>? {
+            let c = vp * SIMD4<Float>(p, 1)
+            guard c.w > 1e-4 else { return nil }            // behind the camera
+            return SIMD2<Float>(c.x, c.y) / c.w * half
+        }
+        guard let sa = screen(a), let sb = screen(b) else { return fallback }
+        let screenLen = simd_length(sb - sa)
+        guard screenLen > 1e-4 else { return fallback }
+
+        // Ideal on-screen dash length if we honoured the world target exactly, then
+        // clamp to the pixel band. Cycle = dash + equal gap = 2·dash.
+        let idealDashPx = shipDashWorldLength * screenLen / worldLen
+        let dashPx = min(max(idealDashPx, shipDashMinPixels), shipDashMaxPixels)
+        return 2 * dashPx
     }
 
     /// Encode the curated labels over the tone-mapped drawable: pick the selected

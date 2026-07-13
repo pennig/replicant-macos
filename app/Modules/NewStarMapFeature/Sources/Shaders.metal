@@ -342,6 +342,11 @@ struct ShipLineVaryings {
     float along;
     float side;
     float fade;
+    // Screen-space arc-length from endpoint A, in pixels. Interpolated WITHOUT
+    // perspective correction (screen-linear) so a fragment's value is its true
+    // pixel distance along the ribbon — that's what makes dashes uniform in screen
+    // space even when the trajectory is foreshortened toward/away from the camera.
+    float screenDist [[center_no_perspective]];
 };
 
 vertex ShipLineVaryings ship_line_vertex(uint vid                          [[vertex_id]],
@@ -366,6 +371,9 @@ vertex ShipLineVaryings ship_line_vertex(uint vid                          [[ver
     out.along = v.along;
     out.side = v.side;
     out.fade = u.overlayDim;
+    // 0 at A, full screen length at B; screen-linear interpolation (see the varying)
+    // turns this into the fragment's true pixel distance along the trajectory.
+    out.screenDist = v.along * length(delta);
     return out;
 }
 
@@ -380,8 +388,11 @@ fragment float4 ship_line_fragment(ShipLineVaryings in [[stage_in]],
         float f = saturate(1.0 - back / max(s.tailLength, 1e-4));
         b = f * f;
     } else {
-        // Ahead: faint dashed line to the destination.
-        b = step(0.5, fract(in.along * s.dashPeriod)) * 0.22;
+        // Ahead: faint dashed line to the destination. Phase is measured in SCREEN
+        // pixels (in.screenDist), so dashes are uniform in screen space along the
+        // whole trajectory regardless of perspective foreshortening; the CPU sizes
+        // one dash+gap cycle (dashCyclePixels) to the clamped world-target band.
+        b = step(0.5, fract(in.screenDist / max(s.dashCyclePixels, 1e-4))) * 0.22;
     }
     return float4(s.color * (b * aa * in.fade), 1.0);
 }

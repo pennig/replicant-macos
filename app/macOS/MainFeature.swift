@@ -173,6 +173,13 @@ struct MainFeature {
                 state.detailSelection = nil
                 return .none
 
+            case let .newStarMap(.delegate(.openDevice(code))):
+                // A ship dossier's "View device" — switch to the Devices category and
+                // select it so the inspector opens on that device.
+                state.sidebar.category = .devices
+                state.devices.selectedDeviceCode = code
+                return .none
+
             case .sidebar, .account, .messages, .rawAPI, .newStarMap, .devices, .blueprints, .locations, .locationEvents, .printQueue, .replicantDirectory:
                 return .none
             }

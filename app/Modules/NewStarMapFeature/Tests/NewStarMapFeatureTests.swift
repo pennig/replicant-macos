@@ -461,7 +461,7 @@ import Metal
 @Suite struct ShipTests {
 
     @Test func progressClampsToTheTripWindow() {
-        let ship = Ship(fromStar: 0, toStar: 1, departedMedia: 100, arrivesMedia: 110)
+        let ship = Ship(deviceCode: "D", fromStar: 0, toStar: 1, departedMedia: 100, arrivesMedia: 110)
         #expect(ship.progress(at: 90) == 0)             // before departure → held at origin
         #expect(ship.progress(at: 100) == 0)
         #expect(abs(ship.progress(at: 105) - 0.5) < 1e-4)
@@ -472,7 +472,7 @@ import Metal
     @Test func positionInterpolatesBetweenSystems() {
         let stars = Galaxy.generate()
         let a = stars[0].position, b = stars[1].position
-        let ship = Ship(fromStar: 0, toStar: 1, departedMedia: 100, arrivesMedia: 110)
+        let ship = Ship(deviceCode: "D", fromStar: 0, toStar: 1, departedMedia: 100, arrivesMedia: 110)
         #expect(simd_length(ship.position(at: 100, stars: stars) - a) < 1e-4)
         #expect(simd_length(ship.position(at: 105, stars: stars) - (a + (b - a) * 0.5)) < 1e-3)
     }

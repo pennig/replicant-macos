@@ -29,6 +29,10 @@ public struct NewStarMapFeature {
         /// The star surfaced by the last pick (single-click re-aim or double-click
         /// dive); nil after a clear/home. Drives the dossier.
         var selectedStar: Star?
+        /// The in-transit device whose ship icon was tapped; nil when none. Drives
+        /// the ship dossier, and is mutually exclusive with `selectedStar` (picking
+        /// one clears the other) so only one HUD dossier shows at a time.
+        var selectedShipDeviceCode: String?
         /// Label of the active data filter (nil = none). Drives the HUD chip.
         var activeFilterName: String?
         /// Toggled info overlays. Ported for the layer rail; not yet wired to the
@@ -71,6 +75,7 @@ public struct NewStarMapFeature {
 
         public init() {
             self.selectedStar = nil
+            self.selectedShipDeviceCode = nil
             self.activeFilterName = nil
             self.activeLayers = [.presence]
             self.autoRotate = true
@@ -90,6 +95,13 @@ public struct NewStarMapFeature {
     }
 
     public enum Action {
+        // Ship overlay: a device icon over a pip was tapped (surfaces its dossier),
+        // the dossier was dismissed, or its "View device" was tapped (bubbles up so
+        // the container opens that device's inspector).
+        case shipSelected(String)        // device_code
+        case shipDeselected
+        case viewDeviceRequested(String) // device_code
+        case delegate(Delegate)
         // Interaction outcomes forwarded from the Metal input layer.
         case starFocused(Star?)          // single-click re-aim resolved to this star
         case starDived(Star)             // double-click dive resolved to this star
@@ -133,6 +145,13 @@ public struct NewStarMapFeature {
         case bootCorruptionDetected
         case manualOverrideTapped
         case bootDismissed
+
+        @CasePathable
+        public enum Delegate: Equatable {
+            /// The player asked to open a device's inspector from a ship dossier —
+            /// the container switches to the Devices category and selects it.
+            case openDevice(String)
+        }
     }
 
     private enum CancelID { case survey, transition, meshRefresh }
@@ -157,16 +176,36 @@ public struct NewStarMapFeature {
     public var body: some ReducerOf<Self> {
         Reduce { state, action in
             switch action {
+            case let .shipSelected(code):
+                // Surfacing a ship dossier takes over the shared HUD slot from any
+                // system dossier.
+                state.selectedShipDeviceCode = code
+                state.selectedStar = nil
+                return .none
+
+            case .shipDeselected:
+                state.selectedShipDeviceCode = nil
+                return .none
+
+            case let .viewDeviceRequested(code):
+                return .send(.delegate(.openDevice(code)))
+
+            case .delegate:
+                return .none
+
             case let .starFocused(star):
                 state.selectedStar = star
+                state.selectedShipDeviceCode = nil
                 return .none
 
             case let .starDived(star):
                 state.selectedStar = star
+                state.selectedShipDeviceCode = nil
                 return .none
 
             case .selectionCleared, .homeRequested:
                 state.selectedStar = nil
+                state.selectedShipDeviceCode = nil
                 return .none
 
             case let .dataFilterCycled(name):
@@ -197,6 +236,7 @@ public struct NewStarMapFeature {
                 // Select it (surfaces the dossier) and request the camera fly.
                 // The search UI only shows in the galaxy HUD, so focus is `.galaxy`.
                 state.selectedStar = star
+                state.selectedShipDeviceCode = nil
                 state.searchQuery = ""
                 state.starFocusToken += 1
                 return .none
@@ -400,6 +440,15 @@ public struct NewStarMapFeature {
     /// Starts the paged nearby-stars survey: resets progress, then walks every
     /// page — persisting each (timestamps preserved on re-survey) and reporting
     /// progress. The view's `@FetchAll` observation renders the inserted rows.
+    ///
+    /// Cheap re-survey short-circuit: the listing is distance-sorted with no
+    /// delta cursor and stars carry no server timestamp, so there's no way to
+    /// ask for "only the new ones" — new stars interleave anywhere in the ~200
+    /// pages. But page 1 reports the server's `total_stars`; if the local
+    /// `stars` table already holds at least that many, nothing new exists and we
+    /// stop after page 1 instead of re-walking every page. An empty catalog
+    /// (first run / rebuild) has a count of 0, so the initial survey always
+    /// walks fully.
     private func runSurvey(_ state: inout State) -> Effect<Action> {
         guard let code = state.activeReplicantCode, !code.isEmpty else {
             state.surveyError = "No active replicant selected."
@@ -416,6 +465,9 @@ public struct NewStarMapFeature {
         let date = self.date
         let pageSize = Self.surveyPageSize
         return .run { send in
+            let existingCount = (try? await database.read { db in
+                try UniverseModels.Star.fetchCount(db)
+            }) ?? 0
             for try await result in starsClient.survey(code, pageSize) {
                 let stamp = date.now
                 let records = result.stars.map { UniverseModels.Star(item: $0, createdAt: stamp) }
@@ -444,6 +496,12 @@ public struct NewStarMapFeature {
                     totalPages: result.totalPages,
                     starCount: result.totalStars
                 ))
+                // Nothing new since the last survey — stop after page 1 rather
+                // than re-walking every page. The next page is only requested on
+                // the following loop turn, so breaking here costs one request.
+                if result.page == 1, result.totalStars > 0, existingCount >= result.totalStars {
+                    break
+                }
             }
             await send(.surveyFinished)
         } catch: { error, send in

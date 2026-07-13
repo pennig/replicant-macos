@@ -85,4 +85,54 @@ import Testing
             $0.travelPreview = nil
         }
     }
+
+    // MARK: - Ship overlay selection
+
+    /// Tapping a ship icon surfaces its dossier by recording the device code, and
+    /// dismissing clears it.
+    @Test func shipSelectionAndDismiss() async {
+        let store = TestStore(initialState: NewStarMapFeature.State()) {
+            NewStarMapFeature()
+        }
+
+        await store.send(.shipSelected("mining_drone_ABCD1234")) {
+            $0.selectedShipDeviceCode = "mining_drone_ABCD1234"
+        }
+        await store.send(.shipDeselected) {
+            $0.selectedShipDeviceCode = nil
+        }
+    }
+
+    /// Picking a star dismisses any open ship dossier — the two share one HUD slot.
+    @Test func starPickClearsShipSelection() async {
+        let store = TestStore(
+            initialState: {
+                var state = NewStarMapFeature.State()
+                state.selectedShipDeviceCode = "mining_drone_ABCD1234"
+                return state
+            }()
+        ) {
+            NewStarMapFeature()
+        }
+
+        await store.send(.starFocused(nil)) {
+            $0.selectedShipDeviceCode = nil
+        }
+    }
+
+    /// "View device" bubbles a delegate action so the container opens the inspector.
+    @Test func viewDeviceRequestEmitsDelegate() async {
+        let store = TestStore(
+            initialState: {
+                var state = NewStarMapFeature.State()
+                state.selectedShipDeviceCode = "mining_drone_ABCD1234"
+                return state
+            }()
+        ) {
+            NewStarMapFeature()
+        }
+
+        await store.send(.viewDeviceRequested("mining_drone_ABCD1234"))
+        await store.receive(\.delegate.openDevice)
+    }
 }

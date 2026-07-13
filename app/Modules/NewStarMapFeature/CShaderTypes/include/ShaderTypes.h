@@ -152,7 +152,7 @@ typedef struct {
     float progress;         // 0..1 head position along the trajectory
     float halfWidthPixels;  // ribbon half-thickness
     float tailLength;       // fraction of the trajectory the fading tail spans
-    float dashPeriod;       // dashes along the not-yet-travelled remainder
+    float dashCyclePixels;  // one dash+gap cycle length in SCREEN pixels (see ship_line_fragment)
 } ShipParams;
 
 // Tuning knobs for the solar-flare playground (FlarePlayground.swift). Every value

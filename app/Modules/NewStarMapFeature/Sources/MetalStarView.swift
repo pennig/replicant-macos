@@ -188,6 +188,9 @@ struct MetalStarView: NSViewRepresentable {
     /// The orrery to show when `focus` is `.system` — built by the view from the
     /// live row. Nil in galaxy mode.
     let systemModel: SystemModel?
+    /// The bridge the renderer pushes ship screen positions to each frame, read by
+    /// the sibling `ShipOverlayLayer` to float tappable device icons over the pips.
+    let shipProjection: ShipProjectionModel
 
     final class Coordinator {
         var renderer: StarFieldRenderer?
@@ -214,7 +217,8 @@ struct MetalStarView: NSViewRepresentable {
         /// ending — is applied IN PLACE. Tearing the renderer down per change is what
         /// left the viewport black through the initial survey and made the camera
         /// feel dead on first load (each rebuild cancelled the in-flight camera fly).
-        @MainActor func syncTerrain(_ stars: [Star], overlays: StarMapOverlays, into view: StarMTKView) {
+        @MainActor func syncTerrain(_ stars: [Star], overlays: StarMapOverlays,
+                                    projection: ShipProjectionModel, into view: StarMTKView) {
             if renderer == nil {
                 // Empty terrain → nothing to draw yet (stays black until stars arrive).
                 guard let renderer = StarFieldRenderer(
@@ -225,6 +229,17 @@ struct MetalStarView: NSViewRepresentable {
                 self.renderer = renderer
                 view.renderer = renderer
                 view.delegate = renderer
+                // Push each frame's ship screen points to the overlay model. The
+                // renderer draws on the main thread, so the main-actor hop is safe;
+                // the `!=` guard keeps an idle fleet (or empty set) from churning
+                // SwiftUI. The same renderer object persists across in-place terrain/
+                // overlay updates, so this is wired exactly once.
+                renderer.onShipsProjected = { [weak projection] ships in
+                    MainActor.assumeIsolated {
+                        guard let projection, projection.ships != ships else { return }
+                        projection.ships = ships
+                    }
+                }
             } else if stars != loadedStars {
                 loadedStars = stars
                 loadedOverlays = overlays
@@ -320,7 +335,7 @@ struct MetalStarView: NSViewRepresentable {
         view.isPaused = false                      // continuous for slice 1; see note
         view.enableSetNeedsDisplay = false
         view.send = { [store] action in store.send(action) }
-        context.coordinator.syncTerrain(stars, overlays: overlays, into: view)
+        context.coordinator.syncTerrain(stars, overlays: overlays, projection: shipProjection, into: view)
         context.coordinator.applyControls(autoRotate: store.autoRotate,
                                           recenterToken: store.cameraResetToken)
         context.coordinator.applyStarFocus(token: store.starFocusToken,
@@ -330,7 +345,7 @@ struct MetalStarView: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: StarMTKView, context: Context) {
-        context.coordinator.syncTerrain(stars, overlays: overlays, into: nsView)
+        context.coordinator.syncTerrain(stars, overlays: overlays, projection: shipProjection, into: nsView)
         context.coordinator.applyControls(autoRotate: store.autoRotate,
                                           recenterToken: store.cameraResetToken)
         context.coordinator.applyStarFocus(token: store.starFocusToken,

@@ -16,6 +16,9 @@ import GameModels
 /// renderer can place it at the correct point along the straight-line trajectory
 /// at any instant.
 struct ShipRoute: Equatable {
+    /// The device in transit — carried through to the renderer's `Ship` so the
+    /// tappable overlay icon can identify which device a pip represents.
+    var deviceCode: String
     /// Origin system designation (e.g. `SOL`).
     var from: String
     /// Destination system designation.

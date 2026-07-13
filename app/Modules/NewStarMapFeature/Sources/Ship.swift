@@ -12,6 +12,9 @@ import simd
 // built, so per-frame progress is a cheap linear map with no date arithmetic.
 
 struct Ship {
+    /// The device in transit — the identity the tappable overlay icon carries so a
+    /// click can surface that device's dossier and open its inspector.
+    let deviceCode: String
     /// Endpoint systems (indices into the star array). Both are state-clamped so
     /// they never dim, and both anchor the trajectory.
     let fromStar: Int

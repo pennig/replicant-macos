@@ -23,6 +23,11 @@ import UniverseModels
 
 public struct NewStarMapView: View {
     @Bindable var store: StoreOf<NewStarMapFeature>
+    /// The bridge the Metal renderer pushes ship pip screen positions to each
+    /// frame. Held here but NOT read in `body` — only the sibling `ShipOverlayLayer`
+    /// reads `.ships`, so a per-frame update re-renders just that overlay and never
+    /// this view (which would otherwise rebuild the whole star terrain per frame).
+    @State private var shipProjection = ShipProjectionModel()
     /// The charted galaxy, straight from SQLite — the same table the SceneKit map
     /// reads. Sorted by insertion order so new survey rows append deterministically.
     @FetchAll(UniverseModels.Star.order(by: \.createdAt)) private var surveyed
@@ -127,9 +132,22 @@ public struct NewStarMapView: View {
                   let destination = snapshot.destination.map(Self.systemDesignation),
                   origin != destination
             else { return nil }
-            return ShipRoute(from: origin, to: destination,
+            return ShipRoute(deviceCode: device.deviceCode, from: origin, to: destination,
                              departedAt: departedAt, arrivesAt: arrivesAt)
         }
+    }
+
+    /// deviceCode → deviceType for every device on the roster, so the ship overlay
+    /// can resolve each pip's `device.<type>` glyph. Recomputed only when `body`
+    /// re-evaluates (not per frame — `body` never reads `shipProjection.ships`).
+    private var shipDeviceTypes: [String: String] {
+        Dictionary(devices.map { ($0.deviceCode, $0.deviceType) }, uniquingKeysWith: { first, _ in first })
+    }
+
+    /// The device backing the selected ship's dossier, resolved from the live roster.
+    private var selectedShipDevice: Device? {
+        guard let code = store.selectedShipDeviceCode else { return nil }
+        return devices.first { $0.deviceCode == code }
     }
 
     /// The star system a location code belongs to — the designation up to the
@@ -234,8 +252,20 @@ public struct NewStarMapView: View {
     public var body: some View {
         ZStack {
             MetalStarView(store: store, stars: stars, overlays: overlays,
-                          focus: store.focus, systemModel: focusedModel)
+                          focus: store.focus, systemModel: focusedModel,
+                          shipProjection: shipProjection)
                 .ignoresSafeArea()
+
+            // Tappable device icons over the ship pips. Renders nothing unless the
+            // renderer is publishing projected ships (galaxy scale only); empty
+            // areas capture no hits, so map gestures pass through.
+            ShipOverlayLayer(
+                projection: shipProjection,
+                deviceTypes: shipDeviceTypes,
+                selectedDeviceCode: store.selectedShipDeviceCode,
+                onSelect: { store.send(.shipSelected($0)) }
+            )
+            .ignoresSafeArea()
 
             switch store.focus {
             case .galaxy:
@@ -264,6 +294,7 @@ public struct NewStarMapView: View {
         .environment(\.colorScheme, .dark)
         .animation(.easeInOut(duration: 0.5), value: store.focus)
         .animation(.easeInOut(duration: 0.22), value: store.selectedStar)
+        .animation(.easeInOut(duration: 0.22), value: store.selectedShipDeviceCode)
         .animation(.easeInOut(duration: 0.15), value: store.searchQuery)
         .animation(.easeInOut(duration: 0.22), value: store.activeFilterName)
         .animation(.easeInOut(duration: 0.4), value: store.bootPhase)
@@ -307,7 +338,15 @@ public struct NewStarMapView: View {
                 )
                 Spacer()
                 HStack(alignment: .bottom) {
-                    if let system = selectedSystem {
+                    if let device = selectedShipDevice {
+                        ShipDossier(
+                            device: device,
+                            onViewDevice: { store.send(.viewDeviceRequested(device.deviceCode)) },
+                            onClose: { store.send(.shipDeselected) }
+                        )
+                        .frame(width: 280)
+                        .transition(.move(edge: .leading).combined(with: .opacity))
+                    } else if let system = selectedSystem {
                         SystemDossier(
                             system: system,
                             exactPlanetCount: exactPlanetCount(system.id),
@@ -716,6 +755,116 @@ private struct SystemDossier: View {
             ZStack(alignment: .leading) {
                 Capsule().fill(.rcSurfaceRaised).frame(width: 64, height: 5)
                 Capsule().fill(color).frame(width: 64 * value, height: 5)
+            }
+        }
+    }
+}
+
+// MARK: - Ship dossier
+
+/// The device dossier for a ship in transit, surfaced by tapping its pip icon. A
+/// glass HUD card mirroring `SystemDossier`'s slot: identity + status, the live
+/// leg it's flying, and a jump to the full Device inspector. System/location names
+/// are designation codes, so they render in mono (spec rule).
+private struct ShipDossier: View {
+    let device: Device
+    let onViewDevice: () -> Void
+    let onClose: () -> Void
+
+    /// "heaven_vessel" → "Heaven Vessel" (local — `DevicePresentation` lives in the
+    /// Devices feature and isn't importable here).
+    private var typeName: String {
+        device.deviceType
+            .split(separator: "_")
+            .map { $0.prefix(1).uppercased() + $0.dropFirst() }
+            .joined(separator: " ")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Space.s) {
+            HStack(alignment: .top, spacing: Space.s) {
+                glyphTile
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(typeName)
+                        .font(.rcHeadline)
+                        .foregroundStyle(.rcTextPrimary)
+                        .lineLimit(1)
+                    Text(device.deviceCode)
+                        .font(.rcMonoSmall)
+                        .foregroundStyle(.rcTextTertiary)
+                        .lineLimit(1)
+                        .textSelection(.enabled)
+                }
+                Spacer()
+                Button(action: onClose) {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.rcTextTertiary)
+                }
+                .buttonStyle(.plain)
+            }
+
+            StatusBadge(device.statusBase, parameter: device.statusParameter)
+
+            Divider().overlay(.rcSeparator)
+
+            if let snapshot = device.travelSnapshot {
+                legReadout(snapshot)
+            } else if let location = device.location {
+                HStack(spacing: Space.xs) {
+                    Image(systemName: "mappin.and.ellipse")
+                        .font(.system(size: 10)).foregroundStyle(.rcTextTertiary)
+                    Text(device.locationName ?? location)
+                        .font(.rcMonoSmall).foregroundStyle(.rcTextSecondary)
+                }
+            }
+
+            Button(action: onViewDevice) {
+                Label("View device", systemImage: "arrow.up.right.square")
+            }
+            .buttonStyle(RCButtonStyle(.primary, fullWidth: true))
+            .padding(.top, 2)
+        }
+        .padding(Space.m)
+        .hudGlass()
+    }
+
+    private var glyphTile: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                .fill(.rcSurfaceRaised)
+                .overlay(
+                    RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                        .strokeBorder(.rcSeparator, lineWidth: 0.5)
+                )
+            Image.rcSymbol("device.\(device.deviceType)")
+                .symbolRenderingMode(.monochrome)
+                .font(.system(size: 22, weight: .regular))
+                .foregroundStyle(.rcTextPrimary)
+        }
+        .frame(width: 40, height: 40)
+    }
+
+    /// The active travel leg: origin → destination (designation codes, mono) and the
+    /// arrival ETA, when the trip window is known.
+    @ViewBuilder private func legReadout(_ snapshot: TravelSnapshot) -> some View {
+        VStack(alignment: .leading, spacing: Space.xs) {
+            HStack(spacing: Space.xs) {
+                if let origin = snapshot.origin {
+                    Text(origin).font(.rcMonoSmall).foregroundStyle(.rcTextTertiary)
+                }
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 9)).foregroundStyle(.rcTextTertiary)
+                Text(snapshot.destination ?? "—")
+                    .font(.rcBodyEmphMono).foregroundStyle(.rcTextPrimary)
+            }
+            .lineLimit(1)
+            if let eta = device.derivedActivity?.completesAt {
+                HStack(spacing: Space.xs) {
+                    Image(systemName: "clock")
+                        .font(.system(size: 10)).foregroundStyle(.rcTextTertiary)
+                    Text("Arrives \(eta, format: .relative(presentation: .named))")
+                        .font(.rcCaption).foregroundStyle(.rcTextSecondary)
+                }
             }
         }
     }
