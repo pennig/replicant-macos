@@ -1197,28 +1197,17 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         pendingOrreryModel = nil
     }
 
-    /// The shortest orbital period (days) among the model's bodies — the "fastest"
-    /// orbit the on-screen timing is anchored to. Defaults to 1 for an empty model.
-    private func minOrbitPeriodDays(_ model: SystemModel) -> Double {
-        model.planets.map(\.periodDays).min() ?? 1
+    /// The orbit-timing knobs, packaged for `OrreryLayout` — the one place the orbit math
+    /// now lives (bodies, pips, device clusters, ship endpoints, picking all read it).
+    private var orbitTiming: OrbitTiming {
+        OrbitTiming(minPeriodSeconds: orreryMinPeriod, periodFalloff: orreryPeriodFalloff)
     }
 
-    /// The on-screen orbital period (seconds) for a body: scale every period off the
-    /// system's fastest so the quickest orbit lands at `orreryMinPeriod` seconds and the
-    /// rest stay proportional, compressed by `orreryPeriodFalloff` (1 = the true ratio,
-    /// 0 = every body at the same speed) so distant bodies drift instead of going inert.
-    private func orbitPeriodSeconds(periodDays: Double, minPeriodDays: Double) -> Float {
-        let ratio = minPeriodDays > 0 ? Float(periodDays / minPeriodDays) : 1
-        return max(orreryMinPeriod * pow(ratio, orreryPeriodFalloff), 0.001)
-    }
-
-    /// A planet's orbit angle (radians) at `time`. The angular term is subtracted so
-    /// bodies orbit counter-clockwise about the sun's north pole — matching the sun's
-    /// visible spin and the asteroid belt (see `orrery_point_vertex`). Shared by every
-    /// orbit call site so the direction can't drift between bodies, pips, and picking.
-    private func orbitAngle(phase0Deg: Double, periodDays: Double, minPeriodDays: Double, time: Float) -> Float {
-        let period = orbitPeriodSeconds(periodDays: periodDays, minPeriodDays: minPeriodDays)
-        return Float(phase0Deg) * .pi / 180 - (time / period) * 2 * .pi
+    /// Build the location resolver for one rendered layer at the given orbit `time`.
+    private func orreryLayout(model: SystemModel, center: SIMD3<Float>, scale: Float,
+                              reveal: Float, time: Float) -> OrreryLayout {
+        OrreryLayout(model: model, center: center, scale: scale, reveal: reveal,
+                     time: time, timing: orbitTiming)
     }
 
     /// Encode one orrery layer into the HDR pass: HZ band + orbit rings + belt
@@ -1364,7 +1353,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     private func placedOrreryBodies(model: SystemModel, center: SIMD3<Float>, scale: Float,
                                     sun: SIMD3<Float>, reveal: Float,
                                     time: Float, excludeID: String? = nil) -> [PlacedBody] {
-        let minPeriodDays = minOrbitPeriodDays(model)
+        let layout = orreryLayout(model: model, center: center, scale: scale, reveal: reveal, time: time)
         var placed: [PlacedBody] = []
         placed.reserveCapacity(model.planets.count + 1)
 
@@ -1389,10 +1378,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         }
 
         for planet in model.planets where planet.id != excludeID {
-            let angle = orbitAngle(phase0Deg: planet.phase0Deg, periodDays: planet.periodDays,
-                                   minPeriodDays: minPeriodDays, time: time)
-            let r = Float(planet.semiMajorScene) * scale * reveal   // emerge from the centre
-            let pos = center + SIMD3<Float>(cos(angle) * r, 0, sin(angle) * r)
+            let pos = layout.orbiterPosition(planet)   // emerge from the centre (reveal applied)
             placed.append(PlacedBody(
                 isCentral: false, center: pos, radius: Float(planet.displayRadius) * scale,
                 sun: sun, type: planet.planetType, lifeStage: planet.lifeStage,
@@ -1443,7 +1429,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     private func orreryPips(model: SystemModel, center: SIMD3<Float>, scale: Float,
                             reveal: Float, time: Float, viewportPx: SIMD2<Float>,
                             excludeID: String? = nil) -> [OrreryPip] {
-        let minPeriodDays = minOrbitPeriodDays(model)    // matches placedOrreryBodies
+        let layout = orreryLayout(model: model, center: center, scale: scale, reveal: reveal, time: time)
         let pipRadius: Float = 3
         let gap: Float = 4               // px between the planet rim and the pip row
         let minSpacing: Float = 8
@@ -1466,10 +1452,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         for planet in model.planets where planet.id != excludeID {
             let entries = OrreryGeometry.pipEntries(planet.indicators)
             guard !entries.isEmpty else { continue }
-            let angle = orbitAngle(phase0Deg: planet.phase0Deg, periodDays: planet.periodDays,
-                                   minPeriodDays: minPeriodDays, time: time)
-            let r = Float(planet.semiMajorScene) * scale * reveal
-            let pos = center + SIMD3<Float>(cos(angle) * r, 0, sin(angle) * r)
+            let pos = layout.orbiterPosition(planet)
 
             // The planet's on-screen radius: project a point offset by its world
             // radius along view-x and measure the pixel span (same trick as the
@@ -1510,14 +1493,11 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     /// this instant's orbit angle — same math as `placedOrreryBodies`. Used to capture a
     /// planet's live position when drilling from the system into it.
     private func currentOrbiterWorldPosition(id: String) -> SIMD3<Float>? {
-        guard let model = orreryModel,
-              let planet = model.planets.first(where: { $0.id == id }) else { return nil }
+        guard let model = orreryModel else { return nil }
         // Use the (possibly frozen) orbit clock so the captured position matches what
         // the system layer is actually rendering this frame.
-        let angle = orbitAngle(phase0Deg: planet.phase0Deg, periodDays: planet.periodDays,
-                               minPeriodDays: minOrbitPeriodDays(model), time: orbitClock)
-        let r = Float(planet.semiMajorScene) * orreryScale * orreryReveal
-        return orreryCenter + SIMD3<Float>(cos(angle) * r, 0, sin(angle) * r)
+        return orreryLayout(model: model, center: orreryCenter, scale: orreryScale,
+                            reveal: orreryReveal, time: orbitClock).orbiterPosition(id: id)
     }
 
     /// Marks live viewport input (scroll / pinch / click) so the auto-rotate idle

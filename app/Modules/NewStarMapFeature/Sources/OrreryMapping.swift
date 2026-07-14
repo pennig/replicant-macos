@@ -133,6 +133,11 @@ enum OrreryMapping {
             let interestingMoon = p.moons.contains { moonIsInteresting($0) }
                 || (p.moons.isEmpty && (p.moonCount ?? 0) > 0)   // hint before hydration
 
+            let lagrange = p.lagrange.compactMap { sp -> LagrangePoint? in
+                guard let n = lPointNumber(sp.designation) else { return nil }
+                return LagrangePoint(designation: sp.designation, point: n)
+            }
+
             return OrreryPlanet(
                 designation: p.designation, name: p.name, type: p.type,
                 planetType: PlanetType(apiType: p.type), estimated: p.typeEstimated,
@@ -150,7 +155,8 @@ enum OrreryMapping {
                 displayRadius: radii[i],
                 colorHex: planetColor(type: p.type),
                 hasRing: p.physical?.rings ?? false,
-                indicators: indicators, hasInterestingMoon: interestingMoon, moons: [])
+                indicators: indicators, hasInterestingMoon: interestingMoon, moons: [],
+                lagrange: lagrange)
         }
 
         let belts = s.belts.indices.map { i -> BeltModel in
@@ -171,6 +177,15 @@ enum OrreryMapping {
                 orbitScene: sceneRadius(au: st.orbitalDistanceAu ?? 0),
                 targetScene: nil, progressPct: st.progressPercentage,
                 deadline: st.deadline.flatMap(parseDate))
+        }
+
+        // Positioned system objects (megastructures, objects, outer-system regions) for
+        // device/pip/picking anchors. Only those with a known orbital distance.
+        let structures = s.structures.compactMap { st -> OrreryStructure? in
+            guard let au = st.orbitalDistanceAu else { return nil }
+            return OrreryStructure(designation: st.designation,
+                                   kind: st.objectType ?? st.kind.rawValue,
+                                   orbitScene: sceneRadius(au: au))
         }
 
         let deviceCount = s.planets.reduce(0) { $0 + $1.devices.count }
@@ -198,6 +213,7 @@ enum OrreryMapping {
             hzOuterScene: star?.habitableZoneOuterAu
                 .map { remapToSpaced(sceneRadius(au: $0), rawScenes: rawScenes, orbits: orbits) },
             planets: planets, belts: belts, hazards: hazards,
+            structures: structures,
             kuiperScene: kuiper,
             // Widen the frame so nothing spills outside the view.
             frameScene: max(frame, outerMost * 1.12),
@@ -319,7 +335,7 @@ enum OrreryMapping {
     /// are index-stepped (real `orbitalDistanceKm` only orders them) so the roster
     /// stays legible. Empty moons → just the central planet (shown before the
     /// `hydrateBody` roster lands, like the star-only system fallback).
-    static func bodyModel(planet: Planet, maxMoons: Int = 18) -> SystemModel {
+    static func bodyModel(planet: Planet, maxMoons: Int = 24) -> SystemModel {
         // The drilled planet is the body-level "sun": a consistent, prominent centre
         // (like the field star at system level), with its moons proportional to it.
         let centralScene = 2.6
@@ -344,7 +360,12 @@ enum OrreryMapping {
             if ad != bd { return ad < bd }
             return a.designation < b.designation
         }
-        let shown = Array(ordered.prefix(maxMoons))
+        // Force-include EVERY interesting moon (hosts a device / site / salvage /
+        // inventory) even past the cap — a device must never lack an anchor. The cap only
+        // trims boring moons for legibility; a huge interesting roster is shown in full.
+        let interesting = ordered.filter(moonIsInteresting)
+        let boring = ordered.filter { !moonIsInteresting($0) }
+        let shown = interesting + boring.prefix(max(0, maxMoons - interesting.count))
         let base = centralScene * 1.7          // first moon clears the planet + a gap
         let step = centralScene * 0.5
         let moons: [OrreryPlanet] = shown.enumerated().map { i, m in
@@ -388,6 +409,15 @@ enum OrreryMapping {
     }
 
     // MARK: - Helpers
+
+    /// The L-number (1…5) of a Lagrange designation whose last segment is `L[1-5]`
+    /// (`SOL-5-L4` → 4). Nil if the tail isn't a recognized Lagrange marker.
+    static func lPointNumber(_ designation: String) -> Int? {
+        guard let last = designation.split(separator: "-").last,
+              last.first == "L", let n = Int(last.dropFirst()), (1...5).contains(n)
+        else { return nil }
+        return n
+    }
 
     private static func parseDate(_ s: String) -> Date? {
         let f = ISO8601DateFormatter()

@@ -303,6 +303,50 @@ struct OrreryMappingTests {
         #expect(PlanetMaterial.modifiers(tags: ["ringed", "haunted"]) == SurfaceModifiers())
     }
 
+    @Test func mapsLagrangePointsAndStructures() {
+        let system = StarSystem(
+            designation: "SOL",
+            star: SystemStar(designation: "SOL", stellarClass: "G2", color: "Yellow"),
+            recon: .scanned, systemScanned: true,
+            planets: [Planet(
+                designation: "SOL-5", type: "Gas Giant", orbitalDistanceAu: 5.2, recon: .scanned,
+                lagrange: [
+                    SpecialSite(designation: "SOL-5-L4", kind: .lagrange, parentBody: "SOL-5"),
+                    SpecialSite(designation: "SOL-5-L1", kind: .lagrange, parentBody: "SOL-5"),
+                ])],
+            structures: [
+                SpecialSite(designation: "SOL-KUIPER", kind: .kuiper, orbitalDistanceAu: 44.5),
+                SpecialSite(designation: "SOL-OBJ-1", kind: .megastructure,
+                            objectType: "megastructure", orbitalDistanceAu: 1.0),
+            ])
+        let m = OrreryMapping.systemModel(from: system)
+        let ls = m.planets[0].lagrange
+        #expect(Set(ls.map(\.point)) == [1, 4])
+        #expect(ls.first { $0.designation == "SOL-5-L4" }?.point == 4)
+        // Structures with an orbital distance become positioned anchors.
+        #expect(Set(m.structures.map(\.designation)) == ["SOL-KUIPER", "SOL-OBJ-1"])
+    }
+
+    @Test func moonCapForceIncludesEveryInterestingMoon() {
+        // 30 moons that each host a device — all must survive the cap (a device must never
+        // lack an anchor), even though the default cap trims boring moons at 24.
+        let moons = (0..<30).map { i in
+            Moon(designation: "SOL-5-\(i)", recon: .scanned,
+                 devices: [LocatedDevice(deviceCode: "D\(i)", deviceType: "mining_drone")])
+        }
+        let planet = Planet(designation: "SOL-5", type: "Gas Giant",
+                            orbitalDistanceAu: 5.2, recon: .scanned, moons: moons)
+        let m = OrreryMapping.bodyModel(planet: planet)
+        #expect(m.planets.count == 30)
+        #expect(m.planets.allSatisfy { $0.indicators.contains(.device) })
+
+        // Boring moons beyond the cap ARE trimmed.
+        let boring = (0..<30).map { Moon(designation: "SOL-6-\($0)", recon: .scanned) }
+        let m2 = OrreryMapping.bodyModel(planet:
+            Planet(designation: "SOL-6", type: "Gas Giant", orbitalDistanceAu: 6, recon: .scanned, moons: boring))
+        #expect(m2.planets.count == 24)
+    }
+
     @Test func mapsRealSystemToPlanetsBeltsHazards() {
         let system = StarSystem(
             designation: "AINALRAM",
@@ -411,5 +455,85 @@ struct OrreryMappingTests {
         for (a, b) in zip(sorted, sorted.dropFirst()) {
             #expect(b.semiMajorScene - a.semiMajorScene > a.displayRadius + b.displayRadius)
         }
+    }
+}
+
+struct OrreryLayoutTests {
+    // Minimal factories for precise control of the layout math.
+    private func planet(_ id: String, phase: Double, semi: Double, radius: Double = 1,
+                        period: Double = 100, lagrange: [LagrangePoint] = []) -> OrreryPlanet {
+        OrreryPlanet(
+            designation: id, name: nil, type: nil, planetType: .unknown(""), estimated: false,
+            tags: [], surfaceTempC: nil, atmosphere: Atmosphere(apiValue: nil), appearanceSeed: 0,
+            orbitalDistanceAu: 1, inHabitableZone: false, scanned: true, moonCount: 0, lifeStage: nil,
+            inventory: [], semiMajorScene: semi, periodDays: period, phase0Deg: phase,
+            displayRadius: radius, colorHex: "#ffffff", hasRing: false, indicators: [],
+            hasInterestingMoon: false, moons: [], lagrange: lagrange)
+    }
+
+    private func model(planets: [OrreryPlanet], belts: [BeltModel] = [],
+                       structures: [OrreryStructure] = [], starID: String = "SOL") -> SystemModel {
+        SystemModel(
+            star: StarDetail(designation: starID, name: nil, spectralType: nil, color: nil,
+                             position: Position(x: 0, y: 0, z: 0), temperatureK: nil, massSolar: nil,
+                             luminositySolar: nil, ageMy: nil, habitableZone: nil, miningBonusPct: nil),
+            hzInnerScene: nil, hzOuterScene: nil, planets: planets, belts: belts, hazards: [],
+            structures: structures, kuiperScene: nil, frameScene: 20, deviceCount: 0, vesselCount: 0)
+    }
+
+    private func layout(_ m: SystemModel, center: SIMD3<Float> = .zero, scale: Float = 1,
+                        reveal: Float = 1, time: Float = 0) -> OrreryLayout {
+        OrreryLayout(model: m, center: center, scale: scale, reveal: reveal, time: time)
+    }
+
+    private func approx(_ a: SIMD3<Float>, _ b: SIMD3<Float>, _ tol: Float = 1e-3) -> Bool {
+        simd_length(a - b) < tol
+    }
+
+    @Test func orbiterPositionMatchesOrbitMathAndScalesWithReveal() {
+        let m = model(planets: [planet("SOL-5", phase: 90, semi: 10)])
+        // phase 90°, time 0 → angle π/2 → (0, 0, 10).
+        #expect(approx(layout(m).orbiterPosition(id: "SOL-5")!, SIMD3(0, 0, 10)))
+        // Reveal scales the orbit radius; center offsets it.
+        #expect(approx(layout(m, center: SIMD3(1, 0, 0), reveal: 0.5).orbiterPosition(id: "SOL-5")!,
+                       SIMD3(1, 0, 5)))
+        #expect(layout(m).orbiterPosition(id: "NOPE") == nil)
+    }
+
+    @Test func lagrangePointsSitRelativeToTheirPlanet() {
+        // Planet at phase 0 → angle 0 → (10, 0, 0). off = max(10·0.1, 1·3) = 3.
+        let ls = [1, 2, 3, 4, 5].map { LagrangePoint(designation: "SOL-5-L\($0)", point: $0) }
+        let m = model(planets: [planet("SOL-5", phase: 0, semi: 10, radius: 1, lagrange: ls)])
+        let L = layout(m)
+        #expect(approx(L.lagrangePosition("SOL-5-L1")!, SIMD3(7, 0, 0)))    // sunward
+        #expect(approx(L.lagrangePosition("SOL-5-L2")!, SIMD3(13, 0, 0)))   // anti-sunward
+        #expect(approx(L.lagrangePosition("SOL-5-L3")!, SIMD3(-10, 0, 0)))  // opposite the star
+        // L4/L5 lead/trail by 60° on the orbit radius (magnitude stays 10).
+        #expect(approx(L.lagrangePosition("SOL-5-L4")!, SIMD3(5, 0, 10 * sinf(.pi / 3))))
+        #expect(approx(L.lagrangePosition("SOL-5-L5")!, SIMD3(5, 0, -10 * sinf(.pi / 3))))
+    }
+
+    @Test func topLevelResolutionIsLevelAware() {
+        let m = model(
+            planets: [planet("SOL-5", phase: 0, semi: 10,
+                             lagrange: [LagrangePoint(designation: "SOL-5-L4", point: 4)])],
+            belts: [BeltModel(designation: "SOL-BELT-1", innerScene: 8, outerScene: 12,
+                              density: "moderate", richness: [:], hasSites: false)],
+            structures: [OrreryStructure(designation: "SOL-OBJ-1", kind: "megastructure", orbitScene: 20)])
+        let L = layout(m)
+        // The system star / central resolves to the centre.
+        #expect(approx(L.position(ofLocation: "SOL")!, .zero))
+        // A planet resolves exactly; a MOON collapses to its parent planet at system level.
+        #expect(approx(L.position(ofLocation: "SOL-5")!, SIMD3(10, 0, 0)))
+        #expect(approx(L.position(ofLocation: "SOL-5-1")!, SIMD3(10, 0, 0)))
+        // A Lagrange point resolves to its offset spot.
+        #expect(approx(L.position(ofLocation: "SOL-5-L4")!, SIMD3(5, 0, 10 * sinf(.pi / 3))))
+        // A belt (and a site under it) resolves to the ring anchor (mid-radius 10).
+        #expect(abs(simd_length(L.position(ofLocation: "SOL-BELT-1")!) - 10) < 1e-3)
+        #expect(approx(L.position(ofLocation: "SOL-BELT-1-SITE-3")!, L.position(ofLocation: "SOL-BELT-1")!))
+        // A structure resolves to its orbit radius (20).
+        #expect(abs(simd_length(L.position(ofLocation: "SOL-OBJ-1")!) - 20) < 1e-3)
+        // Nothing known, not even an ancestor → nil.
+        #expect(L.position(ofLocation: "ZZZ-9") == nil)
     }
 }

@@ -45,6 +45,26 @@ struct BodyIndicators: OptionSet, Equatable, Sendable {
     static let life       = BodyIndicators(rawValue: 1 << 4)
 }
 
+/// A Lagrange point of a planet (`SYSTEM-n-L[1-5]`), positioned relative to that
+/// planet's live orbit position and the system star. Schematic, not physically exact.
+struct LagrangePoint: Identifiable, Equatable, Sendable {
+    var designation: String   // e.g. SOL-5-L4
+    var point: Int            // 1…5 (the L-number)
+    var id: String { designation }
+}
+
+/// A positioned system object that isn't a planet/moon/belt — a megastructure, an
+/// incoming asteroid, or an outer-system region (kuiper/oort). Carried so devices,
+/// pips, and picking can anchor to it. `orbitScene` is its distance from the star in
+/// scene units (0 = unknown / at the star). Distinct from `OrreryHazard`, which drives
+/// the animated impact markers; a hazard and a structure may describe the same object.
+struct OrreryStructure: Identifiable, Equatable, Sendable {
+    var designation: String
+    var kind: String          // "megastructure" / "object" / "incoming_asteroid" / "kuiper" / "oort"
+    var orbitScene: Double
+    var id: String { designation }
+}
+
 struct OrreryMoon: Equatable, Sendable {
     var designation: String
     var name: String?
@@ -94,6 +114,8 @@ struct OrreryPlanet: Identifiable, Equatable, Sendable {
     /// once the planet is hydrated; a hint (`moonCount > 0`) before that.
     var hasInterestingMoon: Bool
     var moons: [OrreryMoon]
+    /// This planet's Lagrange points (`SYSTEM-n-L[1-5]`), if the scan reported any.
+    var lagrange: [LagrangePoint] = []
 
     var id: String { designation }
 }
@@ -156,6 +178,9 @@ struct SystemModel: Equatable, Sendable {
     var planets: [OrreryPlanet]
     var belts: [BeltModel]
     var hazards: [OrreryHazard]
+    /// Positioned system objects (megastructures, objects, outer-system regions) for
+    /// device/pip/picking anchors. Additive to `hazards` (which drives impact markers).
+    var structures: [OrreryStructure] = []
     var kuiperScene: Double?
     /// Radius (scene units) the camera frames on drill-in — the outermost planet
     /// / belt, so a lone inner planet still fills the view (a distant kuiper ring
