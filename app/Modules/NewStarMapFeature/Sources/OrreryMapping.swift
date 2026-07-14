@@ -36,6 +36,20 @@ enum OrreryMapping {
         return Double(h % 360)
     }
 
+    /// A stable per-body appearance seed in [0, 1), hashed (FNV-1a) from the body's
+    /// designation and rotation period. Fed to the surface shader so each planet has
+    /// its own band count / swirliness / feature placement — identical every time it's
+    /// viewed. Rotation period is folded in when known (nil until scanned) for extra
+    /// variety; the designation alone keeps it stable before that.
+    static func appearanceSeed(designation: String, rotationPeriodHours: Double?) -> Float {
+        var h: UInt64 = 14695981039346656037
+        for b in designation.utf8 { h = (h ^ UInt64(b)) &* 1099511628211 }
+        let rp = rotationPeriodHours ?? 0
+        let bits = rp.isFinite ? UInt64(bitPattern: Int64((rp * 10).rounded())) : 0
+        h = (h ^ bits) &* 1099511628211
+        return Float(h % 100_000) / 100_000
+    }
+
     // MARK: - Appearance
 
     /// Planet-type → schematic color hex. (The sun keeps its temperature-real color;
@@ -96,7 +110,15 @@ enum OrreryMapping {
         // pushed outward just enough to clear the previous body — so no two orbits (or a
         // planet and the star) ever intersect.
         let radii = s.planets.map { sunScene * sizeFraction(planet: $0) }
-        let orbits = spacedOrbits(rawScenes: rawScenes, radii: radii, sunScene: sunScene)
+        let rawBeltInner = s.belts.map { sceneRadius(au: $0.innerRadiusAu ?? 0) }
+        let rawBeltOuter = s.belts.map { sceneRadius(au: $0.outerRadiusAu ?? 0) }
+        // Interleave planets and belts and space them all outward from the star, so no
+        // planet orbit ever falls inside an asteroid belt's band (and no two planets, or
+        // a planet and the star, ever intersect).
+        let layout = spacedLayout(
+            planetOrbits: rawScenes, planetRadii: radii,
+            beltInner: rawBeltInner, beltOuter: rawBeltOuter, sunScene: sunScene)
+        let orbits = layout.orbits
 
         let planets = s.planets.indices.map { i -> OrreryPlanet in
             let p = s.planets[i]
@@ -113,6 +135,12 @@ enum OrreryMapping {
 
             return OrreryPlanet(
                 designation: p.designation, name: p.name, type: p.type,
+                planetType: PlanetType(apiType: p.type), estimated: p.typeEstimated,
+                tags: p.physical?.tags ?? [],
+                surfaceTempC: p.physical?.surfaceTempC,
+                atmosphere: Atmosphere(apiValue: p.physical?.atmosphere),
+                appearanceSeed: appearanceSeed(designation: p.designation,
+                                               rotationPeriodHours: p.physical?.rotationPeriodHours),
                 orbitalDistanceAu: au, inHabitableZone: p.inHabitableZone,
                 scanned: p.recon == .scanned, moonCount: p.moonCount ?? p.moons.count,
                 lifeStage: p.lifeStage, inventory: p.inventory,
@@ -125,13 +153,12 @@ enum OrreryMapping {
                 indicators: indicators, hasInterestingMoon: interestingMoon, moons: [])
         }
 
-        let belts = s.belts.map { b in
-            let outer = sceneRadius(au: b.outerRadiusAu ?? 0)
-            // Keep the belt clear of the sun too, but never past its own outer edge.
-            let inner = min(max(sceneRadius(au: b.innerRadiusAu ?? 0), sunScene * 1.1), outer)
+        let belts = s.belts.indices.map { i -> BeltModel in
+            let b = s.belts[i]
+            let band = layout.belts[i]   // spaced clear of the sun and its neighbouring orbits
             return BeltModel(
                 designation: b.designation,
-                innerScene: inner, outerScene: outer,
+                innerScene: band.inner, outerScene: band.outer,
                 density: b.density, richness: b.richness, hasSites: !b.sites.isEmpty)
         }
 
@@ -148,6 +175,10 @@ enum OrreryMapping {
 
         let deviceCount = s.planets.reduce(0) { $0 + $1.devices.count }
 
+        // The spacing pass can push a very crowded inner system — or a wide belt — past
+        // the raw outer edge; frame to whichever body/belt now sits farthest out.
+        let outerMost = (orbits + layout.belts.map(\.outer)).max() ?? 0
+
         let hz: HabitableZone? = zip2(star?.habitableZoneInnerAu, star?.habitableZoneOuterAu)
             .map { HabitableZone(innerAu: $0, outerAu: $1) }
 
@@ -159,36 +190,87 @@ enum OrreryMapping {
                 temperatureK: star?.temperatureK, massSolar: star?.massSolar,
                 luminositySolar: star?.luminositySolar, ageMy: star?.ageMy,
                 habitableZone: hz, miningBonusPct: star?.miningBonusPct),
-            hzInnerScene: star?.habitableZoneInnerAu.map(sceneRadius(au:)),
-            hzOuterScene: star?.habitableZoneOuterAu.map(sceneRadius(au:)),
+            // Map the HZ edges through the SAME spacing the planets got, so the drawn band
+            // stays faithful: a planet whose AU falls in the zone renders inside the band,
+            // and one outside renders outside — even after spacing nudges orbits outward.
+            hzInnerScene: star?.habitableZoneInnerAu
+                .map { remapToSpaced(sceneRadius(au: $0), rawScenes: rawScenes, orbits: orbits) },
+            hzOuterScene: star?.habitableZoneOuterAu
+                .map { remapToSpaced(sceneRadius(au: $0), rawScenes: rawScenes, orbits: orbits) },
             planets: planets, belts: belts, hazards: hazards,
             kuiperScene: kuiper,
-            // The spacing pass can push a very crowded inner system past the raw outer
-            // edge; widen the frame so nothing spills outside the view.
-            frameScene: max(frame, (orbits.max() ?? 0) * 1.12),
+            // Widen the frame so nothing spills outside the view.
+            frameScene: max(frame, outerMost * 1.12),
             deviceCount: deviceCount, vesselCount: 0)
     }
 
-    /// Non-overlapping orbit radii (scene units). Walking from the star outward, each
-    /// planet stays at its AU-mapped radius when it has room; when the sqrt-compressed
-    /// inner system would stack bodies on top of one another (or inside the large sun),
-    /// it's pushed out just enough to clear the previous body plus a gap. The sun is the
-    /// innermost "body" (radius `sunScene`), so the first planet also clears the star.
-    /// Order-preserving; outer planets keep their true positions. Returns input order.
-    static func spacedOrbits(rawScenes: [Double], radii: [Double], sunScene: Double) -> [Double] {
-        let pad = max(0.6, sunScene * 0.15)          // clear gap between adjacent bodies
-        let order = rawScenes.indices.sorted { rawScenes[$0] < rawScenes[$1] }
-        var result = rawScenes
-        var prevOrbit = 0.0
-        var prevRadius = sunScene                     // the star occupies the centre
-        for i in order {
-            let minOrbit = prevOrbit + prevRadius + radii[i] + pad
-            let orbit = max(rawScenes[i], minOrbit)
-            result[i] = orbit
-            prevOrbit = orbit
-            prevRadius = radii[i]
+    /// Non-overlapping orbit radii AND asteroid-belt bands (scene units). Planets and
+    /// belts are interleaved by their raw inner edge and walked from the star outward;
+    /// each is pushed out just enough that its inner edge clears the previous occupant's
+    /// outer edge plus a gap. So when the sqrt-compressed inner system would stack bodies
+    /// on top of one another — or a planet's orbit would fall inside a belt's band — the
+    /// crowded one is nudged outward. The sun is the innermost "body" (radius `sunScene`),
+    /// so the first occupant also clears the star. Order-preserving; occupants with room
+    /// keep their true positions. Returns planet orbits and belt bands in input order.
+    static func spacedLayout(
+        planetOrbits: [Double], planetRadii: [Double],
+        beltInner: [Double], beltOuter: [Double], sunScene: Double
+    ) -> (orbits: [Double], belts: [(inner: Double, outer: Double)]) {
+        let pad = max(0.6, sunScene * 0.15)          // clear gap between adjacent occupants
+
+        enum Occupant { case planet(Int), belt(Int) }
+        // Sort by raw radial centre (a planet's orbit; a belt's midpoint). Centre order
+        // preserves the planets' true radial order (a nearer planet never renders farther
+        // out than a farther one), which keeps the spaced orbits monotonic in raw radius —
+        // relied on by `remapToSpaced` for a faithful habitable-zone band.
+        var order: [(Occupant, key: Double)] = []
+        for i in planetOrbits.indices { order.append((.planet(i), planetOrbits[i])) }
+        for i in beltInner.indices { order.append((.belt(i), (beltInner[i] + beltOuter[i]) / 2)) }
+        order.sort { $0.key < $1.key }
+
+        var orbits = planetOrbits
+        var belts = Array(zip(beltInner, beltOuter)).map { (inner: $0.0, outer: $0.1) }
+        var prevOuter = sunScene                      // the star occupies the centre
+
+        for (occupant, _) in order {
+            switch occupant {
+            case let .planet(i):
+                let orbit = max(planetOrbits[i], prevOuter + pad + planetRadii[i])
+                orbits[i] = orbit
+                prevOuter = orbit + planetRadii[i]
+            case let .belt(i):
+                let width = max(beltOuter[i] - beltInner[i], 0)
+                let inner = max(beltInner[i], prevOuter + pad)
+                belts[i] = (inner, inner + width)
+                prevOuter = inner + width
+            }
         }
-        return result
+        return (orbits, belts)
+    }
+
+    /// Map a raw (AU→scene) radius into the *spaced* layout, so a continuous feature —
+    /// the habitable-zone band — lands consistently with the planets whose orbits the
+    /// spacing pass nudged outward. Piecewise-linear through the planet anchors
+    /// (`rawScenes[i]` → `orbits[i]`), pinned at the star centre (0 → 0) and extrapolated
+    /// beyond the outermost planet with that last segment's slope. Because the spaced
+    /// orbits are monotonic in raw radius (see `spacedLayout`), this map is monotonic:
+    /// a radius inside the raw HZ maps inside the mapped band, one outside stays outside.
+    static func remapToSpaced(_ rawRadius: Double, rawScenes: [Double], orbits: [Double]) -> Double {
+        // Anchors sorted by raw radius, prefixed with the star centre.
+        let sorted = rawScenes.indices.sorted { rawScenes[$0] < rawScenes[$1] }
+        var xs: [Double] = [0], ys: [Double] = [0]
+        for i in sorted { xs.append(rawScenes[i]); ys.append(orbits[i]) }
+        guard xs.count > 1 else { return rawRadius }        // no planets → identity
+
+        if rawRadius <= xs[0] { return rawRadius }
+        for k in 1..<xs.count where rawRadius <= xs[k] {
+            let t = (rawRadius - xs[k - 1]) / max(xs[k] - xs[k - 1], 1e-9)
+            return ys[k - 1] + t * (ys[k] - ys[k - 1])
+        }
+        // Beyond the outermost planet: extend along the last segment's slope.
+        let n = xs.count
+        let slope = (ys[n - 1] - ys[n - 2]) / max(xs[n - 1] - xs[n - 2], 1e-9)
+        return ys[n - 1] + slope * (rawRadius - xs[n - 1])
     }
 
     /// A star-only model (no planets/belts) for a system we haven't hydrated yet —
@@ -244,7 +326,15 @@ enum OrreryMapping {
         let central = CentralBody(
             displayRadius: centralScene,
             colorHex: planetColor(type: planet.type),
-            hasRing: planet.physical?.rings ?? false)
+            hasRing: planet.physical?.rings ?? false,
+            planetType: PlanetType(apiType: planet.type),
+            lifeStage: planet.lifeStage, estimated: planet.typeEstimated,
+            tags: planet.physical?.tags ?? [],
+            inHabitableZone: planet.inHabitableZone,
+            surfaceTempC: planet.physical?.surfaceTempC,
+            atmosphere: Atmosphere(apiValue: planet.physical?.atmosphere),
+            appearanceSeed: appearanceSeed(designation: planet.designation,
+                                           rotationPeriodHours: planet.physical?.rotationPeriodHours))
 
         let ordered = planet.moons.sorted { a, b in
             let ai = moonIsInteresting(a), bi = moonIsInteresting(b)
@@ -265,6 +355,12 @@ enum OrreryMapping {
             if !m.inventory.isEmpty { indicators.insert(.inventory) }
             return OrreryPlanet(
                 designation: m.designation, name: m.name, type: m.type,
+                planetType: PlanetType(apiType: m.type), estimated: m.recon != .scanned,
+                tags: m.physical?.tags ?? [],
+                surfaceTempC: m.physical?.surfaceTempC,
+                atmosphere: Atmosphere(apiValue: m.physical?.atmosphere),
+                appearanceSeed: appearanceSeed(designation: m.designation,
+                                               rotationPeriodHours: m.physical?.rotationPeriodHours),
                 orbitalDistanceAu: 0, inHabitableZone: false,
                 scanned: m.recon == .scanned, moonCount: 0, lifeStage: nil,
                 inventory: m.inventory,

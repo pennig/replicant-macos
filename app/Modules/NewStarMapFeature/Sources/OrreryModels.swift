@@ -61,6 +61,21 @@ struct OrreryPlanet: Identifiable, Equatable, Sendable {
     var designation: String
     var name: String?
     var type: String?
+    /// Classified kind — drives surface texturing.
+    var planetType: PlanetType
+    /// The body's `typeEstimated` flag: its type is a guess, not confirmed intel.
+    /// Renders duller + staticky.
+    var estimated: Bool
+    /// Scan `tags` (empty until scanned) — texture-intensity hints (cratered, frozen, …).
+    var tags: [String]
+    /// Scanned surface temperature (°C, nil until scanned) — shifts lava hue/amount on
+    /// volcanic worlds and grows polar ice caps on cold desert/terran worlds.
+    var surfaceTempC: Double?
+    /// Scanned atmospheric thickness (`.unknown` until scanned) — drives the atmosphere
+    /// halo on terrestrial bodies. Decoupled from type/temperature; read from the scan.
+    var atmosphere: Atmosphere
+    /// Stable per-body surface-variability seed (hash of designation + rotation period).
+    var appearanceSeed: Float
     var orbitalDistanceAu: Double
     var inHabitableZone: Bool
     var scanned: Bool
@@ -113,6 +128,20 @@ struct CentralBody: Equatable, Sendable {
     var displayRadius: Double     // scene units
     var colorHex: String
     var hasRing: Bool
+    /// Classified kind + biosphere, so the drilled planet is textured like it was
+    /// when orbiting at system level. `estimated` = its type is an unconfirmed guess.
+    var planetType: PlanetType
+    var lifeStage: String?
+    var estimated: Bool
+    var tags: [String]
+    /// Whether the drilled planet orbits within its star's habitable zone — livens the
+    /// land-green saturation of a terran surface (see `PlanetMaterial.surface`).
+    var inHabitableZone: Bool
+    /// Scanned surface temperature (°C, nil until scanned) — see `OrreryPlanet.surfaceTempC`.
+    var surfaceTempC: Double?
+    /// Scanned atmospheric thickness — see `OrreryPlanet.atmosphere`.
+    var atmosphere: Atmosphere
+    var appearanceSeed: Float
 }
 
 /// The full orrery presentation aggregate for one focus level. At system level the

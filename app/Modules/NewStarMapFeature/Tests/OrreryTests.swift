@@ -209,6 +209,100 @@ struct OrreryMappingTests {
         #expect(OrreryMapping.planetColor(type: nil) == OrreryMapping.planetColor(type: "unknown"))
     }
 
+    @Test func planetTypeClassification() {
+        #expect(PlanetType(apiType: "Ocean World") == .oceanWorld)
+        #expect(PlanetType(apiType: "Ice Giant") == .iceGiant)     // "giant" wins over bare "ice"
+        #expect(PlanetType(apiType: "Frozen") == .frozen)
+        #expect(PlanetType(apiType: "Super Earth") == .superEarth)
+        #expect(PlanetType(apiType: "Volcanic") == .volcanic)
+        #expect(PlanetType(apiType: nil) == .unknown(""))
+        // Unrecognized labels keep their raw string (so a new game type isn't lost).
+        #expect(PlanetType(apiType: "Ringworld Segment") == .unknown("Ringworld Segment"))
+    }
+
+    @Test func materialResolvesStyleLifeAndEstimated() {
+        let ocean = PlanetMaterial.surface(for: .oceanWorld, lifeStage: "intelligent", estimated: false)
+        #expect(ocean.style == .ocean)
+        #expect(ocean.life == 1.0)
+        #expect(!ocean.estimated)
+
+        // An unconfirmed body still textures by its guessed type, flagged estimated.
+        let guessedGiant = PlanetMaterial.surface(for: .gasGiant, lifeStage: nil, estimated: true)
+        #expect(guessedGiant.style == .banded)
+        #expect(guessedGiant.estimated)
+        #expect(guessedGiant.life == 0)
+
+        // Gas and ice giants texture with distinct styles.
+        #expect(PlanetMaterial.style(.gasGiant) == .banded)
+        #expect(PlanetMaterial.style(.iceGiant) == .iceGiant)
+
+        // Unknown types fall back to the neutral rocky surface.
+        #expect(PlanetMaterial.surface(for: .unknown("Ringworld"), lifeStage: nil, estimated: false).style == .rocky)
+    }
+
+    @Test func surfaceTemperatureShapesLavaAndIceCaps() {
+        // Volcanic lava hue follows the black-body ramp: dull red → yellow/white.
+        let cool = PlanetMaterial.surface(for: .volcanic, lifeStage: nil, estimated: false, surfaceTempC: 650)
+        let hot  = PlanetMaterial.surface(for: .volcanic, lifeStage: nil, estimated: false, surfaceTempC: 1350)
+        #expect(hot.detail.x >= cool.detail.x)                 // both near max red…
+        #expect(hot.detail.y > cool.detail.y + 0.3)            // …but hotter adds green (toward yellow/white)
+        #expect(hot.mods.lava > cool.mods.lava)                // hotter → more lava
+        // Unknown temperature keeps the default lava tint (existing look preserved).
+        let noTemp = PlanetMaterial.surface(for: .volcanic, lifeStage: nil, estimated: false)
+        #expect(noTemp.detail == OrreryGeometry.rgb(hex: PlanetMaterial.detailHex(.volcanic)))
+        #expect(noTemp.polarIce == 0)
+
+        // Cold desert/terran/ocean worlds grow polar caps; the cap EXTENT ramps from
+        // 40 °C (none) down to −40 °C (full), and colder always means more ice.
+        func ice(_ type: PlanetType, _ temp: Double) -> Float {
+            PlanetMaterial.surface(for: type, lifeStage: nil, estimated: false, surfaceTempC: temp).polarIce
+        }
+        #expect(ice(.superEarth, 40) == 0)                     // no ice at/above 40°C
+        #expect(ice(.terrestrial, 15) > 0.15)                  // a mild-cold world shows a clear cap
+        #expect(ice(.terrestrial, 15) < ice(.desertWorld, -30)) // colder → larger cap
+        #expect(ice(.oceanWorld, -20) > 0.5)
+        #expect(ice(.desertWorld, -40) == 1)                   // full extent by −40°C
+        #expect(ice(.desertWorld, -100) == 1)                  // and clamps there
+        // Ice caps are gated to those types — a cold gas giant gets none.
+        #expect(ice(.gasGiant, -30) == 0)
+    }
+
+    @Test func appearanceSeedIsStableAndVaries() {
+        // Same inputs → identical seed (a planet always looks the same), in [0, 1).
+        let a = OrreryMapping.appearanceSeed(designation: "SOL-5", rotationPeriodHours: 9.9)
+        let b = OrreryMapping.appearanceSeed(designation: "SOL-5", rotationPeriodHours: 9.9)
+        #expect(a == b)
+        #expect(a >= 0 && a < 1)
+
+        // Different name or rotation → (almost surely) a different seed.
+        #expect(OrreryMapping.appearanceSeed(designation: "SOL-6", rotationPeriodHours: 9.9) != a)
+        #expect(OrreryMapping.appearanceSeed(designation: "SOL-5", rotationPeriodHours: 10.7) != a)
+
+        // Absent rotation (unscanned) is handled and still stable.
+        let n1 = OrreryMapping.appearanceSeed(designation: "SOL-5", rotationPeriodHours: nil)
+        let n2 = OrreryMapping.appearanceSeed(designation: "SOL-5", rotationPeriodHours: nil)
+        #expect(n1 == n2)
+        #expect(n1 >= 0 && n1 < 1)
+    }
+
+    @Test func tagsMapToSurfaceModifiers() {
+        // No useful tags → neutral modifiers (identical to the untagged look).
+        #expect(PlanetMaterial.modifiers(tags: []) == SurfaceModifiers())
+        #expect(PlanetMaterial.modifiers(tags: ["barren", "ice_giant"]) == SurfaceModifiers())
+
+        let barren = PlanetMaterial.modifiers(tags: ["cratered", "no_atmosphere"])
+        #expect(barren.craters == 1.6)
+        #expect(barren.atmosphere == 0)
+
+        // Strongest lava tag wins when several apply.
+        let hell = PlanetMaterial.modifiers(tags: ["volcanic", "hellworld", "tectonically_active"])
+        #expect(hell.lava == 1.8)
+
+        #expect(PlanetMaterial.modifiers(tags: ["ice_surface"]).frost == 0.7)
+        // Unknown tags are ignored (a new game tag can't break rendering).
+        #expect(PlanetMaterial.modifiers(tags: ["ringed", "haunted"]) == SurfaceModifiers())
+    }
+
     @Test func mapsRealSystemToPlanetsBeltsHazards() {
         let system = StarSystem(
             designation: "AINALRAM",
@@ -260,6 +354,35 @@ struct OrreryMappingTests {
         // Every moon orbits outside the central planet.
         let central = m.centralBody?.displayRadius ?? 0
         #expect(m.planets.allSatisfy { $0.semiMajorScene - $0.displayRadius > central })
+    }
+
+    @Test func habitableZoneBandTracksSpacedPlanetOrbits() throws {
+        // A crowded inner system so the spacing pass pushes orbits well past their raw
+        // AU-mapped radii. The drawn HZ band must move with them: a planet whose AU is in
+        // the zone must render INSIDE the band, and one outside must render OUTSIDE —
+        // otherwise the visual would contradict the data.
+        let hzInner = 0.7, hzOuter = 1.6
+        let aus: [Double] = [0.05, 0.2, 0.5, 0.9, 1.2, 1.5, 2.4, 6.0]
+        let planets = aus.enumerated().map { i, au in
+            Planet(designation: "HZ-\(i + 1)", type: "Barren",
+                   orbitalDistanceAu: au, inHabitableZone: au >= hzInner && au <= hzOuter,
+                   recon: .scanned)
+        }
+        let system = StarSystem(
+            designation: "HZTEST",
+            star: SystemStar(designation: "HZTEST", stellarClass: "G2", color: "Yellow",
+                             habitableZoneInnerAu: hzInner, habitableZoneOuterAu: hzOuter),
+            recon: .scanned, systemScanned: true, planets: planets)
+        let m = OrreryMapping.systemModel(from: system)
+        let bandInner = try #require(m.hzInnerScene)
+        let bandOuter = try #require(m.hzOuterScene)
+
+        for planet in m.planets {
+            let inByData = planet.orbitalDistanceAu >= hzInner && planet.orbitalDistanceAu <= hzOuter
+            let inByGeometry = planet.semiMajorScene >= bandInner && planet.semiMajorScene <= bandOuter
+            #expect(inByData == inByGeometry,
+                    "\(planet.designation): au=\(planet.orbitalDistanceAu) inData=\(inByData) but orbit=\(planet.semiMajorScene) in [\(bandInner), \(bandOuter)]=\(inByGeometry)")
+        }
     }
 
     @Test func crowdedInnerPlanetsClearSunAndEachOther() {

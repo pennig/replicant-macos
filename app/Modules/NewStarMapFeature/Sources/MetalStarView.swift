@@ -1,4 +1,5 @@
 import ComposableArchitecture
+import CStarMapShaderTypes
 import MetalKit
 import SwiftUI
 

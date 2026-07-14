@@ -13,6 +13,7 @@
 //
 
 import ComposableArchitecture
+import CStarMapShaderTypes
 import GameModels
 import simd
 import SQLiteData

@@ -25,6 +25,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     private let orreryLinePipeline: MTLRenderPipelineState  // orbit rings / HZ / kuiper (additive)
     private let orreryPointPipeline: MTLRenderPipelineState // asteroid belt (additive points)
     private let orreryPipPipeline: MTLRenderPipelineState   // body indicator + hazard pips (additive)
+    private let orreryAtmoPipeline: MTLRenderPipelineState  // terrestrial atmosphere halos (additive, depth-read)
 
     // Depth: only the resolved bodies write it; the dense additive field never
     // does (Invariant 8). Overlays test against it to occlude behind bodies.
@@ -64,6 +65,8 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     private var cameraStack: [TurntableCamera] = []   // pose per drilled level, restored on zoom-out
     private var orreryLineBuffer: MTLBuffer?
     private var orreryLineVertexCount = 0
+    private var orreryHZBuffer: MTLBuffer?          // habitable-zone filled band (triangles)
+    private var orreryHZVertexCount = 0
     private var orreryBeltBuffer: MTLBuffer?
     private var orreryBeltCount = 0
     // One time-based transition progress (0 = galaxy, 1 = system focus). The
@@ -93,6 +96,116 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     /// Drill/zoom durations (seconds); match the reducer's transition lock.
     private let drillDurationBase = 1.15
     private let zoomDurationBase = 0.95
+
+    /// Whether the active orrery is body-level (a planet + its moons) rather than
+    /// system-level (the focused star + its planets). Drives the `bodyProgress` fade
+    /// direction for each cross-fading layer.
+    private var orreryIsBody = false
+    /// System↔body cross-fade (0 = system view, 1 = drilled into a planet), on its
+    /// own eased clock (like `systemProgress`). While a drill/zoom between the two
+    /// levels is in flight, `departing` holds the layer being left behind so both
+    /// render in one frame — the sibling planets + sun fade out while the drilled
+    /// planet + its moons fade in (and vice-versa on the way back).
+    private var bodyProgress: Float = 0
+    private var bodyFrom: Float = 0
+    private var bodyTarget: Float = 0
+    private var bodyStart: Double = 0
+    private var bodyDuration: Double = 0.0001
+    /// The orrery layer being transitioned away from — the system when drilling into
+    /// a planet, the planet when zooming back out. Carries its own centre / sun /
+    /// scale / scaffold buffers so it renders exactly where it sits, independent of
+    /// the arriving layer, and is dropped once the cross-fade settles.
+    private var departing: DepartingOrrery?
+
+    /// An orrery model update (e.g. a body hydrate landing) that arrived while a
+    /// drill/zoom was in flight. Rebuilding the orrery does CPU geometry generation
+    /// plus buffer allocation on the render thread; doing that mid-fly drops a frame
+    /// or two. So it's stashed here and applied in `draw` once the transition settles,
+    /// where a one-frame rebuild on a static camera is imperceptible.
+    private var pendingOrreryModel: SystemModel?
+
+    private struct DepartingOrrery {
+        var model: SystemModel
+        var center: SIMD3<Float>
+        var sunWorldPos: SIMD3<Float>
+        var scale: Float
+        var isBody: Bool
+        var lineBuffer: MTLBuffer?
+        var lineCount: Int
+        var hzBuffer: MTLBuffer?
+        var hzCount: Int
+        var beltBuffer: MTLBuffer?
+        var beltCount: Int
+    }
+
+    /// Orbit-animation clock (seconds). Advances with real time EXCEPT while focused
+    /// on / transitioning to a body, when it FREEZES — so a drilled planet (and its
+    /// siblings) hold their positions rather than orbiting out from under the camera,
+    /// and resume exactly where they paused on the way back (an accumulator, so
+    /// freezing/unfreezing never jumps). Surface spin/flares use `time` (never frozen).
+    private var orbitClock: Float = 0
+    /// The drilled planet's rendered radius in the SYSTEM view (world units). The
+    /// body-level central body grows from this to its full body radius across
+    /// `bodyProgress`, so the planet is continuous with its system self at the start
+    /// of the drill (no size pop) yet ends up comfortably sun-sized. 0 = not drilling.
+    private var bodyCentralStartRadius: Float = 0
+    /// Designation of the drilled planet, so a SYSTEM layer can SKIP it (it's drawn
+    /// once as the continuous central body, never blended against a second copy).
+    /// Set on `enterBody`, cleared once fully back at system level.
+    private var bodyPlanetID: String?
+
+    /// The distant lighting-sun position for a body centred at `planet`, along the
+    /// true direction to the system star (see `enterBody`).
+    private func bodySunPosition(planet: SIMD3<Float>, starIndex: Int?, distance: Float) -> SIMD3<Float> {
+        let starPos = starIndex.map { stars[$0].position } ?? (planet + SIMD3<Float>(1, 0, 0))
+        let toStar = starPos - planet
+        let dir = simd_length(toStar) > 1e-6 ? simd_normalize(toStar) : SIMD3<Float>(1, 0, 0)
+        return planet + dir * distance
+    }
+
+    /// A cross-fading orrery layer's opacity at the current `bodyProgress`: a
+    /// body-level layer fades IN with it (0→1); a system-level layer fades OUT
+    /// (1→0). At the settled ends one layer is fully shown and the other is gone.
+    private func layerOpacity(isBody: Bool) -> Float {
+        isBody ? bodyProgress : 1 - bodyProgress
+    }
+
+    /// Start the eased system↔body cross-fade toward `target` (0 = system, 1 = body).
+    private func beginBodyTransition(to target: Float, duration: Double, now: Double) {
+        bodyFrom = bodyProgress
+        bodyTarget = target
+        bodyStart = now
+        bodyDuration = max(duration, 0.0001)
+    }
+
+    /// Pin `bodyProgress` to a settled value with no in-flight fade — used when the
+    /// active orrery is a system (galaxy↔system moves never cross the body level).
+    private func settleBodyProgress(_ v: Float) {
+        bodyProgress = v; bodyFrom = v; bodyTarget = v
+        bodyStart = 0; bodyDuration = 0.0001
+    }
+
+    /// True while either eased clock (the shared galaxy↔system transition or the
+    /// system↔body cross-fade) is still animating — used to defer main-thread orrery
+    /// rebuilds off the fly. A settled clock has its end time in the past, so this
+    /// reads false at rest.
+    private func transitionInFlight(now: Double) -> Bool {
+        now < transitionStart + transitionDuration || now < bodyStart + bodyDuration
+    }
+
+    /// Snapshot the active orrery (model + centre/sun/scale + scaffold buffers) into
+    /// a departing layer, so it keeps rendering — where it truly sits — while the
+    /// next level fades in over it. Captured BEFORE `setOrreryModel` swaps in the new
+    /// roster (which reassigns the instance buffers; the snapshot retains the old).
+    private func snapshotActiveOrrery(isBody: Bool) -> DepartingOrrery? {
+        guard let model = orreryModel else { return nil }
+        return DepartingOrrery(
+            model: model, center: orreryCenter, sunWorldPos: orrerySunWorldPos,
+            scale: orreryScale, isBody: isBody,
+            lineBuffer: orreryLineBuffer, lineCount: orreryLineVertexCount,
+            hzBuffer: orreryHZBuffer, hzCount: orreryHZVertexCount,
+            beltBuffer: orreryBeltBuffer, beltCount: orreryBeltCount)
+    }
 
     // Labels: the curated annotation layer. Rasterized-text cache + which star is
     // selected (always labelled), plus how many context labels to show.
@@ -169,7 +282,13 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     // Tunables (all the knobs the design discussion surfaced, in one place).
     private var minAngularSize: Float = 0.0015   // floor: distant stars stay visible
     private var maxAngularSize: Float = 0.05     // ceiling: near stars can't fill the view
-    private let orreryOrbitSpeed: Float = 1.2    // seconds of animation per "period day" — larger = slower
+    // Orbit timing (dialed-in constants). Rather than a flat multiplier on period-days —
+    // which let a short-period inner planet whip around too fast to click — every planet's
+    // on-screen period scales off the system's *fastest* so that quickest orbit lands at
+    // `orreryMinPeriod` seconds, and `orreryPeriodFalloff` (0…1) compresses the spread so
+    // outer planets still drift rather than going inert. See `orbitPeriodSeconds`.
+    private let orreryMinPeriod: Float = 75
+    private let orreryPeriodFalloff: Float = 0.55
     private var atmoNear: Float = 40             // depth dimming band
     private var atmoFar: Float = 420
     private var atmoFloor: Float = 0.35          // atmospheric floor (≠ semantic floor)
@@ -178,6 +297,14 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     private var lodFull: Float = 0.018           // angular size where it's a full luminous disc
     private var overviewRadius: Float = 180      // home / overview pull-back distance
     private var diveRadius: Float = 6           // double-click close-focus distance
+    // Orrery elevation policy: while focused on an orrery (system or planet) the
+    // camera is held to an oblique band — never edge-on or fully top-down — and
+    // drilling into a system tilts onto the orbital plane at a fixed entry angle
+    // (keeping the current azimuth). Galaxy view keeps the camera's default
+    // symmetric range, restored on zoom-out from the saved pre-drill pose.
+    private let orreryMinElevation: Float = 5 * .pi / 180
+    private let orreryMaxElevation: Float = 85 * .pi / 180
+    private let orreryEntryElevation: Float = 25 * .pi / 180
     // System-focus recession (see ShaderTypes.Uniforms): how far the background
     // field is pushed away from the focused star and how far it shrinks at full
     // drill-in, plus the residual field brightness kept as a backdrop (so the
@@ -295,6 +422,15 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         Self.configureAdditiveHDR(orreryPipDesc.colorAttachments[0]!)
         orreryPipDesc.depthAttachmentPixelFormat = depthPF
 
+        // Orrery atmosphere halos: soft glow shells beyond terrestrial limbs. Additive
+        // HDR, depth-READ (occluded by a nearer body, never writes depth) — drawn after
+        // the opaque bodies so a halo composites over the background and the sun.
+        let orreryAtmoDesc = MTLRenderPipelineDescriptor()
+        orreryAtmoDesc.vertexFunction = library.makeFunction(name: "orrery_atmosphere_vertex")
+        orreryAtmoDesc.fragmentFunction = library.makeFunction(name: "orrery_atmosphere_fragment")
+        Self.configureAdditiveHDR(orreryAtmoDesc.colorAttachments[0]!)
+        orreryAtmoDesc.depthAttachmentPixelFormat = depthPF
+
         // Mesh links (additive, depth-tested so a body in front occludes them).
         let meshDesc = MTLRenderPipelineDescriptor()
         meshDesc.vertexFunction = library.makeFunction(name: "mesh_vertex")
@@ -350,6 +486,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
             orreryLinePipeline = try device.makeRenderPipelineState(descriptor: orreryLineDesc)
             orreryPointPipeline = try device.makeRenderPipelineState(descriptor: orreryPointDesc)
             orreryPipPipeline = try device.makeRenderPipelineState(descriptor: orreryPipDesc)
+            orreryAtmoPipeline = try device.makeRenderPipelineState(descriptor: orreryAtmoDesc)
         } catch {
             assertionFailure("Pipeline creation failed: \(error)")
             return nil
@@ -406,6 +543,10 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         lastFrameTime = now
         advanceAutoRotate(now: now, dt: dt)
         relevance.step()                     // advance eased relevance transitions
+        // Freeze orbital motion while focused on / transitioning to a body, so the
+        // drilled planet holds still (no camera-follow needed) and its siblings stay
+        // put; it resumes seamlessly from the same phase on the way back out.
+        if !(orreryIsBody || departing != nil) { orbitClock += dt }
         camera.step(now: now)                // advance eased camera framing
 
         // Advance the shared transition progress (time-based smoothstep — a real
@@ -413,6 +554,22 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         let raw = Float(min(max((now - transitionStart) / transitionDuration, 0), 1))
         let eased = raw * raw * (3 - 2 * raw)
         systemProgress = transitionFrom + (transitionTarget - transitionFrom) * eased
+        // The system↔body cross-fade runs on its own eased clock. Once it settles,
+        // drop the layer we transitioned away from (its buffers are then free).
+        let bRaw = Float(min(max((now - bodyStart) / bodyDuration, 0), 1))
+        let bEased = bRaw * bRaw * (3 - 2 * bRaw)
+        bodyProgress = bodyFrom + (bodyTarget - bodyFrom) * bEased
+        if bRaw >= 1 {
+            departing = nil
+            if !orreryIsBody { bodyCentralStartRadius = 0; bodyPlanetID = nil }   // back at system level
+        }
+        // Apply an orrery update that arrived mid-fly now that both clocks have settled
+        // and the camera is static — the rebuild's one-frame cost isn't perceptible here
+        // (deferred in `updateOrrery` precisely to keep it off the fly).
+        if let pending = pendingOrreryModel, raw >= 1, bRaw >= 1 {
+            pendingOrreryModel = nil
+            applyOrreryUpdate(pending)
+        }
         // `focusedStarIndex` is intentionally NOT cleared on zoom-out: the star that
         // was drilled stays "focused" (it's the sun throughout, so no snap-flicker,
         // and it remains the focused star back in the galaxy).
@@ -526,51 +683,39 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
                                    now: CACurrentMediaTime())
             }
 
-            // --- Orrery (system focus): scaffold rings + belt (additive), then the
-            // lit sun/planets (over-blend, depth-write) so bodies occlude correctly.
-            if orreryReveal > 0.001, let model = orreryModel {
-                let t = Float(now - startTime)
-                if let lineBuf = orreryLineBuffer, orreryLineVertexCount > 0 {
-                    enc.setRenderPipelineState(orreryLinePipeline)
-                    enc.setDepthStencilState(readDepthState)
-                    enc.setVertexBuffer(lineBuf, offset: 0, index: 0)
-                    enc.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
-                    enc.setFragmentBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
-                    enc.drawPrimitives(type: .line, vertexStart: 0, vertexCount: orreryLineVertexCount)
+            // --- Orrery (system/body focus): scaffold rings + belt (additive), then
+            // the lit sun/planets (over-blend, depth-write) so bodies occlude
+            // correctly. During a system↔body drill/zoom two layers render in one
+            // frame: the DEPARTING layer (behind, no depth write) and the ARRIVING/
+            // active layer on top. Orbits use the frozen `orbitClock`, not wall time.
+            if orreryReveal > 0.001 {
+                let t = orbitClock
+                let viewportPx = SIMD2<Float>(Float(size.width), Float(size.height))
+                if let dep = departing {
+                    // A body layer's orbits emerge/recede with `bodyProgress`; a system
+                    // layer's with `orreryReveal` (systemProgress). Fade = the layer's
+                    // opacity. A SYSTEM layer skips the drilled planet (drawn as the
+                    // continuous central body); a body layer draws it as its central.
+                    encodeOrreryLayer(
+                        enc, model: dep.model, center: dep.center, sun: dep.sunWorldPos,
+                        scale: dep.scale, emergeReveal: dep.isBody ? bodyProgress : orreryReveal,
+                        alphaReveal: orreryReveal * layerOpacity(isBody: dep.isBody),
+                        writesDepth: false, excludeID: dep.isBody ? nil : bodyPlanetID,
+                        lineBuffer: dep.lineBuffer, lineCount: dep.lineCount,
+                        hzBuffer: dep.hzBuffer, hzCount: dep.hzCount,
+                        beltBuffer: dep.beltBuffer, beltCount: dep.beltCount,
+                        baseUniforms: uniforms, time: t, viewportPx: viewportPx)
                 }
-                if let beltBuf = orreryBeltBuffer, orreryBeltCount > 0 {
-                    enc.setRenderPipelineState(orreryPointPipeline)
-                    enc.setDepthStencilState(readDepthState)
-                    enc.setVertexBuffer(beltBuf, offset: 0, index: 0)
-                    enc.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
-                    enc.drawPrimitives(type: .point, vertexStart: 0, vertexCount: orreryBeltCount)
-                }
-                // Planets: billboard sphere-impostors (round, no facets), depth-tested
-                // so they occlude one another and hide behind the sun (the focused star).
-                enc.setRenderPipelineState(orreryBodyPipeline)
-                enc.setDepthStencilState(bodyDepthState)
-                enc.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
-                enc.setFragmentBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
-                for var body in orreryBodies(model: model, time: t) {
-                    enc.setVertexBytes(&body, length: MemoryLayout<OrreryBodyUniform>.stride, index: 2)
-                    enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
-                }
-                // Annotation pips: indicator dots + hazard markers, on top of the
-                // bodies (depth-read so a pip behind the sun is occluded), additive.
-                let pips = orreryPips(model: model, time: t,
-                                      viewportPx: SIMD2<Float>(Float(size.width), Float(size.height)))
-                if !pips.isEmpty {
-                    var pipParams = MeshParams(
-                        viewportPixels: SIMD2<Float>(Float(size.width), Float(size.height)),
-                        halfWidthPixels: 0, nodeRadiusPixels: 0)
-                    enc.setRenderPipelineState(orreryPipPipeline)
-                    enc.setDepthStencilState(readDepthState)
-                    pips.withUnsafeBytes { enc.setVertexBytes($0.baseAddress!, length: $0.count, index: 0) }
-                    enc.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
-                    enc.setVertexBytes(&pipParams, length: MemoryLayout<MeshParams>.stride, index: 2)
-                    enc.setFragmentBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
-                    enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6,
-                                       instanceCount: pips.count)
+                if let model = orreryModel {
+                    encodeOrreryLayer(
+                        enc, model: model, center: orreryCenter, sun: orrerySunWorldPos,
+                        scale: orreryScale, emergeReveal: orreryIsBody ? bodyProgress : orreryReveal,
+                        alphaReveal: orreryReveal * layerOpacity(isBody: orreryIsBody),
+                        writesDepth: true, excludeID: orreryIsBody ? nil : bodyPlanetID,
+                        lineBuffer: orreryLineBuffer, lineCount: orreryLineVertexCount,
+                        hzBuffer: orreryHZBuffer, hzCount: orreryHZVertexCount,
+                        beltBuffer: orreryBeltBuffer, beltCount: orreryBeltCount,
+                        baseUniforms: uniforms, time: t, viewportPx: viewportPx)
                 }
             }
             enc.endEncoding()
@@ -772,6 +917,14 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         orreryCenter = viewpoint.orreryCenter
         orrerySunWorldPos = viewpoint.orrerySunWorldPos
         orreryScale = viewpoint.orreryScale
+        // Land the body cross-fade settled (no departing layer, no replay of the fly).
+        // The restored body view holds at its saved centre/scale (bodyProgress pinned
+        // at 1 so the central body is at its full radius).
+        orreryIsBody = viewpoint.orreryIsBody
+        departing = nil
+        bodyPlanetID = viewpoint.bodyPlanetID
+        bodyCentralStartRadius = viewpoint.bodyCentralStartRadius
+        settleBodyProgress(orreryIsBody ? 1 : 0)
         focusedStarIndex = viewpoint.focusedStarIndex
         selectedStarIndex = viewpoint.selectedStarIndex
         if let model = viewpoint.orreryModel {
@@ -797,6 +950,9 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         viewpoint.orreryCenter = orreryCenter
         viewpoint.orrerySunWorldPos = orrerySunWorldPos
         viewpoint.orreryScale = orreryScale
+        viewpoint.orreryIsBody = orreryIsBody
+        viewpoint.bodyPlanetID = bodyPlanetID
+        viewpoint.bodyCentralStartRadius = bodyCentralStartRadius
         viewpoint.focusedStarIndex = focusedStarIndex
         viewpoint.selectedStarIndex = selectedStarIndex
     }
@@ -821,38 +977,98 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         // Keep the existing relevance focus: the other stars are already dimmed
         // around the selection, so they just fade out with `fieldDim` — resetting
         // to full here would snap them bright right before fading them away.
-        cameraStack.append(camera)               // restore this galaxy pose on zoom-out
+        cameraStack.append(camera)               // restore this galaxy pose + clamp on zoom-out
         systemFocused = true
+        orreryIsBody = false                     // system level — no body cross-fade in flight
+        departing = nil
+        bodyCentralStartRadius = 0
+        bodyPlanetID = nil
+        settleBodyProgress(0)
         camera.focusFloor = dFinal * 0.6         // limit how far you can zoom in
+        // Narrow the interactive elevation to the oblique orrery band and tilt onto
+        // the orbital plane at the fixed entry angle (keeping the current azimuth).
+        camera.minElevation = orreryMinElevation
+        camera.maxElevation = orreryMaxElevation
         let now = CACurrentMediaTime()
         beginTransition(to: 1, duration: drillDurationBase, now: now)
-        camera.dive(on: orreryCenter, radius: dFinal, now: now, duration: transitionDuration)
+        camera.frame(on: orreryCenter, azimuth: camera.azimuth, elevation: orreryEntryElevation,
+                     radius: dFinal, now: now, duration: transitionDuration)
     }
 
-    /// Drill from a system into one of its planets: the planet (captured at its
-    /// current orbit position in the system orrery we're leaving) becomes the lit
-    /// central body with its moons orbiting. The galaxy stays receded
-    /// (systemProgress holds at 1) and the star stays the (now distant) sun that
-    /// lights the scene — only the camera flies and the orrery model swaps.
+    /// Manual-dolly bounds for the current body-level orrery, at the live `orreryScale`.
+    /// Zoom-IN floor is keyed to the planet's own radius (`centralScene * orreryScale`)
+    /// so you can pull up to a full-frame close-up; zoom-OUT ceiling is a margin past the
+    /// moon-system framing distance so the whole system fits with room to spare. Kept in
+    /// one place because the moon roster hydrates AFTER drill-in — `updateOrrery` re-runs
+    /// this so the ceiling widens to the real (larger) system instead of staying pinned
+    /// at the pre-hydrate frame.
+    private func bodyDollyBounds(model: SystemModel) -> (floor: Float, ceiling: Float) {
+        let centralScene = Float(model.centralBody?.displayRadius ?? 2.6)
+        let planetWorldRadius = centralScene * orreryScale
+        let frameWorldRadius = Float(model.frameScene) * orreryScale
+        let dFinal = frameWorldRadius / (tan(camera.fovy * 0.5) * 0.9)
+        return (floor: planetWorldRadius * 2.0, ceiling: dFinal * 1.5)
+    }
+
+    /// Drill from a system into one of its planets — the same seamless move as
+    /// galaxy→system, one level deeper. The clicked planet IS the body-view centre,
+    /// at the SAME world position it orbited; the orrery freezes (`orbitClock` holds)
+    /// so the planet sits still and the camera dives straight in — no per-frame
+    /// tracking. The central body starts at its system rendered size and GROWS to a
+    /// comfortable, sun-sized body radius across the drill (so it's continuous at the
+    /// start yet legible at the end, and world units never get clipping-small). Moons
+    /// emerge from it (orbit × `bodyProgress`) as planets do from the star; siblings +
+    /// sun fade out.
     func enterBody(starIndex: Int, planetID: String, model: SystemModel) {
         guard stars.indices.contains(starIndex) else { return }
-        // Where the planet is right now, in the system orrery still loaded.
+        // The planet's frozen position + its rendered radius in the system we're leaving.
+        let systemPlanet = orreryModel?.planets.first(where: { $0.id == planetID })
         let planetCenter = currentOrbiterWorldPosition(id: planetID) ?? orreryCenter
-        focusedStarIndex = starIndex             // keep the system star as the (unfaded) light source
+        let systemPlanetRadius = systemPlanet.map { Float($0.displayRadius) * orreryScale }
+            ?? (stars[starIndex].worldRadius * 0.3)
+
+        // Snapshot the system we're leaving so its siblings + sun keep drawing (and
+        // fading) over the fly-in. Orbits are frozen, so its focused planet stays put
+        // and registered with the arriving body centre.
+        departing = snapshotActiveOrrery(isBody: orreryIsBody)
+        focusedStarIndex = starIndex             // the system star stays the light source
         orreryCenter = planetCenter
-        orrerySunWorldPos = stars[starIndex].position
-        // Body orrery: scale to a fixed world frame, dive to fill the view with it.
-        let frameWorld: Float = 14
-        orreryScale = frameWorld / Float(max(model.frameScene, 1))
+        orreryIsBody = true
+        bodyPlanetID = planetID                       // the SYSTEM layer skips this planet
+        bodyCentralStartRadius = systemPlanetRadius   // the body central grows FROM this
+
+        // Scale the body orrery so the central planet ends up as big as the system
+        // star (≥ the sun's angular width) — keeping world units comfortable, well
+        // clear of the near plane — with the moons sized proportionally around it.
+        let centralScene = Float(model.centralBody?.displayRadius ?? 2.6)
+        orreryScale = stars[starIndex].worldRadius / centralScene
+        // Frame it like a sun: dive until the moon system fits the view.
+        let frameWorldRadius = Float(model.frameScene) * orreryScale
+        let dFinal = frameWorldRadius / (tan(camera.fovy * 0.5) * 0.9)
+
+        // Light from a DISTANT sun along the true star direction (kept far outside the
+        // frame so it never falls inside the planet — which would unlight it and light
+        // its moons as if the planet were the sun). Frozen with the orrery.
+        orrerySunWorldPos = bodySunPosition(planet: planetCenter, starIndex: starIndex,
+                                            distance: frameWorldRadius * 40)
         setOrreryModel(model)
 
-        cameraStack.append(camera)               // restore this system pose on zoom-out
+        cameraStack.append(camera)               // restore this system pose (incl. near) on zoom-out
         systemFocused = true
-        let dFinal = frameWorld / (tan(camera.fovy * 0.5) * 0.9)
-        camera.focusFloor = dFinal * 0.6
+        // Dolly bounds keyed to the planet's own radius (zoom-in) and the moon-system
+        // frame (zoom-out) — recomputed on hydrate (see `bodyDollyBounds` / `updateOrrery`).
+        let bounds = bodyDollyBounds(model: model)
+        camera.focusFloor = bounds.floor
+        camera.focusCeiling = bounds.ceiling
+        let planetWorldRadius = centralScene * orreryScale
+        // Pull the near plane in so nothing clips when dollied to the floor: below the
+        // moon frame (dFinal · 0.02) AND below the gap between the zoom-in floor and the
+        // planet surface (0.35 radius), whichever is tighter — the latter guards a large
+        // moon system where dFinal · 0.02 could exceed that gap. Restored in exitToSystem.
+        camera.near = min(camera.near, min(dFinal * 0.02, planetWorldRadius * 0.1))
         let now = CACurrentMediaTime()
-        // Reveal already at 1 (still focused) — beginTransition only drives the fly.
         beginTransition(to: 1, duration: drillDurationBase, now: now)
+        beginBodyTransition(to: 1, duration: drillDurationBase, now: now)   // moons emerge, siblings + sun fade
         camera.dive(on: planetCenter, radius: dFinal, now: now, duration: transitionDuration)
     }
 
@@ -861,17 +1077,26 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     /// galaxy stays receded (systemProgress holds at 1).
     func exitToSystem(starIndex: Int, model: SystemModel) {
         guard stars.indices.contains(starIndex) else { return }
+        // Snapshot the planet we're leaving so it (and its moons) keep drawing while
+        // the system's siblings + sun fade back IN over the pull-back.
+        departing = snapshotActiveOrrery(isBody: orreryIsBody)
         focusedStarIndex = starIndex
         orreryCenter = stars[starIndex].position
         orrerySunWorldPos = orreryCenter
+        orreryIsBody = false
         let dFinal = stars[starIndex].worldRadius / maxAngularSize
         orreryScale = orreryScaleToFit(frameScene: model.frameScene, atDistance: dFinal)
         setOrreryModel(model)
 
         let now = CACurrentMediaTime()
         beginTransition(to: 1, duration: zoomDurationBase, now: now)
+        beginBodyTransition(to: 0, duration: zoomDurationBase, now: now)   // siblings + sun fade back in
         if let saved = cameraStack.popLast() {
             camera.focusFloor = saved.focusFloor
+            camera.focusCeiling = saved.focusCeiling    // drop the body zoom-out cap
+            camera.near = saved.near                    // restore the system near plane
+            camera.minElevation = saved.minElevation   // still orrery-focused; carry its clamp
+            camera.maxElevation = saved.maxElevation
             camera.restore(saved, now: now, duration: transitionDuration)
         }
     }
@@ -894,6 +1119,12 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
             bytes: lines, length: lines.count * MemoryLayout<OrreryLineVertex>.stride,
             options: .storageModeShared)
 
+        let hz = OrreryGeometry.habitableZoneFill(model: model, center: orreryCenter, scale: orreryScale)
+        orreryHZVertexCount = hz.count
+        orreryHZBuffer = hz.isEmpty ? nil : device.makeBuffer(
+            bytes: hz, length: hz.count * MemoryLayout<OrreryLineVertex>.stride,
+            options: .storageModeShared)
+
         let belt = OrreryGeometry.beltPoints(model: model, center: orreryCenter, scale: orreryScale)
         orreryBeltCount = belt.count
         orreryBeltBuffer = belt.isEmpty ? nil : device.makeBuffer(
@@ -905,17 +1136,50 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     /// (planets/moons/belts pop in without restarting the transition or re-framing).
     func updateOrrery(model: SystemModel) {
         guard systemFocused else { return }
+        // Defer the rebuild if a drill/zoom is still flying: the geometry generation +
+        // buffer allocation stalls the render thread and drops a frame or two mid-fly.
+        // `draw` applies the stashed model the moment both eased clocks settle, so the
+        // one-frame cost lands on a static camera instead (see `pendingOrreryModel`).
+        if transitionInFlight(now: CACurrentMediaTime()) {
+            pendingOrreryModel = model
+            return
+        }
+        applyOrreryUpdate(model)
+    }
+
+    /// Rebuild the orrery for an updated roster and re-fit the body zoom-out cap.
+    /// Split out of `updateOrrery` so the same work can run either immediately (at
+    /// rest) or deferred from `draw` (once a fly settles).
+    private func applyOrreryUpdate(_ model: SystemModel) {
         setOrreryModel(model)
+        // A body hydrate can grow the moon roster (and thus `frameScene`), so re-widen
+        // the zoom-out cap to the real system — otherwise it stays pinned at the frame
+        // computed from the sparse pre-hydrate roster and you can't pull back to see all
+        // the moons. Only at body level; system-level zoom-out stays uncapped.
+        if orreryIsBody {
+            let bounds = bodyDollyBounds(model: model)
+            camera.focusFloor = bounds.floor
+            camera.focusCeiling = bounds.ceiling
+        }
     }
 
     /// Zoom back out to the galaxy: ease the camera back to the exact pre-drill
     /// pose. The orrery reveal fades out in `draw`; its buffers drop on next drill.
     func exitSystem() {
         systemFocused = false
+        orreryIsBody = false        // back to the galaxy — no body layer in play
+        departing = nil
+        bodyCentralStartRadius = 0
+        bodyPlanetID = nil
+        settleBodyProgress(0)
         let now = CACurrentMediaTime()
         beginTransition(to: 0, duration: zoomDurationBase, now: now)
         if let saved = cameraStack.popLast() {
             camera.focusFloor = saved.focusFloor
+            camera.focusCeiling = saved.focusCeiling    // drop the body zoom-out cap
+            camera.near = saved.near                    // restore the galaxy near plane
+            camera.minElevation = saved.minElevation   // restore the galaxy's wider clamp
+            camera.maxElevation = saved.maxElevation
             camera.restore(saved, now: now, duration: transitionDuration)
         }
     }
@@ -927,45 +1191,259 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         transitionTarget = target
         transitionStart = now
         transitionDuration = max(duration, 0.0001)
+        // A pending update from a prior level is superseded by the model this new
+        // transition renders (set directly by the enter/exit caller); drop it so it
+        // can't apply on top of the arriving level.
+        pendingOrreryModel = nil
     }
 
-    /// The per-frame lit planets at their current orbit angle (`phase0 + time/period`),
-    /// lit by the sun (the focused star at `orreryCenter`). Orbit radii scale with
-    /// `orreryReveal` so planets EMERGE from the star on drill-in and retreat into
-    /// it on zoom-out. The sun is not here — it's the persistent focused field star.
-    private func orreryBodies(model: SystemModel, time: Float) -> [OrreryBodyUniform] {
-        let orbitSpeed = orreryOrbitSpeed
-        var bodies: [OrreryBodyUniform] = []
-        bodies.reserveCapacity(model.planets.count + 1)
+    /// The shortest orbital period (days) among the model's bodies — the "fastest"
+    /// orbit the on-screen timing is anchored to. Defaults to 1 for an empty model.
+    private func minOrbitPeriodDays(_ model: SystemModel) -> Double {
+        model.planets.map(\.periodDays).min() ?? 1
+    }
+
+    /// The on-screen orbital period (seconds) for a body: scale every period off the
+    /// system's fastest so the quickest orbit lands at `orreryMinPeriod` seconds and the
+    /// rest stay proportional, compressed by `orreryPeriodFalloff` (1 = the true ratio,
+    /// 0 = every body at the same speed) so distant bodies drift instead of going inert.
+    private func orbitPeriodSeconds(periodDays: Double, minPeriodDays: Double) -> Float {
+        let ratio = minPeriodDays > 0 ? Float(periodDays / minPeriodDays) : 1
+        return max(orreryMinPeriod * pow(ratio, orreryPeriodFalloff), 0.001)
+    }
+
+    /// A planet's orbit angle (radians) at `time`. The angular term is subtracted so
+    /// bodies orbit counter-clockwise about the sun's north pole — matching the sun's
+    /// visible spin and the asteroid belt (see `orrery_point_vertex`). Shared by every
+    /// orbit call site so the direction can't drift between bodies, pips, and picking.
+    private func orbitAngle(phase0Deg: Double, periodDays: Double, minPeriodDays: Double, time: Float) -> Float {
+        let period = orbitPeriodSeconds(periodDays: periodDays, minPeriodDays: minPeriodDays)
+        return Float(phase0Deg) * .pi / 180 - (time / period) * 2 * .pi
+    }
+
+    /// Encode one orrery layer into the HDR pass: HZ band + orbit rings + belt
+    /// (additive, depth-read), the lit bodies (over-blend), atmosphere halos, and
+    /// annotation pips — all faded by `alphaReveal` (fed to the shaders as
+    /// `orreryAlpha`) and centred on `center`. The scaffold shaders grow geometry
+    /// out of `center` by `orreryReveal`, so the per-layer `center` is written into
+    /// the uniform copy. `writesDepth` gates whether the bodies write depth: the
+    /// active layer does (bodies occlude one another); a departing layer only reads,
+    /// so its near-transparent bodies never punch depth holes. `emergeReveal` scales
+    /// orbit radii + scaffold grow-out (0 = collapsed to the centre, 1 = full orbits)
+    /// so moons emerge from / recede into the planet exactly as planets do the star.
+    /// `excludeID` drops the drilled planet from a SYSTEM layer (it's drawn once as the
+    /// continuous central body, not blended against a second copy).
+    private func encodeOrreryLayer(_ enc: MTLRenderCommandEncoder,
+                                   model: SystemModel, center: SIMD3<Float>, sun: SIMD3<Float>,
+                                   scale: Float, emergeReveal: Float, alphaReveal: Float,
+                                   writesDepth: Bool, excludeID: String?,
+                                   lineBuffer: MTLBuffer?, lineCount: Int,
+                                   hzBuffer: MTLBuffer?, hzCount: Int,
+                                   beltBuffer: MTLBuffer?, beltCount: Int,
+                                   baseUniforms: Uniforms, time: Float, viewportPx: SIMD2<Float>) {
+        // Skip a fully-faded layer — UNLESS it carries the drilled planet (central),
+        // which draws at full opacity independent of `alphaReveal`. Otherwise, in the
+        // last sliver of a zoom-out (alphaReveal→0 but not yet settled), the opaque
+        // central would be skipped while the system layer still excludes that planet
+        // → it vanishes for one frame right before landing.
+        guard alphaReveal > 0.001 || model.centralBody != nil else { return }
+        var u = baseUniforms
+        u.orreryCenter = SIMD4(center, 0)     // the scaffold grows out of THIS layer's centre
+        u.orreryReveal = emergeReveal         // orbits/scaffold emerge from the centre by this
+        u.orreryAlpha = alphaReveal           // fade this layer independently of the grow-out
+
+        // Habitable-zone band (filled), orbit rings, then the belt point ring.
+        if let hzBuf = hzBuffer, hzCount > 0 {
+            enc.setRenderPipelineState(orreryLinePipeline)
+            enc.setDepthStencilState(readDepthState)
+            enc.setVertexBuffer(hzBuf, offset: 0, index: 0)
+            enc.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 1)
+            enc.setFragmentBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 1)
+            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: hzCount)
+        }
+        if let lineBuf = lineBuffer, lineCount > 0 {
+            enc.setRenderPipelineState(orreryLinePipeline)
+            enc.setDepthStencilState(readDepthState)
+            enc.setVertexBuffer(lineBuf, offset: 0, index: 0)
+            enc.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 1)
+            enc.setFragmentBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 1)
+            enc.drawPrimitives(type: .line, vertexStart: 0, vertexCount: lineCount)
+        }
+        if let beltBuf = beltBuffer, beltCount > 0 {
+            enc.setRenderPipelineState(orreryPointPipeline)
+            enc.setDepthStencilState(readDepthState)
+            enc.setVertexBuffer(beltBuf, offset: 0, index: 0)
+            enc.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 1)
+            enc.drawPrimitives(type: .point, vertexStart: 0, vertexCount: beltCount)
+        }
+
+        // Bodies: billboard sphere-impostors, depth-tested so they occlude one another
+        // (active layer writes depth; a departing layer reads only). The drilled planet
+        // (central) stays FULLY OPAQUE and only changes size — it's one continuous body
+        // across system↔body, never cross-faded — while its moons fade with the layer.
+        var uCentral = u
+        uCentral.orreryAlpha = orreryReveal
+        let placed = placedOrreryBodies(model: model, center: center, scale: scale, sun: sun,
+                                        reveal: emergeReveal, time: time, excludeID: excludeID)
+        enc.setRenderPipelineState(orreryBodyPipeline)
+        for placedBody in placed {
+            var pu = placedBody.isCentral ? uCentral : u
+            // The opaque central ALWAYS writes depth (even on a departing layer), so
+            // the other layer's additive rings / HZ band can't composite THROUGH the
+            // planet; the fading moons follow the layer policy (no holes when transparent).
+            enc.setDepthStencilState((placedBody.isCentral || writesDepth) ? bodyDepthState : readDepthState)
+            var body = bodyUniform(placedBody)
+            enc.setVertexBytes(&pu, length: MemoryLayout<Uniforms>.stride, index: 1)
+            enc.setFragmentBytes(&pu, length: MemoryLayout<Uniforms>.stride, index: 1)
+            enc.setVertexBytes(&body, length: MemoryLayout<OrreryBodyUniform>.stride, index: 2)
+            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+        }
+
+        // Atmosphere halos: additive glow shells beyond the limb, depth-read (a nearer
+        // body occludes them without their writing depth). The central's halo tracks
+        // its full opacity; the moons' fade with the layer.
+        let hasAtmo = placed.contains { atmosphereUniform($0) != nil }
+        if hasAtmo {
+            enc.setRenderPipelineState(orreryAtmoPipeline)
+            enc.setDepthStencilState(readDepthState)
+            for placedBody in placed {
+                guard var a = atmosphereUniform(placedBody) else { continue }
+                var pu = placedBody.isCentral ? uCentral : u
+                enc.setVertexBytes(&pu, length: MemoryLayout<Uniforms>.stride, index: 1)
+                enc.setFragmentBytes(&pu, length: MemoryLayout<Uniforms>.stride, index: 1)
+                enc.setVertexBytes(&a, length: MemoryLayout<OrreryAtmosphereUniform>.stride, index: 2)
+                enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+            }
+        }
+
+        // Annotation pips: indicator dots + hazard markers, depth-read (occluded
+        // behind a body), additive.
+        let pips = orreryPips(model: model, center: center, scale: scale, reveal: emergeReveal,
+                              time: time, viewportPx: viewportPx, excludeID: excludeID)
+        if !pips.isEmpty {
+            var pipParams = MeshParams(viewportPixels: viewportPx, halfWidthPixels: 0, nodeRadiusPixels: 0)
+            enc.setRenderPipelineState(orreryPipPipeline)
+            enc.setDepthStencilState(readDepthState)
+            pips.withUnsafeBytes { enc.setVertexBytes($0.baseAddress!, length: $0.count, index: 0) }
+            enc.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 1)
+            enc.setVertexBytes(&pipParams, length: MemoryLayout<MeshParams>.stride, index: 2)
+            enc.setFragmentBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 1)
+            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6, instanceCount: pips.count)
+        }
+    }
+
+    /// A body positioned for this frame — the shared placement (world center + scene
+    /// radius, plus the light source) and the material inputs, so the opaque body pass
+    /// and the atmosphere-halo pass draw at exactly the same spot without recomputing
+    /// the orbit math twice.
+    private struct PlacedBody {
+        var isCentral: Bool           // the drilled planet (opaque + size-morphing), not a moon/planet
+        var center: SIMD3<Float>
+        var radius: Float
+        var sun: SIMD3<Float>         // light source (world), so both draws share it
+        var type: PlanetType
+        var lifeStage: String?
+        var estimated: Bool
+        var tags: [String]
+        var inHabitableZone: Bool
+        var surfaceTempC: Double?
+        var atmosphere: Atmosphere
+        var appearanceSeed: Float
+        var seedDeg: Double
+    }
+
+    /// Place every body of one orrery layer for this frame: the drilled central body
+    /// (body level) and each orbiting planet/moon at its animated angle. Explicitly
+    /// parameterized by the layer's centre / scale / sun / reveal so the SAME code
+    /// places the active orrery AND a departing one during the body cross-fade.
+    /// `reveal` scales orbit radii (planets/moons emerge from the centre on drill-in,
+    /// recede into it on zoom-out). `excludeID` drops one planet — used to skip the
+    /// drilled planet in the SYSTEM layer, since it's drawn as the single continuous
+    /// central body instead of cross-faded against a second copy. One pass, consumed
+    /// by the body + halo draws.
+    private func placedOrreryBodies(model: SystemModel, center: SIMD3<Float>, scale: Float,
+                                    sun: SIMD3<Float>, reveal: Float,
+                                    time: Float, excludeID: String? = nil) -> [PlacedBody] {
+        let minPeriodDays = minOrbitPeriodDays(model)
+        var placed: [PlacedBody] = []
+        placed.reserveCapacity(model.planets.count + 1)
 
         // Body level: the drilled planet as a lit impostor at the centre (no orbit),
-        // lit — like the moons — by the system star's distant position.
+        // lit — like the moons — by the (distant) sun position. Its radius grows from
+        // the size it had in the system view up to its full body radius across
+        // `bodyProgress`, so the planet is ONE continuous body (opaque, size-morphing)
+        // rather than a cross-fade — see the central handling in `encodeOrreryLayer`.
         if let central = model.centralBody {
-            bodies.append(OrreryBodyUniform(
-                centerRadius: SIMD4(orreryCenter, Float(central.displayRadius) * orreryScale),
-                color: SIMD4(OrreryGeometry.rgb(hex: central.colorHex), 1),
-                sunEmissive: SIMD4(orrerySunWorldPos, 1)))
+            let fullRadius = Float(central.displayRadius) * scale
+            let radius = bodyCentralStartRadius > 0
+                ? bodyCentralStartRadius + (fullRadius - bodyCentralStartRadius) * bodyProgress
+                : fullRadius
+            placed.append(PlacedBody(
+                isCentral: true, center: center, radius: radius,
+                sun: sun, type: central.planetType, lifeStage: central.lifeStage,
+                estimated: central.estimated, tags: central.tags,
+                inHabitableZone: central.inHabitableZone,
+                surfaceTempC: central.surfaceTempC, atmosphere: central.atmosphere,
+                appearanceSeed: central.appearanceSeed,
+                seedDeg: OrreryMapping.phaseDeg(model.star.designation)))
         }
 
-        for planet in model.planets {
-            let period = max(Float(planet.periodDays) * orbitSpeed, 0.001)
-            let angle = Float(planet.phase0Deg) * .pi / 180 + (time / period) * 2 * .pi
-            let r = Float(planet.semiMajorScene) * orreryScale * orreryReveal   // emerge from the centre
-            let pos = orreryCenter + SIMD3<Float>(cos(angle) * r, 0, sin(angle) * r)
-            bodies.append(OrreryBodyUniform(
-                centerRadius: SIMD4(pos, Float(planet.displayRadius) * orreryScale),
-                color: SIMD4(OrreryGeometry.rgb(hex: planet.colorHex), 1),
-                sunEmissive: SIMD4(orrerySunWorldPos, 0)))
+        for planet in model.planets where planet.id != excludeID {
+            let angle = orbitAngle(phase0Deg: planet.phase0Deg, periodDays: planet.periodDays,
+                                   minPeriodDays: minPeriodDays, time: time)
+            let r = Float(planet.semiMajorScene) * scale * reveal   // emerge from the centre
+            let pos = center + SIMD3<Float>(cos(angle) * r, 0, sin(angle) * r)
+            placed.append(PlacedBody(
+                isCentral: false, center: pos, radius: Float(planet.displayRadius) * scale,
+                sun: sun, type: planet.planetType, lifeStage: planet.lifeStage,
+                estimated: planet.estimated, tags: planet.tags,
+                inHabitableZone: planet.inHabitableZone,
+                surfaceTempC: planet.surfaceTempC, atmosphere: planet.atmosphere,
+                appearanceSeed: planet.appearanceSeed,
+                seedDeg: planet.phase0Deg))
         }
-        return bodies
+        return placed
+    }
+
+    /// Pack a placed body's resolved `PlanetMaterial` surface into the GPU uniform — base +
+    /// terrain albedos, the procedural style index, biosphere strength, and the
+    /// estimated flag — plus a deterministic per-body spin seed so each planet's
+    /// texture is rotated differently (and stably across launches).
+    private func bodyUniform(_ p: PlacedBody) -> OrreryBodyUniform {
+        let s = PlanetMaterial.surface(for: p.type, lifeStage: p.lifeStage, estimated: p.estimated,
+                                       tags: p.tags, surfaceTempC: p.surfaceTempC,
+                                       atmosphere: p.atmosphere,
+                                       inHabitableZone: p.inHabitableZone)
+        let spin = Float(p.seedDeg) * .pi / 180
+        return OrreryBodyUniform(
+            centerRadius: SIMD4(p.center, p.radius),
+            color: SIMD4(s.base, s.polarIce),
+            sunEmissive: SIMD4(p.sun, s.greenVibrancy),
+            detailColor: SIMD4(s.detail, Float(s.style.rawValue)),
+            surfaceParams: SIMD4(s.estimated ? 1 : 0, s.life, spin, p.appearanceSeed),
+            surfaceMods: SIMD4(s.mods.craters, s.mods.atmosphere, s.mods.lava, s.mods.frost))
+    }
+
+    /// The atmosphere-halo uniform for a placed body, or `nil` if it gets no shell (a
+    /// giant, or an airless/unscanned reading). Same center/radius as the body draw so
+    /// the halo registers exactly with the limb; lit by the same orrery sun.
+    private func atmosphereUniform(_ p: PlacedBody) -> OrreryAtmosphereUniform? {
+        guard let shell = PlanetMaterial.atmosphereShell(for: p.type, atmosphere: p.atmosphere,
+                                                         tags: p.tags) else { return nil }
+        return OrreryAtmosphereUniform(
+            centerRadius: SIMD4(p.center, p.radius),
+            sunExtent: SIMD4(p.sun, shell.extent),
+            tintDensity: SIMD4(shell.tint, shell.density))
     }
 
     /// The per-frame annotation pips: a centred row of indicator dots above each
     /// body that carries notable features, plus a pulsing marker on each incoming
-    /// hazard. Positions mirror `orreryBodies` (same orbit math, same reveal scale)
-    /// so the pips track their bodies as they orbit and emerge on drill-in.
-    private func orreryPips(model: SystemModel, time: Float, viewportPx: SIMD2<Float>) -> [OrreryPip] {
-        let orbitSpeed = orreryOrbitSpeed    // matches orreryBodies
+    /// hazard. Positions mirror `placedOrreryBodies` (same orbit math, same reveal
+    /// scale) so the pips track their bodies as they orbit and emerge on drill-in.
+    private func orreryPips(model: SystemModel, center: SIMD3<Float>, scale: Float,
+                            reveal: Float, time: Float, viewportPx: SIMD2<Float>,
+                            excludeID: String? = nil) -> [OrreryPip] {
+        let minPeriodDays = minOrbitPeriodDays(model)    // matches placedOrreryBodies
         let pipRadius: Float = 3
         let gap: Float = 4               // px between the planet rim and the pip row
         let minSpacing: Float = 8
@@ -985,18 +1463,18 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
             return SIMD2<Float>((clip.x * 0.5 + 0.5) * w, (1 - (clip.y * 0.5 + 0.5)) * h)
         }
 
-        for planet in model.planets {
+        for planet in model.planets where planet.id != excludeID {
             let entries = OrreryGeometry.pipEntries(planet.indicators)
             guard !entries.isEmpty else { continue }
-            let period = max(Float(planet.periodDays) * orbitSpeed, 0.001)
-            let angle = Float(planet.phase0Deg) * .pi / 180 + (time / period) * 2 * .pi
-            let r = Float(planet.semiMajorScene) * orreryScale * orreryReveal
-            let pos = orreryCenter + SIMD3<Float>(cos(angle) * r, 0, sin(angle) * r)
+            let angle = orbitAngle(phase0Deg: planet.phase0Deg, periodDays: planet.periodDays,
+                                   minPeriodDays: minPeriodDays, time: time)
+            let r = Float(planet.semiMajorScene) * scale * reveal
+            let pos = center + SIMD3<Float>(cos(angle) * r, 0, sin(angle) * r)
 
             // The planet's on-screen radius: project a point offset by its world
             // radius along view-x and measure the pixel span (same trick as the
             // star disc in `pickStar`). Scale the row's offset + spacing to it.
-            let worldRadius = Float(planet.displayRadius) * orreryScale
+            let worldRadius = Float(planet.displayRadius) * scale
             let viewPos = view * SIMD4<Float>(pos, 1)
             let screenR = project(viewPos).flatMap { c in
                 project(viewPos + SIMD4<Float>(worldRadius, 0, 0, 0)).map { length($0 - c) }
@@ -1017,7 +1495,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         // Incoming hazards: one pulsing red marker at the asteroid's position; the
         // pulse quickens as its progress climbs toward impact.
         for hazard in model.hazards where hazard.orbitScene > 0 {
-            let pos = orreryCenter + OrreryGeometry.hazardOffset(hazard) * orreryScale * orreryReveal
+            let pos = center + OrreryGeometry.hazardOffset(hazard) * scale * reveal
             let progress = Float(min(max((hazard.progressPct ?? 0) / 100, 0), 1))
             let pulseSpeed = 2.5 + 5 * progress
             pips.append(OrreryPip(
@@ -1029,14 +1507,15 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     }
 
     /// The current world position of an orbiter (planet) in the loaded orrery, at
-    /// this instant's orbit angle — same math as `orreryBodies`. Used to capture a
+    /// this instant's orbit angle — same math as `placedOrreryBodies`. Used to capture a
     /// planet's live position when drilling from the system into it.
     private func currentOrbiterWorldPosition(id: String) -> SIMD3<Float>? {
-        guard let planet = orreryModel?.planets.first(where: { $0.id == id }) else { return nil }
-        let orbitSpeed = orreryOrbitSpeed
-        let time = Float(CACurrentMediaTime() - startTime)
-        let period = max(Float(planet.periodDays) * orbitSpeed, 0.001)
-        let angle = Float(planet.phase0Deg) * .pi / 180 + (time / period) * 2 * .pi
+        guard let model = orreryModel,
+              let planet = model.planets.first(where: { $0.id == id }) else { return nil }
+        // Use the (possibly frozen) orbit clock so the captured position matches what
+        // the system layer is actually rendering this frame.
+        let angle = orbitAngle(phase0Deg: planet.phase0Deg, periodDays: planet.periodDays,
+                               minPeriodDays: minOrbitPeriodDays(model), time: orbitClock)
         let r = Float(planet.semiMajorScene) * orreryScale * orreryReveal
         return orreryCenter + SIMD3<Float>(cos(angle) * r, 0, sin(angle) * r)
     }
@@ -1485,6 +1964,8 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
             time: Float(CACurrentMediaTime() - startTime),
             fieldDim: fieldDim,
             orreryReveal: orreryReveal,
+            bodyReveal: bodyProgress,
+            orreryAlpha: orreryReveal * layerOpacity(isBody: orreryIsBody),
             overlayDim: overlayDim,
             systemPush: systemPush,
             fieldShrink: fieldShrink,

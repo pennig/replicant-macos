@@ -270,8 +270,16 @@ public struct NewStarMapFeature {
                 }
                 .cancellable(id: CancelID.transition)
                 // Fetch the body's moon roster (the scan only gives moon_count); the
-                // `@Fetch` re-renders the body orrery when it merges.
-                return .merge(transition, hydrateBody(bodyID))
+                // `@Fetch` re-renders the body orrery when it merges. Deferred until the
+                // fly lands: the hydrate's DB write triggers a re-render that re-decodes
+                // the persisted `StarSystem` blob on the main thread — cheap at rest, but
+                // mid-fly it stalls the render loop and drops frames. Landing first keeps
+                // the drill silky; the moons pop in a beat later.
+                let hydrate: Effect<Action> = .concatenate(
+                    .run { _ in try await clock.sleep(for: .milliseconds(Self.drillInBaseMs)) },
+                    hydrateBody(bodyID)
+                )
+                return .merge(transition, hydrate)
 
             case .zoomOutRequested:
                 // Steps out exactly one level: body → system → galaxy.

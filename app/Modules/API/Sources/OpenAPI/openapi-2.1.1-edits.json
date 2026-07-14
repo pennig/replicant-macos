@@ -2365,6 +2365,10 @@
               "additionalProperties": {}
             }
           },
+          "assigned_devices": {
+            "type": "object",
+            "additionalProperties": {}
+          },
           "attached_devices": {
             "type": "array",
             "items": {

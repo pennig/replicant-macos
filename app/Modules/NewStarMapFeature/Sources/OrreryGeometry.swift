@@ -12,7 +12,10 @@ enum OrreryGeometry {
     // Scaffold colours (approximating the design tokens the SceneKit orrery used).
     private static let orbitColor = SIMD4<Float>(0.55, 0.58, 0.66, 0.5)
     private static let kuiperColor = SIMD4<Float>(0.50, 0.55, 0.70, 0.28)
-    private static let hzColor = SIMD4<Float>(0.40, 0.82, 0.55, 0.5)
+    // The habitable zone reads as a soft translucent green *zone* (a filled annulus),
+    // not two edge rings — so the fill is deliberately low-intensity (it's additive and
+    // covers a large area) while keeping the same green as the old HZ edges.
+    private static let hzFillColor = SIMD4<Float>(0.34, 0.80, 0.48, 0.005)
     private static let beltColor = SIMD3<Float>(0.90, 0.72, 0.42)
     private static let hazardLineColor = SIMD4<Float>(0.95, 0.36, 0.30, 0.55)
 
@@ -99,8 +102,7 @@ enum OrreryGeometry {
 
         for planet in model.planets { addRing(radius: planet.semiMajorScene, color: orbitColor) }
         if let kuiper = model.kuiperScene { addRing(radius: kuiper, color: kuiperColor) }
-        if let inner = model.hzInnerScene { addRing(radius: inner, color: hzColor) }
-        if let outer = model.hzOuterScene { addRing(radius: outer, color: hzColor) }
+        // The habitable zone is drawn as a filled band (see `habitableZoneFill`), not rings.
 
         // Incoming-hazard approach vectors: a short red radial from the asteroid's
         // current position inward toward the star, so the impact course reads at a
@@ -112,6 +114,30 @@ enum OrreryGeometry {
             let to = center + dir * (Float(hazard.orbitScene) * scale * 0.08)   // near the star
             verts.append(OrreryLineVertex(position: SIMD4(from, 1), color: hazardLineColor))
             verts.append(OrreryLineVertex(position: SIMD4(to, 1), color: hazardLineColor))
+        }
+        return verts
+    }
+
+    /// The habitable zone as a filled translucent annulus (triangle list) lying in the
+    /// orbital plane — a soft green *zone* rather than two edge rings. Additive like the
+    /// rest of the scaffold, so the shader's `orreryReveal` grows it out of the star with
+    /// everything else. Empty until the star's HZ is known (i.e. the system is scanned).
+    static func habitableZoneFill(model: SystemModel, center: SIMD3<Float>, scale: Float, segments: Int = 128) -> [OrreryLineVertex] {
+        guard let inner = model.hzInnerScene, let outer = model.hzOuterScene, outer > inner else { return [] }
+        let ri = Float(inner) * scale, ro = Float(outer) * scale
+        var verts: [OrreryLineVertex] = []
+        verts.reserveCapacity(segments * 6)
+        func point(_ angle: Float, _ radius: Float) -> SIMD4<Float> {
+            SIMD4(center + SIMD3<Float>(cos(angle) * radius, 0, sin(angle) * radius), 1)
+        }
+        for i in 0..<segments {
+            let a0 = 2 * Float.pi * Float(i) / Float(segments)
+            let a1 = 2 * Float.pi * Float(i + 1) / Float(segments)
+            let inner0 = point(a0, ri), outer0 = point(a0, ro)
+            let inner1 = point(a1, ri), outer1 = point(a1, ro)
+            for p in [inner0, outer0, inner1, inner1, outer0, outer1] {
+                verts.append(OrreryLineVertex(position: p, color: hzFillColor))
+            }
         }
         return verts
     }

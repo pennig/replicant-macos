@@ -27,11 +27,18 @@ struct TurntableCamera {
     /// the galaxy still spins about its true centre. Positive → content moves right.
     var lensShiftX: Float = 0
 
-    // Symmetric elevation clamp: 10° shy of each pole to dodge the gimbal
-    // singularity and top/bottom-down vertigo, while allowing views from below
-    // (there's no privileged galactic plane — the terrain is a sphere).
-    private let minElevation: Float = -80 * .pi / 180
-    private let maxElevation: Float =  80 * .pi / 180
+    // Interactive elevation clamp for manual orbiting. Symmetric ±80° in the
+    // galaxy (10° shy of each pole to dodge the gimbal singularity and
+    // top/bottom-down vertigo, while allowing views from below — there's no
+    // privileged galactic plane). The renderer narrows this to an oblique band
+    // while focused on an orrery so the orbital plane always reads at an angle.
+    var minElevation: Float = -80 * .pi / 180
+    var maxElevation: Float =  80 * .pi / 180
+    // Absolute pole-safe bounds applied to every DERIVED pose (eased framing), so
+    // a fly between two in-range poses is never kinked by the tighter interactive
+    // clamp mid-flight — only manual orbiting is held to `min/maxElevation`.
+    private let absMinElevation: Float = -85 * .pi / 180
+    private let absMaxElevation: Float =  85 * .pi / 180
     private let minRadius: Float = 0.5
     private let maxRadius: Float = 500
 
@@ -50,6 +57,24 @@ struct TurntableCamera {
     /// at which the focused star fills its angular-size cap, so you can't zoom past
     /// the point where it stops growing (no dead zone). nil → the plain `minRadius`.
     var focusFloor: Float?
+
+    /// Dolly ceiling while focused on a body: the renderer sets this so a manual
+    /// zoom-out can't drift far past the framed body (into empty space) — you stay
+    /// near the thing you drilled into. nil → the plain `maxRadius`.
+    var focusCeiling: Float?
+
+    /// Effective radius bounds. `minRadius`/`maxRadius` are absolute galaxy-scale
+    /// limits, but a focused scene (esp. a drilled body) works in far smaller world
+    /// units than `minRadius` — so when the renderer has set `focusFloor`/`focusCeiling`
+    /// they are AUTHORITATIVE (they replace, not intersect, the absolute bounds), else
+    /// the absolute bound is the fallback. `min`/`max` guard against an inverted pair.
+    private var radiusLowerBound: Float { focusFloor ?? minRadius }
+    private var radiusUpperBound: Float { focusCeiling ?? maxRadius }
+    private func clampRadius(_ r: Float) -> Float {
+        let lo = Swift.min(radiusLowerBound, radiusUpperBound)
+        let hi = Swift.max(radiusLowerBound, radiusUpperBound)
+        return Swift.min(Swift.max(r, lo), hi)
+    }
 
     // Duration-scaled ease-in-out for framing moves. Duration grows with the size
     // of the change and is clamped to [minDuration, maxDuration]; the eye-position
@@ -125,8 +150,7 @@ struct TurntableCamera {
     /// Manual dolly cancels any in-flight framing so the user always wins.
     mutating func dolly(_ amount: Float) {
         framing = nil
-        let floor = max(minRadius, focusFloor ?? minRadius)
-        radius = min(max(radius * exp(-amount), floor), maxRadius)
+        radius = clampRadius(radius * exp(-amount))
     }
 
     /// Pan the pivot in the screen plane. Speed scales with radius so panning
@@ -186,7 +210,7 @@ struct TurntableCamera {
         let ce = cos(elevation), se = sin(elevation)
         let ca = cos(azimuth),   sa = sin(azimuth)
         let u = dist > 1e-4 ? v / dist : SIMD3<Float>(ce * sa, se, ce * ca)
-        let r = min(max(diveRadius, minRadius), maxRadius)
+        let r = clampRadius(diveRadius)
         beginFraming(goalEye: point + u * r, goalTarget: point, now: now, duration: duration)
     }
 
@@ -196,7 +220,7 @@ struct TurntableCamera {
     mutating func settle(on point: SIMD3<Float>, radius r: Float) {
         framing = nil
         target = point
-        radius = min(max(r, minRadius), maxRadius)
+        radius = clampRadius(r)
     }
 
     /// Cancel any in-flight eased move, holding the current pose. Used when a
@@ -207,10 +231,23 @@ struct TurntableCamera {
     /// Ease to an overview: move the eye so it sits `radius` from `target`,
     /// recentring there. Used for Home — a deliberate pull-back, not a re-aim.
     mutating func overview(target newTarget: SIMD3<Float>, radius newRadius: Float, now: Double) {
-        let goalRadius = min(max(newRadius, minRadius), maxRadius)
+        let goalRadius = clampRadius(newRadius)
         let goalEye = eyePosition(target: newTarget, azimuth: azimuth,
                                   elevation: elevation, radius: goalRadius)
         beginFraming(goalEye: goalEye, goalTarget: newTarget, now: now)
+    }
+
+    /// Ease to a pose framing `point` from explicit orbit angles at `radius`.
+    /// Unlike `dive` (which preserves the current orientation while repositioning),
+    /// this tweens the orbit angles too — used to tilt onto the orbital plane at a
+    /// fixed elevation when drilling into a system. `duration` overrides the
+    /// auto-scaled framing time (to sync the fly with the crossfade).
+    mutating func frame(on point: SIMD3<Float>, azimuth a: Float, elevation el: Float,
+                        radius r: Float, now: Double, duration: Double? = nil) {
+        let goalRadius = clampRadius(r)
+        let goalEl = min(max(el, absMinElevation), absMaxElevation)
+        let goalEye = eyePosition(target: point, azimuth: a, elevation: goalEl, radius: goalRadius)
+        beginFraming(goalEye: goalEye, goalTarget: point, now: now, duration: duration)
     }
 
     /// Ease back to a previously-captured pose (used to restore the pre-drill
@@ -254,7 +291,10 @@ struct TurntableCamera {
     // MARK: Orbit derivation
 
     /// Set target + azimuth/elevation/radius so the camera sits at `e` looking at
-    /// `p`. No cap here — that's already resolved into the interpolation endpoints.
+    /// `p`. No focus cap here — that's already resolved into the interpolation
+    /// endpoints; clamping to the (possibly tiny) focus bounds mid-fly would snap the
+    /// eye when a drill-in starts from the larger system radius. Only an absolute
+    /// upper safety is applied.
     private mutating func setOrbit(fromEye e: SIMD3<Float>, pivot p: SIMD3<Float>) {
         target = p
         let v = e - p
@@ -262,8 +302,8 @@ struct TurntableCamera {
         guard dist > 1e-4 else { return }
         let u = v / dist
         azimuth = atan2(u.x, u.z)
-        elevation = min(max(asin(min(max(u.y, -1), 1)), minElevation), maxElevation)
-        radius = min(max(dist, minRadius), maxRadius)
+        elevation = min(max(asin(min(max(u.y, -1), 1)), absMinElevation), absMaxElevation)
+        radius = min(dist, maxRadius)
     }
 
     /// Eye position for an arbitrary orbit state (same formula as `eye`).

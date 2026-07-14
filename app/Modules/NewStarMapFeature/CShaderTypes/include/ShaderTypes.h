@@ -61,6 +61,19 @@ typedef struct {
     // ramps the orrery in/out (0…1).
     float fieldDim;
     float orreryReveal;
+    // System↔body crossfade (0 = system level, 1 = drilled into a planet). Drives
+    // the drill from a system into one of its planets: the sibling planets + the
+    // sun shrink and fade out as this ramps 0→1, leaving the focused planet and its
+    // moons alone on empty space. Unwinds on zoom-out for free.
+    float bodyReveal;
+    // Orrery OPACITY, decoupled from `orreryReveal` (which drives the grow-out of
+    // orbits/scaffold from the centre and must track each body's true position).
+    // A drilling body cross-fade renders two orrery layers in one frame — the
+    // departing system and the arriving body — each with the SAME `orreryReveal`
+    // (fully grown) but its OWN `orreryAlpha`, so one fades out while the other
+    // fades in without either collapsing toward the centre. At every other time
+    // this equals `orreryReveal`.
+    float orreryAlpha;
     // Galaxy-overlay opacity (FTL mesh, ship vectors, player/relay markers). These
     // belong to the overview and fade with the drill ASYMMETRICALLY, so the CPU
     // computes it (the shader can't see the transition direction): out fast over the
@@ -97,9 +110,27 @@ typedef struct {
 // Per-body params for one orrery sphere draw.
 typedef struct {
     simd_float4 centerRadius;   // xyz = world center, w = radius
-    simd_float4 color;          // rgb = body color, a = reserved
-    simd_float4 sunEmissive;    // xyz = sun world position (light), w = emissive flag (1 = sun)
+    simd_float4 color;          // rgb = base albedo, a = polar ice caps (0…1, temperature-driven)
+    simd_float4 sunEmissive;    // xyz = sun world position (light), w = green saturation × (land+vegetation; 1 = off)
+    // Procedural surface texturing (see orrery_body_fragment / PlanetMaterial).
+    simd_float4 detailColor;    // rgb = secondary/terrain tint, w = surface style index
+    // x = estimated (0/1 → duller + staticky), y = life (0…1 biosphere), z = spin
+    // seed (per-body longitude offset), w = reserved.
+    simd_float4 surfaceParams;
+    // Tag-driven surface modifiers (see PlanetMaterial.SurfaceModifiers): x = crater
+    // relief ×, y = cloud/atmosphere ×, z = lava emissive ×, w = frost overlay (0…1).
+    simd_float4 surfaceMods;
 } OrreryBodyUniform;
+
+// Per-body params for one orrery atmosphere halo — a soft glow shell drawn in a
+// separate additive, depth-read pass AFTER the opaque bodies, so it bleeds beyond the
+// planet's limb into space (and is occluded by any nearer body). See
+// orrery_atmosphere_fragment / PlanetMaterial.atmosphereShell.
+typedef struct {
+    simd_float4 centerRadius;   // xyz = world center, w = the SOLID body radius
+    simd_float4 sunExtent;      // xyz = sun world position (light), w = shell outer radius (× body radius)
+    simd_float4 tintDensity;    // rgb = glow tint, w = density (opacity/intensity 0…1)
+} OrreryAtmosphereUniform;
 
 // One vertex of the orrery scaffold: orbit rings, HZ band, kuiper — colored line
 // segments in world space, drawn additively.

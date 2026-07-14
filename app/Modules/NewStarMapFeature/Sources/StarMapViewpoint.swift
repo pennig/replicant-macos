@@ -40,6 +40,15 @@ final class StarMapViewpoint {
     var orreryCenter = SIMD3<Float>(repeating: 0)
     var orrerySunWorldPos = SIMD3<Float>(repeating: 0)
     var orreryScale: Float = 1
+    /// Whether the active orrery is a body-level one (a planet + its moons) rather
+    /// than a system (the focused star + its planets). Restored so the body-view
+    /// cross-fade lands settled rather than replaying its drill-in.
+    var orreryIsBody = false
+    /// The drilled planet's designation + its system rendered radius, so a zoom-out
+    /// from a RESTORED body view still skips it in the system layer (no double) and
+    /// shrinks the central body back to its system size.
+    var bodyPlanetID: String?
+    var bodyCentralStartRadius: Float = 0
     var focusedStarIndex: Int?
     /// The picked star (drives the persistent label + relevance glow), so the
     /// selection highlight is restored alongside the camera, not just the dossier.
