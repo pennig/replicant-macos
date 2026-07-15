@@ -262,6 +262,28 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     /// MTKView draws there), so the closure may hop to the main-actor overlay model.
     var onShipsProjected: (([ProjectedShip]) -> Void)?
 
+    /// Pushed each frame with the device clusters' projected screen points (view points,
+    /// top-left) while focused into a system, so the SwiftUI overlay floats one tappable
+    /// badge over each occupied location. nil until set by `MetalStarView`. Empty in the
+    /// galaxy (clusters are a system-focus overlay).
+    var onClustersProjected: (([ProjectedCluster]) -> Void)?
+    /// Device-presence clusters, grouped by the anchor the focused level draws (built by
+    /// the view from the live roster + scan blob). Projected each frame in `draw`.
+    private var deviceClusters: [DeviceCluster] = []
+    /// The location the player has picked (mirrored from the reducer). A planet's Lagrange
+    /// points are only drawn/pickable when that planet (or the point itself) is selected —
+    /// otherwise only occupied points show, so an idle system isn't cluttered with ticks.
+    var selectedLocationCode: String?
+
+    /// Whether a planet's Lagrange point should be shown + pickable: a device sits on it,
+    /// or the current selection belongs to this planet (the planet itself or any of its
+    /// Lagrange points) — so all 5 stay visible while cycling among them.
+    private func lagrangeVisible(_ lp: LagrangePoint, planet: OrreryPlanet) -> Bool {
+        if deviceClusters.contains(where: { $0.anchorCode == lp.designation }) { return true }
+        guard let sel = selectedLocationCode else { return false }
+        return sel == planet.id || OrreryLayout.parent(of: sel) == planet.id
+    }
+
     private var hdrTexture: MTLTexture?
     private var aspect: Float = 1
 
@@ -739,6 +761,8 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         // Publish the ships' screen positions for the SwiftUI icon overlay, using
         // the same camera pose just rendered so the icons are frame-locked to the pips.
         emitShipProjection(view: view, now: now)
+        // And the device-presence cluster badges (system focus only).
+        emitClusterProjection(view: view)
     }
 
     /// Project each in-transit ship's comet head to view points (top-left origin,
@@ -770,6 +794,67 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
                 deviceCode: ship.deviceCode, point: CGPoint(x: px, y: py), opacity: Double(dim)))
         }
         emit(projected)
+    }
+
+    /// Replace the device-presence clusters (the view rebuilds these off the live roster
+    /// + scan blob whenever either changes). Projected each frame while focused.
+    func updateDeviceClusters(_ clusters: [DeviceCluster]) { deviceClusters = clusters }
+
+    /// Project each device cluster's anchor to view points (top-left, mirroring
+    /// `emitShipProjection`) and push them to the SwiftUI overlay. Clusters are a
+    /// system-focus overlay: empty in the galaxy (fades with `orreryReveal`), placed via
+    /// the active layer's `OrreryLayout` so a badge tracks its body as it orbits. Uses
+    /// `bounds.size` (POINTS), not `drawableSize` (pixels), for SwiftUI's local space.
+    private func emitClusterProjection(view: MTKView) {
+        guard let emit = onClustersProjected else { return }
+        guard systemFocused, orreryReveal > 0.001, !deviceClusters.isEmpty, let model = orreryModel
+        else { emit([]); return }
+        let reveal = orreryIsBody ? bodyProgress : orreryReveal
+        let layout = orreryLayout(model: model, center: orreryCenter, scale: orreryScale,
+                                  reveal: reveal, time: orbitClock)
+        let viewM = camera.viewMatrix()
+        let proj = camera.projectionMatrix(aspect: aspect)
+        let size = view.bounds.size
+        let w = Float(size.width), h = Float(size.height)
+        guard w > 0, h > 0 else { emit([]); return }
+        let op = Double(orreryReveal)
+
+        var out: [ProjectedCluster] = []
+        out.reserveCapacity(deviceClusters.count)
+        for cluster in deviceClusters {
+            guard let world = layout.position(ofLocation: cluster.anchorCode) else { continue }
+            let vpos = viewM * SIMD4<Float>(world, 1)
+            var clip = proj * vpos
+            if clip.w <= 0 { continue }                       // behind the camera
+            clip /= clip.w
+            let cx = CGFloat((clip.x * 0.5 + 0.5) * w)
+            let cy = CGFloat((1 - (clip.y * 0.5 + 0.5)) * h)
+            // Float the badge just above the body's top edge so it never covers it.
+            var screenR: CGFloat = 0
+            let r = anchorWorldRadius(cluster.anchorCode, model: model)
+            if r > 0 {
+                var edge = proj * (vpos + SIMD4<Float>(r, 0, 0, 0))
+                if edge.w > 0 { edge /= edge.w; screenR = abs(CGFloat((edge.x * 0.5 + 0.5) * w) - cx) }
+            }
+            let point = CGPoint(x: cx, y: cy - screenR - 16)   // 16 ≈ badge half-height + margin
+            out.append(ProjectedCluster(
+                anchorCode: cluster.anchorCode, point: point,
+                count: cluster.count, primaryType: cluster.primaryType,
+                hasOwn: cluster.hasOwn, opacity: op))
+        }
+        emit(out)
+    }
+
+    /// The world radius of a cluster's anchor body (0 for a point anchor like a Lagrange
+    /// point or belt) — so the badge can be floated clear of the body's on-screen disc.
+    private func anchorWorldRadius(_ code: String, model: SystemModel) -> Float {
+        if code == model.star.designation {
+            if orreryIsBody, let cb = model.centralBody { return Float(cb.displayRadius) * orreryScale }
+            if let fi = focusedStarIndex, stars.indices.contains(fi) { return stars[fi].worldRadius }
+            return 0
+        }
+        if let p = model.planets.first(where: { $0.id == code }) { return Float(p.displayRadius) * orreryScale }
+        return 0
     }
 
     // MARK: Picking
@@ -827,6 +912,85 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
 
     /// The domain star at a pick index — for surfacing selection data to the UI.
     func star(at index: Int) -> Star { stars[index] }
+
+    /// The orrery location designation under a view point (top-left, points), or nil —
+    /// the system-focus counterpart of `pickStar`. Candidates are every anchor the active
+    /// layer's `OrreryLayout` resolves: the sun/central body, each orbiter, and (at system
+    /// level) each planet's Lagrange points, belts, and structures. Clicking a body's
+    /// on-screen disc selects it (frontmost wins on overlap); point anchors use a
+    /// pixel-radius fallback so a small Lagrange tick is still easy to hit. Nil unless
+    /// focused into an orrery.
+    func pickLocation(atViewPoint p: CGPoint, viewSize: CGSize, pixelRadius: CGFloat = 16) -> String? {
+        guard systemFocused, let model = orreryModel else { return nil }
+        let reveal = orreryIsBody ? bodyProgress : orreryReveal
+        let layout = orreryLayout(model: model, center: orreryCenter, scale: orreryScale,
+                                  reveal: reveal, time: orbitClock)
+        let view = camera.viewMatrix()
+        let proj = camera.projectionMatrix(aspect: aspect)
+        let w = Float(viewSize.width), h = Float(viewSize.height)
+        let px = Float(p.x), py = Float(p.y)
+
+        // (designation, world position, world radius — 0 for a point anchor).
+        var candidates: [(id: String, pos: SIMD3<Float>, radius: Float)] = []
+        if orreryIsBody, let cb = model.centralBody {
+            candidates.append((model.star.designation, orreryCenter, Float(cb.displayRadius) * orreryScale))
+        } else if let fi = focusedStarIndex, stars.indices.contains(fi) {
+            candidates.append((model.star.designation, orreryCenter, stars[fi].worldRadius))
+        }
+        for planet in model.planets {
+            candidates.append((planet.id, layout.orbiterPosition(planet), Float(planet.displayRadius) * orreryScale))
+        }
+        if !orreryIsBody {
+            for planet in model.planets {
+                for lp in planet.lagrange where lagrangeVisible(lp, planet: planet) {
+                    if let pos = layout.lagrangePosition(lp.designation) { candidates.append((lp.designation, pos, 0)) }
+                }
+            }
+            for belt in model.belts {
+                if let pos = layout.beltAnchor(belt.designation) { candidates.append((belt.designation, pos, 0)) }
+            }
+            for st in model.structures {
+                if let pos = layout.structurePosition(st.designation) { candidates.append((st.designation, pos, 0)) }
+            }
+        }
+
+        // Project a view-space point to view pixels (top-left); nil if behind.
+        func projClip(_ vpos: SIMD4<Float>) -> SIMD2<Float>? {
+            var clip = proj * vpos
+            if clip.w <= 0 { return nil }
+            clip /= clip.w
+            return SIMD2<Float>((clip.x * 0.5 + 0.5) * w, (1 - (clip.y * 0.5 + 0.5)) * h)
+        }
+
+        var bestDisc = -1
+        var bestDiscDepth = Float.greatestFiniteMagnitude
+        var bestNear = -1
+        var bestNearD = Float(pixelRadius * pixelRadius)
+        for (i, c) in candidates.enumerated() {
+            let vpos = view * SIMD4<Float>(c.pos, 1)
+            guard let center = projClip(vpos) else { continue }
+            let dist = length(vpos.xyz)
+            let discR = c.radius > 0
+                ? (projClip(vpos + SIMD4<Float>(c.radius, 0, 0, 0)).map { length($0 - center) } ?? 0)
+                : 0
+            let d2 = length_squared(center - SIMD2<Float>(px, py))
+            if d2 <= discR * discR {
+                if dist < bestDiscDepth { bestDiscDepth = dist; bestDisc = i }
+            } else if d2 < bestNearD {
+                bestNearD = d2; bestNear = i
+            }
+        }
+        if bestDisc >= 0 { return candidates[bestDisc].id }
+        if bestNear >= 0 { return candidates[bestNear].id }
+        return nil
+    }
+
+    /// Whether `code` is a planet the current SYSTEM view can drill into (double-click
+    /// → body view). False at body level (moons don't drill) and for non-planet anchors.
+    func isDrillablePlanet(_ code: String) -> Bool {
+        guard systemFocused, !orreryIsBody, let model = orreryModel else { return false }
+        return model.planets.contains { $0.id == code }
+    }
 
     // MARK: Focus
 
@@ -1472,6 +1636,19 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
                     worldPosRadius: SIMD4(pos, pipRadius),
                     color: SIMD4(entry.color, 0),                       // steady (no pulse)
                     pixelOffset: SIMD2(x, clusterY), _pad: .zero))
+            }
+        }
+
+        // Lagrange points: a faint fixed-size tick at each L-point so the (now
+        // pickable) points read as scaffold. Steady + dim; Phase 3 brightens an
+        // occupied point. Only planets carry Lagrange (moons at body level don't).
+        for planet in model.planets where planet.id != excludeID {
+            for lp in planet.lagrange where lagrangeVisible(lp, planet: planet) {
+                guard let pos = layout.lagrangePosition(lp.designation) else { continue }
+                pips.append(OrreryPip(
+                    worldPosRadius: SIMD4(pos, 3),
+                    color: SIMD4(OrreryGeometry.lagrangeColor, 0),   // steady (no pulse)
+                    pixelOffset: .zero, _pad: .zero))
             }
         }
 

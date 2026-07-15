@@ -33,6 +33,11 @@ public struct NewStarMapFeature {
         /// the ship dossier, and is mutually exclusive with `selectedStar` (picking
         /// one clears the other) so only one HUD dossier shows at a time.
         var selectedShipDeviceCode: String?
+        /// The orrery location designation picked in a system/body view (planet, moon,
+        /// belt, Lagrange point, structure, or the star); nil when none. Drives the
+        /// location dossier. Mutually exclusive with the other selections, and cleared
+        /// on any level change (drill/zoom) since anchors are level-specific.
+        var selectedLocation: String?
         /// Label of the active data filter (nil = none). Drives the HUD chip.
         var activeFilterName: String?
         /// Toggled info overlays. Ported for the layer rail; not yet wired to the
@@ -76,6 +81,7 @@ public struct NewStarMapFeature {
         public init() {
             self.selectedStar = nil
             self.selectedShipDeviceCode = nil
+            self.selectedLocation = nil
             self.activeFilterName = nil
             self.activeLayers = [.presence]
             self.autoRotate = true
@@ -101,6 +107,8 @@ public struct NewStarMapFeature {
         case shipSelected(String)        // device_code
         case shipDeselected
         case viewDeviceRequested(String) // device_code
+        // Orrery location picking (system/body view): a location anchor was clicked.
+        case locationSelected(String)    // location designation
         case delegate(Delegate)
         // Interaction outcomes forwarded from the Metal input layer.
         case starFocused(Star?)          // single-click re-aim resolved to this star
@@ -178,9 +186,10 @@ public struct NewStarMapFeature {
             switch action {
             case let .shipSelected(code):
                 // Surfacing a ship dossier takes over the shared HUD slot from any
-                // system dossier.
+                // system/location dossier.
                 state.selectedShipDeviceCode = code
                 state.selectedStar = nil
+                state.selectedLocation = nil
                 return .none
 
             case .shipDeselected:
@@ -190,22 +199,32 @@ public struct NewStarMapFeature {
             case let .viewDeviceRequested(code):
                 return .send(.delegate(.openDevice(code)))
 
+            case let .locationSelected(code):
+                // Picking an orrery location takes over the shared HUD dossier slot.
+                state.selectedLocation = code
+                state.selectedStar = nil
+                state.selectedShipDeviceCode = nil
+                return .none
+
             case .delegate:
                 return .none
 
             case let .starFocused(star):
                 state.selectedStar = star
                 state.selectedShipDeviceCode = nil
+                state.selectedLocation = nil
                 return .none
 
             case let .starDived(star):
                 state.selectedStar = star
                 state.selectedShipDeviceCode = nil
+                state.selectedLocation = nil
                 return .none
 
             case .selectionCleared, .homeRequested:
                 state.selectedStar = nil
                 state.selectedShipDeviceCode = nil
+                state.selectedLocation = nil
                 return .none
 
             case let .dataFilterCycled(name):
@@ -237,6 +256,7 @@ public struct NewStarMapFeature {
                 // The search UI only shows in the galaxy HUD, so focus is `.galaxy`.
                 state.selectedStar = star
                 state.selectedShipDeviceCode = nil
+                state.selectedLocation = nil
                 state.searchQuery = ""
                 state.starFocusToken += 1
                 return .none
@@ -246,6 +266,7 @@ public struct NewStarMapFeature {
                 // control for explored systems, so the reducer trusts it.
                 guard !state.isTransitioning, state.focus == .galaxy else { return .none }
                 state.focus = .system(id)
+                state.selectedLocation = nil   // anchors are level-specific
                 state.isTransitioning = true
                 let clock = self.clock
                 let transition: Effect<Action> = .run { send in
@@ -262,6 +283,7 @@ public struct NewStarMapFeature {
                 // scanned system, so the reducer trusts the affordance.
                 guard !state.isTransitioning, case .system = state.focus else { return .none }
                 state.focus = .body(bodyID)
+                state.selectedLocation = nil   // anchors are level-specific
                 state.isTransitioning = true
                 let clock = self.clock
                 let transition: Effect<Action> = .run { send in
@@ -284,6 +306,7 @@ public struct NewStarMapFeature {
             case .zoomOutRequested:
                 // Steps out exactly one level: body → system → galaxy.
                 guard !state.isTransitioning else { return .none }
+                state.selectedLocation = nil   // anchors are level-specific
                 switch state.focus {
                 case .galaxy:
                     return .none

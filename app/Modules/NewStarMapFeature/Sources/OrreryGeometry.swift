@@ -28,6 +28,9 @@ enum OrreryGeometry {
     static let miningColor    = SIMD3<Float>(0.86, 0.60, 0.32)   // rcStatusWaiting (deeper)
     static let inventoryColor = SIMD3<Float>(0.72, 0.74, 0.80)   // rcTextSecondary
     static let hazardColor    = SIMD3<Float>(0.95, 0.36, 0.30)   // rcError
+    /// Faint Lagrange-point tick — a dim neutral so the 5 points read as scaffold, not
+    /// features, until one hosts a device (Phase 3 brightens occupied points).
+    static let lagrangeColor  = SIMD3<Float>(0.34, 0.40, 0.52)
 
     /// The indicator dots for a body, in a stable priority order (life first), each
     /// with its pip colour. Empty when the body carries no notable features — so a

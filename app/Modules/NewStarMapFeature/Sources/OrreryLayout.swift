@@ -144,15 +144,22 @@ struct OrreryLayout {
     /// resolves exactly; anything deeper (a moon at system level, a site) collapses to the
     /// nearest ancestor the layer knows; the system/central body resolves to `center`.
     /// Nil only when nothing — not even an ancestor — is known.
-    func position(ofLocation raw: String) -> SIMD3<Float>? {
+    func position(ofLocation raw: String) -> SIMD3<Float>? { anchor(ofLocation: raw)?.position }
+
+    /// Resolve a location code to the anchor this layer actually draws it at — both the
+    /// world position AND the designation of that anchor (the code a moon rolls up to at
+    /// system level, etc.). Grouping device clusters by `code` yields one badge per
+    /// visible anchor. Nil when nothing — not even an ancestor — is known to this layer.
+    func anchor(ofLocation raw: String) -> (code: String, position: SIMD3<Float>)? {
         let code = Self.hostBody(of: raw)     // strip a trailing -SITE-N / -SAL-N
-        if let p = resolveExact(code) { return p }
+        if let p = resolveExact(code) { return (code, p) }
         // Collapse upward: a moon → its planet, a Lagrange/site of an unknown body → the
         // body, etc. Walk ancestors until one resolves.
         var parts = code.split(separator: "-").map(String.init)
         while parts.count > 1 {
             parts.removeLast()
-            if let p = resolveExact(parts.joined(separator: "-")) { return p }
+            let anc = parts.joined(separator: "-")
+            if let p = resolveExact(anc) { return (anc, p) }
         }
         return nil
     }

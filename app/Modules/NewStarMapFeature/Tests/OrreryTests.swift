@@ -128,6 +128,45 @@ struct OrreryFocusReducerTests {
         // Body drill is only valid from a system view.
         await store.send(.drillIntoBodyRequested("SHERATANON-6"))
     }
+
+    @Test func locationSelectionIsExclusiveAndClearsOnLevelChange() async {
+        let clock = TestClock()
+        let store = TestStore(initialState: NewStarMapFeature.State()) {
+            NewStarMapFeature()
+        } withDependencies: {
+            $0.continuousClock = clock
+            $0.locationsClient.system = { _ in throw LocationsError.notFound }
+            $0.date = .constant(Date(timeIntervalSince1970: 0))
+            $0.defaultDatabase = try! DatabaseQueue()
+        }
+
+        await store.send(.drillInRequested("SOL")) {
+            $0.focus = .system("SOL")
+            $0.isTransitioning = true
+        }
+        await clock.advance(by: .milliseconds(1150))
+        await store.receive(\.transitionCompleted) { $0.isTransitioning = false }
+
+        // Picking a location surfaces it in the shared dossier slot.
+        await store.send(.locationSelected("SOL-3")) { $0.selectedLocation = "SOL-3" }
+        // A ship selection takes over the slot, clearing the location.
+        await store.send(.shipSelected("ABCD1234")) {
+            $0.selectedShipDeviceCode = "ABCD1234"
+            $0.selectedLocation = nil
+        }
+        // Re-pick, then a level change (zoom out) clears it — anchors are level-specific.
+        await store.send(.locationSelected("SOL-3")) {
+            $0.selectedShipDeviceCode = nil
+            $0.selectedLocation = "SOL-3"
+        }
+        await store.send(.zoomOutRequested) {
+            $0.focus = .galaxy
+            $0.selectedLocation = nil
+            $0.isTransitioning = true
+        }
+        await clock.advance(by: .milliseconds(950))
+        await store.receive(\.transitionCompleted) { $0.isTransitioning = false }
+    }
 }
 
 struct OrreryGeometryTests {
@@ -321,7 +360,8 @@ struct OrreryMappingTests {
             ])
         let m = OrreryMapping.systemModel(from: system)
         let ls = m.planets[0].lagrange
-        #expect(Set(ls.map(\.point)) == [1, 4])
+        // All 5 Lagrange points are synthesized per planet (shown/selectable device or not).
+        #expect(Set(ls.map(\.point)) == [1, 2, 3, 4, 5])
         #expect(ls.first { $0.designation == "SOL-5-L4" }?.point == 4)
         // Structures with an orbital distance become positioned anchors.
         #expect(Set(m.structures.map(\.designation)) == ["SOL-KUIPER", "SOL-OBJ-1"])
@@ -535,5 +575,48 @@ struct OrreryLayoutTests {
         #expect(abs(simd_length(L.position(ofLocation: "SOL-OBJ-1")!) - 20) < 1e-3)
         // Nothing known, not even an ancestor → nil.
         #expect(L.position(ofLocation: "ZZZ-9") == nil)
+    }
+
+    @Test func anchorCodeCollapsesToTheDrawnLevel() {
+        let m = model(
+            planets: [planet("SOL-3", phase: 0, semi: 10,
+                             lagrange: [LagrangePoint(designation: "SOL-3-L4", point: 4)])],
+            belts: [BeltModel(designation: "SOL-BELT-1", innerScene: 8, outerScene: 12,
+                              density: nil, richness: [:], hasSites: false)])
+        let L = layout(m)
+        #expect(L.anchor(ofLocation: "SOL-3")?.code == "SOL-3")            // planet, exact
+        #expect(L.anchor(ofLocation: "SOL-3-1")?.code == "SOL-3")          // moon → parent planet
+        #expect(L.anchor(ofLocation: "SOL-3-1-SITE-2")?.code == "SOL-3")   // site under a moon → planet
+        #expect(L.anchor(ofLocation: "SOL-3-L4")?.code == "SOL-3-L4")      // Lagrange, exact
+        #expect(L.anchor(ofLocation: "SOL-BELT-1")?.code == "SOL-BELT-1")  // belt, exact
+        #expect(L.anchor(ofLocation: "SOL")?.code == "SOL")                // star centre
+        #expect(L.anchor(ofLocation: "ZZZ-1") == nil)
+    }
+
+    @Test func clusteringDedupsOwnOverOthersAndGroupsByAnchor() {
+        let m = model(planets: [planet("SOL-3", phase: 0, semi: 10)])
+        let L = layout(m)
+        let own = [
+            DeviceClustering.Input(deviceCode: "AAA", deviceType: "mining_drone", status: "mining", location: "SOL-3"),
+            DeviceClustering.Input(deviceCode: "BBB", deviceType: "ftl_relay", status: "relaying", location: "SOL-3-1"),
+        ]
+        let others = [
+            // Duplicate of an own device → dropped (own wins).
+            DeviceClustering.Input(deviceCode: "AAA", deviceType: "mining_drone", status: nil, location: "SOL-3"),
+            // A foreign device on the planet.
+            DeviceClustering.Input(deviceCode: "CCC", deviceType: "autofactory", status: "idle", location: "SOL-3"),
+        ]
+        let clusters = DeviceClustering.clusters(own: own, others: others, layout: L)
+        // Everything rolls up to SOL-3 at system level (moon SOL-3-1 → its planet).
+        #expect(clusters.count == 1)
+        let c = try! #require(clusters.first)
+        #expect(c.anchorCode == "SOL-3")
+        #expect(c.count == 3)                       // AAA, BBB, CCC — the duplicate AAA dropped
+        #expect(c.devices.filter(\.isOwn).count == 2)
+        #expect(c.hasOwn)
+        // Own devices sort first.
+        let firstTwoOwn = c.devices.prefix(2).allSatisfy { $0.isOwn }
+        #expect(firstTwoOwn)
+        #expect(c.primaryType == "mining_drone")    // first own device's glyph
     }
 }

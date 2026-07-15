@@ -29,6 +29,10 @@ public struct NewStarMapView: View {
     /// reads `.ships`, so a per-frame update re-renders just that overlay and never
     /// this view (which would otherwise rebuild the whole star terrain per frame).
     @State private var shipProjection = ShipProjectionModel()
+    /// The bridge the renderer pushes projected device-cluster badge positions to each
+    /// frame. Held here but NOT read in `body` — only `LocationClusterLayer` reads
+    /// `.clusters`, so a per-frame update re-renders just that overlay.
+    @State private var clusterProjection = DeviceClusterProjectionModel()
     /// The charted galaxy, straight from SQLite — the same table the SceneKit map
     /// reads. Sorted by insertion order so new survey rows append deterministically.
     @FetchAll(UniverseModels.Star.order(by: \.createdAt)) private var surveyed
@@ -238,6 +242,46 @@ public struct NewStarMapView: View {
             .flatMap { try? $0.system() }
     }
 
+    /// The system the current focus sits in (nil in the galaxy).
+    private var focusedSystemDesignation: String? {
+        switch store.focus {
+        case .galaxy: return nil
+        case let .system(id): return id
+        case .body: return store.focus.systemDesignation
+        }
+    }
+
+    /// Device-presence clusters for the focused system, grouped by the anchor the current
+    /// level draws (a moon rolls up to its planet at system level). Merges the live
+    /// `Device` roster (own, authoritative, live status) with the persisted scan blob
+    /// (others, coarse), deduped by device code — own wins. Empty in the galaxy. Fed to
+    /// the renderer (badge placement) and the dossier (device list).
+    private var deviceClusters: [DeviceCluster] {
+        guard let model = focusedModel, let sys = focusedSystemDesignation else { return [] }
+        // A transform-free layout: only its code dispatch (planet/moon/belt/Lagrange/…)
+        // matters for grouping, not the world coordinates.
+        let layout = OrreryLayout(model: model, center: .zero, scale: 1, reveal: 1, time: 0)
+        // Own devices (authoritative) — every roster device located in this system.
+        let own = devices.compactMap { d -> DeviceClustering.Input? in
+            guard let loc = d.location, Self.systemDesignation(loc) == sys else { return nil }
+            return DeviceClustering.Input(deviceCode: d.deviceCode, deviceType: d.deviceType,
+                                          status: d.status, location: loc)
+        }
+        // Other players' devices from the persisted scan blob (planet/moon rosters).
+        var others: [DeviceClustering.Input] = []
+        if let system = persistedSystem(sys) {
+            for p in system.planets {
+                others += p.devices.map { .init(deviceCode: $0.deviceCode, deviceType: $0.deviceType,
+                                                status: $0.status, location: p.designation) }
+                for m in p.moons {
+                    others += m.devices.map { .init(deviceCode: $0.deviceCode, deviceType: $0.deviceType,
+                                                    status: $0.status, location: m.designation) }
+                }
+            }
+        }
+        return DeviceClustering.clusters(own: own, others: others, layout: layout)
+    }
+
     /// Window title reflecting the current focus level.
     private var navTitle: String {
         switch store.focus {
@@ -254,7 +298,9 @@ public struct NewStarMapView: View {
         ZStack {
             MetalStarView(store: store, stars: stars, overlays: overlays,
                           focus: store.focus, systemModel: focusedModel,
-                          shipProjection: shipProjection)
+                          shipProjection: shipProjection,
+                          deviceClusters: deviceClusters,
+                          clusterProjection: clusterProjection)
                 .ignoresSafeArea()
 
             // Tappable device icons over the ship pips. Renders nothing unless the
@@ -268,6 +314,16 @@ public struct NewStarMapView: View {
             )
             .ignoresSafeArea()
 
+            // Device-presence badges over occupied orrery locations (system focus only;
+            // the renderer emits nothing in the galaxy). Tapping selects the location,
+            // surfacing its device list in the dossier.
+            LocationClusterLayer(
+                projection: clusterProjection,
+                selectedLocation: store.selectedLocation,
+                onSelect: { store.send(.locationSelected($0)) }
+            )
+            .ignoresSafeArea()
+
             switch store.focus {
             case .galaxy:
                 galaxyHUD.transition(.opacity)
@@ -277,9 +333,13 @@ public struct NewStarMapView: View {
                         model: model,
                         level: { if case .body = store.focus { return .body } else { return .system } }(),
                         isTransitioning: store.isTransitioning,
+                        selectedLocation: store.selectedLocation,
+                        clusters: deviceClusters,
                         onBack: { store.send(.zoomOutRequested) },
                         onScan: { store.send(.scanCurrentSystemTapped) },
-                        onDrillBody: { store.send(.drillIntoBodyRequested($0)) }
+                        onDrillBody: { store.send(.drillIntoBodyRequested($0)) },
+                        onDismissLocation: { store.send(.selectionCleared) },
+                        onViewDevice: { store.send(.viewDeviceRequested($0)) }
                     )
                     .transition(.opacity)
                 }
@@ -296,6 +356,7 @@ public struct NewStarMapView: View {
         .animation(.easeInOut(duration: 0.5), value: store.focus)
         .animation(.easeInOut(duration: 0.22), value: store.selectedStar)
         .animation(.easeInOut(duration: 0.22), value: store.selectedShipDeviceCode)
+        .animation(.easeInOut(duration: 0.22), value: store.selectedLocation)
         .animation(.easeInOut(duration: 0.15), value: store.searchQuery)
         .animation(.easeInOut(duration: 0.22), value: store.activeFilterName)
         .animation(.easeInOut(duration: 0.4), value: store.bootPhase)
@@ -884,9 +945,17 @@ private struct SystemHUD: View {
     let model: SystemModel
     let level: OrreryLevel
     let isTransitioning: Bool
+    /// The location the player picked in the orrery (planet/moon/belt/Lagrange/
+    /// structure/star), driving the location dossier. Nil hides it.
+    let selectedLocation: String?
+    /// Device-presence clusters for this system, so the dossier can list the devices at
+    /// the selected location (grouped by the same anchor the badges use).
+    let clusters: [DeviceCluster]
     let onBack: () -> Void
     let onScan: () -> Void
     let onDrillBody: (String) -> Void
+    let onDismissLocation: () -> Void
+    let onViewDevice: (String) -> Void
 
     private var isBody: Bool { level == .body }
 
@@ -899,6 +968,17 @@ private struct SystemHUD: View {
             .padding(Space.l)
             .frame(maxWidth: .infinity, alignment: .leading)
 
+            // Location dossier — bottom-leading, matching the galaxy system dossier's
+            // position. Present only while a location is picked.
+            VStack {
+                Spacer()
+                HStack {
+                    locationDossier
+                    Spacer()
+                }
+            }
+            .padding(Space.l)
+
             VStack {
                 Spacer()
                 HStack {
@@ -908,6 +988,134 @@ private struct SystemHUD: View {
             }
             .padding(Space.l)
         }
+    }
+
+    /// The picked location's dossier — kind, designation (mono), and the basic facts we
+    /// already hold in the orrery model. Device rosters, sites, and inventory land in
+    /// Phases 3 & 5. Nil selection (or an unresolved code) renders nothing.
+    @ViewBuilder private var locationDossier: some View {
+        if let code = selectedLocation, let info = resolveLocation(code) {
+            VStack(alignment: .leading, spacing: Space.s) {
+                HStack(spacing: Space.s) {
+                    Text(info.kind)
+                        .font(.rcSectionLabel).textCase(.uppercase).foregroundStyle(.rcTextTertiary)
+                    Spacer()
+                    Button(action: onDismissLocation) {
+                        Image(systemName: "xmark").font(.system(size: 10, weight: .semibold))
+                    }
+                    .buttonStyle(.plain).foregroundStyle(.rcTextTertiary)
+                }
+                Text(info.title).font(.rcHeadlineMono).foregroundStyle(.rcTextPrimary)
+                if let sub = info.subtitle {
+                    Text(sub).font(.rcMonoSmall).foregroundStyle(.rcTextTertiary)
+                }
+                if !info.facts.isEmpty {
+                    HStack(alignment: .top, spacing: Space.l) {
+                        ForEach(Array(info.facts.enumerated()), id: \.offset) { _, f in
+                            fact(f.label, f.value)
+                        }
+                    }
+                }
+                if !info.indicators.isEmpty { indicatorGlyphs(info.indicators) }
+                deviceList
+            }
+            .padding(Space.m)
+            .frame(width: 280, alignment: .leading)
+            .hudGlass()
+            .transition(.move(edge: .leading).combined(with: .opacity))
+        }
+    }
+
+    /// The devices present at the selected location — own (accent, with a "View" action
+    /// into the inspector) and foreign (muted). Scrolls past a handful so a busy location
+    /// doesn't overrun the card.
+    @ViewBuilder private var deviceList: some View {
+        if let code = selectedLocation,
+           let cluster = clusters.first(where: { $0.anchorCode == code }), !cluster.devices.isEmpty {
+            Divider().overlay(.rcSeparator)
+            Text("Devices · \(cluster.count)")
+                .font(.rcSectionLabel).textCase(.uppercase).foregroundStyle(.rcTextTertiary)
+            ScrollView {
+                VStack(alignment: .leading, spacing: Space.xs) {
+                    ForEach(cluster.devices) { deviceRow($0) }
+                }
+            }
+            .frame(maxHeight: 200)
+        }
+    }
+
+    @ViewBuilder private func deviceRow(_ dev: ClusterDevice) -> some View {
+        HStack(spacing: Space.s) {
+            Image.rcSymbol("device.\(dev.deviceType)")
+                .symbolRenderingMode(.monochrome)
+                .font(.system(size: 11))
+                .foregroundStyle(dev.isOwn ? Color.rcAccent : .rcTextSecondary)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(dev.deviceCode).font(.rcMonoSmall).foregroundStyle(.rcTextPrimary)
+                if let s = dev.status, !s.isEmpty {
+                    Text(s.replacingOccurrences(of: "_", with: " ").capitalized)
+                        .font(.rcCaption).foregroundStyle(.rcTextTertiary)
+                }
+            }
+            Spacer()
+            if dev.isOwn {
+                Button("View") { onViewDevice(dev.deviceCode) }
+                    .buttonStyle(.plain).font(.rcCaption).foregroundStyle(.rcAccent)
+            } else {
+                Text("Foreign").font(.rcCaption).foregroundStyle(.rcTextTertiary)
+            }
+        }
+    }
+
+    private struct LocationDossierInfo {
+        var kind: String
+        var title: String
+        var subtitle: String?
+        var facts: [(label: String, value: String)]
+        var indicators: BodyIndicators
+    }
+
+    /// Resolve a picked location code against the current orrery `model` into its
+    /// dossier fields. Level-aware: an orbiter is a planet at system level, a moon at
+    /// body level; the centre is the star (system) or the drilled body (body level).
+    private func resolveLocation(_ code: String) -> LocationDossierInfo? {
+        if code == model.star.designation {
+            return LocationDossierInfo(
+                kind: isBody ? "Body" : "Star",
+                title: model.star.name ?? model.star.designation,
+                subtitle: model.star.spectralType, facts: [], indicators: [])
+        }
+        if let p = model.planets.first(where: { $0.id == code }) {
+            var facts: [(String, String)] = []
+            if let t = p.type { facts.append(("Type", t)) }
+            if !isBody { facts.append(("Orbit", String(format: "%.2f AU", p.orbitalDistanceAu))) }
+            if !isBody, p.moonCount > 0 { facts.append(("Moons", "\(p.moonCount)")) }
+            return LocationDossierInfo(
+                kind: isBody ? "Moon" : "Planet",
+                title: p.name.map { "\(p.designation) · \($0)" } ?? p.designation,
+                subtitle: p.inHabitableZone ? "In habitable zone" : nil,
+                facts: facts, indicators: p.indicators)
+        }
+        if let b = model.belts.first(where: { $0.id == code }) {
+            var facts: [(String, String)] = []
+            if let d = b.density { facts.append(("Density", d.capitalized)) }
+            return LocationDossierInfo(kind: "Asteroid Belt", title: b.designation,
+                                       subtitle: nil, facts: facts, indicators: [])
+        }
+        // Recognize a Lagrange point by its grammar (`…-L[1-5]`), not the `planet.lagrange`
+        // array — that only fills via per-location hydration, but a device badge (and thus
+        // a selectable code) can resolve from the parent planet alone.
+        if let n = OrreryMapping.lPointNumber(code) {
+            return LocationDossierInfo(kind: "Lagrange Point", title: code,
+                                       subtitle: "L\(n) · \(OrreryLayout.parent(of: code))",
+                                       facts: [], indicators: [])
+        }
+        if let s = model.structures.first(where: { $0.id == code }) {
+            return LocationDossierInfo(
+                kind: s.kind.replacingOccurrences(of: "_", with: " ").capitalized,
+                title: code, subtitle: nil, facts: [], indicators: [])
+        }
+        return nil
     }
 
     private var starCard: some View {

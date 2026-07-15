@@ -133,10 +133,11 @@ enum OrreryMapping {
             let interestingMoon = p.moons.contains { moonIsInteresting($0) }
                 || (p.moons.isEmpty && (p.moonCount ?? 0) > 0)   // hint before hydration
 
-            let lagrange = p.lagrange.compactMap { sp -> LagrangePoint? in
-                guard let n = lPointNumber(sp.designation) else { return nil }
-                return LagrangePoint(designation: sp.designation, point: n)
-            }
+            // Every planet has its 5 Lagrange points — shown and selectable device or not.
+            // Their designations are deterministic (`SYSTEM-n-L[1-5]`) and positions come
+            // from `OrreryLayout` (parent planet + star), so no per-location hydration of
+            // `planet.lagrange` is needed to render or pick them.
+            let lagrange = (1...5).map { LagrangePoint(designation: "\(p.designation)-L\($0)", point: $0) }
 
             return OrreryPlanet(
                 designation: p.designation, name: p.name, type: p.type,

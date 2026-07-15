@@ -142,6 +142,29 @@ moon-cap force-include; CPU-vs-GPU projection parity assert (must match
 
 **Tests:** feature tests for the new actions; pure pick-math tests.
 
+**STATUS (2026-07-14): landed, builds clean, tested.**
+- ✅ `StarFieldRenderer.pickLocation` — candidates = sun/central + orbiters + (system level)
+  Lagrange/belts/structures via `OrreryLayout`; disc test + pixel-radius fallback, frontmost
+  wins. `isDrillablePlanet` gates the double-click drill.
+- ✅ Faint Lagrange tick markers (`OrreryGeometry.lagrangeColor`) added in `orreryPips`
+  (system level; moons carry none). Structure markers deferred (mostly off-frame / hazards
+  already mark objects).
+- ✅ Reducer: `selectedLocation` state + `locationSelected` action; mutually exclusive with
+  star/ship selection; cleared on any drill/zoom (anchors are level-specific).
+- ✅ `MetalStarView.mouseDown`: orrery branch (single-click → select w/ double-click
+  deferral; double-click a planet → drill). Galaxy path unchanged.
+- ✅ Location dossier card in `SystemHUD` (top-trailing): kind + designation (mono) +
+  basic facts + indicators, resolved level-aware from the orrery model. Device rosters /
+  sites / inventory land in Phases 3 & 5.
+- ✅ Tests: `locationSelectionIsExclusiveAndClearsOnLevelChange` + pick-math covered by
+  `OrreryLayoutTests`.
+- ⏭️ Note: `planet.lagrange` is populated by per-location hydration (Phase 3 wiring), so
+  L-point markers/picking become fully exercisable once that data flows; the resolver,
+  picking, dossier, and markers are all in place now.
+- ⏭️ Projection consolidation (Phase-1 item 7): pickLocation is self-contained (mirrors
+  pickStar); a shared projector is still deferred to Phase 3's overlay work where a 5th
+  consumer justifies migrating the existing sites in one verifiable pass.
+
 ---
 
 ## Phase 3 — Device clusters at rest (headline feature)
@@ -166,6 +189,30 @@ renderer projects each cluster anchor via Phase-1 `worldToView` and pushes
 planet/moon? If so, extend the model here.
 
 **Tests:** cluster-merge (dedup/counts) pure tests; feature tests for tap → open/inspect.
+
+**STATUS (2026-07-14): landed, builds clean, tested.**
+- ✅ Domain (`DeviceCluster.swift`): `ClusterDevice` / `DeviceCluster` (anchor + own-first
+  devices, count/hasOwn/primaryType) / `ProjectedCluster` / `DeviceClusterProjectionModel`,
+  and a pure `DeviceClustering.clusters(own:others:layout:)` merge (dedup by code, own wins,
+  group by `OrreryLayout.anchor`).
+- ✅ `OrreryLayout.anchor(ofLocation:)` — returns the drawn anchor code + position (moon →
+  planet at system level); `position(ofLocation:)` delegates.
+- ✅ Renderer: `updateDeviceClusters` + `emitClusterProjection` each frame (system focus
+  only, opacity = `orreryReveal`), pushes `[ProjectedCluster]` via `onClustersProjected`.
+- ✅ `LocationClusterLayer.swift`: one tappable badge-per-location (glyph + count, accent if
+  own), frame-locked; tap → `locationSelected(anchorCode)`.
+- ✅ View: `deviceClusters` merges own roster (all location types, live status) + scan-blob
+  planet/moon others; wired to `MetalStarView` + `SystemHUD`. Location dossier now lists the
+  devices at the selected location (own → "View" into inspector via `viewDeviceRequested`;
+  foreign → muted), scrollable past a handful.
+- ✅ Tests: `clusteringDedupsOwnOverOthersAndGroupsByAnchor`, `anchorCodeCollapsesToTheDrawnLevel`.
+- ⏭️ Own devices anchor at **any** location type (planet/moon/belt/Lagrange/structure) with
+  no extra fetch — Lagrange badges resolve from the parent planet, so they light up now.
+  Other-players' devices at belt/Lagrange/structure need per-location hydration (deferred);
+  scan blob only carries planet/moon others today.
+- ⏭️ Occupied-Lagrange marker brightening skipped — the device badge is the occupancy signal.
+- ⏭️ Projection still has two paths (ship + cluster emit duplicate the world→screen math);
+  unify in Phase 4 when ships are reworked (the justifying moment to migrate both).
 
 ---
 
