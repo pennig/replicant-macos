@@ -237,6 +237,31 @@ Highest complexity; isolated. Keep `Ship.position` pure/deterministic for unit t
 **Tests (`TravelSnapshotTests`/`TravelFlowTests`):** per-leg progress at boundary times;
 endpoint resolution per level; galaxy-vs-system placement of a mixed cruise+jump itinerary.
 
+**STATUS (2026-07-14): landed, builds clean, tested.**
+- ✅ `RouteLeg` on `ShipRoute` (location-level from/to + seconds); view populates from
+  `TravelSnapshot.legs`.
+- ✅ `Ship` reworked to a multi-leg polyline (`Ship.Leg` carries system-star indices +
+  location codes + media window). `position(at:)` interpolates the active leg's system
+  endpoints (cruise legs park at a star, jump legs span stars); `ribbonProgress` keeps the
+  drawn ribbon's tail tracking the head; `orreryPosition(at:resolve:)` places the ship on
+  an intra-system cruise leg inside the orrery (nil if the active leg leaves the system).
+- ✅ Renderer `applyOverlays`: builds per-leg media windows anchored backward from arrival
+  (the live block lists only remaining legs); `emitShipProjection` now places in-orrery
+  ships via the active layer's `OrreryLayout` at `orreryReveal` opacity, falling back to the
+  galaxy straight-line placement (fading with `overlayDim`) — so a ship is watchable on its
+  intra-system legs and fades with the galaxy otherwise.
+- ✅ Tests: `multiLegShipParksThenMovesThenParks`, `orreryPositionResolvesOnlyIntraSystemLegs`,
+  `noLegsFallsBackToStraightLine` (+ existing progress/interp).
+- ⏭️ In-orrery ships render as the SwiftUI ship icon only (no GPU comet head/trail
+  in-orrery); the galaxy keeps the comet head + dashed ribbon. Fine — the icon is the
+  tappable representation.
+- ⏭️ 3+-distinct-system trips: head placement is correct per-leg, but the drawn galaxy
+  ribbon is a straight origin→dest (head projected onto it). A system-node polyline ribbon
+  would make 3+-system routes exact; deferred (rare; the common 2-system trip is exact).
+- ⏭️ Projection consolidation (Phase-1 item 7) NOT done — `emitShipProjection` /
+  `emitClusterProjection` still each carry the world→screen math. Deferred to a cleanup
+  pass; both work and are isolated.
+
 ---
 
 ## Phase 5 — Sites, salvage & inventory
@@ -250,6 +275,40 @@ Additive; data already hangs off bodies.
 - Optional: depleted-vs-active salvage pip treatment.
 
 **Tests:** presentation-mapping pure tests.
+
+**STATUS (2026-07-14): landed, builds clean, tested.**
+- ✅ Belt indicators: `BeltModel.indicators` (mining/inventory) set in mapping; `orreryPips`
+  draws a pip row at the belt's ring anchor so a belt reads its contents like a planet.
+- ✅ Location dossier enriched: a `LocationDetail` (mining `ResourceSite` w/ live-resource
+  summary, `SalvageSite` w/ depleted/resources, `InventoryItem` roll-up) dug from the
+  persisted blob for the selected planet/moon/belt/structure, rendered as scrollable
+  sections beneath the device list (capped so a busy location can't overrun the card).
+- ✅ Test: `beltIndicatorsFromSitesAndInventory`.
+
+---
+
+## Overall (2026-07-14): all five phases landed, app builds clean, module tests green
+(aside from the pre-existing unrelated `surfaceTemperatureShapesLavaAndIceCaps`).
+
+## Deferred polish — ALL DONE (2026-07-14)
+- ✅ Projection consolidation: shared `projectViewPoint(world:…)` on the renderer; both
+  `emitShipProjection` and `emitClusterProjection` use it (one world→screen map).
+- ✅ In-orrery ship comet heads: `encodeOrreryShipHeads` draws a glow head for ships on an
+  intra-system leg (placed via `OrreryLayout`), alongside the tracking SwiftUI icon.
+- ✅ Multi-system polyline ribbon: `Ship.nodeStars` (distinct system nodes); the renderer
+  builds one ribbon segment per hop (`shipSegments`), each drawn with per-segment
+  head-projection progress (`segmentProgress`) so the comet tail flows across a 3+-system
+  route. `shipDashCyclePixels` generalized to arbitrary endpoints.
+- ✅ Occupied-Lagrange brightening: an occupied L-point tick renders in the device tint
+  (and slightly larger) under its cluster badge; empty points stay faint scaffold.
+- ✅ Other players' devices at belt/Lagrange/structure: `Belt` & `SpecialSite` gained
+  `devices: [LocatedDevice]` (back-compat `decodeIfPresent`); the DTO threads `devs` into
+  them; `locationSelected` fires a best-effort per-location `hydrateBody` (cancel-in-flight)
+  that merges the roster; the cluster builder reads belt/lagrange/structure devices. Tested
+  via `beltLevelDecodesSitesRemainingAndInventory` (now asserts a decoded device).
+
+Note: adding stored fields to shared `UniverseModels` structs → cleaned `Modules/.build`
+before `swift test` (SPM stale-layout). Xcode `BuildProject` unaffected.
 
 ---
 

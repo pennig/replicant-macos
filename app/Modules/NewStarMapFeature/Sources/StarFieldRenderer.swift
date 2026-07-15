@@ -243,7 +243,11 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     // State overlay: the player and their ships. Always drawn, never dimmed.
     private var playerStarIndex = 0
     private var ships: [Ship] = []
-    private var shipLineBuffer: MTLBuffer?        // 6 ribbon vertices per ship
+    private var shipLineBuffer: MTLBuffer?        // 6 ribbon vertices per polyline segment
+    /// Per polyline-segment metadata for the ship ribbons: the 6-vertex start offset in
+    /// `shipLineBuffer`, the segment's endpoint stars, and which ship it belongs to. A ship
+    /// spanning N distinct systems contributes N−1 segments (the common trip has one).
+    private var shipSegments: [(vertexStart: Int, aStar: Int, bStar: Int, shipIndex: Int)] = []
     private var shipLineHalfWidth: Float = 1.6    // trajectory thickness in pixels
     // Trajectory dash cadence. Each visible dash aims for `shipDashWorldLength` in
     // world units, but is clamped to a screen-space pixel band so dashes never
@@ -739,6 +743,12 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
                         beltBuffer: orreryBeltBuffer, beltCount: orreryBeltCount,
                         baseUniforms: uniforms, time: t, viewportPx: viewportPx)
                 }
+
+                // Ship comet heads for ships on an intra-system leg — the in-orrery
+                // counterpart of the galaxy heads (which fade out on drill-in). Always on
+                // top, matching the SwiftUI icon that tracks them.
+                var shipParams = MeshParams(viewportPixels: viewportPx, halfWidthPixels: 0, nodeRadiusPixels: 0)
+                encodeOrreryShipHeads(enc, uniforms: &uniforms, params: &shipParams, now: CACurrentMediaTime())
             }
             enc.endEncoding()
         }
@@ -773,25 +783,42 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     /// `drawableSize` (pixels), so the points land in SwiftUI's local space.
     private func emitShipProjection(view: MTKView, now: Double) {
         guard let emit = onShipsProjected else { return }
-        let dim = overlayDim
-        guard dim > 0.001, !ships.isEmpty else { emit([]); return }
+        guard !ships.isEmpty else { emit([]); return }
         let viewM = camera.viewMatrix()
         let proj = camera.projectionMatrix(aspect: aspect)
         let size = view.bounds.size
         let w = Float(size.width), h = Float(size.height)
         guard w > 0, h > 0 else { emit([]); return }
 
+        // In-orrery resolver: a ship whose active leg is wholly within the focused system
+        // stays visible + placed on its intra-system cruise leg (opacity ramps with the
+        // reveal). A ship not in this system — or when in the galaxy — falls back to the
+        // galaxy straight-line placement, fading with `overlayDim` on drill-in.
+        let shipLayout: OrreryLayout? = {
+            guard systemFocused, orreryReveal > 0.001, let model = orreryModel else { return nil }
+            let reveal = orreryIsBody ? bodyProgress : orreryReveal
+            return orreryLayout(model: model, center: orreryCenter, scale: orreryScale,
+                                reveal: reveal, time: orbitClock)
+        }()
+        let dim = overlayDim
+
         var projected: [ProjectedShip] = []
         projected.reserveCapacity(ships.count)
         for ship in ships {
-            let vpos = viewM * SIMD4<Float>(ship.position(at: now, stars: stars), 1)
-            var clip = proj * vpos
-            if clip.w <= 0 { continue }                       // behind the camera
-            clip /= clip.w
-            let px = CGFloat((clip.x * 0.5 + 0.5) * w)
-            let py = CGFloat((1 - (clip.y * 0.5 + 0.5)) * h)
-            projected.append(ProjectedShip(
-                deviceCode: ship.deviceCode, point: CGPoint(x: px, y: py), opacity: Double(dim)))
+            var world: SIMD3<Float>?
+            var opacity = 0.0
+            if let layout = shipLayout,
+               let op = ship.orreryPosition(at: now, resolve: { layout.position(ofLocation: $0) }) {
+                world = op
+                opacity = Double(orreryReveal)
+            } else if dim > 0.001 {
+                world = ship.position(at: now, stars: stars)
+                opacity = Double(dim)
+            }
+            guard let world, opacity > 0.001,
+                  let point = projectViewPoint(world, view: viewM, proj: proj, width: w, height: h)
+            else { continue }
+            projected.append(ProjectedShip(deviceCode: ship.deviceCode, point: point, opacity: opacity))
         }
         emit(projected)
     }
@@ -822,21 +849,21 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         var out: [ProjectedCluster] = []
         out.reserveCapacity(deviceClusters.count)
         for cluster in deviceClusters {
-            guard let world = layout.position(ofLocation: cluster.anchorCode) else { continue }
-            let vpos = viewM * SIMD4<Float>(world, 1)
-            var clip = proj * vpos
-            if clip.w <= 0 { continue }                       // behind the camera
-            clip /= clip.w
-            let cx = CGFloat((clip.x * 0.5 + 0.5) * w)
-            let cy = CGFloat((1 - (clip.y * 0.5 + 0.5)) * h)
-            // Float the badge just above the body's top edge so it never covers it.
+            guard let world = layout.position(ofLocation: cluster.anchorCode),
+                  let center = projectViewPoint(world, view: viewM, proj: proj, width: w, height: h)
+            else { continue }
+            // Float the badge just above the body's top edge so it never covers it:
+            // measure the body's on-screen radius via a view-space offset along view-x.
             var screenR: CGFloat = 0
             let r = anchorWorldRadius(cluster.anchorCode, model: model)
             if r > 0 {
-                var edge = proj * (vpos + SIMD4<Float>(r, 0, 0, 0))
-                if edge.w > 0 { edge /= edge.w; screenR = abs(CGFloat((edge.x * 0.5 + 0.5) * w) - cx) }
+                var edge = proj * (viewM * SIMD4<Float>(world, 1) + SIMD4<Float>(r, 0, 0, 0))
+                if edge.w > 0 {
+                    edge /= edge.w
+                    screenR = abs(CGFloat((edge.x * 0.5 + 0.5) * w) - center.x)
+                }
             }
-            let point = CGPoint(x: cx, y: cy - screenR - 16)   // 16 ≈ badge half-height + margin
+            let point = CGPoint(x: center.x, y: center.y - screenR - 16)   // 16 ≈ badge half-height + margin
             out.append(ProjectedCluster(
                 anchorCode: cluster.anchorCode, point: point,
                 count: cluster.count, primaryType: cluster.primaryType,
@@ -1645,10 +1672,28 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         for planet in model.planets where planet.id != excludeID {
             for lp in planet.lagrange where lagrangeVisible(lp, planet: planet) {
                 guard let pos = layout.lagrangePosition(lp.designation) else { continue }
+                // An occupied point brightens to the device tint (and grows a touch) so it
+                // reads as active under its cluster badge; an empty one stays faint scaffold.
+                let occupied = deviceClusters.contains { $0.anchorCode == lp.designation }
+                pips.append(OrreryPip(
+                    worldPosRadius: SIMD4(pos, occupied ? 3.5 : 3),
+                    color: SIMD4(occupied ? OrreryGeometry.deviceColor : OrreryGeometry.lagrangeColor, 0),
+                    pixelOffset: .zero, _pad: .zero))
+            }
+        }
+
+        // Belt features: a small pip row at the belt's ring anchor (mining site / stored
+        // inventory), so a belt reads its notable contents like a planet does.
+        for belt in model.belts {
+            let entries = OrreryGeometry.pipEntries(belt.indicators)
+            guard !entries.isEmpty, let pos = layout.beltAnchor(belt.designation) else { continue }
+            let n = Float(entries.count)
+            for (i, entry) in entries.enumerated() {
+                let x = (Float(i) - (n - 1) / 2) * 9
                 pips.append(OrreryPip(
                     worldPosRadius: SIMD4(pos, 3),
-                    color: SIMD4(OrreryGeometry.lagrangeColor, 0),   // steady (no pulse)
-                    pixelOffset: .zero, _pad: .zero))
+                    color: SIMD4(entry.color, 0),
+                    pixelOffset: SIMD2(x, -10), _pad: .zero))
             }
         }
 
@@ -1802,16 +1847,46 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         let buildMedia = CACurrentMediaTime()
         let buildDate = Date()
         func media(_ date: Date) -> Double { buildMedia + date.timeIntervalSince(buildDate) }
+        func systemName(_ code: String) -> String { String(code.split(separator: "-").first ?? "") }
         let fleet: [Ship] = overlays.ships.compactMap { route in
             guard let from = indexByName[route.from], let to = indexByName[route.to], from != to
             else { return nil }
+            let departed = media(route.departedAt)
+            let arrives = media(route.arrivesAt)
+            // Resolve legs to system-star endpoints + media windows, anchored so the LAST
+            // leg ends at arrival (the live `travel` block lists only the remaining legs).
+            // Needs every leg to carry a duration; otherwise a single straight segment.
+            var shipLegs: [Ship.Leg] = []
+            if !route.legs.isEmpty, route.legs.allSatisfy({ $0.seconds != nil }) {
+                var end = arrives
+                for leg in route.legs.reversed() {
+                    let start = end - (leg.seconds ?? 0)
+                    let fs = indexByName[systemName(leg.from)] ?? from
+                    let ts = indexByName[systemName(leg.to)] ?? to
+                    shipLegs.append(Ship.Leg(fromStar: fs, toStar: ts,
+                                             fromCode: leg.from, toCode: leg.to,
+                                             startMedia: start, endMedia: end))
+                    end = start
+                }
+                shipLegs.reverse()
+            }
             return Ship(deviceCode: route.deviceCode, fromStar: from, toStar: to,
-                        departedMedia: media(route.departedAt), arrivesMedia: media(route.arrivesAt))
+                        departedMedia: departed, arrivesMedia: arrives, legs: shipLegs)
         }
         ships = fleet
-        let shipVerts = fleet.flatMap {
-            MeshLineVertex.ribbon(stars[$0.fromStar].position, stars[$0.toStar].position)
+        // Ribbon as a polyline through each ship's distinct system nodes (one segment for
+        // the common two-system trip). Record where each segment's 6 vertices start so the
+        // encoder can draw + progress them individually.
+        var shipVerts: [MeshLineVertex] = []
+        var segments: [(vertexStart: Int, aStar: Int, bStar: Int, shipIndex: Int)] = []
+        for (si, ship) in fleet.enumerated() {
+            let nodes = ship.nodeStars
+            for (a, b) in zip(nodes, nodes.dropFirst()) where a != b {
+                segments.append((vertexStart: shipVerts.count, aStar: a, bStar: b, shipIndex: si))
+                shipVerts.append(contentsOf: MeshLineVertex.ribbon(stars[a].position, stars[b].position))
+            }
         }
+        shipSegments = segments
         shipLineBuffer = shipVerts.isEmpty ? nil : device.makeBuffer(
             bytes: shipVerts,
             length: shipVerts.count * MemoryLayout<MeshLineVertex>.stride,
@@ -1869,14 +1944,21 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
             enc.setVertexBuffer(shipLineBuffer, offset: 0, index: 0)
             enc.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
             enc.setVertexBytes(&params, length: MemoryLayout<MeshParams>.stride, index: 2)
-            for (i, ship) in ships.enumerated() {
-                var sp = ShipParams(color: shipColor, progress: ship.progress(at: now),
+            // Each polyline segment: the traveled/remaining split is the head's fraction
+            // ALONG that segment, so the comet tail flows continuously across a multi-system
+            // route (a segment before the head fills fully; the one after stays empty).
+            for seg in shipSegments {
+                let ship = ships[seg.shipIndex]
+                let a = stars[seg.aStar].position, b = stars[seg.bStar].position
+                let head = ship.position(at: now, stars: stars)
+                var sp = ShipParams(color: shipColor,
+                                    progress: segmentProgress(head: head, a: a, b: b),
                                     halfWidthPixels: shipLineHalfWidth,
                                     tailLength: 0.35,
-                                    dashCyclePixels: shipDashCyclePixels(ship, uniforms: uniforms, params: params))
+                                    dashCyclePixels: shipDashCyclePixels(a: a, b: b, uniforms: uniforms, params: params))
                 enc.setVertexBytes(&sp, length: MemoryLayout<ShipParams>.stride, index: 3)
                 enc.setFragmentBytes(&sp, length: MemoryLayout<ShipParams>.stride, index: 0)
-                enc.drawPrimitives(type: .triangle, vertexStart: i * 6, vertexCount: 6)
+                enc.drawPrimitives(type: .triangle, vertexStart: seg.vertexStart, vertexCount: 6)
             }
         }
 
@@ -1911,12 +1993,37 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         }
     }
 
+    /// Draw a comet head for every ship on an intra-system leg within the focused system,
+    /// placed via the active layer's `OrreryLayout` (the same resolve the SwiftUI icon
+    /// uses). Additive glow, always on top — the in-orrery counterpart of the galaxy heads.
+    private func encodeOrreryShipHeads(_ enc: MTLRenderCommandEncoder,
+                                       uniforms: inout Uniforms, params: inout MeshParams, now: Double) {
+        guard systemFocused, !ships.isEmpty, let model = orreryModel else { return }
+        let reveal = orreryIsBody ? bodyProgress : orreryReveal
+        let layout = orreryLayout(model: model, center: orreryCenter, scale: orreryScale,
+                                  reveal: reveal, time: orbitClock)
+        let heads: [StateMarker] = ships.compactMap { ship in
+            guard let pos = ship.orreryPosition(at: now, resolve: { layout.position(ofLocation: $0) })
+            else { return nil }
+            return StateMarker(position: pos, color: shipColor,
+                               radiusPixels: shipHeadRadius, style: 1, worldRadius: 0)
+        }
+        guard !heads.isEmpty else { return }
+        enc.setRenderPipelineState(stateMarkerPipeline)
+        enc.setDepthStencilState(noDepthState)
+        enc.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
+        enc.setVertexBytes(&params, length: MemoryLayout<MeshParams>.stride, index: 2)
+        heads.withUnsafeBytes { enc.setVertexBytes($0.baseAddress!, length: $0.count, index: 0) }
+        enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6, instanceCount: heads.count)
+    }
+
     /// The screen-pixel length of one dash+gap cycle for a ship's trajectory. Each
     /// visible dash targets `shipDashWorldLength` in world units, clamped to a
     /// screen-space pixel band, so dashes never balloon on zoom-in or vanish on
     /// zoom-out. The shader lays these cycles down along the ribbon's true screen
     /// arc-length (`in.screenDist`), so the cadence is uniform even under perspective.
-    private func shipDashCyclePixels(_ ship: Ship, uniforms: Uniforms, params: MeshParams) -> Float {
+    private func shipDashCyclePixels(a a0: SIMD3<Float>, b b0: SIMD3<Float>,
+                                     uniforms: Uniforms, params: MeshParams) -> Float {
         // Mirror the shader's system-focus recession (Shaders.metal overlayPushed) so
         // the CPU measures the same endpoints the GPU draws. Identity at overview.
         func pushed(_ p: SIMD3<Float>) -> SIMD3<Float> {
@@ -1924,8 +2031,8 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
             let center = SIMD3<Float>(uniforms.orreryCenter.x, uniforms.orreryCenter.y, uniforms.orreryCenter.z)
             return center + (p - center) * (1 + uniforms.systemPush * uniforms.orreryReveal)
         }
-        let a = pushed(stars[ship.fromStar].position)
-        let b = pushed(stars[ship.toStar].position)
+        let a = pushed(a0)
+        let b = pushed(b0)
         let worldLen = simd_length(b - a)
         // Fallback cycle (~mid-band) when the trajectory is degenerate or off-screen.
         let fallback = (shipDashMinPixels + shipDashMaxPixels)
@@ -1950,6 +2057,16 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         let idealDashPx = shipDashWorldLength * screenLen / worldLen
         let dashPx = min(max(idealDashPx, shipDashMinPixels), shipDashMaxPixels)
         return 2 * dashPx
+    }
+
+    /// The head's fraction 0…1 along a ribbon segment (a→b) — its projection onto the
+    /// segment, clamped. A segment the head has passed reads 1 (fully traveled), one ahead
+    /// reads 0, the active one reads the partial split.
+    private func segmentProgress(head: SIMD3<Float>, a: SIMD3<Float>, b: SIMD3<Float>) -> Float {
+        let ab = b - a
+        let denom = simd_dot(ab, ab)
+        guard denom > 1e-6 else { return 1 }
+        return min(max(simd_dot(head - a, ab) / denom, 0), 1)
     }
 
     /// Encode the curated labels over the tone-mapped drawable: pick the selected
@@ -2091,6 +2208,18 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
         }
         for id in stale { labelOpacity.removeValue(forKey: id) }
+    }
+
+    /// Project a world point to view POINTS (top-left origin) for the SwiftUI overlays —
+    /// the single world→screen map shared by the ship and device-cluster projections (and
+    /// available to any other overlay). Nil when the point is behind the camera.
+    private func projectViewPoint(_ world: SIMD3<Float>, view: float4x4, proj: float4x4,
+                                  width: Float, height: Float) -> CGPoint? {
+        var clip = proj * (view * SIMD4<Float>(world, 1))
+        if clip.w <= 0 { return nil }
+        clip /= clip.w
+        return CGPoint(x: CGFloat((clip.x * 0.5 + 0.5) * width),
+                       y: CGFloat((1 - (clip.y * 0.5 + 0.5)) * height))
     }
 
     /// Additive blend into the HDR (rgba16Float) target — shared by every pass

@@ -163,10 +163,14 @@ enum OrreryMapping {
         let belts = s.belts.indices.map { i -> BeltModel in
             let b = s.belts[i]
             let band = layout.belts[i]   // spaced clear of the sun and its neighbouring orbits
+            var ind: BodyIndicators = []
+            if !b.sites.isEmpty { ind.insert(.miningSite) }
+            if !b.inventory.isEmpty { ind.insert(.inventory) }
             return BeltModel(
                 designation: b.designation,
                 innerScene: band.inner, outerScene: band.outer,
-                density: b.density, richness: b.richness, hasSites: !b.sites.isEmpty)
+                density: b.density, richness: b.richness, hasSites: !b.sites.isEmpty,
+                indicators: ind)
         }
 
         let hazards = s.structures.compactMap { st -> OrreryHazard? in

@@ -137,8 +137,16 @@ public struct NewStarMapView: View {
                   let destination = snapshot.destination.map(Self.systemDesignation),
                   origin != destination
             else { return nil }
+            // Per-leg route (location-level) so the renderer places the ship along its
+            // real multi-leg path — parking at a star during intra-system cruise legs and
+            // spanning stars on a surge/jump. Legs missing endpoints are dropped; an empty
+            // set falls back to a single origin→destination segment.
+            let legs = snapshot.legs.compactMap { leg -> RouteLeg? in
+                guard let f = leg.from, let t = leg.to else { return nil }
+                return RouteLeg(from: f, to: t, seconds: leg.timeSeconds)
+            }
             return ShipRoute(deviceCode: device.deviceCode, from: origin, to: destination,
-                             departedAt: departedAt, arrivesAt: arrivesAt)
+                             departedAt: departedAt, arrivesAt: arrivesAt, legs: legs)
         }
     }
 
@@ -267,19 +275,46 @@ public struct NewStarMapView: View {
             return DeviceClustering.Input(deviceCode: d.deviceCode, deviceType: d.deviceType,
                                           status: d.status, location: loc)
         }
-        // Other players' devices from the persisted scan blob (planet/moon rosters).
+        // Other players' devices from the persisted blob. Planet/moon come from the system
+        // scan; belt/Lagrange/structure rosters arrive via the per-location hydrate fired
+        // on selection (they're absent from the scan blob).
         var others: [DeviceClustering.Input] = []
+        func located(_ ld: [LocatedDevice], at location: String) -> [DeviceClustering.Input] {
+            ld.map { .init(deviceCode: $0.deviceCode, deviceType: $0.deviceType,
+                           status: $0.status, location: location) }
+        }
         if let system = persistedSystem(sys) {
             for p in system.planets {
-                others += p.devices.map { .init(deviceCode: $0.deviceCode, deviceType: $0.deviceType,
-                                                status: $0.status, location: p.designation) }
-                for m in p.moons {
-                    others += m.devices.map { .init(deviceCode: $0.deviceCode, deviceType: $0.deviceType,
-                                                    status: $0.status, location: m.designation) }
-                }
+                others += located(p.devices, at: p.designation)
+                others += p.lagrange.flatMap { located($0.devices, at: $0.designation) }
+                for m in p.moons { others += located(m.devices, at: m.designation) }
             }
+            others += system.belts.flatMap { located($0.devices, at: $0.designation) }
+            others += system.structures.flatMap { located($0.devices, at: $0.designation) }
         }
         return DeviceClustering.clusters(own: own, others: others, layout: layout)
+    }
+
+    /// The mining sites / salvage / stored inventory at a location, dug from the persisted
+    /// system blob — surfaced in the location dossier. Resolves a planet, moon, belt, or
+    /// structure by designation. Nil when we hold no detail for it.
+    private func locationDetail(for code: String) -> LocationDetail? {
+        guard let sys = focusedSystemDesignation, let system = persistedSystem(sys) else { return nil }
+        if let p = system.planets.first(where: { $0.designation == code }) {
+            return LocationDetail(miningSites: p.sites, salvage: p.salvage, inventory: p.inventory)
+        }
+        for p in system.planets {
+            if let m = p.moons.first(where: { $0.designation == code }) {
+                return LocationDetail(miningSites: m.sites, salvage: m.salvage, inventory: m.inventory)
+            }
+        }
+        if let b = system.belts.first(where: { $0.designation == code }) {
+            return LocationDetail(miningSites: b.sites, salvage: [], inventory: b.inventory)
+        }
+        if let s = system.structures.first(where: { $0.designation == code }) {
+            return LocationDetail(miningSites: [], salvage: [], inventory: s.inventory)
+        }
+        return nil
     }
 
     /// Window title reflecting the current focus level.
@@ -335,6 +370,7 @@ public struct NewStarMapView: View {
                         isTransitioning: store.isTransitioning,
                         selectedLocation: store.selectedLocation,
                         clusters: deviceClusters,
+                        locationDetail: store.selectedLocation.flatMap(locationDetail(for:)),
                         onBack: { store.send(.zoomOutRequested) },
                         onScan: { store.send(.scanCurrentSystemTapped) },
                         onDrillBody: { store.send(.drillIntoBodyRequested($0)) },
@@ -941,6 +977,15 @@ private enum OrreryLevel { case system, body }
 /// The orrery-focus HUD: a central-body dossier (top-leading) and a satellites
 /// list (bottom-trailing), with a Back control that zooms out one level. At system
 /// level the satellite rows drill into a planet; at body level they list moons.
+/// A location's mining/salvage/inventory detail for the dossier, dug from the persisted
+/// system blob (the orrery `SystemModel` carries only presence flags).
+private struct LocationDetail: Equatable {
+    var miningSites: [ResourceSite]
+    var salvage: [SalvageSite]
+    var inventory: [InventoryItem]
+    var isEmpty: Bool { miningSites.isEmpty && salvage.isEmpty && inventory.isEmpty }
+}
+
 private struct SystemHUD: View {
     let model: SystemModel
     let level: OrreryLevel
@@ -951,6 +996,8 @@ private struct SystemHUD: View {
     /// Device-presence clusters for this system, so the dossier can list the devices at
     /// the selected location (grouped by the same anchor the badges use).
     let clusters: [DeviceCluster]
+    /// Mining/salvage/inventory detail for the selected location (nil when none held).
+    let locationDetail: LocationDetail?
     let onBack: () -> Void
     let onScan: () -> Void
     let onDrillBody: (String) -> Void
@@ -1017,7 +1064,7 @@ private struct SystemHUD: View {
                     }
                 }
                 if !info.indicators.isEmpty { indicatorGlyphs(info.indicators) }
-                deviceList
+                detailSections
             }
             .padding(Space.m)
             .frame(width: 280, alignment: .leading)
@@ -1026,22 +1073,87 @@ private struct SystemHUD: View {
         }
     }
 
-    /// The devices present at the selected location — own (accent, with a "View" action
-    /// into the inspector) and foreign (muted). Scrolls past a handful so a busy location
-    /// doesn't overrun the card.
-    @ViewBuilder private var deviceList: some View {
-        if let code = selectedLocation,
-           let cluster = clusters.first(where: { $0.anchorCode == code }), !cluster.devices.isEmpty {
+    /// The selected location's contents — devices, mining sites, salvage, and stored
+    /// inventory — in one scroll area so a busy location never overruns the card.
+    @ViewBuilder private var detailSections: some View {
+        let devices = selectedLocation.flatMap { code in
+            clusters.first { $0.anchorCode == code }?.devices
+        } ?? []
+        let hasDetail = locationDetail.map { !$0.isEmpty } ?? false
+        if !devices.isEmpty || hasDetail {
             Divider().overlay(.rcSeparator)
-            Text("Devices · \(cluster.count)")
-                .font(.rcSectionLabel).textCase(.uppercase).foregroundStyle(.rcTextTertiary)
             ScrollView {
-                VStack(alignment: .leading, spacing: Space.xs) {
-                    ForEach(cluster.devices) { deviceRow($0) }
+                VStack(alignment: .leading, spacing: Space.m) {
+                    if !devices.isEmpty { deviceSection(devices) }
+                    if let d = locationDetail {
+                        if !d.miningSites.isEmpty { miningSection(d.miningSites) }
+                        if !d.salvage.isEmpty { salvageSection(d.salvage) }
+                        if !d.inventory.isEmpty { inventorySection(d.inventory) }
+                    }
                 }
             }
-            .frame(maxHeight: 200)
+            .frame(maxHeight: 260)
         }
+    }
+
+    @ViewBuilder private func sectionHeader(_ text: String) -> some View {
+        Text(text).font(.rcSectionLabel).textCase(.uppercase).foregroundStyle(.rcTextTertiary)
+    }
+
+    @ViewBuilder private func deviceSection(_ devices: [ClusterDevice]) -> some View {
+        VStack(alignment: .leading, spacing: Space.xs) {
+            sectionHeader("Devices · \(devices.count)")
+            ForEach(devices) { deviceRow($0) }
+        }
+    }
+
+    @ViewBuilder private func miningSection(_ sites: [ResourceSite]) -> some View {
+        VStack(alignment: .leading, spacing: Space.xs) {
+            sectionHeader("Mining · \(sites.count)")
+            ForEach(sites) { site in
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(site.name ?? site.designation).font(.rcMonoSmall).foregroundStyle(.rcTextPrimary)
+                    let live = resourceSummary(site.remaining)
+                    Text(live.isEmpty ? "Depleted" : live)
+                        .font(.rcCaption).foregroundStyle(live.isEmpty ? .rcTextTertiary : .rcStatusWaiting)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private func salvageSection(_ sites: [SalvageSite]) -> some View {
+        VStack(alignment: .leading, spacing: Space.xs) {
+            sectionHeader("Salvage · \(sites.count)")
+            ForEach(sites) { site in
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(site.name ?? site.salvageType?.replacingOccurrences(of: "_", with: " ").capitalized ?? site.designation)
+                        .font(.rcMonoSmall).foregroundStyle(.rcTextPrimary)
+                    Text(site.depleted ? "Depleted" : site.resourcesAvailable.joined(separator: ", "))
+                        .font(.rcCaption).foregroundStyle(site.depleted ? .rcTextTertiary : .rcStatusWaiting)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private func inventorySection(_ items: [InventoryItem]) -> some View {
+        VStack(alignment: .leading, spacing: Space.xs) {
+            sectionHeader("Inventory")
+            ForEach(items.sorted { $0.quantity > $1.quantity }, id: \.resourceType) { item in
+                HStack {
+                    Text(item.resourceType.replacingOccurrences(of: "_", with: " ").capitalized)
+                        .font(.rcCaption).foregroundStyle(.rcTextSecondary)
+                    Spacer()
+                    Text("\(Int(item.quantity))").font(.rcMonoSmall).foregroundStyle(.rcTextPrimary)
+                }
+            }
+        }
+    }
+
+    /// The names of resources with any percentage remaining, comma-joined (empty ⇒ spent).
+    private func resourceSummary(_ remaining: [String: Double]) -> String {
+        remaining.filter { $0.value > 0 }.keys.sorted()
+            .map { $0.replacingOccurrences(of: "_", with: " ").capitalized }
+            .joined(separator: ", ")
     }
 
     @ViewBuilder private func deviceRow(_ dev: ClusterDevice) -> some View {

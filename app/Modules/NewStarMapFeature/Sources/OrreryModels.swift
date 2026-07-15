@@ -128,6 +128,9 @@ struct BeltModel: Identifiable, Equatable, Sendable {
     var density: String?
     var richness: [String: String]
     var hasSites: Bool
+    /// Notable-feature flags (mining sites / stored inventory) — drives a pip on the belt
+    /// ring, matching the planet pips. Belts carry no devices/salvage/life in the model.
+    var indicators: BodyIndicators = []
     var id: String { designation }
 }
 

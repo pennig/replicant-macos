@@ -103,6 +103,9 @@ import Testing
         #expect(belt.sites.first?.siteIndex == 0)
         // Accumulated stock is distinct from sites.
         #expect(belt.inventory.contains { $0.resourceType == "rares" && $0.quantity == 153 })
+        // Devices at a belt come through per-location detail (not the scan blob).
+        #expect(belt.devices.count == 1)
+        #expect(belt.devices.first?.deviceCode == "AB12CD34")
     }
 
     @Test func unscannedPlanetBodyDetailStaysVisited() throws {
@@ -386,7 +389,8 @@ extension UniverseModelsTests {
         { "site_index": 3, "designation": "SOL-BELT-1-SITE-3", "name": "SOL-BELT-1 Site 3",
           "resources_remaining_pct": { "carbon": 100 } }
       ],
-      "devices": [], "inventory": [ { "quantity": 153, "resource_type": "rares" } ],
+      "devices": [ { "device_code": "AB12CD34", "device_type": "mining_rig", "status": "idle" } ],
+      "inventory": [ { "quantity": 153, "resource_type": "rares" } ],
       "belt": { "density": "moderate", "inner_radius_au": 2.1, "outer_radius_au": 3.3,
                 "designation": "SOL-BELT-1", "resources": { "carbon": "moderate" } }
     }

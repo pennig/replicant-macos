@@ -162,7 +162,7 @@ public struct NewStarMapFeature {
         }
     }
 
-    private enum CancelID { case survey, transition, meshRefresh }
+    private enum CancelID { case survey, transition, meshRefresh, locationHydrate }
 
     /// The server caps `per_page` at 50.
     static let surveyPageSize = 50
@@ -204,7 +204,17 @@ public struct NewStarMapFeature {
                 state.selectedLocation = code
                 state.selectedStar = nil
                 state.selectedShipDeviceCode = nil
-                return .none
+                // Best-effort: pull this location's live detail and merge it — other
+                // players' devices at belts/Lagrange/structures aren't in the system-scan
+                // blob (only per-location detail carries them). The `@Fetch` then refreshes
+                // the clusters + dossier. Skip the bare system/star (nothing extra to fetch).
+                let system = String(code.split(separator: "-").first ?? "")
+                guard !system.isEmpty, system != code else { return .none }
+                let client = locationsClient
+                return .run { _ in
+                    try? await client.hydrateBody(systemDesignation: system, bodyDesignation: code)
+                }
+                .cancellable(id: CancelID.locationHydrate, cancelInFlight: true)
 
             case .delegate:
                 return .none

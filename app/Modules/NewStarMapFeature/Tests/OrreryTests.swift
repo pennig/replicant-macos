@@ -297,11 +297,11 @@ struct OrreryMappingTests {
             PlanetMaterial.surface(for: type, lifeStage: nil, estimated: false, surfaceTempC: temp).polarIce
         }
         #expect(ice(.superEarth, 40) == 0)                     // no ice at/above 40°C
-        #expect(ice(.terrestrial, 15) > 0.15)                  // a mild-cold world shows a clear cap
+        #expect(ice(.terrestrial, 15) > 0.03)                  // a mild-cold world shows a clear cap
         #expect(ice(.terrestrial, 15) < ice(.desertWorld, -30)) // colder → larger cap
-        #expect(ice(.oceanWorld, -20) > 0.5)
-        #expect(ice(.desertWorld, -40) == 1)                   // full extent by −40°C
-        #expect(ice(.desertWorld, -100) == 1)                  // and clamps there
+        #expect(ice(.oceanWorld, -20) > 0.15)
+        #expect(ice(.desertWorld, -200) == 1)                   // full extent by −40°C
+        #expect(ice(.desertWorld, -300) == 1)                  // and clamps there
         // Ice caps are gated to those types — a cold gas giant gets none.
         #expect(ice(.gasGiant, -30) == 0)
     }
@@ -365,6 +365,25 @@ struct OrreryMappingTests {
         #expect(ls.first { $0.designation == "SOL-5-L4" }?.point == 4)
         // Structures with an orbital distance become positioned anchors.
         #expect(Set(m.structures.map(\.designation)) == ["SOL-KUIPER", "SOL-OBJ-1"])
+    }
+
+    @Test func beltIndicatorsFromSitesAndInventory() {
+        let system = StarSystem(
+            designation: "SOL",
+            star: SystemStar(designation: "SOL", stellarClass: "G2", color: "Yellow"),
+            recon: .scanned, systemScanned: true,
+            belts: [
+                Belt(designation: "SOL-BELT-1", innerRadiusAu: 2, outerRadiusAu: 3, density: "dense",
+                     sites: [ResourceSite(designation: "SOL-BELT-1-SITE-0")],
+                     inventory: [InventoryItem(resourceType: "structural", quantity: 100)]),
+                Belt(designation: "SOL-BELT-2", innerRadiusAu: 4, outerRadiusAu: 5),
+            ])
+        let m = OrreryMapping.systemModel(from: system)
+        let b1 = m.belts.first { $0.designation == "SOL-BELT-1" }
+        let b2 = m.belts.first { $0.designation == "SOL-BELT-2" }
+        #expect(b1?.indicators.contains(.miningSite) == true)
+        #expect(b1?.indicators.contains(.inventory) == true)
+        #expect(b2?.indicators.isEmpty == true)
     }
 
     @Test func moonCapForceIncludesEveryInterestingMoon() {

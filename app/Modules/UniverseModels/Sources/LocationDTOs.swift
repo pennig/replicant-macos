@@ -370,11 +370,13 @@ extension RawBodyPhysical {
 }
 
 extension RawBelt {
-    func domain(sites: [ResourceSite] = [], inventory: [InventoryItem] = []) -> Belt? {
+    func domain(sites: [ResourceSite] = [], inventory: [InventoryItem] = [],
+                devices: [LocatedDevice] = []) -> Belt? {
         guard let designation else { return nil }
         return Belt(
             designation: designation, innerRadiusAu: innerRadiusAu, outerRadiusAu: outerRadiusAu,
-            density: density, richness: resources ?? [:], sites: sites, inventory: inventory
+            density: density, richness: resources ?? [:], sites: sites, inventory: inventory,
+            devices: devices
         )
     }
 }
@@ -511,14 +513,15 @@ extension RawLocation {
             ))
 
         case "belt":
-            guard let b = belt?.domain(sites: sites, inventory: inv) else { return nil }
+            guard let b = belt?.domain(sites: sites, inventory: inv, devices: devs) else { return nil }
             return .belt(b)
 
         case "lagrange":
             guard let l = lagrange, let designation = l.designation ?? location else { return nil }
             return .special(SpecialSite(
                 designation: designation, kind: .lagrange, label: l.lPoint,
-                parentBody: l.parentPlanet, orbitalDistanceAu: l.orbitalDistanceAu
+                parentBody: l.parentPlanet, orbitalDistanceAu: l.orbitalDistanceAu,
+                devices: devs
             ))
 
         case "megastructure":
@@ -529,13 +532,14 @@ extension RawLocation {
                 status: megastructure?.status, stage: megastructure?.stage,
                 orbitalDistanceAu: megastructure?.orbitalDistanceAu,
                 progressPercentage: megastructure?.progressPercentage, deadline: megastructure?.deadline,
-                requirements: (megastructure?.requirements ?? [:]).domain, inventory: inv
+                requirements: (megastructure?.requirements ?? [:]).domain, inventory: inv,
+                devices: devs
             ))
 
         case "kuiper", "oort", "object":
             guard let designation = location else { return nil }
             let kind: SpecialSiteKind = SpecialSiteKind(rawValue: locationType ?? "object") ?? .object
-            return .special(SpecialSite(designation: designation, kind: kind, inventory: inv))
+            return .special(SpecialSite(designation: designation, kind: kind, inventory: inv, devices: devs))
 
         default:
             return nil

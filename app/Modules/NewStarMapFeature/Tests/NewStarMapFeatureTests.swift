@@ -461,7 +461,7 @@ import Metal
 @Suite struct ShipTests {
 
     @Test func progressClampsToTheTripWindow() {
-        let ship = Ship(deviceCode: "D", fromStar: 0, toStar: 1, departedMedia: 100, arrivesMedia: 110)
+        let ship = Ship(deviceCode: "D", fromStar: 0, toStar: 1, departedMedia: 100, arrivesMedia: 110, legs: [])
         #expect(ship.progress(at: 90) == 0)             // before departure → held at origin
         #expect(ship.progress(at: 100) == 0)
         #expect(abs(ship.progress(at: 105) - 0.5) < 1e-4)
@@ -472,9 +472,63 @@ import Metal
     @Test func positionInterpolatesBetweenSystems() {
         let stars = Galaxy.generate()
         let a = stars[0].position, b = stars[1].position
-        let ship = Ship(deviceCode: "D", fromStar: 0, toStar: 1, departedMedia: 100, arrivesMedia: 110)
+        let ship = Ship(deviceCode: "D", fromStar: 0, toStar: 1, departedMedia: 100, arrivesMedia: 110, legs: [])
         #expect(simd_length(ship.position(at: 100, stars: stars) - a) < 1e-4)
         #expect(simd_length(ship.position(at: 105, stars: stars) - (a + (b - a) * 0.5)) < 1e-3)
+    }
+
+    private func star(_ name: String, _ pos: SIMD3<Float>) -> Star {
+        Star(name: name, position: pos, temperature: 5000, stellarClass: .G, ageMyr: 1000,
+             hasFTLRelay: false, life: .none,
+             resources: Resources(minerals: 0, gas: 0, rare: 0),
+             scan: .unexplored, hasInventory: false)
+    }
+
+    @Test func multiLegShipParksThenMovesThenParks() {
+        // Two systems (A at origin, B at x=10); a 3-leg trip — cruise in A, jump A→B,
+        // cruise in B — so the head parks at A, crosses to B, then parks at B.
+        let stars = [star("A", SIMD3(0, 0, 0)), star("B", SIMD3(10, 0, 0))]
+        let legs = [
+            Ship.Leg(fromStar: 0, toStar: 0, fromCode: "A-1", toCode: "A-2", startMedia: 100, endMedia: 110),  // cruise in A
+            Ship.Leg(fromStar: 0, toStar: 1, fromCode: "A", toCode: "B", startMedia: 110, endMedia: 120),       // jump A→B
+            Ship.Leg(fromStar: 1, toStar: 1, fromCode: "B-1", toCode: "B-2", startMedia: 120, endMedia: 130),   // cruise in B
+        ]
+        let ship = Ship(deviceCode: "S1", fromStar: 0, toStar: 1,
+                        departedMedia: 100, arrivesMedia: 130, legs: legs)
+
+        #expect(ship.position(at: 90, stars: stars) == SIMD3(0, 0, 0))    // before start → at A
+        #expect(ship.position(at: 105, stars: stars) == SIMD3(0, 0, 0))   // cruise in A → parked
+        #expect(ship.position(at: 115, stars: stars) == SIMD3(5, 0, 0))   // mid jump → halfway
+        #expect(ship.position(at: 125, stars: stars) == SIMD3(10, 0, 0))  // cruise in B → parked
+        #expect(ship.position(at: 200, stars: stars) == SIMD3(10, 0, 0))  // arrived → at B
+
+        // The ribbon tail tracks the head's fraction along A→B.
+        #expect(ship.ribbonProgress(at: 105, stars: stars) == 0)
+        #expect(abs(ship.ribbonProgress(at: 115, stars: stars) - 0.5) < 1e-4)
+        #expect(ship.ribbonProgress(at: 125, stars: stars) == 1)
+    }
+
+    @Test func noLegsFallsBackToStraightLine() {
+        let stars = [star("A", SIMD3(0, 0, 0)), star("B", SIMD3(10, 0, 0))]
+        let ship = Ship(deviceCode: "S1", fromStar: 0, toStar: 1,
+                        departedMedia: 100, arrivesMedia: 130, legs: [])
+        #expect(ship.position(at: 115, stars: stars) == SIMD3(5, 0, 0))   // linear over the window
+        #expect(abs(ship.progress(at: 115) - 0.5) < 1e-4)
+    }
+
+    @Test func orreryPositionResolvesOnlyIntraSystemLegs() {
+        // Cruise leg wholly within system A resolves against a location→world map; the
+        // jump leg (endpoint B unknown to A's orrery) does not, so the ship isn't placed.
+        let legs = [
+            Ship.Leg(fromStar: 0, toStar: 0, fromCode: "A-1", toCode: "A-2", startMedia: 100, endMedia: 110),
+            Ship.Leg(fromStar: 0, toStar: 1, fromCode: "A", toCode: "B", startMedia: 110, endMedia: 120),
+        ]
+        let ship = Ship(deviceCode: "S", fromStar: 0, toStar: 1,
+                        departedMedia: 100, arrivesMedia: 120, legs: legs)
+        let known: [String: SIMD3<Float>] = ["A-1": SIMD3(0, 0, 0), "A-2": SIMD3(4, 0, 0)]
+        let resolve: (String) -> SIMD3<Float>? = { known[$0] }
+        #expect(ship.orreryPosition(at: 105, resolve: resolve) == SIMD3(2, 0, 0))  // mid cruise
+        #expect(ship.orreryPosition(at: 115, resolve: resolve) == nil)             // jump leg → not in A
     }
 }
 

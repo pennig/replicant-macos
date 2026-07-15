@@ -12,21 +12,33 @@ import GameModels
 // per-frame inside the renderer from the timestamps here, so a moving ship does
 // not churn this value.
 
-/// A ship in transit between two star systems, with the real trip window so the
-/// renderer can place it at the correct point along the straight-line trajectory
-/// at any instant.
+/// One leg of a route: its endpoints as full LOCATION codes (belt/planet/Lagrange/…)
+/// and its duration. At galaxy scale each endpoint resolves to its system's star, so an
+/// intra-system cruise leg collapses to a point (the ship parks at the star) while a
+/// surge/jump leg spans two stars.
+struct RouteLeg: Equatable {
+    var from: String
+    var to: String
+    var seconds: Double?
+}
+
+/// A ship in transit, with its per-leg route and the real trip window so the renderer
+/// can place it at the correct point along the (multi-leg) trajectory at any instant.
 struct ShipRoute: Equatable {
     /// The device in transit — carried through to the renderer's `Ship` so the
     /// tappable overlay icon can identify which device a pip represents.
     var deviceCode: String
-    /// Origin system designation (e.g. `SOL`).
+    /// Overall origin system designation (e.g. `SOL`) — anchors the drawn ribbon.
     var from: String
-    /// Destination system designation.
+    /// Overall destination system designation.
     var to: String
     /// When the trip began.
     var departedAt: Date
     /// When the trip completes (final arrival).
     var arrivesAt: Date
+    /// The route's legs (location-level), in order. Empty falls back to a single
+    /// straight `from`→`to` segment over the whole window.
+    var legs: [RouteLeg]
 }
 
 /// Everything the renderer overlays on the terrain that isn't expressible as a

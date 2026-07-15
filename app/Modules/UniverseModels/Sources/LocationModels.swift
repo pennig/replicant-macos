@@ -254,6 +254,9 @@ public struct SpecialSite: Identifiable, Equatable, Sendable, Codable {
     /// Resources stored at this object (megastructures/outer-system objects can
     /// accumulate holdings just like bodies). Empty for most objects.
     public var inventory: [InventoryItem]
+    /// Devices stationed at this location (Lagrange points and objects can host devices),
+    /// from its per-location detail. Empty until hydrated.
+    public var devices: [LocatedDevice]
     public var id: String { designation }
 
     public init(
@@ -261,7 +264,8 @@ public struct SpecialSite: Identifiable, Equatable, Sendable, Codable {
         title: String? = nil, siteDescription: String? = nil, label: String? = nil,
         status: String? = nil, stage: String? = nil, parentBody: String? = nil,
         orbitalDistanceAu: Double? = nil, progressPercentage: Double? = nil, deadline: String? = nil,
-        requirements: [StructureRequirement] = [], inventory: [InventoryItem] = []
+        requirements: [StructureRequirement] = [], inventory: [InventoryItem] = [],
+        devices: [LocatedDevice] = []
     ) {
         self.designation = designation
         self.kind = kind
@@ -278,15 +282,16 @@ public struct SpecialSite: Identifiable, Equatable, Sendable, Codable {
         self.deadline = deadline
         self.requirements = requirements
         self.inventory = inventory
+        self.devices = devices
     }
 
-    // Custom decoding so blobs persisted before `inventory` (and `requirements`)
+    // Custom decoding so blobs persisted before `inventory` / `requirements` / `devices`
     // existed still decode — a missing key defaults to empty rather than throwing
     // and dropping the whole cached system. Encoding stays synthesized.
     private enum CodingKeys: String, CodingKey {
         case designation, kind, objectType, name, title, siteDescription, label
         case status, stage, parentBody, orbitalDistanceAu, progressPercentage
-        case deadline, requirements, inventory
+        case deadline, requirements, inventory, devices
     }
 
     public init(from decoder: any Decoder) throws {
@@ -306,6 +311,7 @@ public struct SpecialSite: Identifiable, Equatable, Sendable, Codable {
         deadline = try c.decodeIfPresent(String.self, forKey: .deadline)
         requirements = try c.decodeIfPresent([StructureRequirement].self, forKey: .requirements) ?? []
         inventory = try c.decodeIfPresent([InventoryItem].self, forKey: .inventory) ?? []
+        devices = try c.decodeIfPresent([LocatedDevice].self, forKey: .devices) ?? []
     }
 }
 
@@ -440,12 +446,15 @@ public struct Belt: Identifiable, Equatable, Sendable, Codable {
     /// Accumulated stock held at the belt (distinct from `sites`, which are the
     /// discovered deposits). Drives the belt's contribution to the Inventory sort.
     public var inventory: [InventoryItem]
+    /// Devices stationed at the belt, from its per-location detail (belts aren't in the
+    /// system-scan blob's device rosters). Empty until the location is hydrated.
+    public var devices: [LocatedDevice]
     public var id: String { designation }
 
     public init(
         designation: String, innerRadiusAu: Double? = nil, outerRadiusAu: Double? = nil,
         density: String? = nil, richness: [String: String] = [:], sites: [ResourceSite] = [],
-        inventory: [InventoryItem] = []
+        inventory: [InventoryItem] = [], devices: [LocatedDevice] = []
     ) {
         self.designation = designation
         self.innerRadiusAu = innerRadiusAu
@@ -454,6 +463,25 @@ public struct Belt: Identifiable, Equatable, Sendable, Codable {
         self.richness = richness
         self.sites = sites
         self.inventory = inventory
+        self.devices = devices
+    }
+
+    // Custom decoding so blobs persisted before `devices` still decode — a missing key
+    // defaults to empty rather than throwing and dropping the whole cached system.
+    private enum CodingKeys: String, CodingKey {
+        case designation, innerRadiusAu, outerRadiusAu, density, richness, sites, inventory, devices
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        designation = try c.decode(String.self, forKey: .designation)
+        innerRadiusAu = try c.decodeIfPresent(Double.self, forKey: .innerRadiusAu)
+        outerRadiusAu = try c.decodeIfPresent(Double.self, forKey: .outerRadiusAu)
+        density = try c.decodeIfPresent(String.self, forKey: .density)
+        richness = try c.decodeIfPresent([String: String].self, forKey: .richness) ?? [:]
+        sites = try c.decodeIfPresent([ResourceSite].self, forKey: .sites) ?? []
+        inventory = try c.decodeIfPresent([InventoryItem].self, forKey: .inventory) ?? []
+        devices = try c.decodeIfPresent([LocatedDevice].self, forKey: .devices) ?? []
     }
 }
 
