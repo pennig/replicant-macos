@@ -139,7 +139,14 @@ struct ReplicantApp: App {
                 // `accounts/me` refresh. The name columns are cleared (the arrival
                 // carries no display names, and the UI falls back to the mono
                 // designation) — except the star name survives an intra-system hop.
-                if let update = decision.rosterUpdate {
+                //
+                // Only *live relay* arrivals move the roster. A backfilled game-log
+                // arrival is history being replayed on launch (see
+                // `EventPipeline.backfill`): folding those in would walk the roster
+                // through stale waypoints — the location flicker — before settling.
+                // The roster's launch truth is `accounts/me`; backfill exists to
+                // repair the other tables (devices, etc.), which it still does.
+                if case .relay = event.source, let update = decision.rosterUpdate {
                     let priorStarName = replicant.currentStarName
                     try? await database.write { db in
                         try Replicant.where { $0.replicantCode.eq(code) }.update {

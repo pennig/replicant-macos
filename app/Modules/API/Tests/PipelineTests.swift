@@ -100,4 +100,84 @@ final class PipelineTests: XCTestCase {
         XCTAssertNil(EventPipeline.cursorDate(nil))
         XCTAssertNil(EventPipeline.cursorDate("not-a-number"))
     }
+
+    // MARK: - Forward-cursor backfill walk
+
+    private func entry(id: Int, eventType: String) -> GameLogEntry {
+        GameLogEntry(
+            id: id,
+            createdAt: "2026-06-10T08:09:51-05:00",
+            deviceCode: nil,
+            deviceType: nil,
+            eventType: eventType,
+            message: nil,
+            payload: nil
+        )
+    }
+
+    // Cold start (no stored cursor): read only the newest tail to record a
+    // resume point, and replay nothing — so launch never flickers the roster
+    // through historical waypoints.
+    func testCollectForwardSeedsWithoutReplaying() async throws {
+        let tail = EventLogPage(
+            entries: [entry(id: 30, eventType: "arrived"), entry(id: 29, eventType: "stowed")],
+            nextCursor: nil  // `latest=true` returns a null next_cursor
+        )
+        let walk = try await EventPipeline.collectForward(
+            replicantCode: "R",
+            storedCursor: nil,
+            maxEvents: 2000,
+            fetchPage: { cursor, latest in
+                XCTAssertTrue(latest, "seed must request the latest tail")
+                XCTAssertNil(cursor)
+                return tail
+            }
+        )
+        XCTAssertTrue(walk.seededOnly)
+        XCTAssertTrue(walk.events.isEmpty)
+        XCTAssertEqual(walk.newCursor, 30, "resume point is the tip (largest id)")
+    }
+
+    // Catch-up: page forward from the stored cursor, following each page's
+    // next_cursor until the tip, in chronological order.
+    func testCollectForwardPagesForwardFromCursor() async throws {
+        let pages: [Int?: EventLogPage] = [
+            41: EventLogPage(
+                entries: [entry(id: 42, eventType: "a"), entry(id: 43, eventType: "b"), entry(id: 44, eventType: "c")],
+                nextCursor: 44
+            ),
+            44: EventLogPage(entries: [entry(id: 45, eventType: "d")], nextCursor: 45),
+            45: EventLogPage(entries: [], nextCursor: nil),
+        ]
+        var requested: [Int?] = []
+        let walk = try await EventPipeline.collectForward(
+            replicantCode: "R",
+            storedCursor: 41,
+            maxEvents: 2000,
+            fetchPage: { cursor, latest in
+                XCTAssertFalse(latest, "catch-up pages forward, never `latest`")
+                requested.append(cursor)
+                return pages[cursor] ?? EventLogPage(entries: [], nextCursor: nil)
+            }
+        )
+        XCTAssertFalse(walk.seededOnly)
+        XCTAssertEqual(walk.events.count, 4)
+        XCTAssertEqual(walk.newCursor, 45)
+        XCTAssertEqual(requested, [41, 44, 45], "follows next_cursor forward, stops on the empty page")
+    }
+
+    // A caught-up cursor (at the tip) yields an immediately-empty forward page:
+    // nothing to emit, resume point unchanged. This is the quiet-launch path
+    // that used to re-dump the newest 100 events and flicker the location.
+    func testCollectForwardCaughtUpReturnsNothing() async throws {
+        let walk = try await EventPipeline.collectForward(
+            replicantCode: "R",
+            storedCursor: 100,
+            maxEvents: 2000,
+            fetchPage: { _, _ in EventLogPage(entries: [], nextCursor: nil) }
+        )
+        XCTAssertFalse(walk.seededOnly)
+        XCTAssertTrue(walk.events.isEmpty)
+        XCTAssertEqual(walk.newCursor, 100, "resume point stays put when nothing is new")
+    }
 }

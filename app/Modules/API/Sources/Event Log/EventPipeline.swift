@@ -20,6 +20,34 @@ public struct UserDefaultsCursorStore: RelayCursorStore {
     public func save(_ cursor: String) { defaults.set(cursor, forKey: key) }
 }
 
+/// Persists the per-replicant game-log resume point (the last processed event
+/// id) across launches, so tier-2 backfill pages *forward* from where it left
+/// off instead of re-replaying the newest window every time.
+public protocol GameLogCursorStore: Sendable {
+    func load(replicantCode: String) -> Int?
+    func save(_ cursor: Int, replicantCode: String)
+}
+
+public struct UserDefaultsGameLogCursorStore: GameLogCursorStore {
+    private let prefix: String
+    // `UserDefaults` is thread-safe but not marked `Sendable`; the access here is safe.
+    nonisolated(unsafe) private let defaults: UserDefaults
+
+    public init(prefix: String = "replicant.eventlog.cursor.", defaults: UserDefaults = .standard) {
+        self.prefix = prefix
+        self.defaults = defaults
+    }
+
+    // `object(forKey:) as? Int` (not `integer(forKey:)`) so an absent cursor
+    // reads as nil rather than 0 — the seed path keys off exactly that nil.
+    public func load(replicantCode: String) -> Int? {
+        defaults.object(forKey: prefix + replicantCode) as? Int
+    }
+    public func save(_ cursor: Int, replicantCode: String) {
+        defaults.set(cursor, forKey: prefix + replicantCode)
+    }
+}
+
 /// The app's single source of game events.
 ///
 /// Merges two channels into one deduplicated `AsyncStream<UnifiedEvent>`:
@@ -44,6 +72,7 @@ public actor EventPipeline {
     private let relay: RelayClient
     private let client: any APIProtocol
     private let cursorStore: RelayCursorStore
+    private let gameLogCursorStore: GameLogCursorStore
 
     private var seen: BoundedFingerprintSet
     private var continuation: AsyncStream<UnifiedEvent>.Continuation?
@@ -55,17 +84,21 @@ public actor EventPipeline {
     ///     Backfill reads go through its middleware (auth, rate limiting,
     ///     logging), so it shares your app's rate-limit budget automatically.
     ///   - cursorStore: where the relay resume-point lives.
+    ///   - gameLogCursorStore: where the per-replicant game-log resume point
+    ///     (last processed event id) lives.
     ///   - dedupCapacity: how many recent fingerprints to remember. Should
     ///     comfortably exceed the largest backfill overlap (default: plenty).
     public init(
         relay: RelayClient,
         client: any APIProtocol,
         cursorStore: RelayCursorStore = UserDefaultsCursorStore(),
+        gameLogCursorStore: GameLogCursorStore = UserDefaultsGameLogCursorStore(),
         dedupCapacity: Int = 4096
     ) {
         self.relay = relay
         self.client = client
         self.cursorStore = cursorStore
+        self.gameLogCursorStore = gameLogCursorStore
         self.seen = BoundedFingerprintSet(capacity: dedupCapacity)
     }
 
@@ -102,71 +135,106 @@ public actor EventPipeline {
         }
     }
 
-    /// Reconcile against the game's event log: fetch recent entries for the
-    /// replicant, emit anything the relay channel missed (in chronological
-    /// order), and return how many missed events were recovered — a nonzero
-    /// return is your gap-detection signal.
+    /// Reconcile a replicant against the authoritative game event log by paging
+    /// *forward* from the persisted resume point, emitting anything the relay
+    /// channel missed (in chronological order). Returns how many events were
+    /// emitted — a nonzero return is your gap-detection signal.
+    ///
+    /// Two modes, keyed on whether a resume cursor exists for this replicant:
+    ///
+    ///   - **Seed** (no stored cursor — cold start / newly-seen replicant):
+    ///     read only the newest tail (`latest: true`) to record a resume point,
+    ///     and emit *nothing*. History before first launch isn't replayed — the
+    ///     roster's current location already comes from `accounts/me`, so
+    ///     replaying it would just flicker the UI through stale waypoints.
+    ///   - **Catch-up** (stored cursor): page forward from it (each page's
+    ///     `nextCursor` is the largest id seen, fed back as the next `cursor`)
+    ///     until the log's tip, emitting each genuinely-new event once. A quiet
+    ///     account returns nothing → no replay.
+    ///
+    /// The resume point advances to the newest id processed and is persisted, so
+    /// the next launch continues from exactly here.
     ///
     /// - Parameters:
     ///   - replicantCode: the log is per-replicant; loop over your clones.
-    ///   - since: only consider entries after this instant (a 60s overlap
-    ///     is applied — dedup absorbs it). Pass nil to take whatever the
-    ///     fetched window covers.
-    ///   - maxFetch: upper bound on how many entries to pull when `since` is
-    ///     older than the first page (paging stops once this cap is hit).
-    ///   - pageSize: entries per request while paging back through the log.
+    ///   - maxEvents: safety cap on how many entries a single catch-up walk pulls
+    ///     (bounds the read burst when a gap is enormous).
     @discardableResult
-    public func backfill(
-        replicantCode: String,
-        since: Date?,
-        maxFetch: Int = 1000,
-        pageSize: Int = 100
-    ) async throws -> Int {
-        let cutoff = since?.addingTimeInterval(-60)
-
-        // Page newest-first (`latest` on the first request, then follow
-        // `nextCursor`) until we reach past `cutoff`, hit `maxFetch`, or
-        // reach the log's beginning.
-        var entries: [GameLogEntry] = []
-        var cursor: Int?
-        var isFirstPage = true
-        while entries.count < maxFetch {
-            let page = try await client.eventLog(
-                replicantCode: replicantCode,
-                cursor: cursor,
-                limit: min(pageSize, maxFetch - entries.count),
-                latest: isFirstPage ? true : nil
-            )
-            isFirstPage = false
-            guard !page.entries.isEmpty else { break }
-            entries.append(contentsOf: page.entries)
-
-            guard let cutoff else { break }  // nil `since`: just the newest page
-            let oldest = page.entries
-                .compactMap { UnifiedEvent.parseTimestamp($0.createdAt) }
-                .min()
-            if let oldest, oldest <= cutoff { break }
-            guard let next = page.nextCursor else { break }
-            cursor = next
-        }
-
-        var recovered = entries
-            .map { UnifiedEvent(gameLogEntry: $0, replicantCode: replicantCode) }
-            .filter { event in
-                guard let cutoff else { return true }
-                guard let date = event.date else { return true }  // unparseable: keep, dedup decides
-                return date >= cutoff
+    public func backfill(replicantCode: String, maxEvents: Int = 2000) async throws -> Int {
+        let stored = gameLogCursorStore.load(replicantCode: replicantCode)
+        // Capture the client (Sendable) locally so the fetch closure doesn't
+        // capture the actor — `collectForward` runs off-isolation.
+        let client = self.client
+        let walk = try await Self.collectForward(
+            replicantCode: replicantCode,
+            storedCursor: stored,
+            maxEvents: maxEvents,
+            fetchPage: { cursor, latest in
+                try await client.eventLog(
+                    replicantCode: replicantCode,
+                    cursor: cursor,
+                    latest: latest ? true : nil
+                )
             }
-
-        // Oldest first, so consumers see backfilled history in order.
-        recovered.sort { ($0.date ?? .distantPast) < ($1.date ?? .distantPast) }
+        )
+        if let newCursor = walk.newCursor {
+            gameLogCursorStore.save(newCursor, replicantCode: replicantCode)
+        }
+        // Seed only records a resume point; it must not replay history.
+        guard !walk.seededOnly else { return 0 }
 
         var emitted = 0
-        for event in recovered where seen.insert(event.id) {
+        for event in walk.events where seen.insert(event.id) {
             continuation?.yield(event)
             emitted += 1
         }
         return emitted
+    }
+
+    /// The outcome of a forward walk: the events to emit (oldest-first), the
+    /// resume point to persist (largest id seen, or the prior cursor when the
+    /// walk found nothing new), and whether this was a seed (record-only).
+    struct ForwardWalk {
+        let events: [UnifiedEvent]
+        let newCursor: Int?
+        let seededOnly: Bool
+    }
+
+    /// Pure forward-cursor walk — no actor state, no network, so it's unit
+    /// testable with a canned `fetchPage`. `fetchPage(cursor, latest)` mirrors
+    /// `APIProtocol.eventLog`.
+    static func collectForward(
+        replicantCode: String,
+        storedCursor: Int?,
+        maxEvents: Int,
+        fetchPage: (_ cursor: Int?, _ latest: Bool) async throws -> EventLogPage
+    ) async throws -> ForwardWalk {
+        // Seed: no resume point yet — record the tip, replay nothing.
+        guard let storedCursor else {
+            let tip = try await fetchPage(nil, true)
+            let tipID = tip.entries.compactMap(\.id).max()
+            return ForwardWalk(events: [], newCursor: tipID, seededOnly: true)
+        }
+
+        // Catch-up: page forward until the tip (nil `nextCursor`), an empty
+        // page, or the safety cap. Entries are oldest-first within a page and
+        // pages advance toward newest, so concatenation stays chronological.
+        var events: [UnifiedEvent] = []
+        var maxID = storedCursor
+        var cursor: Int? = storedCursor
+        while events.count < maxEvents {
+            let page = try await fetchPage(cursor, false)
+            guard !page.entries.isEmpty else { break }
+            for entry in page.entries {
+                events.append(UnifiedEvent(gameLogEntry: entry, replicantCode: replicantCode))
+            }
+            if let pageMax = page.entries.compactMap(\.id).max() {
+                maxID = max(maxID, pageMax)
+            }
+            guard let next = page.nextCursor else { break }
+            cursor = next
+        }
+        return ForwardWalk(events: events, newCursor: maxID, seededOnly: false)
     }
 
     /// Wall-clock time of the last relay event we persisted, decoded from the

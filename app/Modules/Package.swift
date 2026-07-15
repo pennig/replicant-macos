@@ -346,10 +346,17 @@ let package = Package(
                 .product(name: "SQLiteData", package: "sqlite-data"),
             ],
             path: "NewStarMapFeature/Sources",
+            // ShaderCommon.h is #included by the .metal files (not compiled on its
+            // own), so exclude it from the target's file list.
+            exclude: ["ShaderCommon.h"],
             resources: [
                 // Compiled into the target's default.metallib, loaded at runtime
-                // via `device.makeDefaultLibrary(bundle: .module)`.
-                .process("Shaders.metal"),
+                // via `device.makeDefaultLibrary(bundle: .module)`. Split from the
+                // former monolithic Shaders.metal; shared helpers live in ShaderCommon.h.
+                .process("StarField.metal"),
+                .process("Orrery.metal"),
+                .process("Overlays.metal"),
+                .process("Tonemap.metal"),
             ]
         ),
         .testTarget(
@@ -473,8 +480,8 @@ let package = Package(
             name: "UI",
             path: "UI/Sources",
             resources: [
-                .copy("Colors.xcassets"),
-                .copy("Symbols.xcassets"),
+                .process("Colors.xcassets"),
+                .process("Symbols.xcassets"),
             ]
         ),
         .testTarget(

@@ -168,7 +168,7 @@ actor GameSyncEngine {
         @Dependency(\.defaultDatabase) var database
         let replicants = (try? await database.read { db in try Replicant.fetchAll(db) }) ?? []
         for replicant in replicants {
-            let recovered = (try? await pipeline.backfill(replicantCode: replicant.replicantCode, since: nil)) ?? 0
+            let recovered = (try? await pipeline.backfill(replicantCode: replicant.replicantCode)) ?? 0
             logger.info("backfill \(replicant.replicantCode, privacy: .public): recovered \(recovered) event(s)")
         }
     }

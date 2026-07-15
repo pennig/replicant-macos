@@ -5,9 +5,12 @@ import Utils
 /// One page of a replicant's event log, mapped to stable DTOs. (File-scope, not
 /// nested — a type can't be nested in a protocol extension.)
 struct EventLogPage {
+    /// This page's entries, **oldest-first** (unless the request passed
+    /// `latest: true`, which returns the newest-first tail).
     let entries: [GameLogEntry]
-    /// Position to resume from for the next (older) page, or nil when the log's
-    /// beginning has been reached.
+    /// Cursor to resume from for the next (newer) page — the largest event id
+    /// in this page. Passing it as `cursor` returns entries with a greater id.
+    /// Nil once the newest entry (the log's tip) has been reached.
     let nextCursor: Int?
 }
 
@@ -20,9 +23,11 @@ extension APIProtocol {
     /// and request/response logging for free.
     ///
     /// - Parameters:
-    ///   - cursor: resume position from a prior page's `nextCursor`. Mutually
+    ///   - cursor: resume position from a prior page's `nextCursor` — returns
+    ///     entries with a greater id (forward, toward newest). Mutually
     ///     exclusive with `latest`.
-    ///   - latest: start from the newest events (pass on the first page only).
+    ///   - latest: fetch the newest tail (newest-first) instead of paging
+    ///     forward. Use once to seed a resume point on a cold start.
     func eventLog(
         replicantCode: String,
         cursor: Int? = nil,
@@ -45,6 +50,7 @@ extension GameLogEntry {
     /// Map a generated event into the stable DTO.
     init(schema: Components.Schemas.AppSchemasEventsEventSchema) {
         self.init(
+            id: schema.id,
             createdAt: schema.createdAt ?? "",
             deviceCode: schema.deviceCode,
             deviceType: schema.deviceType,
