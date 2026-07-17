@@ -48,6 +48,7 @@ public struct BlueprintsListView: View {
             }
         }
         .navigationTitle("Blueprints")
+        .navigationSubtitle(Text("\(store.blueprints.count) blueprints"))
         .searchable(text: $store.searchText, placement: .sidebar, prompt: "Search blueprints")
         .safeAreaInset(edge: .top, spacing: 0) {
             if let errorMessage = store.errorMessage {
@@ -55,14 +56,6 @@ public struct BlueprintsListView: View {
             }
         }
         .toolbar {
-            ToolbarItem {
-                if !store.blueprints.isEmpty {
-                    Text("\(store.blueprints.count) blueprints")
-                        .font(.rcCaption)
-                        .foregroundStyle(.rcTextTertiary)
-                        .padding(.horizontal, Space.m)
-                }
-            }
             ToolbarItem {
                 Button {
                     store.send(.refreshButtonTapped)

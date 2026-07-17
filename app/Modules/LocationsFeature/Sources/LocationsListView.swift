@@ -38,33 +38,27 @@ public struct LocationsListView: View {
     }
 
     public var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: Space.m) {
-                Text("\(forest.count.formatted()) \(forest.count == 1 ? "system" : "systems")")
-                    .font(.rcCaption)
-                    .foregroundStyle(.rcTextTertiary)
-                    .monospacedDigit()
-                Spacer(minLength: Space.s)
-            }
-            .padding(.horizontal, Space.m)
-            .padding(.vertical, Space.s)
-
-            Group {
-                if forest.isEmpty {
-                    emptyState
-                } else {
-                    // Flat, pre-flattened visible rows rendered by an AppKit
-                    // `NSTableView` (see `LocationsOutlineView`): the only way on
-                    // macOS to get BOTH cell recycling (essential at 10,000+ systems)
-                    // and animated row insert/remove on expand/collapse. The store
-                    // stays the source of truth — this is a pure renderer over `rows`,
-                    // `selection`, and the toggle callback.
-                    LocationsOutlineView(rows: rows, selection: $store.selection) { id in
-                        store.send(.toggleExpansion(id))
-                    }
+        Group {
+            if forest.isEmpty {
+                emptyState
+            } else {
+                // Flat, pre-flattened visible rows rendered by an AppKit
+                // `NSTableView` (see `LocationsOutlineView`): the only way on
+                // macOS to get BOTH cell recycling (essential at 10,000+ systems)
+                // and animated row insert/remove on expand/collapse. The store
+                // stays the source of truth — this is a pure renderer over `rows`,
+                // `selection`, and the toggle callback.
+                LocationsOutlineView(rows: rows, selection: $store.selection) { id in
+                    store.send(.toggleExpansion(id))
                 }
+                // Extend under the toolbar so rows scroll beneath it; the scroll
+                // view re-insets its content (automaticallyAdjustsContentInsets)
+                // and drives the toolbar's scroll-edge glass effect.
+                .ignoresSafeArea(.container, edges: .top)
             }
         }
+        .navigationTitle("Locations")
+        .navigationSubtitle(Text("^[\(forest.count) system](inflect: true)").monospacedDigit())
         .searchable(text: $store.searchText, placement: .sidebar, prompt: "Search systems")
         .toolbar { toolbarContent }
         .task { store.send(.task) }

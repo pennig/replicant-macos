@@ -29,7 +29,6 @@ public struct ActivityView: View {
                     .listRowSeparator(.hidden)
             }
         }
-        .listStyle(.inset)
         .overlay {
             if operations.isEmpty {
                 ContentUnavailableView(

@@ -397,6 +397,7 @@ public struct NewStarMapView: View {
         .animation(.easeInOut(duration: 0.22), value: store.activeFilterName)
         .animation(.easeInOut(duration: 0.4), value: store.bootPhase)
         .navigationTitle(navTitle)
+        .navigationSubtitle(store.focus == .galaxy ? Text("^[\(chartedStarCount) known star](inflect: true)") : Text(""))
         .sheet(
             isPresented: Binding(
                 get: { store.travelPreview != nil },
@@ -425,7 +426,6 @@ public struct NewStarMapView: View {
         ZStack {
             VStack(alignment: .leading, spacing: Space.m) {
                 GalaxyNavigator(
-                    chartedStarCount: chartedStarCount,
                     query: Binding(
                         get: { store.searchQuery },
                         set: { store.send(.searchQueryChanged($0)) }
@@ -565,12 +565,10 @@ public struct NewStarMapView: View {
 
 // MARK: - Galaxy navigator (header + search)
 
-/// The galaxy HUD's primary navigation lockup: the "Galaxy Explorer" title and
-/// charted-star count over a search field, in one glass card. Typing filters the
-/// charted catalog; picking a result (click or ↩ on the top hit) flies the camera
-/// to that star. Uses the design system's field styling (`rcField`) and focus ring.
+/// The galaxy HUD's primary navigation lockup: a search field  in one glass card.
+/// Typing filters the charted catalog; picking a result (click or ↩ on the top hit) flies
+/// the camera to that star. Uses the design system's field styling (`rcField`) and focus ring.
 private struct GalaxyNavigator: View {
-    let chartedStarCount: Int
     @Binding var query: String
     let results: [Star]
     let currentLocationID: String?
@@ -580,15 +578,6 @@ private struct GalaxyNavigator: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.s) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Galaxy Explorer")
-                    .font(.rcTitle)
-                    .foregroundStyle(.rcTextPrimary)
-                Text(chartedStarCount > 0 ? "\(chartedStarCount.formatted()) charted stars" : "Uncharted")
-                    .font(.rcCaption)
-                    .foregroundStyle(.rcTextTertiary)
-            }
-
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 12))

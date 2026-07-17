@@ -46,20 +46,13 @@ public struct PrintQueueListView: View {
             }
         }
         .navigationTitle("Print Queue")
+        .navigationSubtitle(store.printers.isEmpty ? Text("") : Text("^[\(store.printers.count) printer](inflect: true)").monospacedDigit())
         .safeAreaInset(edge: .top, spacing: 0) {
             if let errorMessage = store.errorMessage {
                 RCErrorBanner(errorMessage) { store.send(.dismissError) }
             }
         }
         .toolbar {
-            ToolbarItem {
-                if !store.printers.isEmpty {
-                    Text("^[\(store.printers.count) printer](inflect: true)")
-                        .font(.rcCaption)
-                        .foregroundStyle(.rcTextTertiary)
-                        .padding(.horizontal, Space.m)
-                }
-            }
             ToolbarItem {
                 Button {
                     store.send(.refreshButtonTapped)
@@ -95,8 +88,8 @@ private struct PrintQueueRow: View {
                         .font(.rcMonoSmall)
                         .foregroundStyle(.rcTextTertiary)
                     Spacer(minLength: Space.xs)
-                    if device.queueSize > 0 {
-                        queueBadge(device.queueSize)
+                    if device.queuedJobCount > 0 {
+                        queueBadge(device.queuedJobCount)
                     }
                 }
 

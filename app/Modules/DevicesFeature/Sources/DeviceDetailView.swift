@@ -79,11 +79,13 @@ public struct DeviceDetailView: View {
                     )
                 }
             } else {
+                ScrollView {
                 ContentUnavailableView(
                     "No Device Selected",
                     systemImage: SidebarSymbol.devices,
                     description: Text("Select a device to inspect it.")
                 )
+                }
             }
         }
         // Keep an in-place-refreshing device live while it's in view: a mining
@@ -209,7 +211,7 @@ public struct DeviceDetailView: View {
                 .font(.rcSectionLabel).kerning(1)
                 .foregroundStyle(.rcTextTertiary)
             detailRow("Replicant", device.replicantCode)
-            detailRow("Queue", "\(device.queueSize)")
+            detailRow("Queue capacity", "\(device.queueSize)")
             if let directive = device.currentDirective {
                 detailRow("Directive", DevicePresentation.displayName(directive))
             }

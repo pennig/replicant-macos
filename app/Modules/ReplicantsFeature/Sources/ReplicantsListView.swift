@@ -33,7 +33,8 @@ public struct ReplicantsListView: View {
                 SelectableSection(id: $0.id, title: $0.id, items: $0.replicants)
             },
             rowID: \.replicantCode,
-            style: .inline
+            style: .inline,
+            pinnedViews: [.sectionHeaders]
         ) { replicant, isSelected in
             ReplicantRow(replicant: replicant, isOwn: ownCodes.contains(replicant.replicantCode))
                 .rcSidebarRow(isSelected: isSelected)
@@ -55,6 +56,7 @@ public struct ReplicantsListView: View {
             }
         }
         .navigationTitle("Replicants")
+        .navigationSubtitle(Text("^[\(store.directory.count) known replicants](inflect: true)"))
         .searchable(text: $store.searchText, placement: .sidebar, prompt: "Search replicants")
         .safeAreaInset(edge: .top, spacing: 0) {
             if let errorMessage = store.errorMessage {
@@ -62,13 +64,6 @@ public struct ReplicantsListView: View {
             }
         }
         .toolbar {
-            ToolbarItem {
-                if !store.isDirectoryEmpty {
-                    Text("\(store.directory.count) known")
-                        .font(.rcCaption)
-                        .foregroundStyle(.rcTextTertiary)
-                }
-            }
             ToolbarItem {
                 Button {
                     store.send(.refreshButtonTapped)

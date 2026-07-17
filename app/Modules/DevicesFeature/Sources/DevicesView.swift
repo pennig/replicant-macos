@@ -45,20 +45,13 @@ public struct DevicesListView: View {
             }
         }
         .navigationTitle("Devices")
+        .navigationSubtitle(store.devices.isEmpty ? Text("") : Text("^[\(store.devices.count) device](inflect: true)"))
         .safeAreaInset(edge: .top, spacing: 0) {
             if let errorMessage = store.errorMessage {
                 RCErrorBanner(errorMessage) { store.send(.dismissError) }
             }
         }
         .toolbar {
-            ToolbarItem {
-                if !store.devices.isEmpty {
-                    Text("\(store.devices.count) devices")
-                        .font(.rcCaption)
-                        .foregroundStyle(.rcTextTertiary)
-                        .padding(.horizontal, Space.m)
-                }
-            }
             ToolbarItem {
                 Button {
                     store.send(.refreshButtonTapped)

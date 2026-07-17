@@ -239,7 +239,12 @@ struct LocationsOutlineView: NSViewRepresentable {
         scrollView.documentView = table
         scrollView.hasVerticalScroller = true
         scrollView.drawsBackground = false
-        scrollView.automaticallyAdjustsContentInsets = false
+        // Let the scroll view coordinate with the window chrome: it insets its
+        // content beneath the toolbar/titlebar and, on macOS 26, drives the
+        // toolbar's scroll-edge (glass) effect as rows pass under it. Paired with
+        // the outline view ignoring the top safe area in `LocationsListView` so
+        // content actually extends under the toolbar (matching a SwiftUI `List`).
+        scrollView.automaticallyAdjustsContentInsets = true
         return scrollView
     }
 

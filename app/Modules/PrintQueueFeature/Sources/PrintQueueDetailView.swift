@@ -219,7 +219,7 @@ public struct PrintQueueDetailView: View {
                     .font(.rcSectionLabel).kerning(1)
                     .foregroundStyle(.rcTextTertiary)
                 Spacer(minLength: 0)
-                if device.queueSize > 0 {
+                if !items.isEmpty {
                     Button(role: .destructive) {
                         store.send(.commandConfirmed(
                             kind: .simple("clear_queue"),
@@ -235,11 +235,7 @@ public struct PrintQueueDetailView: View {
             }
 
             if items.isEmpty {
-                // The server may report a queue count without per-item detail;
-                // reflect the count so the pane never reads as empty when it isn't.
-                Text(device.queueSize > 0
-                     ? "\(device.queueSize) job\(device.queueSize == 1 ? "" : "s") queued."
-                     : "No jobs queued.")
+                Text("No jobs queued.")
                     .font(.rcCaption)
                     .foregroundStyle(.rcTextTertiary)
                     .frame(maxWidth: .infinity, alignment: .leading)

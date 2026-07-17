@@ -103,12 +103,23 @@ import Utils
     }
 
     @Test func gateIncludesQueuedButIdlePrinter() {
-        let device = makeDevice(detail: .object([:]), features: ["print"], queueSize: 3)
+        // Jobs waiting in `print_queue`, no active print → included.
+        let queue = JSONValue.array([.object(["device_type": .string("mining_drone")])])
+        let device = makeDevice(detail: .object(["print_queue": queue]), features: ["print"])
         #expect(device.isPrintingOrQueued)
     }
 
     @Test func gateExcludesIdleEmptyPrinter() {
         let device = makeDevice(detail: .object([:]), features: ["print"], queueSize: 0)
+        #expect(device.isPrintingOrQueued == false)
+    }
+
+    // Regression: `queue_size` is the queue *capacity*, not the count of queued
+    // jobs. An idle autofactory advertises a capacity (e.g. 10) with an empty
+    // `print_queue`; it must not be treated as printing/queued.
+    @Test func gateExcludesIdlePrinterWithCapacityButNoJobs() {
+        let device = makeDevice(detail: .object([:]), features: ["print"], queueSize: 10)
+        #expect(device.queuedJobCount == 0)
         #expect(device.isPrintingOrQueued == false)
     }
 

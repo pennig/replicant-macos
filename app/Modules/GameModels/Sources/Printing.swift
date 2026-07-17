@@ -120,9 +120,9 @@ extension Device {
     }
 
     /// The jobs queued behind the active print, in order. Empty when the device
-    /// carries no `print_queue` array (or an empty one). The `queueSize` column
-    /// is the authoritative count; this parses whatever per-item detail the
-    /// server included.
+    /// carries no `print_queue` array (or an empty one). This is the authoritative
+    /// source for what's queued — the `queueSize` column is the queue *capacity*
+    /// (e.g. 10 for an idle autofactory), not the number of jobs waiting.
     public var printQueueItems: [PrintQueueItem] {
         guard let items = detail["print_queue"]?.arrayValue else { return [] }
         return items.enumerated().map { offset, item in
@@ -134,6 +134,11 @@ extension Device {
             )
         }
     }
+
+    /// The number of jobs actually waiting behind the active print — the length of
+    /// the `print_queue` array. Distinct from `queueSize`, which is the queue's
+    /// *capacity*.
+    public var queuedJobCount: Int { printQueueItems.count }
 
     /// Resources a queued print is still waiting on before it can start, parsed
     /// from the `waiting_for` object (`{resource: {need, have}}`). Empty when the
@@ -155,6 +160,6 @@ extension Device {
     /// actively printing or holding queued jobs. Idle printers with an empty queue
     /// are excluded.
     public var isPrintingOrQueued: Bool {
-        canPrint && (printingSnapshot != nil || queueSize > 0)
+        canPrint && (printingSnapshot != nil || queuedJobCount > 0)
     }
 }

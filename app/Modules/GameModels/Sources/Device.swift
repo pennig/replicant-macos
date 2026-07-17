@@ -34,6 +34,9 @@ public struct Device: Identifiable, Equatable, Sendable {
     public var location: String?
     public var locationName: String?
     public var operationalCapacity: Double
+    /// The print queue's *capacity* (`queue_size` on the wire) — e.g. 10 for an
+    /// autofactory — not the number of jobs waiting. For the count of queued jobs
+    /// use `queuedJobCount` (the length of the `print_queue` array in `detail`).
     public var queueSize: Int
     public var stowedInDeviceCode: String?
     public var controllerDeviceCode: String?

@@ -207,10 +207,11 @@ struct MainView: View {
                     sidebar  
                         .navigationSplitViewColumnWidth(min: 240, ideal: 240, max: 300)
                 } detail: {
-                    content
-                        .background(.rcWindowBackground)
+                    ZStack {
+                        Color.rcWindowBackground.ignoresSafeArea()
+                        content
+                    }
                 }
-                .navigationTitle("Replicant")
             } else {
                 NavigationSplitView {
                     sidebar
@@ -220,13 +221,11 @@ struct MainView: View {
                         .navigationSplitViewColumnWidth(min: 280, ideal: 320, max: 420)
                         .background(.rcWindowBackground)
                 } detail: {
-                    Group {
-                        detail
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(.rcContentBackground)
+                    detail
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(.rcContentBackground)
+                        .toolbar { Text("") } // force toolbar content to get the glass effect to appear above detail content (wtf).
                 }
-                .navigationTitle("Replicant")
             }
         }
         // The Account sheet (identity · settings · achievements), driven from the
