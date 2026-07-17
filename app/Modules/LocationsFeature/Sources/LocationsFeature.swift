@@ -45,6 +45,11 @@ public struct LocationsFeature {
         /// The roster, for the probe's current star (marks the "current system").
         @ObservationStateIgnored
         @FetchAll(Replicant.all) public var roster: [Replicant]
+        /// The live device roster, so the inspector can resolve the active
+        /// replicant's host vessel and gate the Travel / Scan System actions on its
+        /// features (`surge`, `system_scan`).
+        @ObservationStateIgnored
+        @FetchAll(Device.all) public var devices: [Device]
 
         /// Selected node designation (system or body).
         public var selection: String?
@@ -63,6 +68,11 @@ public struct LocationsFeature {
         public var hydrating: Set<String>
         /// True while a full scan of the current system is in flight.
         public var isScanning: Bool
+        /// A pending `travel` itinerary for the active replicant's host vessel,
+        /// shown as a dry-run confirmation sheet before the command is dispatched —
+        /// the same flow the star map dossier's Travel button drives. Non-nil ⇒
+        /// presented.
+        public var travelPreview: TravelPreview?
         public var errorMessage: String?
         /// The active replicant, used to scan its current system.
         @Shared(.appStorage(Account.activeReplicantCodeKey)) public var activeReplicantCode: String?
@@ -79,6 +89,7 @@ public struct LocationsFeature {
             self.expanded = []
             self.hydrating = []
             self.isScanning = false
+            self.travelPreview = nil
             self.errorMessage = nil
         }
 
@@ -91,6 +102,41 @@ public struct LocationsFeature {
         /// The probe's current star (the roster's first replicant), to mark the
         /// inspected system as the current one.
         public var currentStar: String? { roster.first?.currentStar }
+
+        /// The session's active replicant, preferring the stored selection and
+        /// falling back to the sole replicant on the roster — mirroring the star
+        /// map's host resolution so the inspector's Travel / Scan actions target the
+        /// same vessel.
+        public var activeReplicant: Replicant? {
+            roster.first { $0.replicantCode == activeReplicantCode }
+                ?? (roster.count == 1 ? roster.first : nil)
+        }
+
+        /// The active replicant's host device (its vessel), resolved from the live
+        /// roster via `hostedDeviceCode`. Nil when there's no active replicant or the
+        /// host isn't on the roster.
+        public var activeHostDevice: Device? {
+            guard let code = activeReplicant?.hostedDeviceCode else { return nil }
+            return devices.first { $0.deviceCode == code }
+        }
+
+        /// The active replicant's current-location *system*, used to gate the Scan
+        /// System action (which scans the whole current system).
+        public var activeCurrentStar: String? { activeReplicant?.currentStar }
+
+        /// The active replicant's exact current location (e.g. `SOL-3`), used to gate
+        /// the Travel action — offered for any location that isn't precisely where
+        /// the host already sits, so intra-system hops are travellable too.
+        public var activeCurrentLocation: String? { activeReplicant?.currentLocation }
+
+        /// Whether the host vessel can plot interstellar travel — carries the
+        /// `surge` feature. Gates the inspector's Travel button, matching the star
+        /// map dossier.
+        public var canSurge: Bool { activeHostDevice?.features.contains("surge") == true }
+
+        /// Whether the host vessel can scan its current system — carries the
+        /// `system_scan` feature. Gates the inspector's Scan System button.
+        public var canScanSystem: Bool { activeHostDevice?.features.contains("system_scan") == true }
 
         /// The system designation for the current selection (a system or one of its
         /// bodies).
@@ -120,12 +166,21 @@ public struct LocationsFeature {
         case scanRequested
         case scanFinished
         case scanFailed(String)
+        // Travel command preview flow, driven from the inspector's Travel button:
+        // request a dry-run plan for the active replicant's host vessel, receive it,
+        // then either confirm (dispatch for real) or dismiss the sheet. Mirrors the
+        // star map dossier's flow.
+        case travelRequested(deviceCode: String, destination: String)
+        case travelPreviewResponse(TravelPreviewOutcome)
+        case travelPreviewConfirmed
+        case travelPreviewDismissed
         case loadFailed(String)
         case dismissError
     }
 
     @Dependency(\.defaultDatabase) var database
     @Dependency(\.locationsClient) var locationsClient
+    @Dependency(\.commandClient) var commandClient
     @Dependency(\.date.now) var now
 
     public init() {}
@@ -273,6 +328,41 @@ public struct LocationsFeature {
             case let .scanFailed(message):
                 state.isScanning = false
                 state.errorMessage = message
+                return .none
+
+            case let .travelRequested(deviceCode, destination):
+                state.travelPreview = TravelPreview(deviceCode: deviceCode, destination: destination)
+                let commandClient = self.commandClient
+                return .run { send in
+                    await send(.travelPreviewResponse(commandClient.previewTravel(deviceCode, destination)))
+                }
+
+            case let .travelPreviewResponse(outcome):
+                // Ignore a late response if the user already dismissed the sheet.
+                guard state.travelPreview != nil else { return .none }
+                switch outcome {
+                case let .plan(plan):
+                    state.travelPreview?.phase = .loaded(plan)
+                case let .rejected(message), let .failed(message):
+                    state.travelPreview?.phase = .failed(message)
+                }
+                return .none
+
+            case .travelPreviewConfirmed:
+                guard let preview = state.travelPreview else { return .none }
+                state.travelPreview = nil
+                let commandClient = self.commandClient
+                let deviceCode = preview.deviceCode
+                let destination = preview.destination
+                // Fire-and-forget: the dispatched op surfaces via table observation
+                // (GameSync + reconciler drive it to completion), matching the star
+                // map and the Devices inspector.
+                return .run { _ in
+                    _ = await commandClient.dispatch(.travel, deviceCode, CommandParams(destination: destination))
+                }
+
+            case .travelPreviewDismissed:
+                state.travelPreview = nil
                 return .none
 
             case let .loadFailed(message):

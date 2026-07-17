@@ -374,11 +374,9 @@ public struct PrintQueueDetailView: View {
 /// (which is internal to the Devices feature) so this module can render device
 /// type names without a cross-feature dependency.
 enum PrintQueuePresentation {
-    /// "heaven_vessel" → "Heaven Vessel".
+    /// "heaven_vessel" → "HEAVEN Vessel". Delegates to the shared GameModels
+    /// helper so the special-casing rules live in one place.
     static func displayName(_ raw: String) -> String {
-        raw
-            .split(separator: "_")
-            .map { $0.prefix(1).uppercased() + $0.dropFirst() }
-            .joined(separator: " ")
+        BlueprintPresentation.displayName(raw)
     }
 }

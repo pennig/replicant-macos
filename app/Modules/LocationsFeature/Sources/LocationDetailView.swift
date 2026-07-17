@@ -9,9 +9,11 @@
 //
 
 import ComposableArchitecture
+import GameModels
 import GameServices
 import SQLiteData
 import SwiftUI
+import TravelUI
 import UI
 import UniverseModels
 
@@ -26,20 +28,15 @@ public struct LocationDetailView: View {
         Group {
             if let id = store.selection, let system = store.selectedSystem {
                 if id == system.designation {
-                    SystemInspector(
-                        system: system,
-                        isCurrentSystem: system.designation == store.currentStar,
-                        isScanning: store.isScanning,
-                        onScan: { store.send(.scanRequested) }
-                    )
+                    SystemInspector(system: system, accessory: topAccessory)
                 } else if let planet = system.planets.first(where: { $0.designation == id }) {
-                    PlanetInspector(planet: planet)
+                    PlanetInspector(planet: planet, accessory: topAccessory)
                 } else if let moon = system.planets.flatMap(\.moons).first(where: { $0.designation == id }) {
-                    MoonInspector(moon: moon)
+                    MoonInspector(moon: moon, accessory: topAccessory)
                 } else if let belt = system.belts.first(where: { $0.designation == id }) {
-                    BeltInspector(belt: belt)
+                    BeltInspector(belt: belt, accessory: topAccessory)
                 } else if let object = system.structures.first(where: { $0.designation == id }) {
-                    ObjectInspector(site: object)
+                    ObjectInspector(site: object, accessory: topAccessory)
                 } else {
                     hydratingOrEmpty
                 }
@@ -53,6 +50,67 @@ public struct LocationDetailView: View {
                 )
             }
         }
+        .sheet(
+            isPresented: Binding(
+                get: { store.travelPreview != nil },
+                set: { if !$0 { store.send(.travelPreviewDismissed) } }
+            )
+        ) {
+            TravelPlanSheet(
+                preview: store.travelPreview,
+                onConfirm: { store.send(.travelPreviewConfirmed) },
+                onDismiss: { store.send(.travelPreviewDismissed) }
+            )
+        }
+    }
+
+    /// The right-aligned actions shown across from the inspector's title. Travel is
+    /// offered for any location that isn't precisely the host's current one (if the
+    /// vessel can `surge`) — including intra-system hops; Scan System is offered
+    /// whenever the viewed location sits in the host's current system (if it can
+    /// `system_scan`). The two aren't mutually exclusive: when both apply, Scan
+    /// takes the secondary treatment and sits to the left of the primary Travel
+    /// button. Nil when neither applies.
+    private var topAccessory: AnyView? {
+        guard let selection = store.selection, !selection.isEmpty else { return nil }
+        let showScan = store.canScanSystem && store.selectedSystemID == store.activeCurrentStar
+        // A system node (`SOL`) is "current" whenever the host sits anywhere inside
+        // it, so its Travel button only shows for a different star system. A body
+        // (`SOL-3`) compares against the host's exact location, so intra-system hops
+        // stay travellable.
+        let viewingSystem = selection == store.selectedSystemID
+        let isCurrent = viewingSystem
+            ? selection == store.activeCurrentStar
+            : selection == store.activeCurrentLocation
+        let travelCode = store.canSurge && !isCurrent
+            ? store.activeHostDevice?.deviceCode : nil
+        guard showScan || travelCode != nil else { return nil }
+        return AnyView(
+            HStack(spacing: Space.s) {
+                if showScan {
+                    Button {
+                        store.send(.scanRequested)
+                    } label: {
+                        Label(store.isScanning ? "Scanning…" : "Scan System",
+                              systemImage: "dot.radiowaves.left.and.right")
+                    }
+                    // Secondary when Travel is alongside it, otherwise the lone
+                    // prominent action.
+                    .buttonStyle(RCButtonStyle(travelCode != nil ? .secondary : .primary))
+                    .disabled(store.isScanning)
+                    .help("Scan reveals shops, megastructures, and outer-system objects here.")
+                }
+                if let travelCode {
+                    Button {
+                        store.send(.travelRequested(deviceCode: travelCode, destination: selection))
+                    } label: {
+                        Label("Travel", systemImage: "location.north.line")
+                    }
+                    .buttonStyle(RCButtonStyle(.primary))
+                    .help("Plot a route to \(selection).")
+                }
+            }
+        )
     }
 
     @ViewBuilder
@@ -73,23 +131,11 @@ public struct LocationDetailView: View {
 
 private struct SystemInspector: View {
     let system: StarSystem
-    let isCurrentSystem: Bool
-    let isScanning: Bool
-    let onScan: () -> Void
+    let accessory: AnyView?
 
     var body: some View {
-        InspectorScroll(title: system.name ?? system.designation, code: system.designation, recon: system.recon) {
-            if isCurrentSystem {
-                Button(action: onScan) {
-                    Label(isScanning ? "Scanning…" : "Scan System", systemImage: "dot.radiowaves.left.and.right")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.rcAccent)
-                .disabled(isScanning)
-                .help("Scan reveals shops, megastructures, and outer-system objects here.")
-            }
-
+        InspectorScroll(title: system.name ?? system.designation, code: system.designation,
+                        recon: system.recon, accessory: accessory) {
             if let star = system.star {
                 RCReadoutCard("Star") {
                     Readout("Class", star.stellarClass ?? "—")
@@ -177,8 +223,10 @@ private struct SystemInspector: View {
 
 private struct PlanetInspector: View {
     let planet: Planet
+    let accessory: AnyView?
     var body: some View {
-        InspectorScroll(title: planet.name ?? planet.designation, code: planet.designation, recon: planet.recon) {
+        InspectorScroll(title: planet.name ?? planet.designation, code: planet.designation,
+                        recon: planet.recon, accessory: accessory) {
             RCReadoutCard("Planet") {
                 Readout("Type", (planet.type ?? "—") + (planet.typeEstimated ? " (est.)" : ""))
                 if let au = planet.orbitalDistanceAu { Readout("Orbit", String(format: "%.2f AU", au)) }
@@ -202,8 +250,10 @@ private struct PlanetInspector: View {
 
 private struct MoonInspector: View {
     let moon: Moon
+    let accessory: AnyView?
     var body: some View {
-        InspectorScroll(title: moon.name ?? moon.designation, code: moon.designation, recon: moon.recon) {
+        InspectorScroll(title: moon.name ?? moon.designation, code: moon.designation,
+                        recon: moon.recon, accessory: accessory) {
             RCReadoutCard("Moon") {
                 Readout("Type", moon.type ?? "—")
             }
@@ -216,8 +266,10 @@ private struct MoonInspector: View {
 
 private struct BeltInspector: View {
     let belt: Belt
+    let accessory: AnyView?
     var body: some View {
-        InspectorScroll(title: belt.designation, code: belt.designation, recon: .scanned) {
+        InspectorScroll(title: belt.designation, code: belt.designation,
+                        recon: .scanned, accessory: accessory) {
             RCReadoutCard("Belt") {
                 if let d = belt.density { Readout("Density", d.capitalized) }
                 if let inner = belt.innerRadiusAu, let outer = belt.outerRadiusAu {
@@ -247,8 +299,10 @@ private struct BeltInspector: View {
 
 private struct ObjectInspector: View {
     let site: SpecialSite
+    let accessory: AnyView?
     var body: some View {
-        InspectorScroll(title: site.title ?? site.name ?? site.designation, code: site.designation, recon: .scanned) {
+        InspectorScroll(title: site.title ?? site.name ?? site.designation, code: site.designation,
+                        recon: .scanned, accessory: accessory) {
             RCReadoutCard(site.kind.label) {
                 Readout("Type", (site.objectType ?? site.kind.rawValue)
                     .replacingOccurrences(of: "_", with: " ").capitalized)
@@ -358,17 +412,24 @@ private struct InspectorScroll<Content: View>: View {
     let title: String
     let code: String
     let recon: Recon
+    var accessory: AnyView? = nil
     @ViewBuilder let content: Content
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Space.l) {
-                VStack(alignment: .leading, spacing: Space.xs) {
-                    Text(title).font(.rcTitleMono).foregroundStyle(.rcTextPrimary)
-                    HStack(spacing: Space.s) {
-                        Text(code).font(.rcMono).foregroundStyle(.rcTextTertiary)
-                        ReconDot(recon: recon)
-                        Text(recon.label).font(.rcCaption).foregroundStyle(.rcTextTertiary)
+                HStack(alignment: .top, spacing: Space.m) {
+                    VStack(alignment: .leading, spacing: Space.xs) {
+                        Text(title).font(.rcTitleMono).foregroundStyle(.rcTextPrimary)
+                        HStack(spacing: Space.s) {
+                            Text(code).font(.rcMono).foregroundStyle(.rcTextTertiary)
+                            ReconDot(recon: recon)
+                            Text(recon.label).font(.rcCaption).foregroundStyle(.rcTextTertiary)
+                        }
+                    }
+                    if let accessory {
+                        Spacer(minLength: 0)
+                        accessory
                     }
                 }
                 content

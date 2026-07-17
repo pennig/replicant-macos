@@ -19,6 +19,9 @@ import UI
 public struct BlueprintDetailView: View {
     let store: StoreOf<BlueprintsFeature>
     @FetchAll(Blueprint.all) private var blueprints
+    /// The measured Print Cost lockup height, mirrored onto the Print Time lockup
+    /// so it renders as a square that matches the cost lockup's height.
+    @State private var costHeight: CGFloat = 0
 
     public init(store: StoreOf<BlueprintsFeature>) {
         self.store = store
@@ -35,7 +38,7 @@ public struct BlueprintDetailView: View {
                 VStack(alignment: .leading, spacing: Space.xl) {
                     header(blueprint)
                     description(blueprint)
-                    buildCost(blueprint)
+                    costAndTime(blueprint)
                     capabilities(blueprint)
                     capacities(blueprint)
                 }
@@ -90,34 +93,32 @@ public struct BlueprintDetailView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    // MARK: Build cost
+    // MARK: Cost & time
 
-    @ViewBuilder
-    private func buildCost(_ blueprint: Blueprint) -> some View {
-        let items = blueprint.resources.lineItems
-        Section(label: "Build Cost") {
-            VStack(alignment: .leading, spacing: Space.m) {
-                if items.isEmpty {
-                    Text("No listed resource cost.")
-                        .font(.rcBody)
-                        .foregroundStyle(.rcTextTertiary)
-                } else {
-                    let maxAmount = items.map(\.amount).max() ?? 1
-                    ForEach(items, id: \.label) { item in
-                        ResourceBar(label: item.label, amount: item.amount, maxAmount: maxAmount)
-                    }
-                }
-                Divider().overlay(.rcSeparator)
-                HStack {
-                    Label("Print time", systemImage: "clock")
-                        .font(.rcBody)
-                        .foregroundStyle(.rcTextSecondary)
-                    Spacer()
-                    Text(BlueprintPresentation.printTimeText(blueprint.printTime))
-                        .font(.rcMono)
-                        .foregroundStyle(.rcTextPrimary)
-                }
+    /// The cost/time band: a Print Cost lockup (keyed legend + logarithmic radar)
+    /// that fills the available width — stretching the category-name column — and a
+    /// square Print Time lockup, sized to the cost lockup's measured height.
+    private func costAndTime(_ blueprint: Blueprint) -> some View {
+        HStack(alignment: .top, spacing: Space.m) {
+            PrintCostLockup(
+                resources: blueprint.resources,
+                // A single scale across every resource of every blueprint, so a
+                // 1,500 cost always plots smaller than a 3,000 one regardless of
+                // which resource each happens to be.
+                scaleMax: ResourceCost.overallMaximum(across: blueprints.map(\.resources))
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .onGeometryChange(for: CGFloat.self) { proxy in
+                proxy.size.height
+            } action: { height in
+                costHeight = height
             }
+
+            PrintTimeLockup(
+                printTime: blueprint.printTime,
+                maxPrintTime: blueprints.map(\.printTime).max() ?? 0
+            )
+            .frame(width: costHeight, height: costHeight)
         }
     }
 
@@ -189,34 +190,6 @@ private struct Section<Content: View>: View {
             content
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-// MARK: - Resource bar
-
-private struct ResourceBar: View {
-    let label: String
-    let amount: Int
-    let maxAmount: Int
-
-    var body: some View {
-        HStack(spacing: Space.m) {
-            Text(label)
-                .font(.rcBody)
-                .foregroundStyle(.rcTextSecondary)
-                .frame(width: 88, alignment: .leading)
-            RCMeterBar(fraction: Double(fraction), height: 6)
-            Text("\(amount)")
-                .font(.rcMono)
-                .foregroundStyle(.rcTextPrimary)
-                .frame(width: 52, alignment: .trailing)
-                .monospacedDigit()
-        }
-    }
-
-    private var fraction: CGFloat {
-        guard maxAmount > 0 else { return 0 }
-        return CGFloat(amount) / CGFloat(maxAmount)
     }
 }
 
@@ -305,5 +278,5 @@ private struct FlowLayout: Layout {
             BlueprintsFeature()
         }
     )
-    .frame(width: 480, height: 720)
+    .frame(width: 640, height: 760)
 }

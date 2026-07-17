@@ -858,13 +858,10 @@ private struct ShipDossier: View {
     let onViewDevice: () -> Void
     let onClose: () -> Void
 
-    /// "heaven_vessel" → "Heaven Vessel" (local — `DevicePresentation` lives in the
-    /// Devices feature and isn't importable here).
+    /// "heaven_vessel" → "HEAVEN Vessel" via the shared GameModels helper, so the
+    /// special-casing rules live in one place.
     private var typeName: String {
-        device.deviceType
-            .split(separator: "_")
-            .map { $0.prefix(1).uppercased() + $0.dropFirst() }
-            .joined(separator: " ")
+        BlueprintPresentation.displayName(device.deviceType)
     }
 
     var body: some View {

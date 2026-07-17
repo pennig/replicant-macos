@@ -223,6 +223,7 @@ struct MainView: View {
                 } detail: {
                     detail
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .navigationSplitViewColumnWidth(min: 600, ideal: 720, max: .infinity)
                         .background(.rcContentBackground)
                         .toolbar { Text("") } // force toolbar content to get the glass effect to appear above detail content (wtf).
                 }

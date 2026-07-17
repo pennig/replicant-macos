@@ -234,6 +234,14 @@ public enum TileSize {
     public static let large: CGFloat = 52
 }
 
+/// Standard control dimensions. `height` pins non-text buttons to one consistent
+/// height so variance in label content (e.g. differing SF Symbol glyph heights)
+/// can't make otherwise-identical buttons render at different heights. Consumed by
+/// `RCButtonStyle`.
+public enum Control {
+    public static let height: CGFloat = 34
+}
+
 public extension Font {
     static let rcTitle        = Font.system(size: 20, weight: .bold)            // inspector / list title
     static let rcHeadline     = Font.system(size: 15, weight: .semibold)
@@ -269,7 +277,9 @@ public struct StatusBadge: View {
             Circle().fill(tone.color).frame(width: 6, height: 6)
                 .shadow(color: tone.color.opacity(0.6), radius: 3)
             Text(text).font(.rcCaption).foregroundStyle(tone.color)
+                .lineLimit(1)
         }
+        .fixedSize(horizontal: true, vertical: false)
         .padding(.vertical, 3).padding(.horizontal, 8)
         .background(Capsule().fill(tone.color.opacity(0.12)))
         .overlay(Capsule().stroke(tone.color.opacity(0.4), lineWidth: 0.5))

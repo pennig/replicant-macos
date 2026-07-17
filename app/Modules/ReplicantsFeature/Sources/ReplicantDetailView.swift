@@ -300,11 +300,9 @@ public struct ReplicantDetailView: View {
 
 /// View-side display helpers for the Replicants feature.
 enum ReplicantPresentation {
-    /// "mining_drone" → "Mining Drone".
+    /// "mining_drone" → "Mining Drone". Delegates to the shared GameModels helper
+    /// so the special-casing rules live in one place.
     static func displayName(_ raw: String) -> String {
-        raw
-            .split(separator: "_")
-            .map { $0.prefix(1).uppercased() + $0.dropFirst() }
-            .joined(separator: " ")
+        BlueprintPresentation.displayName(raw)
     }
 }

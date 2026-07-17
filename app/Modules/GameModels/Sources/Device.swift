@@ -305,6 +305,35 @@ extension Device {
     }
 }
 
+// MARK: - Stowage
+
+extension Device {
+    /// How many devices this device can hold stowed at once (`stow_capacity`), from
+    /// the variable tail. 0 when the field is absent (the device can't stow).
+    public var stowCapacity: Int {
+        detail["stow_capacity"]?.numberValue.map(Int.init) ?? 0
+    }
+
+    /// How many stow slots are currently occupied (`stow_used`), from the variable
+    /// tail. Falls back to the count of `stowed_devices` when the field is absent.
+    public var stowUsed: Int {
+        detail["stow_used"]?.numberValue.map(Int.init) ?? stowedDeviceCodes.count
+    }
+
+    /// The stow slots still free — capacity minus used, never negative.
+    public var stowRemaining: Int { max(0, stowCapacity - stowUsed) }
+
+    /// The codes of the devices currently stowed in this device (`stowed_devices`),
+    /// from the variable tail. Entries may be bare codes or `{device_code, …}`
+    /// objects (like `attached_devices`); both are handled. Empty when none are
+    /// stowed or the field is absent.
+    public var stowedDeviceCodes: [String] {
+        detail["stowed_devices"]?.arrayValue?.compactMap {
+            $0["device_code"]?.stringValue ?? $0.stringValue
+        } ?? []
+    }
+}
+
 // MARK: - Operation completion signals
 
 extension Device {

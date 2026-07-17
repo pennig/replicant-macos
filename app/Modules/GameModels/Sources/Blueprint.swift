@@ -127,6 +127,46 @@ public struct ResourceCost: Codable, Equatable, Sendable {
             ("Volatiles", volatiles),
         ].filter { $0.amount > 0 }
     }
+
+    /// The canonical six-resource ordering used by the radar chart and its keyed
+    /// legend — every axis, always present (a zero cost plots at the centre). The
+    /// order matches `lineItems` so the two readouts read consistently. Each
+    /// resource carries a periodic-table-style abbreviation used to tie a radar
+    /// vertex back to its legend row.
+    public static let displayOrder: [(key: String, label: String, abbr: String)] = [
+        ("structural", "Structural", "St"),
+        ("conductive", "Conductive", "Co"),
+        ("silicates", "Silicates", "Si"),
+        ("carbon", "Carbon", "C"),
+        ("rares", "Rares", "R"),
+        ("volatiles", "Volatiles", "V"),
+    ]
+
+    /// The cost for a canonical resource key (`structural`, `conductive`, …).
+    public func amount(for key: String) -> Int {
+        switch key {
+        case "structural": return structural
+        case "conductive": return conductive
+        case "silicates":  return silicates
+        case "carbon":     return carbon
+        case "rares":      return rares
+        case "volatiles":  return volatiles
+        default:           return 0
+        }
+    }
+
+    /// All six costs in `displayOrder` — the radar's per-axis values and the
+    /// keyed legend rows (zeros included).
+    public var orderedItems: [(key: String, label: String, abbr: String, amount: Int)] {
+        ResourceCost.displayOrder.map { ($0.key, $0.label, $0.abbr, amount(for: $0.key)) }
+    }
+
+    /// The single largest cost across every resource of every supplied blueprint
+    /// — the shared scale for all radar axes, so a 1,500 cost always plots
+    /// smaller than a 3,000 one regardless of which resource each is.
+    public static func overallMaximum(across costs: [ResourceCost]) -> Int {
+        costs.flatMap { cost in displayOrder.map { cost.amount(for: $0.key) } }.max() ?? 0
+    }
 }
 
 // MARK: - Mapping

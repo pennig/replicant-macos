@@ -267,6 +267,7 @@ let package = Package(
             dependencies: [
                 "GameModels",
                 "GameServices",
+                "TravelUI",
                 "UI",
                 "UniverseModels",
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
