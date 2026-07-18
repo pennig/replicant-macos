@@ -25,7 +25,7 @@ public struct LocationEventDetailView: View {
             if let event = store.selectedEvent {
                 QuestSheet(event: event)
             } else {
-                ContentUnavailableView(
+                RCContentUnavailableView(
                     "No Event Selected",
                     systemImage: "flag",
                     description: Text("Select an event to see its objectives and rewards.")

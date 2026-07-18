@@ -680,6 +680,51 @@ public struct RCReadoutCard<Content: View>: View {
     }
 }
 
+// MARK: - Content-unavailable placeholder (empty / no-selection / invalid states)
+
+/// A `ContentUnavailableView` wrapped so it reads correctly beneath a pane's
+/// toolbar: vertically centered and full-width inside a `ScrollView`, so a
+/// split-view pane's empty, no-selection, and invalid-selection states don't
+/// crowd the toolbar above them. Initialize it with the same arguments as
+/// `ContentUnavailableView` — a title (string or `LocalizedStringKey`) plus an
+/// `image` / `systemImage` and optional `description`, or a trailing closure for
+/// the `label` / `description` / `actions` builder form.
+public struct RCContentUnavailableView: View {
+    private let content: AnyView
+
+    /// Wrap an arbitrary `ContentUnavailableView` (e.g. the
+    /// `label` / `description` / `actions` builder form).
+    public init<Content: View>(@ViewBuilder content: () -> Content) {
+        self.content = AnyView(content())
+    }
+
+    public var body: some View {
+        ScrollView {
+            content
+                .frame(maxWidth: .infinity)
+                .containerRelativeFrame(.vertical)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+// Convenience initializers mirroring `ContentUnavailableView`'s title + image
+// forms, so call sites read identically to the standard view.
+public extension RCContentUnavailableView {
+    init<S: StringProtocol>(_ title: S, systemImage: String, description: Text? = nil) {
+        self.init { ContentUnavailableView(title, systemImage: systemImage, description: description) }
+    }
+    init<S: StringProtocol>(_ title: S, image: String, description: Text? = nil) {
+        self.init { ContentUnavailableView(title, image: image, description: description) }
+    }
+    init(_ title: LocalizedStringKey, systemImage: String, description: Text? = nil) {
+        self.init { ContentUnavailableView(title, systemImage: systemImage, description: description) }
+    }
+    init(_ title: LocalizedStringKey, image: String, description: Text? = nil) {
+        self.init { ContentUnavailableView(title, image: image, description: description) }
+    }
+}
+
 // MARK: - Pill badge (compact inline capsule)
 
 public enum RCPillTone { case accent, neutral }

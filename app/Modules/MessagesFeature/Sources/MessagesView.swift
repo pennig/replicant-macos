@@ -160,7 +160,7 @@ public struct MessageDetailView: View {
             .background(.rcContentBackground)
             .navigationTitle(message.title)
         } else {
-            ContentUnavailableView(
+            RCContentUnavailableView(
                 "No Message Selected",
                 systemImage: "envelope",
                 description: Text("Select a message to read it.")

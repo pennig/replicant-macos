@@ -43,7 +43,7 @@ public struct LocationDetailView: View {
             } else if store.selection != nil {
                 hydratingOrEmpty
             } else {
-                ContentUnavailableView(
+                RCContentUnavailableView(
                     "No Location Selected",
                     systemImage: "globe.americas",
                     description: Text("Select a system or body to inspect it.")
@@ -118,7 +118,7 @@ public struct LocationDetailView: View {
         if let id = store.selectedSystemID, store.hydrating.contains(id) {
             ProgressView("Scanning \(id)…").controlSize(.small)
         } else {
-            ContentUnavailableView(
+            RCContentUnavailableView(
                 "Uncharted",
                 systemImage: "sparkles",
                 description: Text("Travel to this system and scan it to reveal its bodies.")

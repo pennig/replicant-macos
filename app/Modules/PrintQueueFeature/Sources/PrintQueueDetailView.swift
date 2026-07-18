@@ -58,7 +58,7 @@ public struct PrintQueueDetailView: View {
                     )
                 }
             } else {
-                ContentUnavailableView(
+                RCContentUnavailableView(
                     "No Printer Selected",
                     systemImage: "printer",
                     description: Text("Select a printer to inspect its job and queue.")

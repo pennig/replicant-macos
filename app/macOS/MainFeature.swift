@@ -328,7 +328,7 @@ struct MainView: View {
                 .navigationTitle(category.title)
             }
         } else {
-            ContentUnavailableView("Nothing Selected", systemImage: "sidebar.left")
+            RCContentUnavailableView("Nothing Selected", systemImage: "sidebar.left")
         }
     }
 
@@ -358,7 +358,7 @@ struct MainView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .navigationTitle(selection)
         } else {
-            ContentUnavailableView("No Selection", systemImage: "square.dashed")
+            RCContentUnavailableView("No Selection", systemImage: "square.dashed")
         }
     }
 }

@@ -52,7 +52,7 @@ public struct ReplicantDetailView: View {
                     }
                 }
             } else {
-                ContentUnavailableView(
+                RCContentUnavailableView(
                     "No Replicant Selected",
                     systemImage: SidebarSymbol.replicants,
                     description: Text("Select a replicant to inspect it.")

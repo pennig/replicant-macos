@@ -82,16 +82,11 @@ public struct DeviceDetailView: View {
                     )
                 }
             } else {
-                ScrollView {
-                    ContentUnavailableView(
-                        "No Device Selected",
-                        systemImage: SidebarSymbol.devices,
-                        description: Text("Select a device to inspect it.")
-                    )
-                    .frame(maxWidth: .infinity)
-                    .containerRelativeFrame(.vertical)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                RCContentUnavailableView(
+                    "No Device Selected",
+                    systemImage: SidebarSymbol.devices,
+                    description: Text("Select a device to inspect it.")
+                )
             }
         }
         // Keep an in-place-refreshing device live while it's in view: a mining

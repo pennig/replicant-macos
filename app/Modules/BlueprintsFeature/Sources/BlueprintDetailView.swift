@@ -47,7 +47,7 @@ public struct BlueprintDetailView: View {
             }
             .navigationTitle(BlueprintPresentation.displayName(blueprint.deviceType))
         } else {
-            ContentUnavailableView(
+            RCContentUnavailableView(
                 "No Blueprint Selected",
                 systemImage: SidebarSymbol.blueprints,
                 description: Text("Select a blueprint to inspect it.")
