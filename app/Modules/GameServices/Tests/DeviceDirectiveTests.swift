@@ -48,6 +48,54 @@ import Utils
         #expect(device.currentDirectiveConfig?["recall"]?.boolValue == true)
     }
 
+    /// A transport controller advertises its four directives, and an in-force
+    /// `delivery` carries a nested `route` object plus a per-resource
+    /// `requirement` — the shape the inspector's delivery config reads and writes.
+    @Test func parsesTransportDeliveryDirective() {
+        let device = device(type: "ami_transport_controller", detail: .object([
+            "available_directives": .array([
+                .string("delivery"), .string("ferry"), .string("shuttle"), .string("consolidate"),
+            ]),
+            "ami_directive": .object([
+                "name": .string("delivery"),
+                "config": .object([
+                    "route": .object([
+                        "collect": .string("ATIANFU-BELT-1"),
+                        "deliver": .string("ALPHERATOZ-8-L4"),
+                    ]),
+                    "requirement": .object(["carbon": .number(50), "silicates": .number(100)]),
+                ]),
+            ]),
+        ]))
+        #expect(device.availableDirectives == ["delivery", "ferry", "shuttle", "consolidate"])
+        #expect(device.currentDirective == "delivery")
+        let config = device.currentDirectiveConfig
+        #expect(config?["route"]?["collect"]?.stringValue == "ATIANFU-BELT-1")
+        #expect(config?["route"]?["deliver"]?.stringValue == "ALPHERATOZ-8-L4")
+        #expect(config?["requirement"]?["carbon"]?.numberValue == 50)
+        #expect(config?["requirement"]?["silicates"]?.numberValue == 100)
+    }
+
+    /// A continuous transport directive (`shuttle`/`ferry`) carries flat
+    /// `collect`/`deliver` endpoints and an ordered `priority` array.
+    @Test func parsesTransportShuttleDirective() {
+        let device = device(type: "ami_transport_controller", detail: .object([
+            "ami_directive": .object([
+                "name": .string("shuttle"),
+                "config": .object([
+                    "collect": .string("SOL-BELT-1"),
+                    "deliver": .string("SOL-3-L4"),
+                    "priority": .array([.string("carbon"), .string("rares")]),
+                ]),
+            ]),
+        ]))
+        #expect(device.currentDirective == "shuttle")
+        let config = device.currentDirectiveConfig
+        #expect(config?["collect"]?.stringValue == "SOL-BELT-1")
+        #expect(config?["deliver"]?.stringValue == "SOL-3-L4")
+        #expect(config?["priority"]?.arrayValue?.compactMap(\.stringValue) == ["carbon", "rares"])
+    }
+
     /// A device with no directive tail reports an empty vocabulary and nil current —
     /// so the inspector hides the `set_directive` command rather than showing an
     /// empty picker.

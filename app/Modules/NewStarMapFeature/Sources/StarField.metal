@@ -119,6 +119,60 @@ fragment float4 ambient_fragment(AmbientVaryings in [[stage_in]],
     return float4(in.color.rgb * (in.color.a * a), 1.0);
 }
 
+// ---------------------------------------------------------------------------
+// Nebulae — the reworked interstellar clouds (NebulaField.swift). Unlike the
+// ambient point sprites above (fixed pixel size → reads as dots), each puff is a
+// WORLD-SPACE billboard: its radius is in light-years, so it projects with depth
+// and parallaxes as a real volume, and hundreds overlapping read as diffuse gas.
+// Additive into the same HDR target, behind everything (no depth). It recedes +
+// fades with a system drill-in from the shared `Uniforms`, exactly like the field.
+// ---------------------------------------------------------------------------
+
+struct NebulaVaryings {
+    float4 position [[position]];
+    float2 uv;                           // [-1,1] across the sprite, for the falloff
+    float4 color;                        // rgb = tint, a = opacity (already field-faded)
+};
+
+vertex NebulaVaryings nebula_vertex(uint vid                       [[vertex_id]],
+                                    uint iid                       [[instance_id]],
+                                    const device NebulaPuff*       puffs [[buffer(0)]],
+                                    constant Uniforms&             u     [[buffer(1)]],
+                                    constant NebulaRenderParams&   np    [[buffer(2)]])
+{
+    NebulaPuff m = puffs[iid];
+
+    // The nebulae are a fixed distant backdrop: unlike the star field they do NOT
+    // recede/shrink on a system drill-in (they're the far sky, not local geometry).
+    // They only fade with the galaxy via `fieldDim`.
+    float4 viewPos = u.view * float4(m.positionSize.xyz, 1.0);
+    float2 c = kCorners[vid];
+    float r = m.positionSize.w * np.sizeScale;
+    viewPos.xy += c * r;
+
+    NebulaVaryings out;
+    out.position = u.projection * viewPos;
+    out.uv = c;
+    out.color = float4(m.color.rgb, m.color.a * u.fieldDim);   // fade with the galaxy
+    return out;
+}
+
+fragment float4 nebula_fragment(NebulaVaryings in            [[stage_in]],
+                                constant NebulaRenderParams& np [[buffer(0)]])
+{
+    float d = length(in.uv);
+    float soft = max(np.softness, 0.1);
+    float body = pow(saturate(1.0 - d), soft);
+    float core = pow(saturate(1.0 - d), soft * 4.0) * np.coreBoost;
+    float alpha = in.color.a * np.brightness * (body + core);
+
+    float3 rgb = in.color.rgb;
+    float luma = dot(rgb, float3(0.2126, 0.7152, 0.0722));
+    rgb = mix(float3(luma), rgb, np.saturation);
+
+    return float4(rgb * alpha, 1.0);   // premultiplied for pure-additive blend
+}
+
 // Sphere radius within the sprite quad — the disc fills this, the flares live in
 // the annulus beyond it. Shared by the glow, flare, and body passes so they agree.
 constant float kDiscEdge = 0.798;

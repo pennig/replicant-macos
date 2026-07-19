@@ -37,6 +37,13 @@ public struct LocationDetailView: View {
                     BeltInspector(belt: belt, accessory: topAccessory)
                 } else if let object = system.structures.first(where: { $0.designation == id }) {
                     ObjectInspector(site: object, accessory: topAccessory)
+                } else if let n = LocationTree.lPointNumber(id),
+                          let planet = system.planets.first(where: { id == "\($0.designation)-L\(n)" }) {
+                    LagrangeInspector(
+                        designation: id, point: n, planet: planet,
+                        site: planet.lagrange.first { $0.designation == id },
+                        accessory: topAccessory
+                    )
                 } else {
                     hydratingOrEmpty
                 }
@@ -326,6 +333,31 @@ private struct ObjectInspector: View {
                 }
             }
             InventoryCard(site.inventory)
+        }
+    }
+}
+
+/// A planet's Lagrange point. Renders from the synthesized designation alone (so
+/// it works before hydration and stays a valid travel target); a hydrated
+/// `SpecialSite` fills in the orbital distance and any stored inventory.
+private struct LagrangeInspector: View {
+    let designation: String
+    let point: Int
+    let planet: Planet
+    let site: SpecialSite?
+    let accessory: AnyView?
+    var body: some View {
+        InspectorScroll(title: "L\(point)", code: designation,
+                        recon: site != nil ? .scanned : .aware, accessory: accessory) {
+            RCReadoutCard("Lagrange Point") {
+                Readout("Point", "L\(point)")
+                Readout("Stability", (point == 4 || point == 5) ? "Stable" : "Unstable")
+                Readout("Parent", planet.designation, mono: true)
+                if let au = site?.orbitalDistanceAu ?? planet.orbitalDistanceAu {
+                    Readout("Orbit", String(format: "%.2f AU", au))
+                }
+            }
+            InventoryCard(site?.inventory ?? [])
         }
     }
 }

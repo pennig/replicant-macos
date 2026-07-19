@@ -6,9 +6,11 @@
 //  persisted census (`Star`, all charted systems), the hydrated `StarSystem`
 //  blobs (explored systems), and the `LocationFootprint` holdings overlay.
 //
-//  The tree is three levels — system → (belts + planets) → moons — matching the
-//  sidebar spec. Resource/salvage sites, shops, lagrange points and events do
-//  NOT appear as rows; they bubble up into the detail pane instead.
+//  The tree is three levels — system → (belts + planets) → (moons + lagrange
+//  points) — matching the sidebar spec. A planet lists its moons followed by its
+//  five Lagrange points (valid travel destinations that can hold inventory and
+//  devices). Resource/salvage sites, shops and events do NOT appear as rows; they
+//  bubble up into the detail pane instead.
 //
 //  Pure value types + pure builders so filter/sort/assembly are unit-testable.
 //
@@ -53,15 +55,16 @@ public enum LocationFilter: String, CaseIterable, Sendable, Identifiable {
 // MARK: - Node
 
 public enum LocationKind: String, Equatable, Sendable {
-    case system, belt, planet, moon, object
+    case system, belt, planet, moon, object, lagrange
 
     public var symbol: String {
         switch self {
-        case .system: "sparkles"
-        case .belt:   "circle.dotted"
-        case .planet: "globe.americas"
-        case .moon:   "moon"
-        case .object: "cube.transparent"
+        case .system:   "sparkles"
+        case .belt:     "circle.dotted"
+        case .planet:   "globe.americas"
+        case .moon:     "moon"
+        case .object:   "cube.transparent"
+        case .lagrange: "scope"
         }
     }
 }
@@ -227,10 +230,23 @@ public enum LocationTree {
     }
 
     static func planetNode(_ p: Planet, _ footprints: [String: LocationCounts]) -> LocationNode {
-        // A planet's badges reflect it *and* its moons, so sites/salvage/devices/
-        // inventory held on a moon still flag the planet row while it's collapsed.
-        let inventory = p.inventory + p.moons.flatMap(\.inventory)
-        let devices = p.devices.count + p.moons.reduce(0) { $0 + $1.devices.count }
+        // A planet's badges reflect it *and* its moons and Lagrange points, so
+        // sites/salvage/devices/inventory held beneath it still flag the planet row
+        // while it's collapsed.
+        let inventory = p.inventory + p.moons.flatMap(\.inventory) + p.lagrange.flatMap(\.inventory)
+        let devices = p.devices.count
+            + p.moons.reduce(0) { $0 + $1.devices.count }
+            + p.lagrange.reduce(0) { $0 + $1.devices.count }
+        // Moons first, then the five Lagrange points. Every planet has L1–L5 with
+        // deterministic designations (`SYSTEM-n-L[1-5]`); any hydrated detail
+        // (holdings, stationed devices) overlays by designation.
+        let children = p.moons.map { moonNode($0, footprints) }
+            + (1...5).map { n -> LocationNode in
+                let code = "\(p.designation)-L\(n)"
+                return lagrangeNode(code: code, point: n,
+                                    hydrated: p.lagrange.first { $0.designation == code },
+                                    footprints)
+            }
         return LocationNode(
             id: p.designation,
             kind: .planet,
@@ -242,7 +258,27 @@ public enum LocationTree {
                 sites: p.allResourceSites.count, salvage: p.allSalvageSites.count, devices: devices,
                 hasInventory: hasInventory(p.designation, own: inventory, footprints: footprints, includeDescendants: true)
             ),
-            children: p.moons.isEmpty ? nil : p.moons.map { moonNode($0, footprints) }
+            children: children
+        )
+    }
+
+    /// A planet's Lagrange point row. Synthesized for every planet (L1–L5); a
+    /// `hydrated` `SpecialSite` supplies stationed-device and inventory badges once
+    /// its per-location detail has been fetched. L4/L5 are the stable points.
+    static func lagrangeNode(
+        code: String, point: Int, hydrated: SpecialSite?, _ footprints: [String: LocationCounts]
+    ) -> LocationNode {
+        LocationNode(
+            id: code,
+            kind: .lagrange,
+            title: "L\(point)",
+            subtitle: (point == 4 || point == 5) ? "Lagrange point · stable" : "Lagrange point",
+            recon: hydrated != nil ? .scanned : .aware,
+            badges: bodyBadges(
+                sites: 0, salvage: 0, devices: hydrated?.devices.count ?? 0,
+                hasInventory: hasInventory(code, own: hydrated?.inventory ?? [],
+                                           footprints: footprints, includeDescendants: false)
+            )
         )
     }
 
@@ -352,6 +388,16 @@ public enum LocationTree {
             parts.append("\(system.planets.count) planets")
         }
         return parts.joined(separator: " · ")
+    }
+
+    /// The L-number (1…5) of a Lagrange designation whose last segment is `L[1-5]`
+    /// (`SOL-5-L4` → 4). Nil when the tail isn't a recognized Lagrange marker — the
+    /// detail pane uses it to resolve a selected Lagrange point back to its planet.
+    public static func lPointNumber(_ designation: String) -> Int? {
+        guard let last = designation.split(separator: "-").last,
+              last.first == "L", let n = Int(last.dropFirst()), (1...5).contains(n)
+        else { return nil }
+        return n
     }
 
     // MARK: Sort keys

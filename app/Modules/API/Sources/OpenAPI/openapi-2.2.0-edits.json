@@ -2406,12 +2406,20 @@
           "ami_directive_status": {
             "type": "string"
           },
+          "controller": {
+            "type": "object",
+            "additionalProperties": {}
+          },
           "controlled_devices": {
             "type": "array",
             "items": {
               "type": "object",
               "additionalProperties": {}
             }
+          },
+          "assigned_devices": {
+            "type": "object",
+            "additionalProperties": {}
           },
           "attached_devices": {
             "type": "array",

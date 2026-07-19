@@ -28,6 +28,51 @@ typedef struct {
     simd_float4 color;
 } AmbientVertex;
 
+// One soft "puff" of a nebula cloud — a WORLD-SPACE billboard (unlike AmbientVertex,
+// whose w is a fixed pixel size). Because its radius is in world units it projects
+// with depth and parallaxes as a real volume; many overlapping puffs read as diffuse
+// gas. The cloud's SHAPE comes from how the puffs are distributed (see NebulaField),
+// not from the individual sprite. Used by the nebula playground (NebulaPlayground.swift);
+// the tuned generator is meant to feed the live ambient field once dialed in.
+typedef struct {
+    simd_float4 positionSize;   // xyz = world position, w = world-space radius (ly)
+    simd_float4 color;          // rgb = tint, a = per-puff opacity (pre-accumulation)
+} NebulaPuff;
+
+// Live render knobs for the nebula playground — the camera plus the per-frame shader
+// controls the sliders drive. Generation-side knobs (counts, shapes, star-avoidance)
+// live in Swift (NebulaConfig) because they need a CPU rebuild; these are the free,
+// per-frame render controls. Scalars kept a multiple of four for 16-byte alignment.
+typedef struct {
+    simd_float4x4 view;
+    simd_float4x4 projection;
+
+    float sizeScale;    // global puff size multiplier
+    float brightness;   // global opacity multiplier
+    float softness;     // radial falloff exponent (higher = softer, wispier edges)
+    float exposure;     // HDR tone-map exposure
+
+    float saturation;   // color saturation (1 = as generated)
+    float coreBoost;    // extra brightness at each puff's dense center
+    float time;         // seconds (reserved: slow drift)
+    float _pad0;
+} NebulaUniforms;
+
+// Live render knobs for the nebula pass in the REAL star map (StarFieldRenderer),
+// where the camera comes from the shared `Uniforms` (so nebulae recede + fade with a
+// system drill-in) and only these per-frame scalars need their own buffer. Mirrors the
+// render half of `NebulaUniforms`. Kept a multiple of four for 16-byte alignment.
+typedef struct {
+    float sizeScale;    // global puff size multiplier
+    float brightness;   // global opacity multiplier
+    float softness;     // radial falloff exponent (higher = softer, wispier edges)
+    float saturation;   // color saturation (1 = as generated)
+    float coreBoost;    // extra brightness at each puff's dense center
+    float _pad0;
+    float _pad1;
+    float _pad2;
+} NebulaRenderParams;
+
 // Frame uniforms.
 typedef struct {
     simd_float4x4 view;

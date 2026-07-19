@@ -521,7 +521,7 @@ extension RawLocation {
             return .special(SpecialSite(
                 designation: designation, kind: .lagrange, label: l.lPoint,
                 parentBody: l.parentPlanet, orbitalDistanceAu: l.orbitalDistanceAu,
-                devices: devs
+                inventory: inv, devices: devs
             ))
 
         case "megastructure":

@@ -334,6 +334,45 @@ extension Device {
     }
 }
 
+// MARK: - Cargo
+
+extension Device {
+    /// A single resource stack held in a transport device's cargo hold
+    /// (`cargo` entry) — a resource type and how many units of it are aboard.
+    public struct CargoItem: Equatable, Sendable, Identifiable {
+        public let resourceType: String
+        public let quantity: Int
+        public var id: String { resourceType }
+    }
+
+    /// The total cargo hold capacity in units (`cargo_capacity`), from the
+    /// variable tail. 0 when the field is absent (the device carries no hold).
+    public var cargoCapacity: Int {
+        detail["cargo_capacity"]?.numberValue.map(Int.init) ?? 0
+    }
+
+    /// How many cargo units are currently aboard (`cargo_used`), from the variable
+    /// tail. Falls back to summing the `cargo` stacks when the field is absent.
+    public var cargoUsed: Double {
+        detail["cargo_used"]?.numberValue ?? Double(cargoItems.reduce(0) { $0 + $1.quantity })
+    }
+
+    /// The cargo hold's free capacity — capacity minus used, never negative.
+    public var cargoRemaining: Int { max(0, cargoCapacity - Int(cargoUsed)) }
+
+    /// The resource stacks currently in the cargo hold (`cargo`), from the variable
+    /// tail. Empty when the hold is empty or the field is absent.
+    public var cargoItems: [CargoItem] {
+        detail["cargo"]?.arrayValue?.compactMap { entry in
+            guard let resource = entry["resource_type"]?.stringValue else { return nil }
+            return CargoItem(
+                resourceType: resource,
+                quantity: entry["quantity"]?.numberValue.map(Int.init) ?? 0
+            )
+        } ?? []
+    }
+}
+
 // MARK: - Operation completion signals
 
 extension Device {

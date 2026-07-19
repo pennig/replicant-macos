@@ -68,8 +68,6 @@ enum AmbientField {
     /// far plane.
     struct Config {
         var dustCount = 7000
-        var nebulaCount = 20
-        var nebulaPointsEach = 1200
         var protostarCount = 120
         var radius: Double = 2600
         var thickness: Double = 2600
@@ -79,7 +77,6 @@ enum AmbientField {
 
     /// Point sizes (pixels), one per category. Clamped again in the shader.
     private static let dustSize: Float = 2.3
-    private static let nebulaSize: Float = 2.6
     private static let protostarSize: Float = 3.8
     private static let shellSize: Float = 1.8
 
@@ -92,8 +89,7 @@ enum AmbientField {
         var rng = SeededLCG(seed: seed)
         var motes: [AmbientVertex] = []
         motes.reserveCapacity(
-            config.dustCount + config.nebulaCount * config.nebulaPointsEach
-                + config.protostarCount + config.shellCount)
+            config.dustCount + config.protostarCount + config.shellCount)
 
         func emit(_ p: SIMD3<Float>, size: Float, _ rgb: SIMD3<Float>, _ alpha: Float) {
             motes.append(AmbientVertex(
@@ -116,24 +112,8 @@ enum AmbientField {
             emit(p, size: dustSize, rgb, Float(rng.next(in: 0.03...0.16)))
         }
 
-        // — Nebula clouds: a handful of soft gaussian blobs, each a single hue. —
-        for cloud in 0..<config.nebulaCount {
-            let centerTheta = rng.next(in: 0...(2 * .pi))
-            let centerR = rng.next(in: config.radius * 0.12 ... config.radius * 0.82)
-            let centerX = cos(centerTheta) * centerR
-            let centerY = rng.gaussian() * config.thickness * 1.1
-            let centerZ = sin(centerTheta) * centerR
-            let spread = rng.next(in: config.radius * 0.10 ... config.radius * 0.22)
-            let tint = tints.nebula.isEmpty ? tints.dustCool : tints.nebula[cloud % tints.nebula.count]
-            for _ in 0..<config.nebulaPointsEach {
-                let p = SIMD3<Float>(
-                    Float(centerX + rng.gaussian() * spread),
-                    Float(centerY + rng.gaussian() * spread * 0.6),
-                    Float(centerZ + rng.gaussian() * spread))
-                let v = Float(rng.next(in: 0.55...1.0))
-                emit(p, size: nebulaSize, tint * v, Float(rng.next(in: 0.06...0.30)))
-            }
-        }
+        // Nebula clouds moved to the dedicated volumetric `NebulaField` (billboard
+        // puffs, star-diffused) drawn in its own pass — see StarFieldRenderer.
 
         // — Proto-stars: a few hot, bright masses seeded inside the clouds. —
         for _ in 0..<config.protostarCount {

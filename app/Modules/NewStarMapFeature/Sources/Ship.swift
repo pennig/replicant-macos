@@ -1,3 +1,4 @@
+import Foundation
 import simd
 
 // A ship in transit — state-tier data. Travel is a multi-leg, location→location route
@@ -24,6 +25,10 @@ struct Ship {
     /// the straight-line fallback when there are no resolved legs).
     let departedMedia: Double
     let arrivesMedia: Double
+    /// The real wall-clock final-arrival time, carried straight from the route so the
+    /// transit callout can show a live "arrives in …" countdown (media-time is monotonic,
+    /// not a date). Defaults to `.distantFuture` for callers that don't need it (tests).
+    var arrivesAt: Date = .distantFuture
     /// The route's legs, each resolved to its endpoint SYSTEM stars + its media-time
     /// window. Empty ⇒ a single straight `fromStar`→`toStar` segment over the window.
     let legs: [Leg]
@@ -52,6 +57,13 @@ struct Ship {
             if leg.toStar != seq.last { seq.append(leg.toStar) }
         }
         return seq
+    }
+
+    /// The route's location codes in order (origin → each leg's destination), the input to
+    /// `SystemTransit` for the inbound/outbound affordance. Empty with no legs.
+    var orderedCodes: [String] {
+        guard let first = legs.first else { return [] }
+        return [first.fromCode] + legs.map(\.toCode)
     }
 
     /// Overall progress 0…1 across the whole trip window (clamped) — the straight-line

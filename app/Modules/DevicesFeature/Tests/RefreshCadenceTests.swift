@@ -38,6 +38,11 @@ import Utils
         #expect(DevicesFeature.refreshDelay(for: device, now: now) == .seconds(30))
     }
 
+    @Test func repairingTicksModestly() {
+        let device = device(status: "repairing (304F6EC1)", detail: .object([:]))
+        #expect(DevicesFeature.refreshDelay(for: device, now: now) == .seconds(15))
+    }
+
     @Test func settledDeviceStopsTheLoop() {
         #expect(DevicesFeature.refreshDelay(for: device(status: "idle", detail: .object([:])), now: now) == nil)
         #expect(DevicesFeature.refreshDelay(for: device(status: "stowed", detail: .object([:])), now: now) == nil)

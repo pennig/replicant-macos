@@ -779,7 +779,13 @@ extension StarSystem {
                 copy.belts.append(b)
             }
         case .special(let s):
-            if s.kind == .lagrange, let parent = s.parentBody,
+            // Lagrange points attach to their parent planet. Prefer the payload's
+            // `parentBody`, falling back to the designation (SOL-5-L4 → SOL-5) so
+            // they still land on the planet when the API omits `parent_planet`.
+            let lagrangeParent = s.kind == .lagrange
+                ? (s.parentBody ?? s.designation.split(separator: "-").dropLast().joined(separator: "-"))
+                : nil
+            if let parent = lagrangeParent,
                let idx = copy.planets.firstIndex(where: { $0.designation == parent }) {
                 if let li = copy.planets[idx].lagrange.firstIndex(where: { $0.designation == s.designation }) {
                     copy.planets[idx].lagrange[li] = s

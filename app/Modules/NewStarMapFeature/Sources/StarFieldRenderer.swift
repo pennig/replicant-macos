@@ -52,6 +52,17 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     private let ambientBuffer: MTLBuffer?
     private let ambientVertexCount: Int
 
+    // Volumetric nebulae: additive world-space billboard puffs (NebulaField), diffused
+    // around the surveyed stars. The buffer is rebuilt in place when the tuning config
+    // changes (from the HUD panel) or the terrain changes; the render knobs are a
+    // per-frame uniform, so they cost nothing to tweak. Drawn in the pre-pass with the
+    // ambient dust, faded/receded with the galaxy on drill-in.
+    private var nebulaBuffer: MTLBuffer?
+    private var nebulaCount = 0
+    private var nebulaParams = NebulaRenderParams.live
+    private let nebulaConfig = NebulaConfig()
+    private let nebulaPipeline: MTLRenderPipelineState
+
     // System-focus (orrery). Bodies are billboard sphere-impostors (no mesh);
     // scaffold/belt buffers are rebuilt per drill-in. The orrery is scaled to the
     // focused star's angular framing so drilling reads as a zoom IN, and the sun
@@ -257,6 +268,9 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     private var shipDashMaxPixels: Float = 40       // clamp: longest visible dash on screen
     private var playerMarkerRadius: Float = 14    // player reticle radius in pixels (clears the relay ring's 8px floor)
     private var shipHeadRadius: Float = 6         // ship comet-head radius in pixels
+    // The inbound/outbound transit riser height, as a fraction of the framed system
+    // radius (`SystemModel.frameScene`) so it stays proportional at system and body level.
+    private var transitRiserFraction: Float = 0.32
     private let playerColor = SIMD3<Float>(1.0, 0.82, 0.35)   // gold
     private let shipColor   = SIMD3<Float>(0.55, 0.95, 1.0)   // bright cyan-white
 
@@ -271,6 +285,12 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     /// badge over each occupied location. nil until set by `MetalStarView`. Empty in the
     /// galaxy (clusters are a system-focus overlay).
     var onClustersProjected: (([ProjectedCluster]) -> Void)?
+
+    /// Pushed each frame with the inbound/outbound transit callouts' projected screen points
+    /// (the top of each dotted riser) while focused into a system, so the SwiftUI overlay
+    /// floats a "Traveling from/to …" card at each boundary crossing. nil until set by
+    /// `MetalStarView`. Empty in the galaxy and for routes that don't touch the view.
+    var onTransitsProjected: (([ProjectedTransit]) -> Void)?
     /// Device-presence clusters, grouped by the anchor the focused level draws (built by
     /// the view from the live roster + scan blob). Projected each frame in `draw`.
     private var deviceClusters: [DeviceCluster] = []
@@ -379,6 +399,14 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
             length: ambientMotes.count * MemoryLayout<AmbientVertex>.stride,
             options: .storageModeShared)
 
+        // Volumetric nebulae, diffused around the actual surveyed stars.
+        let puffs = NebulaField.generate(config: nebulaConfig, stars: stars.map(\.position))
+        nebulaCount = puffs.count
+        nebulaBuffer = puffs.isEmpty ? nil : device.makeBuffer(
+            bytes: puffs,
+            length: puffs.count * MemoryLayout<NebulaPuff>.stride,
+            options: .storageModeShared)
+
         // Every pipeline drawing into the HDR pass must declare its depth format
         // (the pass now has a depth attachment for the resolved-body occlusion).
         let depthPF: MTLPixelFormat = .depth32Float
@@ -412,6 +440,13 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         ambientDesc.fragmentFunction = library.makeFunction(name: "ambient_fragment")
         Self.configureAdditiveHDR(ambientDesc.colorAttachments[0]!)
         ambientDesc.depthAttachmentPixelFormat = depthPF
+
+        // Nebula billboards (additive HDR, no depth — the volumetric clouds).
+        let nebulaDesc = MTLRenderPipelineDescriptor()
+        nebulaDesc.vertexFunction = library.makeFunction(name: "nebula_vertex")
+        nebulaDesc.fragmentFunction = library.makeFunction(name: "nebula_fragment")
+        Self.configureAdditiveHDR(nebulaDesc.colorAttachments[0]!)
+        nebulaDesc.depthAttachmentPixelFormat = depthPF
 
         // Orrery bodies: lit sun/planets, over-blend + depth write so they occlude.
         let orreryBodyDesc = MTLRenderPipelineDescriptor()
@@ -508,6 +543,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
             tonemapPipeline = try device.makeRenderPipelineState(descriptor: tmDesc)
             labelPipeline = try device.makeRenderPipelineState(descriptor: labelDesc)
             ambientPipeline = try device.makeRenderPipelineState(descriptor: ambientDesc)
+            nebulaPipeline = try device.makeRenderPipelineState(descriptor: nebulaDesc)
             orreryBodyPipeline = try device.makeRenderPipelineState(descriptor: orreryBodyDesc)
             orreryLinePipeline = try device.makeRenderPipelineState(descriptor: orreryLineDesc)
             orreryPointPipeline = try device.makeRenderPipelineState(descriptor: orreryPointDesc)
@@ -536,9 +572,10 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
 
         super.init()
 
-        // Extend the far plane to contain the ambient backdrop + star shell, which
-        // sit far beyond the charted bubble.
-        camera.far = 6000
+        // Extend the far plane to contain the ambient backdrop + star shell + the
+        // distant nebula shell (pushed out further by the nebula `scale`), all of
+        // which sit far beyond the charted bubble.
+        camera.far = 12000
 
         // Bake the initial overlays (FTL mesh + ships) into their buffers/relevance.
         // Later overlay changes route through `updateOverlays` (in place), so the
@@ -624,13 +661,25 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         hdrPass.depthAttachment.storeAction = .dontCare   // never read back → free on TBDR
 
         if let enc = cmd.makeRenderCommandEncoder(descriptor: hdrPass) {
-            // 1(pre) — the interstellar medium behind everything (additive, no depth).
+            // 1(pre) — the interstellar medium behind everything (additive, no depth):
+            // the ambient dust/protostar/shell points first, then the volumetric nebulae
+            // over them.
             if let ambientBuffer, ambientVertexCount > 0 {
                 enc.setRenderPipelineState(ambientPipeline)
                 enc.setDepthStencilState(noDepthState)
                 enc.setVertexBuffer(ambientBuffer, offset: 0, index: 0)
                 enc.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
                 enc.drawPrimitives(type: .point, vertexStart: 0, vertexCount: ambientVertexCount)
+            }
+            if let nebulaBuffer, nebulaCount > 0 {
+                enc.setRenderPipelineState(nebulaPipeline)
+                enc.setDepthStencilState(noDepthState)
+                enc.setVertexBuffer(nebulaBuffer, offset: 0, index: 0)
+                enc.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
+                enc.setVertexBytes(&nebulaParams, length: MemoryLayout<NebulaRenderParams>.stride, index: 2)
+                enc.setFragmentBytes(&nebulaParams, length: MemoryLayout<NebulaRenderParams>.stride, index: 0)
+                enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6,
+                                   instanceCount: nebulaCount)
             }
 
             // 1a — additive glow field (base layer, no depth).
@@ -749,6 +798,12 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
                 // top, matching the SwiftUI icon that tracks them.
                 var shipParams = MeshParams(viewportPixels: viewportPx, halfWidthPixels: 0, nodeRadiusPixels: 0)
                 encodeOrreryShipHeads(enc, uniforms: &uniforms, params: &shipParams, now: CACurrentMediaTime())
+
+                // Inbound/outbound transit affordance: dotted risers + connectors for
+                // ships whose route crosses the boundary of this view (drawn under the
+                // SwiftUI callout cards `emitTransitProjection` positions).
+                var transitParams = MeshParams(viewportPixels: viewportPx, halfWidthPixels: 0, nodeRadiusPixels: 0)
+                encodeOrreryTransit(enc, uniforms: uniforms, params: &transitParams, now: CACurrentMediaTime())
             }
             enc.endEncoding()
         }
@@ -773,6 +828,9 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         emitShipProjection(view: view, now: now)
         // And the device-presence cluster badges (system focus only).
         emitClusterProjection(view: view)
+        // And the inbound/outbound transit callouts (system focus only), anchored to the
+        // top of each riser the orrery pass drew.
+        emitTransitProjection(view: view, now: now)
     }
 
     /// Project each in-transit ship's comet head to view points (top-left origin,
@@ -1784,6 +1842,23 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         } else if let selected = selectedStarIndex, selected < stars.count {
             relevance.focus(on: selected)
         }
+
+        // Re-diffuse the nebulae against the new star set (deterministic — same seed,
+        // only the star-avoidance changes as systems stream in).
+        regenerateNebula()
+    }
+
+    // MARK: Nebulae
+
+    /// Rebuild the nebula puff buffer against the current star set — the diffusion tracks
+    /// the surveyed stars, so a survey streaming systems in re-diffuses the field.
+    private func regenerateNebula() {
+        let puffs = NebulaField.generate(config: nebulaConfig, stars: stars.map(\.position))
+        nebulaCount = puffs.count
+        nebulaBuffer = puffs.isEmpty ? nil : device.makeBuffer(
+            bytes: puffs,
+            length: puffs.count * MemoryLayout<NebulaPuff>.stride,
+            options: .storageModeShared)
     }
 
     // MARK: Overlays
@@ -1871,7 +1946,8 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
                 shipLegs.reverse()
             }
             return Ship(deviceCode: route.deviceCode, fromStar: from, toStar: to,
-                        departedMedia: departed, arrivesMedia: arrives, legs: shipLegs)
+                        departedMedia: departed, arrivesMedia: arrives,
+                        arrivesAt: route.arrivesAt, legs: shipLegs)
         }
         ships = fleet
         // Ribbon as a polyline through each ship's distinct system nodes (one segment for
@@ -2009,12 +2085,131 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
                                radiusPixels: shipHeadRadius, style: 1, worldRadius: 0)
         }
         guard !heads.isEmpty else { return }
+        // These heads sit at true orrery positions (like the bodies + the SwiftUI icon that
+        // tracks them), so disable `overlayPushed` for this draw — otherwise the shader's
+        // galaxy recession (`1 + systemPush·orreryReveal`, ≈3×) flings the head out from its
+        // icon mid-drill. Zeroing `orreryReveal` makes the push an identity; head markers
+        // have `worldRadius == 0`, so the reveal-driven star-size collapse doesn't apply.
+        var u = uniforms
+        u.orreryReveal = 0
         enc.setRenderPipelineState(stateMarkerPipeline)
         enc.setDepthStencilState(noDepthState)
-        enc.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
+        enc.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 1)
         enc.setVertexBytes(&params, length: MemoryLayout<MeshParams>.stride, index: 2)
         heads.withUnsafeBytes { enc.setVertexBytes($0.baseAddress!, length: $0.count, index: 0) }
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6, instanceCount: heads.count)
+    }
+
+    // MARK: Inbound / outbound transit affordance
+
+    /// The active orrery layer's resolver for transit placement (system focus only), or nil
+    /// in the galaxy. Mirrors `encodeOrreryShipHeads` / `emitClusterProjection`.
+    private func orreryTransitLayout() -> OrreryLayout? {
+        guard systemFocused, orreryReveal > 0.001, let model = orreryModel else { return nil }
+        let reveal = orreryIsBody ? bodyProgress : orreryReveal
+        return orreryLayout(model: model, center: orreryCenter, scale: orreryScale,
+                            reveal: reveal, time: orbitClock)
+    }
+
+    /// The world height of a transit riser — a fraction of the framed system radius, so it
+    /// stays proportional at system and body level and emerges with the orrery `reveal`.
+    private func transitRiserWorldHeight(reveal: Float) -> Float {
+        guard let model = orreryModel else { return 0 }
+        return Float(model.frameScene) * transitRiserFraction * orreryScale * reveal
+    }
+
+    /// Draw the dotted risers + in-view connectors for every ship whose route crosses the
+    /// boundary of the focused view (see `SystemTransit`). Reuses the ship-trajectory
+    /// pipeline as a PURE dashed line (`progress: 0` ⇒ no traveled tail), depth-read so a
+    /// nearer body occludes it like the ship ribbons. The SwiftUI callout cards float over
+    /// the top of each riser (`emitTransitProjection`).
+    private func encodeOrreryTransit(_ enc: MTLRenderCommandEncoder, uniforms: Uniforms,
+                                     params: inout MeshParams, now: Double) {
+        guard !ships.isEmpty, let layout = orreryTransitLayout() else { return }
+        let reveal = orreryIsBody ? bodyProgress : orreryReveal
+        let height = transitRiserWorldHeight(reveal: reveal)
+        let resolves: (String) -> Bool = { layout.position(ofLocation: $0) != nil }
+
+        var segments: [(SIMD3<Float>, SIMD3<Float>)] = []
+        for ship in ships {
+            let result = SystemTransit.resolve(orderedCodes: ship.orderedCodes,
+                                               deviceCode: ship.deviceCode, resolves: resolves)
+            guard !result.boundaries.isEmpty else { continue }
+            // Connector: trace consecutive in-view anchors (the in-system route path).
+            let pts = result.connectorCodes.compactMap { layout.position(ofLocation: $0) }
+            if pts.count > 1 {
+                for i in 0..<(pts.count - 1) { segments.append((pts[i], pts[i + 1])) }
+            }
+            // Risers: straight up out of the orbital plane at each boundary anchor.
+            for boundary in result.boundaries {
+                guard let base = layout.position(ofLocation: boundary.anchorCode) else { continue }
+                segments.append((base, base + SIMD3<Float>(0, height, 0)))
+            }
+        }
+        guard !segments.isEmpty else { return }
+
+        // Two shader overrides, both because `ship_line` is a GALAXY overlay by default:
+        // 1. `overlayDim` drives its fade to 0 on drill-in — override it with the reveal so
+        //    the transit lines are visible in-orrery (this is where they belong).
+        // 2. `overlayPushed` (in the vertex shader) pushes points radially from the focused
+        //    star by `1 + systemPush·orreryReveal` (≈3× here) to clear the galaxy field on
+        //    a drill. Orrery bodies/pips and the CPU-projected callout are NOT pushed, so a
+        //    pushed line lands far outside the orbits. Zero `orreryReveal` in this copy to
+        //    make `overlayPushed` an identity, so the line tracks the true body positions.
+        var u = uniforms
+        u.overlayDim = orreryReveal
+        u.orreryReveal = 0
+        enc.setRenderPipelineState(shipLinePipeline)
+        enc.setDepthStencilState(readDepthState)
+        enc.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 1)
+        enc.setVertexBytes(&params, length: MemoryLayout<MeshParams>.stride, index: 2)
+        for (a, b) in segments {
+            let verts = MeshLineVertex.ribbon(a, b)
+            var sp = ShipParams(color: shipColor, progress: 0, halfWidthPixels: shipLineHalfWidth,
+                                tailLength: 0,
+                                dashCyclePixels: shipDashCyclePixels(a: a, b: b, uniforms: u, params: params))
+            verts.withUnsafeBytes { enc.setVertexBytes($0.baseAddress!, length: $0.count, index: 0) }
+            enc.setVertexBytes(&sp, length: MemoryLayout<ShipParams>.stride, index: 3)
+            enc.setFragmentBytes(&sp, length: MemoryLayout<ShipParams>.stride, index: 0)
+            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+        }
+    }
+
+    /// Project the top of each transit riser to view points and push the callouts to the
+    /// SwiftUI overlay via `onTransitsProjected`. Empty in the galaxy / for routes that
+    /// don't touch this view. Uses `bounds.size` (POINTS) for SwiftUI's local space.
+    private func emitTransitProjection(view: MTKView, now: Double) {
+        guard let emit = onTransitsProjected else { return }
+        guard !ships.isEmpty, let layout = orreryTransitLayout() else { emit([]); return }
+        let reveal = orreryIsBody ? bodyProgress : orreryReveal
+        let height = transitRiserWorldHeight(reveal: reveal)
+        let resolves: (String) -> Bool = { layout.position(ofLocation: $0) != nil }
+        let viewM = camera.viewMatrix()
+        let proj = camera.projectionMatrix(aspect: aspect)
+        let size = view.bounds.size
+        let w = Float(size.width), h = Float(size.height)
+        guard w > 0, h > 0 else { emit([]); return }
+        let op = Double(orreryReveal)
+
+        var out: [ProjectedTransit] = []
+        for ship in ships {
+            let result = SystemTransit.resolve(orderedCodes: ship.orderedCodes,
+                                               deviceCode: ship.deviceCode, resolves: resolves)
+            for boundary in result.boundaries {
+                guard let base = layout.position(ofLocation: boundary.anchorCode) else { continue }
+                let top = base + SIMD3<Float>(0, height, 0)
+                guard let point = projectViewPoint(top, view: viewM, proj: proj, width: w, height: h)
+                else { continue }
+                out.append(ProjectedTransit(
+                    deviceCode: boundary.deviceCode,
+                    direction: boundary.direction == .inbound ? .inbound : .outbound,
+                    endpointCode: boundary.endpointCode,
+                    viaCode: boundary.viaCode,
+                    arrivesAt: ship.arrivesAt,
+                    point: point, opacity: op))
+            }
+        }
+        emit(out)
     }
 
     /// The screen-pixel length of one dash+gap cycle for a ship's trajectory. Each

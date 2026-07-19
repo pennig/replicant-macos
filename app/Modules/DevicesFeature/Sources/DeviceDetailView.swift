@@ -56,6 +56,9 @@ public struct DeviceDetailView: View {
                         if device.stowCapacity > 0 {
                             StowedDevicesSection(device: device, store: store)
                         }
+                        if device.features.contains("transport") {
+                            CargoSection(device: device)
+                        }
                         CommandGrid(device: device, store: store)
                     }
                     .padding(Space.xl)
@@ -106,8 +109,8 @@ public struct DeviceDetailView: View {
     private var refreshKey: String? {
         guard let device = store.selectedDevice else { return nil }
         switch device.statusBase {
-        case "mining", "diverting": return device.deviceCode
-        default:                    return nil
+        case "mining", "diverting", "repairing": return device.deviceCode
+        default:                                 return nil
         }
     }
 
@@ -199,7 +202,8 @@ public struct DeviceDetailView: View {
             parameter: device.statusParameter,
             liveTravel: device.travelSnapshot,
             diversion: diversionSnapshot(for: device),
-            mining: device.statusBase == "mining" ? device.miningSnapshot : nil
+            mining: device.statusBase == "mining" ? device.miningSnapshot : nil,
+            repair: device.statusBase == "repairing" ? device.repairSnapshot : nil
         )
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -215,6 +219,7 @@ public struct DeviceDetailView: View {
             detailRow("Queue capacity", "\(device.queueSize)")
             if let directive = device.currentDirective {
                 detailRow("Directive", DevicePresentation.displayName(directive))
+                directiveSummaryRows(directive, device: device)
             }
             if !device.features.isEmpty {
                 detailRow("Features", device.features.joined(separator: ", "))
@@ -231,6 +236,62 @@ public struct DeviceDetailView: View {
                         .strokeBorder(.rcSeparator, lineWidth: 0.5)
                 )
         )
+    }
+
+    /// Supplemental detail rows summarising an in-force transport directive's
+    /// configuration — the route it runs, its resource priority, or its one-shot
+    /// delivery target. Nothing for directives without a route (survey/mining).
+    @ViewBuilder
+    private func directiveSummaryRows(_ directive: String, device: Device) -> some View {
+        let config = device.currentDirectiveConfig
+        switch directive {
+        case "delivery":
+            if let collect = config?["route"]?["collect"]?.stringValue,
+               let deliver = config?["route"]?["deliver"]?.stringValue {
+                detailRow("Route", "\(collect) → \(deliver)")
+            }
+            if let target = requirementSummary(config?["requirement"]) {
+                detailRow("Target", target)
+            }
+        case "shuttle", "ferry":
+            if let collect = config?["collect"]?.stringValue,
+               let deliver = config?["deliver"]?.stringValue {
+                detailRow("Route", "\(collect) → \(deliver)")
+            }
+            if let priority = prioritySummary(config?["priority"]) {
+                detailRow("Priority", priority)
+            }
+        case "consolidate":
+            if let deliver = config?["deliver"]?.stringValue {
+                detailRow("Deliver to", deliver)
+            }
+            if let priority = prioritySummary(config?["priority"]) {
+                detailRow("Priority", priority)
+            }
+        default:
+            EmptyView()
+        }
+    }
+
+    /// "carbon 50 · silicates 100" from a `delivery` requirement object, or nil
+    /// when it's absent or empty.
+    private func requirementSummary(_ value: JSONValue?) -> String? {
+        guard case let .object(target)? = value, !target.isEmpty else { return nil }
+        let parts = target
+            .compactMap { key, amount -> String? in
+                guard let n = amount.numberValue else { return nil }
+                let formatted = n == n.rounded() ? String(Int(n)) : String(n)
+                return "\(key) \(formatted)"
+            }
+            .sorted()
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// "carbon → rares" from a `priority` array (order preserved), or nil when
+    /// it's absent or empty.
+    private func prioritySummary(_ value: JSONValue?) -> String? {
+        let resources = value?.arrayValue?.compactMap(\.stringValue) ?? []
+        return resources.isEmpty ? nil : resources.joined(separator: " → ")
     }
 
     private func detailRow(_ label: String, _ value: String) -> some View {
@@ -453,6 +514,10 @@ private struct ActiveTaskCard: View {
     /// present it replaces the generic operation readout with the cycle-aware card,
     /// since mining is continuous (no deadline) and refreshes in place each cycle.
     var mining: MiningSnapshot? = nil
+    /// The live repair state for a `repairing` bot — target device, server progress,
+    /// and ETA. When present it replaces the generic operation readout, since repair
+    /// carries its state in the device's own `repair` block and refreshes in place.
+    var repair: RepairSnapshot? = nil
 
     /// The itinerary to display for a travel op: the whole route captured at
     /// dispatch when we have it, else the device's remaining-legs snapshot. Nil
@@ -473,6 +538,8 @@ private struct ActiveTaskCard: View {
                 diversionReadout(diversion)
             } else if let mining {
                 miningReadout(mining)
+            } else if let repair {
+                repairReadout(repair)
             } else if let operation {
                 HStack(spacing: Space.xs) {
                     Text(operation.kind.replacingOccurrences(of: "_", with: " ").capitalized)
@@ -677,6 +744,44 @@ private struct ActiveTaskCard: View {
             }
         }
         .padding(.top, Space.xs)
+    }
+
+    // MARK: Repair readout
+
+    /// The live readout for a repairing bot: the device it's mending, a progress
+    /// bar (live-interpolated from `started_at`/`eta_seconds` when both are known,
+    /// else the server's authoritative percent), and the completion percent.
+    @ViewBuilder
+    private func repairReadout(_ r: RepairSnapshot) -> some View {
+        HStack(spacing: Space.xs) {
+            Text("Repairing")
+                .font(.rcHeadline)
+                .foregroundStyle(.rcTextPrimary)
+            if let target = r.targetDeviceCode {
+                Text("·")
+                    .font(.rcHeadline)
+                    .foregroundStyle(.rcTextTertiary)
+                Text(target)
+                    .font(.rcMono)
+                    .foregroundStyle(.rcTextSecondary)
+                    .textSelection(.enabled)
+            }
+        }
+        .lineLimit(1)
+
+        if let started = r.startedAt, let completesAt = r.completesAt {
+            OperationProgressView(startedAt: started, completesAt: completesAt, tint: StatusTone.working.color)
+        } else if let pct = r.progressPercent {
+            ProgressView(value: min(max(pct / 100, 0), 1))
+                .tint(StatusTone.working.color)
+        }
+
+        if let pct = r.progressPercent {
+            VStack(alignment: .leading, spacing: Space.xs) {
+                taskRow("Progress", "\(Self.percent(pct)) complete")
+            }
+            .padding(.top, Space.xs)
+        }
     }
 
     /// "ATIANFU-BELT-1 · Dense" — where it's mining and how dense the belt is.
@@ -977,6 +1082,81 @@ private struct StowedDevicesSection: View {
     }
 }
 
+// MARK: - Cargo
+
+/// The cargo manifest for a transport device (one with the `transport` feature):
+/// each resource stack aboard with its quantity, plus a header reporting how full
+/// the hold is (`cargo_used`/`cargo_capacity`). An empty hold still renders the
+/// section — with an explicit "empty" note — so the capacity is discoverable and
+/// the manifest is always present for a transport device.
+private struct CargoSection: View {
+    let device: Device
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Space.s) {
+            HStack(spacing: Space.s) {
+                Text("CARGO")
+                    .font(.rcSectionLabel).kerning(1)
+                    .foregroundStyle(.rcTextTertiary)
+                Spacer(minLength: 0)
+                if device.cargoCapacity > 0 {
+                    Text("\(Self.number(device.cargoUsed))/\(device.cargoCapacity) · \(device.cargoRemaining) free")
+                        .font(.rcCaption)
+                        .foregroundStyle(.rcTextTertiary)
+                }
+            }
+
+            if device.cargoItems.isEmpty {
+                Text("Cargo hold empty.")
+                    .font(.rcCaption)
+                    .foregroundStyle(.rcTextTertiary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(Space.m)
+                    .background(cardBackground)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(Array(device.cargoItems.enumerated()), id: \.element.id) { index, item in
+                        if index > 0 { Divider().overlay(Color.rcSeparator) }
+                        row(item)
+                    }
+                }
+                .background(cardBackground)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// One cargo row — the resource's display name and how many units are aboard.
+    private func row(_ item: Device.CargoItem) -> some View {
+        HStack(spacing: Space.s) {
+            Text(DevicePresentation.displayName(item.resourceType))
+                .font(.rcBodyEmph)
+                .foregroundStyle(.rcTextPrimary)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+            Text("\(item.quantity) unit\(item.quantity == 1 ? "" : "s")")
+                .font(.rcMonoSmall)
+                .foregroundStyle(.rcTextSecondary)
+        }
+        .padding(.horizontal, Space.m)
+        .padding(.vertical, Space.s)
+    }
+
+    private var cardBackground: some View {
+        RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+            .fill(.rcSurfaceRaised)
+            .overlay(
+                RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                    .strokeBorder(.rcSeparator, lineWidth: 0.5)
+            )
+    }
+
+    /// Whole numbers stay whole (`80`), fractions keep one place (`1.5`).
+    private static func number(_ value: Double) -> String {
+        value == value.rounded() ? String(Int(value)) : String(format: "%.1f", value)
+    }
+}
+
 // MARK: - Command grid + inline parameter panel
 
 private struct CommandGrid: View {
@@ -1006,6 +1186,15 @@ private struct CommandGrid: View {
     /// `gather_salvage` directive configuration: the chosen salvage-site
     /// designation, revealed when that directive is the pending selection.
     @State private var salvageLocation: String = ""
+    /// AMI transport-controller directive configuration (`delivery` / `shuttle` /
+    /// `ferry` / `consolidate`), revealed when one of those is the pending
+    /// selection. `collect`/`deliver` are location designations; `requirement` is
+    /// the per-resource target for a one-shot `delivery`; `priorityResources` is
+    /// the ordered resource preference for the continuous directives.
+    @State private var collectLocation: String = ""
+    @State private var deliverLocation: String = ""
+    @State private var requirement: [String: String] = [:]
+    @State private var priorityResources: [String] = []
 
     /// The `all` / `none` scope values the survey config dropdowns offer.
     private enum SurveyScope { static let all = "all", none = "none" }
@@ -1234,6 +1423,10 @@ private struct CommandGrid: View {
         moonsScope = SurveyScope.none
         recall = true
         salvageLocation = ""
+        collectLocation = ""
+        deliverLocation = ""
+        requirement = [:]
+        priorityResources = []
         guard let config = device.currentDirectiveConfig else { return }
         switch device.currentDirective {
         case "survey_system":
@@ -1243,9 +1436,31 @@ private struct CommandGrid: View {
         case "gather_salvage":
             salvageLocation = config["location"]?.stringValue ?? ""
             recall = config["recall"]?.boolValue ?? recall
+        case "delivery":
+            // The backend nests a one-shot delivery's endpoints under `route`.
+            collectLocation = config["route"]?["collect"]?.stringValue ?? ""
+            deliverLocation = config["route"]?["deliver"]?.stringValue ?? ""
+            if case let .object(target)? = config["requirement"] {
+                requirement = target.reduce(into: [:]) { acc, pair in
+                    if let amount = pair.value.numberValue { acc[pair.key] = Self.amountString(amount) }
+                }
+            }
+        case "shuttle", "ferry":
+            collectLocation = config["collect"]?.stringValue ?? ""
+            deliverLocation = config["deliver"]?.stringValue ?? ""
+            priorityResources = config["priority"]?.arrayValue?.compactMap(\.stringValue) ?? []
+        case "consolidate":
+            deliverLocation = config["deliver"]?.stringValue ?? ""
+            priorityResources = config["priority"]?.arrayValue?.compactMap(\.stringValue) ?? []
         default:
             break
         }
+    }
+
+    /// Render a requirement amount without a trailing `.0` so a whole number
+    /// round-trips as "50" rather than "50.0".
+    private static func amountString(_ value: Double) -> String {
+        value == value.rounded() ? String(Int(value)) : String(value)
     }
 
     @ViewBuilder
@@ -1400,8 +1615,47 @@ private struct CommandGrid: View {
                 "location": .string(salvageLocation),
                 "recall": .bool(recall),
             ]
+        case "delivery":
+            // A one-shot transfer: endpoints nest under `route`, and the
+            // per-resource `requirement` defines when the run is complete.
+            var config: [String: JSONValue] = [
+                "route": .object([
+                    "collect": .string(collectLocation),
+                    "deliver": .string(deliverLocation),
+                ]),
+            ]
+            let target = requirementPayload
+            if !target.isEmpty { config["requirement"] = .object(target) }
+            return config
+        case "shuttle", "ferry":
+            // Continuous in-system (shuttle) / interstellar (ferry) transport:
+            // flat endpoints with an optional ordered resource `priority`.
+            var config: [String: JSONValue] = [
+                "collect": .string(collectLocation),
+                "deliver": .string(deliverLocation),
+            ]
+            if !priorityResources.isEmpty {
+                config["priority"] = .array(priorityResources.map(JSONValue.string))
+            }
+            return config
+        case "consolidate":
+            // Gather dispersed system resources to a single destination.
+            var config: [String: JSONValue] = ["deliver": .string(deliverLocation)]
+            if !priorityResources.isEmpty {
+                config["priority"] = .array(priorityResources.map(JSONValue.string))
+            }
+            return config
         default:
             return nil
+        }
+    }
+
+    /// The `delivery` requirement object: the resources with a positive amount,
+    /// keyed by resource type. Blank or non-positive rows are dropped.
+    private var requirementPayload: [String: JSONValue] {
+        requirement.reduce(into: [:]) { acc, pair in
+            let trimmed = pair.value.trimmingCharacters(in: .whitespaces)
+            if let amount = Double(trimmed), amount > 0 { acc[pair.key] = .number(amount) }
         }
     }
 
@@ -1425,8 +1679,193 @@ private struct CommandGrid: View {
             .padding(.top, Space.xs)
         case "gather_salvage":
             salvageConfiguration
+        case "delivery":
+            deliveryConfiguration
+        case "shuttle":
+            transportRouteConfiguration(interstellar: false)
+        case "ferry":
+            transportRouteConfiguration(interstellar: true)
+        case "consolidate":
+            consolidateConfiguration
         default:
             EmptyView()
+        }
+    }
+
+    /// The `delivery` config: a one-shot collect → deliver route plus the
+    /// per-resource target that defines when the run is complete. The backend
+    /// rejects the directive without a requirement, so confirm stays disabled
+    /// until both endpoints and at least one amount are set.
+    @ViewBuilder
+    private var deliveryConfiguration: some View {
+        VStack(alignment: .leading, spacing: Space.s) {
+            RCField("Collect From", text: $collectLocation, placeholder: "ATIANFU-BELT-1", mono: true)
+            RCField("Deliver To", text: $deliverLocation, placeholder: "ALPHERATOZ-8-L4", mono: true)
+            requirementEditor
+        }
+        .padding(.top, Space.xs)
+    }
+
+    /// The `shuttle` (in-system) / `ferry` (interstellar) config: a continuous
+    /// collect → deliver route with an optional ordered resource priority.
+    @ViewBuilder
+    private func transportRouteConfiguration(interstellar: Bool) -> some View {
+        VStack(alignment: .leading, spacing: Space.s) {
+            RCField(
+                "Collect From",
+                text: $collectLocation,
+                placeholder: interstellar ? "TARAZEDAR-BELT-1" : "ATIANFU-BELT-1",
+                hint: interstellar ? "source system" : nil,
+                mono: true
+            )
+            RCField(
+                "Deliver To",
+                text: $deliverLocation,
+                placeholder: "ALPHERATOZ-8-L4",
+                hint: interstellar ? "destination system" : nil,
+                mono: true
+            )
+            priorityEditor
+        }
+        .padding(.top, Space.xs)
+    }
+
+    /// The `consolidate` config: a single destination that dispersed system
+    /// resources are gathered to, with an optional ordered resource priority.
+    @ViewBuilder
+    private var consolidateConfiguration: some View {
+        VStack(alignment: .leading, spacing: Space.s) {
+            RCField("Deliver To", text: $deliverLocation, placeholder: "ALPHERATOZ-8-L4", mono: true)
+            priorityEditor
+        }
+        .padding(.top, Space.xs)
+    }
+
+    /// The `delivery` requirement editor: one numeric field per resource type.
+    /// Only resources with a positive amount are sent; together they define the
+    /// quota that completes the one-shot run.
+    @ViewBuilder
+    private var requirementEditor: some View {
+        VStack(alignment: .leading, spacing: Space.xs) {
+            Text("REQUIREMENT")
+                .font(.rcSectionLabel)
+                .foregroundStyle(.rcTextTertiary)
+            Text("Amounts to deliver before the run completes.")
+                .font(.rcCaption)
+                .foregroundStyle(.rcTextTertiary)
+            VStack(spacing: 0) {
+                ForEach(Array(DeviceCommand.miningResources.enumerated()), id: \.element) { index, resource in
+                    if index > 0 { Divider().overlay(Color.rcSeparator) }
+                    requirementRow(resource)
+                }
+            }
+            .background(
+                RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                    .fill(.rcSurfaceRaised)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                            .strokeBorder(.rcSeparator, lineWidth: 1)
+                    )
+            )
+        }
+    }
+
+    /// One requirement row — a resource label and a trailing numeric field.
+    private func requirementRow(_ resource: String) -> some View {
+        HStack(spacing: Space.s) {
+            Text(resource.capitalized)
+                .font(.rcCaption)
+                .foregroundStyle(.rcTextSecondary)
+            Spacer(minLength: 0)
+            TextField("0", text: requirementBinding(resource))
+                .textFieldStyle(.plain)
+                .multilineTextAlignment(.trailing)
+                .font(.rcMonoSmall)
+                .frame(width: 56)
+        }
+        .padding(.horizontal, Space.m)
+        .padding(.vertical, Space.s)
+    }
+
+    /// A string binding into the `requirement` map for a resource, so an empty
+    /// field clears the entry rather than leaving a stale amount.
+    private func requirementBinding(_ resource: String) -> Binding<String> {
+        Binding(
+            get: { requirement[resource] ?? "" },
+            set: { newValue in
+                let trimmed = newValue.trimmingCharacters(in: .whitespaces)
+                if trimmed.isEmpty { requirement[resource] = nil }
+                else { requirement[resource] = trimmed }
+            }
+        )
+    }
+
+    /// The ordered resource-priority editor for the continuous transport
+    /// directives. Tapping a resource appends it (its badge shows the rank);
+    /// tapping again removes it and the remaining ranks close up. Empty means
+    /// "balance everything".
+    @ViewBuilder
+    private var priorityEditor: some View {
+        VStack(alignment: .leading, spacing: Space.xs) {
+            Text("PRIORITY")
+                .font(.rcSectionLabel)
+                .foregroundStyle(.rcTextTertiary)
+            Text("Tap to rank resources in order. Leave empty to balance all.")
+                .font(.rcCaption)
+                .foregroundStyle(.rcTextTertiary)
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 96), spacing: Space.xs)],
+                spacing: Space.xs
+            ) {
+                ForEach(DeviceCommand.miningResources, id: \.self) { resource in
+                    priorityChip(resource)
+                }
+            }
+        }
+    }
+
+    /// A single priority chip: accent-filled with its rank number when selected,
+    /// a bordered surface otherwise.
+    private func priorityChip(_ resource: String) -> some View {
+        let rank = priorityResources.firstIndex(of: resource)
+        let selected = rank != nil
+        return Button {
+            togglePriority(resource)
+        } label: {
+            HStack(spacing: Space.xs) {
+                if let rank {
+                    Text("\(rank + 1)")
+                        .font(.rcMonoSmall)
+                        .foregroundStyle(.rcAccentOnColor)
+                }
+                Text(resource.capitalized)
+                    .font(.rcCaption)
+                    .lineLimit(1)
+                    .foregroundStyle(selected ? .rcAccentOnColor : .rcTextSecondary)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, Space.xs)
+            .padding(.horizontal, Space.s)
+            .background(
+                RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                    .fill(selected ? Color.rcAccent : Color.rcSurfaceRaised)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                            .strokeBorder(selected ? Color.clear : Color.rcSeparator, lineWidth: 1)
+                    )
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Toggle a resource in the ordered priority list, appending it at the end
+    /// (lowest current rank) or removing it.
+    private func togglePriority(_ resource: String) {
+        if let index = priorityResources.firstIndex(of: resource) {
+            priorityResources.remove(at: index)
+        } else {
+            priorityResources.append(resource)
         }
     }
 
@@ -1616,9 +2055,21 @@ private struct CommandGrid: View {
         switch command.parameter {
         case .text:        return !textValue.trimmingCharacters(in: .whitespaces).isEmpty
         case .choice:
-            // gather_salvage needs a salvage-site location or the backend rejects it.
-            if case .setDirective = command, choiceValue == "gather_salvage" {
-                return !salvageLocation.isEmpty
+            // Some directives carry required config the backend rejects without.
+            if case .setDirective = command {
+                switch choiceValue {
+                case "gather_salvage":
+                    return !salvageLocation.isEmpty
+                case "delivery":
+                    // Needs both endpoints and at least one resource target.
+                    return !collectLocation.isEmpty && !deliverLocation.isEmpty && !requirementPayload.isEmpty
+                case "shuttle", "ferry":
+                    return !collectLocation.isEmpty && !deliverLocation.isEmpty
+                case "consolidate":
+                    return !deliverLocation.isEmpty
+                default:
+                    break
+                }
             }
             return !choiceValue.isEmpty
         case .deviceChoice: return !choiceValue.isEmpty

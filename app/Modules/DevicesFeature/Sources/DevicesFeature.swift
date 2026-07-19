@@ -364,6 +364,11 @@ public struct DevicesFeature {
             return .seconds(cycle - intoCycle + 1.5)
         case "diverting":
             return .seconds(30)
+        case "repairing":
+            // Repair's bar self-interpolates from its ETA; the poll just keeps the
+            // server progress/target current and catches completion (when the bot
+            // settles, the loop stops). A modest fixed tick.
+            return .seconds(15)
         default:
             return nil
         }

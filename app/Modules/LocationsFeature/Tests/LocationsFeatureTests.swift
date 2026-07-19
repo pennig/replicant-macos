@@ -35,15 +35,60 @@ import UniverseModels
         )
         #expect(all.map(\.id) == ["DABAH", "SOL"])
         let solNode = try! #require(all.first { $0.id == "SOL" })
-        // Belt + planet as children; planet has a moon child.
+        // Belt + planet as children; the planet lists its moon followed by its five
+        // Lagrange points.
         #expect(solNode.children?.map(\.id) == ["SOL-BELT-1", "SOL-3"])
-        #expect(solNode.children?.first(where: { $0.id == "SOL-3" })?.children?.map(\.id) == ["SOL-3-1"])
+        #expect(solNode.children?.first(where: { $0.id == "SOL-3" })?.children?.map(\.id)
+            == ["SOL-3-1", "SOL-3-L1", "SOL-3-L2", "SOL-3-L3", "SOL-3-L4", "SOL-3-L5"])
 
         let explored = LocationTree.forest(
             stars: [sol, dabah], details: [:], footprints: [:],
             myPosition: nil, filter: .explored, sort: .alphabetical
         )
         #expect(explored.map(\.id) == ["SOL"])
+    }
+
+    /// Every planet lists its five Lagrange points after its moons, even before
+    /// hydration; a hydrated point flags its stored inventory and stationed devices
+    /// (which also roll up onto the parent planet), while an empty point is bare.
+    @Test func planetListsLagrangePointsAfterMoons() {
+        let star = Star(
+            designation: "SOL", spectralType: "G2", color: "yellow-white",
+            positionX: 0, positionY: 0, positionZ: 0, estimatedPlanets: 8,
+            explored: true, hasLife: nil, entryPoint: nil, createdAt: .distantPast
+        )
+        // SOL-5's L4 has been hydrated with a stored resource and a stationed device.
+        let l4 = SpecialSite(
+            designation: "SOL-5-L4", kind: .lagrange, parentBody: "SOL-5",
+            inventory: [InventoryItem(resourceType: "iron", quantity: 42)],
+            devices: [LocatedDevice(deviceCode: "AB12", deviceType: "miner")]
+        )
+        let system = StarSystem(
+            designation: "SOL", systemScanned: true,
+            planets: [Planet(designation: "SOL-5", type: "Gas Giant", recon: .scanned,
+                             lagrange: [l4])]
+        )
+
+        let forest = LocationTree.forest(
+            stars: [star], details: ["SOL": system], footprints: [:],
+            myPosition: nil, filter: .all, sort: .alphabetical
+        )
+        let planet = try! #require(forest.first?.children?.first { $0.id == "SOL-5" })
+        // Moonless planet still gets L1–L5, in order.
+        #expect(planet.children?.map(\.id)
+            == ["SOL-5-L1", "SOL-5-L2", "SOL-5-L3", "SOL-5-L4", "SOL-5-L5"])
+        #expect(planet.children?.allSatisfy { $0.kind == .lagrange } == true)
+
+        let l4Node = try! #require(planet.children?.first { $0.id == "SOL-5-L4" })
+        #expect(l4Node.badges.contains { $0.symbol == "shippingbox" })
+        #expect(l4Node.badges.contains { $0.symbol == "circle.hexagongrid" && $0.count == 1 })
+
+        let l1Node = try! #require(planet.children?.first { $0.id == "SOL-5-L1" })
+        #expect(l1Node.badges.isEmpty)
+
+        // The planet rolls up its Lagrange holdings while collapsed.
+        #expect(planet.badges.contains { $0.symbol == "shippingbox" })
+        #expect(planet.badges.contains { $0.symbol == "circle.hexagongrid" })
     }
 
     /// System objects (megastructures, outer-system objects) appear as system

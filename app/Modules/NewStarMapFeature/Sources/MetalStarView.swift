@@ -223,6 +223,9 @@ struct MetalStarView: NSViewRepresentable {
     /// The bridge the renderer pushes projected cluster badges to, read by the sibling
     /// `LocationClusterLayer`.
     let clusterProjection: DeviceClusterProjectionModel
+    /// The bridge the renderer pushes inbound/outbound transit callouts to, read by the
+    /// sibling `TransitCalloutLayer`.
+    let transitProjection: TransitProjectionModel
 
     final class Coordinator {
         var renderer: StarFieldRenderer?
@@ -252,6 +255,7 @@ struct MetalStarView: NSViewRepresentable {
         @MainActor func syncTerrain(_ stars: [Star], overlays: StarMapOverlays,
                                     projection: ShipProjectionModel,
                                     clusterProjection: DeviceClusterProjectionModel,
+                                    transitProjection: TransitProjectionModel,
                                     into view: StarMTKView) {
             if renderer == nil {
                 // Empty terrain → nothing to draw yet (stays black until stars arrive).
@@ -279,6 +283,13 @@ struct MetalStarView: NSViewRepresentable {
                     MainActor.assumeIsolated {
                         guard let clusterProjection, clusterProjection.clusters != clusters else { return }
                         clusterProjection.clusters = clusters
+                    }
+                }
+                // Inbound/outbound transit callouts: same once-wired, `!=`-guarded push.
+                renderer.onTransitsProjected = { [weak transitProjection] callouts in
+                    MainActor.assumeIsolated {
+                        guard let transitProjection, transitProjection.callouts != callouts else { return }
+                        transitProjection.callouts = callouts
                     }
                 }
             } else if stars != loadedStars {
@@ -390,7 +401,8 @@ struct MetalStarView: NSViewRepresentable {
         view.enableSetNeedsDisplay = false
         view.send = { [store] action in store.send(action) }
         context.coordinator.syncTerrain(stars, overlays: overlays, projection: shipProjection,
-                                        clusterProjection: clusterProjection, into: view)
+                                        clusterProjection: clusterProjection,
+                                        transitProjection: transitProjection, into: view)
         context.coordinator.applyClusters(deviceClusters)
         context.coordinator.applySelectedLocation(store.selectedLocation)
         context.coordinator.applyControls(autoRotate: store.autoRotate,
@@ -403,7 +415,8 @@ struct MetalStarView: NSViewRepresentable {
 
     func updateNSView(_ nsView: StarMTKView, context: Context) {
         context.coordinator.syncTerrain(stars, overlays: overlays, projection: shipProjection,
-                                        clusterProjection: clusterProjection, into: nsView)
+                                        clusterProjection: clusterProjection,
+                                        transitProjection: transitProjection, into: nsView)
         context.coordinator.applyClusters(deviceClusters)
         context.coordinator.applySelectedLocation(store.selectedLocation)
         context.coordinator.applyControls(autoRotate: store.autoRotate,

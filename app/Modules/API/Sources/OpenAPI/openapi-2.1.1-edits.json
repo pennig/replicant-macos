@@ -2358,6 +2358,10 @@
           "ami_directive_status": {
             "type": "string"
           },
+          "controller": {
+            "type": "object",
+            "additionalProperties": {}
+          },
           "controlled_devices": {
             "type": "array",
             "items": {

@@ -33,6 +33,10 @@ public struct NewStarMapView: View {
     /// frame. Held here but NOT read in `body` — only `LocationClusterLayer` reads
     /// `.clusters`, so a per-frame update re-renders just that overlay.
     @State private var clusterProjection = DeviceClusterProjectionModel()
+    /// The bridge the renderer pushes inbound/outbound transit callout positions to each
+    /// frame. Held here but NOT read in `body` — only `TransitCalloutLayer` reads
+    /// `.callouts`, so a per-frame update re-renders just that overlay.
+    @State private var transitProjection = TransitProjectionModel()
     /// The charted galaxy, straight from SQLite — the same table the SceneKit map
     /// reads. Sorted by insertion order so new survey rows append deterministically.
     @FetchAll(UniverseModels.Star.order(by: \.createdAt)) private var surveyed
@@ -335,7 +339,8 @@ public struct NewStarMapView: View {
                           focus: store.focus, systemModel: focusedModel,
                           shipProjection: shipProjection,
                           deviceClusters: deviceClusters,
-                          clusterProjection: clusterProjection)
+                          clusterProjection: clusterProjection,
+                          transitProjection: transitProjection)
                 .ignoresSafeArea()
 
             // Tappable device icons over the ship pips. Renders nothing unless the
@@ -356,6 +361,16 @@ public struct NewStarMapView: View {
                 projection: clusterProjection,
                 selectedLocation: store.selectedLocation,
                 onSelect: { store.send(.locationSelected($0)) }
+            )
+            .ignoresSafeArea()
+
+            // Inbound/outbound travel cards over the top of each dotted transit riser
+            // (system focus only). Tapping selects the ship, like the ship icons.
+            TransitCalloutLayer(
+                projection: transitProjection,
+                deviceTypes: shipDeviceTypes,
+                selectedDeviceCode: store.selectedShipDeviceCode,
+                onSelect: { store.send(.shipSelected($0)) }
             )
             .ignoresSafeArea()
 
