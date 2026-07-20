@@ -413,12 +413,16 @@ public struct NewStarMapView: View {
         .animation(.easeInOut(duration: 0.4), value: store.bootPhase)
         .navigationTitle(navTitle)
         .navigationSubtitle(store.focus == .galaxy ? Text("^[\(chartedStarCount) known star](inflect: true)") : Text(""))
+        // Item-driven (not `isPresented:`) so plotting travel for one system then
+        // another in quick succession re-presents reliably — keyed on the
+        // preview's identity, SwiftUI swaps sheets even when the change lands
+        // mid-dismiss-animation, which a bool toggled off→on silently drops.
         .sheet(
-            isPresented: Binding(
-                get: { store.travelPreview != nil },
-                set: { if !$0 { store.send(.travelPreviewDismissed) } }
+            item: Binding(
+                get: { store.travelPreview },
+                set: { if $0 == nil { store.send(.travelPreviewDismissed) } }
             )
-        ) {
+        ) { _ in
             TravelPlanSheet(
                 preview: store.travelPreview,
                 onConfirm: { store.send(.travelPreviewConfirmed) },
@@ -542,31 +546,29 @@ public struct NewStarMapView: View {
 
     @ViewBuilder private var surveyControl: some View {
         if store.isSurveying {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: Space.s) {
-                    ProgressView().controlSize(.small)
-                    Text("Surveying…").font(.rcCaption).foregroundStyle(.rcTextSecondary)
-                }
-                if let total = store.surveyTotalPages {
-                    ProgressView(value: Double(store.surveyPagesDone), total: Double(max(total, 1)))
-                        .tint(.rcAccent)
-                    Text("Sector \(store.surveyPagesDone) / \(total)")
-                        .font(.rcMonoSmall)
-                        .foregroundStyle(.rcTextTertiary)
-                }
+            HStack(spacing: Space.s) {
+                ProgressView().controlSize(.small)
+                Text("Surveying…").font(.rcCaption).foregroundStyle(.rcTextSecondary)
             }
         } else {
             VStack(alignment: .leading, spacing: 4) {
                 Button {
                     store.send(.surveyButtonTapped)
                 } label: {
-                    Label("Survey nearby stars", systemImage: "dot.radiowaves.left.and.right")
+                    Label("Survey galaxy", systemImage: "dot.radiowaves.left.and.right")
                         .font(.rcCaption)
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(.rcAccent)
+                .foregroundStyle(store.isOnCooldown ? .rcTextTertiary : .rcAccent)
+                .disabled(store.isOnCooldown)
 
-                if let error = store.surveyError {
+                if let until = store.surveyCooldownUntil {
+                    // Live-updating relative countdown; the reducer clears the
+                    // cooldown (re-enabling the button) the moment it lifts.
+                    (Text("Available ") + Text(until, style: .relative))
+                        .font(.rcMonoSmall)
+                        .foregroundStyle(.rcTextTertiary)
+                } else if let error = store.surveyError {
                     Text(error)
                         .font(.rcMonoSmall)
                         .foregroundStyle(.rcError)
@@ -1407,44 +1409,18 @@ private struct BootRebuildOverlay: View {
 
     @ViewBuilder private var phaseContent: some View {
         switch store.bootPhase {
-        case .corruptionDetected:
-            VStack(alignment: .leading, spacing: Space.m) {
-                Text("FAULT 0x5A · STAR_SYSTEM_DB · INTEGRITY CHECK FAILED")
+        case .rebuilding:
+            HStack(spacing: Space.s) {
+                ProgressView().controlSize(.small)
+                Text(progressLine)
                     .font(.rcMonoSmall)
-                    .foregroundStyle(.rcTextTertiary)
-                if let error = store.surveyError {
-                    Text("Last attempt failed: \(error)")
-                        .font(.rcMonoSmall)
-                        .foregroundStyle(.rcError)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Button {
-                    store.send(.manualOverrideTapped)
-                } label: {
-                    Text(store.surveyError == nil ? "Manual Override" : "Retry Manual Override")
-                        .font(.rcBodyEmph)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, Space.s)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.rcAccentOnColor)
-                .background(RoundedRectangle(cornerRadius: Radius.control).fill(.rcAccent))
+                    .foregroundStyle(.rcTextSecondary)
             }
 
-        case .rebuilding, .complete:
-            VStack(alignment: .leading, spacing: Space.s) {
-                ProgressView(value: store.surveyFraction)
-                    .tint(.rcAccent)
-                HStack {
-                    Text(progressLine)
-                        .font(.rcMonoSmall)
-                        .foregroundStyle(.rcTextSecondary)
-                    Spacer()
-                    Text("\(Int(store.surveyFraction * 100))%")
-                        .font(.rcMonoSmall)
-                        .foregroundStyle(.rcTextTertiary)
-                }
-            }
+        case .complete:
+            Text(progressLine)
+                .font(.rcMonoSmall)
+                .foregroundStyle(.rcTextSecondary)
 
         case .idle:
             EmptyView()
@@ -1452,43 +1428,28 @@ private struct BootRebuildOverlay: View {
     }
 
     private var progressLine: String {
-        let total = store.surveyTotalPages ?? 0
         let stars = store.surveyStarCount.formatted()
         return store.bootPhase == .complete
-            ? "\(stars) STARS RESTORED"
-            : "SECTOR \(store.surveyPagesDone) / \(total) · \(stars) STARS RECOVERED"
+            ? "\(stars) STARS CHARTED"
+            : "DOWNLOADING CATALOGUE…"
     }
 
     private var icon: String {
-        switch store.bootPhase {
-        case .complete: "checkmark.seal.fill"
-        case .rebuilding: "arrow.triangle.2.circlepath"
-        default: "exclamationmark.triangle.fill"
-        }
+        store.bootPhase == .complete ? "checkmark.seal.fill" : "sparkles"
     }
 
     private var iconColor: Color {
-        switch store.bootPhase {
-        case .complete: .rcStatusReady
-        case .rebuilding: .rcAccent
-        default: .rcError
-        }
+        store.bootPhase == .complete ? .rcStatusReady : .rcAccent
     }
 
     private var title: String {
-        switch store.bootPhase {
-        case .complete: "Star system database restored"
-        case .rebuilding: "Rebuilding star system database…"
-        default: "Error loading galaxy map: database corruption detected!"
-        }
+        store.bootPhase == .complete ? "Star catalogue ready" : "Charting the galaxy…"
     }
 
     private var message: String {
-        switch store.bootPhase {
-        case .complete: "Catalog reconstructed from deep survey. Resuming normal operation."
-        case .rebuilding: "Manual override accepted. Reconstructing the catalog from a live deep-space survey."
-        default: "Manual override required to rebuild the star system database."
-        }
+        store.bootPhase == .complete
+            ? "The full star catalogue is loaded. Resuming normal operation."
+            : "Downloading the full star catalogue."
     }
 }
 

@@ -67,16 +67,15 @@ public struct NewStarMapFeature {
         /// session's local selection. Nil until an account with a replicant signs in.
         @Shared(.appStorage(Account.activeReplicantCodeKey)) var activeReplicantCode: String?
         var isSurveying: Bool
-        var surveyPagesDone: Int
-        var surveyTotalPages: Int?
         var surveyStarCount: Int
         var surveyError: String?
         var bootPhase: BootPhase
+        /// When the next full survey is allowed, per the catalogue endpoint's own
+        /// rate limit (nil = ready now). Non-nil disables the survey button until a
+        /// timer clears it.
+        var surveyCooldownUntil: Date?
 
-        var surveyFraction: Double {
-            guard let total = surveyTotalPages, total > 0 else { return 0 }
-            return min(1, Double(surveyPagesDone) / Double(total))
-        }
+        var isOnCooldown: Bool { surveyCooldownUntil != nil }
 
         public init() {
             self.selectedStar = nil
@@ -92,11 +91,10 @@ public struct NewStarMapFeature {
             self.isTransitioning = false
             self.travelPreview = nil
             self.isSurveying = false
-            self.surveyPagesDone = 0
-            self.surveyTotalPages = nil
             self.surveyStarCount = 0
             self.surveyError = nil
             self.bootPhase = .idle
+            self.surveyCooldownUntil = nil
         }
     }
 
@@ -146,12 +144,13 @@ public struct NewStarMapFeature {
         case travelPreviewDismissed
         // First-run survey / boot sequence.
         case task
+        case firstRunSurveyStarted
         case surveyButtonTapped
-        case surveyProgress(pagesDone: Int, totalPages: Int, starCount: Int)
+        case catalogueLoaded(count: Int)
         case surveyFinished
         case surveyFailed(String)
-        case bootCorruptionDetected
-        case manualOverrideTapped
+        case surveyCooldownStarted(Date?)
+        case cooldownElapsed
         case bootDismissed
 
         @CasePathable
@@ -162,10 +161,12 @@ public struct NewStarMapFeature {
         }
     }
 
-    private enum CancelID { case survey, transition, meshRefresh, locationHydrate }
+    private enum CancelID { case survey, cooldown, transition, meshRefresh, locationHydrate, travelPreview }
 
-    /// The server caps `per_page` at 50.
-    static let surveyPageSize = 50
+    /// The per-replicant exploration overlay walks pages at the server's `per_page`
+    /// cap. Explored (nearest) systems cluster in the first pages, so the walk
+    /// stops as soon as a page carries none.
+    static let overlayPageSize = 100
 
     /// Fly durations, in ms. Must match the camera eases in `StarFieldRenderer`.
     static let drillInBaseMs = 1150
@@ -357,6 +358,9 @@ public struct NewStarMapFeature {
                 return .run { send in
                     await send(.travelPreviewResponse(commandClient.previewTravel(deviceCode, destination)))
                 }
+                // A new preview cancels any prior in-flight dry-run so a late
+                // response can't overwrite this one's phase.
+                .cancellable(id: CancelID.travelPreview, cancelInFlight: true)
 
             case let .travelPreviewResponse(outcome):
                 // Ignore a late response if the user already dismissed the sheet.
@@ -387,13 +391,11 @@ public struct NewStarMapFeature {
                 return .none
 
             case .surveyButtonTapped:
-                guard !state.isSurveying else { return .none }
+                guard !state.isSurveying, !state.isOnCooldown else { return .none }
                 return runSurvey(&state)
 
-            case let .surveyProgress(pagesDone, totalPages, starCount):
-                state.surveyPagesDone = pagesDone
-                state.surveyTotalPages = totalPages
-                state.surveyStarCount = starCount
+            case let .catalogueLoaded(count):
+                state.surveyStarCount = count
                 return .none
 
             case .surveyFinished:
@@ -411,29 +413,32 @@ public struct NewStarMapFeature {
             case let .surveyFailed(message):
                 state.isSurveying = false
                 state.surveyError = message
-                // Drop back to the modal so the override can be retried.
-                if state.bootPhase == .rebuilding { state.bootPhase = .corruptionDetected }
+                // Dismiss the loading overlay; the HUD survey control surfaces the
+                // message (and any cooldown) so the map is usable immediately.
+                state.bootPhase = .idle
+                return .none
+
+            case let .surveyCooldownStarted(until):
+                return setCooldown(&state, until: until)
+
+            case .cooldownElapsed:
+                state.surveyCooldownUntil = nil
                 return .none
 
             case .task:
-                // First run only: if the local star catalog is empty, present the
-                // (themed) corruption modal that gates the initial rebuild.
-                guard state.bootPhase == .idle else { return .none }
+                // First run only: if the local star catalog is empty, load the full
+                // catalogue up front (no themed gate — just fetch it).
+                guard state.bootPhase == .idle, !state.isSurveying else { return .none }
                 let database = self.database
                 return .run { send in
                     let count = try await database.read { db in
                         try UniverseModels.Star.fetchCount(db)
                     }
-                    if count == 0 { await send(.bootCorruptionDetected) }
+                    if count == 0 { await send(.firstRunSurveyStarted) }
                 } catch: { _, _ in }
 
-            case .bootCorruptionDetected:
-                guard state.bootPhase == .idle else { return .none }
-                state.bootPhase = .corruptionDetected
-                return .none
-
-            case .manualOverrideTapped:
-                guard !state.isSurveying else { return .none }
+            case .firstRunSurveyStarted:
+                guard !state.isSurveying, !state.isOnCooldown else { return .none }
                 state.bootPhase = .rebuilding
                 return runSurvey(&state)
 
@@ -478,76 +483,113 @@ public struct NewStarMapFeature {
         }
     }
 
-    /// Starts the paged nearby-stars survey: resets progress, then walks every
-    /// page — persisting each (timestamps preserved on re-survey) and reporting
-    /// progress. The view's `@FetchAll` observation renders the inserted rows.
-    ///
-    /// Cheap re-survey short-circuit: the listing is distance-sorted with no
-    /// delta cursor and stars carry no server timestamp, so there's no way to
-    /// ask for "only the new ones" — new stars interleave anywhere in the ~200
-    /// pages. But page 1 reports the server's `total_stars`; if the local
-    /// `stars` table already holds at least that many, nothing new exists and we
-    /// stop after page 1 instead of re-walking every page. An empty catalog
-    /// (first run / rebuild) has a count of 0, so the initial survey always
-    /// walks fully.
+    /// Runs the full survey: one non-paged download of the entire objective star
+    /// catalogue (`GET /v1/stars`), then a bounded per-replicant pass that overlays
+    /// `explored` / `has_life`. The view's `@FetchAll` observation renders the
+    /// inserted rows. The catalogue endpoint is rate-limited to ≈one call a minute;
+    /// on cooldown the download throws and we surface the reset (from its response
+    /// headers) rather than an error, disabling the button until it lifts.
     private func runSurvey(_ state: inout State) -> Effect<Action> {
         guard let code = state.activeReplicantCode, !code.isEmpty else {
             state.surveyError = "No active replicant selected."
-            if state.bootPhase == .rebuilding { state.bootPhase = .corruptionDetected }
+            state.bootPhase = .idle
             return .none
         }
         state.isSurveying = true
         state.surveyError = nil
-        state.surveyPagesDone = 0
-        state.surveyTotalPages = nil
         state.surveyStarCount = 0
         let starsClient = self.starsClient
         let database = self.database
         let date = self.date
-        let pageSize = Self.surveyPageSize
+        let overlayPageSize = Self.overlayPageSize
         return .run { send in
-            let existingCount = (try? await database.read { db in
-                try UniverseModels.Star.fetchCount(db)
-            }) ?? 0
-            for try await result in starsClient.survey(code, pageSize) {
-                let stamp = date.now
-                let records = result.stars.map { UniverseModels.Star(item: $0, createdAt: stamp) }
-                try await database.write { db in
-                    try UniverseModels.Star.insert {
-                        records
-                    } onConflict: {
-                        $0.designation
-                    } doUpdate: { row, excluded in
-                        // Schema fields refresh; local lifecycle timestamps
-                        // (createdAt/firstVisitedAt/fullyScannedAt) are preserved.
-                        row.spectralType = excluded.spectralType
-                        row.color = excluded.color
-                        row.positionX = excluded.positionX
-                        row.positionY = excluded.positionY
-                        row.positionZ = excluded.positionZ
-                        row.estimatedPlanets = excluded.estimatedPlanets
-                        row.explored = excluded.explored
-                        row.hasLife = excluded.hasLife
-                        row.entryPoint = excluded.entryPoint
-                    }
-                    .execute(db)
-                }
-                await send(.surveyProgress(
-                    pagesDone: result.page,
-                    totalPages: result.totalPages,
-                    starCount: result.totalStars
-                ))
-                // Nothing new since the last survey — stop after page 1 rather
-                // than re-walking every page. The next page is only requested on
-                // the following loop turn, so breaking here costs one request.
-                if result.page == 1, result.totalStars > 0, existingCount >= result.totalStars {
-                    break
-                }
+            // 1. Full objective catalogue in a single request.
+            let catalogue: [StarItem]
+            do {
+                catalogue = try await starsClient.catalogue()
+            } catch {
+                let cooldown = await starsClient.cooldownUntil()
+                let message = cooldown != nil
+                    ? "Survey is on cooldown — try again shortly."
+                    : error.localizedDescription
+                await send(.surveyFailed(message))
+                await send(.surveyCooldownStarted(cooldown))
+                return
             }
+            let stamp = date.now
+            let records = catalogue.map { UniverseModels.Star(item: $0, createdAt: stamp) }
+            try await database.write { db in
+                try UniverseModels.Star.insert {
+                    records
+                } onConflict: {
+                    $0.designation
+                } doUpdate: { row, excluded in
+                    // Objective catalogue fields refresh; per-replicant knowledge
+                    // (explored/hasLife) and local lifecycle timestamps are
+                    // preserved — the catalogue carries neither.
+                    row.spectralType = excluded.spectralType
+                    row.color = excluded.color
+                    row.positionX = excluded.positionX
+                    row.positionY = excluded.positionY
+                    row.positionZ = excluded.positionZ
+                    row.estimatedPlanets = excluded.estimatedPlanets
+                    row.entryPoint = excluded.entryPoint
+                }
+                .execute(db)
+            }
+            await send(.catalogueLoaded(count: catalogue.count))
+
+            // 2. Best-effort per-replicant exploration overlay. The listing is
+            // distance-sorted and explored systems are the nearest, so they cluster
+            // in the first pages; stop at the first page carrying none rather than
+            // walking the whole ~140-page catalogue.
+            do {
+                for try await result in starsClient.survey(code, overlayPageSize) {
+                    let explored = result.stars.filter(\.explored)
+                    if !explored.isEmpty {
+                        let records = explored.map { UniverseModels.Star(item: $0, createdAt: stamp) }
+                        try await database.write { db in
+                            try UniverseModels.Star.insert {
+                                records
+                            } onConflict: {
+                                $0.designation
+                            } doUpdate: { row, excluded in
+                                row.explored = excluded.explored
+                                row.hasLife = excluded.hasLife
+                            }
+                            .execute(db)
+                        }
+                    }
+                    if explored.isEmpty { break }
+                }
+            } catch {
+                // Enrichment is best-effort; the catalogue already loaded.
+            }
+
             await send(.surveyFinished)
+            await send(.surveyCooldownStarted(starsClient.cooldownUntil()))
         } catch: { error, send in
             await send(.surveyFailed(error.localizedDescription))
         }
         .cancellable(id: CancelID.survey)
+    }
+
+    /// Arms (or clears) the survey-button cooldown: holds `until` in state and
+    /// schedules a one-shot to clear it the moment the window lifts, re-enabling
+    /// the button without any polling. A nil or past date clears immediately.
+    private func setCooldown(_ state: inout State, until: Date?) -> Effect<Action> {
+        let now = self.date.now
+        guard let until, until > now else {
+            state.surveyCooldownUntil = nil
+            return .cancel(id: CancelID.cooldown)
+        }
+        state.surveyCooldownUntil = until
+        let clock = self.clock
+        let interval = until.timeIntervalSince(now)
+        return .run { send in
+            try await clock.sleep(for: .seconds(interval))
+            await send(.cooldownElapsed)
+        }
+        .cancellable(id: CancelID.cooldown, cancelInFlight: true)
     }
 }

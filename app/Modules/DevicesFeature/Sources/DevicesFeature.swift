@@ -45,6 +45,10 @@ public struct DevicesFeature {
         /// cost checked against the current location's live inventory. Non-nil ⇒
         /// the sheet is presented.
         public var printPreview: PrintPreview?
+        /// A pending `collect_resources` (Load Cargo) picker: the transport's hold
+        /// space and the location's live stockpile, resolved before the sheet's
+        /// per-resource quantity controls render. Non-nil ⇒ the sheet is presented.
+        public var cargoLoad: CargoLoadPreview?
         /// The diversion defense state for the selected device, when it's
         /// `diverting`. A diverting device carries no activity block of its own, so
         /// its active-task readout is fetched from the object it's attached to (see
@@ -58,6 +62,7 @@ public struct DevicesFeature {
             self.commandError = nil
             self.travelPreview = nil
             self.printPreview = nil
+            self.cargoLoad = nil
             self.diversion = nil
         }
 
@@ -102,6 +107,13 @@ public struct DevicesFeature {
         case printPreviewResponse(PrintPreview.Phase)
         case printPreviewConfirmed
         case printPreviewDismissed
+        /// Load-cargo flow: open the picker (fetching the location's stockpile),
+        /// receive the resolved stockpile, then either confirm (dispatch
+        /// `collect_resources` with the chosen per-resource amounts) or dismiss.
+        case cargoLoadRequested(deviceCode: String, location: String?, locationName: String?, capacityRemaining: Int)
+        case cargoLoadResponse(CargoLoadPreview.Phase)
+        case cargoLoadConfirmed(resources: [String: Int])
+        case cargoLoadDismissed
         /// The inspector is viewing a device whose activity refreshes in place
         /// (mining cycles, a diversion's slow progress). Non-nil starts a
         /// while-viewing refresh loop for that device; nil (deselect / settled)
@@ -131,8 +143,10 @@ public struct DevicesFeature {
     @Dependency(\.continuousClock) var clock
     @Dependency(\.date) var date
 
-    /// Cancels the while-viewing refresh loop when the inspected device changes.
-    private enum CancelID { case refresh }
+    /// `refresh` cancels the while-viewing refresh loop when the inspected device
+    /// changes; `travelPreview` cancels an in-flight dry-run so a prior device's
+    /// late response can't land on the current preview.
+    private enum CancelID { case refresh, travelPreview, cargoLoad }
 
     public var body: some ReducerOf<Self> {
         BindingReducer()
@@ -217,6 +231,9 @@ public struct DevicesFeature {
                 return .run { send in
                     await send(.travelPreviewResponse(commandClient.previewTravel(deviceCode, destination)))
                 }
+                // Requesting a new preview cancels any prior device's in-flight
+                // dry-run, so a late response can't overwrite this one's phase.
+                .cancellable(id: CancelID.travelPreview, cancelInFlight: true)
 
             case let .travelPreviewResponse(outcome):
                 // Ignore a late response if the user already dismissed the sheet.
@@ -274,6 +291,63 @@ public struct DevicesFeature {
             case .printPreviewDismissed:
                 state.printPreview = nil
                 return .none
+
+            case let .cargoLoadRequested(deviceCode, location, locationName, capacityRemaining):
+                state.cargoLoad = CargoLoadPreview(
+                    deviceCode: deviceCode,
+                    locationName: locationName,
+                    capacityRemaining: capacityRemaining
+                )
+                logger.info("cargo load \(deviceCode, privacy: .public) requested")
+                let locationsClient = self.locationsClient
+                return .run { send in
+                    guard let location, !location.isEmpty else {
+                        await send(.cargoLoadResponse(.failed("This device isn’t at a location, so there’s no stockpile to load from.")))
+                        return
+                    }
+                    do {
+                        let items = try await locationsClient.inventory(at: location)
+                        // Only resources actually on hand are loadable; sort by a
+                        // stable canonical order so the picker rows don't shuffle.
+                        let order = DeviceCommand.miningResources
+                        let stock = items
+                            .compactMap { item -> CargoStock? in
+                                let units = Int(item.quantity)
+                                guard units > 0 else { return nil }
+                                return CargoStock(resourceType: item.resourceType.lowercased(), available: units)
+                            }
+                            .sorted { lhs, rhs in
+                                let l = order.firstIndex(of: lhs.resourceType) ?? order.count
+                                let r = order.firstIndex(of: rhs.resourceType) ?? order.count
+                                return l == r ? lhs.resourceType < rhs.resourceType : l < r
+                            }
+                        await send(.cargoLoadResponse(.loaded(stock)))
+                    } catch {
+                        await send(.cargoLoadResponse(.failed(Self.stockpileErrorMessage(error))))
+                    }
+                }
+                // A new request cancels a prior device's in-flight stockpile read so
+                // a late response can't land on this picker's phase.
+                .cancellable(id: CancelID.cargoLoad, cancelInFlight: true)
+
+            case let .cargoLoadResponse(phase):
+                // Ignore a late response if the user already dismissed the sheet.
+                guard state.cargoLoad != nil else { return .none }
+                state.cargoLoad?.phase = phase
+                return .none
+
+            case let .cargoLoadConfirmed(resources):
+                guard let preview = state.cargoLoad else { return .none }
+                state.cargoLoad = nil
+                return .send(.commandConfirmed(
+                    kind: .collectResources,
+                    deviceCode: preview.deviceCode,
+                    params: CommandParams(resources: resources)
+                ))
+
+            case .cargoLoadDismissed:
+                state.cargoLoad = nil
+                return .cancel(id: CancelID.cargoLoad)
 
             case let .viewingChanged(deviceCode):
                 // Any prior device's overlay is stale the moment the selection
@@ -342,6 +416,20 @@ public struct DevicesFeature {
                 state.commandError = message
                 return .none
             }
+        }
+    }
+
+    /// A user-facing message for a failed location-stockpile read behind the Load
+    /// Cargo picker. A presence-gated location (no replicant in system) gets a
+    /// pointed hint; anything else is reported generically.
+    static func stockpileErrorMessage(_ error: Error) -> String {
+        switch error {
+        case LocationsError.noReplicantInSystem:
+            return "No replicant is in this system, so its stockpile isn’t visible from here."
+        case LocationsError.notFound:
+            return "This location has no readable stockpile."
+        default:
+            return "Couldn’t read this location’s stockpile."
         }
     }
 

@@ -168,6 +168,16 @@ public struct OperationKind: RawRepresentable, Hashable, Sendable {
     /// Stow into the nearest carrier — status-only topology change. Immediate.
     public static let stow     = OperationKind(rawValue: "stow")
 
+    /// Load a transport device's cargo hold from the local stockpile
+    /// (`collect_resources`). Carries a per-type `resources` map of how many units
+    /// of each resource to take. Immediate: the server moves the resources into the
+    /// hold and answers synchronously, so it creates no tracked op.
+    public static let collectResources = OperationKind(rawValue: "collect_resources")
+    /// Unload a transport device's cargo hold at its current location
+    /// (`deposit_resources`). An omitted `resources` map empties the entire hold;
+    /// otherwise it drops the named per-type amounts. Immediate, like its inverse.
+    public static let depositResources = OperationKind(rawValue: "deposit_resources")
+
     /// Set an AMI controller's autonomous directive (e.g. a survey controller to
     /// `belt_search`, a mining controller to `gather_evenly`) — a synchronous
     /// configuration change gated on the device's `available_directives`.

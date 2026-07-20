@@ -572,6 +572,96 @@ private typealias Operation = GameModels.Operation
         }
     }
 
+    /// `collect_resources` loads the hold from the local stockpile — an immediate
+    /// command (no tracked op) whose `command` verb and per-type `resources` map
+    /// reach the wire, and whose post-command read refreshes the transport's cargo.
+    @Test func collectResourcesSendsResourcesAndIsImmediate() async throws {
+        let database = try GameDatabase.bootstrap()
+        let readCount = LockIsolated(0)
+        let captured = LockIsolated<JSONValue?>(nil)
+        let client = GameClient(make: {
+            Client(
+                serverURL: URL(string: "https://stub.invalid")!,
+                transport: CapturingTransport(
+                    onBody: { data in captured.setValue(try? JSONDecoder().decode(JSONValue.self, from: data)) },
+                    response: jsonResponse(200, #"{"status":"idle","cargo_used":50}"#)
+                )
+            )
+        })
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.gameClient = client
+            $0.devicesClient.read = { code in
+                readCount.withValue { $0 += 1 }
+                return makeDevice(code: code, status: "idle")
+            }
+        } operation: {
+            let outcome = await CommandClient.liveValue.dispatch(
+                .collectResources, "51910407", CommandParams(resources: ["structural": 30, "carbon": 20])
+            )
+            #expect(outcome == .accepted(operationID: nil))
+        }
+
+        let body = captured.value
+        #expect(body?["command"]?.stringValue == "collect_resources")
+        #expect(body?["resources"]?["structural"]?.numberValue == 30)
+        #expect(body?["resources"]?["carbon"]?.numberValue == 20)
+        #expect(try await op(database, device: "51910407") == nil)   // no tracked op
+        #expect(readCount.value == 1)                                // one authoritative read
+    }
+
+    /// `collect_resources` with an empty map fails before any request is sent (the
+    /// server needs at least one resource/amount to move).
+    @Test func collectResourcesEmptyFails() async throws {
+        let database = try GameDatabase.bootstrap()
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.gameClient = stubGameClient { _ in jsonResponse(200) }
+            $0.devicesClient.read = { code in makeDevice(code: code, status: "idle") }
+        } operation: {
+            let outcome = await CommandClient.liveValue.dispatch(.collectResources, "51910407", CommandParams())
+            if case .failed = outcome {} else { Issue.record("expected failed, got \(outcome)") }
+        }
+    }
+
+    /// `deposit_resources` with no `resources` empties the entire hold — the body
+    /// carries only the verb (no `resources` key), and it dispatches as immediate.
+    @Test func depositResourcesEmptyOmitsResourcesAndIsImmediate() async throws {
+        let database = try GameDatabase.bootstrap()
+        let captured = LockIsolated<JSONValue?>(nil)
+        let client = GameClient(make: {
+            Client(
+                serverURL: URL(string: "https://stub.invalid")!,
+                transport: CapturingTransport(
+                    onBody: { data in captured.setValue(try? JSONDecoder().decode(JSONValue.self, from: data)) },
+                    response: jsonResponse(200, #"{"status":"idle","cargo_used":0}"#)
+                )
+            )
+        })
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.gameClient = client
+            $0.devicesClient.read = { code in makeDevice(code: code, status: "idle") }
+        } operation: {
+            let outcome = await CommandClient.liveValue.dispatch(.depositResources, "51910407", CommandParams())
+            #expect(outcome == .accepted(operationID: nil))
+        }
+
+        let body = captured.value
+        #expect(body?["command"]?.stringValue == "deposit_resources")
+        #expect(body?["resources"] == nil)   // omitted → empty the whole hold
+        #expect(try await op(database, device: "51910407") == nil)   // no tracked op
+    }
+
     /// Regression for the `DeviceCommandResponseSchema` `additionalProperties:false`
     /// drift: the device-command 200 body carries confirmation/travel fields the
     /// hand-maintained spec had omitted — `activated`/`deactivated` on the

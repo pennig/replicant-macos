@@ -85,15 +85,14 @@ enum StarMapFocus: Equatable, Sendable {
     }
 }
 
-// MARK: - Database rebuild (first-run survey)
+// MARK: - First-run catalogue load
 
-/// The themed first-run "database rebuild" sequence. The map presents the live
-/// star survey as a recovery from (fictional) database corruption.
+/// The first-run catalogue-download sequence. On an empty local catalog the map
+/// loads the full star catalogue up front behind a simple progress overlay.
 enum BootPhase: Equatable, Sendable {
-    case idle               // normal galaxy
-    case corruptionDetected // the fake error modal, awaiting manual override
-    case rebuilding         // survey running; progress shown, stars stream in
-    case complete           // brief success state before auto-dismiss
+    case idle        // normal galaxy
+    case rebuilding  // catalogue downloading; progress shown
+    case complete    // brief success state before auto-dismiss
 }
 
 // MARK: - Info layers

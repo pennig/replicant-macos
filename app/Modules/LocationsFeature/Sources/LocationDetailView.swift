@@ -57,12 +57,16 @@ public struct LocationDetailView: View {
                 )
             }
         }
+        // Item-driven (not `isPresented:`) so back-to-back previews for different
+        // locations re-present reliably — keyed on the preview's identity, SwiftUI
+        // swaps sheets even when the change lands mid-dismiss-animation, which a
+        // bool toggled off→on silently drops.
         .sheet(
-            isPresented: Binding(
-                get: { store.travelPreview != nil },
-                set: { if !$0 { store.send(.travelPreviewDismissed) } }
+            item: Binding(
+                get: { store.travelPreview },
+                set: { if $0 == nil { store.send(.travelPreviewDismissed) } }
             )
-        ) {
+        ) { _ in
             TravelPlanSheet(
                 preview: store.travelPreview,
                 onConfirm: { store.send(.travelPreviewConfirmed) },

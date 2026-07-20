@@ -185,6 +185,10 @@ public struct LocationsFeature {
 
     public init() {}
 
+    /// Cancels an in-flight travel dry-run so a prior location's late response
+    /// can't land on the current preview.
+    private enum CancelID { case travelPreview }
+
     public var body: some ReducerOf<Self> {
         BindingReducer()
         Reduce { state, action in
@@ -336,6 +340,9 @@ public struct LocationsFeature {
                 return .run { send in
                     await send(.travelPreviewResponse(commandClient.previewTravel(deviceCode, destination)))
                 }
+                // A new preview cancels any prior in-flight dry-run so a late
+                // response can't overwrite this one's phase.
+                .cancellable(id: CancelID.travelPreview, cancelInFlight: true)
 
             case let .travelPreviewResponse(outcome):
                 // Ignore a late response if the user already dismissed the sheet.

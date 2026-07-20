@@ -20,6 +20,12 @@ public actor RateLimitGovernor {
         case reads
         /// Everything else (POST, DELETE, PATCH, ...).
         case actions
+        /// The full star catalogue (`GET /v1/stars`), which the server meters on
+        /// its own tight budget (≈1 request/minute) reported on the same
+        /// `X-RateLimit-*` headers. Kept apart so its `limit: 1 / remaining: 0`
+        /// never clamps the shared `reads` budget. Not gated by `acquire`; the
+        /// feature reads its `resetAt` to gate the survey button instead.
+        case stars
     }
 
     /// A read-only view, e.g. for showing budget in a debug HUD.
@@ -52,6 +58,9 @@ public actor RateLimitGovernor {
         self.states = [
             .reads: State(limit: readLimit, remaining: readLimit, resetAt: nil),
             .actions: State(limit: actionLimit, remaining: actionLimit, resetAt: nil),
+            // Only ever reconciled from response headers / read for its reset; the
+            // optimistic defaults are never consulted since `stars` isn't gated.
+            .stars: State(limit: 1, remaining: 1, resetAt: nil),
         ]
         self.reserve = max(0, reserve)
     }

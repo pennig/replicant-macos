@@ -11,6 +11,7 @@
 //  replicant.
 //
 
+import AccountManager
 import ComposableArchitecture
 import Foundation
 import GameModels
@@ -71,6 +72,10 @@ public struct ReplicantsFeature {
         /// inspector can show a spinner while the richer record loads.
         public var loadingDetailCode: String?
 
+        /// A presented sheet — the profile editor or the replicate confirmation.
+        /// Both act only on the account's own replicants.
+        @Presents public var destination: ReplicantsDestination.State?
+
         public init(selectedReplicantCode: String? = nil) {
             self.selectedReplicantCode = selectedReplicantCode
             self.searchText = ""
@@ -95,6 +100,16 @@ public struct ReplicantsFeature {
         public var selectedHostDevice: Device? {
             guard let hostCode = selectedReplicant?.hostedDeviceCode else { return nil }
             return devices.first { $0.deviceCode == hostCode }
+        }
+
+        /// The codes of the account's own replicants — the "Yours" set. Drives
+        /// which replicants expose the edit / replicate actions.
+        public var ownedCodes: Set<String> { Set(roster.map(\.replicantCode)) }
+
+        /// Whether the currently-inspected replicant is one of the account's own.
+        public var isSelectedOwned: Bool {
+            guard let code = selectedReplicantCode else { return false }
+            return ownedCodes.contains(code)
         }
 
         /// The directory grouped into the account's own replicants, other players,
@@ -145,6 +160,13 @@ public struct ReplicantsFeature {
         /// the inspector can show its real type/glyph — fetching it via
         /// `devices/{code}` when we don't already have it. Nil clears the loop.
         case hostDeviceRequested(code: String?)
+        /// Open the profile editor for the inspected (own) replicant.
+        case editTapped
+        /// Open the replicate confirmation for the inspected (own) replicant.
+        case replicateTapped
+        /// Reveal a replicant in the inspector (e.g. a freshly-spawned offspring).
+        case selectReplicant(String?)
+        case destination(PresentationAction<ReplicantsDestination.Action>)
     }
 
     public init() {}
@@ -152,6 +174,7 @@ public struct ReplicantsFeature {
     @Dependency(\.defaultDatabase) var database
     @Dependency(\.replicantsClient) var replicantsClient
     @Dependency(\.devicesClient) var devicesClient
+    @Dependency(\.accountManager) var accountManager
 
     private enum CancelID { case details, hostDevice }
 
@@ -249,7 +272,60 @@ public struct ReplicantsFeature {
                     logger.info("fetched host device \(code, privacy: .public) for inspector")
                 }
                 .cancellable(id: CancelID.hostDevice, cancelInFlight: true)
+
+            case .editTapped:
+                guard let replicant = state.selectedReplicant, state.isSelectedOwned else { return .none }
+                state.destination = .edit(ReplicantEditFeature.State(replicant: replicant))
+                return .none
+
+            case .replicateTapped:
+                guard let replicant = state.selectedReplicant, state.isSelectedOwned else { return .none }
+                // Resolve readiness from the local fleet — a pure function of the
+                // devices we already hold, so the checklist renders immediately.
+                let eligibility = ReplicationEligibility.resolve(
+                    hostDeviceCode: replicant.hostedDeviceCode, devices: state.devices
+                )
+                state.destination = .replicate(ReplicantReplicateFeature.State(
+                    replicantCode: replicant.replicantCode,
+                    replicantName: replicant.name.isEmpty ? replicant.replicantCode : replicant.name,
+                    eligibility: eligibility
+                ))
+                return .none
+
+            case let .selectReplicant(code):
+                state.selectedReplicantCode = code
+                return .none
+
+            // A replication landed: bring in the new replicant (roster + directory)
+            // and the rehosted target device, then reveal the offspring.
+            case let .destination(.presented(.replicate(.delegate(.replicated(newCode))))):
+                let accountManager = self.accountManager
+                let devicesClient = self.devicesClient
+                let replicantsClient = self.replicantsClient
+                logger.info("replication succeeded\(newCode.map { " → \($0)" } ?? "", privacy: .public); refreshing roster + fleet")
+                return .run { send in
+                    await accountManager.refreshAccount()
+                    if let devices = try? await devicesClient.fetchAll() {
+                        for device in devices { await Reconciler().ingest(device) }
+                    }
+                    _ = try? await replicantsClient.refresh()
+                    if let newCode { await send(.selectReplicant(newCode)) }
+                }
+
+            case .destination:
+                return .none
             }
         }
+        .ifLet(\.$destination, action: \.destination)
     }
 }
+
+/// The sheets the Replicants inspector can present — both scoped to the account's
+/// own replicants: the profile editor and the replicate confirmation.
+@Reducer
+public enum ReplicantsDestination {
+    case edit(ReplicantEditFeature)
+    case replicate(ReplicantReplicateFeature)
+}
+
+extension ReplicantsDestination.State: Equatable {}

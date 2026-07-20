@@ -32,6 +32,26 @@ public struct RateLimitMiddleware: ClientMiddleware {
         operationID: String,
         next: @Sendable (HTTPRequest, HTTPBody?, URL) async throws -> (HTTPResponse, HTTPBody?)
     ) async throws -> (HTTPResponse, HTTPBody?) {
+        // The full star catalogue (`GET /v1/stars`) is metered on its own tight,
+        // dedicated budget (≈1/min) carried on the same `X-RateLimit-*` headers.
+        // Record it into the `stars` bucket so its `limit: 1 / remaining: 0` can't
+        // clamp the shared reads budget, and neither gate nor auto-retry it — the
+        // survey feature reads the bucket's `resetAt` to gate its button and shows
+        // a cooldown rather than silently blocking on a 429.
+        if operationID == "getV1Stars" {
+            let (response, responseBody) = try await next(request, body, baseURL)
+            let reset = response.headerFields.doubleValue(.xRateLimitReset)
+                ?? response.headerFields.doubleValue(.retryAfter)
+                    .map { Date().timeIntervalSince1970 + $0 }
+            await governor.record(
+                bucket: .stars,
+                limit: response.headerFields.intValue(.xRateLimitLimit),
+                remaining: response.headerFields.intValue(.xRateLimitRemaining),
+                resetEpoch: reset
+            )
+            return (response, responseBody)
+        }
+
         let bucket: RateLimitGovernor.Bucket = (request.method == .get) ? .reads : .actions
 
         // HTTPBody is a single-pass async sequence; buffer it so the request

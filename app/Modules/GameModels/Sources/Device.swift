@@ -321,7 +321,7 @@ extension Device {
     }
 
     /// The stow slots still free — capacity minus used, never negative.
-    public var stowRemaining: Int { max(0, stowCapacity - stowUsed) }
+    public var stowRemaining: Int { Swift.max(0, stowCapacity - stowUsed) }
 
     /// The codes of the devices currently stowed in this device (`stowed_devices`),
     /// from the variable tail. Entries may be bare codes or `{device_code, …}`
@@ -358,7 +358,7 @@ extension Device {
     }
 
     /// The cargo hold's free capacity — capacity minus used, never negative.
-    public var cargoRemaining: Int { max(0, cargoCapacity - Int(cargoUsed)) }
+    public var cargoRemaining: Int { Swift.max(0, cargoCapacity - Int(cargoUsed)) }
 
     /// The resource stacks currently in the cargo hold (`cargo`), from the variable
     /// tail. Empty when the hold is empty or the field is absent.

@@ -19,7 +19,7 @@ import SwiftUI
 import UI
 
 public struct ReplicantDetailView: View {
-    let store: StoreOf<ReplicantsFeature>
+    @Bindable var store: StoreOf<ReplicantsFeature>
 
     public init(store: StoreOf<ReplicantsFeature>) {
         self.store = store
@@ -36,6 +36,9 @@ public struct ReplicantDetailView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: Space.xl) {
                         header(replicant)
+                        if store.isSelectedOwned {
+                            ownerActions
+                        }
                         locationCard(replicant)
                         lore(replicant)
                         devices(replicant)
@@ -68,6 +71,35 @@ public struct ReplicantDetailView: View {
         // type/glyph. Re-runs when the host code changes.
         .task(id: store.selectedReplicant?.hostedDeviceCode) {
             store.send(.hostDeviceRequested(code: store.selectedReplicant?.hostedDeviceCode))
+        }
+        .sheet(item: $store.scope(state: \.destination?.edit, action: \.destination.edit)) { editStore in
+            ReplicantEditSheet(store: editStore)
+        }
+        .sheet(item: $store.scope(state: \.destination?.replicate, action: \.destination.replicate)) { replicateStore in
+            ReplicantReplicateSheet(store: replicateStore)
+        }
+    }
+
+    // MARK: Owner actions
+
+    /// Edit / Replicate — shown only for the account's own replicants.
+    private var ownerActions: some View {
+        HStack(spacing: Space.m) {
+            Button {
+                store.send(.editTapped)
+            } label: {
+                Label("Edit", systemImage: "pencil")
+            }
+            .buttonStyle(RCButtonStyle(.primary))
+
+            Button {
+                store.send(.replicateTapped)
+            } label: {
+                Label("Replicate", systemImage: "square.on.square.dashed")
+            }
+            .buttonStyle(RCButtonStyle(.secondary))
+
+            Spacer(minLength: 0)
         }
     }
 

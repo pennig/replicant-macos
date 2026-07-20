@@ -39,6 +39,10 @@ public struct CommandParams: Sendable, Equatable {
     public var configuration: [String: JSONValue]?
     /// adopt — the device codes an AMI controller should take under its control.
     public var devices: [String]?
+    /// collect_resources / deposit_resources — a per-type map of how many units of
+    /// each resource to load into (or unload from) a transport's cargo hold. For a
+    /// deposit, nil/empty means "empty the entire hold at the current location".
+    public var resources: [String: Int]?
 
     public init(
         destination: String? = nil,
@@ -48,7 +52,8 @@ public struct CommandParams: Sendable, Equatable {
         directive: String? = nil,
         index: Int? = nil,
         configuration: [String: JSONValue]? = nil,
-        devices: [String]? = nil
+        devices: [String]? = nil,
+        resources: [String: Int]? = nil
     ) {
         self.destination = destination
         self.deviceType = deviceType
@@ -58,6 +63,7 @@ public struct CommandParams: Sendable, Equatable {
         self.index = index
         self.configuration = configuration
         self.devices = devices
+        self.resources = resources
     }
 
     var json: JSONValue {
@@ -70,6 +76,9 @@ public struct CommandParams: Sendable, Equatable {
         if let index { dict["index"] = .number(Double(index)) }
         if let configuration, !configuration.isEmpty { dict["configuration"] = .object(configuration) }
         if let devices, !devices.isEmpty { dict["devices"] = .array(devices.map(JSONValue.string)) }
+        if let resources, !resources.isEmpty {
+            dict["resources"] = .object(resources.mapValues { .number(Double($0)) })
+        }
         return .object(dict)
     }
 }
@@ -195,6 +204,11 @@ extension CommandClient: DependencyKey {
                         let reason = "Server error (\(statusCode))."
                         logger.warning("dispatch \(kind.rawValue, privacy: .public) → \(deviceCode, privacy: .public): \(reason, privacy: .public)")
                         return .failed(reason)
+                    case .created:
+                        // 201 is only returned by `replicate`, which dispatches via
+                        // `ReplicantsClient` — not through here — so treat it as unexpected.
+                        logger.warning("dispatch \(kind.rawValue, privacy: .public) → \(deviceCode, privacy: .public): unexpected 201")
+                        return .failed("Unexpected server response.")
                     @unknown default:
                         return .failed("Unexpected server response.")
                     }
@@ -316,6 +330,12 @@ extension CommandClient: DependencyKey {
                     logger.warning("dispatch \(opID, privacy: .public): \(reason, privacy: .public)")
                     await finish(opID, as: .failed, reason: reason, at: date.now, database: database)
                     return .failed(reason)
+                case .created:
+                    // 201 is only returned by `replicate` (dispatched via `ReplicantsClient`),
+                    // never by a tracked command — treat as unexpected.
+                    logger.warning("dispatch \(opID, privacy: .public): unexpected 201")
+                    await finish(opID, as: .failed, reason: "Unexpected server response.", at: date.now, database: database)
+                    return .failed("Unexpected server response.")
                 @unknown default:
                     logger.error("dispatch \(opID, privacy: .public): unexpected server response")
                     await finish(opID, as: .failed, reason: "Unexpected server response.", at: date.now, database: database)
@@ -364,6 +384,8 @@ extension CommandClient: DependencyKey {
                     return .rejected(reason)
                 case let .default(statusCode, _):
                     return .failed("Server error (\(statusCode)).")
+                case .created:
+                    return .failed("Unexpected server response.")
                 @unknown default:
                     return .failed("Unexpected server response.")
                 }
@@ -384,6 +406,8 @@ extension CommandClient: DependencyKey {
     private typealias ReleaseSchema = Components.Schemas.AppSchemasDeviceCommandsReleaseSchema
     private typealias AttachSchema = Components.Schemas.AppSchemasDeviceCommandsAttachSchema
     private typealias DetachSchema = Components.Schemas.AppSchemasDeviceCommandsDetachSchema
+    private typealias CollectResourcesSchema = Components.Schemas.AppSchemasDeviceCommandsCollectResourcesSchema
+    private typealias DepositResourcesSchema = Components.Schemas.AppSchemasDeviceCommandsDepositResourcesSchema
     private typealias CommandResponse = Components.Schemas.AppSchemasDevicesDeviceCommandResponseSchema
 
     /// How a command reports completion — derived from live probing of the API
@@ -479,6 +503,21 @@ extension CommandClient: DependencyKey {
             // `targets` shape as attach.
             guard let devices = params.devices, !devices.isEmpty else { throw CommandError.missingParameter("targets") }
             return .json(.detach(try devicesSchema(DetachSchema.self, command: "detach", devices: devices, key: "targets")))
+        case .collectResources:
+            // Load the hold from the local stockpile — the server needs at least
+            // one resource/amount to move, so an empty map fails fast.
+            guard let resources = params.resources, !resources.isEmpty else {
+                throw CommandError.missingParameter("resources")
+            }
+            return .json(.collectResources(try resourcesSchema(
+                CollectResourcesSchema.self, command: "collect_resources", resources: resources
+            )))
+        case .depositResources:
+            // Unload the hold at the current location. `resources` is optional here:
+            // omitting it empties the entire hold (what the inspector's Unload does).
+            return .json(.depositResources(try resourcesSchema(
+                DepositResourcesSchema.self, command: "deposit_resources", resources: params.resources
+            )))
         case .print:
             guard let deviceType = params.deviceType else { throw CommandError.missingParameter("device_type") }
             return .json(.enqueuePrint(.init(command: "enqueue_print", deviceType: deviceType)))
@@ -518,6 +557,23 @@ extension CommandClient: DependencyKey {
             key: .array(devices.map(JSONValue.string)),
         ])
         let data = try jsonEncoder.encode(json)
+        return try JSONDecoder().decode(Schema.self, from: data)
+    }
+
+    /// Build a `collect_resources`/`deposit_resources` body carrying a per-type
+    /// `resources` map. Those generated schemas type `resources` as an
+    /// `additionalProperties` bag (schemaless keys → numbers), so — as with
+    /// `set_directive`'s configuration — round-trip a `{command, resources}` object
+    /// through JSON and let the schema's decoder slurp the per-resource amounts.
+    /// A nil/empty map omits `resources` entirely (a deposit then empties the hold).
+    private static func resourcesSchema<Schema: Decodable>(
+        _ type: Schema.Type, command: String, resources: [String: Int]?
+    ) throws -> Schema {
+        var object: [String: JSONValue] = ["command": .string(command)]
+        if let resources, !resources.isEmpty {
+            object["resources"] = .object(resources.mapValues { .number(Double($0)) })
+        }
+        let data = try jsonEncoder.encode(JSONValue.object(object))
         return try JSONDecoder().decode(Schema.self, from: data)
     }
 

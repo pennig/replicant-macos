@@ -424,6 +424,7 @@ let package = Package(
         .target(
             name: "ReplicantsFeature",
             dependencies: [
+                "AccountManager",
                 "API",
                 "GameModels",
                 "GameServices",

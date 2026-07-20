@@ -186,6 +186,58 @@
         },
         "additionalProperties": false
       },
+      "app_schemas_accounts_EventSettingsSchema": {
+        "type": "object",
+        "properties": {
+          "ami_digest_interval": {
+            "type": "integer",
+            "default": null,
+            "minimum": 1,
+            "maximum": 30,
+            "description": "Digest frequency multiplier (1-30)",
+            "nullable": true
+          },
+          "muted": {
+            "type": "array",
+            "default": null,
+            "maxItems": 50,
+            "description": "Wildcard patterns for events to suppress (e.g. 'mining.*', '*.completed')",
+            "items": {
+              "type": "string",
+              "pattern": "^[\\w.*]+$"
+            },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "app_schemas_accounts_MessageSettingsSchema": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "boolean",
+            "default": null,
+            "nullable": true
+          },
+          "subscribed": {
+            "type": "array",
+            "default": null,
+            "maxItems": 10,
+            "description": "Message categories to receive as email (e.g. 'alert', 'progression')",
+            "items": {
+              "type": "string",
+              "enum": [
+                "simulation",
+                "alert",
+                "social",
+                "progression"
+              ]
+            },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
       "app_schemas_accounts_ReplicantSummarySchema": {
         "type": "object",
         "properties": {
@@ -263,6 +315,12 @@
           },
           "replicant_cooperation": {
             "type": "string"
+          },
+          "events": {
+            "$ref": "#/components/schemas/app_schemas_accounts_EventSettingsSchema"
+          },
+          "messages": {
+            "$ref": "#/components/schemas/app_schemas_accounts_MessageSettingsSchema"
           },
           "experience_points_total": {
             "type": "integer"
@@ -398,6 +456,30 @@
             "type": "string",
             "default": null,
             "nullable": true
+          },
+          "events": {
+            "default": null,
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/app_schemas_accounts_EventSettingsSchema"
+              },
+              {
+                "type": "object",
+                "nullable": true
+              }
+            ]
+          },
+          "messages": {
+            "default": null,
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/app_schemas_accounts_MessageSettingsSchema"
+              },
+              {
+                "type": "object",
+                "nullable": true
+              }
+            ]
           }
         },
         "additionalProperties": false
@@ -423,6 +505,12 @@
           },
           "replicant_cooperation": {
             "type": "string"
+          },
+          "events": {
+            "$ref": "#/components/schemas/app_schemas_accounts_EventSettingsSchema"
+          },
+          "messages": {
+            "$ref": "#/components/schemas/app_schemas_accounts_MessageSettingsSchema"
           },
           "status": {
             "type": "string"
@@ -2959,6 +3047,67 @@
         },
         "additionalProperties": false
       },
+      "app_schemas_events_GameEventSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer"
+          },
+          "category": {
+            "type": "string"
+          },
+          "event": {
+            "type": "string"
+          },
+          "replicant_code": {
+            "type": "string",
+            "nullable": true
+          },
+          "device_code": {
+            "type": "string",
+            "nullable": true
+          },
+          "device_type": {
+            "type": "string",
+            "nullable": true
+          },
+          "star": {
+            "type": "string",
+            "nullable": true
+          },
+          "location": {
+            "type": "string",
+            "nullable": true
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "created_at": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "app_schemas_events_GameEventsResponseSchema": {
+        "type": "object",
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/app_schemas_events_GameEventSchema"
+            }
+          },
+          "next_cursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
       "app_schemas_messages_MessageSchema": {
         "type": "object",
         "properties": {
@@ -2967,6 +3116,14 @@
           },
           "message_type": {
             "type": "string"
+          },
+          "category": {
+            "type": "string",
+            "nullable": true
+          },
+          "subcategory": {
+            "type": "string",
+            "nullable": true
           },
           "title": {
             "type": "string"
@@ -3710,6 +3867,23 @@
           },
           "body": {
             "type": "string"
+          },
+          "message_type": {
+            "type": "string",
+            "default": "system",
+            "description": "Message type: system, story, discovery, etc."
+          },
+          "category": {
+            "type": "string",
+            "default": null,
+            "description": "Notification category (e.g. 'exploration')",
+            "nullable": true
+          },
+          "subcategory": {
+            "type": "string",
+            "default": null,
+            "description": "Notification subcategory (e.g. 'updates')",
+            "nullable": true
           }
         },
         "required": [
@@ -7119,6 +7293,131 @@
         "summary": "List unlocked blueprints for this account.",
         "tags": [
           "blueprints"
+        ]
+      }
+    },
+    "/v1/events": {
+      "get": {
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "description": "Redis Stream ID to read after",
+            "schema": {
+              "type": "string",
+              "default": null,
+              "nullable": true
+            },
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "description": "Number of events to return (max 100)",
+            "schema": {
+              "type": "integer",
+              "default": 100
+            },
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "filtered",
+            "description": "Apply account event subscription filters",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "device_code",
+            "description": "Filter by device code",
+            "schema": {
+              "type": "string",
+              "default": null,
+              "nullable": true
+            },
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "event",
+            "description": "Filter by event name (e.g. mining.started)",
+            "schema": {
+              "type": "string",
+              "default": null,
+              "nullable": true
+            },
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "category",
+            "description": "Filter by category (e.g. mining)",
+            "schema": {
+              "type": "string",
+              "default": null,
+              "nullable": true
+            },
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "description": "Return events at or after this time (account timezone if naive, ISO 8601)",
+            "schema": {
+              "type": "string",
+              "default": null,
+              "nullable": true
+            },
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "before",
+            "description": "Return events before this time (account timezone if naive, ISO 8601)",
+            "schema": {
+              "type": "string",
+              "default": null,
+              "nullable": true
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "422": {
+            "$ref": "#/components/responses/UNPROCESSABLE_ENTITY"
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/app_schemas_events_GameEventsResponseSchema"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/DEFAULT_ERROR"
+          }
+        },
+        "tags": [
+          "events"
+        ]
+      }
+    },
+    "/v1/events/stream": {
+      "get": {
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/DEFAULT_ERROR"
+          }
+        },
+        "tags": [
+          "events"
         ]
       }
     },

@@ -52,6 +52,13 @@ enum DeviceCommand: Hashable, Identifiable {
     /// Detach devices from a carrier, chosen from the ones it currently carries.
     /// The inverse of `attach`.
     case detach(attached: [DeviceOption])
+    /// Load a transport's cargo hold from the local stockpile (`collect_resources`).
+    /// Opens the load sheet directly (its resource/quantity picker needs the
+    /// location's live stockpile), so it carries no inline parameter.
+    case loadCargo
+    /// Unload a transport's cargo hold at its current location (`deposit_resources`),
+    /// emptying it entirely. A confirm-only action.
+    case unloadCargo
     /// A parameter-less lifecycle command, by backend verb (e.g. `deactivate`).
     case simple(String)
 
@@ -84,6 +91,8 @@ enum DeviceCommand: Hashable, Identifiable {
         case "release":        self = .release(controlled: releaseCandidates)
         case "attach":         self = .attach(candidates: attachCandidates, attachedCount: attachedCount, capacity: attachCapacity)
         case "detach":         self = .detach(attached: detachCandidates)
+        case "collect_resources": self = .loadCargo
+        case "deposit_resources": self = .unloadCargo
         default:
             // Surface only the parameter-less commands CommandClient can dispatch.
             guard CommandClient.supportedSimpleCommands.contains(command) else { return nil }
@@ -107,6 +116,8 @@ enum DeviceCommand: Hashable, Identifiable {
         case .release:       return "release"
         case .attach:        return "attach"
         case .detach:        return "detach"
+        case .loadCargo:     return "collect_resources"
+        case .unloadCargo:   return "deposit_resources"
         case let .simple(c): return c
         }
     }
@@ -126,6 +137,8 @@ enum DeviceCommand: Hashable, Identifiable {
         case .release:       return .release
         case .attach:        return .attach
         case .detach:        return .detach
+        case .loadCargo:     return .collectResources
+        case .unloadCargo:   return .depositResources
         case let .simple(c): return .simple(c)
         }
     }
@@ -145,6 +158,8 @@ enum DeviceCommand: Hashable, Identifiable {
         case .release:       return "Release"
         case .attach:        return "Attach"
         case .detach:        return "Detach"
+        case .loadCargo:     return "Load"
+        case .unloadCargo:   return "Unload"
         case let .simple(c): return DevicePresentation.displayName(c)
         }
     }
@@ -164,6 +179,8 @@ enum DeviceCommand: Hashable, Identifiable {
         case .release:       return "rectangle.stack.badge.minus"
         case .attach:        return "link"
         case .detach:        return "link.badge.minus"
+        case .loadCargo:     return "tray.and.arrow.down"
+        case .unloadCargo:   return "tray.and.arrow.up"
         case let .simple(c): return Self.simpleSymbols[c] ?? "bolt"
         }
     }
@@ -226,7 +243,9 @@ enum DeviceCommand: Hashable, Identifiable {
             return attached.count == 1
                 ? .deviceChoice(label: "Device", options: attached)
                 : .multiSelect(label: "Devices", options: attached, limit: nil)
-        case .scan, .surveyScan, .census, .stow, .simple: return .none
+        // loadCargo opens its own sheet (intercepted before an inline panel shows);
+        // unloadCargo is a plain confirm. Neither collects an inline parameter.
+        case .scan, .surveyScan, .census, .stow, .loadCargo, .unloadCargo, .simple: return .none
         }
     }
 
@@ -253,7 +272,7 @@ enum DeviceCommand: Hashable, Identifiable {
         case .setDirective:    return CommandParams(directive: value)
         // adopt/release/attach build their params from the picker selection in the
         // command grid, not this single-value mapping.
-        case .adopt, .release, .attach, .detach, .scan, .surveyScan, .census, .stow, .simple: return CommandParams()
+        case .adopt, .release, .attach, .detach, .scan, .surveyScan, .census, .stow, .loadCargo, .unloadCargo, .simple: return CommandParams()
         }
     }
 }

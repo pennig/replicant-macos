@@ -41,24 +41,52 @@ public struct StarPage: Equatable, Sendable {
 }
 
 public struct StarsClient: Sendable {
-    /// Walk every page of the observable-stars listing, yielding each page as it
-    /// arrives. One generated client (one rate-limit governor) is shared across
-    /// the survey. The stream finishes when the last page is read, or throws if
-    /// any request fails.
+    /// Download the entire objective star catalogue in a single request
+    /// (`GET /v1/stars`) — every star's position, spectral type, planet estimate,
+    /// and entry point. This is the primary galaxy source. It carries *no*
+    /// per-replicant knowledge (no `explored` / `has_life`); overlay that with
+    /// `survey`. The endpoint is expensive and rate-limited to roughly one call a
+    /// minute — gate any UI on `cooldownUntil`.
+    public var catalogue: @Sendable () async throws -> [StarItem]
+
+    /// When the next full-catalogue download is allowed, per the endpoint's own
+    /// rate-limit headers (nil = ready now). Read after a `catalogue` call — the
+    /// governor captures the reset from the response even on a 429.
+    public var cooldownUntil: @Sendable () async -> Date?
+
+    /// Walk the per-replicant observable-stars listing (`GET /v1/replicants/{code}/stars`,
+    /// paged), yielding each page as it arrives. Used to overlay per-replicant
+    /// `explored` / `has_life` onto the catalogue; the listing is distance-sorted,
+    /// so callers can stop once the nearby explored systems are covered. The
+    /// stream finishes when the last page is read, or throws if any request fails.
     public var survey: @Sendable (
         _ replicantCode: String,
         _ perPage: Int
     ) -> AsyncThrowingStream<StarPage, any Error>
 
     public init(
+        catalogue: @escaping @Sendable () async throws -> [StarItem],
+        cooldownUntil: @escaping @Sendable () async -> Date?,
         survey: @escaping @Sendable (String, Int) -> AsyncThrowingStream<StarPage, any Error>
     ) {
+        self.catalogue = catalogue
+        self.cooldownUntil = cooldownUntil
         self.survey = survey
     }
 }
 
 extension StarsClient: DependencyKey {
-    public static let liveValue = StarsClient(survey: { replicantCode, perPage in
+    public static let liveValue = StarsClient(catalogue: {
+        @Dependency(\.gameClient) var gameClient
+        let output = try await gameClient.make().getV1Stars()
+        let body = try output.ok.body.json
+        return (body.stars ?? []).map(StarItem.init(schema:))
+    }, cooldownUntil: {
+        @Dependency(\.gameClient) var gameClient
+        let snapshot = await gameClient.budget(.stars)
+        guard let reset = snapshot.resetAt, reset > Date() else { return nil }
+        return reset
+    }, survey: { replicantCode, perPage in
         @Dependency(\.gameClient) var gameClient
         let make = gameClient.make
         return AsyncThrowingStream { continuation in
@@ -90,20 +118,26 @@ extension StarsClient: DependencyKey {
 }
 
 extension StarsClient: TestDependencyKey {
-    public static let testValue = StarsClient(survey: { _, _ in
-        AsyncThrowingStream { $0.finish() }
-    })
+    public static let testValue = StarsClient(
+        catalogue: { [] },
+        cooldownUntil: { nil },
+        survey: { _, _ in AsyncThrowingStream { $0.finish() } }
+    )
 
-    public static let previewValue = StarsClient(survey: { _, _ in
-        AsyncThrowingStream { continuation in
-            continuation.yield(StarPage(
-                stars: StarItem.previewSeed, page: 1, perPage: 100,
-                totalStars: StarItem.previewSeed.count, totalPages: 1,
-                replicantPosition: Position(x: 0, y: 0, z: 0)
-            ))
-            continuation.finish()
+    public static let previewValue = StarsClient(
+        catalogue: { StarItem.previewSeed },
+        cooldownUntil: { nil },
+        survey: { _, _ in
+            AsyncThrowingStream { continuation in
+                continuation.yield(StarPage(
+                    stars: StarItem.previewSeed, page: 1, perPage: 100,
+                    totalStars: StarItem.previewSeed.count, totalPages: 1,
+                    replicantPosition: Position(x: 0, y: 0, z: 0)
+                ))
+                continuation.finish()
+            }
         }
-    })
+    )
 }
 
 extension DependencyValues {

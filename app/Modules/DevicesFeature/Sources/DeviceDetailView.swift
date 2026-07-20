@@ -70,18 +70,32 @@ public struct DeviceDetailView: View {
                 } message: { message in
                     Text(message)
                 }
-                .sheet(isPresented: travelPreviewBinding) {
+                // Item-driven (not `isPresented:`) so back-to-back previews for
+                // different devices re-present reliably: keyed on the preview's
+                // identity, SwiftUI dismisses one device's sheet and presents the
+                // next even when the swap lands mid-dismiss-animation — a bool
+                // toggled off→on in that window is silently coalesced and dropped.
+                // Content reads `store.travelPreview` live so the loading→loaded
+                // phase transition still renders.
+                .sheet(item: travelPreviewItem) { _ in
                     TravelPlanSheet(
                         preview: store.travelPreview,
                         onConfirm: { store.send(.travelPreviewConfirmed) },
                         onDismiss: { store.send(.travelPreviewDismissed) }
                     )
                 }
-                .sheet(isPresented: printPreviewBinding) {
+                .sheet(item: printPreviewItem) { _ in
                     PrintPlanSheet(
                         preview: store.printPreview,
                         onConfirm: { store.send(.printPreviewConfirmed) },
                         onDismiss: { store.send(.printPreviewDismissed) }
+                    )
+                }
+                .sheet(item: cargoLoadItem) { _ in
+                    CargoLoadSheet(
+                        preview: store.cargoLoad,
+                        onConfirm: { store.send(.cargoLoadConfirmed(resources: $0)) },
+                        onDismiss: { store.send(.cargoLoadDismissed) }
                     )
                 }
             } else {
@@ -132,17 +146,27 @@ public struct DeviceDetailView: View {
         )
     }
 
-    private var travelPreviewBinding: Binding<Bool> {
+    /// Item bindings for the preview sheets: SwiftUI presents while the value is
+    /// non-nil and keys re-presentation on the item's identity; a nil write (the
+    /// user closing the sheet) routes to the dismiss action.
+    private var travelPreviewItem: Binding<TravelPreview?> {
         Binding(
-            get: { store.travelPreview != nil },
-            set: { if !$0 { store.send(.travelPreviewDismissed) } }
+            get: { store.travelPreview },
+            set: { if $0 == nil { store.send(.travelPreviewDismissed) } }
         )
     }
 
-    private var printPreviewBinding: Binding<Bool> {
+    private var printPreviewItem: Binding<PrintPreview?> {
         Binding(
-            get: { store.printPreview != nil },
-            set: { if !$0 { store.send(.printPreviewDismissed) } }
+            get: { store.printPreview },
+            set: { if $0 == nil { store.send(.printPreviewDismissed) } }
+        )
+    }
+
+    private var cargoLoadItem: Binding<CargoLoadPreview?> {
+        Binding(
+            get: { store.cargoLoad },
+            set: { if $0 == nil { store.send(.cargoLoadDismissed) } }
         )
     }
 
@@ -1329,6 +1353,10 @@ private struct CommandGrid: View {
                 case let .release(controlled): return !controlled.isEmpty
                 case let .attach(candidates, _, _): return !candidates.isEmpty
                 case let .detach(attached):    return !attached.isEmpty
+                // Cargo commands only make sense while the transport is stationed at
+                // a location: Load needs free hold space, Unload needs cargo aboard.
+                case .loadCargo:   return device.cargoRemaining > 0 && device.location?.isEmpty == false
+                case .unloadCargo: return !device.cargoItems.isEmpty && device.location?.isEmpty == false
                 default:                      return true
                 }
             }
@@ -1376,6 +1404,18 @@ private struct CommandGrid: View {
     /// Toggle a command's confirm panel, seeding any default parameter value.
     private func select(_ command: DeviceCommand) {
         if pending == command { pending = nil; return }
+        // Load Cargo skips the inline panel — its resource/quantity picker needs the
+        // location's live stockpile, so it opens a sheet straight from the grid.
+        if case .loadCargo = command {
+            pending = nil
+            store.send(.cargoLoadRequested(
+                deviceCode: device.deviceCode,
+                location: device.location,
+                locationName: device.locationName,
+                capacityRemaining: device.cargoRemaining
+            ))
+            return
+        }
         textValue = ""
         selectedCodes = []
         if case .print = command {
@@ -1499,9 +1539,10 @@ private struct CommandGrid: View {
                     .foregroundStyle(.rcTextSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             case .none:
-                Text("Run \(command.title) on \(device.deviceCode)?")
+                Text(confirmPrompt(for: command))
                     .font(.rcCaption)
                     .foregroundStyle(.rcTextSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             HStack(spacing: Space.s) {
@@ -1551,11 +1592,22 @@ private struct CommandGrid: View {
         )
     }
 
+    /// The prompt shown in a confirm-only (`.none`) panel. Unload spells out that it
+    /// empties the whole hold; everything else is a plain "Run X on CODE?".
+    private func confirmPrompt(for command: DeviceCommand) -> String {
+        if case .unloadCargo = command {
+            let place = device.locationName ?? device.location ?? "its current location"
+            return "Unload the entire cargo hold at \(place)?"
+        }
+        return "Run \(command.title) on \(device.deviceCode)?"
+    }
+
     /// The confirm button's title. Travel reviews a route first; adopt shows how
     /// many devices are checked.
     private func confirmTitle(for command: DeviceCommand) -> String {
         if command == .travel { return "Review Route…" }
         if command == .print { return "Review Cost…" }
+        if case .unloadCargo = command { return "Unload All" }
         if !selectedCodes.isEmpty {
             if case .adopt = command { return "Adopt \(selectedCodes.count)" }
             if case .release = command { return "Release \(selectedCodes.count)" }
