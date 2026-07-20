@@ -2,10 +2,10 @@
 //  LocationEventPolicyTests.swift
 //  Replicould — GameServices
 //
-//  The passive-scan / roster-location policy behind the `locations.scan` relay
-//  route: which events warrant a current-system re-scan, and which arrivals
-//  advance the roster location. Pure logic, so exercised directly (no relay, no
-//  database, no scan side effect).
+//  The passive-scan / roster-location policy behind the `locations.scan` route:
+//  which events warrant a current-system re-scan, and which arrivals advance the
+//  roster location. Pure logic, so exercised directly (no stream, no database,
+//  no scan side effect).
 //
 
 import API
@@ -19,20 +19,29 @@ import Utils
 
     // MARK: - Fixtures
 
-    /// A relay `event` built from a payload dict (JSON-encoded like the wire).
+    /// A game `event` with a dotted name. Place fields can be supplied either as
+    /// first-class envelope fields (`star`/`location`) or in the `payload`, to
+    /// exercise both resolution paths.
     private func event(
-        eventType: String,
+        _ name: String,
         deviceCode: String? = nil,
         replicantCode: String? = nil,
+        star: String? = nil,
+        location: String? = nil,
         payload: [String: String] = [:]
-    ) throws -> UnifiedEvent {
-        var object: [String: Any] = ["type": "event", "timestamp": "2026-06-25T09:42:06-05:00"]
-        object["event_type"] = eventType
-        if let deviceCode { object["device_code"] = deviceCode }
-        if let replicantCode { object["replicant_code"] = replicantCode }
-        if !payload.isEmpty { object["payload"] = payload }
-        let data = try JSONSerialization.data(withJSONObject: object)
-        return try UnifiedEvent(relayEvent: RelayEvent(id: "1-0", raw: data))
+    ) -> GameEventEnvelope {
+        let values = payload.mapValues { JSONValue.string($0) }
+        return GameEventEnvelope(
+            id: "1-0",
+            category: String(name.split(separator: ".").first ?? ""),
+            event: name,
+            replicantCode: replicantCode,
+            deviceCode: deviceCode,
+            star: star,
+            location: location,
+            payload: values.isEmpty ? nil : values,
+            createdAt: "2026-06-25T09:42:06-05:00"
+        )
     }
 
     /// A replicant at ATIANFU-KUIPER hosted by vessel "HOST", by default.
@@ -52,83 +61,85 @@ import Utils
 
     // MARK: - system(for:)
 
-    @Test func systemPrefersStarField() throws {
-        let e = try event(eventType: "shop", payload: ["star": "ATIANFU", "location": "OTHER-1"])
+    @Test func systemPrefersEnvelopeStarField() {
+        let e = event("shop.restocked", star: "ATIANFU", location: "OTHER-1")
         #expect(LocationEventPolicy.system(for: e) == "ATIANFU")
     }
 
-    @Test func systemFallsBackToLocationPrefix() throws {
-        let e = try event(eventType: "shop", payload: ["location": "ATIANFU-1-L4"])
+    @Test func systemFallsBackToEnvelopeLocationPrefix() {
+        let e = event("shop.restocked", location: "ATIANFU-1-L4")
         #expect(LocationEventPolicy.system(for: e) == "ATIANFU")
     }
 
-    @Test func systemFallsBackToPlanetThenDesignation() throws {
-        #expect(try LocationEventPolicy.system(for: event(eventType: "x", payload: ["planet": "SOL-3"])) == "SOL")
-        #expect(try LocationEventPolicy.system(for: event(eventType: "x", payload: ["designation": "SOL-3-SAL-1"])) == "SOL")
+    @Test func systemPrefersPayloadStarWhenEnvelopeAbsent() {
+        let e = event("shop.restocked", payload: ["star": "ATIANFU", "location": "OTHER-1"])
+        #expect(LocationEventPolicy.system(for: e) == "ATIANFU")
     }
 
-    @Test func systemIsNilWhenPayloadNamesNoPlace() throws {
-        #expect(try LocationEventPolicy.system(for: event(eventType: "x", payload: ["status": "ok"])) == nil)
-        #expect(try LocationEventPolicy.system(for: event(eventType: "x")) == nil)
+    @Test func systemFallsBackToPayloadPlanetThenDesignation() {
+        #expect(LocationEventPolicy.system(for: event("x", payload: ["planet": "SOL-3"])) == "SOL")
+        #expect(LocationEventPolicy.system(for: event("x", payload: ["designation": "SOL-3-SAL-1"])) == "SOL")
+    }
+
+    @Test func systemIsNilWhenNothingNamesAPlace() {
+        #expect(LocationEventPolicy.system(for: event("x", payload: ["status": "ok"])) == nil)
+        #expect(LocationEventPolicy.system(for: event("x")) == nil)
     }
 
     // MARK: - Non-trigger events
 
-    @Test func unrelatedEventIsIgnored() throws {
-        let e = try event(eventType: "mining_started", deviceCode: "HOST", payload: ["location": "ATIANFU-KUIPER"])
+    @Test func unrelatedEventIsIgnored() {
+        let e = event("mining.started", deviceCode: "HOST", location: "ATIANFU-KUIPER")
         #expect(LocationEventPolicy.decide(event: e, replicant: replicant()) == .ignore)
     }
 
     // MARK: - Arrivals (host-device gated)
 
-    @Test func hostArrivalCrossSystemScansAndAdvancesRosterClearingStarName() throws {
-        let e = try event(eventType: "arrived", deviceCode: "HOST",
-                          payload: ["star": "AINALRAM", "location": "AINALRAM-BELT-1"])
+    @Test func hostArrivalCrossSystemScansAndAdvancesRosterClearingStarName() {
+        // Arrival carries its place in the first-class envelope fields.
+        let e = event("travel.arrived", deviceCode: "HOST", star: "AINALRAM", location: "AINALRAM-BELT-1")
         let decision = LocationEventPolicy.decide(event: e, replicant: replicant())
         #expect(decision.shouldScan)
         #expect(decision.rosterUpdate == .init(star: "AINALRAM", location: "AINALRAM-BELT-1", systemChanged: true))
     }
 
-    @Test func hostArrivalIntraSystemHopKeepsStarName() throws {
+    @Test func hostArrivalIntraSystemHopKeepsStarName() {
         // Same system (ATIANFU), different location → systemChanged false.
-        let e = try event(eventType: "device_cruise_arrived", deviceCode: "HOST",
-                          payload: ["location": "ATIANFU-1"])
+        let e = event("travel.cruise_arrived", deviceCode: "HOST", location: "ATIANFU-1")
         let decision = LocationEventPolicy.decide(event: e, replicant: replicant())
         #expect(decision.shouldScan)
         #expect(decision.rosterUpdate == .init(star: "ATIANFU", location: "ATIANFU-1", systemChanged: false))
     }
 
-    @Test func hostArrivalDerivesStarFromLocationPrefixWhenAbsent() throws {
-        let e = try event(eventType: "device_surge_hop_arrived", deviceCode: "HOST",
-                          payload: ["location": "AINALRAM-1-L4"])
+    @Test func hostArrivalDerivesStarFromPayloadLocationPrefixWhenAbsent() {
+        // Place supplied via payload (not envelope) → star derived from prefix.
+        let e = event("travel.surge_hop_arrived", deviceCode: "HOST", payload: ["location": "AINALRAM-1-L4"])
         let decision = LocationEventPolicy.decide(event: e, replicant: replicant())
         #expect(decision.rosterUpdate?.star == "AINALRAM")
         #expect(decision.rosterUpdate?.location == "AINALRAM-1-L4")
         #expect(decision.rosterUpdate?.systemChanged == true)
     }
 
-    @Test func hostArrivalAtSameLocationScansButDoesNotReWriteRoster() throws {
-        let e = try event(eventType: "arrived", deviceCode: "HOST",
-                          payload: ["star": "ATIANFU", "location": "ATIANFU-KUIPER"])
+    @Test func hostArrivalAtSameLocationScansButDoesNotReWriteRoster() {
+        let e = event("travel.arrived", deviceCode: "HOST", star: "ATIANFU", location: "ATIANFU-KUIPER")
         let decision = LocationEventPolicy.decide(event: e, replicant: replicant())
         #expect(decision.shouldScan)                 // still worth a passive refresh
         #expect(decision.rosterUpdate == nil)         // already there — no redundant write
     }
 
-    @Test func arrivalOfAnotherDeviceIsIgnored() throws {
+    @Test func arrivalOfAnotherDeviceIsIgnored() {
         // A mining drone (not the host vessel) arriving elsewhere leaves us put.
-        let e = try event(eventType: "arrived", deviceCode: "DRONE",
-                          payload: ["star": "ELSEWHERE", "location": "ELSEWHERE-2"])
+        let e = event("travel.arrived", deviceCode: "DRONE", star: "ELSEWHERE", location: "ELSEWHERE-2")
         #expect(LocationEventPolicy.decide(event: e, replicant: replicant()) == .ignore)
     }
 
-    @Test func arrivalWithNoDeviceCodeIsIgnored() throws {
-        let e = try event(eventType: "arrived", payload: ["location": "AINALRAM-1"])
+    @Test func arrivalWithNoDeviceCodeIsIgnored() {
+        let e = event("travel.arrived", location: "AINALRAM-1")
         #expect(LocationEventPolicy.decide(event: e, replicant: replicant()) == .ignore)
     }
 
-    @Test func hostArrivalWithNoLocationScansWithoutRosterUpdate() throws {
-        let e = try event(eventType: "arrived", deviceCode: "HOST", payload: ["status": "ok"])
+    @Test func hostArrivalWithNoLocationScansWithoutRosterUpdate() {
+        let e = event("travel.arrived", deviceCode: "HOST", payload: ["status": "ok"])
         let decision = LocationEventPolicy.decide(event: e, replicant: replicant())
         #expect(decision.shouldScan)
         #expect(decision.rosterUpdate == nil)
@@ -136,20 +147,20 @@ import Utils
 
     // MARK: - Location-scoped events (current-system gated)
 
-    @Test func locationEventInCurrentSystemScans() throws {
-        let e = try event(eventType: "shop_restocked", payload: ["location": "ATIANFU-1"])
+    @Test func locationEventInCurrentSystemScans() {
+        let e = event("shop.restocked", location: "ATIANFU-1")
         let decision = LocationEventPolicy.decide(event: e, replicant: replicant())
         #expect(decision.shouldScan)
         #expect(decision.rosterUpdate == nil)   // location-scoped events never move the roster
     }
 
-    @Test func locationEventInDifferentSystemIsIgnored() throws {
-        let e = try event(eventType: "asteroid_incoming", payload: ["star": "SOMEWHERE"])
+    @Test func locationEventInDifferentSystemIsIgnored() {
+        let e = event("system.object_detected", star: "SOMEWHERE")
         #expect(LocationEventPolicy.decide(event: e, replicant: replicant()) == .ignore)
     }
 
-    @Test func locationEventWithUnknownCurrentSystemIsIgnored() throws {
-        let e = try event(eventType: "location_event", payload: ["location": "ATIANFU-1"])
+    @Test func locationEventWithUnknownCurrentSystemIsIgnored() {
+        let e = event("event.discovered_location_event", location: "ATIANFU-1")
         // Replicant has no current star → nothing to match against.
         #expect(LocationEventPolicy.decide(event: e, replicant: replicant(star: nil)) == .ignore)
     }

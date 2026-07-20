@@ -11,6 +11,7 @@
 		C91E72192FF9931B0092DF05 /* LocationEventsFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C91E72182FF9931B0092DF05 /* LocationEventsFeature */; };
 		C91E721B2FFA954A0092DF05 /* GameDatabase in Frameworks */ = {isa = PBXBuildFile; productRef = C91E721A2FFA954A0092DF05 /* GameDatabase */; };
 		C927E7662FFD5C2900D443E8 /* NewStarMapFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C927E7652FFD5C2900D443E8 /* NewStarMapFeature */; };
+		C9582DF9300E699600EBDC60 /* EventLogFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C9582DF8300E699600EBDC60 /* EventLogFeature */; };
 		C961BC5B2FF5C7AD00D9C273 /* LocationsFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C961BC5A2FF5C7AD00D9C273 /* LocationsFeature */; };
 		C961BC5D2FF69C7600D9C273 /* PrintQueueFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C961BC5C2FF69C7600D9C273 /* PrintQueueFeature */; };
 		C961BC5F2FF6A58600D9C273 /* ReplicantsFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C961BC5E2FF6A58600D9C273 /* ReplicantsFeature */; };
@@ -79,6 +80,7 @@
 				C9702B6D2FF202A5002E2CCE /* BlueprintsFeature in Frameworks */,
 				C927E7662FFD5C2900D443E8 /* NewStarMapFeature in Frameworks */,
 				C9B530992FE1D3AA006F79A8 /* Utils in Frameworks */,
+				C9582DF9300E699600EBDC60 /* EventLogFeature in Frameworks */,
 				C961BC5B2FF5C7AD00D9C273 /* LocationsFeature in Frameworks */,
 				C9B530952FE1D3AA006F79A8 /* API in Frameworks */,
 				C961BC5D2FF69C7600D9C273 /* PrintQueueFeature in Frameworks */,
@@ -160,6 +162,7 @@
 				C927E7652FFD5C2900D443E8 /* NewStarMapFeature */,
 				C98EDC7B2FFFD6EF0033AF54 /* AccountFeature */,
 				C9E7D9783001D264002C2A16 /* TravelUI */,
+				C9582DF8300E699600EBDC60 /* EventLogFeature */,
 			);
 			productName = Replicant;
 			productReference = C922A8B62FDC493200431320 /* Replicould.app */;
@@ -485,6 +488,10 @@
 		C927E7652FFD5C2900D443E8 /* NewStarMapFeature */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = NewStarMapFeature;
+		};
+		C9582DF8300E699600EBDC60 /* EventLogFeature */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = EventLogFeature;
 		};
 		C961BC5A2FF5C7AD00D9C273 /* LocationsFeature */ = {
 			isa = XCSwiftPackageProductDependency;

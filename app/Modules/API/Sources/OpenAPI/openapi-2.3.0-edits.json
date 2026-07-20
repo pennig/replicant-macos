@@ -1165,11 +1165,19 @@
           "explored": {
             "type": "boolean"
           },
+          "has_hub": {
+            "type": "boolean",
+            "nullable": true
+          },
           "has_life": {
             "type": "boolean",
             "nullable": true
           },
           "entry_point": {
+            "type": "string",
+            "nullable": true
+          },
+          "name": {
             "type": "string",
             "nullable": true
           }

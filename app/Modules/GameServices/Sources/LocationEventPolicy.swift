@@ -69,11 +69,11 @@ public enum LocationEventPolicy {
         public static let ignore = Decision(shouldScan: false, rosterUpdate: nil)
     }
 
-    /// Decide what a relay `event` implies for `replicant`'s current location.
-    public static func decide(event: UnifiedEvent, replicant: Replicant) -> Decision {
-        let type = (event.eventType ?? "").lowercased()
-        let isArrival = type.contains("arrived")
-        let isLocationScoped = locationScopedTriggers.contains(where: type.contains)
+    /// Decide what a game `event` implies for `replicant`'s current location.
+    public static func decide(event: GameEventEnvelope, replicant: Replicant) -> Decision {
+        let name = event.event.lowercased()
+        let isArrival = name.contains("arrived")
+        let isLocationScoped = locationScopedTriggers.contains(where: name.contains)
         guard isArrival || isLocationScoped else { return .ignore }
 
         if isArrival {
@@ -88,27 +88,37 @@ public enum LocationEventPolicy {
         return Decision(shouldScan: match)
     }
 
-    /// The star system an event concerns, if its payload names a place: `star` is
-    /// already a system designation; `location` / `planet` / `designation` are
-    /// location codes whose system is the prefix before the first hyphen
-    /// (`ATIANFU-1-L4` → `ATIANFU`). Nil when the payload names none.
-    public static func system(for event: UnifiedEvent) -> String? {
-        let payload = event.payload
-        func systemPrefix(_ key: String) -> String? {
-            guard let value = payload?[key]?.stringValue else { return nil }
+    /// The star system an event concerns, if it names a place. `star` is already a
+    /// system designation; a `location` code's system is the prefix before the
+    /// first hyphen (`ATIANFU-1-L4` → `ATIANFU`). The envelope's first-class
+    /// `star`/`location` fields win; the payload (`planet`/`designation`) is a
+    /// fallback for events that only carry the place there. Nil when none names a
+    /// place.
+    public static func system(for event: GameEventEnvelope) -> String? {
+        func systemPrefix(_ value: String?) -> String? {
+            guard let value, !value.isEmpty else { return nil }
             let prefix = String(value.split(separator: "-").first ?? "")
             return prefix.isEmpty ? nil : prefix
         }
-        return payload?["star"]?.stringValue
-            ?? systemPrefix("location") ?? systemPrefix("planet") ?? systemPrefix("designation")
+        let payload = event.payload
+        return event.star
+            ?? systemPrefix(event.location)
+            ?? payload?["star"]?.stringValue
+            ?? systemPrefix(payload?["location"]?.stringValue)
+            ?? systemPrefix(payload?["planet"]?.stringValue)
+            ?? systemPrefix(payload?["designation"]?.stringValue)
     }
 
     /// The roster advance an arrival carries: the destination `location` (and
     /// `star`, else its system prefix), when it differs from what we hold. Nil if
-    /// the arrival names no location or the replicant is already there.
-    static func arrivalUpdate(event: UnifiedEvent, replicant: Replicant) -> RosterLocationUpdate? {
-        guard let location = event.payload?["location"]?.stringValue, !location.isEmpty else { return nil }
-        let star = event.payload?["star"]?.stringValue ?? String(location.split(separator: "-").first ?? "")
+    /// the arrival names no location or the replicant is already there. The
+    /// envelope's first-class fields win, falling back to the payload.
+    static func arrivalUpdate(event: GameEventEnvelope, replicant: Replicant) -> RosterLocationUpdate? {
+        let locationValue = event.location ?? event.payload?["location"]?.stringValue
+        guard let location = locationValue, !location.isEmpty else { return nil }
+        let star = event.star
+            ?? event.payload?["star"]?.stringValue
+            ?? String(location.split(separator: "-").first ?? "")
         guard location != replicant.currentLocation || star != replicant.currentStar else { return nil }
         return RosterLocationUpdate(star: star, location: location, systemChanged: star != replicant.currentStar)
     }

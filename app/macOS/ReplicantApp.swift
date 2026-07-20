@@ -68,26 +68,25 @@ struct ReplicantApp: App {
             }
         }
         gameSync.registerRoute(
-            RelayRoute(
+            EventRoute(
                 id: "message",
-                type: "message",
+                match: .category("message"),
                 apply: { _ in await refreshInbox() },
                 gapRepair: refreshInbox
             )
         )
 
-        // "event" (story): narrative beats (Bill/Riker updates, first-contact
-        // reports) are pushed over the relay for immediacy, but the backend also
-        // persists them to the inbox as ordinary messages (`message_type:
-        // "story"`). The relay copy carries no id/read-state, so — exactly like
-        // the "message" route — a story event triggers one authoritative inbox
-        // read; the new row lands in the same `Message` table the inbox observes,
-        // arriving live instead of on the next poll. No `gapRepair` needed: the
-        // "message" route's head-page re-read already recovers stories missed
-        // while disconnected.
+        // `story.*`: narrative beats (Bill/Riker updates, first-contact reports)
+        // are pushed over the stream for immediacy, but the backend also persists
+        // them to the inbox as ordinary messages (`message_type: "story"`). The
+        // stream copy carries no id/read-state, so — exactly like the "message"
+        // route — a story event triggers one authoritative inbox read; the new row
+        // lands in the same `Message` table the inbox observes, arriving live
+        // instead of on the next poll. No `gapRepair` needed: the "message"
+        // route's head-page re-read already recovers stories missed while
+        // disconnected.
         gameSync.registerRoute(
-            RelayRoute(id: "messages.story", type: "event") { event in
-                guard (event.eventType ?? "").lowercased() == "story" else { return }
+            EventRoute(id: "messages.story", match: .category("story")) { _ in
                 await refreshInbox()
             }
         )
@@ -111,13 +110,13 @@ struct ReplicantApp: App {
         // relevant events needs exactly one scan to converge — not one per event.
         // This matters most at launch: tier-2 backfill replays a batch of recent
         // events through the routes, and events dispatch *serially* (see
-        // `RelayRouter.dispatch`), so a per-event scan fires a redundant scan for
+        // `EventRouter.dispatch`), so a per-event scan fires a redundant scan for
         // each replayed event. A trailing debounce collapses the burst: each
         // relevant event (re)arms a short timer, and a single scan runs once the
         // events quiet — the same live state one immediate scan would have read.
         let pendingPassiveScan = LockIsolated<Task<Void, Never>?>(nil)
         gameSync.registerRoute(
-            RelayRoute(id: "locations.scan", type: "event") { event in
+            EventRoute(id: "locations.scan", match: .all) { event in
                 @Dependency(\.defaultDatabase) var database
                 // The replicant the event pertains to (else the sole/first on the
                 // roster) — the source of the host-device and current-system gates.
@@ -140,13 +139,13 @@ struct ReplicantApp: App {
                 // carries no display names, and the UI falls back to the mono
                 // designation) — except the star name survives an intra-system hop.
                 //
-                // Only *live relay* arrivals move the roster. A backfilled game-log
-                // arrival is history being replayed on launch (see
-                // `EventPipeline.backfill`): folding those in would walk the roster
-                // through stale waypoints — the location flicker — before settling.
-                // The roster's launch truth is `accounts/me`; backfill exists to
-                // repair the other tables (devices, etc.), which it still does.
-                if case .relay = event.source, let update = decision.rosterUpdate {
+                // Only *live stream* arrivals move the roster. A catch-up arrival
+                // is history being replayed on launch (see `EventPipeline.catchUp`):
+                // folding those in would walk the roster through stale waypoints —
+                // the location flicker — before settling. The roster's launch truth
+                // is `accounts/me`; catch-up exists to repair the other tables
+                // (devices, etc.), which it still does.
+                if event.provenance == .stream, let update = decision.rosterUpdate {
                     let priorStarName = replicant.currentStarName
                     try? await database.write { db in
                         try Replicant.where { $0.replicantCode.eq(code) }.update {
@@ -181,26 +180,25 @@ struct ReplicantApp: App {
         // carries catalog data is a new `case` here plus one `LocationsClient`
         // method, nothing more. Every handler is best-effort and idempotent.
         gameSync.registerRoute(
-            RelayRoute(id: "locations.catalog", type: "event") { event in
+            EventRoute(id: "locations.catalog", match: .all) { event in
                 @Dependency(\.locationsClient) var locationsClient
                 let payload = event.payload
-                switch (event.eventType ?? "").lowercased() {
-                case "scan_complete":
+                // Prefer the envelope's first-class `location`; fall back to payload.
+                let location = event.location ?? payload?["location"]?.stringValue
+                switch event.event {
+                case "scan.completed":
                     // Full scanned body (physical, salvage, sites, inventory).
                     if let payload {
                         _ = try? await locationsClient.ingestScanResult(payload: payload)
                     }
-                case "salvage_depleted":
+                case "salvage.depleted":
                     // A salvage site at `location` is fully spent.
-                    if let location = payload?["location"]?.stringValue {
+                    if let location {
                         _ = try? await locationsClient.markSalvageDepleted(location: location)
                     }
-                case "salvage_resource_depleted":
-                    // One resource ran out at `location`'s salvage.
-                    if let location = payload?["location"]?.stringValue,
-                       let resource = payload?["resource_type"]?.stringValue {
-                        _ = try? await locationsClient.markSalvageResourceDepleted(location: location, resource: resource)
-                    }
+                // NOTE: the resource-level salvage-depletion event's new dotted name
+                // is unconfirmed post-migration; it will surface in the event log so
+                // the case can be added once its name/payload are known.
                 default:
                     break
                 }
@@ -237,12 +235,13 @@ struct ReplicantApp: App {
             }
         }
         gameSync.registerRoute(
-            RelayRoute(
+            EventRoute(
                 id: "locationEvents",
-                type: "event",
+                match: .all,
                 apply: { event in
-                    let type = (event.eventType ?? "").lowercased()
-                    guard type.contains("location_event") || type.contains("scan_complete")
+                    // Quests surface as the `event.*` family (`event.discovered` /
+                    // `event.completed`); a fresh scan can also reveal one.
+                    guard event.category == "event" || event.event == "scan.completed"
                     else { return }
                     refreshEvents()
                 },
@@ -343,6 +342,12 @@ struct ReplicantApp: App {
                 }
                 .keyboardShortcut("r", modifiers: [.command, .option])
                 .disabled(store.isLoggedOut)
+
+                Button("Event Log") {
+                    openWindow(id: WindowID.eventLog)
+                }
+                .keyboardShortcut("e", modifiers: [.command, .option])
+                .disabled(store.isLoggedOut)
             }
         }
 
@@ -350,6 +355,13 @@ struct ReplicantApp: App {
         // Tools menu (never at launch) and follows the appearance preference.
         Window("Raw API Access", id: WindowID.rawAPI) {
             RawAPIWindow(store: store)
+        }
+        .defaultLaunchBehavior(.suppressed)
+
+        // The SSE Event Log diagnostic window for power users. Opened on demand from
+        // the Tools menu (never at launch) and follows the appearance preference.
+        Window("Event Log", id: WindowID.eventLog) {
+            EventLogWindow(store: store)
         }
         .defaultLaunchBehavior(.suppressed)
 
@@ -367,4 +379,5 @@ enum WindowID {
     static let login = "login"
     static let main = "main"
     static let rawAPI = "rawAPI"
+    static let eventLog = "eventLog"
 }

@@ -162,6 +162,12 @@ public struct DiagnosticAPIClient: APIProtocol {
     public func getV1Blueprints(_ input: Operations.GetV1Blueprints.Input) async throws -> Operations.GetV1Blueprints.Output {
         try await DecodingDiagnostics.capture("getV1Blueprints") { try await wrapped.getV1Blueprints(input) }
     }
+    public func getV1Events(_ input: Operations.GetV1Events.Input) async throws -> Operations.GetV1Events.Output {
+        try await DecodingDiagnostics.capture("getV1Events") { try await wrapped.getV1Events(input) }
+    }
+    public func getV1EventsStream(_ input: Operations.GetV1EventsStream.Input) async throws -> Operations.GetV1EventsStream.Output {
+        try await DecodingDiagnostics.capture("getV1EventsStream") { try await wrapped.getV1EventsStream(input) }
+    }
     public func getV1ReplicantsReplicantCodeEvents(_ input: Operations.GetV1ReplicantsReplicantCodeEvents.Input) async throws -> Operations.GetV1ReplicantsReplicantCodeEvents.Output {
         try await DecodingDiagnostics.capture("getV1ReplicantsReplicantCodeEvents") { try await wrapped.getV1ReplicantsReplicantCodeEvents(input) }
     }

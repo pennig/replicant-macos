@@ -1,14 +1,13 @@
 import Foundation
 import SwiftUI
-import UI
 import Utils
 
-struct JSONTreeNode: Identifiable {
-    enum Key: CustomStringConvertible {
+public struct JSONTreeNode: Identifiable {
+    public enum Key: CustomStringConvertible {
         case index(Int)
         case property(String)
-        
-        var description: String {
+
+        public var description: String {
             switch self {
             case .index(let index):
                 String(index)
@@ -17,17 +16,17 @@ struct JSONTreeNode: Identifiable {
             }
         }
     }
-    
-    let id = UUID()
+
+    public let id = UUID()
     let key: Key?
     let value: JSONValue
-    
+
     // Built once at init so identities stay stable across re-renders. A
     // computed property would mint fresh UUIDs on every access and break
     // List diffing/expansion state.
     let children: [JSONTreeNode]?
 
-    init(key: Key? = nil, value: JSONValue) {
+    public init(key: Key? = nil, value: JSONValue) {
         self.key = key
         self.value = value
 
@@ -86,9 +85,13 @@ private struct JSONFlatRow: Identifiable {
     var id: RowID { RowID(node: node.id, kind: kind) }
 }
 
-struct JSONTreeView: View {
+public struct JSONTreeView: View {
     let node: JSONTreeNode
     @State private var expansion = JSONExpansionStore()
+
+    public init(node: JSONTreeNode) {
+        self.node = node
+    }
 
     /// The initial expansion state the whole tree adopts (matches the
     /// `jsonInitiallyExpanded` environment value seeded below). Kept in sync so
@@ -116,7 +119,7 @@ struct JSONTreeView: View {
         return rows
     }
 
-    var body: some View {
+    public var body: some View {
         // A plain scroll container at the root. We deliberately avoid `List`
         // for the tree: nesting a List inside each row produces an inconsistent
         // outline tree that crashes SwiftUI's macOS OutlineListCoordinator, and
@@ -263,7 +266,7 @@ private struct JSONTreeRow: View {
             Color.clear.frame(width: Self.chevronColumn, height: 1)
         }
     }
-    
+
     // The closing `]` / `}`, shown on its own line beneath an expanded
     // container's children and aligned under the opening bracket. Only
     // containers reach here (scalars have no children), so the lookup is
@@ -398,67 +401,4 @@ private extension JSONTreeLabel {
                 )
         }
     }
-}
-
-#Preview {
-    JSONTreeView(node: .init(value: .object([
-        "foo": .string("bar"),
-        "wat": .null,
-        "nah": .object([:]),
-        "yep": .bool(true),
-        "bar": .object([
-            "baz": .string("qux"),
-            "bam": .null,
-            "appol": .string("This is a very long string that will wrap into multiple lines if rendered in a view and we should display it properly."),
-            "bat": .array([
-                .number(12),
-                .number(14),
-                .number(25),
-                .number(12),
-                .number(14),
-                .number(25),
-                .number(12),
-                .number(14),
-                .number(25),
-                .number(12),
-                .number(14),
-                .number(25),
-                .number(12),
-                .number(14),
-                .number(25),
-                .number(12),
-                .number(14),
-                .number(25),
-            ]),
-        ])
-    ]))).background(.rcWindowBackground)
-}
-
-#Preview {
-    JSONTreeView(node: .init(value: .array([
-        .object([
-            "departed_at": .string("2026-05-29T18:45:12Z"),
-            "arrived_at": .string("2026-05-30T07:22:59Z"),
-        ]),
-        .object([
-            "departed_at": .string("2026-05-29T18:45:12Z"),
-            "arrived_at": .string("2026-05-30T07:22:59Z"),
-        ]),
-    ]))).background(.rcWindowBackground)
-}
-
-#Preview {
-    VStack {
-        JSONTreeView(node: .init(value: .string("Hello, world!")))
-        Divider()
-        JSONTreeView(node: .init(value: .bool(false)))
-        Divider()
-        JSONTreeView(node: .init(value: .number(12.56)))
-        Divider()
-        JSONTreeView(node: .init(value: .null))
-        Divider()
-        JSONTreeView(node: .init(value: .array([.string("foo"), .string("bar")])))
-        Divider()
-        JSONTreeView(node: .init(value: .object(["foo": .string("bar"), "bar": .null])))
-    }.background(.rcWindowBackground)
 }

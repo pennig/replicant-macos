@@ -36,6 +36,7 @@ public enum GameDatabase {
         BobnetMessage.registerMigrations(&migrator)
         // Qualified: `Operation` would otherwise be ambiguous with Foundation's.
         GameModels.Operation.registerMigrations(&migrator)
+        EventLog.registerMigrations(&migrator)
         return migrator
     }
 

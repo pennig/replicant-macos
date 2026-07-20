@@ -42,17 +42,26 @@ public struct AccountUpdate: Equatable, Sendable {
     public var timezone: String?
     public var replicantCooperation: String?
     public var bobnetChannels: [String]?
+    /// Event-stream preferences (AMI digest interval + mute patterns). When set,
+    /// the mutes take effect server-side on the event stream.
+    public var events: Account.EventSettings?
+    /// Message-delivery preferences (email opt-in + subscribed categories).
+    public var messages: Account.MessageSettings?
 
     public init(
         name: String? = nil,
         timezone: String? = nil,
         replicantCooperation: String? = nil,
-        bobnetChannels: [String]? = nil
+        bobnetChannels: [String]? = nil,
+        events: Account.EventSettings? = nil,
+        messages: Account.MessageSettings? = nil
     ) {
         self.name = name
         self.timezone = timezone
         self.replicantCooperation = replicantCooperation
         self.bobnetChannels = bobnetChannels
+        self.events = events
+        self.messages = messages
     }
 }
 
@@ -78,7 +87,17 @@ extension AccountClient: DependencyKey {
                     name: update.name,
                     timezone: update.timezone,
                     bobnetChannels: update.bobnetChannels,
-                    replicantCooperation: update.replicantCooperation
+                    replicantCooperation: update.replicantCooperation,
+                    events: update.events.map { .init(value1: .init(
+                        amiDigestInterval: $0.amiDigestInterval,
+                        muted: $0.muted
+                    )) },
+                    messages: update.messages.map { .init(value1: .init(
+                        email: $0.email,
+                        subscribed: $0.subscribed.compactMap {
+                            Components.Schemas.AppSchemasAccountsMessageSettingsSchema.SubscribedPayloadPayload(rawValue: $0)
+                        }
+                    )) }
                 ))
             )
             switch output {

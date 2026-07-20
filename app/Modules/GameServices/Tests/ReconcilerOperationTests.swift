@@ -2,7 +2,7 @@
 //  ReconcilerOperationTests.swift
 //  Replicould — GameServices
 //
-//  A completion event (`print_complete`) closes the device's open operation and
+//  A completion event (`print.completed`) closes the device's open operation and
 //  folds its result (the `new_device_code` the dispatch response withheld) into
 //  the op's detail — §4.4 "the event is closer to truth than to a hint."
 //
@@ -121,10 +121,12 @@ private typealias Operation = GameModels.Operation
             }.execute(db)
         }
 
-        let raw = #"""
-        {"type":"event","event_type":"print_complete","device_code":"965AC2C3","payload":{"new_device_code":"1F63E913","device_type":"ftl_beacon"},"timestamp":"2026-06-26T01:00:00Z"}
-        """#
-        let event = try UnifiedEvent(relayEvent: RelayEvent(id: "1-0", raw: Data(raw.utf8)))
+        let event = GameEventEnvelope(
+            id: "1-0", category: "print", event: "print.completed",
+            deviceCode: "965AC2C3",
+            payload: ["new_device_code": .string("1F63E913"), "device_type": .string("ftl_beacon")],
+            createdAt: "2026-06-26T01:00:00Z"
+        )
 
         await withDependencies {
             $0.defaultDatabase = database
@@ -143,8 +145,10 @@ private typealias Operation = GameModels.Operation
     /// No open op on the device → the event is a harmless no-op.
     @Test func printCompleteWithNoOpenOpIsNoOp() async throws {
         let database = try GameDatabase.bootstrap()
-        let raw = #"{"type":"event","event_type":"print_complete","device_code":"NOPE","payload":{},"timestamp":"2026-06-26T01:00:00Z"}"#
-        let event = try UnifiedEvent(relayEvent: RelayEvent(id: "1-0", raw: Data(raw.utf8)))
+        let event = GameEventEnvelope(
+            id: "1-0", category: "print", event: "print.completed",
+            deviceCode: "NOPE", payload: nil, createdAt: "2026-06-26T01:00:00Z"
+        )
 
         await withDependencies {
             $0.defaultDatabase = database
@@ -288,8 +292,10 @@ private typealias Operation = GameModels.Operation
             }.execute(db)
         }
 
-        let raw = #"{"type":"event","event_type":"scan_complete","device_code":"2586E328","payload":null,"timestamp":"2026-06-29T00:16:14Z"}"#
-        let event = try UnifiedEvent(relayEvent: RelayEvent(id: "1-0", raw: Data(raw.utf8)))
+        let event = GameEventEnvelope(
+            id: "1-0", category: "scan", event: "scan.completed",
+            deviceCode: "2586E328", payload: nil, createdAt: "2026-06-29T00:16:14Z"
+        )
 
         await withDependencies {
             $0.defaultDatabase = database
@@ -329,10 +335,10 @@ private typealias Operation = GameModels.Operation
         #expect(op?.completesAt != leg1End)
     }
 
-    /// A *per-leg* arrival event (`device_cruise_arrived`) must not complete an
-    /// open travel op — those fire on every leg. Only the whole-route
-    /// `device_travel_arrived` closes the trip. Regression: completing on the leg
-    /// event ended a multi-leg trip after its first leg.
+    /// A *per-leg* arrival event must not complete an open travel op — those fire
+    /// on every leg. Only the whole-route `travel.arrived` closes the trip.
+    /// Regression: completing on the leg event ended a multi-leg trip after its
+    /// first leg.
     @Test func legArrivalDoesNotCompleteTravelButRouteArrivalDoes() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in
@@ -346,11 +352,16 @@ private typealias Operation = GameModels.Operation
             }.execute(db)
         }
 
-        let legRaw = #"{"type":"event","event_type":"device_cruise_arrived","device_code":"965AC2C3","payload":{"location":"ATIANFU-1-L4"},"timestamp":"2026-06-29T01:33:54-05:00"}"#
-        let legEvent = try UnifiedEvent(relayEvent: RelayEvent(id: "1-0", raw: Data(legRaw.utf8)))
-
-        let routeRaw = #"{"type":"event","event_type":"device_travel_arrived","device_code":"965AC2C3","payload":{"location":"BETSU-7-L4","star":"BETSU"},"timestamp":"2026-06-29T01:36:23-05:00"}"#
-        let routeEvent = try UnifiedEvent(relayEvent: RelayEvent(id: "2-0", raw: Data(routeRaw.utf8)))
+        let legEvent = GameEventEnvelope(
+            id: "1-0", category: "travel", event: "travel.cruise_arrived",
+            deviceCode: "965AC2C3", payload: ["location": .string("ATIANFU-1-L4")],
+            createdAt: "2026-06-29T01:33:54-05:00"
+        )
+        let routeEvent = GameEventEnvelope(
+            id: "2-0", category: "travel", event: "travel.arrived",
+            deviceCode: "965AC2C3", payload: ["location": .string("BETSU-7-L4"), "star": .string("BETSU")],
+            createdAt: "2026-06-29T01:36:23-05:00"
+        )
 
         try await withDependencies {
             $0.defaultDatabase = database

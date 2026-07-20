@@ -2,16 +2,16 @@
 //  BobnetMessage.swift
 //  Replicould — shared dependency clients
 //
-//  The locally-persisted Bobnet chat record. Bobnet exists *only* as relay
-//  webhooks (no authoritative REST endpoint), so unlike every other table this
-//  one is populated solely from the relay and persisted locally so history
-//  survives relaunch (IMPLEMENTATION_PLAN §4.5). The relay delivers a
-//  `{"type":"bobnet","messages":[…]}` envelope whose array lives outside the
-//  generic event envelope, so the bobnet route decodes the raw bytes here.
+//  The locally-persisted Bobnet chat record. Bobnet exists *only* as event-stream
+//  pushes (no authoritative REST endpoint), so unlike every other table this one
+//  is populated solely from the stream and persisted locally so history survives
+//  relaunch (IMPLEMENTATION_PLAN §4.5). Each `bobnet.new_*` event carries one
+//  message in its `payload`, which `init(eventPayload:createdAt:)` maps here.
 //
 
 import Foundation
 import SQLiteData
+import Utils
 
 /// A single Bobnet chat message.
 @Table
@@ -44,49 +44,37 @@ public struct BobnetMessage: Identifiable, Equatable, Sendable {
     }
 }
 
-// MARK: - Wire decoding
+// MARK: - Event-stream decoding
 
 extension BobnetMessage {
-    /// Decode a relay `bobnet` envelope's `messages[]` into records. Returns an
-    /// empty array on any decode failure, so one malformed delivery never wedges
-    /// ingestion.
-    public static func decode(from data: Data) -> [BobnetMessage] {
-        guard let payload = try? JSONDecoder().decode(WirePayload.self, from: data) else { return [] }
-        return payload.messages.map(BobnetMessage.init(wire:))
-    }
-
-    private init(wire: WirePayload.Message) {
+    /// Build a record from a `bobnet.new_*` event's payload. The native event
+    /// stream delivers one bobnet message per event (in `payload`), unlike the
+    /// old relay envelope's top-level `messages[]` array. Returns nil when the
+    /// payload carries no numeric `id` (nothing to key/dedup on).
+    ///
+    /// - Parameter createdAt: the event's envelope timestamp, used when the
+    ///   payload itself carries no `time` (falls back to the epoch, matching the
+    ///   wire decoder's tolerance).
+    public init?(eventPayload payload: [String: JSONValue], createdAt: Date?) {
+        guard let id = payload["id"]?.numberValue.map({ Int($0) }) else { return nil }
+        let time: Date = payload["time"]?.stringValue.map(Self.parseTimestamp)
+            ?? createdAt
+            ?? Date(timeIntervalSince1970: 0)
         self.init(
-            id: wire.id,
-            replicantName: wire.replicantName ?? "",
-            replicantCode: wire.replicantCode ?? "",
-            currentStar: wire.currentStar,
-            channel: wire.channel ?? "",
-            message: wire.message ?? "",
-            time: Self.parseTimestamp(wire.time ?? "")
+            id: id,
+            replicantName: payload["replicant_name"]?.stringValue ?? "",
+            replicantCode: payload["replicant_code"]?.stringValue ?? "",
+            currentStar: payload["current_star"]?.stringValue,
+            channel: payload["channel"]?.stringValue ?? "",
+            message: payload["message"]?.stringValue ?? "",
+            time: time
         )
     }
+}
 
-    private struct WirePayload: Decodable {
-        let messages: [Message]
-        struct Message: Decodable {
-            let id: Int
-            let replicantName: String?
-            let replicantCode: String?
-            let currentStar: String?
-            let channel: String?
-            let message: String?
-            let time: String?
+// MARK: - Timestamp parsing
 
-            enum CodingKeys: String, CodingKey {
-                case id, channel, message, time
-                case replicantName = "replicant_name"
-                case replicantCode = "replicant_code"
-                case currentStar = "current_star"
-            }
-        }
-    }
-
+extension BobnetMessage {
     /// Parses an ISO-8601 timestamp (with or without fractional seconds),
     /// falling back to the Unix epoch so a malformed row still sorts predictably.
     static func parseTimestamp(_ string: String) -> Date {

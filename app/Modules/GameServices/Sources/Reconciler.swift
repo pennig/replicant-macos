@@ -15,7 +15,7 @@
 //  Local-only provenance (`firstSeenAt`) survives every upsert; a stale or
 //  duplicate snapshot is a no-op.
 //
-//  Operations: completion events (e.g. `print_complete`) are treated as truth
+//  Operations: completion events (e.g. `print.completed`) are treated as truth
 //  for the action they close (§4.4) — they carry the result the dispatch
 //  response withheld — so they complete the device's open operation directly.
 //
@@ -149,9 +149,9 @@ public struct Reconciler: Sendable {
                 // whatever timed action it was running. Close its open
                 // deadline-bearing op directly instead of waiting for the deadline
                 // timer — this is what completes travel, since arrival events are
-                // unreliable as a "done" signal (per-leg `device_cruise_arrived`
-                // fires on every leg, and a simple single-leg trip emits *only*
-                // that, never a whole-route `device_travel_arrived`). It also
+                // unreliable as a "done" signal (per-leg arrivals fire on every
+                // leg, and a simple single-leg trip may emit *only* a per-leg
+                // arrival, never a whole-route `travel.arrived`). It also
                 // catches arrivals the server reports before its own ETA estimate.
                 // Continuous mining has no deadline (`completesAt == nil`) and is
                 // left to its own stop signals; search tracks its site and never
@@ -202,36 +202,35 @@ public struct Reconciler: Sendable {
     /// can escalate its follow-up device read (a completed activity block should
     /// be re-read authoritatively, not left to a skippable low-priority refresh).
     @discardableResult
-    public func applyOperationEvent(_ event: UnifiedEvent) async -> Bool {
+    public func applyOperationEvent(_ event: GameEventEnvelope) async -> Bool {
+        // Message/bobnet events don't concern a device operation.
         guard
-            event.type == "event",
-            let deviceCode = event.deviceCode,
-            let eventType = event.eventType
+            event.category != "message",
+            event.category != "bobnet",
+            let deviceCode = event.deviceCode
         else { return false }
 
-        // Event types that close the device's open operation. The event is truth
+        // Event names that close the device's open operation. The event is truth
         // for the action it completes (§4.4); the deadline timer is only the
         // backstop for when one of these is lost.
-        guard Self.completionEventTypes.contains(eventType) else { return false }
+        guard Self.completionEventTypes.contains(event.event) else { return false }
         return await completeOpenOperation(on: deviceCode, source: .event, eventTime: event.date, result: event.payload)
     }
 
-    /// Relay `event_type`s that complete an operation, keyed in one place so an
-    /// evolving payload taxonomy is a localized edit.
+    /// Dotted event names that complete an operation, keyed in one place so an
+    /// evolving taxonomy is a localized edit.
     ///
     /// Travel is completed primarily by the settled-device path (see `ingest`),
-    /// not by an arrival event: the per-leg events (`device_cruise_arrived`,
-    /// `device_surge_hop_arrived`) fire on *every* leg, and a simple single-leg
-    /// trip emits only `device_cruise_arrived` — never a whole-route arrival — so
-    /// no single arrival type means "the trip is done." `device_travel_arrived`
-    /// (emitted at the final destination of a multi-leg/interstellar route) is
+    /// not by an arrival event: per-leg arrivals fire on *every* leg and a simple
+    /// single-leg trip may emit only a per-leg arrival, so no single arrival name
+    /// means "the trip is done." `travel.arrived` (the whole-route arrival) is
     /// kept here only as a snappy fast-path that closes the op without waiting for
-    /// the confirm-read; the per-leg events fall through to drive that read.
+    /// the confirm-read; per-leg arrivals fall through to drive that read.
     static let completionEventTypes: Set<String> = [
-        "print_complete",          // enqueued print finished (carries new_device_code)
-        "device_travel_arrived",   // whole route finished (multi-leg/interstellar fast-path)
-        "site_resource_depleted",  // mining site exhausted → drone returns to idle
-        "scan_complete",           // survey search located a site → drone now tracks it
+        "print.completed",   // enqueued print finished (carries the new device code)
+        "travel.arrived",    // whole route finished (multi-leg/interstellar fast-path)
+        "site.depleted",     // mining site exhausted → drone returns to idle
+        "scan.completed",    // survey search located a site → drone now tracks it
     ]
 
     /// Mark the single open operation on a device completed, recording any event

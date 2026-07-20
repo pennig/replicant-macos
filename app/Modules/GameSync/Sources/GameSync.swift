@@ -3,10 +3,11 @@
 //  Replicould — GameSync
 //
 //  The app's single long-lived ingestion service: the sole consumer of the
-//  account-wide relay and the one place external change enters the app. It owns
-//  the `EventPipeline` + `RelayClient` lifecycle and a registry of `RelayRoute`s.
-//  Features stay pure SQLite observers; the composition root registers routes
-//  that map each relay `type` onto a feature table (see IMPLEMENTATION_PLAN §2).
+//  native event stream and the one place external change enters the app. It owns
+//  the `EventPipeline` + `EventStreamClient` lifecycle and a registry of
+//  `EventRoute`s. Features stay pure SQLite observers; the composition root
+//  registers routes that map the dotted event taxonomy onto feature tables (see
+//  IMPLEMENTATION_PLAN §2).
 //
 //  Exposed as `@Dependency(\.gameSync)`. Registration is synchronous (like
 //  `AccountManager.registerHandler`); start/stop are driven from the session
@@ -24,21 +25,21 @@ import SQLiteData
 private let logger = Logger(subsystem: "name.pennig.replicould", category: "GameSync")
 
 public struct GameSync: Sendable {
-    /// Register a route for a relay event `type`. Synchronous and immediate, so
-    /// routes registered at app launch are in place before `start()` runs.
-    public var registerRoute: @Sendable (RelayRoute) -> Void
+    /// Register a route for a set of events. Synchronous and immediate, so routes
+    /// registered at app launch are in place before `start()` runs.
+    public var registerRoute: @Sendable (EventRoute) -> Void
 
-    /// Begin consuming the relay and dispatching events to routes. Idempotent —
+    /// Begin consuming the event stream and dispatching to routes. Idempotent —
     /// a second call while already running is a no-op (so a restored-session
     /// launch start and a later login start can't double-connect).
     public var start: @Sendable () async -> Void
 
-    /// Stop consuming the relay and tear the pipeline down. The persisted cursor
+    /// Stop consuming the stream and tear the pipeline down. The persisted cursor
     /// survives, so a later `start()` resumes where this left off.
     public var stop: @Sendable () async -> Void
 
     public init(
-        registerRoute: @escaping @Sendable (RelayRoute) -> Void,
+        registerRoute: @escaping @Sendable (EventRoute) -> Void,
         start: @escaping @Sendable () async -> Void,
         stop: @escaping @Sendable () async -> Void
     ) {
@@ -51,13 +52,13 @@ public struct GameSync: Sendable {
 // MARK: - Live implementation
 
 extension GameSync {
-    /// Build a live service backed by a fresh route registry and relay engine.
+    /// Build a live service backed by a fresh route registry and stream engine.
     /// The process shares one instance via `liveValue` (mirroring `GameClient`'s
     /// single governor and `AccountManager`'s single registry).
-    public static func makeLive(configuration: RelayConfiguration = .live) -> GameSync {
+    public static func makeLive() -> GameSync {
         // One registry per service, shared between the (synchronous) registration
         // closure and the engine that reads it on every dispatch.
-        let routes = LockIsolated<[RelayRoute]>([])
+        let routes = LockIsolated<[EventRoute]>([])
 
         // Built-in routes for the shared-infrastructure tables `GameSync` owns
         // (Device / BobnetMessage live in GameServices, not a feature), so
@@ -69,14 +70,13 @@ extension GameSync {
             current.append(Self.deviceRoute(reconciler: reconciler))
             current.append(Self.bobnetRoute())
             // Registered after the device route so, when both fire for the same
-            // relay event, the relay device's confirm-read lands first and the
-            // roster the mesh rebuild reads is current.
+            // event, the device confirm-read lands first and the roster the mesh
+            // rebuild reads is current.
             current.append(Self.ftlMeshRoute())
         }
 
         let engine = GameSyncEngine(
-            configuration: configuration,
-            router: RelayRouter(routes: routes),
+            router: EventRouter(routes: routes),
             scheduler: scheduler
         )
 
@@ -93,17 +93,15 @@ extension GameSync {
     }
 }
 
-/// Owns the relay consumption lifecycle. An actor so start/stop can mutate the
-/// pipeline + task safely from concurrent lifecycle callbacks.
+/// Owns the event-stream consumption lifecycle. An actor so start/stop can mutate
+/// the pipeline + task safely from concurrent lifecycle callbacks.
 actor GameSyncEngine {
-    private let configuration: RelayConfiguration
-    private let router: RelayRouter
+    private let router: EventRouter
     private let scheduler: DeadlineScheduler
     private var pipeline: EventPipeline?
     private var consumeTask: Task<Void, Never>?
 
-    init(configuration: RelayConfiguration, router: RelayRouter, scheduler: DeadlineScheduler) {
-        self.configuration = configuration
+    init(router: EventRouter, scheduler: DeadlineScheduler) {
         self.router = router
         self.scheduler = scheduler
     }
@@ -114,32 +112,32 @@ actor GameSyncEngine {
             return
         }
         @Dependency(\.gameClient) var gameClient
-        logger.info("starting — relay \(self.configuration.baseURL.absoluteString, privacy: .public)")
+        @Dependency(\.keychain) var keychain
+        logger.info("starting — native event stream")
 
         // Arm the deadline backstop for any already-open operations.
         Task { await scheduler.start() }
 
-        let relay = RelayClient(baseURL: configuration.baseURL, clientToken: configuration.clientToken)
-        // Backfill reads share the app's rate-limit budget via gameClient's client.
-        let pipeline = EventPipeline(relay: relay, client: gameClient())
+        // The SSE stream authenticates with the session bearer token, read fresh
+        // per (re)connect from the Keychain — the same source `GameClient` uses.
+        let streamClient = EventStreamClient.live(
+            token: { keychain.load(KeychainClient.apiKeyAccount) }
+        )
+        // Catch-up pull reads share the app's rate-limit budget via gameClient's client.
+        let pipeline = EventPipeline(streamClient: streamClient, client: gameClient())
         self.pipeline = pipeline
 
         let router = self.router
         consumeTask = Task {
             let stream = await pipeline.start()
-            // Tier-2 gap repair (§5.3): reconstruct recent state from the
-            // authoritative game log on every (re)start, covering the case where
-            // the relay cursor fell outside Redis retention. Backfilled events
-            // flow through the same stream → routes and are deduped against
-            // tier-1 cursor replay by the pipeline's fingerprint set. Spawned
-            // after `start()` so the stream's continuation is live first.
-            //
-            // The event channel's tier-2 is this per-replicant game-log walk
-            // (it must feed the pipeline, not write rows directly). The *other*
-            // channels own their tier-2 as `RelayRoute.gapRepair` — the messages
-            // route re-reads the REST inbox — so run every route's gapRepair here
-            // too, recovering entries missed while disconnected beyond retention.
-            Task { await GameSyncEngine.backfillIfStale(pipeline) }
+            // Catch-up (§5.3): reconstruct recent state from the authoritative
+            // account-wide event log on every (re)start, covering a stale cursor.
+            // Catch-up events flow through the same stream → routes, deduped by
+            // stream id. Spawned after `start()` so the stream's continuation is
+            // live first. Feature channels own their own tier-2 as
+            // `EventRoute.gapRepair` (e.g. the messages route re-reads the REST
+            // inbox), so run every route's gapRepair here too.
+            Task { await GameSyncEngine.catchUpIfStale(pipeline) }
             Task { await router.runGapRepair() }
             for await event in stream {
                 await router.dispatch(event)
@@ -147,30 +145,20 @@ actor GameSyncEngine {
         }
     }
 
-    /// Run tier-2 game-log backfill only when the persisted relay cursor is stale
-    /// (or absent). A fresh cursor means tier-1 replay from it already recovers
-    /// recent history on connect, so the per-replicant log walk would be redundant
-    /// reads on every relaunch/wake. A long absence (or cold start) leaves the
-    /// cursor old — or gone — so we walk. `freshWindow` is generous: a needless
-    /// walk only costs a few reads (dedup absorbs them), whereas skipping a real
-    /// gap loses events, so we err toward walking.
-    static func backfillIfStale(_ pipeline: EventPipeline, freshWindow: TimeInterval = 15 * 60) async {
+    /// Run the account-wide catch-up pull only when the persisted cursor is stale
+    /// (or absent). A fresh cursor means the stream's replay-from-cursor already
+    /// recovers recent history on connect, so the pull would be redundant reads on
+    /// every relaunch/wake. `freshWindow` is generous: a needless walk only costs
+    /// a few reads (dedup absorbs them), whereas skipping a real gap loses events,
+    /// so we err toward walking.
+    static func catchUpIfStale(_ pipeline: EventPipeline, freshWindow: TimeInterval = 15 * 60) async {
         @Dependency(\.date) var date
         if let last = await pipeline.lastCursorDate(), date.now.timeIntervalSince(last) < freshWindow {
-            logger.info("backfill skipped — relay cursor fresh (\(Int(date.now.timeIntervalSince(last)))s old); tier-1 replay covers it")
+            logger.info("catch-up skipped — cursor fresh (\(Int(date.now.timeIntervalSince(last)))s old); stream replay covers it")
             return
         }
-        await backfillAllReplicants(pipeline)
-    }
-
-    /// Walk the (small) replicant roster and backfill each from the game log.
-    private static func backfillAllReplicants(_ pipeline: EventPipeline) async {
-        @Dependency(\.defaultDatabase) var database
-        let replicants = (try? await database.read { db in try Replicant.fetchAll(db) }) ?? []
-        for replicant in replicants {
-            let recovered = (try? await pipeline.backfill(replicantCode: replicant.replicantCode)) ?? 0
-            logger.info("backfill \(replicant.replicantCode, privacy: .public): recovered \(recovered) event(s)")
-        }
+        let recovered = (try? await pipeline.catchUp()) ?? 0
+        logger.info("catch-up: recovered \(recovered) event(s)")
     }
 
     func stop() async {
@@ -186,22 +174,20 @@ actor GameSyncEngine {
 // MARK: - Built-in routes (shared-infrastructure tables)
 
 extension GameSync {
-    /// `event`: a game-state event naming a device is treated as an invalidation
-    /// signal — confirm-read the authoritative snapshot and reconcile it under
-    /// the event-time guard. This is robust to evolving payloads (it parses no
-    /// device fields out of the event). Phase 4 adds request coalescing, per-type
-    /// TTL, and budget-aware deferral; Phase 2 does one read per device-naming
-    /// event.
-    static func deviceRoute(reconciler: Reconciler) -> RelayRoute {
-        RelayRoute(id: "device.event", type: "event") { event in
+    /// Every game event naming a device is treated as an invalidation signal —
+    /// confirm-read the authoritative snapshot and reconcile it under the
+    /// event-time guard. Matches `.all` (it parses no device fields out of the
+    /// event, so it's robust to evolving payloads); message/bobnet events simply
+    /// carry no device code and no-op here.
+    static func deviceRoute(reconciler: Reconciler) -> EventRoute {
+        EventRoute(id: "device.event", match: .all) { event in
             @Dependency(\.deviceRefresher) var deviceRefresher
-            logger.debug("event \(event.eventType ?? "?", privacy: .public) device=\(event.deviceCode ?? "-", privacy: .public)")
             // Completion events are truth for the action they close (§4.4): fold
             // the result into the device's open operation first (cheap, no read).
             let completedOp = await reconciler.applyOperationEvent(event)
             // A finished print job spawns a brand-new device (the printed clone)
             // whose code isn't in the local fleet yet — a single-device confirm-read
-            // of the printer can't surface it. The event payload already names it
+            // of the printer can't surface it. The event payload names it
             // (`new_device_code`), so read *just that device* — one coalesced,
             // high-priority read through the coordinator — rather than re-walking
             // the whole account list: at hundreds-to-1000+ devices a full paged
@@ -209,7 +195,10 @@ extension GameSync {
             // it bypassed the coordinator's coalescing/budget entirely). Pruning
             // stays with the explicit cold-load walk in the Devices feature — the
             // one place that knows the account's complete set (see `pruneDevices`).
-            if event.eventType == "print_complete",
+            // NOTE: `new_device_code` is the pre-migration payload key; the loud
+            // unhandled-event log will surface the real key if the new stream
+            // differs, at which point this becomes a one-line edit.
+            if event.event == "print.completed",
                let newCode = event.payload?["new_device_code"]?.stringValue,
                !newCode.isEmpty {
                 _ = await deviceRefresher.refresh(newCode, .high)
@@ -227,43 +216,32 @@ extension GameSync {
         }
     }
 
-    /// Relay-liveness events (`relay_activated` / `relay_deactivated`) change the
-    /// FTL mesh without changing the relay device roster — the device stays put,
-    /// only its status flips — so the star map's roster-change trigger can't see
-    /// them, and neither can any confirm-read of the device row (the mesh is edges
-    /// between relays, not a device field). Rebuild and persist the mesh here
-    /// whenever one arrives, independent of whether the map is on screen. Other
-    /// `event` types fall through untouched (the guard makes this a cheap no-op).
-    static func ftlMeshRoute() -> RelayRoute {
-        RelayRoute(id: "ftl.mesh", type: "event") { event in
-            guard let eventType = event.eventType,
-                  Self.relayLivenessEventTypes.contains(eventType)
-            else { return }
+    /// Relay-liveness events (`relay.activated` / deactivation) change the FTL mesh
+    /// without changing the relay device roster — the device stays put, only its
+    /// status flips — so the star map's roster-change trigger can't see them, and
+    /// neither can any confirm-read of the device row (the mesh is edges between
+    /// relays, not a device field). Rebuild and persist the mesh whenever any
+    /// `relay.*` event arrives, independent of whether the map is on screen.
+    static func ftlMeshRoute() -> EventRoute {
+        EventRoute(id: "ftl.mesh", match: .category("relay")) { event in
             @Dependency(\.ftlMeshRefresher) var ftlMeshRefresher
-            logger.debug("ftl mesh: \(eventType, privacy: .public) → rebuild")
+            logger.debug("ftl mesh: \(event.event, privacy: .public) → rebuild")
             await ftlMeshRefresher.refresh()
         }
     }
 
-    /// Relay `event_type`s that flip a relay's liveness and thus reshape the mesh,
-    /// keyed in one place so an evolving taxonomy is a localized edit.
-    static let relayLivenessEventTypes: Set<String> = ["relay_activated", "relay_deactivated"]
-
-    /// `bobnet`: relay-only chat with no authoritative re-read source, so the
-    /// route decodes the envelope's `messages[]` from the raw bytes and appends
-    /// them (idempotent by message id), persisting history locally.
-    static func bobnetRoute() -> RelayRoute {
-        RelayRoute(id: "bobnet", type: "bobnet") { event in
-            guard let data = event.rawData else { return }
-            let messages = BobnetMessage.decode(from: data)
-            guard !messages.isEmpty else { return }
+    /// `bobnet`: chat with no authoritative re-read source, so the route persists
+    /// each `bobnet.new_*` event's message locally (idempotent by message id).
+    static func bobnetRoute() -> EventRoute {
+        EventRoute(id: "bobnet", match: .category("bobnet")) { event in
+            guard let payload = event.payload,
+                  let message = BobnetMessage(eventPayload: payload, createdAt: event.date)
+            else { return }
             @Dependency(\.defaultDatabase) var database
             try? await database.write { db in
-                for message in messages {
-                    try BobnetMessage.upsert { message }.execute(db)
-                }
+                try BobnetMessage.upsert { message }.execute(db)
             }
-            logger.debug("bobnet: appended \(messages.count) message(s)")
+            logger.debug("bobnet: appended message \(message.id, privacy: .public)")
         }
     }
 }
@@ -275,7 +253,7 @@ extension GameSync: DependencyKey {
 }
 
 extension GameSync: TestDependencyKey {
-    /// Inert by default: tests that exercise routing build a `RelayRouter`
+    /// Inert by default: tests that exercise routing build an `EventRouter`
     /// directly, and other features don't touch the relay.
     public static let testValue = GameSync(
         registerRoute: { _ in },

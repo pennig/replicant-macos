@@ -33,6 +33,13 @@ public struct Account: Codable, Equatable, Sendable {
     public var bobnetChannels: [String]
     public var replicantCooperation: String
     public var experiencePointsTotal: Int
+    /// Event-stream preferences added in v2.3.0 (AMI digest interval + mute
+    /// patterns applied to the stream server-side). Optional so an account.json
+    /// persisted before this field still decodes.
+    public var events: EventSettings?
+    /// Message-delivery preferences added in v2.3.0 (email opt-in + subscribed
+    /// categories). Optional for the same back-compat reason.
+    public var messages: MessageSettings?
 
     public init(
         email: String = "",
@@ -44,7 +51,9 @@ public struct Account: Codable, Equatable, Sendable {
         unreadMessageCount: Int = 0,
         bobnetChannels: [String] = [],
         replicantCooperation: String = "",
-        experiencePointsTotal: Int = 0
+        experiencePointsTotal: Int = 0,
+        events: EventSettings? = nil,
+        messages: MessageSettings? = nil
     ) {
         self.email = email
         self.name = name
@@ -56,6 +65,35 @@ public struct Account: Codable, Equatable, Sendable {
         self.bobnetChannels = bobnetChannels
         self.replicantCooperation = replicantCooperation
         self.experiencePointsTotal = experiencePointsTotal
+        self.events = events
+        self.messages = messages
+    }
+
+    /// Event-stream preferences (`app_schemas_accounts_EventSettingsSchema`).
+    public struct EventSettings: Codable, Equatable, Sendable {
+        /// AMI digest frequency multiplier (1–30).
+        public var amiDigestInterval: Int?
+        /// Wildcard patterns for events to suppress (e.g. `mining.*`,
+        /// `*.completed`); the stream applies these server-side.
+        public var muted: [String]
+
+        public init(amiDigestInterval: Int? = nil, muted: [String] = []) {
+            self.amiDigestInterval = amiDigestInterval
+            self.muted = muted
+        }
+    }
+
+    /// Message-delivery preferences (`app_schemas_accounts_MessageSettingsSchema`).
+    public struct MessageSettings: Codable, Equatable, Sendable {
+        /// Whether subscribed categories are delivered by email.
+        public var email: Bool?
+        /// Message categories to receive as email (e.g. `alert`, `progression`).
+        public var subscribed: [String]
+
+        public init(email: Bool? = nil, subscribed: [String] = []) {
+            self.email = email
+            self.subscribed = subscribed
+        }
     }
 
     /// The `@Shared(.appStorage)` key under which the active replicant's code is
@@ -82,7 +120,27 @@ extension Account {
             unreadMessageCount: schema.unreadMessageCount ?? 0,
             bobnetChannels: schema.bobnetChannels ?? [],
             replicantCooperation: schema.replicantCooperation ?? "",
-            experiencePointsTotal: schema.experiencePointsTotal ?? 0
+            experiencePointsTotal: schema.experiencePointsTotal ?? 0,
+            events: schema.events.map(EventSettings.init(schema:)),
+            messages: schema.messages.map(MessageSettings.init(schema:))
+        )
+    }
+}
+
+extension Account.EventSettings {
+    public init(schema: Components.Schemas.AppSchemasAccountsEventSettingsSchema) {
+        self.init(
+            amiDigestInterval: schema.amiDigestInterval,
+            muted: schema.muted ?? []
+        )
+    }
+}
+
+extension Account.MessageSettings {
+    public init(schema: Components.Schemas.AppSchemasAccountsMessageSettingsSchema) {
+        self.init(
+            email: schema.email,
+            subscribed: (schema.subscribed ?? []).map(\.rawValue)
         )
     }
 }

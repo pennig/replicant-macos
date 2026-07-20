@@ -12,6 +12,7 @@ let package = Package(
         .library(name: "API", targets: ["API"]),
         .library(name: "BlueprintsFeature", targets: ["BlueprintsFeature"]),
         .library(name: "DevicesFeature", targets: ["DevicesFeature"]),
+        .library(name: "EventLogFeature", targets: ["EventLogFeature"]),
         .library(name: "GameDatabase", targets: ["GameDatabase"]),
         .library(name: "GameModels", targets: ["GameModels"]),
         .library(name: "GameServices", targets: ["GameServices"]),
@@ -161,6 +162,30 @@ let package = Package(
                 .product(name: "SQLiteData", package: "sqlite-data"),
             ],
             path: "DevicesFeature/Tests"
+        ),
+        .target(
+            name: "EventLogFeature",
+            dependencies: [
+                "GameModels",
+                "UI",
+                "Utils",
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "SQLiteData", package: "sqlite-data"),
+            ],
+            path: "EventLogFeature/Sources"
+        ),
+        .testTarget(
+            name: "EventLogFeatureTests",
+            dependencies: [
+                "EventLogFeature",
+                "API",
+                "GameDatabase",
+                "GameModels",
+                "Utils",
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "SQLiteData", package: "sqlite-data"),
+            ],
+            path: "EventLogFeature/Tests"
         ),
         .target(
             name: "GameDatabase",
@@ -480,6 +505,9 @@ let package = Package(
         ),
         .target(
             name: "UI",
+            dependencies: [
+                "Utils",
+            ],
             path: "UI/Sources",
             resources: [
                 .process("Colors.xcassets"),

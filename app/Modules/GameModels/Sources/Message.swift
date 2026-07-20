@@ -22,6 +22,10 @@ public struct Message: Identifiable, Equatable, Sendable {
     public let id: Int
     /// Backend category string, e.g. `"system"`, `"combat"`, `"trade"`.
     public var messageType: String
+    /// Broad grouping added in v2.3.0 (e.g. `"alert"`, `"progression"`), nullable.
+    public var category: String?
+    /// Finer grouping added in v2.3.0, nullable.
+    public var subcategory: String?
     public var title: String
     public var body: String
     public var isRead: Bool
@@ -30,6 +34,8 @@ public struct Message: Identifiable, Equatable, Sendable {
     public init(
         id: Int,
         messageType: String,
+        category: String? = nil,
+        subcategory: String? = nil,
         title: String,
         body: String,
         isRead: Bool,
@@ -37,6 +43,8 @@ public struct Message: Identifiable, Equatable, Sendable {
     ) {
         self.id = id
         self.messageType = messageType
+        self.category = category
+        self.subcategory = subcategory
         self.title = title
         self.body = body
         self.isRead = isRead
@@ -65,6 +73,11 @@ extension Message {
                 """
             )
             .execute(db)
+        }
+        // v2.3.0 added optional category/subcategory groupings to messages.
+        migrator.registerMigration("Add category/subcategory to 'messages'") { db in
+            try #sql(#"ALTER TABLE "messages" ADD COLUMN "category" TEXT"#).execute(db)
+            try #sql(#"ALTER TABLE "messages" ADD COLUMN "subcategory" TEXT"#).execute(db)
         }
     }
 }

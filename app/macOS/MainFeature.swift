@@ -15,6 +15,7 @@ import AppKit
 import BlueprintsFeature
 import ComposableArchitecture
 import DevicesFeature
+import EventLogFeature
 import GameModels
 import GameServices
 import LocationEventsFeature
@@ -51,6 +52,9 @@ struct MainFeature {
         /// The Raw API Access experience, shown in its own window (Tools menu).
         /// Seeded with the session API key so requests authenticate as this user.
         var rawAPI: RawAPIFeature.State
+        /// The SSE Event Log diagnostic, shown in its own window (Tools menu). Reads
+        /// the persisted `EventLog` table, so it needs no session seeding.
+        var eventLog: EventLogFeature.State
         /// The Galaxy Map (Stars view)
         var newStarMap: NewStarMapFeature.State
         /// The live fleet (Devices view) — list + inspector + command dispatch.
@@ -77,6 +81,7 @@ struct MainFeature {
             self.sidebar = SidebarFeature.State(category: category)
             self.messages = MessagesFeature.State()
             self.rawAPI = RawAPIFeature.State(apiKey: apiKey)
+            self.eventLog = EventLogFeature.State()
             self.newStarMap = NewStarMapFeature.State()
             self.devices = DevicesFeature.State()
             self.blueprints = BlueprintsFeature.State()
@@ -99,6 +104,7 @@ struct MainFeature {
         case account(PresentationAction<AccountFeature.Action>)
         case messages(MessagesFeature.Action)
         case rawAPI(RawAPIFeature.Action)
+        case eventLog(EventLogFeature.Action)
         case newStarMap(NewStarMapFeature.Action)
         case devices(DevicesFeature.Action)
         case blueprints(BlueprintsFeature.Action)
@@ -122,6 +128,9 @@ struct MainFeature {
         }
         Scope(state: \.rawAPI, action: \.rawAPI) {
             RawAPIFeature()
+        }
+        Scope(state: \.eventLog, action: \.eventLog) {
+            EventLogFeature()
         }
         Scope(state: \.newStarMap, action: \.newStarMap) {
             NewStarMapFeature()
@@ -180,7 +189,7 @@ struct MainFeature {
                 state.devices.selectedDeviceCode = code
                 return .none
 
-            case .sidebar, .account, .messages, .rawAPI, .newStarMap, .devices, .blueprints, .locations, .locationEvents, .printQueue, .replicantDirectory:
+            case .sidebar, .account, .messages, .rawAPI, .eventLog, .newStarMap, .devices, .blueprints, .locations, .locationEvents, .printQueue, .replicantDirectory:
                 return .none
             }
         }

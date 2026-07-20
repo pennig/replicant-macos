@@ -113,6 +113,8 @@ extension Message {
         self.init(
             id: schema.id ?? 0,
             messageType: schema.messageType ?? "",
+            category: schema.category,
+            subcategory: schema.subcategory,
             title: schema.title ?? "",
             body: schema.body ?? "",
             isRead: schema.isRead ?? false,

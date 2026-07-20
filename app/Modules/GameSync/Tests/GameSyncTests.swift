@@ -2,10 +2,10 @@
 //  GameSyncTests.swift
 //  Replicould — GameSync
 //
-//  Routing is the core of the ingestion service, so it's tested directly: a
-//  `RelayRouter` with canned routes must dispatch an event only to the route
-//  whose `type` matches, and to every matching route. (Pipeline/relay I/O is
-//  exercised end-to-end in the app, not here.)
+//  Routing is the core of the ingestion service, so it's tested directly: an
+//  `EventRouter` with canned routes must dispatch an event to every route whose
+//  matcher accepts it (and to no others). (Pipeline/stream I/O is exercised
+//  end-to-end in the app, not here.)
 //
 
 import API
@@ -19,57 +19,76 @@ import Testing
 import Utils
 @testable import GameSync
 
-@Suite struct RelayRouterTests {
+@Suite struct EventRouterTests {
 
-    /// Build a `UnifiedEvent` of a given top-level type from a relay payload.
-    private func event(type: String) throws -> UnifiedEvent {
-        let raw = #"{"type":"\#(type)","title":"x","body":"y","timestamp":"2026-06-25T09:42:06-05:00"}"#
-        return try UnifiedEvent(relayEvent: RelayEvent(id: "1-0", raw: Data(raw.utf8)))
+    /// Build a `GameEventEnvelope` with a given dotted name (category defaults to
+    /// the name's prefix).
+    private func event(
+        _ name: String,
+        deviceCode: String? = nil,
+        payload: [String: JSONValue]? = nil
+    ) -> GameEventEnvelope {
+        GameEventEnvelope(
+            id: "1-0",
+            category: String(name.split(separator: ".").first ?? ""),
+            event: name,
+            deviceCode: deviceCode,
+            payload: payload,
+            createdAt: "2026-06-25T09:42:06-05:00"
+        )
     }
 
-    @Test func dispatchRunsOnlyTheMatchingRoute() async throws {
-        let routes = LockIsolated<[RelayRoute]>([])
-        let router = RelayRouter(routes: routes)
+    @Test func categoryMatcherRunsOnlyMatchingRoutes() async throws {
+        let routes = LockIsolated<[EventRoute]>([])
+        let router = EventRouter(routes: routes)
         let messageRan = LockIsolated(false)
-        let eventRan = LockIsolated(false)
+        let miningRan = LockIsolated(false)
 
         routes.withValue {
-            $0.append(RelayRoute(id: "message", type: "message") { _ in messageRan.setValue(true) })
-            $0.append(RelayRoute(id: "event", type: "event") { _ in eventRan.setValue(true) })
+            $0.append(EventRoute(id: "message", match: .category("message")) { _ in messageRan.setValue(true) })
+            $0.append(EventRoute(id: "mining", match: .category("mining")) { _ in miningRan.setValue(true) })
         }
 
-        await router.dispatch(try event(type: "message"))
+        await router.dispatch(event("message.new_", payload: ["title": .string("x")]))
 
         #expect(messageRan.value == true)
-        #expect(eventRan.value == false)
+        #expect(miningRan.value == false)
     }
 
-    @Test func dispatchRunsEveryRouteForTheSameType() async throws {
-        let routes = LockIsolated<[RelayRoute]>([])
-        let router = RelayRouter(routes: routes)
-        let count = LockIsolated(0)
+    @Test func eventAndPrefixMatchersSelectByDottedName() async throws {
+        let routes = LockIsolated<[EventRoute]>([])
+        let router = EventRouter(routes: routes)
+        let exactRan = LockIsolated(false)
+        let prefixRan = LockIsolated(false)
+        let allRan = LockIsolated(0)
 
         routes.withValue {
-            $0.append(RelayRoute(id: "a", type: "message") { _ in count.withValue { $0 += 1 } })
-            $0.append(RelayRoute(id: "b", type: "message") { _ in count.withValue { $0 += 1 } })
+            $0.append(EventRoute(id: "exact", match: .event("relay.activated")) { _ in exactRan.setValue(true) })
+            $0.append(EventRoute(id: "prefix", match: .eventPrefix("travel.")) { _ in prefixRan.setValue(true) })
+            $0.append(EventRoute(id: "all", match: .all) { _ in allRan.withValue { $0 += 1 } })
         }
 
-        await router.dispatch(try event(type: "message"))
+        await router.dispatch(event("travel.departed", deviceCode: "D1"))
+        #expect(exactRan.value == false)
+        #expect(prefixRan.value == true)
+        #expect(allRan.value == 1, "the .all route matches everything")
 
-        #expect(count.value == 2)
+        await router.dispatch(event("relay.activated", deviceCode: "D2"))
+        #expect(exactRan.value == true)
+        #expect(allRan.value == 2)
     }
 
-    /// `runGapRepair` invokes every route's tier-2 catch-up (§4.5), and a route
-    /// with the default no-op `gapRepair` is a harmless skip.
+    /// `runGapRepair` invokes every route's tier-2 catch-up, and a route with the
+    /// default no-op `gapRepair` is a harmless skip.
     @Test func runGapRepairInvokesEveryRoutesGapRepair() async throws {
-        let routes = LockIsolated<[RelayRoute]>([])
-        let router = RelayRouter(routes: routes)
+        let routes = LockIsolated<[EventRoute]>([])
+        let router = EventRouter(routes: routes)
         let ran = LockIsolated<[String]>([])
 
         routes.withValue {
-            $0.append(RelayRoute(id: "a", type: "event", apply: { _ in }, gapRepair: { ran.withValue { $0.append("a") } }))
-            $0.append(RelayRoute(id: "b", type: "message", apply: { _ in }, gapRepair: { ran.withValue { $0.append("b") } }))
-            $0.append(RelayRoute(id: "c", type: "bobnet", apply: { _ in }))   // default no-op gapRepair
+            $0.append(EventRoute(id: "a", match: .all, apply: { _ in }, gapRepair: { ran.withValue { $0.append("a") } }))
+            $0.append(EventRoute(id: "b", match: .category("message"), apply: { _ in }, gapRepair: { ran.withValue { $0.append("b") } }))
+            $0.append(EventRoute(id: "c", match: .category("bobnet"), apply: { _ in }))   // default no-op gapRepair
         }
 
         await router.runGapRepair()
@@ -179,8 +198,12 @@ import Utils
             await Reconciler().ingest(device("PRNT", at: now))
             await Reconciler().ingest(device("GONE", at: now))
 
-            let raw = #"{"type":"event","event_type":"print_complete","device_code":"PRNT","payload":{"new_device_code":"CLONE","device_type":"ftl_beacon"},"timestamp":"2026-06-26T01:00:00Z"}"#
-            let event = try UnifiedEvent(relayEvent: RelayEvent(id: "1-0", raw: Data(raw.utf8)))
+            let event = GameEventEnvelope(
+                id: "1-0", category: "print", event: "print.completed",
+                deviceCode: "PRNT",
+                payload: ["new_device_code": .string("CLONE"), "device_type": .string("ftl_beacon")],
+                createdAt: "2026-06-26T01:00:00Z"
+            )
             await GameSync.deviceRoute(reconciler: Reconciler()).apply(event)
 
             let codes = try await database.read { db in
@@ -197,24 +220,26 @@ import Utils
 // MARK: - Bobnet decoding
 
 @Suite struct BobnetDecodeTests {
-    @Test func decodesRelayEnvelopeMessages() {
-        let raw = #"""
-        {"type":"bobnet","messages":[{"id":3421,"replicant_name":"Riker","replicant_code":"B3DDEDE7","current_star":"SOL","channel":"#general","message":"We have to move faster.","time":"2026-06-25T10:09:33-05:00"}]}
-        """#
-        let messages = BobnetMessage.decode(from: Data(raw.utf8))
-        #expect(messages.count == 1)
-        let message = messages.first
+    @Test func decodesEventPayload() {
+        let payload: [String: JSONValue] = [
+            "id": .number(3421),
+            "replicant_name": .string("Riker"),
+            "replicant_code": .string("B3DDEDE7"),
+            "current_star": .string("SOL"),
+            "channel": .string("#general"),
+            "message": .string("We have to move faster."),
+        ]
+        let message = BobnetMessage(eventPayload: payload, createdAt: Date(timeIntervalSince1970: 1_000))
         #expect(message?.id == 3421)
         #expect(message?.replicantName == "Riker")
         #expect(message?.replicantCode == "B3DDEDE7")
         #expect(message?.currentStar == "SOL")
         #expect(message?.channel == "#general")
         #expect(message?.message == "We have to move faster.")
+        #expect(message?.time == Date(timeIntervalSince1970: 1_000))  // envelope createdAt fallback
     }
 
-    @Test func malformedPayloadYieldsEmpty() {
-        #expect(BobnetMessage.decode(from: Data("not json".utf8)).isEmpty)
-        // An "event" envelope has no `messages` array.
-        #expect(BobnetMessage.decode(from: Data(#"{"type":"event"}"#.utf8)).isEmpty)
+    @Test func payloadWithoutIDYieldsNil() {
+        #expect(BobnetMessage(eventPayload: ["message": .string("hi")], createdAt: nil) == nil)
     }
 }

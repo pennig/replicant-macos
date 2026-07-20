@@ -10,6 +10,7 @@
 
 import AccountManager
 import ComposableArchitecture
+import EventLogFeature
 import GameModels
 import LoginFeature
 import RawAPIFeature
@@ -131,6 +132,30 @@ struct RawAPIWindow: View {
                     "Not Signed In",
                     systemImage: "lock",
                     description: Text("Sign in to use Raw API Access.")
+                )
+            }
+        }
+        .applyAppAppearance(appearance)
+    }
+}
+
+/// Root of the SSE Event Log window. Scopes into the signed-in session so it can
+/// observe the persisted event ledger. When signed out there's nothing to show —
+/// the window can't be opened from the (disabled) Tools menu, but guard anyway so
+/// a restored window is empty.
+struct EventLogWindow: View {
+    let store: StoreOf<AppFeature>
+    @Shared(.appStorage("appearance")) var appearance: Appearance = .system
+
+    var body: some View {
+        Group {
+            if let mainStore = store.scope(state: \.appState.loggedIn, action: \.appState.loggedIn) {
+                EventLogView(store: mainStore.scope(state: \.eventLog, action: \.eventLog))
+            } else {
+                ContentUnavailableView(
+                    "Not Signed In",
+                    systemImage: "lock",
+                    description: Text("Sign in to view the Event Log.")
                 )
             }
         }
