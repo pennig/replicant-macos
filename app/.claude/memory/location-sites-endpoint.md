@@ -1,0 +1,26 @@
+---
+name: location-sites-endpoint
+description: "GET /v1/locations/{designation} — polymorphic per location_type (star/planet/moon/belt/lagrange/megastructure/object/kuiper/oort); mining sites, salvage sites, inventory, explored-gating. Root data for the Locations catalog."
+metadata: 
+  node_type: memory
+  type: reference
+  originSessionId: 6dbb37e5-4983-4e1f-ba18-9d2930e8bc5e
+---
+
+`GET locations/{designation}` is **polymorphic on `location_type`** and the designation hierarchy IS the tree (`SOL` · `SOL-3` · `SOL-3-1` · `SOL-BELT-1` · `SOL-BELT-1-SITE-0` · `SOL-5-L4`):
+- **star**: `star{}` (designation, stellar_class, color, age_my, mining_bonus_pct, distance_from_sol, position), `planets[]` roster, `asteroid_belt{present, belts[]}` (belts is an **array**, 0-to-many), counts (`planets_scanned/total`, `moons_scanned/total`, `*_estimated`), `system_scanned`, `entry_point`. Each planet in the roster carries its own `inventory[]` **and `salvage[]`**.
+- **planet**: `planet{}` physical (mass_earth, radius_earth, surface_temp_c/k, surface_gravity, atmosphere, tags, rings, magnetic_field, rotation/orbital periods, axial_tilt), `moons[]`, `resource_sites[]`, `inventory[]`, `devices[]`, `location_event` + `active_location_events[]`.
+- **moon**: `moon{}` physical (+ tidally_locked, orbital_distance_km, has_subsurface_ocean, has_atmosphere), sites, inventory, devices.
+- **belt**: `belt{}` (density, inner/outer_radius_au, richness map name→"low/moderate/high/scarce/abundant"), `resource_sites[]` (`site_index`, `resources_remaining_pct` name→0-100), **and `inventory[]`** = accumulated mined stock (distinct from sites; e.g. ATIANFU-BELT-1 had 1577 units but empty sites).
+- **lagrange**: `lagrange{parent_planet, l_point (L1-L5; L4/L5 stable), orbital_distance_au}`.
+- **megastructure/object/kuiper/oort** (from docs, not probed live): OBJ-N / KUIPER (~20AU) / OORT (~2000AU, needs surge drive). Megastructure block: `name`, `progress` (0-1), `requirements` (per device_type needed/contributed); contribute via POST `/locations/{code}/contribute`.
+
+**Salvage ≠ mining site.** Salvage designations `…-SAL-N` on planets AND moons: `{designation, name, salvage_type (e.g. "research_station"), location, resources_available: [names], depleted: bool}` — a resource LIST + depleted flag, NO percentages. Modeled as its own `SalvageSite` type (BETSU-3-SAL-1 is the live example).
+
+**Gating & knowledge:** location detail requires having explored the system — unexplored → `403 "No replicant in system"`. `explored:true` ≠ scanned: an explored system returns its full body roster with `type_estimated:true, scanned:false` until each body is individually scanned. This maps to `Recon` (.aware → .visited/explored → .scanned). Distance-from-probe should be computed locally from last-known position (census `distance_from_replicant` goes stale on travel).
+
+Sibling endpoints: `GET /v1/locations` → **footprint/holdings** map (locationCode → {location_events, devices, resource_sites, resources, replicants}) — ONLY locations I've *interacted with* (deployed devices / accumulated resources / active events / presence), NOT everything scanned (a fully-scanned system with no holdings, e.g. BETSU, is absent). Use as a badge/inventory OVERLAY, never as the knowledge index — that's the census `Star.explored` + per-body `scanned`. `/locations/{designation}/inventory`; `/locations/{location_code}/events`; `POST /locations/{code}/contribute`. **Shops, system_objects, and outer_system are NOT on the locations endpoint — ONLY in the POST `replicants/{code}/scan` response** (current system, transient; `replicant scan` CLI renders it). Confirmed live shapes:
+- `shops[]`: {controller_code, shop_name, description, location (can be a MOON e.g. SOL-3-1 → bubbles up), location_name, owner_name, owner_replicant_code, trades[]}. Each trade is a BARTER: {trade_code, name, current_stock, criteria: {resources: {name: qty}}, rewards: {devices: {type: n}}}.
+- `system_objects[]`: {designation (e.g. EXODUS-ARK-001 or SOL-OBJ-1), object_type ("megastructure" | "incoming_asteroid" | …), title, description, status, stage, progress_percentage (0-**100**, NOT 0-1; null for non-megastructures), requirements DICT {device_type: {current, remaining, complete, required}}, contributors_memorial[], star_designation, location, orbital_distance_au, deadline, megastructure_type}. incoming_asteroid = impact threat w/ deadline.
+- `outer_system`: {kuiper: {designation, distance_au}, oort: {designation, distance_au}}.
+Populating shops/megastructures/outer-system/threats requires ingesting the SCAN response — the `locations/{star}` call never yields them. This is BUILT: `ScanDTOs.swift` (`RawScan` → `StarSystem`), `LocationsClient.scan`/`scanAndPersist`, `StarSystem.mergingScan` (overlays scan, preserves hydrated body detail). Two triggers: explicit "Scan System" button (current system) + passive GameSync route `locations.scan` (re-scans on arrival/megastructure/object/shop/location_event events, excludes scan-echoes, coalesced). [[locations-catalog-feature]] Generated client types every nested block as opaque freeform `*Payload` (just additionalProperties) → decode via JSON round-trip into own DTOs. Domain lives in `UniverseModels/LocationModels.swift`. Related: [[device-command-shapes]].

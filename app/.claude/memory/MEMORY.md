@@ -1,0 +1,48 @@
+# Memory Index
+
+- [Event stream migration](event-stream-migration.md) — v2.3.0 native SSE stream replaced the custom relay; single-channel EventPipeline, dotted event taxonomy, EventRoute matchers, loud unhandled-event logging.
+- [Event Log feature](event-log-feature.md) — EventLogFeature: persisted SSE ledger window (Tools menu); write hook in EventRouter.dispatch; unhandled flag+filter; JSONTreeView now shared from UI.
+- [Monospace system/location names](monospace-system-names.md) — project rule: any system/location name (designation code) always renders in a mono font token.
+
+- [List row preview crash](list-row-preview-crash.md) — Xcode 26 crashes List previews when the row struct is in the same file as #Preview; keep row structs in their own file.
+- [Preview rewriter vs self.init](preview-rewriter-self-init.md) — a #Preview in the same file as a delegating convenience init fails the preview build; keep previews in their own file.
+- [API module name](api-module-name.md) — package is "ReplicouldKit" but the importable module is "API".
+- [Ignore sandbox folder](ignore-sandbox-folder.md) — skip `Replicant/sandbox/` in all work unless explicitly asked.
+- [pbxproj link is manual](pbxproj-link-is-manual.md) — linking a new SPM module product to the app target must be done by the user in Xcode; pbxproj edits are blocked.
+- [New Star Map feature](new-star-map-feature.md) — NewStarMapFeature, the raw-Metal port of the star map; DONE per user (live-wired, galaxy→system→body drill-in); SceneKit cutover not yet done.
+- [In-system viz plan](in-system-viz-plan.md) — planned 5-phase feature: devices at any location (incl. Lagrange), multi-leg travel, sites/inventory; keystone = a pure OrreryLayout resolver; full plan doc in the module.
+- [Star map live overlays](star-map-live-overlays.md) — current-location reticle, FTL mesh (real /network links), and ships are now sourced from Replicant/Device data (not faked); NewStarMapFeature is the only wired-in Stars view.
+- [Orrery layout tuning](orrery-layout-tuning.md) — orrery sizing/orbit model: sun-relative sizes, non-overlapping spacedOrbits pass, fidelity over accuracy.
+- [Flare playground](flare-playground.md) — animated solar flares at highest LOD; FlarePlayground tuning tool + FlareParams uniform kept in the module until user says remove.
+- [Nebula playground](nebula-playground.md) — NebulaField (3 styles + star diffusion) wired into the live map; standalone NebulaPlayground tool + NebulaUniforms struct removed 2026-07-20.
+- [Planet texturing](planet-texturing.md) — orrery planets procedurally textured: PlanetType/PlanetMaterial → OrreryBodyUniform → orrery_body_fragment; style-index + tag-modifier sync points; atmosphere halo + animated clouds; feel constants now baked as kCloud*/kHalo* in Shaders.metal (OrreryTuning struct + sliders removed).
+- [Metal HUD glass hitch](metal-hud-glass-hitch.md) — glass cards (ultraThinMaterial + big shadow) hitch the main-thread MTKView camera fly; drop the material/shadow, keep the animation.
+- [Star map hydrate fly hitch](starmap-hydrate-fly-hitch.md) — drill-in fly hitched because a mid-fly hydrate DB write forced a StarSystem blob re-decode on the main thread; fix = defer the hydrate until the transition lands.
+- [Metal SPM integration](metal-spm-integration.md) — how to wire a .metal shader + shared C struct header into an SPM library target (process resource, Bundle.module, C target, no defaultIsolation).
+- [Locations catalog feature](locations-catalog-feature.md) — Catalog › Locations disclosure tree; domain+client+persistence in UniverseModels, UI in LocationsFeature; blob-per-system persistence, hydrate-on-select.
+- [UniverseModels module](locations-catalog-feature.md) — shared no-SceneKit domain module; owns census Star/StarsClient/Position/Recon/LifeTier/InventoryItem (hoisted from StarMap) + the locations domain.
+- [Running package tests](running-package-tests.md) — SPM module tests ARE in the Xcode test plan; schemes with test targets work as expected (`swift test` also works).
+- [OpenAPI spec drift leniency](openapi-spec-drift-leniency.md) — POLICY: keep spec STRICT, do NOT relax additionalProperties; patch drift with targeted typed keys.
+- [OpenAPI spec layout](openapi-spec-layout.md) — spec files in Modules/API/Sources/OpenAPI/ as pristine + -edits per version; openapi.json symlinks the active -edits.
+- [Device command shapes](device-command-shapes.md) — per-command POST response classes (travel=deadline, mine=continuous, scan/census=synchronous, print=enqueued, lifecycle=immediate) + mining lifecycle.
+- [Location sites endpoint](location-sites-endpoint.md) — GET locations/{designation} polymorphic per location_type; mining sites vs salvage sites, belt inventory, explored-gating; root of the Locations catalog.
+- [Feature module import GameServices](feature-module-import-dependencyclients.md) — a new module's domain client needs `import GameServices` (the module renamed from DependencyClients) for `@Dependency(\.gameClient)`; missing it shows as a misleading key-path inference error.
+- [Survey search op shapes](survey-search-op-shapes.md) — survey-drone `search`: `scan` block (eta_seconds, no completes_at) + `scan_complete` relay event; wired as `OperationKind.search`.
+- [Travel block leg vs route](travel-block-leg-vs-route.md) — travel block has per-leg (arrives_at/eta_seconds) vs whole-route (final_arrives_at/route_eta_seconds) fields; `device_travel_arrived` completes the trip (per-leg cruise/surge events don't).
+- [SwiftUI View statics trap in tests](swiftui-view-statics-trap-in-tests.md) — pure logic as a static/nested type on a SwiftUI View traps (signal 5) under `swift test`; extract to a plain SwiftUI-free namespace.
+- [Device inspector refresh loop](device-inspector-refresh-loop.md) — while-viewing in-place refresh for mining/diverting devices; cadence in `DevicesFeature.refreshDelay`; mining-vs-seeking = pending_* > 0.
+- [Replicants feature](replicants-feature.md) — ReplicantsFeature (galaxy directory) + KnownReplicant table (separate from Replicant roster); last-known-location from system_scan replicants block, hooked in CommandClient.
+- [List query in state](list-feature-query-in-state.md) — standard: SQLiteData @FetchAll lives in TCA @ObservableState (not the view), view is a pure renderer; kills empty-state flashes.
+- [Sidebar feature](sidebar-feature.md) — SidebarFeature owns the left column (header+category list+footer+category selection); MainFeature is now a thin container; progress driven by the Operation table.
+- [Account feature](account-feature.md) — AccountFeature module: Profile/Settings/Achievements sheet; consumes achievements + PATCH accounts/me; presented from MainFeature; notifications matrix + email editing deferred.
+- [Device refresher dependency](device-refresher-dependency.md) — all device confirm-reads funnel through @Dependency(\.deviceRefresher) over one shared PollCoordinator (in GameServices).
+- [Location endpoint presence gate](location-endpoint-presence-gate.md) — GET locations/{designation} gated on replicant PRESENCE not exploration; 403="No replicant in system"; LocationsClient mislabels it .notExplored.
+- [Location Events feature](location-events-feature.md) — Missions/quest-log; accounts/events is the account-wide list w/ full detail; LocationEvent table in GameModels; Event Log renamed Operations Log.
+- [GameDatabase module](gamedatabase-module.md) — single schema-composition point; previews/tests call `GameDatabase.bootstrap()` instead of hand-rolling migrators.
+- [Locations list flatten perf](locations-list-flatten-perf.md) — big macOS hierarchical list: flatten to visible rows + flat List beats children:/DisclosureGroup (generic-metadata/ARC storm at 5,770 nodes).
+- [SQLite DB location](sqlite-db-location.md) — path to the running app DB for direct sqlite3 inspection; census `stars` lags `systemDetails`
+- [Location response schema drift](location-response-schema-drift.md) — openapi.json patch so GET locations/{designation} decodes (asteroid_belt); re-apply after re-fetch
+- [Decode diagnostics decorator](decode-diagnostics-decorator.md) — OpenAPI decode errors logged centrally via DiagnosticAPIClient (APIProtocol decorator); regen with scripts/gen-diagnostic-client.py; call sites stay clean
+- [SPM stale layout crash](spm-stale-layout-crash.md) — adding stored fields to a shared struct can segfault consumer modules (no library evolution); rm -rf Modules/.build to fix
+- [API drift backlog](api-drift-backlog.md) — no known open drifts as of 2026-07-20; swift test fully green (records the resolved new_resource/terminating/adopt-read fixes).
+- [Preview sheets need .sheet(item:)](preview-sheet-item-not-ispresented.md) — travel/print preview sheets must use .sheet(item:) not isPresented, else rapid back-to-back presentations drop the dialog; fixed in 3 travel entry points + effect cancellation.

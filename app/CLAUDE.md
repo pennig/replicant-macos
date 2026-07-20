@@ -6,6 +6,11 @@ An instance of the self-replicating probe is called a Replicant (so the app name
 It's intended to be a fully-featured real-time interface for the game, with a compelling UX to engage with the API surface area, along with a direct API access feature for power users.
 It primarily exists through a three-panel split view interface, though certain things such as the Stars view and Event Log will only have the sidebar and content (no third detail pane).
 
+## Engineering notes (memory)
+Accumulated, hard-won notes about this codebase — feature summaries, API/spec-drift findings, and non-obvious gotchas — live under `.claude/memory/` as one fact per file. The index below is loaded automatically; open the linked file when a note looks relevant, and add/update notes there (with a matching index line) as you learn things.
+
+@.claude/memory/MEMORY.md
+
 ## Design source of truth
 Look in the `Modules/UI` folder for the Swift package that represents the design source of truth.
 - **`DESIGN_SPEC.md`** — full UI spec (layout, components, behaviors, domain model). Read this first.
@@ -14,7 +19,8 @@ Look in the `Modules/UI` folder for the Swift package that represents the design
 - **`Controls.swift`** — the collection of shared controls to be used across the app.
 
 ## Rules
-- **Never hard‑code colors, spacing, or font sizes.** Use the tokens in `DesignSystem.swift` (`.rcTextPrimary`, `Space.m`, `Radius.card`, `Font.rcTitle`, etc.). If a needed token is missing, add it to the design system + asset catalog rather than inlining a value.
+- Abide by Point-Free's patterns and guidance whenever possible. Refer to the pfw-\* skills for more information.
+- Never hard‑code colors, spacing, or font sizes.** Use the tokens in `DesignSystem.swift` (`.rcTextPrimary`, `Space.m`, `Radius.card`, `Font.rcTitle`, etc.). If a needed token is missing, add it to the design system + asset catalog rather than inlining a value.
 - Map backend status strings through `DeviceStatus.tone(for:)` — don't invent per‑status colors.
 - Dark‑first, but every screen must read correctly in light mode (the catalog handles both; verify with `.preferredColorScheme`).
 - Prefer `NavigationSplitView`, system materials for chrome, SF for text, SF Mono for IDs/codes/readouts.
@@ -46,7 +52,7 @@ The docs website seems to be updated more diligently to match the real implement
 ### Backend access
 
 - **Use the generated OpenAPI client for all backend calls.** The `API` module generates a `Client` from `openapi.json` at build time (swift-openapi-generator, `accessModifier: public`), wired with bearer auth + rate limiting + logging middleware.
-- **Get the client from the shared `@Dependency(\.gameClient)`, not by building one yourself.** `GameClient` (in `DependencyClients`) vends a `Client` authenticated with the stored session token (read live from the Keychain) over a process-shared rate-limit governor — so the session token lives in exactly one place and is never threaded through feature state or call sites. A feature's domain client (e.g. `MessagesClient`, `StarsClient`) resolves `@Dependency(\.gameClient)` in its `liveValue`, calls generated operations on `gameClient()`, and maps the generated `Components.Schemas.*` types to the feature's own value types. Such features depend on both the `API` and `DependencyClients` products. See `Modules/API/Sources/Event Log/GameLogFetching.swift` for the operation-call pattern (`extension Client { … try output.ok.body.json … }`), and `MessagesClient`/`StarsClient` for feature-side usage.
+- **Get the client from the shared `@Dependency(\.gameClient)`, not by building one yourself.** `GameClient` (in `GameServices`) vends a `Client` authenticated with the stored session token (read live from the Keychain) over a process-shared rate-limit governor — so the session token lives in exactly one place and is never threaded through feature state or call sites. A feature's domain client (e.g. `MessagesClient`, `StarsClient`) resolves `@Dependency(\.gameClient)` in its `liveValue`, calls generated operations on `gameClient()`, and maps the generated `Components.Schemas.*` types to the feature's own value types. Such features depend on both the `API` and `GameServices` products. See `Modules/API/Sources/Event Log/GameLogFetching.swift` for the operation-call pattern (`extension Client { … try output.ok.body.json … }`), and `MessagesClient`/`StarsClient` for feature-side usage.
   - Do **not** pass the API key into feature state or client methods. (`ReplicantSpace.client(apiKey:)` exists, but the only direct caller should be `GameClient`.)
   - Generated operation method names come from the path (no operationIds), e.g. `getV1Messages`, `getV1ReplicantsReplicantCodeStars`. Generated property names are idiomatic camelCase (`per_page` → `perPage`); treat generated schema properties as optional and coalesce.
   - When an endpoint is paged, resolve `gameClient()` **once** and reuse that client across the whole walk. (The governor is process-shared via `GameClient`, but reusing one client per walk is still the clean shape — see `StarsClient.survey`.)
