@@ -25,7 +25,7 @@ struct EventLogDetailView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         } else {
-            ContentUnavailableView(
+            RCContentUnavailableView(
                 "No Event Selected",
                 systemImage: "dot.radiowaves.left.and.right",
                 description: Text("Select an event to inspect its full JSON payload.")

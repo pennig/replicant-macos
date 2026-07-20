@@ -1553,15 +1553,20 @@ private struct CommandGrid: View {
                 // sheet and let the user confirm there. Every other command
                 // dispatches straight from here.
                 Button(confirmTitle(for: command)) {
+                    // Thin sender: collapse the panel and hand the intent to the
+                    // reducer. The reducer ends field editing and yields a runloop
+                    // tick before presenting the sheet (a sheet presented while the
+                    // destination field's text-completion popover is up crashes
+                    // AppKit's sheet presentation) — that logic lives behind
+                    // dependencies so it's testable. See `.travelConfirmed`.
+                    pending = nil
                     if command == .travel {
-                        store.send(.travelPreviewRequested(
+                        store.send(.travelConfirmed(
                             deviceCode: device.deviceCode,
                             destination: confirmValue(for: command)
                         ))
                     } else if command == .print {
-                        // Print reviews resource cost vs. location stock in a sheet
-                        // before enqueuing.
-                        store.send(.printPreviewRequested(
+                        store.send(.printConfirmed(
                             deviceCode: device.deviceCode,
                             deviceType: blueprintType,
                             location: device.location,
@@ -1569,13 +1574,13 @@ private struct CommandGrid: View {
                             required: requiredLines(for: blueprintType)
                         ))
                     } else {
+                        // No sheet — dispatch straight through.
                         store.send(.commandConfirmed(
                             kind: command.kind,
                             deviceCode: device.deviceCode,
                             params: params(for: command)
                         ))
                     }
-                    pending = nil
                 }
                 .buttonStyle(RCButtonStyle(command.isDestructive ? .destructiveProminent : .primary))
                 .disabled(!isConfirmable(command))

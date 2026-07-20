@@ -41,7 +41,7 @@ struct LocationEventRow: View {
                     .foregroundStyle(.rcTextSecondary)
                     .rcPill(.neutral)
             }
-            StatusBadge(event.status)
+            StatusBadge(event.displayStatus)
         }
         .padding(.vertical, 2)
     }

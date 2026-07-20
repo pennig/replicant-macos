@@ -27,7 +27,6 @@ struct EventLogListView: View {
                 ) { event, isSelected in
                     EventLogRow(event: event).rcSidebarRow(isSelected: isSelected)
                 }
-                .background(.rcContentBackground)
             }
         }
         .navigationTitle("Event Log")

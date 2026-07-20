@@ -23,7 +23,7 @@ public struct LocationEventDetailView: View {
     public var body: some View {
         Group {
             if let event = store.selectedEvent {
-                QuestSheet(event: event)
+                QuestSheet(store: store, event: event)
             } else {
                 RCContentUnavailableView(
                     "No Event Selected",
@@ -38,6 +38,7 @@ public struct LocationEventDetailView: View {
 // MARK: - Quest sheet
 
 private struct QuestSheet: View {
+    let store: StoreOf<LocationEventsFeature>
     let event: LocationEvent
 
     private var quest: LocationEventDetail? { event.quest }
@@ -46,6 +47,10 @@ private struct QuestSheet: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Space.l) {
                 header
+
+                if event.isReady {
+                    completeButton
+                }
 
                 if let broadcast = event.broadcastMessage, !broadcast.isEmpty {
                     broadcastCard(broadcast)
@@ -82,7 +87,7 @@ private struct QuestSheet: View {
                 .foregroundStyle(.rcTextPrimary)
             HStack(spacing: Space.s) {
                 Text(event.designation).font(.rcMono).foregroundStyle(.rcTextTertiary)
-                StatusBadge(event.status, parameter: event.tier > 0 ? "Tier \(event.tier)" : nil)
+                StatusBadge(event.displayStatus, parameter: event.tier > 0 ? "Tier \(event.tier)" : nil)
             }
             HStack(spacing: Space.s) {
                 Label(event.locationLabel, systemImage: "mappin.and.ellipse")
@@ -93,6 +98,25 @@ private struct QuestSheet: View {
                 }
             }
         }
+    }
+
+    // — Complete CTA (only when every objective is met) —
+
+    private var completeButton: some View {
+        Button {
+            store.send(.completeButtonTapped)
+        } label: {
+            HStack(spacing: Space.xs) {
+                if store.isCompleting {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: "checkmark.seal.fill")
+                }
+                Text(store.isCompleting ? "Completing…" : "Complete Event")
+            }
+        }
+        .buttonStyle(RCButtonStyle(.primary, fullWidth: true))
+        .disabled(store.isCompleting)
     }
 
     // — Broadcast —

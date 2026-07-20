@@ -124,4 +124,50 @@ struct LocationEventParsingTests {
     func emptyDetail() {
         #expect(LocationEventDetail(.object([:])) == nil)
     }
+
+    @Test("Unmet objectives leave the event active, not ready")
+    func objectivesUnmet() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let event = LocationEvent.fresh(designation: "KRIOS-2-EVT-001", now: now)
+            .merging(event: resourceQuest, now: now)
+
+        #expect(!event.objectivesMet)
+        #expect(!event.isReady)
+        #expect(event.displayStatus == "active")
+    }
+
+    @Test("Met objectives on an open event read as ready")
+    func objectivesMetReady() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let metQuest = json(#"""
+        {
+          "designation": "KRIOS-2-EVT-001", "location": "KRIOS-2",
+          "title": "Medical Compound Request", "status": "active", "tier": 1,
+          "progress": { "met": true, "replicant_present": true, "options": [] }
+        }
+        """#)
+        let event = LocationEvent.fresh(designation: "KRIOS-2-EVT-001", now: now)
+            .merging(event: metQuest, now: now)
+
+        #expect(event.objectivesMet)
+        #expect(event.isReady)
+        #expect(event.displayStatus == "ready")
+    }
+
+    @Test("A completed event is never ready even when objectives are met")
+    func completedNotReady() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let doneQuest = json(#"""
+        {
+          "designation": "KRIOS-2-EVT-001", "location": "KRIOS-2",
+          "status": "completed", "progress": { "met": true, "options": [] }
+        }
+        """#)
+        let event = LocationEvent.fresh(designation: "KRIOS-2-EVT-001", now: now)
+            .merging(event: doneQuest, now: now)
+
+        #expect(event.objectivesMet)
+        #expect(!event.isReady)
+        #expect(event.displayStatus == "completed")
+    }
 }

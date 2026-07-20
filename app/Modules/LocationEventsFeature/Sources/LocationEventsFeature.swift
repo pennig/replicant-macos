@@ -20,21 +20,30 @@ import SQLiteData
 public struct LocationEventsFeature {
     @ObservableState
     public struct State: Equatable {
-        /// Every discovered event, active first (then higher tier first), observed
-        /// from SQLite. The view groups them into Active / Completed sections.
+        /// Every discovered event, active first — and within active, ready-to-complete
+        /// first, then higher tier — observed from SQLite. The view groups them into
+        /// Active / Completed sections.
         @ObservationStateIgnored
-        @FetchAll(LocationEvent.order { ($0.status.asc(), $0.tier.desc()) })
+        @FetchAll(LocationEvent.order { ($0.status.asc(), $0.objectivesMet.desc(), $0.tier.desc()) })
         public var events: [LocationEvent]
 
         /// The selected event's designation (drives the detail pane).
         public var selection: String?
         /// A refresh is in flight (spinner in the toolbar).
         public var isRefreshing: Bool
+        /// A completion POST is in flight (disables the Complete button).
+        public var isCompleting: Bool
         public var errorMessage: String?
 
-        public init(selection: String? = nil, isRefreshing: Bool = false, errorMessage: String? = nil) {
+        public init(
+            selection: String? = nil,
+            isRefreshing: Bool = false,
+            isCompleting: Bool = false,
+            errorMessage: String? = nil
+        ) {
             self.selection = selection
             self.isRefreshing = isRefreshing
+            self.isCompleting = isCompleting
             self.errorMessage = errorMessage
         }
 
@@ -58,6 +67,10 @@ public struct LocationEventsFeature {
         case refresh
         case refreshed
         case refreshFailed(String)
+        /// Complete the selected (ready) event via an empty POST to its designation.
+        case completeButtonTapped
+        case completeSucceeded
+        case completeFailed(String)
         case dismissError
     }
 
@@ -89,6 +102,30 @@ public struct LocationEventsFeature {
 
             case let .refreshFailed(message):
                 state.isRefreshing = false
+                state.errorMessage = message
+                return .none
+
+            case .completeButtonTapped:
+                guard !state.isCompleting, let event = state.selectedEvent, event.isReady
+                else { return .none }
+                state.isCompleting = true
+                state.errorMessage = nil
+                let location = event.location
+                let designation = event.designation
+                return .run { [locationEventsClient] send in
+                    try await locationEventsClient.complete(location, designation)
+                    await send(.completeSucceeded)
+                } catch: { error, send in
+                    let message = (error as? LocationEventError)?.message ?? error.localizedDescription
+                    await send(.completeFailed(message))
+                }
+
+            case .completeSucceeded:
+                state.isCompleting = false
+                return .none
+
+            case let .completeFailed(message):
+                state.isCompleting = false
                 state.errorMessage = message
                 return .none
 

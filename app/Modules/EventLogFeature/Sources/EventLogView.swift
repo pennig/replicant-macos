@@ -28,6 +28,7 @@ public struct EventLogView: View {
                 .background(.rcContentBackground)
                 .navigationTitle("Event")
         }
+        .background(.rcWindowBackground)
         .confirmationDialog(
             "Clear Event Log?",
             isPresented: $store.isConfirmingClear,

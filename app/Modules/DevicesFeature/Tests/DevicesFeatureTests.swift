@@ -91,6 +91,33 @@ private func device(_ code: String) -> Device {
 
     /// Requesting a travel preview opens the sheet (loading), then loads the
     /// dry-run plan from `CommandClient.previewTravel`.
+    /// The "Review Route…" intent ends field editing (via the `endEditing`
+    /// dependency) and defers over the clock before it requests the dry-run — the
+    /// side effects the view used to perform inline are now controllable here.
+    @Test func travelConfirmedEndsEditingThenRequestsPreview() async throws {
+        let database = try GameDatabase.bootstrap()
+        let endedEditing = LockIsolated(false)
+        let plan = TravelPlan(finalDestination: "IZARUM-2-L4")
+
+        let store = TestStore(initialState: DevicesFeature.State()) {
+            DevicesFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
+            $0.continuousClock = ImmediateClock()
+            $0.endEditing = EndEditingClient { endedEditing.setValue(true) }
+            $0.commandClient.previewTravel = { _, _ in .plan(plan) }
+        }
+
+        await store.send(.travelConfirmed(deviceCode: "A", destination: "IZARUM"))
+        await store.receive(\.travelPreviewRequested) {
+            $0.travelPreview = TravelPreview(deviceCode: "A", destination: "IZARUM")
+        }
+        await store.receive(\.travelPreviewResponse) {
+            $0.travelPreview?.phase = .loaded(plan)
+        }
+        #expect(endedEditing.value == true)
+    }
+
     @Test func travelPreviewRequestLoadsPlan() async throws {
         let database = try GameDatabase.bootstrap()
         let plan = TravelPlan(

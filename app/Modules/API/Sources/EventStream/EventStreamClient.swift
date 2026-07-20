@@ -100,9 +100,28 @@ extension EventStreamClient {
                             var pendingEvent: String?
                             var dataLines: [String] = []
 
-                            for try await line in bytes.lines {
+                            // NOTE: do NOT use `bytes.lines` here. Foundation's
+                            // `AsyncLineSequence` silently drops empty lines (its
+                            // iterator only yields when its buffer is non-empty),
+                            // but in SSE the blank line IS the event delimiter — so
+                            // events would never dispatch. Frame the raw byte stream
+                            // ourselves, splitting on `\n` and preserving blank lines.
+                            var lineBuffer: [UInt8] = []
+                            for try await byte in bytes {
                                 guard !Task.isCancelled else { break }
                                 hasConnected = true
+
+                                guard byte == 0x0A else {   // not newline: accumulate
+                                    lineBuffer.append(byte)
+                                    continue
+                                }
+
+                                // End of a line. Strip a trailing CR (CRLF framing).
+                                if lineBuffer.last == 0x0D {
+                                    lineBuffer.removeLast()
+                                }
+                                let line = String(decoding: lineBuffer, as: UTF8.self)
+                                lineBuffer.removeAll(keepingCapacity: true)
 
                                 if line.isEmpty {
                                     // Blank line = dispatch the accumulated event.
@@ -129,7 +148,7 @@ extension EventStreamClient {
                                     if let ms = Int(line.dropFirst(6).trimmingCharacters(in: .whitespaces)) {
                                         retryDelay = .milliseconds(ms)
                                     }
-                                } else if line.hasPrefix(":") && !line.hasPrefix(":keepalive") {
+                                } else if line.hasPrefix(":") && !line.hasPrefix(": keepalive") {
                                     // Comment - do NOT reset the pending event.
                                     log.debug("comment: \(line.dropFirst(1), privacy: .public)")
                                 }

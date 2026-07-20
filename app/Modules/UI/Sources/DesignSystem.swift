@@ -112,7 +112,7 @@ public enum DeviceStatus {
     /// Map a raw backend status string (without its parameter) to a tone.
     public static func tone(for rawStatus: String) -> StatusTone {
         switch rawStatus {
-        case "idle":
+        case "idle", "ready":
             return .ready
         case "collecting", "depositing", "mining", "printing", "repairing", "diverting":
             return .working
@@ -134,6 +134,7 @@ public enum DeviceStatus {
     /// Human label for a raw status (parameter appended by the caller).
     public static func label(for rawStatus: String) -> String {
         let map: [String: String] = [
+            "ready": "Ready",
             "stowed": "Stowed", "idle": "Idle", "travelling": "Travelling",
             "cruising": "Cruising", "surging": "Surging", "recalling": "Recalling",
             "recall_waiting": "Recall · waiting", "decommissioning": "Decommissioning",

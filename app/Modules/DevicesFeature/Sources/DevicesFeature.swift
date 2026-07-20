@@ -88,12 +88,25 @@ public struct DevicesFeature {
         case commandConfirmed(kind: OperationKind, deviceCode: String, params: CommandParams)
         case commandFinished(CommandOutcome)
         case dismissCommandError
+        /// The inspector's "Review Route…" button. A thin intent: ends field
+        /// editing and yields a runloop tick before `travelPreviewRequested` sets
+        /// the state that presents the sheet (see the reducer for why).
+        case travelConfirmed(deviceCode: String, destination: String)
         /// Travel command preview flow: request a dry-run plan, receive it, then
         /// either confirm (dispatch for real) or dismiss the sheet.
         case travelPreviewRequested(deviceCode: String, destination: String)
         case travelPreviewResponse(TravelPreviewOutcome)
         case travelPreviewConfirmed
         case travelPreviewDismissed
+        /// The inspector's "Review Print…" button. Thin intent mirroring
+        /// `travelConfirmed`: ends editing and yields before `printPreviewRequested`.
+        case printConfirmed(
+            deviceCode: String,
+            deviceType: String,
+            location: String?,
+            locationName: String?,
+            required: [PrintResourceLine]
+        )
         /// Print command preview flow: refresh the location inventory and check
         /// the blueprint's cost against it, then either confirm (enqueue for real)
         /// or dismiss the sheet.
@@ -142,6 +155,7 @@ public struct DevicesFeature {
     @Dependency(\.locationsClient) var locationsClient
     @Dependency(\.continuousClock) var clock
     @Dependency(\.date) var date
+    @Dependency(\.endEditing) var endEditing
 
     /// `refresh` cancels the while-viewing refresh loop when the inspected device
     /// changes; `travelPreview` cancels an in-flight dry-run so a prior device's
@@ -224,6 +238,22 @@ public struct DevicesFeature {
                 state.commandError = nil
                 return .none
 
+            case let .travelConfirmed(deviceCode, destination):
+                // End field editing and yield a runloop tick before the sheet is
+                // presented. Setting `travelPreview` (in `.travelPreviewRequested`)
+                // is what presents the sheet, and presenting while the destination
+                // field's text-completion popover is still on screen crashes
+                // AppKit's sheet presentation. Both side effects live behind
+                // dependencies (`endEditing`, `clock`) so this is testable — the
+                // view just sends the intent.
+                let endEditing = self.endEditing
+                let clock = self.clock
+                return .run { send in
+                    await endEditing()
+                    try await clock.sleep(for: .zero)
+                    await send(.travelPreviewRequested(deviceCode: deviceCode, destination: destination))
+                }
+
             case let .travelPreviewRequested(deviceCode, destination):
                 state.travelPreview = TravelPreview(deviceCode: deviceCode, destination: destination)
                 let commandClient = self.commandClient
@@ -258,6 +288,23 @@ public struct DevicesFeature {
             case .travelPreviewDismissed:
                 state.travelPreview = nil
                 return .none
+
+            case let .printConfirmed(deviceCode, deviceType, location, locationName, required):
+                // Mirror of `.travelConfirmed`: end editing + yield before the
+                // print preview sheet presents.
+                let endEditing = self.endEditing
+                let clock = self.clock
+                return .run { send in
+                    await endEditing()
+                    try await clock.sleep(for: .zero)
+                    await send(.printPreviewRequested(
+                        deviceCode: deviceCode,
+                        deviceType: deviceType,
+                        location: location,
+                        locationName: locationName,
+                        required: required
+                    ))
+                }
 
             case let .printPreviewRequested(deviceCode, deviceType, location, locationName, required):
                 state.printPreview = PrintPreview(deviceCode: deviceCode, deviceType: deviceType)

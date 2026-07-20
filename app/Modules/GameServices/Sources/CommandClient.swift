@@ -124,6 +124,7 @@ extension CommandClient: DependencyKey {
         dispatch: { kind, deviceCode, params in
             @Dependency(\.gameClient) var gameClient
             @Dependency(\.devicesClient) var devicesClient
+            @Dependency(\.locationEventsClient) var locationEventsClient
             @Dependency(\.defaultDatabase) var database
             @Dependency(\.date) var date
             @Dependency(\.uuid) var uuid
@@ -173,8 +174,25 @@ extension CommandClient: DependencyKey {
                                 logger.info("scan recorded \(sightings.count, privacy: .public) replicant sighting(s)")
                             }
                         }
-                        if let device = try? await devicesClient.read(deviceCode) {
+                        let readDevice = try? await devicesClient.read(deviceCode)
+                        if let device = readDevice {
                             await Reconciler().ingest(device)
+                        }
+                        // A successful unload can satisfy a location event sited where
+                        // the cargo was dropped. Cross-reference the drop-off location
+                        // against known events and re-pull the quest list if any are
+                        // open there, so a now-ready event surfaces (sidebar badge +
+                        // Ready status) without the user opening the Locations screen.
+                        if kind == .depositResources, let location = readDevice?.location {
+                            let openThere = (try? await database.read { db in
+                                try LocationEvent
+                                    .where { $0.location.eq(location) && $0.status.eq("active") }
+                                    .fetchCount(db)
+                            }) ?? 0
+                            if openThere > 0 {
+                                try? await locationEventsClient.refresh()
+                                logger.info("unload at \(location, privacy: .public): refreshed \(openThere, privacy: .public) open location event(s)")
+                            }
                         }
                         // Topology commands (attach/detach/adopt/release) move *other*
                         // devices onto or off this one — the response names them in an

@@ -37,6 +37,10 @@ public struct LocationEvent: Identifiable, Equatable, Sendable {
     /// `active`, `completed`, … — drives the sidebar badge (active count) and the
     /// list's active-first ordering.
     public var status: String
+    /// Whether every objective is met — the event is ready to complete. Denormalised
+    /// from `detail.progress.met` so the sidebar's "ready" badge and the list's
+    /// ready-first ordering stay pure SQL (no blob decode per row).
+    public var objectivesMet: Bool
     public var broadcastMessage: String?
     public var eventDescription: String?
     public var discoveredAt: Date?
@@ -59,6 +63,7 @@ public struct LocationEvent: Identifiable, Equatable, Sendable {
         category: String? = nil,
         tier: Int = 0,
         status: String = "active",
+        objectivesMet: Bool = false,
         broadcastMessage: String? = nil,
         eventDescription: String? = nil,
         discoveredAt: Date? = nil,
@@ -75,6 +80,7 @@ public struct LocationEvent: Identifiable, Equatable, Sendable {
         self.category = category
         self.tier = tier
         self.status = status
+        self.objectivesMet = objectivesMet
         self.broadcastMessage = broadcastMessage
         self.eventDescription = eventDescription
         self.discoveredAt = discoveredAt
@@ -89,6 +95,14 @@ public struct LocationEvent: Identifiable, Equatable, Sendable {
 
     /// Whether this event is still open (drives the badge and active grouping).
     public var isActive: Bool { status.lowercased() == "active" }
+
+    /// Whether the event is open *and* every objective is met — so it can be
+    /// completed now. Drives the sidebar "ready" badge and the Complete button.
+    public var isReady: Bool { isActive && objectivesMet }
+
+    /// The status to render in a badge: a met-but-open event reads as `ready`
+    /// (its own tone) rather than the bare backend `active`.
+    public var displayStatus: String { isReady ? "ready" : status }
 
     /// The rich quest payload decoded from `detail` — criteria progress and
     /// rewards. Nil when no detail has been captured yet.
@@ -115,6 +129,7 @@ extension LocationEvent {
         copy.category = event["category"]?.stringValue
         if let tier = event["tier"]?.numberValue { copy.tier = Int(tier) }
         if let status = event["status"]?.stringValue { copy.status = status }
+        copy.objectivesMet = event["progress"]?["met"]?.boolValue ?? false
         copy.broadcastMessage = event["broadcast_message"]?.stringValue
         copy.eventDescription = event["description"]?.stringValue
         copy.discoveredAt = event["discovered_at"]?.stringValue.flatMap(DiversionSnapshot.parseDate)
@@ -174,6 +189,15 @@ extension LocationEvent {
                   "firstSeenAt" TEXT NOT NULL,
                   "updatedAt" TEXT NOT NULL
                 ) STRICT
+                """
+            )
+            .execute(db)
+        }
+        migrator.registerMigration("Add 'objectivesMet' to locationEvents") { db in
+            try #sql(
+                """
+                ALTER TABLE "locationEvents"
+                ADD COLUMN "objectivesMet" INTEGER NOT NULL DEFAULT 0
                 """
             )
             .execute(db)

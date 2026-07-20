@@ -25,6 +25,11 @@ public struct SidebarView: View {
     @FetchOne(Message.where { !$0.isRead && $0.messageType.eq("story") }.count()) private var unreadStoryCount = 0
     /// Live count of open location events ("quests"), for the Location Events badge.
     @FetchOne(LocationEvent.where { $0.status.eq("active") }.count()) private var activeEventCount = 0
+    /// Live count of open events whose objectives are met — the ones that can be
+    /// completed right now. Surfaced as the accent pill ahead of the plain open
+    /// count, exactly like unread *story* messages, so "ready to complete" reads at
+    /// a glance.
+    @FetchOne(LocationEvent.where { $0.status.eq("active") && $0.objectivesMet }.count()) private var readyEventCount = 0
     /// The whole fleet — the header resolves the active replicant's host glyph
     /// (and the tint/label of any running progress) from it.
     @FetchAll private var devices: [Device]
@@ -51,20 +56,30 @@ public struct SidebarView: View {
         }
     }
 
+    /// The accent-pill count for a category — the "needs attention now" subset shown
+    /// ahead of the plain count. Messages surfaces unread *story* beats; Location
+    /// Events surfaces quests that are ready to complete. Everything else stays 0.
+    private func accentCount(for item: SidebarItem) -> Int {
+        switch item {
+        case .messages: unreadStoryCount
+        case .locationEvents: readyEventCount
+        default: 0
+        }
+    }
+
     /// A sidebar category row. Every row shares one structure — `Label` + a
     /// trailing `SidebarCategoryBadge` — so the outline list's identity diffing
     /// stays stable (a per-row structural conditional trips a `ViewListTree`
-    /// assertion). Only Messages passes a story count, so only it can show the
-    /// composite pill.
+    /// assertion). Messages and Location Events pass an accent count, so they can
+    /// show the composite pill (ready/story count + a plain remainder).
     private func categoryRow(for item: SidebarItem) -> some View {
-        HStack(spacing: Space.xs) {
+        let accent = accentCount(for: item)
+        return HStack(spacing: Space.xs) {
             Label(item.title, systemImage: item.symbol)
             Spacer(minLength: Space.xs)
             SidebarCategoryBadge(
-                storyCount: item == .messages ? unreadStoryCount : 0,
-                otherCount: item == .messages
-                    ? max(0, unreadCount - unreadStoryCount)
-                    : badgeCount(for: item)
+                storyCount: accent,
+                otherCount: max(0, badgeCount(for: item) - accent)
             )
         }
         .padding(.vertical, Space.xs)
