@@ -409,10 +409,12 @@ private typealias Operation = GameModels.Operation
     }
 
     /// `adopt` is an immediate controller topology change (no tracked op): its
-    /// `devices` array reaches the wire and the controller read refreshes.
+    /// `devices` array reaches the wire, and dispatch refreshes both the
+    /// controller and each device the response reports it adopted (so the newly
+    /// adopted device's controller linkage reflects now, not next poll).
     @Test func adoptSendsDevicesAndIsImmediate() async throws {
         let database = try GameDatabase.bootstrap()
-        let readCount = LockIsolated(0)
+        let readCodes = LockIsolated<[String]>([])
         let devices = LockIsolated<[String]?>(nil)
         let client = GameClient(make: {
             Client(
@@ -433,7 +435,7 @@ private typealias Operation = GameModels.Operation
             $0.uuid = .incrementing
             $0.gameClient = client
             $0.devicesClient.read = { code in
-                readCount.withValue { $0 += 1 }
+                readCodes.withValue { $0.append(code) }
                 return makeDevice(code: code, status: "coordinating")
             }
         } operation: {
@@ -445,7 +447,9 @@ private typealias Operation = GameModels.Operation
 
         #expect(devices.value == ["32658E70", "7C79FCE1"])
         #expect(try await op(database, device: "18CA7C99") == nil)   // no tracked op
-        #expect(readCount.value == 1)                                // one controller read
+        // The authoritative controller read, then a read of each device the
+        // response's `adopted` block named (here just 32658E70).
+        #expect(readCodes.value == ["18CA7C99", "32658E70"])
     }
 
     /// `release` mirrors adopt — an immediate topology change whose `devices` array

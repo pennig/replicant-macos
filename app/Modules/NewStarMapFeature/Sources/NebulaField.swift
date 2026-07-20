@@ -33,8 +33,8 @@ public enum NebulaStyle: Int, CaseIterable, Identifiable, Sendable {
 
 /// Generation-side tunables (a CPU rebuild is needed when any of these change — hence
 /// `Equatable`, so the renderer only regenerates on an actual change). Live render
-/// knobs (exposure, size, softness…) live in `NebulaUniforms` instead. Distances are
-/// light-years, matching `Galaxy` (Sol at the origin, survey bulk within ~90 ly).
+/// knobs (exposure, size, softness…) live in `NebulaRenderParams` instead. Distances
+/// are light-years, matching `Galaxy` (Sol at the origin, survey bulk within ~90 ly).
 public struct NebulaConfig: Equatable, Sendable {
     public var style: NebulaStyle = .filaments
     public var seed: UInt32 = 0x4EB0_1A55
