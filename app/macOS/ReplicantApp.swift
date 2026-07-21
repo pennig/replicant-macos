@@ -48,36 +48,65 @@ struct ReplicantApp: App {
     private func registerGameSync() {
         @Dependency(\.accountManager) var accountManager
         @Dependency(\.gameSync) var gameSync
+        @Dependency(\.domainFreshness) var domainFreshness
 
-        // "message": a relay message event is a thin notification (no id or
+        // Register the non-device domains' refresh policies (V3.5): each names
+        // the authoritative re-read its event routes debounce into. The routes
+        // below then only `invalidate(domain)` — a synchronous mark + trailing
+        // debounce — so no refresh ever runs on the router's dispatch path
+        // (where a slow read would head-of-line-block all event ingestion).
+
+        // Inbox: a message/story event is a thin notification (no id or
         // read-state — its content lives at the envelope's top level), so the
-        // route triggers one authoritative inbox read instead of upserting from
-        // the event. The resulting rows land in the same `Message` table the
-        // Messages feature observes via @FetchAll, making the inbox live with no
-        // change to that feature. Request coalescing/TTL arrives with the Phase 4
-        // poll coordinator.
-        //
-        // The same authoritative inbox read is this channel's **tier-2 gap
-        // repair** (§4.5): on a cold start or a reconnect beyond the relay's
-        // cursor retention, `gapRepair` recovers messages that arrived while
-        // disconnected — the REST inbox is authoritative, so a head-page re-read
-        // is the catch-up. `apply` and `gapRepair` therefore share one closure.
-        let refreshInbox: @Sendable () async -> Void = {
+        // refresh is one authoritative head-page inbox read. The rows land in
+        // the same `Message` table the Messages feature observes via @FetchAll,
+        // making the inbox live with no change to that feature.
+        let refreshInbox: @Sendable () async -> Bool = {
             @Dependency(\.messagesClient) var messagesClient
             @Dependency(\.defaultDatabase) var database
-            guard let page = try? await messagesClient.fetch(nil, 50, false) else { return }
-            try? await database.write { db in
+            guard let page = try? await messagesClient.fetch(nil, 50, false) else { return false }
+            let wrote = try? await database.write { db in
                 for message in page.messages {
                     try Message.upsert { message }.execute(db)
                 }
             }
+            return wrote != nil
         }
+        domainFreshness.register(.inbox, DomainRegistration(refresh: refreshInbox))
+
+        // Location events (quests): the authoritative shape (criteria, live
+        // progress, rewards) lives at `accounts/events`, re-read wholesale.
+        domainFreshness.register(.locationEvents, DomainRegistration(refresh: {
+            @Dependency(\.locationEventsClient) var locationEventsClient
+            return (try? await locationEventsClient.refresh()) != nil
+        }))
+
+        // FTL mesh: O(relays) serial network reads — the single most expensive
+        // refresh an event can trigger, and exactly why applies must stay off
+        // the dispatch path (V3.4-B2). The rebuild is best-effort per relay by
+        // design (an unreachable relay is skipped, not an error), so it always
+        // counts as a refresh.
+        domainFreshness.register(.ftlMesh, DomainRegistration(refresh: {
+            @Dependency(\.ftlMeshRefresher) var ftlMeshRefresher
+            await ftlMeshRefresher.refresh()
+            return true
+        }))
+
+        // "message": an overnight catch-up can replay a dozen message events —
+        // debounced, they cost one head-page read after the burst (V3.4-B3).
+        //
+        // The same authoritative inbox read is this channel's **tier-2 gap
+        // repair** (§4.5): on a cold start or a reconnect beyond the stream's
+        // cursor retention, `gapRepair` recovers messages that arrived while
+        // disconnected — the REST inbox is authoritative, so a head-page re-read
+        // is the catch-up. Deliberately direct (not debounced): it must run even
+        // when no message event replays at all.
         gameSync.registerRoute(
             EventRoute(
                 id: "message",
                 match: .category("message"),
-                apply: { _ in await refreshInbox() },
-                gapRepair: refreshInbox
+                apply: { _ in domainFreshness.invalidate(.inbox) },
+                gapRepair: { _ = await refreshInbox() }
             )
         )
 
@@ -85,14 +114,14 @@ struct ReplicantApp: App {
         // are pushed over the stream for immediacy, but the backend also persists
         // them to the inbox as ordinary messages (`message_type: "story"`). The
         // stream copy carries no id/read-state, so — exactly like the "message"
-        // route — a story event triggers one authoritative inbox read; the new row
-        // lands in the same `Message` table the inbox observes, arriving live
-        // instead of on the next poll. No `gapRepair` needed: the "message"
+        // route — a story event nudges the same debounced inbox re-read; the new
+        // row lands in the same `Message` table the inbox observes, arriving
+        // live instead of on the next poll. No `gapRepair` needed: the "message"
         // route's head-page re-read already recovers stories missed while
         // disconnected.
         gameSync.registerRoute(
             EventRoute(id: "messages.story", match: .category("story")) { _ in
-                await refreshInbox()
+                domainFreshness.invalidate(.inbox)
             }
         )
 
@@ -223,22 +252,9 @@ struct ReplicantApp: App {
         // Each trigger re-reads the *whole* `accounts/events` list (cursor-paged
         // from the top), so a burst of qualifying events — tier-1 replay + tier-2
         // backfill at launch, or several quests landing together — would fire a
-        // stack of identical full re-reads. As with the passive-scan route above,
-        // one re-read after the burst reads the same live state, so a trailing
-        // debounce collapses the burst: each trigger re-arms a short timer and a
-        // single refresh runs once events quiet.
-        let pendingEventsRefresh = LockIsolated<Task<Void, Never>?>(nil)
-        let refreshEvents: @Sendable () -> Void = {
-            pendingEventsRefresh.withValue { pending in
-                pending?.cancel()
-                pending = Task {
-                    try? await Task.sleep(for: .seconds(2))
-                    guard !Task.isCancelled else { return }
-                    @Dependency(\.locationEventsClient) var locationEventsClient
-                    _ = try? await locationEventsClient.refresh()
-                }
-            }
-        }
+        // stack of identical full re-reads. One re-read after the burst reads
+        // the same live state, so the domain's trailing debounce collapses the
+        // burst into a single refresh once events quiet.
         gameSync.registerRoute(
             EventRoute(
                 id: "locationEvents",
@@ -248,9 +264,9 @@ struct ReplicantApp: App {
                     // `event.completed`); a fresh scan can also reveal one.
                     guard event.category == "event" || event.event == "scan.completed"
                     else { return }
-                    refreshEvents()
+                    domainFreshness.invalidate(.locationEvents)
                 },
-                gapRepair: { refreshEvents() }
+                gapRepair: { domainFreshness.invalidate(.locationEvents) }
             )
         )
 
@@ -263,13 +279,15 @@ struct ReplicantApp: App {
                 onLogin: { await gameSync.start() },
                 onLogout: {
                     await gameSync.stop()
-                    // The two route debounces live outside the engine's
+                    // The route debounces live outside the engine's
                     // cancellation domain — cancel them here so a scan or
-                    // quest refresh armed just before logout can't write into
+                    // domain refresh armed just before logout can't write into
                     // the freshly-wiped tables (or spend the next session's
-                    // budget on the old account's behalf).
+                    // budget on the old account's behalf). `reset` also clears
+                    // the freshness stamps, so the next session's first
+                    // `refreshIfStale` can't mistake wiped tables for fresh.
                     pendingPassiveScan.withValue { $0?.cancel(); $0 = nil }
-                    pendingEventsRefresh.withValue { $0?.cancel(); $0 = nil }
+                    domainFreshness.reset()
                 }
             )
         )

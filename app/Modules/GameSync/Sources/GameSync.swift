@@ -330,13 +330,21 @@ extension GameSync {
     /// without changing the relay device roster — the device stays put, only its
     /// status flips — so the star map's roster-change trigger can't see them, and
     /// neither can any confirm-read of the device row (the mesh is edges between
-    /// relays, not a device field). Rebuild and persist the mesh whenever any
+    /// relays, not a device field). Invalidate the mesh domain whenever any
     /// `relay.*` event arrives, independent of whether the map is on screen.
+    ///
+    /// Invalidate, never rebuild inline (V3.4-B2): the rebuild is O(relays)
+    /// serial network reads, and `EventRouter.dispatch` awaits routes serially —
+    /// an inline rebuild would head-of-line-block all event ingestion behind
+    /// it, and a burst of `relay.*` events would pay for a full rebuild each.
+    /// The domain's trailing debounce collapses the burst into one rebuild
+    /// after it quiets. (The composition root registers the `.ftlMesh` refresh
+    /// as `ftlMeshRefresher.refresh`.)
     static func ftlMeshRoute() -> EventRoute {
         EventRoute(id: "ftl.mesh", match: .category("relay")) { event in
-            @Dependency(\.ftlMeshRefresher) var ftlMeshRefresher
-            logger.debug("ftl mesh: \(event.event, privacy: .public) → rebuild")
-            await ftlMeshRefresher.refresh()
+            @Dependency(\.domainFreshness) var domainFreshness
+            logger.debug("ftl mesh: \(event.event, privacy: .public) → invalidate")
+            domainFreshness.invalidate(.ftlMesh)
         }
     }
 
