@@ -1,6 +1,6 @@
 ---
 name: architecture-review-v3
-description: "ARCHITECTURE_REVIEW.md V3 (2026-07-20): post-SSE-migration five-axis review; P0 correctness fixes + staleness model prescribed, none applied yet."
+description: "ARCHITECTURE_REVIEW.md V3 (2026-07-20): post-SSE-migration five-axis review; P0 correctness AND P1 budget tranches done (2026-07-20/21); staleness model built; P2/P3 remain."
 metadata:
   type: project
 ---
@@ -8,22 +8,30 @@ metadata:
 `ARCHITECTURE_REVIEW.md` gained a **V3 Review section (2026-07-20)** — a five-axis deep review after
 the relay→native-SSE migration. Read it before touching the sync engine.
 
-- **P0 correctness: ALL SIX FIXED 2026-07-20** (commits `e85c3f8`…`2fd14cd`, each subagent-reviewed;
-  V3.10 records what each fix actually shipped). Post-fix invariants worth knowing: EventPipeline
-  start is sequential (catch-up → connect) with a generation stamp + monotonic cursor saves;
-  DeadlineScheduler give-up is measured from the first unanswered deadline (in-memory `overdueSince`);
-  the inspector loop is torn down by `onDisappear`/`.background`; completion events are gated by op
-  family + event time (`Reconciler.completionEvents` map — `travel.arrived`→recall and
-  `scan.completed`→body-scan pairings are ASSUMED, not live-verified); the SSE client hands off via
-  `.staleGap` and the engine restarts through catch-up (sleep/wake covered, no NSWorkspace hook);
-  logout order = ingestion teardown FIRST, then wipes (registration order is load-bearing in
-  `ReplicantApp.init`); EventLog is deliberately never cleared on logout.
-- **P1 budget**: command confirm-reads bypass `deviceRefresher` (2-3 reads/command); FTL-mesh route
-  = O(relays) serial reads per `relay.*` event ON the router hot path; message/story routes
-  un-debounced; **V3.5 prescribes the staleness model** (StalenessTracker + mark-mostly device route
-  + drain loop + refreshIfStale + DomainFreshness) — the design for "leverage SSE payloads / mark
-  stale" work.
-- **Automations**: graph-clean to build, but blocked on replay immunity (the P0 pipeline fixes),
-  router hot-path isolation, and a budget-aware command governor. See V3.9.
+- **P0 correctness: ALL SIX FIXED 2026-07-20** (commits `e85c3f8`…`2fd14cd`; V3.10 records what each
+  fix shipped). Invariants: sequential catch-up→connect with generation stamp + monotonic cursor;
+  give-up measured from the first unanswered deadline; inspector loop torn down on
+  disappear/background; completion events gated by op family + event time; `.staleGap` handoff +
+  restart-through-catch-up; logout = ingestion teardown FIRST, then wipes; EventLog never cleared.
+- **P1 budget: ALL FOUR DONE 2026-07-21** (branch `worktree-v3-p1-budget`, four reviewed commits).
+  The read-budget architecture is now: (a) every post-command confirm-read funnels through
+  `deviceRefresher` and stamps the coordinator TTL (the SSE echo is suppressed; a `.high` refresh
+  never joins a pre-command in-flight read); (b) **`DomainFreshness`** (GameServices) gives
+  inbox/locationEvents/ftlMesh trailing-debounce `invalidate` + TTL'd `refreshIfStale` — routes do
+  nothing slow on the dispatch path; (c) **`StalenessTracker`** implements V3.5 mark-mostly
+  ingestion: only live op-closing events read immediately, everything else (incl. ALL catch-up
+  replay) marks; drain tiers visible→op-holding→aged-hidden (1/pass); marks are spent by
+  `Reconciler.ingest → markSatisfied` under an issue-time guard; the inspector's selection is the
+  visibility signal; (d) `Reconciler.applyEventFields` applies the envelope's first-class `location`
+  (the device's post-event position — null in transit/stowed) for every device event, event-time
+  guarded, stamp clamped to the local clock.
+- **Live-traffic findings (2026-07-21)**: per-leg arrival events DO NOT exist post-migration
+  (`travel.arrived` = whole-trip; payload destination/origin/travel_type/recalling); the docs event
+  catalogue documents `print.started` but NOT `print.completed` — **S9 (the `new_device_code`
+  payload key) is still unverified**; a loud route notice announces the real keys if a live
+  completion ever lacks it. `location: null` vs omitted is undecodable — a future event omitting
+  the field would wipe a row to "in transit" until its mark drains.
+- **Remaining**: P2 (M1–M7 modularity, tests) and P3 (docs/design-system) tranches, V3.9 automation
+  blockers 3–5 (budget-aware command governor, loop protection, audit trail — 1–2 are now fixed).
 
 Full prioritized punch list: V3.10. See [[event-stream-migration]].
