@@ -2,7 +2,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "ReplicouldKit",
+    name: "Modules",
     platforms: [
         .macOS(.v26),
     ],
