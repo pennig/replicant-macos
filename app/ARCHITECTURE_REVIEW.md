@@ -151,13 +151,13 @@ The staleness model (V3.5) is also load-bearing here: automations will multiply 
 
 ## V3.10 Prioritized punch list
 
-**P0 — correctness (do first, small diffs):**
-1. Sequence catch-up before stream connect + monotonic `saveIfNewer` cursor (S1/S2) — restores the provenance guarantee everything else leans on; prerequisite for automations.
-2. Fix `giveUpAfter` to measure from the deadline; long-op regression test (S3).
-3. Fix the inspector-loop leak: teardown-side `viewingChanged(nil)` + `scenePhase` gating (B1).
-4. Event-time + kind guard in `completeOpenOperation` (S4).
-5. Wire `onStreamError` → backoff + `resumeStream`; run catch-up/gap-repair on reconnect + wake (S5/S6).
-6. Complete logout teardown: 6 missing tables, task cancellation, cursor clear (T2/S8).
+**P0 — correctness (do first, small diffs):** — **all six done 2026-07-20** (commits `e85c3f8`…`2fd14cd`), each subagent-reviewed pre-commit; adversarial review surfaced and fixed several second-order holes (catch-up-failure replay leak, accept-then-close connect storm, restart/stop interleaves, gap-repair zombie).
+1. ~~Sequence catch-up before stream connect + monotonic `saveIfNewer` cursor (S1/S2)~~ — done; plus generation stamp against stop-mid-walk resurrect, loud catch-up failure with retry backoff.
+2. ~~Fix `giveUpAfter` to measure from the deadline; long-op regression test (S3)~~ — done; window tracked per-op from the first unanswered deadline, reset by a genuinely later server ETA.
+3. ~~Fix the inspector-loop leak (B1)~~ — done; `onDisappear` teardown + `scenePhase` gated on `.background` only (`.inactive` is ambiguous on macOS and must not freeze a visible readout).
+4. ~~Event-time + kind guard in `completeOpenOperation` (S4)~~ — done; completion events declare the op families they may close; 5s skew tolerance; poll path unconstrained. `travel.arrived`→recall and `scan.completed`→body-scan pairings are assumed-additive, not live-verified.
+5. ~~Stream-death recovery + reconnect/wake gap repair (S5/S6/S7)~~ — done; `.staleGap` handoff (seeded staleness clock) + engine restart-through-catch-up covers sleep/wake with no NSWorkspace hook; jittered exponential backoff reset only on a productive connection; auth ladder 5s→10min.
+6. ~~Complete logout teardown (T2/S8)~~ — done; 5 tables + cursor cleared (EventLog exempt by documented design), ingestion teardown ordered before wipes, all engine side-tasks under `stop()`'s control. `GameDatabase.migrator()` documents the new-table-needs-a-logout-decision rule.
 
 **P1 — budget (the "responsible API usage" tranche):**
 7. Funnel command confirm-reads through `deviceRefresher` (B4 — halves per-command cost, trivial).
