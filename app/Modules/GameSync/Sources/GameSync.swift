@@ -128,37 +128,24 @@ actor GameSyncEngine {
         self.pipeline = pipeline
 
         let router = self.router
+        @Dependency(\.date) var date
+        let now = date.now
         consumeTask = Task {
-            let stream = await pipeline.start()
-            // Catch-up (§5.3): reconstruct recent state from the authoritative
-            // account-wide event log on every (re)start, covering a stale cursor.
-            // Catch-up events flow through the same stream → routes, deduped by
-            // stream id. Spawned after `start()` so the stream's continuation is
-            // live first. Feature channels own their own tier-2 as
-            // `EventRoute.gapRepair` (e.g. the messages route re-reads the REST
-            // inbox), so run every route's gapRepair here too.
-            Task { await GameSyncEngine.catchUpIfStale(pipeline) }
+            // Catch-up (§5.3) runs *inside* `start()`, sequentially before the
+            // SSE connection opens: the gap is emitted as `.catchUp` and the
+            // stream then connects from the advanced cursor, so replayed history
+            // can never arrive tagged `.stream` (V3.3-S1). The 15-minute window
+            // errs toward walking — a needless pull costs a few deduped reads,
+            // skipping a real gap loses events. Feature channels own their own
+            // tier-2 as `EventRoute.gapRepair` (e.g. the messages route re-reads
+            // the REST inbox); that fan-out is REST-side and order-independent,
+            // so it runs concurrently with stream consumption.
+            let stream = await pipeline.start(catchUpIfOlderThan: 15 * 60, now: now)
             Task { await router.runGapRepair() }
             for await event in stream {
                 await router.dispatch(event)
             }
         }
-    }
-
-    /// Run the account-wide catch-up pull only when the persisted cursor is stale
-    /// (or absent). A fresh cursor means the stream's replay-from-cursor already
-    /// recovers recent history on connect, so the pull would be redundant reads on
-    /// every relaunch/wake. `freshWindow` is generous: a needless walk only costs
-    /// a few reads (dedup absorbs them), whereas skipping a real gap loses events,
-    /// so we err toward walking.
-    static func catchUpIfStale(_ pipeline: EventPipeline, freshWindow: TimeInterval = 15 * 60) async {
-        @Dependency(\.date) var date
-        if let last = await pipeline.lastCursorDate(), date.now.timeIntervalSince(last) < freshWindow {
-            logger.info("catch-up skipped — cursor fresh (\(Int(date.now.timeIntervalSince(last)))s old); stream replay covers it")
-            return
-        }
-        let recovered = (try? await pipeline.catchUp()) ?? 0
-        logger.info("catch-up: recovered \(recovered) event(s)")
     }
 
     func stop() async {

@@ -27,12 +27,20 @@ private let logger = Logger(subsystem: "name.pennig.replicould.events", category
 public actor EventPipeline {
 
     private let streamClient: EventStreamClient
-    private let client: any APIProtocol
+    private let fetchPage: @Sendable (_ cursor: String?) async throws -> GameEventsPage
     private let cursorStore: EventCursorStore
 
     private var seen: BoundedEventIDSet
     private var continuation: AsyncStream<GameEventEnvelope>.Continuation?
     private var streamTask: Task<Void, Never>?
+    /// In-memory shadow of the newest *persisted* cursor, so saves stay monotonic
+    /// even when catch-up pages and live frames interleave (see `persistCursor`).
+    private var highWaterCursor: String?
+    /// Bumped by every `start()`/`stop()`. A `start()` still awaiting its
+    /// catch-up walk compares its entry generation before connecting, so a
+    /// stop() (or a newer start()) during the walk can't be followed by a
+    /// zombie connection from the superseded call.
+    private var generation = 0
 
     /// - Parameters:
     ///   - streamClient: the live SSE client.
@@ -47,29 +55,104 @@ public actor EventPipeline {
         cursorStore: EventCursorStore = UserDefaultsEventCursorStore(),
         dedupCapacity: Int = 4096
     ) {
+        self.init(
+            streamClient: streamClient,
+            fetchPage: { cursor in try await client.gameEvents(cursor: cursor, filtered: true) },
+            cursorStore: cursorStore,
+            dedupCapacity: dedupCapacity
+        )
+    }
+
+    /// Internal seam: tests inject canned catch-up pages without conforming a
+    /// full `APIProtocol` double.
+    init(
+        streamClient: EventStreamClient,
+        fetchPage: @escaping @Sendable (_ cursor: String?) async throws -> GameEventsPage,
+        cursorStore: EventCursorStore = UserDefaultsEventCursorStore(),
+        dedupCapacity: Int = 4096
+    ) {
         self.streamClient = streamClient
-        self.client = client
+        self.fetchPage = fetchPage
         self.cursorStore = cursorStore
         self.seen = BoundedEventIDSet(capacity: dedupCapacity)
     }
 
-    /// Begin consuming the stream and return the unified event stream.
+    /// Begin consuming events and return the unified event stream.
     /// Single-consumer: call once and fan out in the app if needed.
+    ///
+    /// Startup is **sequential**, upholding the header's contract: when
+    /// `catchUpIfOlderThan` is given and the persisted cursor is stale (or
+    /// absent/unparseable), the catch-up pull runs to the tip *first* — emitting
+    /// the gap as `.catchUp` — and only then does the SSE connection open, from
+    /// the advanced cursor. Connecting first would make the server replay the
+    /// whole gap over SSE tagged `.stream`, defeating every consumer that gates
+    /// on provenance (e.g. the roster advance). A fresh cursor skips the pull:
+    /// the stream's short replay-from-cursor is genuinely recent, so `.stream`
+    /// is correct — and a needless walk would spend reads on every relaunch,
+    /// whereas dedup absorbs the small overlap either way (we err toward walking).
+    ///
+    /// - Parameters:
+    ///   - catchUpIfOlderThan: staleness window for the pre-connect catch-up
+    ///     pull; nil skips the pull entirely (the caller owns catch-up).
+    ///   - now: injectable clock for the staleness check.
+    ///   - onStreamError: invoked when the SSE stream fails permanently (auth);
+    ///     transient errors are retried inside the stream client.
     public func start(
+        catchUpIfOlderThan freshWindow: TimeInterval? = nil,
+        now: Date = Date(),
         onStreamError: (@Sendable (Error) -> Void)? = nil
-    ) -> AsyncStream<GameEventEnvelope> {
+    ) async -> AsyncStream<GameEventEnvelope> {
         let (stream, continuation) = AsyncStream.makeStream(of: GameEventEnvelope.self)
         self.continuation = continuation
         continuation.onTermination = { [weak self] _ in
             Task { await self?.stop() }
         }
+        generation += 1
+        let epoch = generation
+        if let freshWindow {
+            if let last = lastCursorDate(), now.timeIntervalSince(last) < freshWindow {
+                logger.info("catch-up skipped — cursor fresh (\(Int(now.timeIntervalSince(last)))s old); stream replay covers it")
+            } else {
+                await runCatchUpLoudly()
+            }
+        }
+        // A stop() — or a newer start() — while catch-up was walking must not be
+        // followed by this call's connection; the generation stamp catches both
+        // (a mere continuation-nil check would pass against a *successor's*
+        // continuation).
+        guard !Task.isCancelled, epoch == generation else { return stream }
         resumeStream(onStreamError: onStreamError)
         return stream
     }
 
+    /// Run the startup catch-up, distinguishing "the gap was empty" from "the
+    /// pull failed" — a swallowed failure would connect the stream from the
+    /// stale cursor and let the server replay the gap as `.stream`, the exact
+    /// S1 defect. One short retry covers the launch-before-network-up case;
+    /// a persistent failure is logged loudly and startup proceeds (a live
+    /// stream with imperfect provenance beats no stream at all).
+    private func runCatchUpLoudly() async {
+        for attempt in 1...2 {
+            do {
+                let recovered = try await catchUp()
+                logger.info("catch-up: recovered \(recovered) event(s)")
+                return
+            } catch {
+                if attempt == 1, !Task.isCancelled {
+                    logger.notice("catch-up attempt failed (\(error)); retrying once")
+                    try? await Task.sleep(for: .seconds(2))
+                } else {
+                    logger.error("⚠️ catch-up failed (\(error)) — connecting from the stale cursor; replayed events may arrive as .stream")
+                }
+            }
+        }
+    }
+
     /// (Re)start SSE consumption from the persisted cursor. Safe to call after a
-    /// stream error once connectivity is back.
+    /// stream error once connectivity is back; a no-op once the pipeline has
+    /// been stopped (its stream is finished — a fresh `start()` is required).
     public func resumeStream(onStreamError: (@Sendable (Error) -> Void)? = nil) {
+        guard continuation != nil else { return }
         streamTask?.cancel()
         streamTask = Task {
             do {
@@ -96,12 +179,11 @@ public actor EventPipeline {
     @discardableResult
     public func catchUp(maxEvents: Int = 2000) async throws -> Int {
         guard let stored = cursorStore.load() else { return 0 }
-        let client = self.client
         var emitted = 0
         var pulled = 0
         var cursor: String? = stored
         while pulled < maxEvents {
-            let page = try await client.gameEvents(cursor: cursor, filtered: true)
+            let page = try await fetchPage(cursor)
             guard !page.events.isEmpty else { break }
             for event in page.events {
                 pulled += 1
@@ -109,7 +191,7 @@ public actor EventPipeline {
                     continuation?.yield(event)
                     emitted += 1
                 }
-                cursorStore.save(event.id)
+                persistCursor(event.id)
             }
             guard let next = page.nextCursor else { break }
             cursor = next
@@ -137,6 +219,7 @@ public actor EventPipeline {
     }
 
     public func stop() {
+        generation += 1
         streamTask?.cancel()
         streamTask = nil
         continuation?.finish()
@@ -146,7 +229,7 @@ public actor EventPipeline {
     // MARK: - Private
 
     private func ingestStreamed(_ streamed: StreamedEvent) {
-        defer { cursorStore.save(streamed.id) }
+        defer { persistCursor(streamed.id) }
         guard let event = GameEventEnvelope(streamed: streamed) else {
             // Undecodable body: advance the cursor and move on rather than
             // wedging the stream on one malformed entry.
@@ -156,6 +239,46 @@ public actor EventPipeline {
         if seen.insert(event.id) {
             continuation?.yield(event)
         }
+    }
+
+    /// Persist a cursor only when it advances past the newest one already saved.
+    /// Blind last-write-wins would let a catch-up page save an *older* id after
+    /// a live frame saved the tip (the two interleave at await points) — a quit
+    /// in that window replays the gap on next launch against a fresh dedup set.
+    private func persistCursor(_ id: String) {
+        let current = highWaterCursor ?? cursorStore.load()
+        guard Self.isOrderedAfter(id, current) else {
+            // Loud when the *incoming* id doesn't parse: if the server's id
+            // format ever drifts, silently dropping every save would freeze the
+            // cursor forever (each launch re-walking from the frozen point).
+            if Self.parseStreamID(id) == nil {
+                logger.error("⚠️ unparseable stream id \(id, privacy: .public) — cursor not advanced")
+            }
+            if highWaterCursor == nil { highWaterCursor = current }
+            return
+        }
+        highWaterCursor = id
+        cursorStore.save(id)
+    }
+
+    /// Redis stream-ID ordering: compare `<ms>-<seq>` numerically. A nil/corrupt
+    /// stored value is always superseded by a parseable candidate; an unparseable
+    /// candidate never overwrites a parseable stored value (never regress the
+    /// cursor onto garbage).
+    static func isOrderedAfter(_ candidate: String, _ current: String?) -> Bool {
+        guard let currentParts = parseStreamID(current) else { return true }
+        guard let candidateParts = parseStreamID(candidate) else { return false }
+        return candidateParts > currentParts
+    }
+
+    /// Parse `<ms>` or `<ms>-<seq>` into a comparable pair; nil when malformed.
+    private static func parseStreamID(_ id: String?) -> (UInt64, UInt64)? {
+        guard let id else { return nil }
+        let parts = id.split(separator: "-", maxSplits: 1)
+        guard let first = parts.first, let ms = UInt64(first) else { return nil }
+        let seq = parts.count > 1 ? UInt64(parts[1]) : 0
+        guard let seq else { return nil }
+        return (ms, seq)
     }
 }
 
