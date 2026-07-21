@@ -35,6 +35,12 @@ public struct StreamedEvent: Sendable, Identifiable {
 public enum EventStreamError: Error {
     case badStatus(Int)
     case malformedResponse
+    /// The connection has been down longer than the server's cursor replay can
+    /// be trusted to cover (e.g. the machine slept for hours). Reconnecting
+    /// internally would make the server replay whatever it still retains as
+    /// live `.stream` events with the rest silently lost — the owner must
+    /// instead tear down and restart with the authoritative catch-up pull.
+    case staleGap(idleSeconds: TimeInterval)
 }
 
 /// A long-lived stream of raw game events over SSE. Injectable so `GameSync` can
@@ -59,10 +65,16 @@ extension EventStreamClient {
     ///   - endpoint: the SSE URL (defaults to the live game endpoint).
     ///   - token: reads the current session bearer token; called on every
     ///     (re)connect so login/logout is tracked without reconfiguration.
+    ///   - staleAfter: reconnects are handled internally only while the quiet
+    ///     gap stays inside this window (matching the pipeline's catch-up
+    ///     freshness window); beyond it the stream finishes with `.staleGap`
+    ///     so the owner restarts through the authoritative catch-up pull
+    ///     instead of trusting cursor replay (sleep/wake lands here).
     public static func live(
         endpoint: URL = defaultEndpoint,
         token: @escaping @Sendable () -> String?,
         session: URLSession = .shared,
+        staleAfter: TimeInterval = 15 * 60,
         logger: Logger? = nil
     ) -> EventStreamClient {
         let log = logger ?? Logger(subsystem: "name.pennig.replicould.events", category: "stream")
@@ -71,9 +83,41 @@ extension EventStreamClient {
                 let task = Task {
                     var lastEventID: String? = cursor
                     var retryDelay: Duration = .seconds(1)
+                    // Exponential reconnect backoff: reset to `retryDelay` on a
+                    // successful connect, doubled (with jitter, capped at 60s)
+                    // per consecutive failure so a down/fast-closing server
+                    // isn't hammered at 1 connect/sec indefinitely.
+                    var reconnectDelay: Duration = .seconds(1)
                     var hasConnected = false
+                    // Wall-clock of the last line received (data OR keepalive) —
+                    // the staleness clock for the `.staleGap` check. Seeded at
+                    // task start so a client that NEVER manages to receive a
+                    // line (offline at launch/restart) still hands off after
+                    // the window instead of eventually reconnecting from a
+                    // stale cursor as if nothing happened.
+                    var lastActivityAt = Date()
+                    // Whether the current connection has delivered any line —
+                    // gates the backoff reset (a 200 that closes without bytes
+                    // is not a healthy connection) and the quick clean-close
+                    // reconnect.
+                    var receivedLineThisConnection = false
+
+                    // One jittered, doubling backoff sleep (floor 500ms, cap 60s).
+                    func sleepForBackoff() async {
+                        let seconds = Double(reconnectDelay.components.seconds)
+                            + Double(reconnectDelay.components.attoseconds) / 1e18
+                        let jittered = Duration.seconds(seconds * Double.random(in: 0.8...1.2))
+                        try? await Task.sleep(for: max(jittered, .milliseconds(500)))
+                        reconnectDelay = min(reconnectDelay * 2, .seconds(60))
+                    }
 
                     while !Task.isCancelled {
+                        let idle = Date().timeIntervalSince(lastActivityAt)
+                        if idle > staleAfter {
+                            log.notice("event stream idle \(Int(idle))s — beyond cursor-replay trust; handing off for catch-up restart")
+                            continuation.finish(throwing: EventStreamError.staleGap(idleSeconds: idle))
+                            return
+                        }
                         do {
                             var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)!
                             if let id = lastEventID {
@@ -95,6 +139,7 @@ extension EventStreamClient {
                             guard http.statusCode == 200 else {
                                 throw EventStreamError.badStatus(http.statusCode)
                             }
+                            receivedLineThisConnection = false
 
                             var pendingID: String?
                             var pendingEvent: String?
@@ -122,6 +167,16 @@ extension EventStreamClient {
                                 }
                                 let line = String(decoding: lineBuffer, as: UTF8.self)
                                 lineBuffer.removeAll(keepingCapacity: true)
+                                lastActivityAt = Date()   // any line — keepalives count as liveness
+                                if !receivedLineThisConnection {
+                                    receivedLineThisConnection = true
+                                    // Only a connection that actually delivers
+                                    // counts as healthy: resetting on the bare
+                                    // 200 would let an accept-then-close server
+                                    // (drain, misconfigured proxy) be hammered
+                                    // at the floor rate forever.
+                                    reconnectDelay = retryDelay
+                                }
 
                                 if line.isEmpty {
                                     // Blank line = dispatch the accumulated event.
@@ -166,14 +221,22 @@ extension EventStreamClient {
                                 continuation.finish(throwing: error)
                                 return
                             }
-                            try? await Task.sleep(for: retryDelay)
+                            await sleepForBackoff()
                             continue
                         }
 
-                        // Server closed the connection normally. Reconnect quickly;
-                        // Last-Event-ID / cursor ensures no events are missed.
+                        // Server closed the connection normally. After a
+                        // productive connection, reconnect quickly (Last-Event-ID
+                        // / cursor ensures no events are missed); a 200 that
+                        // closed without delivering a single line rides the
+                        // backoff like a failure, so an accept-then-close server
+                        // can't induce a connect storm.
                         if !Task.isCancelled {
-                            try? await Task.sleep(for: .milliseconds(100))
+                            if receivedLineThisConnection {
+                                try? await Task.sleep(for: .milliseconds(100))
+                            } else {
+                                await sleepForBackoff()
+                            }
                         }
                     }
                     continuation.finish()

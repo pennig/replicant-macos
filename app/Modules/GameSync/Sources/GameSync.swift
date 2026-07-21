@@ -98,12 +98,42 @@ extension GameSync {
 actor GameSyncEngine {
     private let router: EventRouter
     private let scheduler: DeadlineScheduler
+    /// Builds a fresh pipeline per (re)start. Injectable so tests can drive the
+    /// restart path with canned streams instead of a live SSE endpoint.
+    private let makePipeline: @Sendable () -> EventPipeline
     private var pipeline: EventPipeline?
     private var consumeTask: Task<Void, Never>?
+    /// Pending stream-death restart, retained so `stop()` can cancel it —
+    /// logout must never be followed by a zombie reconnect.
+    private var restartTask: Task<Void, Never>?
+    private var streamFailureCount = 0
+    /// When the current pipeline was (re)started — the failure ladder resets
+    /// only after a connection *survived* 10 minutes, so a capped ladder can't
+    /// saw-tooth back to fast retries just because each capped sleep itself
+    /// exceeds the quiet threshold.
+    private var lastStartAt: Date?
 
-    init(router: EventRouter, scheduler: DeadlineScheduler) {
+    init(
+        router: EventRouter,
+        scheduler: DeadlineScheduler,
+        makePipeline: @escaping @Sendable () -> EventPipeline = GameSyncEngine.livePipeline
+    ) {
         self.router = router
         self.scheduler = scheduler
+        self.makePipeline = makePipeline
+    }
+
+    /// The production pipeline: SSE authenticated with the session bearer token,
+    /// read fresh per (re)connect from the Keychain — the same source
+    /// `GameClient` uses; catch-up pull reads share the app's rate-limit budget
+    /// via `gameClient`'s client.
+    static func livePipeline() -> EventPipeline {
+        @Dependency(\.gameClient) var gameClient
+        @Dependency(\.keychain) var keychain
+        let streamClient = EventStreamClient.live(
+            token: { keychain.load(KeychainClient.apiKeyAccount) }
+        )
+        return EventPipeline(streamClient: streamClient, client: gameClient())
     }
 
     func start() {
@@ -111,25 +141,25 @@ actor GameSyncEngine {
             logger.debug("start ignored — already running")
             return
         }
-        @Dependency(\.gameClient) var gameClient
-        @Dependency(\.keychain) var keychain
         logger.info("starting — native event stream")
 
         // Arm the deadline backstop for any already-open operations.
         Task { await scheduler.start() }
 
-        // The SSE stream authenticates with the session bearer token, read fresh
-        // per (re)connect from the Keychain — the same source `GameClient` uses.
-        let streamClient = EventStreamClient.live(
-            token: { keychain.load(KeychainClient.apiKeyAccount) }
-        )
-        // Catch-up pull reads share the app's rate-limit budget via gameClient's client.
-        let pipeline = EventPipeline(streamClient: streamClient, client: gameClient())
+        let pipeline = makePipeline()
         self.pipeline = pipeline
 
         let router = self.router
         @Dependency(\.date) var date
         let now = date.now
+        lastStartAt = now
+        let onStreamError: @Sendable (Error) -> Void = { [weak self] error in
+            // Immutable rebinding: a `weak self` capture is a var, which the
+            // nested @Sendable Task closure may not reference directly under
+            // strict concurrency.
+            let engine = self
+            Task { await engine?.streamDied(error) }
+        }
         consumeTask = Task {
             // Catch-up (§5.3) runs *inside* `start()`, sequentially before the
             // SSE connection opens: the gap is emitted as `.catchUp` and the
@@ -140,7 +170,11 @@ actor GameSyncEngine {
             // tier-2 as `EventRoute.gapRepair` (e.g. the messages route re-reads
             // the REST inbox); that fan-out is REST-side and order-independent,
             // so it runs concurrently with stream consumption.
-            let stream = await pipeline.start(catchUpIfOlderThan: 15 * 60, now: now)
+            let stream = await pipeline.start(
+                catchUpIfOlderThan: 15 * 60,
+                now: now,
+                onStreamError: onStreamError
+            )
             Task { await router.runGapRepair() }
             for await event in stream {
                 await router.dispatch(event)
@@ -150,11 +184,71 @@ actor GameSyncEngine {
 
     func stop() async {
         logger.info("stopping")
+        restartTask?.cancel()
+        restartTask = nil
         consumeTask?.cancel()
         consumeTask = nil
         await pipeline?.stop()
         pipeline = nil
         await scheduler.stop()
+        streamFailureCount = 0
+        lastStartAt = nil
+    }
+
+    /// The stream finished permanently — transient errors retry *inside*
+    /// `EventStreamClient`; only auth failures and stale gaps land here. Tear
+    /// down and re-run the full sequenced start (fresh Keychain token read,
+    /// catch-up when stale, per-route gap repair), so a wake-from-sleep or a
+    /// rotated token recovers without a relaunch (V3.3-S5/S6).
+    private func streamDied(_ error: Error) {
+        guard consumeTask != nil else { return }   // stopped — don't resurrect
+        @Dependency(\.date) var date
+        @Dependency(\.continuousClock) var clock
+
+        let delay: Duration
+        if case EventStreamError.staleGap(let idle) = error {
+            // Not a failure — a planned handoff: the gap outgrew cursor-replay
+            // trust, and the restart's catch-up pull is the repair. Go promptly
+            // (one beat for post-wake networking to settle); no backoff ladder,
+            // since a fresh pipeline can't re-trip the gap check for another
+            // quiet window.
+            logger.notice("event stream handed off after \(Int(idle))s gap — restarting through catch-up")
+            delay = .seconds(1)
+        } else {
+            // Auth failure (or an unexpected terminal error): back off
+            // exponentially — each retry re-reads the Keychain, so a re-issued
+            // token is picked up; a genuinely dead session costs one connect
+            // per backoff step, capped at 10 minutes.
+            let now = date.now
+            if let started = lastStartAt, now.timeIntervalSince(started) > 10 * 60 {
+                streamFailureCount = 0   // the connection survived a while → fresh ladder
+            }
+            streamFailureCount += 1
+            let seconds = min(5 * pow(2, Double(streamFailureCount - 1)), 600)
+            logger.error("event stream died (\(error)) — restart #\(self.streamFailureCount) in \(Int(seconds))s")
+            delay = .seconds(seconds)
+        }
+
+        restartTask?.cancel()
+        restartTask = Task { [weak self] in
+            try? await clock.sleep(for: delay)
+            guard !Task.isCancelled else { return }
+            await self?.restart()
+        }
+    }
+
+    private func restart() async {
+        guard consumeTask != nil else { return }   // logged out meanwhile
+        consumeTask?.cancel()
+        consumeTask = nil
+        let old = pipeline
+        pipeline = nil
+        await old?.stop()
+        // The await above is a real suspension: a logout (`stop()`, which
+        // cancels restartTask) or a fresh lifecycle `start()` may have
+        // interleaved — never resurrect over either.
+        guard !Task.isCancelled, consumeTask == nil else { return }
+        start()
     }
 }
 

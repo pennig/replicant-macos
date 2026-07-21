@@ -97,6 +97,117 @@ import Utils
     }
 }
 
+// MARK: - Stream-death recovery
+
+@Suite struct GameSyncEngineRestartTests {
+
+    /// A stream that dies with `.staleGap` (wake after a long sleep) is restarted
+    /// through the FULL sequenced start: a fresh pipeline whose catch-up pull
+    /// runs again before the new connection opens (V3.3-S5/S6). The old code
+    /// passed no `onStreamError`, so the engine idled on a dry stream forever.
+    @Test func staleGapRestartsThroughCatchUp() async throws {
+        let database = try GameDatabase.bootstrap()
+        let clock = TestClock()
+        let connects = LockIsolated(0)
+        let catchUps = LockIsolated(0)
+        let store = SharedCursorStore("100-0")   // epoch-ancient → catch-up runs every start
+
+        // First connection dies immediately with a stale gap; the second stays open.
+        let streamClient = EventStreamClient { _ in
+            AsyncThrowingStream { continuation in
+                let attempt = connects.withValue { $0 += 1; return $0 }
+                if attempt == 1 {
+                    continuation.finish(throwing: EventStreamError.staleGap(idleSeconds: 3_600))
+                }
+            }
+        }
+        let engine = GameSyncEngine(
+            router: EventRouter(routes: LockIsolated([])),
+            scheduler: DeadlineScheduler(reconciler: Reconciler()),
+            makePipeline: {
+                EventPipeline(
+                    streamClient: streamClient,
+                    fetchPage: { _ in
+                        catchUps.withValue { $0 += 1 }
+                        return GameEventsPage(events: [], nextCursor: nil)
+                    },
+                    cursorStore: store
+                )
+            }
+        )
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 2_000))
+            $0.continuousClock = clock
+        } operation: {
+            await engine.start()
+
+            // Drive the restart: the stale-gap handoff sleeps one beat on the
+            // clock, then rebuilds the pipeline (catch-up → connect #2).
+            for _ in 0..<200 where connects.value < 2 {
+                await clock.advance(by: .seconds(1))
+                await Task.yield()
+            }
+            await engine.stop()
+        }
+
+        #expect(connects.value == 2, "the dead stream must be replaced by a fresh connection")
+        #expect(catchUps.value == 2, "each start runs the catch-up pull before connecting")
+    }
+
+    /// After `stop()`, a pending stream-death restart must NOT resurrect the
+    /// connection (logout tears the whole engine down).
+    @Test func stopCancelsPendingRestart() async throws {
+        let database = try GameDatabase.bootstrap()
+        let clock = TestClock()
+        let connects = LockIsolated(0)
+        let store = SharedCursorStore(nil)   // cold: no catch-up, connect straight away
+
+        let streamClient = EventStreamClient { _ in
+            AsyncThrowingStream { continuation in
+                connects.withValue { $0 += 1 }
+                continuation.finish(throwing: EventStreamError.staleGap(idleSeconds: 3_600))
+            }
+        }
+        let engine = GameSyncEngine(
+            router: EventRouter(routes: LockIsolated([])),
+            scheduler: DeadlineScheduler(reconciler: Reconciler()),
+            makePipeline: {
+                EventPipeline(
+                    streamClient: streamClient,
+                    fetchPage: { _ in GameEventsPage(events: [], nextCursor: nil) },
+                    cursorStore: store
+                )
+            }
+        )
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 2_000))
+            $0.continuousClock = clock
+        } operation: {
+            await engine.start()
+            for _ in 0..<200 where connects.value < 1 { await Task.yield() }
+
+            await engine.stop()                      // logout while a restart is pending
+            await clock.advance(by: .seconds(120))   // the restart's sleep would fire here
+            await Task.yield()
+        }
+
+        #expect(connects.value == 1, "stop() must cancel the pending restart")
+    }
+}
+
+/// Thread-safe in-memory cursor store for engine tests.
+private final class SharedCursorStore: EventCursorStore, @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: String?
+    init(_ initial: String?) { self.value = initial }
+    func load() -> String? { lock.withLock { value } }
+    func save(_ cursor: String) { lock.withLock { value = cursor } }
+}
+
 // MARK: - Reconciliation guard
 
 @Suite struct ReconcilerTests {

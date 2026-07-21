@@ -39,6 +39,11 @@ public struct GameEventsPage: Sendable {
     public let events: [GameEventEnvelope]
     /// Cursor for the next (newer) page — nil once the tip is reached.
     public let nextCursor: String?
+
+    public init(events: [GameEventEnvelope], nextCursor: String?) {
+        self.events = events
+        self.nextCursor = nextCursor
+    }
 }
 
 extension APIProtocol {

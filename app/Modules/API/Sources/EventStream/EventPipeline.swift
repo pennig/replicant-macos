@@ -63,9 +63,10 @@ public actor EventPipeline {
         )
     }
 
-    /// Internal seam: tests inject canned catch-up pages without conforming a
-    /// full `APIProtocol` double.
-    init(
+    /// Testing seam: inject canned catch-up pages without conforming a full
+    /// `APIProtocol` double (used by API and GameSync tests; production code
+    /// uses the `client:` initializer above).
+    public init(
         streamClient: EventStreamClient,
         fetchPage: @escaping @Sendable (_ cursor: String?) async throws -> GameEventsPage,
         cursorStore: EventCursorStore = UserDefaultsEventCursorStore(),
@@ -128,21 +129,26 @@ public actor EventPipeline {
     /// Run the startup catch-up, distinguishing "the gap was empty" from "the
     /// pull failed" — a swallowed failure would connect the stream from the
     /// stale cursor and let the server replay the gap as `.stream`, the exact
-    /// S1 defect. One short retry covers the launch-before-network-up case;
-    /// a persistent failure is logged loudly and startup proceeds (a live
-    /// stream with imperfect provenance beats no stream at all).
+    /// S1 defect. Retries with backoff cover the wake-before-Wi-Fi case
+    /// (blocking startup is fine — a connect would fail identically); after
+    /// the attempts are spent, startup proceeds with a loud error, and the
+    /// stream client's seeded stale-gap clock bounds the damage: within one
+    /// staleness window it hands off and this repair runs again.
     private func runCatchUpLoudly() async {
-        for attempt in 1...2 {
+        var delay: Duration = .seconds(2)
+        for attempt in 1...5 {
             do {
                 let recovered = try await catchUp()
                 logger.info("catch-up: recovered \(recovered) event(s)")
                 return
             } catch {
-                if attempt == 1, !Task.isCancelled {
-                    logger.notice("catch-up attempt failed (\(error)); retrying once")
-                    try? await Task.sleep(for: .seconds(2))
+                guard !Task.isCancelled else { return }
+                if attempt < 5 {
+                    logger.notice("catch-up attempt \(attempt) failed (\(error)); retrying")
+                    try? await Task.sleep(for: delay)
+                    delay = min(delay * 2, .seconds(60))
                 } else {
-                    logger.error("⚠️ catch-up failed (\(error)) — connecting from the stale cursor; replayed events may arrive as .stream")
+                    logger.error("⚠️ catch-up failed after \(attempt) attempts (\(error)) — connecting from the stale cursor; the stale-gap handoff will retry the repair within one staleness window")
                 }
             }
         }
