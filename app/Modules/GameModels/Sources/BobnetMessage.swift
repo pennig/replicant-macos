@@ -5,7 +5,8 @@
 //  The locally-persisted Bobnet chat record. Bobnet exists *only* as event-stream
 //  pushes (no authoritative REST endpoint), so unlike every other table this one
 //  is populated solely from the stream and persisted locally so history survives
-//  relaunch (IMPLEMENTATION_PLAN §4.5). Each `bobnet.new_*` event carries one
+//  relaunch (ARCHITECTURE_REVIEW §4.5, "one connection, three logical streams" —
+//  the plan's §4 has no such subsection). Each `bobnet.new_*` event carries one
 //  message in its `payload`, which `init(eventPayload:createdAt:)` maps here.
 //
 

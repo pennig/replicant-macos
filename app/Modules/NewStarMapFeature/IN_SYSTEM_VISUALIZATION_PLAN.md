@@ -1,6 +1,8 @@
 # In-system device, travel & site visualization — execution plan
 
-Status: **planned** (not started). Last of the core Star Map functionality (besides simulations).
+Status: **complete** — all five phases plus the deferred-polish list landed 2026-07-14 (see
+the "Overall" and "Deferred polish — ALL DONE" sections below). Kept as the execution record.
+(Header corrected 2026-07-21 — it previously still said "planned (not started)".)
 
 This plan lives in `NewStarMapFeature` — the raw-Metal star map (the wired-in "Stars"
 view). It does NOT touch the legacy SceneKit `StarMapFeature`.

@@ -1,21 +1,28 @@
-# Star Map — Slice 1
+# NewStarMapFeature — the Stars view
 
-A raw-Metal instanced star field: 10,000 stars in one draw call, a turntable
-camera, and the relevance field wired through the terrain shader from day one.
+The raw-Metal star map, and the app's wired-in "Stars" view: an instanced star
+field (10,000 stars in one draw call), a turntable camera, the relevance field
+wired through the terrain shader, and the galaxy→system→body drill-in with a
+real-data orrery.
 
-## Xcode setup
+*(This README began as the standalone "Slice 1" prototype doc; the setup
+section below reflects the shipped SPM reality — updated 2026-07-21. The
+"honest gaps" section at the bottom is kept as the slice-era record, with
+done-markers.)*
 
-1. New project → **macOS → App**, interface **SwiftUI**, language **Swift**.
-2. Drop in all the files from this folder.
-3. Bridging header (so Swift sees the shared C structs):
-   - Add a header `StarMap-Bridging-Header.h` containing `#include "ShaderTypes.h"`.
-   - Build Settings → **Objective-C Bridging Header** → set to that path.
-   - (Xcode also offers to create one automatically the first time you reference
-     a C type from Swift.)
-4. `Shaders.metal` compiles into the default library automatically — no extra
-   steps.
+## Module layout (SPM, not a standalone app)
 
-That's it; build and run.
+- **`CStarMapShaderTypes`** — the shared CPU↔GPU struct header as a small C
+  target (the single source of truth), imported by Swift and `#include`d by the
+  shaders. No bridging header; see `.claude/memory/metal-spm-integration.md`.
+- **Shaders** — split `.metal` files (`StarField`/`Orrery`/`Overlays`/`Tonemap`
+  + `ShaderCommon.h`) compiled as processed resources into the target's
+  `default.metallib`, loaded via `device.makeDefaultLibrary(bundle: .module)`.
+- **Live data** — the map renders the persisted census (`Star` table via
+  `@FetchAll`, mapped by `Star.init(surveyed:)`) and per-system scan detail
+  (`SystemDetail` blobs → `OrreryMapping.systemModel`). `Galaxy.generate`
+  survives only as a test fixture — the shipped map draws real data (an empty
+  census shows the "survey" placeholder, not a generated field).
 
 ## Controls
 
@@ -43,7 +50,7 @@ write-the-relevance-field operation every overlay will use later.
   outside it, depth is carried by atmospheric dimming and (once you move the
   camera) parallax.
 - **Focus falloff / floor / easing rate** — `RelevanceField`.
-- **Galaxy shape / spectral colors** — `Galaxy.generate`.
+- **Galaxy shape / spectral colors** — `Galaxy.generate` (test fixture only).
 
 ## What this slice proves
 

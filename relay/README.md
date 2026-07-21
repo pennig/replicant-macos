@@ -1,3 +1,9 @@
+> **🪦 DECOMMISSIONED (2026-07-19).** This relay is no longer used by anything.
+> Backend v2.3.0 shipped a first-party SSE endpoint (`GET /v1/events/stream`)
+> and the Mac app now consumes it directly (`app/Modules/API/Sources/EventStream/`);
+> the app has zero references to this service, and the deployment can be torn
+> down whenever. The README below is preserved as-built for the record.
+
 # replicant-relay
 
 Rust middleware for [replicant.space](https://replicant.space), deployed as
