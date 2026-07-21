@@ -401,13 +401,21 @@ private final class SharedCursorStore: EventCursorStore, @unchecked Sendable {
         } operation: {
             let route = GameSync.deviceRoute(reconciler: Reconciler())
 
-            // 1) Thin live event → mark, no read.
+            // The device exists locally (events can't create rows), stale.
+            await Reconciler().ingest(device("SHIP", at: now))
+
+            // 1) Thin live event → payload location applied + mark, no read.
             await route.apply(GameEventEnvelope(
                 id: "1-0", category: "travel", event: "travel.cruising",
-                deviceCode: "SHIP", createdAt: "2026-07-20T01:00:00Z"
+                deviceCode: "SHIP", location: "TENEGSHE-7-L4",
+                createdAt: "2026-07-20T01:00:00Z"
             ))
             #expect(refreshed.value.isEmpty)
             #expect(marked.value == ["SHIP"])
+            let moved = try await database.read { db in
+                try Device.where { $0.deviceCode.eq("SHIP") }.fetchOne(db)
+            }
+            #expect(moved?.location == "TENEGSHE-7-L4", "the envelope's location applies at zero read cost")
 
             // 2) Live op-closing event → one high-priority read, no mark.
             try await database.write { db in

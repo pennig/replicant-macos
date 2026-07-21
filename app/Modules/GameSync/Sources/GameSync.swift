@@ -325,15 +325,39 @@ extension GameSync {
             // surface a device the fleet has never seen, so a replayed print
             // completion still costs its one clone read — the only way the clone
             // enters the fleet short of a full walk.
-            // NOTE: `new_device_code` is the pre-migration payload key; the loud
-            // unhandled-event log will surface the real key if the new stream
-            // differs, at which point this becomes a one-line edit.
-            if event.event == "print.completed",
-               let newCode = event.payload?["new_device_code"]?.stringValue,
-               !newCode.isEmpty {
-                _ = await deviceRefresher.refresh(newCode, .high)
+            // NOTE (S9): `new_device_code` is the pre-migration payload key and
+            // remains UNVERIFIED against the native stream — the docs' event
+            // catalogue documents only `print.started` (checked 2026-07-21) and
+            // no print event has appeared in retained live traffic. The event
+            // counts as "handled" (it carries a device code), so the generic
+            // unhandled-event log can NOT catch a rename; the notice below
+            // announces it the first time a real completion arrives without the
+            // expected key, at which point this becomes a one-line edit.
+            if event.event == "print.completed" {
+                if let newCode = event.payload?["new_device_code"]?.stringValue,
+                   !newCode.isEmpty {
+                    _ = await deviceRefresher.refresh(newCode, .high)
+                } else {
+                    let keys = event.payload?.keys.sorted().joined(separator: ", ") ?? "none"
+                    logger.notice("⚠️ print.completed WITHOUT new_device_code — clone read skipped; payload keys: [\(keys, privacy: .public)] (S9: update the key)")
+                }
             }
             guard let code = event.deviceCode, !code.isEmpty else { return }
+            // Payload-complete field application (V3.5 row 2), for EVERY device
+            // event: the envelope itself names the device's location after this
+            // event — the arrival's destination, null while in transit or
+            // stowed — so fold it in under the event-time guard and travel
+            // legs / deploy/stow moves render immediately at zero read cost.
+            // Applied on the op-closing path too: if its `.high` read fails,
+            // the row at least holds the arrival's location. (Blindspot worth
+            // knowing: the decoder can't tell `location: null` from an omitted
+            // field, so a future device event that merely omits it would wipe
+            // the row to "in transit" until the mark's read repairs it.)
+            await reconciler.applyEventFields(
+                deviceCode: code,
+                location: event.location,
+                eventTime: event.date
+            )
             if completedOp, event.provenance == .stream {
                 // A live event just closed an operation: the device's finished
                 // activity block (e.g. an arrived `travel` block) must clear from
@@ -342,10 +366,10 @@ extension GameSync {
                 // high-priority read.
                 _ = await deviceRefresher.refresh(code, .high)
             } else {
-                // Thin/unknown live events and all catch-up replay: remember,
-                // don't read. Catch-up especially — it can replay hundreds of
-                // events at launch, and the cold-load gates plus the drain loop
-                // already own that repair.
+                // Remember, don't read: thin/unknown live events and all
+                // catch-up replay. Catch-up especially — it can replay hundreds
+                // of events at launch, and the cold-load gates plus the drain
+                // loop already own that repair.
                 await deviceStaleness.markStale(code, event.event)
             }
         }

@@ -183,6 +183,57 @@ public struct Reconciler: Sendable {
         }
     }
 
+    /// Apply the payload-complete field change a device event *itself* carries
+    /// (V3.5 row 2): the envelope's first-class `location` is the device's
+    /// position after the event — the arrival's destination, or null while in
+    /// transit / stowed (verified against live traffic 2026-07-21) — so travel
+    /// legs and deploy/stow moves render immediately at zero read cost. The
+    /// caller then marks the device stale; a later authoritative read
+    /// reconciles the rest of the row.
+    ///
+    /// Guarded last-writer-wins by event time against the row's synthesized
+    /// event-time (`updatedAt`, the read's request-issue clock): at-or-newer
+    /// (`>=`), because live `createdAt` stamps have second granularity and an
+    /// ordered same-second pair (arrive → deploy) must let the later event win;
+    /// a replayed identical event just re-applies the same value. Applying
+    /// advances `updatedAt` — clamped to the local clock — so an
+    /// *earlier-issued* read landing later is dropped by `ingest`'s guard (the
+    /// same ordering rule reads follow), while a server clock running ahead can
+    /// never stamp the row into the local future (which would make the very
+    /// next read look stale, get dropped whole, and still spend the staleness
+    /// mark — status frozen with its repair signal consumed).
+    ///
+    /// Returns whether the change was applied (an unknown device or a stale
+    /// event is a no-op).
+    @discardableResult
+    public func applyEventFields(
+        deviceCode: String,
+        location: String?,
+        eventTime: Date?
+    ) async -> Bool {
+        guard let eventTime else { return false }
+        @Dependency(\.defaultDatabase) var database
+        @Dependency(\.date) var date
+        let stamp = min(eventTime, date.now)
+        return (try? await database.write { db -> Bool in
+            guard var device = try Device
+                .where({ $0.deviceCode.eq(deviceCode) })
+                .fetchOne(db)
+            else { return false }
+            guard eventTime >= device.updatedAt else { return false }
+            if device.location != location {
+                device.location = location
+                // The event carries no display name for the new location; the
+                // UI falls back to the mono designation until the next read.
+                device.locationName = nil
+            }
+            device.updatedAt = max(device.updatedAt, stamp)
+            try Device.upsert { device }.execute(db)
+            logger.debug("applyEventFields \(deviceCode, privacy: .public): location=\(location ?? "-", privacy: .public) @ \(eventTime.ISO8601Format(), privacy: .public)")
+            return true
+        }) ?? false
+    }
+
     /// Reconcile the local fleet against an authoritative full device list:
     /// delete any local device whose code is absent from `presentCodes`, along
     /// with its operation rows. Only the full account walk (cold-load / explicit
