@@ -15,9 +15,9 @@ import SQLiteData
 import Testing
 @testable import DevicesFeature
 
-private func device(_ code: String) -> Device {
+private func device(_ code: String, status: String = "idle") -> Device {
     Device(
-        deviceCode: code, deviceType: "mining_drone", replicantCode: "R1", status: "idle",
+        deviceCode: code, deviceType: "mining_drone", replicantCode: "R1", status: status,
         location: nil, locationName: nil, operationalCapacity: 100, queueSize: 0,
         stowedInDeviceCode: nil, controllerDeviceCode: nil, attachedToDeviceCode: nil,
         createdAt: Date(timeIntervalSince1970: 0), availableCommands: [], features: [], tags: [],
@@ -63,6 +63,41 @@ private func device(_ code: String) -> Device {
         store.exhaustivity = .off
 
         await store.send(.task)   // no .load follows
+    }
+
+    /// The while-viewing refresh loop stops the moment the view reports the
+    /// device is out of sight (`viewingChanged(nil)`) — the teardown signal
+    /// `onDisappear`/scenePhase now send. Regression for V3.4-B1: without the
+    /// cancel, a never-settling (diverting/mining) device kept polling forever
+    /// after the pane was closed.
+    @Test func viewingChangedNilStopsTheRefreshLoop() async throws {
+        let database = try GameDatabase.bootstrap()
+        let clock = TestClock()
+        let refreshes = LockIsolated(0)
+
+        let store = TestStore(initialState: DevicesFeature.State()) {
+            DevicesFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 2_000))
+            $0.continuousClock = clock
+            // Still diverting (never settles) with no location, so each tick is
+            // exactly one refresh and the loop re-arms indefinitely.
+            $0.deviceRefresher = DeviceRefreshClient { code, _ in
+                refreshes.withValue { $0 += 1 }
+                return device(code, status: "diverting")
+            }
+        }
+        store.exhaustivity = .off
+
+        await store.send(.viewingChanged(deviceCode: "A"))
+        while refreshes.value < 1 { await Task.yield() }   // first tick is in
+
+        await store.send(.viewingChanged(deviceCode: nil)) // view went away
+        await clock.run()                                  // any surviving sleep would fire here
+        await store.finish()
+
+        #expect(refreshes.value == 1, "no further reads once the view is gone")
     }
 
     /// A confirmed command is forwarded to `CommandClient.dispatch`.

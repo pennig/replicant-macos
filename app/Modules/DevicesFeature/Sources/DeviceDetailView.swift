@@ -29,6 +29,7 @@ private typealias Operation = GameModels.Operation
 public struct DeviceDetailView: View {
     let store: StoreOf<DevicesFeature>
     @FetchAll(Operation.order { $0.startedAt.desc() }) private var operations
+    @Environment(\.scenePhase) private var scenePhase
 
     public init(store: StoreOf<DevicesFeature>) {
         self.store = store
@@ -113,6 +114,27 @@ public struct DeviceDetailView: View {
         // selection clears.
         .task(id: refreshKey) {
             store.send(.viewingChanged(deviceCode: refreshKey))
+        }
+        // `.task(id:)` only restarts the loop across *selection* changes. When
+        // the view is REMOVED (sidebar category switch, window close), SwiftUI
+        // cancels the view task but the store's refresh effect would keep
+        // polling the hidden device — forever, for mining/diverting devices
+        // that never settle (V3.4-B1). Teardown must say so explicitly.
+        .onDisappear {
+            store.send(.viewingChanged(deviceCode: nil))
+        }
+        // Likewise a backgrounded/hidden app shouldn't spend reads on an
+        // inspector nobody can see; the loop resumes with the scene. Only
+        // `.background` definitively means "not visible" on macOS — `.inactive`
+        // can be reported while the window is still fully on screen (app merely
+        // resigned active, exactly the watch-a-mining-op-beside-a-browser case),
+        // so it must neither stop nor restart the loop.
+        .onChange(of: scenePhase) { _, phase in
+            switch phase {
+            case .background: store.send(.viewingChanged(deviceCode: nil))
+            case .active:     store.send(.viewingChanged(deviceCode: refreshKey))
+            default:          break
+            }
         }
     }
 
