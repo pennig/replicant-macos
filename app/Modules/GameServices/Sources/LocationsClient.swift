@@ -1,6 +1,6 @@
 //
 //  LocationsClient.swift
-//  UniverseModels
+//  Replicould — GameServices (shared clients + command engine)
 //
 //  Reads the stellar-locations catalog through the generated `ReplicantSpace`
 //  client (inheriting bearer auth, rate limiting, and logging). Three calls:
@@ -21,7 +21,8 @@ import API
 import ComposableArchitecture
 import Foundation
 import GameModels
-import GameServices
+import SQLiteData
+import UniverseModels
 import Utils
 
 public enum LocationsError: Error, Equatable, Sendable {
@@ -165,8 +166,7 @@ extension LocationsClient {
     public func ingestScanResult(payload: [String: JSONValue]) async throws -> Bool {
         guard
             let result = payload["result"],
-            let raw = try? LocationDecoding.reinterpret(result, as: RawScanEventResult.self),
-            let detail = raw.bodyDetail()
+            let detail = ((try? LocationDecoding.scanResultBody(from: result)) ?? nil)
         else { return false }
         let system = String(detail.designation.split(separator: "-").first ?? "")
         guard !system.isEmpty else { return false }
@@ -230,8 +230,7 @@ extension LocationsClient: DependencyKey {
             let output = try await client.getV1Locations()
             switch output {
             case .ok(let ok):
-                let raw = try LocationDecoding.reinterpret(try ok.body.json, as: RawFootprint.self)
-                return (raw.locations ?? [:]).mapValues(\.domain)
+                return try LocationDecoding.footprint(from: try ok.body.json)
             case .default(let statusCode, _):
                 throw LocationsError.unexpected(statusCode)
             }
@@ -254,8 +253,8 @@ extension LocationsClient: DependencyKey {
             )
             switch output {
             case .ok(let ok):
-                let raw = try LocationDecoding.reinterpret(try ok.body.json, as: RawScan.self)
-                guard let system = raw.system() else { throw LocationsError.malformed }
+                guard let system = try LocationDecoding.scannedSystem(from: ok.body.json)
+                else { throw LocationsError.malformed }
                 return system
             case .notFound:
                 throw LocationsError.notFound
@@ -268,13 +267,13 @@ extension LocationsClient: DependencyKey {
     )
 
     /// Shared GET /v1/locations/{designation} with the explored-gate mapping.
-    private static func fetchLocation(_ designation: String) async throws -> RawLocation {
+    private static func fetchLocation(_ designation: String) async throws -> LocationPayload {
         @Dependency(\.gameClient) var gameClient
         let client = gameClient.make()
         let output = try await client.getV1LocationsDesignation(path: .init(designation: designation))
         switch output {
         case .ok(let ok):
-            return try LocationDecoding.reinterpret(try ok.body.json, as: RawLocation.self)
+            return try LocationDecoding.location(from: try ok.body.json)
         case .forbidden:
             throw LocationsError.noReplicantInSystem
         case .notFound:

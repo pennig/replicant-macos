@@ -19,7 +19,7 @@ import Foundation
 
 // MARK: - Round-trip decode
 
-enum LocationDecoding {
+public enum LocationDecoding {
     /// Decoder for the re-encoded location JSON. Snake→camel so DTO fields are
     /// idiomatic; resource-name dictionary keys are single words and unaffected.
     static let decoder: JSONDecoder = {
@@ -35,6 +35,47 @@ enum LocationDecoding {
         let data = try encoder.encode(body)
         return try decoder.decode(T.self, from: data)
     }
+}
+
+// MARK: - Public decode facade
+
+// The `Raw*` wire DTOs below stay internal to this module; the service layer
+// (`LocationsClient` in GameServices) decodes endpoint payloads only through
+// these domain-typed entry points. Each takes any `Encodable` body — a
+// generated OpenAPI schema or a `JSONValue` — and round-trips it through
+// `reinterpret`.
+extension LocationDecoding {
+    /// `GET /v1/locations` — the per-location holdings overlay.
+    public static func footprint(from body: some Encodable) throws -> [String: LocationCounts] {
+        let raw = try reinterpret(body, as: RawFootprint.self)
+        return (raw.locations ?? [:]).mapValues(\.domain)
+    }
+
+    /// `GET /v1/locations/{designation}` — polymorphic on `location_type`;
+    /// read the result as a star system or a body detail.
+    public static func location(from body: some Encodable) throws -> LocationPayload {
+        LocationPayload(raw: try reinterpret(body, as: RawLocation.self))
+    }
+
+    /// `POST /v1/replicants/{code}/scan` — the full current-system scan.
+    public static func scannedSystem(from body: some Encodable) throws -> StarSystem? {
+        try reinterpret(body, as: RawScan.self).system()
+    }
+
+    /// A `scan.completed` event's `result` block — the scanned body, ready to
+    /// merge into a cached `StarSystem`.
+    public static func scanResultBody(from body: some Encodable) throws -> BodyDetail? {
+        try reinterpret(body, as: RawScanEventResult.self).bodyDetail()
+    }
+}
+
+/// A decoded `GET /v1/locations/{designation}` response. The endpoint is
+/// polymorphic on `location_type`, so the caller picks the reading: a star
+/// yields a `StarSystem`, a planet/moon/belt a `BodyDetail`.
+public struct LocationPayload {
+    let raw: RawLocation
+    public func starSystem() -> StarSystem? { raw.starSystem() }
+    public func bodyDetail() -> BodyDetail? { raw.bodyDetail() }
 }
 
 // MARK: - Location response DTO (polymorphic on locationType)

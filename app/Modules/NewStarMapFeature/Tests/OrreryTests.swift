@@ -1,5 +1,6 @@
 import ComposableArchitecture
 import Foundation
+import GameServices
 import SQLiteData
 import Testing
 import UniverseModels

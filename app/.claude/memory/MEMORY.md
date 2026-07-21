@@ -20,8 +20,8 @@
 - [Metal HUD glass hitch](metal-hud-glass-hitch.md) — glass cards (ultraThinMaterial + big shadow) hitch the main-thread MTKView camera fly; drop the material/shadow, keep the animation.
 - [Star map hydrate fly hitch](starmap-hydrate-fly-hitch.md) — drill-in fly hitched because a mid-fly hydrate DB write forced a StarSystem blob re-decode on the main thread; fix = defer the hydrate until the transition lands.
 - [Metal SPM integration](metal-spm-integration.md) — how to wire a .metal shader + shared C struct header into an SPM library target (process resource, Bundle.module, C target, no defaultIsolation).
-- [Locations catalog feature](locations-catalog-feature.md) — Catalog › Locations disclosure tree; domain+client+persistence in UniverseModels, UI in LocationsFeature; blob-per-system persistence, hydrate-on-select.
-- [UniverseModels module](locations-catalog-feature.md) — shared no-SceneKit domain module; owns census Star/StarsClient/Position/Recon/LifeTier/InventoryItem (hoisted from StarMap) + the locations domain.
+- [Locations catalog feature](locations-catalog-feature.md) — Catalog › Locations disclosure tree; domain+persistence in UniverseModels, StarsClient/LocationsClient in GameServices (since 2026-07-21), UI in LocationsFeature; blob-per-system persistence, hydrate-on-select.
+- [UniverseModels module](locations-catalog-feature.md) — pure models module (no clients since 2026-07-21): census Star/Position/Recon/LifeTier/InventoryItem + the locations domain; wire DTOs internal behind the public LocationDecoding facade.
 - [Running package tests](running-package-tests.md) — SPM module tests ARE in the Xcode test plan; schemes with test targets work as expected (`swift test` also works).
 - [OpenAPI spec drift leniency](openapi-spec-drift-leniency.md) — POLICY: keep spec STRICT, do NOT relax additionalProperties; patch drift with targeted typed keys.
 - [OpenAPI spec layout](openapi-spec-layout.md) — spec files in Modules/API/Sources/OpenAPI/ as pristine + -edits per version; openapi.json symlinks the active -edits.

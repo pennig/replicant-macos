@@ -220,6 +220,7 @@ let package = Package(
             dependencies: [
                 "API",
                 "GameModels",
+                "UniverseModels",
                 "Utils",
                 .product(name: "SQLiteData", package: "sqlite-data"),
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
@@ -524,11 +525,8 @@ let package = Package(
         .target(
             name: "UniverseModels",
             dependencies: [
-                "API",
                 "GameModels",
-                "GameServices",
                 "Utils",
-                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
                 .product(name: "SQLiteData", package: "sqlite-data"),
             ],
             path: "UniverseModels/Sources"
@@ -536,7 +534,8 @@ let package = Package(
         .testTarget(
             name: "UniverseModelsTests",
             dependencies: [
-                "UniverseModels"
+                "API",
+                "UniverseModels",
             ],
             path: "UniverseModels/Tests"
         ),

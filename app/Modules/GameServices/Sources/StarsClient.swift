@@ -1,6 +1,6 @@
 //
 //  StarsClient.swift
-//  UniverseModels
+//  Replicould — GameServices (shared clients + command engine)
 //
 //  Surveys observable stars from `GET /v1/replicants/{code}/stars` through the
 //  generated `ReplicantSpace` client, so the call inherits bearer auth, rate
@@ -16,7 +16,7 @@
 import API
 import ComposableArchitecture
 import Foundation
-import GameServices
+import UniverseModels
 
 /// One page of the observable-stars listing.
 public struct StarPage: Equatable, Sendable {
