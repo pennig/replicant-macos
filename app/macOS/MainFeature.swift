@@ -357,8 +357,8 @@ struct MainView: View {
         } else if store.sidebar.category == .replicants {
             ReplicantDetailView(store: replicantsStore)
         } else if let category = store.sidebar.category, let selection = store.detailSelection {
-            VStack(spacing: 12) {
-                Image(systemName: category.symbol).font(.system(size: 48)).foregroundStyle(.tint)
+            VStack(spacing: Space.m) {
+                Image(systemName: category.symbol).font(.system(size: IconSize.display)).foregroundStyle(.tint)
                 Text(selection).font(.title2.bold())
                 Text("Detail for \(category.title.lowercased()).")
                     .foregroundStyle(.secondary)

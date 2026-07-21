@@ -91,9 +91,7 @@ public struct RCActiveReplicantHeader: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: Space.s) {
-            Text("ACTIVE REPLICANT")
-                .font(.rcSectionLabel).kerning(1)
-                .foregroundStyle(.rcTextTertiary)
+            RCSectionHeader("Active Replicant")
 
             RCEntitySwitcher(replicants, selection: $selection, onCommission: onCommission)
                 .padding(.horizontal, -Space.xs) // kick out the sides for visual balance (round corners make it appear more narrow than it actually is)
@@ -129,9 +127,9 @@ public struct RCActiveReplicantHeader: View {
                     isEditingPlan = true
                 } label: {
                     Image(systemName: "pencil")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.system(size: IconSize.m, weight: .semibold))
                         .foregroundStyle(.rcTextTertiary)
-                        .padding(4)
+                        .padding(Space.xs)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -145,9 +143,7 @@ public struct RCActiveReplicantHeader: View {
 
     private var planEditor: some View {
         VStack(alignment: .leading, spacing: Space.s) {
-            Text("CURRENT PLAN")
-                .font(.rcSectionLabel).kerning(1)
-                .foregroundStyle(.rcTextTertiary)
+            RCSectionHeader("Current Plan")
             TextEditor(text: $planDraft)
                 .font(.rcBody)
                 .scrollContentBackground(.hidden)
@@ -216,9 +212,9 @@ public struct RCActiveReplicantHeader: View {
     }
 
     private func stat(value: String, unit: String) -> some View {
-        HStack(spacing: 4) {
+        HStack(spacing: Space.xs) {
             Text(value)
-                .font(.system(size: 13, weight: .bold))
+                .font(.rcBodyEmph)
                 .foregroundStyle(.rcTextPrimary)
             Text(unit)
                 .font(.rcCaption)
@@ -252,7 +248,7 @@ struct RCReplicantProgressView: View {
                         .shadow(color: progress.tint.opacity(0.6), radius: 3)
                     if let symbol = progress.symbol {
                         Image(systemName: symbol)
-                            .font(.system(size: 10, weight: .semibold))
+                            .font(.system(size: IconSize.s, weight: .semibold))
                             .foregroundStyle(.rcTextTertiary)
                     }
                     Text(progress.label)
@@ -317,11 +313,9 @@ public struct RCAccountFooter: View {
             VStack(alignment: .leading, spacing: Space.s) {
                 HStack(spacing: 6) {
                     Image(systemName: "key.fill")
-                        .font(.system(size: 9, weight: .semibold))
+                        .font(.system(size: IconSize.s, weight: .semibold))
                         .foregroundStyle(.rcTextTertiary)
-                    Text("LOGGED IN")
-                        .font(.rcSectionLabel).kerning(1)
-                        .foregroundStyle(.rcTextTertiary)
+                    RCSectionHeader("Logged In")
                     Spacer(minLength: 0)
                 }
                 HStack(alignment: .center, spacing: Space.s) {
@@ -357,9 +351,9 @@ public struct RCAccountFooter: View {
     }
 
     private func stat(value: String, unit: String) -> some View {
-        HStack(spacing: 4) {
+        HStack(spacing: Space.xs) {
             Text(value)
-                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                .font(.rcBodyEmphMono)
                 .foregroundStyle(.rcAccent)
             Text(unit)
                 .font(.rcCaption)

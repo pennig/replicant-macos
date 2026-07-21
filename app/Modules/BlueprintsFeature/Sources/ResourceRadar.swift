@@ -94,7 +94,7 @@ struct RadarIndexBadge: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 9, weight: .semibold, design: .monospaced))
+            .font(.rcMicroMono)
             .foregroundStyle(.rcTextSecondary)
             .frame(width: 18, height: 18)
             .background(Circle().fill(.rcSurfaceRaisedStrong))
@@ -261,7 +261,7 @@ struct PrintTimeLockup: View {
             ForEach(components.indices, id: \.self) { index in
                 HStack(alignment: .firstTextBaseline, spacing: 3) {
                     Text("\(components[index].value)")
-                        .font(.system(size: 30, weight: .semibold))
+                        .font(.rcDisplay)
                         .monospacedDigit()
                         .foregroundStyle(.rcTextPrimary)
                     Text(components[index].unit)

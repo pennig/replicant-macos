@@ -27,7 +27,7 @@ struct LocationRow: View {
     var body: some View {
         HStack(spacing: Space.s) {
             Image(systemName: node.kind.symbol)
-                .font(.system(size: 13))
+                .font(.system(size: IconSize.m))
                 .foregroundStyle(iconColor)
                 .frame(width: 20)
 
@@ -48,7 +48,7 @@ struct LocationRow: View {
 
             ForEach(node.badges) { badge in
                 HStack(spacing: 2) {
-                    Image(systemName: badge.symbol).font(.system(size: 9))
+                    Image(systemName: badge.symbol).font(.system(size: IconSize.s))
                     if let count = badge.count {
                         Text("\(count)").font(.rcMonoSmall)
                     }

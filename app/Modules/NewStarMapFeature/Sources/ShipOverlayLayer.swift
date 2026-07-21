@@ -62,7 +62,7 @@ private struct ShipIcon: View {
         Button(action: action) {
             Image.rcSymbol(symbolName)
                 .symbolRenderingMode(.monochrome)
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: IconSize.s, weight: .semibold))
                 .foregroundStyle(isSelected ? Color.rcAccent : .rcTextPrimary)
                 .frame(width: diameter, height: diameter)
                 .background(Circle().fill(.rcSurfaceRaised))

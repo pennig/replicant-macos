@@ -44,7 +44,7 @@ public struct PrintPlanSheet: View {
     private func header(_ preview: PrintPreview) -> some View {
         HStack(alignment: .top, spacing: Space.m) {
             Image(systemName: "printer")
-                .font(.system(size: 18, weight: .medium))
+                .font(.system(size: IconSize.l, weight: .medium))
                 .foregroundStyle(.rcAccent)
             VStack(alignment: .leading, spacing: Space.xs) {
                 Text("Confirm Print")
@@ -89,7 +89,7 @@ public struct PrintPlanSheet: View {
         case let .failed(message):
             VStack(spacing: Space.s) {
                 Image(systemName: "exclamationmark.triangle")
-                    .font(.system(size: 24))
+                    .font(.system(size: IconSize.xl))
                     .foregroundStyle(.rcWarning)
                 Text(message)
                     .font(.rcBody)
@@ -109,13 +109,9 @@ public struct PrintPlanSheet: View {
     private func requirementsList(_ requirements: PrintRequirements) -> some View {
         VStack(alignment: .leading, spacing: Space.s) {
             HStack(spacing: Space.s) {
-                Text("RESOURCES REQUIRED")
-                    .font(.rcSectionLabel).kerning(1)
-                    .foregroundStyle(.rcTextTertiary)
+                RCSectionHeader("Resources Required")
                 Spacer(minLength: 0)
-                Text("HAVE / NEED")
-                    .font(.rcSectionLabel).kerning(1)
-                    .foregroundStyle(.rcTextTertiary)
+                RCSectionHeader("Have / Need")
             }
 
             if requirements.lines.isEmpty {
@@ -143,7 +139,7 @@ public struct PrintPlanSheet: View {
     private func resourceRow(_ line: PrintResourceLine, inventoryKnown: Bool) -> some View {
         HStack(spacing: Space.m) {
             Image(systemName: statusSymbol(line, inventoryKnown: inventoryKnown))
-                .font(.system(size: 11))
+                .font(.system(size: IconSize.s))
                 .foregroundStyle(statusColor(line, inventoryKnown: inventoryKnown))
                 .frame(width: 14)
             Text(line.label)
@@ -186,7 +182,7 @@ public struct PrintPlanSheet: View {
     private func noteRow(symbol: String, color: Color, text: String) -> some View {
         HStack(alignment: .top, spacing: Space.s) {
             Image(systemName: symbol)
-                .font(.system(size: 11))
+                .font(.system(size: IconSize.s))
                 .foregroundStyle(color)
             Text(text)
                 .font(.rcCaption)
@@ -244,7 +240,7 @@ public struct PrintPlanSheet: View {
             .fill(.rcSurfaceRaised)
             .overlay(
                 RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                    .strokeBorder(.rcSeparator, lineWidth: 0.5)
+                    .strokeBorder(.rcSeparator, lineWidth: Hairline.thin)
             )
     }
 }

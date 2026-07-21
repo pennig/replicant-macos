@@ -64,10 +64,10 @@ public struct BlueprintDetailView: View {
                     .fill(.rcSurfaceRaised)
                     .overlay(
                         RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                            .strokeBorder(.rcSeparator, lineWidth: 0.5)
+                            .strokeBorder(.rcSeparator, lineWidth: Hairline.thin)
                     )
                 Image.rcSymbol("device.\(blueprint.deviceType)")
-                    .font(.system(size: 26, weight: .regular))
+                    .font(.system(size: IconSize.hero, weight: .regular))
                     .foregroundStyle(.rcTextPrimary, .rcAccent, .rcTextSecondary)
             }
             .frame(width: 52, height: 52)
@@ -183,10 +183,7 @@ private struct Section<Content: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.m) {
-            Text(label.uppercased())
-                .font(.rcSectionLabel)
-                .tracking(0.8)
-                .foregroundStyle(.rcTextTertiary)
+            RCSectionHeader(label)
             content
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -212,7 +209,7 @@ private struct ChipFlow: View {
                     .padding(.horizontal, Space.s)
                     .padding(.vertical, Space.xs)
                     .background(.rcSurfaceRaisedStrong, in: Capsule())
-                    .overlay(Capsule().strokeBorder(.rcSeparator, lineWidth: 0.5))
+                    .overlay(Capsule().strokeBorder(.rcSeparator, lineWidth: Hairline.thin))
             }
         }
     }

@@ -17,7 +17,7 @@ public struct RateLimitMiddleware: ClientMiddleware {
 
     public init(
         governor: RateLimitGovernor,
-        logger: Logger = Logger(subsystem: "name.pennig.replicould.api", category: "ratelimit"),
+        logger: Logger = Logger(subsystem: "name.pennig.replicould", category: "API"),
         maxRetriesOn429: Int = 3
     ) {
         self.governor = governor

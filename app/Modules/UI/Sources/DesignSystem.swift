@@ -219,6 +219,20 @@ public enum Radius {
     public static let pill:    CGFloat = 999
 }
 
+/// SF Symbol point sizes for `Image(systemName:).font(.system(size:))` call
+/// sites. Formalizes the icon-size literals that recur across the features:
+/// `s` chevrons/badges/inline row glyphs · `m` standard inline icons ·
+/// `l` sheet-header icons · `xl` empty-state warning glyphs · `hero`
+/// detail-header device glyphs · `display` full-pane empty states.
+public enum IconSize {
+    public static let s:       CGFloat = 11
+    public static let m:       CGFloat = 13
+    public static let l:       CGFloat = 18
+    public static let xl:      CGFloat = 24
+    public static let hero:    CGFloat = 28
+    public static let display: CGFloat = 44
+}
+
 /// Hairline widths for separators/strokes. Formalizes the `0.5`/`1` literals that
 /// recur across cards, rows, and glyph tiles (`Rectangle().frame(height:)`,
 /// `strokeBorder(lineWidth:)`).
@@ -259,6 +273,8 @@ public extension Font {
     static let rcBodyEmphMono  = Font.system(size: 13, weight: .semibold, design: .monospaced) // system name, list-row prominence
     static let rcDisplay      = Font.system(size: 28, weight: .semibold)            // large detail-header glyph / number
     static let rcMicro        = Font.system(size: 9, weight: .semibold)             // micro badge / caption below rcSectionLabel
+    static let rcMicroMono    = Font.system(size: 9, weight: .semibold, design: .monospaced) // micro badge, mono readouts
+    static let rcFieldLabel   = Font.system(size: 10.5, weight: .bold)              // RCField-style form field label (callers add .kerning)
 }
 
 // MARK: - Tiny reusable views matching the mockups

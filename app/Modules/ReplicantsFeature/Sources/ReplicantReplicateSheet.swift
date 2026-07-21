@@ -66,9 +66,7 @@ struct ReplicantReplicateSheet: View {
 
     private var requirementsCard: some View {
         VStack(alignment: .leading, spacing: Space.s) {
-            Text("REQUIREMENTS")
-                .font(.rcSectionLabel).kerning(1)
-                .foregroundStyle(.rcTextTertiary)
+            RCSectionHeader("Requirements")
             VStack(spacing: 0) {
                 ForEach(Array(store.eligibility.requirements.enumerated()), id: \.element.id) { index, requirement in
                     if index > 0 { Divider().overlay(Color.rcSeparator) }
@@ -83,7 +81,7 @@ struct ReplicantReplicateSheet: View {
     private func requirementRow(_ requirement: ReplicationRequirement) -> some View {
         HStack(alignment: .top, spacing: Space.m) {
             Image(systemName: requirement.isMet ? "checkmark.circle.fill" : "circle")
-                .font(.system(size: 12))
+                .font(.system(size: IconSize.m))
                 .foregroundStyle(requirement.isMet ? Color.rcStatusReady : .rcWarning)
                 .frame(width: 16)
             VStack(alignment: .leading, spacing: 2) {
@@ -108,13 +106,11 @@ struct ReplicantReplicateSheet: View {
     @ViewBuilder
     private var targetSection: some View {
         VStack(alignment: .leading, spacing: Space.xs) {
-            Text("TARGET MATRIX")
-                .font(.rcSectionLabel).kerning(1)
-                .foregroundStyle(.rcTextTertiary)
+            RCSectionHeader("Target Matrix")
             if store.eligibility.targets.count == 1, let target = store.eligibility.targets.first {
                 HStack(spacing: Space.s) {
                     Image(systemName: "cube.box")
-                        .font(.system(size: 12))
+                        .font(.system(size: IconSize.m))
                         .foregroundStyle(.rcTextTertiary)
                     Text(target.deviceCode)
                         .font(.rcMono)
@@ -168,7 +164,7 @@ struct ReplicantReplicateSheet: View {
             .fill(.rcSurfaceRaised)
             .overlay(
                 RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                    .strokeBorder(.rcSeparator, lineWidth: 0.5)
+                    .strokeBorder(.rcSeparator, lineWidth: Hairline.thin)
             )
     }
 }

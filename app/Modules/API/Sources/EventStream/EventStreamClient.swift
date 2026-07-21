@@ -77,7 +77,7 @@ extension EventStreamClient {
         staleAfter: TimeInterval = 15 * 60,
         logger: Logger? = nil
     ) -> EventStreamClient {
-        let log = logger ?? Logger(subsystem: "name.pennig.replicould.events", category: "stream")
+        let log = logger ?? Logger(subsystem: "name.pennig.replicould", category: "EventStream")
         return EventStreamClient { cursor in
             AsyncThrowingStream { continuation in
                 let task = Task {

@@ -20,7 +20,7 @@ struct LocationEventRow: View {
     var body: some View {
         HStack(spacing: Space.s) {
             Image(systemName: "flag")
-                .font(.system(size: 13))
+                .font(.system(size: IconSize.m))
                 .foregroundStyle(event.isActive ? .rcAccent : .rcTextTertiary)
                 .frame(width: 20)
 

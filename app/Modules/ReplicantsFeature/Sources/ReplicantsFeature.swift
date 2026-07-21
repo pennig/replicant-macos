@@ -19,7 +19,7 @@ import GameServices
 import OSLog
 import SQLiteData
 
-private let logger = Logger(subsystem: "name.pennig.replicould.feature", category: "Replicants")
+private let logger = Logger(subsystem: "name.pennig.replicould", category: "Replicants")
 
 /// A named group of directory rows (Yours / Players / NPCs), derived in state and
 /// rendered as a `List` section.

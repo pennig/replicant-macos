@@ -100,4 +100,4 @@ extension DependencyValues {
     }
 }
 
-private let logger = Logger(subsystem: "space.replicant.Replicould", category: "Database")
+private let logger = Logger(subsystem: "name.pennig.replicould", category: "GameDatabase")

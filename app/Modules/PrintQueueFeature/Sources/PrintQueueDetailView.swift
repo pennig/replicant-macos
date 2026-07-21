@@ -94,10 +94,10 @@ public struct PrintQueueDetailView: View {
                     .fill(.rcSurfaceRaised)
                     .overlay(
                         RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                            .strokeBorder(.rcSeparator, lineWidth: 0.5)
+                            .strokeBorder(.rcSeparator, lineWidth: Hairline.thin)
                     )
                 Image.rcSymbol("device.\(device.deviceType)")
-                    .font(.system(size: 32, weight: .regular))
+                    .font(.system(size: IconSize.hero, weight: .regular))
                     .foregroundStyle(.rcTextPrimary, .rcAccent, .rcTextSecondary)
             }
             .frame(width: 52, height: 52)
@@ -131,9 +131,7 @@ public struct PrintQueueDetailView: View {
     @ViewBuilder
     private func activeJob(_ device: Device) -> some View {
         VStack(alignment: .leading, spacing: Space.s) {
-            Text("ACTIVE JOB")
-                .font(.rcSectionLabel).kerning(1)
-                .foregroundStyle(.rcTextTertiary)
+            RCSectionHeader("Active Job")
 
             if let printing = device.printingSnapshot {
                 HStack(spacing: Space.xs) {
@@ -183,13 +181,11 @@ public struct PrintQueueDetailView: View {
         let resources = device.waitingForResources
         if !resources.isEmpty {
             VStack(alignment: .leading, spacing: Space.s) {
-                Text("WAITING FOR")
-                    .font(.rcSectionLabel).kerning(1)
-                    .foregroundStyle(.rcTextTertiary)
+                RCSectionHeader("Waiting For")
                 ForEach(resources) { resource in
                     HStack(alignment: .top, spacing: Space.m) {
                         Image(systemName: resource.isMet ? "checkmark.circle.fill" : "hourglass")
-                            .font(.system(size: 11))
+                            .font(.system(size: IconSize.s))
                             .foregroundStyle(resource.isMet ? Color.rcStatusReady : .rcWarning)
                         Text(PrintQueuePresentation.displayName(resource.resource))
                             .font(.rcCaption)
@@ -215,9 +211,7 @@ public struct PrintQueueDetailView: View {
         let items = device.printQueueItems
         VStack(alignment: .leading, spacing: Space.s) {
             HStack(spacing: Space.s) {
-                Text("QUEUE")
-                    .font(.rcSectionLabel).kerning(1)
-                    .foregroundStyle(.rcTextTertiary)
+                RCSectionHeader("Queue")
                 Spacer(minLength: 0)
                 if !items.isEmpty {
                     Button(role: .destructive) {
@@ -280,7 +274,7 @@ public struct PrintQueueDetailView: View {
                 ))
             } label: {
                 Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 13))
+                    .font(.system(size: IconSize.m))
                     .foregroundStyle(.rcTextTertiary)
             }
             .buttonStyle(.plain)
@@ -295,9 +289,7 @@ public struct PrintQueueDetailView: View {
     @ViewBuilder
     private func enqueue(_ device: Device) -> some View {
         VStack(alignment: .leading, spacing: Space.s) {
-            Text("ENQUEUE PRINT")
-                .font(.rcSectionLabel).kerning(1)
-                .foregroundStyle(.rcTextTertiary)
+            RCSectionHeader("Enqueue Print")
             if blueprints.isEmpty {
                 Text("No blueprints unlocked yet.")
                     .font(.rcCaption)
@@ -352,7 +344,7 @@ public struct PrintQueueDetailView: View {
             .fill(.rcSurfaceRaised)
             .overlay(
                 RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                    .strokeBorder(.rcSeparator, lineWidth: 0.5)
+                    .strokeBorder(.rcSeparator, lineWidth: Hairline.thin)
             )
     }
 

@@ -43,7 +43,7 @@ public struct TravelPlanSheet: View {
     private func header(_ preview: TravelPreview) -> some View {
         HStack(alignment: .top, spacing: Space.m) {
             Image(systemName: "location.north.line")
-                .font(.system(size: 18, weight: .medium))
+                .font(.system(size: IconSize.l, weight: .medium))
                 .foregroundStyle(.rcAccent)
                 .frame(width: 28, height: 28)
             VStack(alignment: .leading, spacing: Space.xs) {
@@ -55,7 +55,7 @@ public struct TravelPlanSheet: View {
                         .font(.rcMonoSmall)
                         .foregroundStyle(.rcTextTertiary)
                     Image(systemName: "arrow.right")
-                        .font(.system(size: 9, weight: .semibold))
+                        .font(.system(size: IconSize.s, weight: .semibold))
                         .foregroundStyle(.rcTextTertiary)
                     Text(preview.destination)
                         .font(.rcMonoSmall)
@@ -83,7 +83,7 @@ public struct TravelPlanSheet: View {
         case let .failed(message):
             VStack(spacing: Space.s) {
                 Image(systemName: "exclamationmark.triangle")
-                    .font(.system(size: 24))
+                    .font(.system(size: IconSize.xl))
                     .foregroundStyle(.rcWarning)
                 Text(message)
                     .font(.rcBody)
@@ -135,16 +135,14 @@ public struct TravelPlanSheet: View {
                 .fill(.rcSurfaceRaised)
                 .overlay(
                     RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                        .strokeBorder(.rcSeparator, lineWidth: 0.5)
+                        .strokeBorder(.rcSeparator, lineWidth: Hairline.thin)
                 )
         )
     }
 
     private func routeList(_ plan: TravelPlan) -> some View {
         VStack(alignment: .leading, spacing: Space.s) {
-            Text("ROUTE")
-                .font(.rcSectionLabel).kerning(1)
-                .foregroundStyle(.rcTextTertiary)
+            RCSectionHeader("Route")
             VStack(spacing: 0) {
                 ForEach(Array(plan.route.enumerated()), id: \.offset) { index, leg in
                     if index > 0 { Divider().overlay(Color.rcSeparator) }
@@ -157,7 +155,7 @@ public struct TravelPlanSheet: View {
                     .fill(.rcSurfaceRaised)
                     .overlay(
                         RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                            .strokeBorder(.rcSeparator, lineWidth: 0.5)
+                            .strokeBorder(.rcSeparator, lineWidth: Hairline.thin)
                     )
             )
         }
@@ -176,7 +174,7 @@ public struct TravelPlanSheet: View {
                         .font(.rcMonoSmall)
                         .foregroundStyle(.rcTextSecondary)
                     Image(systemName: "arrow.right")
-                        .font(.system(size: 8, weight: .semibold))
+                        .font(.system(size: IconSize.s, weight: .semibold))
                         .foregroundStyle(.rcTextTertiary)
                     Text(leg.to ?? "—")
                         .font(.rcMonoSmall)

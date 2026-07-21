@@ -20,7 +20,7 @@ import OSLog
 import SQLiteData
 import UniverseModels
 
-private let logger = Logger(subsystem: "name.pennig.replicould.feature", category: "PrintQueue")
+private let logger = Logger(subsystem: "name.pennig.replicould", category: "PrintQueue")
 
 @Reducer
 public struct PrintQueueFeature {

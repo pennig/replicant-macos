@@ -76,7 +76,7 @@ private struct TransitCard: View {
             HStack(spacing: Space.s) {
                 Image.rcSymbol(symbolName)
                     .symbolRenderingMode(.monochrome)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: IconSize.m, weight: .semibold))
                     .foregroundStyle(isSelected ? Color.rcAccent : .rcTextPrimary)
 
                 VStack(alignment: .leading, spacing: 1) {

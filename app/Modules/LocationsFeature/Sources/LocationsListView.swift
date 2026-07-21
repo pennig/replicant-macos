@@ -62,7 +62,11 @@ public struct LocationsListView: View {
         .searchable(text: $store.searchText, placement: .sidebar, prompt: "Search systems")
         .toolbar { toolbarContent }
         .task { store.send(.task) }
-        .safeAreaInset(edge: .top) { errorBanner }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if let errorMessage = store.errorMessage {
+                RCErrorBanner(errorMessage) { store.send(.dismissError) }
+            }
+        }
     }
 
     @ToolbarContentBuilder
@@ -97,21 +101,6 @@ public struct LocationsListView: View {
             )
         } else {
             ContentUnavailableView.search(text: store.searchText)
-        }
-    }
-
-    @ViewBuilder
-    private var errorBanner: some View {
-        if let message = store.errorMessage {
-            HStack(spacing: Space.s) {
-                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.rcWarning)
-                Text(message).font(.rcCaption).foregroundStyle(.rcTextSecondary)
-                Spacer()
-                Button { store.send(.dismissError) } label: { Image(systemName: "xmark") }
-                    .buttonStyle(.plain).foregroundStyle(.rcTextTertiary)
-            }
-            .padding(.horizontal, Space.m).padding(.vertical, Space.s)
-            .background(.rcSurfaceRaised)
         }
     }
 }

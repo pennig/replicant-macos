@@ -2,6 +2,7 @@ import AppKit
 import CStarMapShaderTypes
 import MetalKit
 import SwiftUI
+import UI
 import simd
 
 // A live tuning surface for the star's solar flares: a single centred star rendered
@@ -194,9 +195,9 @@ public struct FlarePlaygroundView: View {
                         Button("Reset") { params = .playgroundDefault; cameraOrbitSpeed = 0.2 }
                         Button("Copy values") { copyValues() }
                     }
-                    .padding(.top, 4)
+                    .padding(.top, Space.xs)
                 }
-                .padding(16)
+                .padding(Space.l)
             }
             .frame(width: 340)
         }
@@ -216,7 +217,7 @@ public struct FlarePlaygroundView: View {
     }
 
     private func slider(_ label: String, _ value: Binding<Float>, _ range: ClosedRange<Float>) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: Space.s) {
             Text(label).font(.caption).frame(width: 96, alignment: .leading)
             Slider(value: value, in: range)
             Text(String(format: "%.2f", value.wrappedValue))

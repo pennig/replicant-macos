@@ -64,7 +64,7 @@ private struct ClusterBadge: View {
             HStack(spacing: 3) {
                 Image.rcSymbol(symbolName)
                     .symbolRenderingMode(.monochrome)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: IconSize.s, weight: .semibold))
                 if count > 1 {
                     Text("\(count)")
                         .font(.rcMonoSmall)

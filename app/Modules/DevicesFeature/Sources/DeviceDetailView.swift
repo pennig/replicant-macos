@@ -214,10 +214,10 @@ public struct DeviceDetailView: View {
                     .fill(.rcSurfaceRaised)
                     .overlay(
                         RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                            .strokeBorder(.rcSeparator, lineWidth: 0.5)
+                            .strokeBorder(.rcSeparator, lineWidth: Hairline.thin)
                     )
                 Image.rcSymbol("device.\(device.deviceType)")
-                    .font(.system(size: 32, weight: .regular))
+                    .font(.system(size: IconSize.hero, weight: .regular))
                     .foregroundStyle(.rcTextPrimary, .rcAccent, .rcTextSecondary)
             }
             .frame(width: 52, height: 52)
@@ -271,9 +271,7 @@ public struct DeviceDetailView: View {
 
     private func details(_ device: Device) -> some View {
         VStack(alignment: .leading, spacing: Space.s) {
-            Text("DETAILS")
-                .font(.rcSectionLabel).kerning(1)
-                .foregroundStyle(.rcTextTertiary)
+            RCSectionHeader("Details")
             detailRow("Replicant", device.replicantCode)
             detailRow("Queue capacity", "\(device.queueSize)")
             if let directive = device.currentDirective {
@@ -292,7 +290,7 @@ public struct DeviceDetailView: View {
                 .fill(.rcSurfaceRaised)
                 .overlay(
                     RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                        .strokeBorder(.rcSeparator, lineWidth: 0.5)
+                        .strokeBorder(.rcSeparator, lineWidth: Hairline.thin)
                 )
         )
     }
@@ -418,7 +416,7 @@ private struct TagsEditor: View {
                 remove(tag)
             } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 8, weight: .bold))
+                    .font(.system(size: IconSize.s, weight: .bold))
                     .foregroundStyle(.rcTextTertiary)
                     .padding(2)
                     .contentShape(Rectangle())
@@ -429,7 +427,7 @@ private struct TagsEditor: View {
         .padding(.vertical, 3)
         .padding(.horizontal, 7)
         .background(.rcSurfaceRaisedStrong, in: Capsule())
-        .overlay(Capsule().strokeBorder(.rcSeparator, lineWidth: 0.5))
+        .overlay(Capsule().strokeBorder(.rcSeparator, lineWidth: Hairline.thin))
     }
 
     /// The inline add-a-tag field: a compact input with a + affordance, committing
@@ -446,7 +444,7 @@ private struct TagsEditor: View {
                 commit()
             } label: {
                 Image(systemName: "plus")
-                    .font(.system(size: 11, weight: .bold))
+                    .font(.system(size: IconSize.s, weight: .bold))
                     .foregroundStyle(canAdd ? Color.rcAccent : .rcTextTertiary)
                     .contentShape(Rectangle())
             }
@@ -545,7 +543,7 @@ private struct CapacityRing: View {
                 .stroke(tone, style: StrokeStyle(lineWidth: 7, lineCap: .round))
                 .rotationEffect(.degrees(-90))
             Text("\(Int(value))")
-                .font(.system(size: 16, weight: .semibold))
+                .font(.rcHeadline)
                 .foregroundStyle(.rcTextPrimary)
                 .monospacedDigit()
         }
@@ -589,9 +587,7 @@ private struct ActiveTaskCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.s) {
-            Text("ACTIVE TASK")
-                .font(.rcSectionLabel).kerning(1)
-                .foregroundStyle(.rcTextTertiary)
+            RCSectionHeader("Active Task")
 
             if let diversion {
                 diversionReadout(diversion)
@@ -633,7 +629,7 @@ private struct ActiveTaskCard: View {
                 .fill(.rcSurfaceRaised)
                 .overlay(
                     RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                        .strokeBorder(.rcSeparator, lineWidth: 0.5)
+                        .strokeBorder(.rcSeparator, lineWidth: Hairline.thin)
                 )
         )
     }
@@ -700,7 +696,7 @@ private struct ActiveTaskCard: View {
             Text(snapshot.originLabel ?? "—")
                 .foregroundStyle(.rcTextSecondary)
             Image(systemName: "arrow.right")
-                .font(.system(size: 9, weight: .semibold))
+                .font(.system(size: IconSize.s, weight: .semibold))
                 .foregroundStyle(.rcTextTertiary)
             Text(snapshot.destinationLabel ?? "—")
                 .foregroundStyle(.rcTextPrimary)
@@ -948,9 +944,7 @@ private struct AttachedDevicesSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Space.s) {
             HStack(spacing: Space.s) {
-                Text("ATTACHED DEVICES")
-                    .font(.rcSectionLabel).kerning(1)
-                    .foregroundStyle(.rcTextTertiary)
+                RCSectionHeader("Attached Devices")
                 Spacer(minLength: 0)
                 if device.attachCapacity > 0 {
                     Text("\(attached.count)/\(device.attachCapacity)")
@@ -1012,7 +1006,7 @@ private struct AttachedDevicesSection: View {
                 }
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: IconSize.s, weight: .semibold))
                     .foregroundStyle(.rcTextTertiary)
             }
             .contentShape(Rectangle())
@@ -1027,7 +1021,7 @@ private struct AttachedDevicesSection: View {
             .fill(.rcSurfaceRaised)
             .overlay(
                 RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                    .strokeBorder(.rcSeparator, lineWidth: 0.5)
+                    .strokeBorder(.rcSeparator, lineWidth: Hairline.thin)
             )
     }
 }
@@ -1059,9 +1053,7 @@ private struct StowedDevicesSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Space.s) {
             HStack(spacing: Space.s) {
-                Text("STOWED DEVICES")
-                    .font(.rcSectionLabel).kerning(1)
-                    .foregroundStyle(.rcTextTertiary)
+                RCSectionHeader("Stowed Devices")
                 Spacer(minLength: 0)
                 Text("\(device.stowUsed)/\(device.stowCapacity) · \(device.stowRemaining) free")
                     .font(.rcCaption)
@@ -1121,7 +1113,7 @@ private struct StowedDevicesSection: View {
                 }
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: IconSize.s, weight: .semibold))
                     .foregroundStyle(.rcTextTertiary)
             }
             .contentShape(Rectangle())
@@ -1136,7 +1128,7 @@ private struct StowedDevicesSection: View {
             .fill(.rcSurfaceRaised)
             .overlay(
                 RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                    .strokeBorder(.rcSeparator, lineWidth: 0.5)
+                    .strokeBorder(.rcSeparator, lineWidth: Hairline.thin)
             )
     }
 }
@@ -1154,9 +1146,7 @@ private struct CargoSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Space.s) {
             HStack(spacing: Space.s) {
-                Text("CARGO")
-                    .font(.rcSectionLabel).kerning(1)
-                    .foregroundStyle(.rcTextTertiary)
+                RCSectionHeader("Cargo")
                 Spacer(minLength: 0)
                 if device.cargoCapacity > 0 {
                     Text("\(Self.number(device.cargoUsed))/\(device.cargoCapacity) · \(device.cargoRemaining) free")
@@ -1206,7 +1196,7 @@ private struct CargoSection: View {
             .fill(.rcSurfaceRaised)
             .overlay(
                 RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                    .strokeBorder(.rcSeparator, lineWidth: 0.5)
+                    .strokeBorder(.rcSeparator, lineWidth: Hairline.thin)
             )
     }
 
@@ -1399,9 +1389,7 @@ private struct CommandGrid: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.m) {
-            Text("COMMANDS")
-                .font(.rcSectionLabel).kerning(1)
-                .foregroundStyle(.rcTextTertiary)
+            RCSectionHeader("Commands")
 
             if commands.isEmpty {
                 Text("No dispatchable commands for this device yet.")
@@ -1627,7 +1615,7 @@ private struct CommandGrid: View {
                 .fill(.rcSurfaceRaised)
                 .overlay(
                     RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                        .strokeBorder(.rcAccentBorder, lineWidth: 0.5)
+                        .strokeBorder(.rcAccentBorder, lineWidth: Hairline.thin)
                 )
         )
     }
@@ -1839,9 +1827,7 @@ private struct CommandGrid: View {
     @ViewBuilder
     private var requirementEditor: some View {
         VStack(alignment: .leading, spacing: Space.xs) {
-            Text("REQUIREMENT")
-                .font(.rcSectionLabel)
-                .foregroundStyle(.rcTextTertiary)
+            RCSectionHeader("Requirement")
             Text("Amounts to deliver before the run completes.")
                 .font(.rcCaption)
                 .foregroundStyle(.rcTextTertiary)
@@ -1899,9 +1885,7 @@ private struct CommandGrid: View {
     @ViewBuilder
     private var priorityEditor: some View {
         VStack(alignment: .leading, spacing: Space.xs) {
-            Text("PRIORITY")
-                .font(.rcSectionLabel)
-                .foregroundStyle(.rcTextTertiary)
+            RCSectionHeader("Priority")
             Text("Tap to rank resources in order. Leave empty to balance all.")
                 .font(.rcCaption)
                 .foregroundStyle(.rcTextTertiary)
@@ -1970,9 +1954,7 @@ private struct CommandGrid: View {
     private var salvageConfiguration: some View {
         VStack(alignment: .leading, spacing: Space.s) {
             VStack(alignment: .leading, spacing: Space.xs) {
-                Text("SALVAGE LOCATION")
-                    .font(.rcSectionLabel)
-                    .foregroundStyle(.rcTextTertiary)
+                RCSectionHeader("Salvage Location")
                 if salvageBodies.isEmpty {
                     Text("No known salvage in this system yet. Scan its bodies in Locations to reveal them.")
                         .font(.rcCaption)
@@ -2119,7 +2101,7 @@ private struct CommandGrid: View {
         } label: {
             HStack(spacing: Space.s) {
                 Image(systemName: selected ? "checkmark.square.fill" : "square")
-                    .font(.system(size: 15))
+                    .font(.system(size: IconSize.m))
                     .foregroundStyle(selected ? Color.rcAccent : .rcTextTertiary)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(option.id)

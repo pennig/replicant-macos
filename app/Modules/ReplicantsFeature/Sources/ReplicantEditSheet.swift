@@ -65,7 +65,7 @@ struct ReplicantEditSheet: View {
     private var cohortSection: some View {
         VStack(alignment: .leading, spacing: Space.xs + 2) {
             Text("COHORT PERMISSION")
-                .font(.system(size: 10.5, weight: .bold)).kerning(0.5)
+                .font(.rcFieldLabel).kerning(0.5)
                 .foregroundStyle(.rcTextTertiary)
             RCSegmentedControl(
                 selection: $store.cohortPermission,
@@ -122,7 +122,7 @@ private struct ThemedTextEditor: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Space.xs + 2) {
             Text(label.uppercased())
-                .font(.system(size: 10.5, weight: .bold)).kerning(0.5)
+                .font(.rcFieldLabel).kerning(0.5)
                 .foregroundStyle(.rcTextTertiary)
             TextField(label, text: $text, axis: .vertical)
                 .focused($focused)

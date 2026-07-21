@@ -15,7 +15,7 @@ import GameModels
 import OSLog
 import SQLiteData
 
-private let logger = Logger(subsystem: "name.pennig.replicould.feature", category: "Blueprints")
+private let logger = Logger(subsystem: "name.pennig.replicould", category: "Blueprints")
 
 @Reducer
 public struct BlueprintsFeature {

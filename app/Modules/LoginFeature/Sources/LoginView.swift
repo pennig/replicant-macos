@@ -58,7 +58,7 @@ public struct LoginView: View {
             Spacer(minLength: 24)
 
             // brand
-            VStack(spacing: 8) {
+            VStack(spacing: Space.s) {
                 ReplicouldLogoView(size: 116)
                     .onGeometryChange(for: CGPoint.self) { proxy in
                         proxy.frame(in: .named("screen")).center
@@ -67,7 +67,7 @@ public struct LoginView: View {
                     }
                 VStack(spacing: 2) {
                     Text("Repli\(Text("could").italic())")
-                        .font(.system(size: 26, weight: .bold))
+                        .font(.system(size: 26, weight: .bold)) // brand wordmark — deliberate one-off, not a text style
                         .foregroundStyle(.rcTextPrimary)
                     HStack(spacing: 0) {
                         Text("A fun interface for the API-based game,")
@@ -78,10 +78,10 @@ public struct LoginView: View {
                     }
                 }
             }
-            .padding(.bottom, 24)
+            .padding(.bottom, Space.xl)
 
             if store.mode != .confirmation {
-                modeFooter.padding(.bottom, 22)
+                modeFooter.padding(.bottom, Space.xl)
             }
 
             Group {
@@ -95,7 +95,7 @@ public struct LoginView: View {
 
             Spacer(minLength: 24)
         }
-        .padding(.horizontal, 56)
+        .padding(.horizontal, 56) // deliberate: login form gutter, no token
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .animation(.easeOut(duration: 0.15), value: store.mode)
     }
@@ -109,7 +109,7 @@ public struct LoginView: View {
     }
 
     private var loginForm: some View {
-        VStack(spacing: 13) {
+        VStack(spacing: Space.m) {
             RCField("API Key", text: $store.apiKey, placeholder: "xsPaUKCPJxa…",
                     hint: "paste the key from your account", mono: true, secure: true)
             submit("Log in") { store.send(.submitKeyTapped) }
@@ -118,12 +118,12 @@ public struct LoginView: View {
     }
 
     private var signupForm: some View {
-        VStack(spacing: 13) {
+        VStack(spacing: Space.m) {
             RCField("Name", text: $store.name, placeholder: "What should we call you?")
             RCField("Email", text: $store.email, placeholder: "you@example.com")
             VStack(alignment: .leading, spacing: Space.xs + 2) {
                 Text("Time zone".uppercased())
-                    .font(.system(size: 10.5, weight: .bold)).kerning(0.5)
+                    .font(.rcFieldLabel).kerning(0.5)
                     .foregroundStyle(.rcTextTertiary)
                 timeZoneField
             }
@@ -135,13 +135,13 @@ public struct LoginView: View {
     /// Post-signup: the server emailed a verification link; the key is shown on
     /// that page, so the user pastes it here just like the login screen.
     private var confirmationForm: some View {
-        VStack(spacing: 13) {
+        VStack(spacing: Space.m) {
             VStack(spacing: 6) {
                 Text("Check your email")
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.rcHeadline)
                     .foregroundStyle(.rcTextPrimary)
                 Text(verificationMessage)
-                    .font(.system(size: 12.5))
+                    .font(.rcBody)
                     .foregroundStyle(.rcTextSecondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
@@ -194,14 +194,14 @@ public struct LoginView: View {
         } label: {
             HStack(spacing: Space.s - 2) {
                 Image(systemName: "clock")
-                    .font(.system(size: 13))
+                    .font(.system(size: IconSize.m))
                     .foregroundStyle(.rcTextTertiary)
                 Text(store.timeZone.replacingOccurrences(of: "_", with: " "))
                     .font(.rcMono)
                     .foregroundStyle(.rcTextPrimary)
                 Spacer(minLength: Space.xs)
                 Image(systemName: "chevron.down")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: IconSize.s, weight: .semibold))
                     .foregroundStyle(.rcTextSecondary)
             }
             .frame(maxWidth: .infinity, minHeight: 36)
@@ -235,7 +235,7 @@ public struct LoginView: View {
                 .buttonStyle(.plain).foregroundStyle(.rcAccent)
             Text(trailing).foregroundStyle(.rcTextTertiary)
         }
-        .font(.system(size: 11.5))
+        .font(.rcCaption)
         .padding(.top, 6)
     }
 }

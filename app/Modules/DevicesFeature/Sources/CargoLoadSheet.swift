@@ -43,7 +43,7 @@ struct CargoLoadSheet: View {
     private func header(_ preview: CargoLoadPreview) -> some View {
         HStack(alignment: .top, spacing: Space.m) {
             Image(systemName: "tray.and.arrow.down")
-                .font(.system(size: 18, weight: .medium))
+                .font(.system(size: IconSize.l, weight: .medium))
                 .foregroundStyle(.rcAccent)
             VStack(alignment: .leading, spacing: Space.xs) {
                 Text("Load Cargo")
@@ -82,7 +82,7 @@ struct CargoLoadSheet: View {
         case let .failed(message):
             VStack(spacing: Space.s) {
                 Image(systemName: "exclamationmark.triangle")
-                    .font(.system(size: 24))
+                    .font(.system(size: IconSize.xl))
                     .foregroundStyle(.rcWarning)
                 Text(message)
                     .font(.rcBody)
@@ -102,12 +102,10 @@ struct CargoLoadSheet: View {
     private func stockpileList(_ stock: [CargoStock], capacityRemaining: Int) -> some View {
         VStack(alignment: .leading, spacing: Space.s) {
             HStack(spacing: Space.s) {
-                Text("STOCKPILE")
-                    .font(.rcSectionLabel).kerning(1)
-                    .foregroundStyle(.rcTextTertiary)
+                RCSectionHeader("Stockpile")
                 Spacer(minLength: 0)
                 Text("\(total) / \(capacityRemaining) units · \(max(0, capacityRemaining - total)) free")
-                    .font(.rcSectionLabel).kerning(1)
+                    .font(.rcSectionLabel)
                     .foregroundStyle(total > 0 ? .rcAccent : .rcTextTertiary)
                     .monospacedDigit()
             }
@@ -228,7 +226,7 @@ struct CargoLoadSheet: View {
             .fill(.rcSurfaceRaised)
             .overlay(
                 RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                    .strokeBorder(.rcSeparator, lineWidth: 0.5)
+                    .strokeBorder(.rcSeparator, lineWidth: Hairline.thin)
             )
     }
 }

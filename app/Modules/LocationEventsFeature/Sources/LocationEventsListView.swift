@@ -47,7 +47,11 @@ public struct LocationEventsListView: View {
         .navigationTitle("Location Events")
         .toolbar { toolbarContent }
         .task { store.send(.task) }
-        .safeAreaInset(edge: .top) { errorBanner }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if let errorMessage = store.errorMessage {
+                RCErrorBanner(errorMessage) { store.send(.dismissError) }
+            }
+        }
     }
 
     @ToolbarContentBuilder
@@ -66,20 +70,5 @@ public struct LocationEventsListView: View {
             systemImage: "flag",
             description: Text("Travel to and scan systems to uncover the galaxy's calls for help.")
         )
-    }
-
-    @ViewBuilder
-    private var errorBanner: some View {
-        if let message = store.errorMessage {
-            HStack(spacing: Space.s) {
-                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.rcWarning)
-                Text(message).font(.rcCaption).foregroundStyle(.rcTextSecondary)
-                Spacer()
-                Button { store.send(.dismissError) } label: { Image(systemName: "xmark") }
-                    .buttonStyle(.plain).foregroundStyle(.rcTextTertiary)
-            }
-            .padding(.horizontal, Space.m).padding(.vertical, Space.s)
-            .background(.rcSurfaceRaised)
-        }
     }
 }

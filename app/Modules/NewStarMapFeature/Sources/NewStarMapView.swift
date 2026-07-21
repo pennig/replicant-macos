@@ -553,7 +553,7 @@ public struct NewStarMapView: View {
                 Text("Surveying…").font(.rcCaption).foregroundStyle(.rcTextSecondary)
             }
         } else {
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: Space.xs) {
                 Button {
                     store.send(.surveyButtonTapped)
                 } label: {
@@ -599,7 +599,7 @@ private struct GalaxyNavigator: View {
         VStack(alignment: .leading, spacing: Space.s) {
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")
-                    .font(.system(size: 12))
+                    .font(.system(size: IconSize.m))
                     .foregroundStyle(.rcTextTertiary)
                 TextField("Search stars…", text: $query)
                     .textFieldStyle(.plain)
@@ -608,7 +608,7 @@ private struct GalaxyNavigator: View {
                 if !query.isEmpty {
                     Button { query = "" } label: {
                         Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 13))
+                            .font(.system(size: IconSize.m))
                             .foregroundStyle(.rcTextTertiary)
                             .padding(6)                   // enlarge the hit target…
                             .contentShape(Rectangle())
@@ -692,10 +692,7 @@ private struct LayerRail: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.xs) {
-            Text("Layers")
-                .font(.rcSectionLabel)
-                .foregroundStyle(.rcTextTertiary)
-                .textCase(.uppercase)
+            RCSectionHeader("Layers")
                 .padding(.bottom, 2)
             ForEach(InfoLayer.allCases) { layer in
                 LayerToggle(layer: layer, isOn: active.contains(layer)) {
@@ -727,7 +724,7 @@ private struct LayerToggle: View {
                     .foregroundStyle(isOn ? .rcTextPrimary : .rcTextTertiary)
                 Spacer()
                 Image(systemName: isOn ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 12))
+                    .font(.system(size: IconSize.m))
                     .foregroundStyle(isOn ? layer.legendColor : .rcTextTertiary)
             }
             .contentShape(Rectangle())
@@ -778,7 +775,7 @@ private struct SystemDossier: View {
             Divider().overlay(.rcSeparator)
 
             HStack(spacing: Space.s) {
-                Image(systemName: reconSymbol).font(.system(size: 11))
+                Image(systemName: reconSymbol).font(.system(size: IconSize.s))
                 Text(system.recon.label)
                 if let presence = system.presence {
                     Text("·").foregroundStyle(.rcTextTertiary)
@@ -915,7 +912,7 @@ private struct ShipDossier: View {
             } else if let location = device.location {
                 HStack(spacing: Space.xs) {
                     Image(systemName: "mappin.and.ellipse")
-                        .font(.system(size: 10)).foregroundStyle(.rcTextTertiary)
+                        .font(.system(size: IconSize.s)).foregroundStyle(.rcTextTertiary)
                     Text(device.locationName ?? location)
                         .font(.rcMonoSmall).foregroundStyle(.rcTextSecondary)
                 }
@@ -937,11 +934,11 @@ private struct ShipDossier: View {
                 .fill(.rcSurfaceRaised)
                 .overlay(
                     RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
-                        .strokeBorder(.rcSeparator, lineWidth: 0.5)
+                        .strokeBorder(.rcSeparator, lineWidth: Hairline.thin)
                 )
             Image.rcSymbol("device.\(device.deviceType)")
                 .symbolRenderingMode(.monochrome)
-                .font(.system(size: 22, weight: .regular))
+                .font(.system(size: IconSize.hero, weight: .regular))
                 .foregroundStyle(.rcTextPrimary)
         }
         .frame(width: 40, height: 40)
@@ -956,7 +953,7 @@ private struct ShipDossier: View {
                     Text(origin).font(.rcMonoSmall).foregroundStyle(.rcTextTertiary)
                 }
                 Image(systemName: "arrow.right")
-                    .font(.system(size: 9)).foregroundStyle(.rcTextTertiary)
+                    .font(.system(size: IconSize.s)).foregroundStyle(.rcTextTertiary)
                 Text(snapshot.destination ?? "—")
                     .font(.rcBodyEmphMono).foregroundStyle(.rcTextPrimary)
             }
@@ -964,7 +961,7 @@ private struct ShipDossier: View {
             if let eta = device.derivedActivity?.completesAt {
                 HStack(spacing: Space.xs) {
                     Image(systemName: "clock")
-                        .font(.system(size: 10)).foregroundStyle(.rcTextTertiary)
+                        .font(.system(size: IconSize.s)).foregroundStyle(.rcTextTertiary)
                     Text("Arrives \(eta, format: .relative(presentation: .named))")
                         .font(.rcCaption).foregroundStyle(.rcTextSecondary)
                 }
@@ -1049,11 +1046,10 @@ private struct SystemHUD: View {
         if let code = selectedLocation, let info = resolveLocation(code) {
             VStack(alignment: .leading, spacing: Space.s) {
                 HStack(spacing: Space.s) {
-                    Text(info.kind)
-                        .font(.rcSectionLabel).textCase(.uppercase).foregroundStyle(.rcTextTertiary)
+                    RCSectionHeader(info.kind)
                     Spacer()
                     Button(action: onDismissLocation) {
-                        Image(systemName: "xmark").font(.system(size: 10, weight: .semibold))
+                        Image(systemName: "xmark").font(.system(size: IconSize.s, weight: .semibold))
                     }
                     .buttonStyle(.plain).foregroundStyle(.rcTextTertiary)
                 }
@@ -1102,7 +1098,7 @@ private struct SystemHUD: View {
     }
 
     @ViewBuilder private func sectionHeader(_ text: String) -> some View {
-        Text(text).font(.rcSectionLabel).textCase(.uppercase).foregroundStyle(.rcTextTertiary)
+        RCSectionHeader(text)
     }
 
     @ViewBuilder private func deviceSection(_ devices: [ClusterDevice]) -> some View {
@@ -1165,7 +1161,7 @@ private struct SystemHUD: View {
         HStack(spacing: Space.s) {
             Image.rcSymbol("device.\(dev.deviceType)")
                 .symbolRenderingMode(.monochrome)
-                .font(.system(size: 11))
+                .font(.system(size: IconSize.s))
                 .foregroundStyle(dev.isOwn ? Color.rcAccent : .rcTextSecondary)
             VStack(alignment: .leading, spacing: 0) {
                 Text(dev.deviceCode).font(.rcMonoSmall).foregroundStyle(.rcTextPrimary)
@@ -1287,10 +1283,7 @@ private struct SystemHUD: View {
 
     private var bodiesCard: some View {
         VStack(alignment: .leading, spacing: Space.s) {
-            Text(isBody ? "Moons" : "Bodies")
-                .font(.rcSectionLabel)
-                .textCase(.uppercase)
-                .foregroundStyle(.rcTextTertiary)
+            RCSectionHeader(isBody ? "Moons" : "Bodies")
             ForEach(model.planets) { planet in
                 bodyRow(planet)
             }
@@ -1298,7 +1291,7 @@ private struct SystemHUD: View {
                 Divider().overlay(.rcSeparator)
                 HStack(spacing: Space.s) {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 11)).foregroundStyle(.rcError)
+                        .font(.system(size: IconSize.s)).foregroundStyle(.rcError)
                     Text(hazard.title ?? hazard.objectType.replacingOccurrences(of: "_", with: " ").capitalized)
                         .font(.rcCaption).foregroundStyle(.rcTextSecondary)
                     Spacer()
@@ -1333,7 +1326,7 @@ private struct SystemHUD: View {
             Text(planet.type ?? "—").font(.rcCaption).foregroundStyle(.rcTextTertiary)
             if !isBody {
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 9)).foregroundStyle(.rcTextTertiary)
+                    .font(.system(size: IconSize.s)).foregroundStyle(.rcTextTertiary)
             }
         }
         .contentShape(Rectangle())
@@ -1358,7 +1351,7 @@ private struct SystemHUD: View {
     }
 
     private func icon(_ name: String, _ color: Color) -> some View {
-        Image(systemName: name).font(.system(size: 9)).foregroundStyle(color)
+        Image(systemName: name).font(.system(size: IconSize.s)).foregroundStyle(color)
     }
 
     private func fact(_ label: String, _ value: String) -> some View {
@@ -1389,7 +1382,7 @@ private struct BootRebuildOverlay: View {
         VStack(alignment: .leading, spacing: Space.l) {
             HStack(alignment: .top, spacing: Space.m) {
                 Image(systemName: icon)
-                    .font(.system(size: 30, weight: .semibold))
+                    .font(.system(size: IconSize.hero, weight: .semibold))
                     .foregroundStyle(iconColor)
                 VStack(alignment: .leading, spacing: 6) {
                     Text(title)
@@ -1464,7 +1457,7 @@ private extension View {
             .background(.rcSurfaceRaised, in: RoundedRectangle(cornerRadius: radius))
             .overlay(
                 RoundedRectangle(cornerRadius: radius)
-                    .strokeBorder(.white.opacity(0.10), lineWidth: 0.5)
+                    .strokeBorder(.white.opacity(0.10), lineWidth: Hairline.thin)
             )
     }
 }

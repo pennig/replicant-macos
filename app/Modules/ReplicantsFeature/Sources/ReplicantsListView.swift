@@ -142,10 +142,10 @@ private struct ReplicantRow: View {
                 .fill(.rcSurfaceRaised)
                 .overlay(
                     RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
-                        .strokeBorder(isOwn ? Color.rcAccentBorder : .rcSeparator, lineWidth: 0.5)
+                        .strokeBorder(isOwn ? Color.rcAccentBorder : .rcSeparator, lineWidth: Hairline.thin)
                 )
             Image(systemName: replicant.isNPC ? SidebarSymbol.npc : SidebarSymbol.replicants)
-                .font(.system(size: 14, weight: .regular))
+                .font(.system(size: IconSize.m, weight: .regular))
                 .foregroundStyle(isOwn ? Color.rcAccent : .rcTextSecondary)
         }
         .frame(width: 30, height: 30)

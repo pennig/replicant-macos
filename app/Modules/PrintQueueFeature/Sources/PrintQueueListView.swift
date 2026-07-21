@@ -98,7 +98,7 @@ private struct PrintQueueRow: View {
                     // progress bar (the live interpolated bar lives in the detail).
                     HStack(spacing: Space.s) {
                         Image(systemName: "printer.fill")
-                            .font(.system(size: 9))
+                            .font(.system(size: IconSize.s))
                             .foregroundStyle(.rcAccent)
                         Text(PrintQueuePresentation.displayName(target))
                             .font(.rcMonoSmall)

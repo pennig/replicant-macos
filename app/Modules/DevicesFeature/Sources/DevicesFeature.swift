@@ -18,7 +18,7 @@ import OSLog
 import SQLiteData
 import UniverseModels
 
-private let logger = Logger(subsystem: "name.pennig.replicould.feature", category: "Devices")
+private let logger = Logger(subsystem: "name.pennig.replicould", category: "Devices")
 
 @Reducer
 public struct DevicesFeature {

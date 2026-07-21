@@ -227,7 +227,7 @@ public struct RCField: View {
             if let label {
                 HStack(spacing: 6) {
                     Text(label.uppercased())
-                        .font(.system(size: 10.5, weight: .bold)).kerning(0.5)
+                        .font(.rcFieldLabel).kerning(0.5)
                         .foregroundStyle(Color.rcTextTertiary)
                     if let hint {
                         Text("— \(hint)").font(.system(size: 11)).foregroundStyle(Color.rcTextTertiary)

@@ -192,7 +192,7 @@ private struct ResponsePlaceholder: View {
     var body: some View {
         VStack(spacing: Space.m) {
             Image(systemName: systemImage)
-                .font(.system(size: 44))
+                .font(.system(size: IconSize.display))
                 .foregroundStyle(tint)
             Text(title)
                 .font(.rcTitle)
@@ -217,7 +217,7 @@ private struct HistorySidebar: View {
             if store.history.isEmpty {
                 VStack(spacing: Space.s) {
                     Image(systemName: "clock.arrow.circlepath")
-                        .font(.system(size: 28))
+                        .font(.system(size: IconSize.hero))
                         .foregroundStyle(.rcTextTertiary)
                     Text("No requests yet")
                         .font(.rcBody)
@@ -330,10 +330,7 @@ private struct EditorSection<Content: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.s) {
-            Text(title.uppercased())
-                .font(.rcSectionLabel)
-                .kerning(1)
-                .foregroundStyle(.rcTextTertiary)
+            RCSectionHeader(title)
             content
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -359,7 +356,7 @@ private struct MethodPicker: View {
                     .font(.rcMonoSmall)
                     .foregroundStyle(method.tone)
                 Image(systemName: "chevron.down")
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(.system(size: IconSize.s, weight: .semibold))
                     .foregroundStyle(.rcTextSecondary)
             }
             .padding(.horizontal, Space.s)
@@ -434,7 +431,7 @@ private struct KeyValueEditor: View {
                         onDelete(row.id)
                     } label: {
                         Image(systemName: "minus.circle.fill")
-                            .font(.system(size: 15))
+                            .font(.system(size: IconSize.m))
                             .foregroundStyle(.rcTextTertiary)
                     }
                     .buttonStyle(.plain)
@@ -483,7 +480,7 @@ private struct BodyEditor: View {
         } else {
             HStack(spacing: Space.s) {
                 Image(systemName: "nosign")
-                    .font(.system(size: 13))
+                    .font(.system(size: IconSize.m))
                     .foregroundStyle(.rcTextTertiary)
                 Text("\(method.rawValue) requests don't send a body.")
                     .font(.rcBody)

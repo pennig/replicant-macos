@@ -22,7 +22,7 @@
 import Foundation
 import OSLog
 
-private let logger = Logger(subsystem: "name.pennig.replicould.events", category: "pipeline")
+private let logger = Logger(subsystem: "name.pennig.replicould", category: "EventStream")
 
 public actor EventPipeline {
 

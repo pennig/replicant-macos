@@ -195,7 +195,7 @@ private struct RequirementRow: View {
             HStack {
                 if met {
                     Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 11)).foregroundStyle(.rcAccent)
+                        .font(.system(size: IconSize.s)).foregroundStyle(.rcAccent)
                 }
                 Text(label).font(.rcBody).foregroundStyle(.rcTextSecondary)
                 Spacer()

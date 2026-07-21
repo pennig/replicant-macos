@@ -111,10 +111,10 @@ public struct ReplicantDetailView: View {
                     .fill(.rcSurfaceRaised)
                     .overlay(
                         RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                            .strokeBorder(.rcSeparator, lineWidth: 0.5)
+                            .strokeBorder(.rcSeparator, lineWidth: Hairline.thin)
                     )
                 Image(systemName: replicant.isNPC ? SidebarSymbol.npc : SidebarSymbol.replicants)
-                    .font(.system(size: 28, weight: .regular))
+                    .font(.system(size: IconSize.hero, weight: .regular))
                     .foregroundStyle(.rcAccent)
             }
             .frame(width: 52, height: 52)
@@ -169,13 +169,11 @@ public struct ReplicantDetailView: View {
 
     private func locationCard(_ replicant: KnownReplicant) -> some View {
         VStack(alignment: .leading, spacing: Space.s) {
-            Text("LAST KNOWN LOCATION")
-                .font(.rcSectionLabel).kerning(1)
-                .foregroundStyle(.rcTextTertiary)
+            RCSectionHeader("Last Known Location")
             if let location = replicant.displayLocationLabel {
                 HStack(spacing: Space.s) {
                     Image(systemName: "mappin.and.ellipse")
-                        .font(.system(size: 12))
+                        .font(.system(size: IconSize.m))
                         .foregroundStyle(.rcAccent)
                     Text(location)
                         .font(.rcHeadlineMono)
@@ -216,9 +214,7 @@ public struct ReplicantDetailView: View {
         }
         if !entries.isEmpty {
             VStack(alignment: .leading, spacing: Space.m) {
-                Text("PROFILE")
-                    .font(.rcSectionLabel).kerning(1)
-                    .foregroundStyle(.rcTextTertiary)
+                RCSectionHeader("Profile")
                 ForEach(entries, id: \.0) { label, value in
                     VStack(alignment: .leading, spacing: Space.xs) {
                         Text(label.uppercased())
@@ -245,9 +241,7 @@ public struct ReplicantDetailView: View {
         let attached = replicant.attachedDevices
         if !stowed.isEmpty || !attached.isEmpty || replicant.hostedDeviceCode != nil {
             VStack(alignment: .leading, spacing: Space.s) {
-                Text("DEVICES")
-                    .font(.rcSectionLabel).kerning(1)
-                    .foregroundStyle(.rcTextTertiary)
+                RCSectionHeader("Devices")
                 if let host = replicant.hostedDeviceCode {
                     // The host resolves to a real device once we have it locally —
                     // show its type/glyph; otherwise fall back to the generic mark.
@@ -283,7 +277,7 @@ public struct ReplicantDetailView: View {
                     Image(systemName: isHost ? "house" : "circle.hexagongrid")
                 }
             }
-            .font(.system(size: 12))
+            .font(.system(size: IconSize.m))
             .foregroundStyle(isHost ? Color.rcAccent : .rcTextTertiary)
             .frame(width: 16)
             Text(type)
@@ -309,7 +303,7 @@ public struct ReplicantDetailView: View {
                     .fill(Color.rcAccent.opacity(0.06))
                     .overlay(
                         RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
-                            .strokeBorder(Color.rcAccentBorder, lineWidth: 0.5)
+                            .strokeBorder(Color.rcAccentBorder, lineWidth: Hairline.thin)
                     )
             }
         }
@@ -322,7 +316,7 @@ public struct ReplicantDetailView: View {
             .fill(.rcSurfaceRaised)
             .overlay(
                 RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                    .strokeBorder(.rcSeparator, lineWidth: 0.5)
+                    .strokeBorder(.rcSeparator, lineWidth: Hairline.thin)
             )
     }
 }
