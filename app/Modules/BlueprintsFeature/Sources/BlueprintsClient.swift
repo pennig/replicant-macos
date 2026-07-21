@@ -14,7 +14,7 @@ import API
 import ComposableArchitecture
 import Foundation
 import GameModels
-import GameServices
+import GameSession
 
 public struct BlueprintsClient: Sendable {
     /// Fetch the account's full unlocked blueprint catalog.

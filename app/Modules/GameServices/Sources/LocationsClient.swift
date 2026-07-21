@@ -21,6 +21,7 @@ import API
 import ComposableArchitecture
 import Foundation
 import GameModels
+import GameSession
 import SQLiteData
 import UniverseModels
 import Utils

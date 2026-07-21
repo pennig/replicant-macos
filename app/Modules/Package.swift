@@ -16,6 +16,7 @@ let package = Package(
         .library(name: "GameDatabase", targets: ["GameDatabase"]),
         .library(name: "GameModels", targets: ["GameModels"]),
         .library(name: "GameServices", targets: ["GameServices"]),
+        .library(name: "GameSession", targets: ["GameSession"]),
         .library(name: "GameSync", targets: ["GameSync"]),
         .library(name: "LocationEventsFeature", targets: ["LocationEventsFeature"]),
         .library(name: "LocationsFeature", targets: ["LocationsFeature"]),
@@ -38,6 +39,7 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-openapi-runtime", from: "1.0.0"),
         .package(url: "https://github.com/apple/swift-openapi-urlsession", from: "1.0.0"),
         .package(url: "https://github.com/pointfreeco/swift-composable-architecture", from: "1.26.0"),
+        .package(url: "https://github.com/pointfreeco/swift-dependencies", from: "1.9.0"),
         .package(url: "https://github.com/pointfreeco/sqlite-data", from: "1.6.0"),
         .package(url: "https://github.com/pointfreeco/swift-sharing", from: "2.8.2"),
         .package(url: "https://github.com/siteline/swiftui-introspect", exact: "26.0.1"),
@@ -49,7 +51,7 @@ let package = Package(
                 "AccountManager",
                 "API",
                 "GameModels",
-                "GameServices",
+                "GameSession",
                 "UI",
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
                 .product(name: "SQLiteData", package: "sqlite-data"),
@@ -62,7 +64,6 @@ let package = Package(
                 "AccountFeature",
                 "GameDatabase",
                 "GameModels",
-                "GameServices",
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
                 .product(name: "SQLiteData", package: "sqlite-data"),
             ],
@@ -75,7 +76,7 @@ let package = Package(
                 .product(name: "SQLiteData", package: "sqlite-data"),
                 "API",
                 "GameModels",
-                "GameServices",
+                "GameSession",
             ],
             path: "AccountManager/Sources"
         ),
@@ -86,7 +87,7 @@ let package = Package(
                 "API",
                 "GameDatabase",
                 "GameModels",
-                "GameServices",
+                "GameSession",
                 .product(name: "HTTPTypes", package: "swift-http-types"),
                 .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime"),
                 .product(name: "SQLiteData", package: "sqlite-data"),
@@ -118,7 +119,7 @@ let package = Package(
                 "API",
                 "GameDatabase",
                 "GameModels",
-                "GameServices",
+                "GameSession",
                 "UI",
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
                 .product(name: "SQLiteData", package: "sqlite-data"),
@@ -220,6 +221,7 @@ let package = Package(
             dependencies: [
                 "API",
                 "GameModels",
+                "GameSession",
                 "UniverseModels",
                 "Utils",
                 .product(name: "SQLiteData", package: "sqlite-data"),
@@ -234,6 +236,7 @@ let package = Package(
                 "GameDatabase",
                 "GameModels",
                 "GameServices",
+                "GameSession",
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
                 .product(name: "HTTPTypes", package: "swift-http-types"),
                 .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime"),
@@ -241,12 +244,26 @@ let package = Package(
             ],
             path: "GameServices/Tests"
         ),
+        // Session-tier module: the authenticated transport (`GameClient`) and
+        // the Keychain-backed token store. Deliberately tiny — read-only
+        // features that need nothing but an authenticated client depend on
+        // this instead of the engine-heavy `GameServices`, so engine edits
+        // don't rebuild them.
+        .target(
+            name: "GameSession",
+            dependencies: [
+                "API",
+                .product(name: "Dependencies", package: "swift-dependencies"),
+            ],
+            path: "GameSession/Sources"
+        ),
         .target(
             name: "GameSync",
             dependencies: [
                 "API",
                 "GameModels",
                 "GameServices",
+                "GameSession",
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
                 .product(name: "SQLiteData", package: "sqlite-data"),
             ],
@@ -259,6 +276,7 @@ let package = Package(
                 "GameDatabase",
                 "GameModels",
                 "GameServices",
+                "GameSession",
                 "GameSync",
                 "Utils",
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
@@ -336,6 +354,7 @@ let package = Package(
                 "GameDatabase",
                 "GameModels",
                 "GameServices",
+                "GameSession",
                 "UI",
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
                 .product(name: "SQLiteData", package: "sqlite-data"),

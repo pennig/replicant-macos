@@ -13,7 +13,7 @@ import API
 import ComposableArchitecture
 import Foundation
 import GameModels
-import GameServices
+import GameSession
 
 public struct MessagePage: Equatable, Sendable {
     public var messages: [Message]

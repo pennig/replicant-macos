@@ -17,7 +17,7 @@ import API
 import ComposableArchitecture
 import Foundation
 import GameModels
-import GameServices
+import GameSession
 import SQLiteData
 
 public struct AccountManager: Sendable {

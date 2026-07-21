@@ -1,6 +1,6 @@
 //
 //  GameClient.swift
-//  Replicant
+//  Replicould — GameSession (session, auth + authenticated transport)
 //
 //  A shared dependency that vends the generated Replicant Space API client,
 //  already authenticated with the stored session token. Domain clients
@@ -9,11 +9,13 @@
 //  sourced in exactly one place (the Keychain) instead of being threaded through
 //  feature state and every call site.
 //
+//  Lives in `GameSession` (not `GameServices`) so read-only features that need
+//  nothing but an authenticated client don't ride every sync-engine rebuild.
+//
 
 import API
-import ComposableArchitecture
+import Dependencies
 import Foundation
-import GameModels
 
 public struct GameClient: Sendable {
     /// Build a fully-wired generated client: bearer auth from the current

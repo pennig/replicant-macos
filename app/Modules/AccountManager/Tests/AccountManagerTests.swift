@@ -14,7 +14,7 @@ import ComposableArchitecture
 import Foundation
 import GameDatabase
 import GameModels
-import GameServices
+import GameSession
 import HTTPTypes
 import OpenAPIRuntime
 import SQLiteData

@@ -1,14 +1,13 @@
 //
 //  KeychainClient.swift
-//  Replicant
+//  Replicould — GameSession (session, auth + authenticated transport)
 //
 //  A small, controllable dependency that stores the API key securely in the
 //  macOS Keychain. Exposed to features via `@Dependency(\.keychain)`.
 //
 
-import ComposableArchitecture
+import Dependencies
 import Foundation
-import GameModels
 import Security
 
 /// Securely stores small string secrets (the API key) in the Keychain.

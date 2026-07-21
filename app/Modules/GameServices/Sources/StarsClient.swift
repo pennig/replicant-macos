@@ -16,6 +16,7 @@
 import API
 import ComposableArchitecture
 import Foundation
+import GameSession
 import UniverseModels
 
 /// One page of the observable-stars listing.

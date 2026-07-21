@@ -18,6 +18,7 @@ import API
 import ComposableArchitecture
 import Foundation
 import GameModels
+import GameSession
 
 public struct AccountClient: Sendable {
     /// Fetch every achievement (the global catalog) annotated with the signed-in

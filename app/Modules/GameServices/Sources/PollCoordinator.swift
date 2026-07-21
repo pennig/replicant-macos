@@ -24,6 +24,7 @@
 import ComposableArchitecture
 import Foundation
 import GameModels
+import GameSession
 import OSLog
 
 private let logger = Logger(subsystem: "name.pennig.replicould", category: "PollCoordinator")
