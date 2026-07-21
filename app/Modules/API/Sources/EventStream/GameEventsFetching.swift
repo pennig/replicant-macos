@@ -15,6 +15,9 @@ import Foundation
 public protocol EventCursorStore: Sendable {
     func load() -> String?
     func save(_ cursor: String)
+    /// Forget the cursor entirely (logout: the cursor is account-scoped, and a
+    /// different account must start cold rather than resume a foreign one).
+    func clear()
 }
 
 public struct UserDefaultsEventCursorStore: EventCursorStore {
@@ -32,6 +35,7 @@ public struct UserDefaultsEventCursorStore: EventCursorStore {
 
     public func load() -> String? { defaults.string(forKey: key) }
     public func save(_ cursor: String) { defaults.set(cursor, forKey: key) }
+    public func clear() { defaults.removeObject(forKey: key) }
 }
 
 /// One page of `GET /v1/events`, oldest-first, with the cursor to resume from.

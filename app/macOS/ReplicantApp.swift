@@ -30,8 +30,13 @@ struct ReplicantApp: App {
         prepareDependencies { try? $0.bootstrapDatabase() }
         // Construct the root store *after* the database is prepared
         _store = State(initialValue: Store(initialState: AppFeature.State()) { AppFeature() })
-        registerSessionCleanup()
+        // Order matters: `AccountManager` runs logout handlers in REGISTRATION
+        // order, so ingestion teardown (the "gameSync" handler) must come
+        // before the table wipes — a still-running route or gap repair would
+        // otherwise repopulate freshly-cleared tables (and a live pipeline
+        // frame would re-persist the just-cleared event cursor).
         registerGameSync()
+        registerSessionCleanup()
     }
 
     /// Wire the relay ingestion service (`GameSync`): register the routes that
@@ -249,12 +254,23 @@ struct ReplicantApp: App {
             )
         )
 
-        // Start consuming the relay on login, stop on logout.
+        // Start consuming the relay on login, stop on logout. Registered FIRST
+        // (init calls `registerGameSync()` before `registerSessionCleanup()`)
+        // so ingestion is fully torn down before any table wipe runs.
         accountManager.registerHandler(
             SessionLifecycleHandler(
                 id: "gameSync",
                 onLogin: { await gameSync.start() },
-                onLogout: { await gameSync.stop() }
+                onLogout: {
+                    await gameSync.stop()
+                    // The two route debounces live outside the engine's
+                    // cancellation domain — cancel them here so a scan or
+                    // quest refresh armed just before logout can't write into
+                    // the freshly-wiped tables (or spend the next session's
+                    // budget on the old account's behalf).
+                    pendingPassiveScan.withValue { $0?.cancel(); $0 = nil }
+                    pendingEventsRefresh.withValue { $0?.cancel(); $0 = nil }
+                }
             )
         )
 
@@ -310,6 +326,44 @@ struct ReplicantApp: App {
                 try? await database.write { db in try LocationEvent.delete().execute(db) }
             })
         )
+        accountManager.registerHandler(
+            SessionLifecycleHandler(id: "blueprints", onLogout: {
+                @Dependency(\.defaultDatabase) var database
+                try? await database.write { db in try Blueprint.delete().execute(db) }
+            })
+        )
+        accountManager.registerHandler(
+            SessionLifecycleHandler(id: "knownReplicants", onLogout: {
+                @Dependency(\.defaultDatabase) var database
+                try? await database.write { db in try KnownReplicant.delete().execute(db) }
+            })
+        )
+        // Universe intel is account-scoped too: system details and location
+        // footprints come from *this* account's scans (explored-gating), and the
+        // FTL mesh from its relay fleet. A second account must not inherit them
+        // — and the cold-load "table is empty" gates must fire for it.
+        accountManager.registerHandler(
+            SessionLifecycleHandler(id: "universe", onLogout: {
+                @Dependency(\.defaultDatabase) var database
+                try? await database.write { db in
+                    try SystemDetail.delete().execute(db)
+                    try LocationFootprint.delete().execute(db)
+                    try FTLLinkRecord.delete().execute(db)
+                }
+            })
+        )
+        // The event-stream cursor is account-scoped: resuming a different
+        // account from the previous account's cursor would skip its catch-up
+        // (the cursor looks fresh) and replay a foreign id-space. The next
+        // login then starts cold, seeding from the live tip.
+        accountManager.registerHandler(
+            SessionLifecycleHandler(id: "eventCursor", onLogout: {
+                UserDefaultsEventCursorStore().clear()
+            })
+        )
+        // Deliberately NOT cleared: `EventLog` — the SSE diagnostic ledger is
+        // user-managed by design (cleared via the Event Log window's button),
+        // and keeping it across sessions is part of its taxonomy-discovery job.
     }
 
     var body: some Scene {

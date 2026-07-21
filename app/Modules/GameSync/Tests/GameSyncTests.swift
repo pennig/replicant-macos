@@ -206,6 +206,7 @@ private final class SharedCursorStore: EventCursorStore, @unchecked Sendable {
     init(_ initial: String?) { self.value = initial }
     func load() -> String? { lock.withLock { value } }
     func save(_ cursor: String) { lock.withLock { value = cursor } }
+    func clear() { lock.withLock { value = nil } }
 }
 
 // MARK: - Reconciliation guard

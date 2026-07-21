@@ -85,7 +85,10 @@ actor DeadlineScheduler {
     }
 
     func start() {
-        guard loopTask == nil else { return }
+        // Refuse a cancelled caller: the engine arms the scheduler from inside
+        // its consume task, so a stop() that already cancelled that task must
+        // not be followed by a fresh loop arming out of order.
+        guard !Task.isCancelled, loopTask == nil else { return }
         loopTask = Task { await run() }
     }
 

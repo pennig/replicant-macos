@@ -18,6 +18,13 @@ import os
 public enum GameDatabase {
     /// A migrator with every feature's table registered. Ordered so that tables
     /// referenced by others are created first.
+    ///
+    /// Adding a table? Decide its logout fate at the same time: account-scoped
+    /// tables need a clear registered in `ReplicantApp.registerSessionCleanup()`
+    /// (or `AccountManager`'s own teardown), or a second account on this
+    /// machine inherits the first's rows — and "table is empty" cold-load
+    /// gates then skip the fetch. `EventLog` is the one deliberate exemption
+    /// (user-managed diagnostic ledger).
     public static func migrator() -> DatabaseMigrator {
         var migrator = DatabaseMigrator()
         #if DEBUG

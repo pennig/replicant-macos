@@ -24,6 +24,7 @@ private final class MemoryCursorStore: EventCursorStore, @unchecked Sendable {
 
     func load() -> String? { lock.withLock { value } }
     func save(_ cursor: String) { lock.withLock { value = cursor } }
+    func clear() { lock.withLock { value = nil } }
 }
 
 /// Records the cursor each connect was asked to resume from, then replays a

@@ -106,6 +106,10 @@ actor GameSyncEngine {
     /// Pending stream-death restart, retained so `stop()` can cancel it —
     /// logout must never be followed by a zombie reconnect.
     private var restartTask: Task<Void, Never>?
+    /// The per-route tier-2 gap-repair fan-out, retained so `stop()` can cancel
+    /// it — a quick logout mid-repair must not keep issuing reads on the old
+    /// session's token.
+    private var gapRepairTask: Task<Void, Never>?
     private var streamFailureCount = 0
     /// When the current pipeline was (re)started — the failure ladder resets
     /// only after a connection *survived* 10 minutes, so a capped ladder can't
@@ -136,6 +140,11 @@ actor GameSyncEngine {
         return EventPipeline(streamClient: streamClient, client: gameClient())
     }
 
+    /// Synchronous on the actor by design: `consumeTask` is claimed before any
+    /// suspension, so a concurrent `start()` can't double-connect and a
+    /// `stop()` can never interleave between the guard and the claim (the
+    /// zombie-engine-after-logout shape). All async work happens inside the
+    /// claimed task, where `stop()`'s cancellation reaches it.
     func start() {
         guard consumeTask == nil else {
             logger.debug("start ignored — already running")
@@ -143,13 +152,11 @@ actor GameSyncEngine {
         }
         logger.info("starting — native event stream")
 
-        // Arm the deadline backstop for any already-open operations.
-        Task { await scheduler.start() }
-
         let pipeline = makePipeline()
         self.pipeline = pipeline
 
         let router = self.router
+        let scheduler = self.scheduler
         @Dependency(\.date) var date
         let now = date.now
         lastStartAt = now
@@ -160,7 +167,12 @@ actor GameSyncEngine {
             let engine = self
             Task { await engine?.streamDied(error) }
         }
-        consumeTask = Task {
+        consumeTask = Task { [weak self] in
+            // Arm the deadline backstop for any already-open operations —
+            // inside the claimed task, so a stop() that has already cancelled
+            // it can't be followed by a zombie arming (`DeadlineScheduler
+            // .start()` refuses a cancelled caller).
+            await scheduler.start()
             // Catch-up (§5.3) runs *inside* `start()`, sequentially before the
             // SSE connection opens: the gap is emitted as `.catchUp` and the
             // stream then connects from the advanced cursor, so replayed history
@@ -175,10 +187,25 @@ actor GameSyncEngine {
                 now: now,
                 onStreamError: onStreamError
             )
-            Task { await router.runGapRepair() }
+            await self?.spawnGapRepair()
             for await event in stream {
                 await router.dispatch(event)
             }
+        }
+    }
+
+    /// Run the per-route tier-2 gap repair as a retained task, so `stop()` can
+    /// cancel a repair still in flight. Refuses a cancelled caller (this runs
+    /// on the consume task, like `DeadlineScheduler.start()`): a stop() during
+    /// the catch-up walk must not be followed by a fresh, uncancellable repair
+    /// issuing reads on the old session's token. The `consumeTask != nil`
+    /// check also keeps a superseded consume task (restart path) from
+    /// respawning over its successor's repair.
+    private func spawnGapRepair() {
+        guard !Task.isCancelled, consumeTask != nil else { return }
+        gapRepairTask?.cancel()
+        gapRepairTask = Task { [router] in
+            await router.runGapRepair()
         }
     }
 
@@ -186,6 +213,8 @@ actor GameSyncEngine {
         logger.info("stopping")
         restartTask?.cancel()
         restartTask = nil
+        gapRepairTask?.cancel()
+        gapRepairTask = nil
         consumeTask?.cancel()
         consumeTask = nil
         await pipeline?.stop()
