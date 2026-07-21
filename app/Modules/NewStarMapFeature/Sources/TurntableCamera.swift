@@ -176,19 +176,36 @@ struct TurntableCamera {
     ///     (tilt-only — an orientation change);
     ///   • beyond `maxFocusRadius` → glide the eye in along the viewing ray to sit
     ///     `maxFocusRadius` from it (zoom-toward).
-    /// The bound is applied once here, to the goal eye. `now` is the current time
-    /// (seconds, monotonic) — injected so the camera is a pure, testable value.
+    /// The bound is applied once here, to the goal eye. The settled pose is also the
+    /// base the next manual orbit builds on, so its elevation is held to the
+    /// interactive `min/maxElevation` clamp — a star nearly overhead swings the eye
+    /// to the clamp boundary rather than settling past it (where the first gesture
+    /// would snap it back). `now` is the current time (seconds, monotonic) —
+    /// injected so the camera is a pure, testable value.
     mutating func focus(on point: SIMD3<Float>, now: Double) {
         let v = eye - point
         let dist = length(v)
         // Direction from the star back to the eye; fall back to the current orbit
         // direction if the eye is essentially on the star.
-        let u: SIMD3<Float>
+        let raw: SIMD3<Float>
         if dist > 1e-4 {
-            u = v / dist
+            raw = v / dist
         } else {
             let ce = cos(elevation), se = sin(elevation), ca = cos(azimuth), sa = sin(azimuth)
-            u = SIMD3<Float>(ce * sa, se, ce * ca)
+            raw = SIMD3<Float>(ce * sa, se, ce * ca)
+        }
+        // Tilt the goal direction back inside the interactive elevation clamp,
+        // keeping its azimuth — except at the poles, where azimuth is degenerate
+        // and the camera's current azimuth carries over.
+        let el = asin(min(max(raw.y, -1), 1))
+        let clampedEl = min(max(el, minElevation), maxElevation)
+        let u: SIMD3<Float>
+        if clampedEl == el {
+            u = raw
+        } else {
+            let a = length(SIMD2<Float>(raw.x, raw.z)) > 1e-5 ? atan2(raw.x, raw.z) : azimuth
+            let ce = cos(clampedEl), se = sin(clampedEl)
+            u = SIMD3<Float>(ce * sin(a), se, ce * cos(a))
         }
         let floor = max(minRadius, focusFloor ?? minRadius)
         let goalDist = dist < floor ? floor
