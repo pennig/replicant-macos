@@ -3,11 +3,11 @@
 //  Replicould — GameServices (shared clients + command engine)
 //
 //  The correctness core (IMPLEMENTATION_PLAN §6): one guarded write path that
-//  every ingestion source funnels through — relay-driven confirm reads and
+//  every ingestion source funnels through — stream-driven confirm reads and
 //  optimistic command dispatch today, the poll coordinator later. It lives in
 //  this shared layer (not in `GameSync`) so both `GameSync` and `CommandClient`
 //  reach it without a dependency cycle; it is pure logic over the shared
-//  `Device`/`Operation` tables and knows nothing about the relay.
+//  `Device`/`Operation` tables and knows nothing about the stream.
 //
 //  Device snapshots: last-writer-wins by synthesized event-time
 //  (`Device.updatedAt`, §4.1) — which is the read's *request-issue* time, so a
@@ -240,7 +240,7 @@ public struct Reconciler: Sendable {
     /// refresh in `DevicesFeature`) knows the *complete* set the account owns, so
     /// this is the one place a device can leave the fleet — a traded-away or
     /// destroyed device stops being returned by `GET /v1/devices` and is pruned
-    /// here. Per-device relay reads never carry that "gone" signal, so they must
+    /// here. Per-device confirm-reads never carry that "gone" signal, so they must
     /// not call this.
     public func pruneDevices(presentCodes: some Sequence<String>) async {
         @Dependency(\.defaultDatabase) var database
@@ -264,7 +264,7 @@ public struct Reconciler: Sendable {
         }
     }
 
-    /// Apply a relay game-event's effect on the `Operation` table. Completion
+    /// Apply a stream game-event's effect on the `Operation` table. Completion
     /// event types close the device's open operation and fold their result into
     /// its `detail`; everything else is left to the device confirm-read path.
     ///

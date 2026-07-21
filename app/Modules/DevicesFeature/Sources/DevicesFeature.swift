@@ -195,7 +195,7 @@ public struct DevicesFeature {
 
             case .task:
                 // First run only: cold-load if the fleet table is empty. After
-                // that the relay keeps it warm, so navigating here doesn't spend
+                // that the event stream keeps it warm, so navigating here doesn't spend
                 // reads — the user can still force a refresh.
                 let database = self.database
                 return .run { send in
@@ -215,7 +215,7 @@ public struct DevicesFeature {
                 return .run { send in
                     let devices = try await devicesClient.fetchAll()
                     // Reconcile (not raw upsert) so the event-time guard holds and
-                    // local provenance is preserved, exactly like a relay read.
+                    // local provenance is preserved, exactly like a stream-driven read.
                     let reconciler = Reconciler()
                     for device in devices { await reconciler.ingest(device) }
                     // The walk is the authoritative full fleet, so anything local
@@ -432,7 +432,7 @@ public struct DevicesFeature {
                 return .run { send in
                     // Refresh the viewed device in place through the shared
                     // coordinator, so this deliberate poll coalesces with any
-                    // relay-/deadline-driven read instead of firing a duplicate
+                    // stream-/deadline-driven read instead of firing a duplicate
                     // (the coordinator reconciles the snapshot into the tables the
                     // inspector observes). `.high` bypasses the coordinator's TTL —
                     // this loop *is* the intended poller — while still joining an

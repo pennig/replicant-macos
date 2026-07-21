@@ -12,7 +12,7 @@
 //  event — criteria, live per-resource/-device progress, and rewards. We upsert
 //  it into this table (preserving `firstSeenAt`) so the Location Events screen and
 //  its sidebar badge stay live via `@FetchAll`, survive relaunch, and refresh off
-//  a relay nudge the same way the inbox does. Summary columns are denormalised for
+//  a stream nudge the same way the inbox does. Summary columns are denormalised for
 //  list rows and the badge; the full payload rides along in `detail` for the quest
 //  sheet, decoded on demand into `LocationEventDetail`.
 //

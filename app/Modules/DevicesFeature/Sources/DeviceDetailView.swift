@@ -7,7 +7,7 @@
 //  device's open `Operation`, interpolated with zero network by
 //  `OperationProgressView`), a details readout, and a command grid whose
 //  parameterized commands (travel / print) reveal an inline confirm panel.
-//  Everything observes SQLite, so a relay update or a dispatched op re-renders
+//  Everything observes SQLite, so a stream update or a dispatched op re-renders
 //  the pane automatically.
 //
 
@@ -1281,7 +1281,7 @@ private struct CommandGrid: View {
     /// Salvage-bearing bodies in the controller's system, read from the local
     /// catalog. `gather_salvage` targets a body (working every site on it), so the
     /// picker offers bodies, not individual sites. Empty until the system is
-    /// hydrated (see `.salvageSitesRequested`); depleted bodies drop out (relay
+    /// hydrated (see `.salvageSitesRequested`); depleted bodies drop out (stream
     /// depletion events keep this current — see LocationsClient.markSalvage*).
     private var salvageBodies: [SalvageBody] {
         guard

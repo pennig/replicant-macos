@@ -3,7 +3,7 @@
 //  Replicould — Devices feature
 //
 //  The fleet master list for the split view's content column. Rows render
-//  straight from the `Device` table via `@FetchAll`, so every relay update flows
+//  straight from the `Device` table via `@FetchAll`, so every stream update flows
 //  in automatically; the store drives selection and the cold-load/refresh.
 //
 

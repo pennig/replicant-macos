@@ -115,7 +115,7 @@ public struct PrintQueueFeature {
 
             case .task:
                 // First run only: cold-load the fleet if the table is empty. After
-                // that the relay keeps it warm, so navigating here spends no reads.
+                // that the event stream keeps it warm, so navigating here spends no reads.
                 let database = self.database
                 return .run { send in
                     let count = try await database.read { db in try Device.fetchCount(db) }
@@ -134,7 +134,7 @@ public struct PrintQueueFeature {
                 return .run { send in
                     let devices = try await devicesClient.fetchAll()
                     // Reconcile (not raw upsert) so the event-time guard holds and
-                    // local provenance is preserved, exactly like a relay read.
+                    // local provenance is preserved, exactly like a stream-driven read.
                     let reconciler = Reconciler()
                     for device in devices { await reconciler.ingest(device) }
                     await reconciler.pruneDevices(presentCodes: devices.map(\.deviceCode))

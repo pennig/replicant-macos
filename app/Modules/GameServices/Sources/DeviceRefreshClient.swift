@@ -4,7 +4,7 @@
 //
 //  The single seam every feature and the sync engine use to request an
 //  authoritative device confirm-read. It fronts one process-shared
-//  `PollCoordinator`, so all reads — relay-event invalidations, deadline
+//  `PollCoordinator`, so all reads — stream-event invalidations, deadline
 //  confirmations, and a feature's while-viewing poll — funnel through the same
 //  coalescing / TTL / budget logic instead of racing each other with duplicate
 //  network reads. Vended as `@Dependency(\.deviceRefresher)`.

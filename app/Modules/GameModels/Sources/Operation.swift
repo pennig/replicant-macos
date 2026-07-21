@@ -114,7 +114,7 @@ public struct OperationKind: RawRepresentable, Hashable, Sendable {
     public init(rawValue: String) { self.rawValue = rawValue }
 
     /// Tracked actions — each creates a first-class `Operation` row whose
-    /// lifecycle is driven to completion (deadline, continuous, or relay event).
+    /// lifecycle is driven to completion (deadline, continuous, or stream event).
     public static let travel = OperationKind(rawValue: "travel")
     public static let mine   = OperationKind(rawValue: "mine")
     public static let print  = OperationKind(rawValue: "print")
@@ -137,7 +137,7 @@ public struct OperationKind: RawRepresentable, Hashable, Sendable {
     /// Survey-drone belt search — the drone scours rocks until it locates a
     /// mining cluster (status `searching`, a `scan` activity block with an
     /// `eta_seconds` countdown). Tracked as a deadline op that completes when the
-    /// site is found; the server announces that with a `scan_complete` relay event
+    /// site is found; the server announces that with a `scan.completed` stream event
     /// (the drone then *tracks* the site rather than settling to idle, so the
     /// event — not a settled status — is the completion signal).
     public static let search = OperationKind(rawValue: "search")

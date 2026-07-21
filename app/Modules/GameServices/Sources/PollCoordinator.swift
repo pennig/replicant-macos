@@ -3,7 +3,7 @@
 //  Replicould — GameServices (shared clients + command engine)
 //
 //  Spends the read budget where it matters (IMPLEMENTATION_PLAN §4.3 / Phase 4).
-//  Every device confirm-read — whether triggered by a relay event or by a
+//  Every device confirm-read — whether triggered by a stream event or by a
 //  deadline — funnels through here so a burst of triggers collapses into the
 //  fewest authoritative reads:
 //

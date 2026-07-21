@@ -2,15 +2,15 @@
 //  DeadlineScheduler.swift
 //  Replicould — GameSync
 //
-//  The backstop that completes self-describing actions when their relay event is
+//  The backstop that completes self-describing actions when their stream event is
 //  lost (IMPLEMENTATION_PLAN §5.4 / Phase 4). It watches open `active` ops that
 //  carry a `completesAt`, sleeps until the earliest one, and on the deadline
 //  takes one high-priority confirm-read (via the poll coordinator) and closes
-//  the op — unless a relay completion event already did, in which case the op is
+//  the op — unless a stream completion event already did, in which case the op is
 //  no longer open and nothing happens (no wasted read).
 //
 //  Enqueued ops with no deadline are intentionally skipped here; their
-//  completion arrives as a relay event (e.g. `print_complete`).
+//  completion arrives as a stream event (e.g. `print.completed`).
 //
 //  One exception has its own slow backstop: **continuous** mining ops also carry
 //  no deadline (they run until stopped), so they're absent from the deadline
@@ -148,7 +148,7 @@ actor DeadlineScheduler {
             logger.info("deadline reached for op \(due.id, privacy: .public) (\(due.kind, privacy: .public)) on \(due.entityCode, privacy: .public) — confirming")
             _ = await deviceRefresher.refresh(due.entityCode, .high)
 
-            // A relay completion event may have closed it during the read.
+            // A stream completion event may have closed it during the read.
             guard
                 let op = try? await database.read({ db in
                     try Operation.where { $0.id.eq(due.id) }.fetchOne(db)

@@ -5,7 +5,7 @@
 //  The master list for the split view's content column: every device that can
 //  print and is currently printing or holding queued jobs. Rows render straight
 //  from the `Device` table via `@FetchAll` (filtered to `isPrintingOrQueued`), so
-//  a relay update or a dispatched command flows in automatically; the store
+//  a stream update or a dispatched command flows in automatically; the store
 //  drives selection and the cold-load / refresh.
 //
 

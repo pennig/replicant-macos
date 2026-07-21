@@ -422,7 +422,7 @@ extension GameSync: DependencyKey {
 
 extension GameSync: TestDependencyKey {
     /// Inert by default: tests that exercise routing build an `EventRouter`
-    /// directly, and other features don't touch the relay.
+    /// directly, and other features don't touch the stream.
     public static let testValue = GameSync(
         registerRoute: { _ in },
         start: {},

@@ -4,7 +4,7 @@
 //
 //  Phase 4 engine: the poll coordinator spends the read budget frugally
 //  (coalesce / TTL / budget-aware deferral), and the deadline scheduler closes a
-//  due operation with exactly one confirm-read — or none if a relay event beat
+//  due operation with exactly one confirm-read — or none if a stream event beat
 //  it.
 //
 
@@ -539,7 +539,7 @@ private func budgetGameClient(remaining: Int) -> GameClient {
         #expect(stored?.status == OperationStatus.active)
     }
 
-    /// If a relay event already completed the op, the deadline does nothing —
+    /// If a stream event already completed the op, the deadline does nothing —
     /// no wasted read.
     @Test func alreadyCompletedOperationTriggersNoRead() async throws {
         let database = try GameDatabase.bootstrap()

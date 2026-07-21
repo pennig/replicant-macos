@@ -9,7 +9,7 @@
 //  (preserving local `firstSeenAt`), so the Location Events screen and its sidebar
 //  badge stay live via `@FetchAll`. This mirrors `ReplicantsClient.refresh`: a
 //  self-contained authoritative re-read, reused both by the feature on appear and
-//  by a relay nudge (the same shape as the inbox refresh). Exposed via
+//  by a stream nudge (the same shape as the inbox refresh). Exposed via
 //  `@Dependency(\.locationEventsClient)`.
 //
 

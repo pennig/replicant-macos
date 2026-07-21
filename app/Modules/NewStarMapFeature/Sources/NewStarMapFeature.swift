@@ -345,7 +345,7 @@ public struct NewStarMapFeature {
                 // genuine roster change invalidates — the debounce collapses the
                 // cold-load's page-by-page roster churn into one rebuild. A mere
                 // pane appear only rebuilds when the domain is stale or its TTL
-                // lapsed; the SSE relay route keeps it fresh in between.
+                // lapsed; the `relay.*` event route keeps it fresh in between.
                 let domainFreshness = self.domainFreshness
                 if rosterChanged {
                     return .run { _ in domainFreshness.invalidate(.ftlMesh) }

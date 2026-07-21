@@ -4,7 +4,7 @@
 //
 //  The locally-persisted device record. Fetched from `GET /v1/devices/{code}`
 //  (and, later, the account list walk) and upserted into SQLite so the fleet
-//  reads instantly and stays live off the relay. Mirrors
+//  reads instantly and stays live off the event stream. Mirrors
 //  `app_schemas_devices_DeviceStatusSchema`.
 //
 //  Storage follows IMPLEMENTATION_PLAN §4.1: stable typed columns for the
@@ -377,7 +377,7 @@ extension Device {
 
 extension Device {
     /// Device statuses that mean it is *not* executing a timed operation. The
-    /// relay completion event is the primary signal that an op finished; when
+    /// stream completion event is the primary signal that an op finished; when
     /// that's lost, the deadline scheduler falls back to this — an op is complete
     /// once its device has settled.
     public static let settledStatuses: Set<String> = ["idle", "stowed", "inactive"]

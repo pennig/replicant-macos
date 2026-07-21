@@ -20,7 +20,7 @@
 //      matters only when it happened in the system the replicant is currently in
 //      (gate on the event's system matching `currentStar`).
 //
-//  Extracted from the route so the policy is unit-testable without the relay, the
+//  Extracted from the route so the policy is unit-testable without the stream, the
 //  database, or the scan side effect.
 //
 
@@ -51,7 +51,7 @@ public enum LocationEventPolicy {
         }
     }
 
-    /// What a relay event implies for the replicant's current location.
+    /// What a stream event implies for the replicant's current location.
     public struct Decision: Equatable, Sendable {
         /// Whether the current system should be (passively) re-scanned.
         public var shouldScan: Bool

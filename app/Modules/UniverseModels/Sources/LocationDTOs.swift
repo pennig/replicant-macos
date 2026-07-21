@@ -230,7 +230,7 @@ struct RawSalvage: Decodable {
     var salvageType: String?
     var location: String?
     var resourcesAvailable: [String]?
-    /// The scan_complete relay event keys salvage yield by `resources_remaining`
+    /// The scan.completed stream event keys salvage yield by `resources_remaining`
     /// (a quantity map) instead of `resources_available` (a name array); fall back
     /// to its keys so either shape produces `resourcesAvailable`.
     var resourcesRemaining: [String: Double]?
@@ -596,9 +596,9 @@ public enum BodyDetail: Equatable, Sendable {
     case special(SpecialSite)
 }
 
-// MARK: - scan_complete relay event result
+// MARK: - scan.completed stream event result
 
-/// The `result` block of a `scan_complete` relay event. Unlike the locations
+/// The `result` block of a `scan.completed` stream event. Unlike the locations
 /// endpoint (which nests physical under `moon`/`planet`/`belt` and puts salvage/
 /// sites at the response top level), the event folds a body's collections
 /// *inside* the body object — so it needs its own decode path into `BodyDetail`.
@@ -642,7 +642,7 @@ struct RawScanEventResult: Decodable {
     }
 }
 
-/// One scanned body from a relay `result`: its physical block (decoded from the
+/// One scanned body from a scan-event `result`: its physical block (decoded from the
 /// same object) plus the salvage/sites/devices/inventory (and moons, for a
 /// planet) the event nests inside it.
 struct RawScannedBody: Decodable {

@@ -826,9 +826,9 @@ extension StarSystem {
     }
 
     /// Ensure the container a body attaches to exists before `applying`, so a
-    /// body from a relay scan isn't dropped for lack of a roster: a moon needs its
+    /// body from a stream-event scan isn't dropped for lack of a roster: a moon needs its
     /// parent planet; planets, belts, and specials self-attach. Used when folding
-    /// a `scan_complete` result into a system we may not have hydrated yet.
+    /// a `scan.completed` result into a system we may not have hydrated yet.
     public func seedingParent(of detail: BodyDetail) -> StarSystem {
         guard case .moon(let m) = detail else { return self }
         let parentID = m.designation.split(separator: "-").dropLast().joined(separator: "-")

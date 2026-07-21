@@ -223,7 +223,7 @@ import Testing
     }
 
     @Test func scanCompleteResultDecodesMoonSalvage() throws {
-        // A `scan_complete` relay event's `result` folds salvage inside the body
+        // A `scan.completed` stream event's `result` folds salvage inside the body
         // and keys it by `resources_remaining` — it must still decode to a moon
         // BodyDetail with its salvage.
         let raw = try LocationDecoding.decoder.decode(RawScanEventResult.self, from: Data(Self.scanResultJSON.utf8))
@@ -462,7 +462,7 @@ extension UniverseModelsTests {
     }
     """
 
-    /// The `result` block of a real `scan_complete` relay event (moon scan).
+    /// The `result` block of a real `scan.completed` stream event (moon scan).
     static let scanResultJSON = """
     {
       "moon": {

@@ -49,7 +49,7 @@ private func device(_ code: String, status: String = "idle") -> Device {
         #expect(count == 2)
     }
 
-    /// A non-empty fleet does not cold-load on `.task` (the relay keeps it warm).
+    /// A non-empty fleet does not cold-load on `.task` (the event stream keeps it warm).
     @Test func nonEmptyFleetSkipsColdLoad() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in try Device.insert { device("A") }.execute(db) }

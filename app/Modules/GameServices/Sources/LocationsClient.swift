@@ -156,7 +156,7 @@ extension LocationsClient {
         }
     }
 
-    /// Fold a `scan_complete` relay event's `result` body into the local catalog,
+    /// Fold a `scan.completed` stream event's `result` body into the local catalog,
     /// sparing a later `body(_:)` hydration call (the event already carries the
     /// scanned body's physical block, salvage, sites, and inventory). Merges onto
     /// the cached `SystemDetail` blob when present, else seeds a minimal system so

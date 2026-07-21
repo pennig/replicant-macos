@@ -7,7 +7,7 @@
 //  resources a queued job is still waiting on, the queue itself (each entry
 //  removable via `dequeue_print`), and an enqueue field to add a new job. Reads
 //  everything straight from the device's `printing` / `print_queue` /
-//  `waiting_for` blocks, so a relay update re-renders the pane automatically.
+//  `waiting_for` blocks, so a stream update re-renders the pane automatically.
 //
 
 import ComposableArchitecture

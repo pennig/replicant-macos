@@ -9,7 +9,7 @@
 //  belonging to any one feature. Exposed via `@Dependency(\.devicesClient)`.
 //
 //  Phase 2 needs only the single-device read — the authoritative snapshot a
-//  relay event invalidates into. The account-wide paged list walk arrives with
+//  stream event invalidates into. The account-wide paged list walk arrives with
 //  the Devices feature (Phase 5).
 //
 

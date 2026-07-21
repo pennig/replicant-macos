@@ -3,7 +3,7 @@
 //  Replicould — Devices feature
 //
 //  A minimal Bobnet chat view over the locally-persisted `BobnetMessage` table.
-//  Bobnet is relay-only (no authoritative REST source), so this is best-effort
+//  Bobnet is stream-only (no authoritative REST source), so this is best-effort
 //  history kept by `GameSync`. Content-only, observed live. Lives in this module
 //  (already linked by the app) so it needs no separate app-target wiring.
 //
