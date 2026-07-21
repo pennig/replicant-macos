@@ -141,32 +141,17 @@ extension EventStreamClient {
                             }
                             receivedLineThisConnection = false
 
-                            var pendingID: String?
-                            var pendingEvent: String?
-                            var dataLines: [String] = []
-
-                            // NOTE: do NOT use `bytes.lines` here. Foundation's
-                            // `AsyncLineSequence` silently drops empty lines (its
-                            // iterator only yields when its buffer is non-empty),
-                            // but in SSE the blank line IS the event delimiter — so
-                            // events would never dispatch. Frame the raw byte stream
-                            // ourselves, splitting on `\n` and preserving blank lines.
-                            var lineBuffer: [UInt8] = []
+                            // The wire protocol (line framing + field parsing)
+                            // lives in `SSEWire.swift`, where it's unit-tested;
+                            // this loop keeps only the connection-level side
+                            // effects (liveness, backoff, cursor advancement).
+                            var framer = SSELineFramer()
+                            var parser = SSEFieldParser()
                             for try await byte in bytes {
                                 guard !Task.isCancelled else { break }
                                 hasConnected = true
 
-                                guard byte == 0x0A else {   // not newline: accumulate
-                                    lineBuffer.append(byte)
-                                    continue
-                                }
-
-                                // End of a line. Strip a trailing CR (CRLF framing).
-                                if lineBuffer.last == 0x0D {
-                                    lineBuffer.removeLast()
-                                }
-                                let line = String(decoding: lineBuffer, as: UTF8.self)
-                                lineBuffer.removeAll(keepingCapacity: true)
+                                guard let line = framer.consume(byte) else { continue }
                                 lastActivityAt = Date()   // any line — keepalives count as liveness
                                 if !receivedLineThisConnection {
                                     receivedLineThisConnection = true
@@ -178,34 +163,16 @@ extension EventStreamClient {
                                     reconnectDelay = retryDelay
                                 }
 
-                                if line.isEmpty {
-                                    // Blank line = dispatch the accumulated event.
-                                    if let id = pendingID, !dataLines.isEmpty {
-                                        let dataStr = dataLines.joined(separator: "\n")
-                                        if let data = dataStr.data(using: .utf8) {
-                                            lastEventID = id
-                                            continuation.yield(
-                                                StreamedEvent(id: id, eventName: pendingEvent ?? "", raw: data)
-                                            )
-                                        }
-                                    }
-                                    pendingID = nil
-                                    pendingEvent = nil
-                                    dataLines.removeAll(keepingCapacity: true)
-                                } else if line.hasPrefix("id:") {
-                                    pendingID = String(line.dropFirst(3)).trimmingCharacters(in: .whitespaces)
-                                } else if line.hasPrefix("event:") {
-                                    pendingEvent = String(line.dropFirst(6)).trimmingCharacters(in: .whitespaces)
-                                } else if line.hasPrefix("data:") {
-                                    // SSE permits multiple `data:` lines per event; join them.
-                                    dataLines.append(String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces))
-                                } else if line.hasPrefix("retry:") {
-                                    if let ms = Int(line.dropFirst(6).trimmingCharacters(in: .whitespaces)) {
-                                        retryDelay = .milliseconds(ms)
-                                    }
-                                } else if line.hasPrefix(":") && !line.hasPrefix(": keepalive") {
-                                    // Comment - do NOT reset the pending event.
-                                    log.debug("comment: \(line.dropFirst(1), privacy: .public)")
+                                switch parser.consume(line) {
+                                case .none:
+                                    break
+                                case .event(let event):
+                                    lastEventID = event.id
+                                    continuation.yield(event)
+                                case .retryHint(let ms):
+                                    retryDelay = .milliseconds(ms)
+                                case .comment(let text):
+                                    log.debug("comment: \(text, privacy: .public)")
                                 }
                             }
                         } catch is CancellationError {

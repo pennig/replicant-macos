@@ -9,7 +9,9 @@ metadata:
 
 Running backlog of confirmed OpenAPI spec/server drift. The [[decode-diagnostics-decorator]] now logs each decode failure (subsystem `name.pennig.replicould.api`, category `decoding`) with its exact coding path, so new drifts surface precisely. Fix pattern = add the missing typed key to `Modules/API/Sources/openapi.json` (prefer a typed `$ref`/property over `additionalProperties:true`), same as [[location-response-schema-drift]]. Re-apply after any spec re-fetch — see [[openapi-spec-drift-leniency]], [[openapi-spec-layout]].
 
-**Open:** none known. As of 2026-07-20 `swift test` is fully green (GameServices bundle = 121 tests, all suites pass). Both formerly-listed failures now pass:
+**Open:** none known. As of 2026-07-20 `swift test` is fully green (GameServices bundle = 121 tests, all suites pass).
+
+**Latent (watch, not a current drift):** generated `Date` fields (e.g. `DeviceStatusSchema.created_at`) decode via OpenAPIRuntime's default ISO8601 transcoder — **no fractional seconds**. If the server ever emits fractional-second timestamps in a `date-time` field, the whole payload fails to decode (unlike `Replicant.created_at`, a string field with `parseTimestamp` tolerance). DiagnosticAPIClient would log it loudly; the fix would be a custom `DateTranscoder` on the generated client. Noted 2026-07-21 while adding GameModelsTests. Both formerly-listed failures now pass:
 
 1. ~~`post/v1/devices/{device_code}` rejects `new_resource`~~ — RESOLVED. `retargetIsImmediateWithResource` passes (the device-command response schema now decodes `new_resource`).
 2. ~~`CommandClientTests.terminatingCommandClosesOpenOp`~~ — RESOLVED. Passes; the terminating command now closes the open op as expected.

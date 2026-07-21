@@ -219,6 +219,15 @@ let package = Package(
             ],
             path: "GameModels/Sources"
         ),
+        .testTarget(
+            name: "GameModelsTests",
+            dependencies: [
+                "API",
+                "GameModels",
+                "Utils",
+            ],
+            path: "GameModels/Tests"
+        ),
         .target(
             name: "GameServices",
             dependencies: [
