@@ -1,6 +1,6 @@
 # Memory Index
 
-- [Architecture review V3](architecture-review-v3.md) — 2026-07-20 five-axis review in ARCHITECTURE_REVIEW.md; P0 sync-engine correctness fixes + staleness model prescribed, not yet applied; read V3.10 punch list before sync-engine work.
+- [Architecture review V3](architecture-review-v3.md) — 2026-07-20 five-axis review in ARCHITECTURE_REVIEW.md; P0+P1+P2 tranches ALL DONE (2026-07-20/21) with invariants recorded (GameSession tier, TCA-by-manifest, EventRoute in GameServices, ingestion exports); P3 + automation blockers 3–5 remain.
 - [Event stream migration](event-stream-migration.md) — v2.3.0 native SSE stream replaced the custom relay; single-channel EventPipeline, dotted event taxonomy, EventRoute matchers, loud unhandled-event logging.
 - [Event Log feature](event-log-feature.md) — EventLogFeature: persisted SSE ledger window (Tools menu); write hook in EventRouter.dispatch; unhandled flag+filter; JSONTreeView now shared from UI.
 - [Monospace system/location names](monospace-system-names.md) — project rule: any system/location name (designation code) always renders in a mono font token.

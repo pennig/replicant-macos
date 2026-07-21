@@ -1,6 +1,6 @@
 ---
 name: architecture-review-v3
-description: "ARCHITECTURE_REVIEW.md V3 (2026-07-20): post-SSE-migration five-axis review; P0 correctness AND P1 budget tranches done (2026-07-20/21); staleness model built; P2/P3 remain."
+description: "ARCHITECTURE_REVIEW.md V3 (2026-07-20): post-SSE-migration five-axis review; P0 correctness, P1 budget, AND P2 modularity tranches done (2026-07-20/21); P3 (docs/design-system) remains."
 metadata:
   type: project
 ---
@@ -31,7 +31,21 @@ the relay→native-SSE migration. Read it before touching the sync engine.
   payload key) is still unverified**; a loud route notice announces the real keys if a live
   completion ever lacks it. `location: null` vs omitted is undecodable — a future event omitting
   the field would wipe a row to "in transit" until its mark drains.
-- **Remaining**: P2 (M1–M7 modularity, tests) and P3 (docs/design-system) tranches, V3.9 automation
-  blockers 3–5 (budget-aware command governor, loop protection, audit trail — 1–2 are now fixed).
+- **P2 modularity: ALL FIVE DONE 2026-07-21** (commits `753f822`…`88555da`, each LSP-reviewed
+  pre-commit). New invariants: **`GameSession`** (GameClient+KeychainClient; deps API+Dependencies
+  only) is the session tier below GameServices — a new domain client `import GameSession` for
+  `\.gameClient`, and adds GameServices only for engine services; **no non-feature module declares
+  ComposableArchitecture** (by manifest — GameServices/GameSync use `Dependencies`, AccountManager
+  `Dependencies`+`Sharing`; rule recorded in CLAUDE.md's module recipe); **`EventRoute` lives in
+  GameServices** (router stays in GameSync) and ingestion policies are module-exported
+  (`MessagesIngestion`/`LocationEventsIngestion`/`LocationsIngestion` — the last is an instance
+  whose `cancelPendingWork()` the root's logout handler must keep calling); UniverseModels is
+  pure models behind the public `LocationDecoding` facade (Raw* wire DTOs stay internal);
+  CommandClient = spine + `CommandClient+<Family>` files (new command family ⇒ new file + one
+  `makeBody` case); GameModelsTests + SSEWire tests exist (S10 closed). **M5 deliberately NOT
+  done**: Blueprints/Messages keep GameDatabase for live-store previews — a recorded decision,
+  don't "clean it up".
+- **Remaining**: P3 (docs/design-system) tranche, V3.9 automation blockers 3–5 (budget-aware
+  command governor, loop protection, audit trail — 1–2 are now fixed), S9 print-key verification.
 
 Full prioritized punch list: V3.10. See [[event-stream-migration]].
