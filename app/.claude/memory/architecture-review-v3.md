@@ -1,6 +1,6 @@
 ---
 name: architecture-review-v3
-description: "ARCHITECTURE_REVIEW.md V3 (2026-07-20): post-SSE-migration five-axis review; P0 correctness, P1 budget, AND P2 modularity tranches done (2026-07-20/21); P3 (docs/design-system) remains."
+description: "ARCHITECTURE_REVIEW.md V3 (2026-07-20): post-SSE-migration five-axis review; ALL FOUR tranches (P0 correctness, P1 budget, P2 modularity, P3 docs/design-system) done 2026-07-20/21; only V3.9 automation blockers 3-5 + S9 + T6-optionals remain."
 metadata:
   type: project
 ---
@@ -45,7 +45,20 @@ the relay→native-SSE migration. Read it before touching the sync engine.
   `makeBody` case); GameModelsTests + SSEWire tests exist (S10 closed). **M5 deliberately NOT
   done**: Blueprints/Messages keep GameDatabase for live-store previews — a recorded decision,
   don't "clean it up".
-- **Remaining**: P3 (docs/design-system) tranche, V3.9 automation blockers 3–5 (budget-aware
-  command governor, loop protection, audit trail — 1–2 are now fixed), S9 print-key verification.
+- **P3 shining-example: ALL FOUR DONE 2026-07-21** (commits `a71435e`…`efd7b94`). New facts:
+  `app/README.md` is the front-door map (keep it true when the graph changes);
+  `IMPLEMENTATION_PLAN.md` is restored WITH an SSE-errata header — its § citations resolve again;
+  "relay" in comments now means ONLY the FTL device; `IconSize` (s/m/l/xl/hero/display),
+  `rcMicroMono`, `rcFieldLabel` exist — no raw icon/font literals in features (Login wordmark is
+  the annotated exception); one log subsystem `name.pennig.replicould`, category = module;
+  RCSectionHeader/RCErrorBanner are adopted, not aspirational; testValues are LOUD
+  (`unimplemented`) with rich fixtures on `previewValue`; preview-sheet dismissals cancel their
+  effects; Reconciler writes + schema bootstrap report failures via IssueReporting. CLAUDE.md
+  carries the presentation-dialect, row-file, logging, loud-testValue rules and the
+  UI-name↔type-name map.
+- **Remaining**: V3.9 automation blockers 3–5 (budget-aware command governor, loop protection,
+  RuleFiring audit trail — 1–2 are fixed), S9 print-key verification (loud notice armed), T6's
+  deliberately-optional niceties, and the user's in-flight LoggingMiddleware edit (its logger
+  still on the old `.api` subsystem).
 
 Full prioritized punch list: V3.10. See [[event-stream-migration]].

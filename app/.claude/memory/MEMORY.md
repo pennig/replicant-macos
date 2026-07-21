@@ -1,6 +1,6 @@
 # Memory Index
 
-- [Architecture review V3](architecture-review-v3.md) — 2026-07-20 five-axis review in ARCHITECTURE_REVIEW.md; P0+P1+P2 tranches ALL DONE (2026-07-20/21) with invariants recorded (GameSession tier, TCA-by-manifest, EventRoute in GameServices, ingestion exports); P3 + automation blockers 3–5 remain.
+- [Architecture review V3](architecture-review-v3.md) — 2026-07-20 five-axis review; ALL FOUR tranches DONE 2026-07-20/21 (P0 correctness, P1 budget, P2 modularity, P3 docs/design-system) with invariants recorded (GameSession tier, TCA-by-manifest, EventRoute home, IconSize/logging/loud-testValue rules, app/README.md map); remaining: automation blockers 3–5, S9, T6 optionals.
 - [Event stream migration](event-stream-migration.md) — v2.3.0 native SSE stream replaced the custom relay; single-channel EventPipeline, dotted event taxonomy, EventRoute matchers, loud unhandled-event logging.
 - [Event Log feature](event-log-feature.md) — EventLogFeature: persisted SSE ledger window (Tools menu); write hook in EventRouter.dispatch; unhandled flag+filter; JSONTreeView now shared from UI.
 - [Monospace system/location names](monospace-system-names.md) — project rule: any system/location name (designation code) always renders in a mono font token.
