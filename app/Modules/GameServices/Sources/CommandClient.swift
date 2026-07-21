@@ -123,7 +123,7 @@ extension CommandClient: DependencyKey {
     public static let liveValue = CommandClient(
         dispatch: { kind, deviceCode, params in
             @Dependency(\.gameClient) var gameClient
-            @Dependency(\.devicesClient) var devicesClient
+            @Dependency(\.deviceRefresher) var deviceRefresher
             @Dependency(\.locationEventsClient) var locationEventsClient
             @Dependency(\.defaultDatabase) var database
             @Dependency(\.date) var date
@@ -174,10 +174,11 @@ extension CommandClient: DependencyKey {
                                 logger.info("scan recorded \(sightings.count, privacy: .public) replicant sighting(s)")
                             }
                         }
-                        let readDevice = try? await devicesClient.read(deviceCode)
-                        if let device = readDevice {
-                            await Reconciler().ingest(device)
-                        }
+                        // Post-command confirm-read through the coordinator (B4):
+                        // reconcile happens inside its task, and the read stamps
+                        // `lastReadAt`, so the command's near-certain SSE echo a
+                        // beat later is TTL-suppressed instead of read again.
+                        let readDevice = await deviceRefresher.refresh(deviceCode, .high)
                         // A successful unload can satisfy a location event sited where
                         // the cargo was dropped. Cross-reference the drop-off location
                         // against known events and re-pull the quest list if any are
@@ -201,9 +202,7 @@ extension CommandClient: DependencyKey {
                         // rather than lagging until the next poll.
                         let affected = affectedDeviceCodes(in: responseJSON).filter { $0 != deviceCode }
                         for code in affected {
-                            if let device = try? await devicesClient.read(code) {
-                                await Reconciler().ingest(device)
-                            }
+                            _ = await deviceRefresher.refresh(code, .high)
                         }
                         return .accepted(operationID: nil)
                     case let .badRequest(response):
@@ -309,12 +308,14 @@ extension CommandClient: DependencyKey {
                     // 4) One authoritative post-command device read (§1 settled
                     //    decision): the command response is a result, not a full
                     //    device snapshot, so this refreshes status/location/detail.
+                    //    Funneled through the coordinator (B4) so the read stamps
+                    //    `lastReadAt` and the command's SSE echo a beat later is
+                    //    TTL-suppressed (reconcile happens inside its task).
                     //    For a deadline op whose response withheld the ETA (e.g.
                     //    `search`, whose countdown lives in the device's `scan`
                     //    block), back-fill `completesAt` from the fresh snapshot so
                     //    the progress bar and deadline scheduler have a deadline.
-                    if let device = try? await devicesClient.read(deviceCode) {
-                        await Reconciler().ingest(device)
+                    if let device = await deviceRefresher.refresh(deviceCode, .high) {
                         if completesAt == nil, let derived = device.activityDeadline {
                             try? await database.write { db in
                                 if var op = try Operation.where({ $0.id.eq(opID) }).fetchOne(db),

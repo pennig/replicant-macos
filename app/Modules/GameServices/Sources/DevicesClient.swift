@@ -51,11 +51,12 @@ public struct DevicesClient: Sendable {
     /// Replace a device's tag set (`PATCH /v1/devices/{code}`, `configuration.tags`).
     /// The declarative `tags` field replaces every tag at once, so the inspector —
     /// which manages the whole set — reduces both add and remove to sending the new
-    /// list. The PATCH response carries only `{device_code, tags}`, so on success
-    /// this takes one authoritative device read (stamped at issue time, like
-    /// `read`) and returns the fresh snapshot for the caller to reconcile. Throws
-    /// `TagUpdateError` carrying the server's message on a rejection.
-    public var updateTags: @Sendable (_ deviceCode: String, _ tags: [String]) async throws -> Device
+    /// list. PATCH only: the response carries just `{device_code, tags}`, and the
+    /// follow-up confirm-read is the *caller's* job, funneled through
+    /// `deviceRefresher` so it stamps the coordinator's TTL like every other
+    /// post-command read (B4). Throws `TagUpdateError` carrying the server's
+    /// message on a rejection.
+    public var updateTags: @Sendable (_ deviceCode: String, _ tags: [String]) async throws -> Void
 
     /// A rejected tag update, carrying a user-facing message.
     public struct TagUpdateError: Error, Equatable {
@@ -145,20 +146,13 @@ extension DevicesClient: DependencyKey {
         },
         updateTags: { deviceCode, tags in
             @Dependency(\.gameClient) var gameClient
-            @Dependency(\.date) var date
-            let client = gameClient()
-            let output = try await client.patchV1DevicesDeviceCode(
+            let output = try await gameClient().patchV1DevicesDeviceCode(
                 path: .init(deviceCode: deviceCode),
                 body: .json(.init(configuration: .init(tags: tags)))
             )
             switch output {
             case .ok:
-                // The PATCH response returns only `{device_code, tags}`; take a
-                // full authoritative read so the whole row stays consistent,
-                // stamped at issue time exactly like `read`.
-                let issuedAt = date.now
-                let readOutput = try await client.getV1DevicesDeviceCode(path: .init(deviceCode: deviceCode))
-                return Device(schema: try readOutput.ok.body.json, fetchedAt: issuedAt)
+                return
             case let .badRequest(response):
                 throw TagUpdateError((try? response.body.json.error) ?? "Couldn’t update tags.")
             case let .forbidden(response):

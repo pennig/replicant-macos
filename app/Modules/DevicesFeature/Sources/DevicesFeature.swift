@@ -447,12 +447,17 @@ public struct DevicesFeature {
 
             case let .tagsEdited(deviceCode, tags):
                 let devicesClient = self.devicesClient
+                let deviceRefresher = self.deviceRefresher
                 logger.info("tags edit → \(deviceCode, privacy: .public): \(tags.count, privacy: .public) tag(s)")
                 return .run { _ in
-                    // Replace the set server-side, then reconcile the authoritative
-                    // snapshot so the inspector's chips reflect confirmed state.
-                    let device = try await devicesClient.updateTags(deviceCode, tags)
-                    await Reconciler().ingest(device)
+                    // Replace the set server-side, then confirm-read through the
+                    // coordinator (B4) so the inspector's chips reflect confirmed
+                    // state and the PATCH's SSE echo is TTL-suppressed. A failed
+                    // confirm-read after a successful PATCH is deliberately NOT
+                    // surfaced as an error (the tags did change); the echo or the
+                    // next poll catches the row up.
+                    try await devicesClient.updateTags(deviceCode, tags)
+                    _ = await deviceRefresher.refresh(deviceCode, .high)
                 } catch: { error, send in
                     let message = (error as? DevicesClient.TagUpdateError)?.message ?? error.localizedDescription
                     await send(.tagUpdateFailed(message))

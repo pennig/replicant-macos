@@ -55,6 +55,7 @@ private typealias Operation = GameModels.Operation
             $0.defaultDatabase = database
             $0.date = .constant(Date(timeIntervalSince1970: 1_000))
             $0.uuid = .incrementing
+            $0.deviceRefresher = coordinatorBackedRefresher()
             $0.gameClient = stubGameClient { _ in jsonResponse(200, body) }
             $0.devicesClient.read = { code in
                 readCount.withValue { $0 += 1 }
@@ -81,6 +82,7 @@ private typealias Operation = GameModels.Operation
             $0.defaultDatabase = database
             $0.date = .constant(Date(timeIntervalSince1970: 1_000))
             $0.uuid = .incrementing
+            $0.deviceRefresher = coordinatorBackedRefresher()
             $0.gameClient = stubGameClient { _ in jsonResponse(400, #"{"error":"Device is busy"}"#) }
             $0.devicesClient.read = { code in
                 readCount.withValue { $0 += 1 }
@@ -108,6 +110,7 @@ private typealias Operation = GameModels.Operation
             $0.defaultDatabase = database
             $0.date = .constant(Date(timeIntervalSince1970: 1_000))
             $0.uuid = .incrementing
+            $0.deviceRefresher = coordinatorBackedRefresher()
             $0.gameClient = stubGameClient { _ in jsonResponse(200, body) }
             $0.devicesClient.read = { code in makeDevice(code: code, status: "travelling") }
         } operation: {
@@ -137,6 +140,7 @@ private typealias Operation = GameModels.Operation
             $0.defaultDatabase = database
             $0.date = .constant(Date(timeIntervalSince1970: 1_000))
             $0.uuid = .incrementing
+            $0.deviceRefresher = coordinatorBackedRefresher()
             $0.gameClient = stubGameClient { _ in jsonResponse(200, body) }
             $0.devicesClient.read = { code in makeDevice(code: code, status: "mining") }
         } operation: {
@@ -159,6 +163,7 @@ private typealias Operation = GameModels.Operation
             $0.defaultDatabase = database
             $0.date = .constant(Date(timeIntervalSince1970: 1_000))
             $0.uuid = .incrementing
+            $0.deviceRefresher = coordinatorBackedRefresher()
             $0.gameClient = stubGameClient { _ in jsonResponse(200) }
             $0.devicesClient.read = { code in makeDevice(code: code, status: "idle") }
         } operation: {
@@ -179,6 +184,7 @@ private typealias Operation = GameModels.Operation
             $0.defaultDatabase = database
             $0.date = .constant(Date(timeIntervalSince1970: 1_000))
             $0.uuid = .incrementing
+            $0.deviceRefresher = coordinatorBackedRefresher()
             $0.gameClient = stubGameClient { _ in jsonResponse(200, #"{"star":"ATIANFU"}"#) }
             $0.devicesClient.read = { code in
                 readCount.withValue { $0 += 1 }
@@ -205,6 +211,7 @@ private typealias Operation = GameModels.Operation
             $0.defaultDatabase = database
             $0.date = .constant(Date(timeIntervalSince1970: 2_000))
             $0.uuid = .incrementing
+            $0.deviceRefresher = coordinatorBackedRefresher()
             $0.gameClient = stubGameClient { _ in jsonResponse(200, #"{"deactivated":"mining","status":"mining_stopped"}"#) }
             $0.devicesClient.read = { code in makeDevice(code: code, status: "idle") }
         } operation: {
@@ -231,6 +238,7 @@ private typealias Operation = GameModels.Operation
             $0.defaultDatabase = database
             $0.date = .constant(Date(timeIntervalSince1970: 1_000))
             $0.uuid = .incrementing
+            $0.deviceRefresher = coordinatorBackedRefresher()
             $0.gameClient = stubGameClient { _ in jsonResponse(200, body) }
             $0.devicesClient.read = { code in makeDevice(code: code, status: "recalling") }
         } operation: {
@@ -258,6 +266,7 @@ private typealias Operation = GameModels.Operation
             $0.defaultDatabase = database
             $0.date = .constant(Date(timeIntervalSince1970: 1_000))
             $0.uuid = .incrementing
+            $0.deviceRefresher = coordinatorBackedRefresher()
             $0.gameClient = stubGameClient { _ in jsonResponse(200, #"{"status":"mining_retargeted","new_resource":"conductive"}"#) }
             $0.devicesClient.read = { code in makeDevice(code: code, status: "mining") }
         } operation: {
@@ -281,6 +290,7 @@ private typealias Operation = GameModels.Operation
             $0.defaultDatabase = database
             $0.date = .constant(Date(timeIntervalSince1970: 1_000))
             $0.uuid = .incrementing
+            $0.deviceRefresher = coordinatorBackedRefresher()
             $0.gameClient = stubGameClient { _ in jsonResponse(200, #"{"status":"coordinating","ami_directive":{"name":"belt_search"}}"#) }
             $0.devicesClient.read = { code in
                 readCount.withValue { $0 += 1 }
@@ -319,6 +329,7 @@ private typealias Operation = GameModels.Operation
             $0.defaultDatabase = database
             $0.date = .constant(Date(timeIntervalSince1970: 1_000))
             $0.uuid = .incrementing
+            $0.deviceRefresher = coordinatorBackedRefresher()
             $0.gameClient = client
             $0.devicesClient.read = { code in makeDevice(code: code, status: "scanning") }
         } operation: {
@@ -353,6 +364,7 @@ private typealias Operation = GameModels.Operation
             $0.defaultDatabase = database
             $0.date = .constant(Date(timeIntervalSince1970: 1_000))
             $0.uuid = .incrementing
+            $0.deviceRefresher = coordinatorBackedRefresher()
             $0.gameClient = client
             $0.devicesClient.read = { code in makeDevice(code: code, status: "coordinating") }
         } operation: {
@@ -391,6 +403,7 @@ private typealias Operation = GameModels.Operation
             $0.defaultDatabase = database
             $0.date = .constant(Date(timeIntervalSince1970: 1_000))
             $0.uuid = .incrementing
+            $0.deviceRefresher = coordinatorBackedRefresher()
             $0.gameClient = client
             $0.devicesClient.read = { code in makeDevice(code: code, status: "coordinating") }
         } operation: {
@@ -433,6 +446,7 @@ private typealias Operation = GameModels.Operation
             $0.defaultDatabase = database
             $0.date = .constant(Date(timeIntervalSince1970: 1_000))
             $0.uuid = .incrementing
+            $0.deviceRefresher = coordinatorBackedRefresher()
             $0.gameClient = client
             $0.devicesClient.read = { code in
                 readCodes.withValue { $0.append(code) }
@@ -476,6 +490,7 @@ private typealias Operation = GameModels.Operation
             $0.defaultDatabase = database
             $0.date = .constant(Date(timeIntervalSince1970: 1_000))
             $0.uuid = .incrementing
+            $0.deviceRefresher = coordinatorBackedRefresher()
             $0.gameClient = client
             $0.devicesClient.read = { code in makeDevice(code: code, status: "coordinating") }
         } operation: {
@@ -498,6 +513,7 @@ private typealias Operation = GameModels.Operation
             $0.defaultDatabase = database
             $0.date = .constant(Date(timeIntervalSince1970: 1_000))
             $0.uuid = .incrementing
+            $0.deviceRefresher = coordinatorBackedRefresher()
             $0.gameClient = stubGameClient { _ in jsonResponse(200) }
             $0.devicesClient.read = { code in makeDevice(code: code, status: "coordinating") }
         } operation: {
@@ -530,6 +546,7 @@ private typealias Operation = GameModels.Operation
             $0.defaultDatabase = database
             $0.date = .constant(Date(timeIntervalSince1970: 1_000))
             $0.uuid = .incrementing
+            $0.deviceRefresher = coordinatorBackedRefresher()
             $0.gameClient = client
             $0.devicesClient.read = { code in makeDevice(code: code, status: "printing (autofactory)") }
         } operation: {
@@ -552,6 +569,7 @@ private typealias Operation = GameModels.Operation
             $0.defaultDatabase = database
             $0.date = .constant(Date(timeIntervalSince1970: 1_000))
             $0.uuid = .incrementing
+            $0.deviceRefresher = coordinatorBackedRefresher()
             $0.gameClient = stubGameClient { _ in jsonResponse(200) }
             $0.devicesClient.read = { code in makeDevice(code: code, status: "printing") }
         } operation: {
@@ -568,6 +586,7 @@ private typealias Operation = GameModels.Operation
             $0.defaultDatabase = database
             $0.date = .constant(Date(timeIntervalSince1970: 1_000))
             $0.uuid = .incrementing
+            $0.deviceRefresher = coordinatorBackedRefresher()
             $0.gameClient = stubGameClient { _ in jsonResponse(200) }
             $0.devicesClient.read = { code in makeDevice(code: code, status: "coordinating") }
         } operation: {
@@ -597,6 +616,7 @@ private typealias Operation = GameModels.Operation
             $0.defaultDatabase = database
             $0.date = .constant(Date(timeIntervalSince1970: 1_000))
             $0.uuid = .incrementing
+            $0.deviceRefresher = coordinatorBackedRefresher()
             $0.gameClient = client
             $0.devicesClient.read = { code in
                 readCount.withValue { $0 += 1 }
@@ -626,6 +646,7 @@ private typealias Operation = GameModels.Operation
             $0.defaultDatabase = database
             $0.date = .constant(Date(timeIntervalSince1970: 1_000))
             $0.uuid = .incrementing
+            $0.deviceRefresher = coordinatorBackedRefresher()
             $0.gameClient = stubGameClient { _ in jsonResponse(200) }
             $0.devicesClient.read = { code in makeDevice(code: code, status: "idle") }
         } operation: {
@@ -653,6 +674,7 @@ private typealias Operation = GameModels.Operation
             $0.defaultDatabase = database
             $0.date = .constant(Date(timeIntervalSince1970: 1_000))
             $0.uuid = .incrementing
+            $0.deviceRefresher = coordinatorBackedRefresher()
             $0.gameClient = client
             $0.devicesClient.read = { code in makeDevice(code: code, status: "idle") }
         } operation: {
@@ -700,6 +722,17 @@ private typealias Operation = GameModels.Operation
 }
 
 // MARK: - Helpers
+
+/// A refresher backed by a real (per-test) `PollCoordinator`, so post-command
+/// confirm-reads exercise the same coalesce → read → reconcile path as
+/// production while the underlying network read stays the test's
+/// `devicesClient.read` stub (the coordinator resolves it at call time).
+private func coordinatorBackedRefresher() -> DeviceRefreshClient {
+    let coordinator = PollCoordinator(reconciler: Reconciler())
+    return DeviceRefreshClient { code, priority in
+        await coordinator.refresh(code, priority: priority)
+    }
+}
 
 private func makeDevice(code: String, status: String) -> Device {
     Device(

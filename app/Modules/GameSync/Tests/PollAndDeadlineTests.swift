@@ -159,6 +159,88 @@ private func budgetGameClient(remaining: Int) -> GameClient {
         #expect(reads.value == 0)
     }
 
+    /// A `.high` refresh must not join a read issued *before* its own request
+    /// time — the inspector's poll racing a command's confirm-read would hand
+    /// back a pre-command snapshot and TTL-suppress the SSE echo that should
+    /// repair it. It waits the stale read out, then issues a fresh one.
+    @Test func highPriorityRefusesToJoinEarlierRead() async throws {
+        let database = try GameDatabase.bootstrap()
+        let reads = LockIsolated(0)
+        let started = AsyncStream.makeStream(of: Void.self)
+        let gate = LockIsolated<CheckedContinuation<Void, Never>?>(nil)
+        let now = LockIsolated(Date(timeIntervalSince1970: 1_000))
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = DateGenerator { now.value }
+            $0.gameClient = budgetGameClient(remaining: 100)   // the .low read must pass the floor
+            $0.devicesClient.read = { code in
+                let n = reads.withValue { $0 += 1; return $0 }
+                if n == 1 {
+                    // The pre-command read: block until the test releases it.
+                    started.continuation.yield(())
+                    await withCheckedContinuation { gate.setValue($0) }
+                    return device(code, status: "idle")
+                }
+                return device(code, status: "travelling")
+            }
+        } operation: {
+            let coordinator = PollCoordinator(reconciler: Reconciler())
+            let stale = Task { await coordinator.refresh("D", priority: .low) }
+
+            // Wait until the pre-command read is actually in flight.
+            var iterator = started.stream.makeAsyncIterator()
+            _ = await iterator.next()
+
+            // The command lands; its confirm-read demands state as of t+1.
+            now.setValue(Date(timeIntervalSince1970: 1_001))
+            let confirm = Task { await coordinator.refresh("D", priority: .high) }
+
+            // Deterministically wait for the confirm to hit the barrier — the
+            // stale read is still gate-blocked, so its in-flight entry is
+            // guaranteed present and the barrier path MUST be taken (a plain
+            // gate release could race the confirm onto an empty coordinator,
+            // passing without exercising the barrier at all).
+            while await coordinator.barrierWaits == 0 { await Task.yield() }
+
+            // Release the stale read; the confirm must then re-read fresh.
+            while gate.value == nil { await Task.yield() }
+            gate.value?.resume()
+            let joined = await stale.value
+            let fresh = await confirm.value
+            #expect(joined?.status == "idle")
+            #expect(fresh?.status == "travelling")
+        }
+
+        #expect(reads.value == 2)
+    }
+
+    /// A failed read must not stamp the TTL: the next low-priority trigger (the
+    /// command's SSE echo) still gets to read and repair the miss.
+    @Test func failedReadDoesNotSuppressFollowUp() async throws {
+        let database = try GameDatabase.bootstrap()
+        let reads = LockIsolated(0)
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.gameClient = budgetGameClient(remaining: 100)
+            $0.devicesClient.read = { code in
+                let n = reads.withValue { $0 += 1; return $0 }
+                if n == 1 { throw URLError(.timedOut) }
+                return device(code)
+            }
+        } operation: {
+            let coordinator = PollCoordinator(reconciler: Reconciler())
+            let failed = await coordinator.refresh("D", priority: .high)
+            #expect(failed == nil)
+            let repaired = await coordinator.refresh("D", priority: .low)
+            #expect(repaired != nil)
+        }
+
+        #expect(reads.value == 2)
+    }
+
     /// A high-priority refresh ignores budget pressure (the deadline matters).
     @Test func highPriorityIgnoresBudget() async throws {
         let database = try GameDatabase.bootstrap()
