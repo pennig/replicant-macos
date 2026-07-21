@@ -35,6 +35,22 @@ public struct FTLMeshRefresher: Sendable {
     }
 }
 
+extension FTLMeshRefresher {
+    /// The `.ftlMesh` domain's refresh policy, registered by the composition
+    /// root at launch. O(relays) serial network reads — the single most
+    /// expensive refresh an event can trigger, and exactly why applies must
+    /// stay off the router's dispatch path (V3.4-B2): the relay route only
+    /// `invalidate(.ftlMesh)`s, and the domain's trailing debounce collapses a
+    /// burst into one rebuild. The rebuild is best-effort per relay by design
+    /// (an unreachable relay is skipped, not an error), so it always counts as
+    /// a refresh.
+    public static let domainRegistration = DomainRegistration(refresh: {
+        @Dependency(\.ftlMeshRefresher) var ftlMeshRefresher
+        await ftlMeshRefresher.refresh()
+        return true
+    })
+}
+
 extension FTLMeshRefresher: DependencyKey {
     public static let liveValue = FTLMeshRefresher(
         refresh: {

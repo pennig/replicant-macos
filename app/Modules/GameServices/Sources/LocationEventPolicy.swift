@@ -2,8 +2,8 @@
 //  LocationEventPolicy.swift
 //  Replicould — GameServices
 //
-//  Pure decision logic for the composition root's passive-scan / roster-location
-//  relay route (the `locations.scan` route in `ReplicantApp`). Given a game
+//  Pure decision logic for the passive-scan / roster-location stream route
+//  (`LocationsIngestion`'s `locations.scan` route, in this module). Given a game
 //  `event` and the replicant it concerns, it decides two things:
 //
 //    • whether the replicant's current system is worth a passive re-scan, and

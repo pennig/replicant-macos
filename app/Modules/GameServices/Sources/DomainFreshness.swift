@@ -79,6 +79,18 @@ public struct DomainFreshnessClient: Sendable {
     /// into freshly-wiped tables, and a stale `lastRefreshedAt` must not let
     /// the next session skip its first re-read).
     public var reset: @Sendable () -> Void
+
+    public init(
+        register: @escaping @Sendable (FreshnessDomain, DomainRegistration) -> Void,
+        invalidate: @escaping @Sendable (FreshnessDomain) -> Void,
+        refreshIfStale: @escaping @Sendable (FreshnessDomain) async -> Void,
+        reset: @escaping @Sendable () -> Void
+    ) {
+        self.register = register
+        self.invalidate = invalidate
+        self.refreshIfStale = refreshIfStale
+        self.reset = reset
+    }
 }
 
 // MARK: - Live implementation

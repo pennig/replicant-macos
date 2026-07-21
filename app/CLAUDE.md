@@ -8,7 +8,6 @@ It primarily exists through a three-panel split view interface, though certain t
 
 ## Engineering notes (memory)
 Accumulated, hard-won notes about this codebase — feature summaries, API/spec-drift findings, and non-obvious gotchas — live under `.claude/memory/` as one fact per file. The index below is loaded automatically; open the linked file when a note looks relevant, and add/update notes there (with a matching index line) as you learn things.
-
 @.claude/memory/MEMORY.md
 
 ## Design source of truth
@@ -39,7 +38,13 @@ The backend API service has copious documentation:
 - The OpenAPI spec: https://api.replicant.space/swagger/openapi.json. It does a great job of documenting the full capabilities and surface area of the API. We've already run into a few issues though, so this doc seems to be hand-maintained and carries with it mismatches between spec and implementation. Use caution.
 
 The docs website seems to be updated more diligently to match the real implementation, so if there's ever a mismatch between expectation and reality, check the docs site to see if that mismatch can be resolved without further debugging.
-
+---
+---
+## Review Protocols
+All reviewing subagents must utilize Swift-LSP (SourceKit-LSP) to analyze code changes. Before signing off on any code:
+1. Query the Swift-LSP language server for syntax, type correctness, and unresolved references.
+2. Cross-reference usage by checking symbol references.
+3. Treat LSP output as the single source of truth over simple text matching.
 ---
 
 ## Implementation Notes

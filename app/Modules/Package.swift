@@ -298,8 +298,10 @@ let package = Package(
         .testTarget(
             name: "LocationEventsFeatureTests",
             dependencies: [
-                "LocationEventsFeature",
+                "API",
                 "GameModels",
+                "GameServices",
+                "LocationEventsFeature",
                 "Utils",
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
                 .product(name: "SQLiteData", package: "sqlite-data"),
@@ -364,9 +366,12 @@ let package = Package(
         .testTarget(
             name: "MessagesFeatureTests",
             dependencies: [
+                "API",
                 "GameDatabase",
                 "GameModels",
+                "GameServices",
                 "MessagesFeature",
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
             ],
             path: "MessagesFeature/Tests"
         ),
