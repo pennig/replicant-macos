@@ -292,11 +292,13 @@ extension LocationsClient: DependencyKey {
 }
 
 extension LocationsClient: TestDependencyKey {
+    /// Unimplemented by default so a test that reaches the network without
+    /// stubbing it fails loudly (V3.6-T5).
     public static let testValue = LocationsClient(
-        footprint: { [:] },
-        system: { _ in throw LocationsError.noReplicantInSystem },
-        body: { _ in throw LocationsError.notFound },
-        scan: { _ in throw LocationsError.notFound }
+        footprint: unimplemented("LocationsClient.footprint"),
+        system: unimplemented("LocationsClient.system"),
+        body: unimplemented("LocationsClient.body"),
+        scan: unimplemented("LocationsClient.scan")
     )
 
     public static let previewValue = LocationsClient(

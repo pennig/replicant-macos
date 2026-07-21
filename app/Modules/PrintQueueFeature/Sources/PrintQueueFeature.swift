@@ -106,6 +106,8 @@ public struct PrintQueueFeature {
     @Dependency(\.commandClient) var commandClient
     @Dependency(\.locationsClient) var locationsClient
 
+    private enum CancelID { case printPreview }
+
     public var body: some ReducerOf<Self> {
         BindingReducer()
         Reduce { state, action in
@@ -191,6 +193,9 @@ public struct PrintQueueFeature {
                     )
                     await send(.printPreviewResponse(.loaded(requirements)))
                 }
+                // A new preview cancels any prior in-flight lookup so a late
+                // response can't overwrite this one's phase.
+                .cancellable(id: CancelID.printPreview, cancelInFlight: true)
 
             case let .printPreviewResponse(phase):
                 guard state.printPreview != nil else { return .none }
@@ -208,7 +213,7 @@ public struct PrintQueueFeature {
 
             case .printPreviewDismissed:
                 state.printPreview = nil
-                return .none
+                return .cancel(id: CancelID.printPreview)
             }
         }
     }

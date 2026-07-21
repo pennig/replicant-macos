@@ -39,7 +39,10 @@ public struct Reconciler: Sendable {
     public func ingest(_ device: Device) async {
         @Dependency(\.defaultDatabase) var database
         @Dependency(\.uuid) var uuid
-        let applied = (try? await database.write { db in
+        // A DB failure here is a correctness-core failure — report it
+        // (visibly in DEBUG/tests), never swallow it (V3.6-T3).
+        let applied = await withErrorReporting {
+            try await database.write { db in
             let existing = try Device
                 .where { $0.deviceCode.eq(device.deviceCode) }
                 .fetchOne(db)
@@ -168,7 +171,8 @@ public struct Reconciler: Sendable {
                     logger.info("ingest \(device.deviceCode, privacy: .public): device settled (\(device.status, privacy: .public)) — completed \(op.kind, privacy: .public) op \(op.id, privacy: .public)")
                 }
             }
-        }) != nil
+            }
+        } != nil
 
         // Spend any staleness mark this snapshot satisfies (V3.5): every
         // successful read funnels through here, so a `.high` confirm, the
@@ -215,7 +219,8 @@ public struct Reconciler: Sendable {
         @Dependency(\.defaultDatabase) var database
         @Dependency(\.date) var date
         let stamp = min(eventTime, date.now)
-        return (try? await database.write { db -> Bool in
+        return await withErrorReporting {
+            try await database.write { db -> Bool in
             guard var device = try Device
                 .where({ $0.deviceCode.eq(deviceCode) })
                 .fetchOne(db)
@@ -231,7 +236,8 @@ public struct Reconciler: Sendable {
             try Device.upsert { device }.execute(db)
             logger.debug("applyEventFields \(deviceCode, privacy: .public): location=\(location ?? "-", privacy: .public) @ \(eventTime.ISO8601Format(), privacy: .public)")
             return true
-        }) ?? false
+            }
+        } ?? false
     }
 
     /// Reconcile the local fleet against an authoritative full device list:
@@ -245,7 +251,8 @@ public struct Reconciler: Sendable {
     public func pruneDevices(presentCodes: some Sequence<String>) async {
         @Dependency(\.defaultDatabase) var database
         let kept = Set(presentCodes)
-        let pruned = (try? await database.write { db -> [String] in
+        let pruned = await withErrorReporting {
+            try await database.write { db -> [String] in
             let staleCodes = try Device
                 .select(\.deviceCode)
                 .fetchAll(db)
@@ -255,7 +262,8 @@ public struct Reconciler: Sendable {
             try Device.where { $0.deviceCode.in(staleCodes) }.delete().execute(db)
             logger.info("prune: removed \(staleCodes.count) device(s) absent from full list: \(staleCodes.joined(separator: ", "), privacy: .public)")
             return staleCodes
-        }) ?? []
+            }
+        } ?? []
         // A pruned device's read can never succeed — drop any staleness mark it
         // holds, or it would cycle through the drain's aged tier forever.
         if !pruned.isEmpty {
@@ -351,7 +359,8 @@ public struct Reconciler: Sendable {
         @Dependency(\.defaultDatabase) var database
         @Dependency(\.date) var date
         let stamp = eventTime ?? date.now
-        return (try? await database.write { db -> Bool in
+        return await withErrorReporting {
+            try await database.write { db -> Bool in
             guard var op = try Operation.where({
                 $0.entityCode.eq(deviceCode)
                     && $0.status.in(OperationStatus.liveCases)
@@ -381,6 +390,7 @@ public struct Reconciler: Sendable {
             try Operation.upsert { op }.execute(db)
             logger.info("completed op \(op.id, privacy: .public) (\(op.kind, privacy: .public)) on \(deviceCode, privacy: .public) via \(source.rawValue, privacy: .public)")
             return true
-        }) ?? false
+            }
+        } ?? false
     }
 }

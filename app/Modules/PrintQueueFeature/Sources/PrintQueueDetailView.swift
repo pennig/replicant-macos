@@ -50,7 +50,7 @@ public struct PrintQueueDetailView: View {
                 } message: { message in
                     Text(message)
                 }
-                .sheet(isPresented: printPreviewBinding) {
+                .sheet(item: printPreviewItem) { _ in
                     PrintPlanSheet(
                         preview: store.printPreview,
                         onConfirm: { store.send(.printPreviewConfirmed) },
@@ -78,10 +78,13 @@ public struct PrintQueueDetailView: View {
         )
     }
 
-    private var printPreviewBinding: Binding<Bool> {
+    // `item:`, not `isPresented:` — rapid back-to-back presentations drop the
+    // dialog under the boolean form (see the preview-sheet memory note); the
+    // other three preview-sheet call sites were already converted.
+    private var printPreviewItem: Binding<PrintPreview?> {
         Binding(
-            get: { store.printPreview != nil },
-            set: { if !$0 { store.send(.printPreviewDismissed) } }
+            get: { store.printPreview },
+            set: { if $0 == nil { store.send(.printPreviewDismissed) } }
         )
     }
 

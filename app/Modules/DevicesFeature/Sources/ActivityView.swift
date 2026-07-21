@@ -7,6 +7,9 @@
 //  pane) — a live ledger of what the fleet is doing. Lives in this module (which
 //  the app already links) so it needs no separate app-target wiring.
 //
+//  Naming: this renders the sidebar's "Operations Log" — NOT Tools ▸ "Event Log"
+//  (that's `EventLogFeature`, the SSE diagnostic ledger).
+//
 
 import GameModels
 import GameServices

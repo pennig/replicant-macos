@@ -4,7 +4,9 @@
 //
 //  A power-user diagnostic modelled on Raw API Access: a standalone window that
 //  shows every Server-Sent Event the app ingested, persisted to SQLite so it
-//  survives relaunches. Each event's full envelope renders in the shared JSON tree
+//  survives relaunches. Naming: this is Tools ▸ "Event Log" — NOT the sidebar's
+//  "Operations Log" (that's `ActivityView` in DevicesFeature, the fleet's
+//  operation ledger). Two different windows, two different tables. Each event's full envelope renders in the shared JSON tree
 //  view; events that no feature-specific route consumed are flagged "unhandled" and
 //  can be isolated with a filter. A Clear action empties the ledger.
 //

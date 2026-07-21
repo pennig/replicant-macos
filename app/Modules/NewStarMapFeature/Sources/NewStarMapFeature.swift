@@ -393,7 +393,7 @@ public struct NewStarMapFeature {
 
             case .travelPreviewDismissed:
                 state.travelPreview = nil
-                return .none
+                return .cancel(id: CancelID.travelPreview)
 
             case .surveyButtonTapped:
                 guard !state.isSurveying, !state.isOnCooldown else { return .none }

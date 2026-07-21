@@ -167,7 +167,7 @@ public struct DevicesFeature {
     /// `refresh` cancels the while-viewing refresh loop when the inspected device
     /// changes; `travelPreview` cancels an in-flight dry-run so a prior device's
     /// late response can't land on the current preview.
-    private enum CancelID { case refresh, travelPreview, cargoLoad }
+    private enum CancelID { case refresh, travelPreview, printPreview, cargoLoad }
 
     public var body: some ReducerOf<Self> {
         BindingReducer()
@@ -311,7 +311,7 @@ public struct DevicesFeature {
 
             case .travelPreviewDismissed:
                 state.travelPreview = nil
-                return .none
+                return .cancel(id: CancelID.travelPreview)
 
             case let .printConfirmed(deviceCode, deviceType, location, locationName, required):
                 // Mirror of `.travelConfirmed`: end editing + yield before the
@@ -343,6 +343,9 @@ public struct DevicesFeature {
                     )
                     await send(.printPreviewResponse(.loaded(requirements)))
                 }
+                // A new preview cancels any prior in-flight lookup so a late
+                // response can't overwrite this one's phase.
+                .cancellable(id: CancelID.printPreview, cancelInFlight: true)
 
             case let .printPreviewResponse(phase):
                 // Ignore a late response if the user already dismissed the sheet.
@@ -361,7 +364,7 @@ public struct DevicesFeature {
 
             case .printPreviewDismissed:
                 state.printPreview = nil
-                return .none
+                return .cancel(id: CancelID.printPreview)
 
             case let .cargoLoadRequested(deviceCode, location, locationName, capacityRemaining):
                 state.cargoLoad = CargoLoadPreview(

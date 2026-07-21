@@ -119,10 +119,15 @@ extension StarsClient: DependencyKey {
 }
 
 extension StarsClient: TestDependencyKey {
+    /// Unimplemented by default so a test that reaches the network without
+    /// stubbing it fails loudly (V3.6-T5).
     public static let testValue = StarsClient(
-        catalogue: { [] },
-        cooldownUntil: { nil },
-        survey: { _, _ in AsyncThrowingStream { $0.finish() } }
+        catalogue: unimplemented("StarsClient.catalogue"),
+        cooldownUntil: unimplemented("StarsClient.cooldownUntil", placeholder: nil),
+        survey: unimplemented(
+            "StarsClient.survey",
+            placeholder: AsyncThrowingStream { $0.finish() }
+        )
     )
 
     public static let previewValue = StarsClient(

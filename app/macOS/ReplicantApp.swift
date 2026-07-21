@@ -28,7 +28,12 @@ struct ReplicantApp: App {
     @Environment(\.openWindow) private var openWindow
 
     init() {
-        prepareDependencies { try? $0.bootstrapDatabase() }
+        // A failed schema bootstrap is a silently broken app (every @FetchAll
+        // reads an empty void) — report it loudly instead of `try?`-ing it
+        // away (V3.6-T3). The app still launches; the report names the cause.
+        prepareDependencies { dependencies in
+            withErrorReporting { try dependencies.bootstrapDatabase() }
+        }
         // Construct the root store *after* the database is prepared
         _store = State(initialValue: Store(initialState: AppFeature.State()) { AppFeature() })
         // Order matters: `AccountManager` runs logout handlers in REGISTRATION

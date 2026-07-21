@@ -77,11 +77,12 @@ extension MessagesClient: DependencyKey {
 // MARK: - Test / preview implementation
 
 extension MessagesClient: TestDependencyKey {
-    /// An empty inbox — the safe default for unit tests, which override `fetch`
-    /// and `markRead` with their own behavior.
+    /// Unimplemented by default so a test that reaches the network without
+    /// stubbing it fails loudly (V3.6-T5) — the former quiet empty-inbox stub
+    /// let "forgot to stub" tests pass silently.
     public static let testValue = MessagesClient(
-        fetch: { _, _, _ in MessagePage(messages: [], nextCursor: nil, unreadCount: 0) },
-        markRead: { _, _ in }
+        fetch: unimplemented("MessagesClient.fetch"),
+        markRead: unimplemented("MessagesClient.markRead")
     )
 
     /// Previews get the sample inbox so the UI renders with content.

@@ -370,7 +370,7 @@ public struct LocationsFeature {
 
             case .travelPreviewDismissed:
                 state.travelPreview = nil
-                return .none
+                return .cancel(id: CancelID.travelPreview)
 
             case let .loadFailed(message):
                 state.errorMessage = message

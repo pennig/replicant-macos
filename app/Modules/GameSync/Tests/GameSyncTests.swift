@@ -207,9 +207,11 @@ private typealias Operation = GameModels.Operation
         let connects = LockIsolated(0)
         let store = SharedCursorStore(nil)   // cold: no catch-up, connect straight away
 
+        let connected = AsyncStream.makeStream(of: Void.self)
         let streamClient = EventStreamClient { _ in
             AsyncThrowingStream { continuation in
                 connects.withValue { $0 += 1 }
+                connected.continuation.yield(())
                 continuation.finish(throwing: EventStreamError.staleGap(idleSeconds: 3_600))
             }
         }
@@ -231,14 +233,16 @@ private typealias Operation = GameModels.Operation
             $0.continuousClock = clock
         } operation: {
             await engine.start()
-            // Generous budget: the consume task crosses several suspension
-            // points (scheduler arm, staleness-drain arm, pipeline start)
-            // before the connect lands.
-            for _ in 0..<2_000 where connects.value < 1 { await Task.yield() }
+            // Suspend until the connect actually lands — the consume task
+            // crosses several suspension points (scheduler arm, staleness-drain
+            // arm, pipeline start) first, and a yield-spin can starve under
+            // full-suite parallel load (this test used to flake that way).
+            var iterator = connected.stream.makeAsyncIterator()
+            _ = await iterator.next()
 
             await engine.stop()                      // logout while a restart is pending
             await clock.advance(by: .seconds(120))   // the restart's sleep would fire here
-            await Task.yield()
+            for _ in 0..<20 { await Task.yield() }   // let a leaked restart surface
         }
 
         #expect(connects.value == 1, "stop() must cancel the pending restart")

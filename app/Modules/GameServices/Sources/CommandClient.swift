@@ -430,10 +430,19 @@ public enum CommandError: Error, Equatable {
 // MARK: - Test / preview implementation
 
 extension CommandClient: TestDependencyKey {
-    /// Inert by default — does nothing and returns a fixed id. Tests that
-    /// exercise dispatch use the live value over a stubbed `gameClient`.
+    /// Unimplemented by default so a test that dispatches without stubbing it
+    /// fails loudly (a quiet stub let "forgot to stub" tests pass silently —
+    /// V3.6-T5). Tests that exercise dispatch use the live value over a
+    /// stubbed `gameClient`.
     public static let testValue = CommandClient(
-        dispatch: { _, _, _ in .accepted(operationID: "test-op") },
+        dispatch: unimplemented("CommandClient.dispatch", placeholder: .failed("unimplemented")),
+        previewTravel: unimplemented("CommandClient.previewTravel", placeholder: .failed("unimplemented"))
+    )
+
+    /// Previews keep the old inert behavior — a preview that taps a command
+    /// button should quietly "accept", not surface a runtime-issue banner.
+    public static let previewValue = CommandClient(
+        dispatch: { _, _, _ in .accepted(operationID: "preview-op") },
         previewTravel: { _, _ in .plan(TravelPlan()) }
     )
 }
