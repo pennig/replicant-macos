@@ -99,14 +99,17 @@ struct ReplicantApp: App {
         // repair** (§4.5): on a cold start or a reconnect beyond the stream's
         // cursor retention, `gapRepair` recovers messages that arrived while
         // disconnected — the REST inbox is authoritative, so a head-page re-read
-        // is the catch-up. Deliberately direct (not debounced): it must run even
-        // when no message event replays at all.
+        // is the catch-up. It invalidates rather than reading directly:
+        // `invalidate` always arms (so the repair runs even when no message
+        // event replays), the debounce absorbs any replayed message events into
+        // the same single read, and the engine's freshness stamp then lets the
+        // inbox pane's appear-path skip its own re-read.
         gameSync.registerRoute(
             EventRoute(
                 id: "message",
                 match: .category("message"),
                 apply: { _ in domainFreshness.invalidate(.inbox) },
-                gapRepair: { _ = await refreshInbox() }
+                gapRepair: { domainFreshness.invalidate(.inbox) }
             )
         )
 

@@ -130,7 +130,7 @@ public struct NewStarMapFeature {
         // appear); the reducer rebuilds and persists the mesh off each relay's
         // backend network view. The view then renders the persisted `FTLLinkRecord`
         // rows directly, so the drawn mesh survives relaunch and a failed read.
-        case refreshMesh
+        case refreshMesh(rosterChanged: Bool)
         /// Full re-scan of the replicant's current system (the only source of HZ /
         /// outer-system / hazards); refreshes the persisted `SystemDetail`.
         case scanCurrentSystemTapped
@@ -161,7 +161,7 @@ public struct NewStarMapFeature {
         }
     }
 
-    private enum CancelID { case survey, cooldown, transition, meshRefresh, locationHydrate, travelPreview }
+    private enum CancelID { case survey, cooldown, transition, locationHydrate, travelPreview }
 
     /// The per-replicant exploration overlay walks pages at the server's `per_page`
     /// cap. Explored (nearest) systems cluster in the first pages, so the walk
@@ -176,7 +176,7 @@ public struct NewStarMapFeature {
     @Dependency(\.defaultDatabase) var database
     @Dependency(\.starsClient) var starsClient
     @Dependency(\.locationsClient) var locationsClient
-    @Dependency(\.ftlMeshRefresher) var ftlMeshRefresher
+    @Dependency(\.domainFreshness) var domainFreshness
     @Dependency(\.commandClient) var commandClient
     @Dependency(\.date) var date
 
@@ -339,13 +339,18 @@ public struct NewStarMapFeature {
                 state.isTransitioning = false
                 return .none
 
-            case .refreshMesh:
-                // Rebuild and persist the mesh off the current relay roster (read
-                // from the Device table inside the refresher) and each relay's live
-                // network view. An empty roster correctly persists an empty mesh.
-                let refresher = ftlMeshRefresher
-                return .run { _ in await refresher.refresh() }
-                    .cancellable(id: CancelID.meshRefresh, cancelInFlight: true)
+            case let .refreshMesh(rosterChanged):
+                // The mesh rebuild is O(relays) network reads, so it goes through
+                // the freshness engine instead of firing directly (V3.4-B2/B6). A
+                // genuine roster change invalidates — the debounce collapses the
+                // cold-load's page-by-page roster churn into one rebuild. A mere
+                // pane appear only rebuilds when the domain is stale or its TTL
+                // lapsed; the SSE relay route keeps it fresh in between.
+                let domainFreshness = self.domainFreshness
+                if rosterChanged {
+                    return .run { _ in domainFreshness.invalidate(.ftlMesh) }
+                }
+                return .run { _ in await domainFreshness.refreshIfStale(.ftlMesh) }
 
             case .scanCurrentSystemTapped:
                 guard let code = state.activeReplicantCode, !code.isEmpty else { return .none }

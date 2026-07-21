@@ -12,6 +12,7 @@
 import ComposableArchitecture
 import Foundation
 import GameModels
+import GameServices
 import SQLiteData
 
 @Reducer
@@ -57,6 +58,7 @@ public struct MessagesFeature {
 
     @Dependency(\.defaultDatabase) var database
     @Dependency(\.messagesClient) var messagesClient
+    @Dependency(\.domainFreshness) var domainFreshness
 
     public var body: some Reducer<State, Action> {
         BindingReducer()
@@ -89,7 +91,16 @@ public struct MessagesFeature {
             case .binding:
                 return .none
 
-            case .task, .refreshButtonTapped:
+            case .task:
+                // The SSE message/story routes keep the inbox table warm, so a
+                // pane appear only re-reads when the domain is marked stale or
+                // its TTL lapsed (V3.4-B6) — the composition root registers the
+                // `.inbox` refresh. No spinner: the common case is a no-op over
+                // an already-live table.
+                let domainFreshness = self.domainFreshness
+                return .run { _ in await domainFreshness.refreshIfStale(.inbox) }
+
+            case .refreshButtonTapped:
                 guard !state.isLoading else { return .none }
                 state.isLoading = true
                 state.errorMessage = nil

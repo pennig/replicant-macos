@@ -115,6 +115,13 @@ public struct DeviceDetailView: View {
         .task(id: refreshKey) {
             store.send(.viewingChanged(deviceCode: refreshKey))
         }
+        // The staleness tracker's visible set follows the *selection*, not the
+        // refresh key — every inspected device is visible, not just the ones
+        // running a refreshable activity (a settled device must still spend its
+        // marks promptly while on screen).
+        .task(id: store.selectedDeviceCode) {
+            store.send(.inspectorVisibilityChanged(deviceCode: store.selectedDeviceCode))
+        }
         // `.task(id:)` only restarts the loop across *selection* changes. When
         // the view is REMOVED (sidebar category switch, window close), SwiftUI
         // cancels the view task but the store's refresh effect would keep
@@ -122,6 +129,7 @@ public struct DeviceDetailView: View {
         // that never settle (V3.4-B1). Teardown must say so explicitly.
         .onDisappear {
             store.send(.viewingChanged(deviceCode: nil))
+            store.send(.inspectorVisibilityChanged(deviceCode: nil))
         }
         // Likewise a backgrounded/hidden app shouldn't spend reads on an
         // inspector nobody can see; the loop resumes with the scene. Only
@@ -131,9 +139,14 @@ public struct DeviceDetailView: View {
         // so it must neither stop nor restart the loop.
         .onChange(of: scenePhase) { _, phase in
             switch phase {
-            case .background: store.send(.viewingChanged(deviceCode: nil))
-            case .active:     store.send(.viewingChanged(deviceCode: refreshKey))
-            default:          break
+            case .background:
+                store.send(.viewingChanged(deviceCode: nil))
+                store.send(.inspectorVisibilityChanged(deviceCode: nil))
+            case .active:
+                store.send(.viewingChanged(deviceCode: refreshKey))
+                store.send(.inspectorVisibilityChanged(deviceCode: store.selectedDeviceCode))
+            default:
+                break
             }
         }
     }

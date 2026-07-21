@@ -132,6 +132,12 @@ public struct DevicesFeature {
         /// while-viewing refresh loop for that device; nil (deselect / settled)
         /// stops it. See `refreshDelay(for:now:)` for the cadence.
         case viewingChanged(deviceCode: String?)
+        /// The inspector is presenting this device (nil = the detail pane went
+        /// away or the scene backgrounded). Feeds the staleness tracker's
+        /// visible set and spends any mark the device accrued while hidden.
+        /// Independent of `viewingChanged`: EVERY inspected device is visible,
+        /// not just the ones running a refreshable activity.
+        case inspectorVisibilityChanged(deviceCode: String?)
         /// A refreshed diversion snapshot for the viewed device (nil clears it).
         case diversionResponse(DiversionSnapshot?)
         /// The inspector opened the `gather_salvage` directive for a controller in
@@ -151,6 +157,7 @@ public struct DevicesFeature {
     @Dependency(\.defaultDatabase) var database
     @Dependency(\.devicesClient) var devicesClient
     @Dependency(\.deviceRefresher) var deviceRefresher
+    @Dependency(\.deviceStaleness) var deviceStaleness
     @Dependency(\.commandClient) var commandClient
     @Dependency(\.locationsClient) var locationsClient
     @Dependency(\.continuousClock) var clock
@@ -168,6 +175,23 @@ public struct DevicesFeature {
             switch action {
             case .binding:
                 return .none
+
+            case let .inspectorVisibilityChanged(deviceCode):
+                // The inspected device is the staleness tracker's "visible" set:
+                // its marks drain promptly, and inspecting a device spends any
+                // mark it accumulated while hidden (V3.5) — the on-demand repair
+                // for rows the mark-mostly event route no longer reads eagerly.
+                // Driven by the detail view (selection changes, disappearance,
+                // scene phase) — deliberately NOT by `viewingChanged`, whose
+                // refresh-loop key is nil for every settled device and would
+                // flap the visible set while the device is still on screen.
+                let deviceStaleness = self.deviceStaleness
+                return .run { _ in
+                    await deviceStaleness.setVisible(deviceCode.map { [$0] } ?? [])
+                    if let deviceCode {
+                        await deviceStaleness.refreshIfStale(deviceCode)
+                    }
+                }
 
             case .task:
                 // First run only: cold-load if the fleet table is empty. After

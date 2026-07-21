@@ -39,7 +39,7 @@ public struct Reconciler: Sendable {
     public func ingest(_ device: Device) async {
         @Dependency(\.defaultDatabase) var database
         @Dependency(\.uuid) var uuid
-        try? await database.write { db in
+        let applied = (try? await database.write { db in
             let existing = try Device
                 .where { $0.deviceCode.eq(device.deviceCode) }
                 .fetchOne(db)
@@ -168,6 +168,18 @@ public struct Reconciler: Sendable {
                     logger.info("ingest \(device.deviceCode, privacy: .public): device settled (\(device.status, privacy: .public)) — completed \(op.kind, privacy: .public) op \(op.id, privacy: .public)")
                 }
             }
+        }) != nil
+
+        // Spend any staleness mark this snapshot satisfies (V3.5): every
+        // successful read funnels through here, so a `.high` confirm, the
+        // inspector's viewing loop, or a cold-load walk all clear marks — the
+        // drain loop never re-pays for an already-fresh row. The issue-time
+        // comparison inside `markSatisfied` keeps a pre-mark snapshot from
+        // spending a newer mark. (A dropped-stale write still satisfies: the
+        // stored row is even fresher than this snapshot.)
+        if applied {
+            @Dependency(\.deviceStaleness) var deviceStaleness
+            await deviceStaleness.markSatisfied(device.deviceCode, device.updatedAt)
         }
     }
 
@@ -182,15 +194,22 @@ public struct Reconciler: Sendable {
     public func pruneDevices(presentCodes: some Sequence<String>) async {
         @Dependency(\.defaultDatabase) var database
         let kept = Set(presentCodes)
-        try? await database.write { db in
+        let pruned = (try? await database.write { db -> [String] in
             let staleCodes = try Device
                 .select(\.deviceCode)
                 .fetchAll(db)
                 .filter { !kept.contains($0) }
-            guard !staleCodes.isEmpty else { return }
+            guard !staleCodes.isEmpty else { return [] }
             try Operation.where { $0.entityCode.in(staleCodes) }.delete().execute(db)
             try Device.where { $0.deviceCode.in(staleCodes) }.delete().execute(db)
             logger.info("prune: removed \(staleCodes.count) device(s) absent from full list: \(staleCodes.joined(separator: ", "), privacy: .public)")
+            return staleCodes
+        }) ?? []
+        // A pruned device's read can never succeed — drop any staleness mark it
+        // holds, or it would cycle through the drain's aged tier forever.
+        if !pruned.isEmpty {
+            @Dependency(\.deviceStaleness) var deviceStaleness
+            await deviceStaleness.forget(Set(pruned))
         }
     }
 
@@ -233,7 +252,9 @@ public struct Reconciler: Sendable {
     /// single-leg trip may emit only a per-leg arrival, so no single arrival name
     /// means "the trip is done." `travel.arrived` (the whole-route arrival) is
     /// kept here only as a snappy fast-path that closes the op without waiting for
-    /// the confirm-read; per-leg arrivals fall through to drive that read.
+    /// the confirm-read; per-leg arrivals fall through to mark the device stale,
+    /// and the op-holding drain tier (or the deadline backstop) drives the read
+    /// whose settled-device snapshot completes the trip.
     static let completionEvents: [String: Set<String>] = [
         // enqueued print finished (carries the new device code)
         "print.completed": [OperationKind.print.rawValue],

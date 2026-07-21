@@ -167,12 +167,15 @@ actor GameSyncEngine {
             let engine = self
             Task { await engine?.streamDied(error) }
         }
+        @Dependency(\.deviceStaleness) var deviceStaleness
         consumeTask = Task { [weak self] in
             // Arm the deadline backstop for any already-open operations —
             // inside the claimed task, so a stop() that has already cancelled
             // it can't be followed by a zombie arming (`DeadlineScheduler
-            // .start()` refuses a cancelled caller).
+            // .start()` refuses a cancelled caller — as does the staleness
+            // drain loop, armed the same way).
             await scheduler.start()
+            await deviceStaleness.startDraining()
             // Catch-up (§5.3) runs *inside* `start()`, sequentially before the
             // SSE connection opens: the gap is emitted as `.catchUp` and the
             // stream then connects from the advanced cursor, so replayed history
@@ -220,6 +223,11 @@ actor GameSyncEngine {
         await pipeline?.stop()
         pipeline = nil
         await scheduler.stop()
+        // Stop the staleness drain and forget the marks — they're
+        // account-scoped, and a drain firing post-logout would read on the old
+        // session's behalf.
+        @Dependency(\.deviceStaleness) var deviceStaleness
+        await deviceStaleness.stopDraining()
         streamFailureCount = 0
         lastStartAt = nil
     }
@@ -284,14 +292,22 @@ actor GameSyncEngine {
 // MARK: - Built-in routes (shared-infrastructure tables)
 
 extension GameSync {
-    /// Every game event naming a device is treated as an invalidation signal —
-    /// confirm-read the authoritative snapshot and reconcile it under the
-    /// event-time guard. Matches `.all` (it parses no device fields out of the
-    /// event, so it's robust to evolving payloads); message/bobnet events simply
-    /// carry no device code and no-op here.
+    /// Every game event naming a device is treated as an invalidation signal.
+    /// Matches `.all` (it parses no device fields out of the event, so it's
+    /// robust to evolving payloads); message/bobnet events simply carry no
+    /// device code and no-op here.
+    ///
+    /// Mark-mostly (V3.5): only a *live* op-closing event pays an immediate
+    /// read. Everything else — thin/unknown events, and the entire catch-up
+    /// replay — just marks the device stale in the `StalenessTracker`, where
+    /// the mark is spent later (promptly for a visible device, on the slow
+    /// drain loop for an op-holding one, on selection for the rest). An event
+    /// burst therefore costs O(1) marks instead of O(events) reads, and a
+    /// launch replay costs zero immediate reads (V3.4-B9).
     static func deviceRoute(reconciler: Reconciler) -> EventRoute {
         EventRoute(id: "device.event", match: .all) { event in
             @Dependency(\.deviceRefresher) var deviceRefresher
+            @Dependency(\.deviceStaleness) var deviceStaleness
             // Completion events are truth for the action they close (§4.4): fold
             // the result into the device's open operation first (cheap, no read).
             let completedOp = await reconciler.applyOperationEvent(event)
@@ -305,6 +321,10 @@ extension GameSync {
             // it bypassed the coordinator's coalescing/budget entirely). Pruning
             // stays with the explicit cold-load walk in the Devices feature — the
             // one place that knows the account's complete set (see `pruneDevices`).
+            // This read is deliberately NOT gated on provenance: a mark can't
+            // surface a device the fleet has never seen, so a replayed print
+            // completion still costs its one clone read — the only way the clone
+            // enters the fleet short of a full walk.
             // NOTE: `new_device_code` is the pre-migration payload key; the loud
             // unhandled-event log will surface the real key if the new stream
             // differs, at which point this becomes a one-line edit.
@@ -313,16 +333,21 @@ extension GameSync {
                !newCode.isEmpty {
                 _ = await deviceRefresher.refresh(newCode, .high)
             }
-            // Then refresh the device row via the poll coordinator. When the event
-            // just closed an operation, read authoritatively (high priority): the
-            // device's now-finished activity block (e.g. an arrived `travel` block)
-            // must clear from its snapshot promptly, or the UI keeps rendering the
-            // completed activity — a low-priority read can be TTL-suppressed and
-            // leave a travel bar stuck on "Arriving…" until a later poll. Otherwise
-            // it's a plain invalidation: a low-priority trigger that coalesces,
-            // respects the TTL, and defers under read-budget pressure.
             guard let code = event.deviceCode, !code.isEmpty else { return }
-            _ = await deviceRefresher.refresh(code, completedOp ? .high : .low)
+            if completedOp, event.provenance == .stream {
+                // A live event just closed an operation: the device's finished
+                // activity block (e.g. an arrived `travel` block) must clear from
+                // its snapshot promptly, or the UI keeps rendering the completed
+                // activity — a mark could be deferred past that. One authoritative
+                // high-priority read.
+                _ = await deviceRefresher.refresh(code, .high)
+            } else {
+                // Thin/unknown live events and all catch-up replay: remember,
+                // don't read. Catch-up especially — it can replay hundreds of
+                // events at launch, and the cold-load gates plus the drain loop
+                // already own that repair.
+                await deviceStaleness.markStale(code, event.event)
+            }
         }
     }
 

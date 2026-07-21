@@ -61,7 +61,7 @@ public struct LocationEventsFeature {
 
     public enum Action: BindableAction {
         case binding(BindingAction<State>)
-        /// The screen appeared — re-read the authoritative list.
+        /// The screen appeared — re-read the authoritative list if it's stale.
         case task
         /// Explicit refresh (toolbar button).
         case refresh
@@ -75,6 +75,7 @@ public struct LocationEventsFeature {
     }
 
     @Dependency(\.locationEventsClient) var locationEventsClient
+    @Dependency(\.domainFreshness) var domainFreshness
 
     public init() {}
 
@@ -85,7 +86,16 @@ public struct LocationEventsFeature {
             case .binding:
                 return .none
 
-            case .task, .refresh:
+            case .task:
+                // The SSE quest route keeps the table warm, so a pane appear
+                // only pays the full `accounts/events` walk when the domain is
+                // marked stale or its TTL lapsed (V3.4-B6 — this was a full
+                // paged walk per appear). No spinner: the common case is a
+                // no-op over an already-live table.
+                let domainFreshness = self.domainFreshness
+                return .run { _ in await domainFreshness.refreshIfStale(.locationEvents) }
+
+            case .refresh:
                 guard !state.isRefreshing else { return .none }
                 state.isRefreshing = true
                 state.errorMessage = nil

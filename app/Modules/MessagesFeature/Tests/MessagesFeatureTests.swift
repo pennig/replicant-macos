@@ -7,6 +7,7 @@ import ComposableArchitecture
 import Foundation
 import GameDatabase
 import GameModels
+import GameServices
 import SQLiteData
 import Testing
 @testable import MessagesFeature
@@ -20,6 +21,26 @@ private struct StubError: LocalizedError {
 
 @MainActor
 @Suite struct MessagesFeatureTests {
+    /// The appear-path defers to the freshness engine: stale or never-read →
+    /// one authoritative re-read through the registered `.inbox` refresh
+    /// (V3.4-B6 — no more unconditional fetch per pane appear).
+    @Test func taskRefreshesThroughTheFreshnessEngine() async throws {
+        let database = try GameDatabase.bootstrap()
+        let refreshedDomains = LockIsolated<[FreshnessDomain]>([])
+        let store = TestStore(initialState: MessagesFeature.State()) {
+            MessagesFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
+            $0.domainFreshness.refreshIfStale = { domain in
+                refreshedDomains.withValue { $0.append(domain) }
+            }
+        }
+
+        await store.send(.task)
+        await store.finish()
+        #expect(refreshedDomains.value == [.inbox])
+    }
+
     /// Refreshing fetches a page and upserts it into the local store.
     @Test func refreshPersistsFetchedMessages() async throws {
         let database = try GameDatabase.bootstrap()
@@ -39,7 +60,7 @@ private struct StubError: LocalizedError {
             }
         }
 
-        await store.send(.task) { $0.isLoading = true }
+        await store.send(.refreshButtonTapped) { $0.isLoading = true }
         await store.receive(\.refreshSucceeded) { $0.isLoading = false }
 
         let stored = try await database.read { db in
@@ -62,7 +83,7 @@ private struct StubError: LocalizedError {
             }
         }
 
-        await store.send(.task) { $0.isLoading = true }
+        await store.send(.refreshButtonTapped) { $0.isLoading = true }
         await store.receive(\.refreshFailed) {
             $0.isLoading = false
             $0.errorMessage = "boom"

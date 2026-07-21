@@ -19,6 +19,9 @@ import Testing
 import Utils
 @testable import GameSync
 
+/// Disambiguate from `Foundation.Operation`.
+private typealias Operation = GameModels.Operation
+
 @Suite struct EventRouterTests {
 
     /// Build a `GameEventEnvelope` with a given dotted name (category defaults to
@@ -156,6 +159,46 @@ import Utils
         #expect(catchUps.value == 2, "each start runs the catch-up pull before connecting")
     }
 
+    /// The engine arms the staleness drain loop with the session and stops it
+    /// (forgetting marks) on `stop()` — the V3.5 drain lifecycle.
+    @Test func engineArmsAndStopsStalenessDraining() async throws {
+        let database = try GameDatabase.bootstrap()
+        let clock = TestClock()
+        let started = LockIsolated(0)
+        let stopped = LockIsolated(0)
+        let store = SharedCursorStore(nil)
+
+        let streamClient = EventStreamClient { _ in
+            AsyncThrowingStream { _ in }   // connects and stays open
+        }
+        let engine = GameSyncEngine(
+            router: EventRouter(routes: LockIsolated([])),
+            scheduler: DeadlineScheduler(reconciler: Reconciler()),
+            makePipeline: {
+                EventPipeline(
+                    streamClient: streamClient,
+                    fetchPage: { _ in GameEventsPage(events: [], nextCursor: nil) },
+                    cursorStore: store
+                )
+            }
+        )
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 2_000))
+            $0.continuousClock = clock
+            $0.deviceStaleness.startDraining = { started.withValue { $0 += 1 } }
+            $0.deviceStaleness.stopDraining = { stopped.withValue { $0 += 1 } }
+        } operation: {
+            await engine.start()
+            for _ in 0..<2_000 where started.value < 1 { await Task.yield() }
+            await engine.stop()
+        }
+
+        #expect(started.value == 1)
+        #expect(stopped.value == 1)
+    }
+
     /// After `stop()`, a pending stream-death restart must NOT resurrect the
     /// connection (logout tears the whole engine down).
     @Test func stopCancelsPendingRestart() async throws {
@@ -188,7 +231,10 @@ import Utils
             $0.continuousClock = clock
         } operation: {
             await engine.start()
-            for _ in 0..<200 where connects.value < 1 { await Task.yield() }
+            // Generous budget: the consume task crosses several suspension
+            // points (scheduler arm, staleness-drain arm, pipeline start)
+            // before the connect lands.
+            for _ in 0..<2_000 where connects.value < 1 { await Task.yield() }
 
             await engine.stop()                      // logout while a restart is pending
             await clock.advance(by: .seconds(120))   // the restart's sleep would fire here
@@ -286,11 +332,14 @@ private final class SharedCursorStore: EventCursorStore, @unchecked Sendable {
     /// `new_device_code` — through the coordinator at high priority, with no
     /// full-fleet walk, and does not prune (pruning belongs to the explicit
     /// cold-load, §5.5). Regression: the old path re-walked `GET /v1/devices` on
-    /// every print completion, bypassing the coordinator.
+    /// every print completion, bypassing the coordinator. The printer itself
+    /// holds no open op here, so under the mark-mostly policy (V3.5) its row is
+    /// *marked stale*, not read.
     @Test func printCompleteReadsNewDeviceWithoutFleetWalkOrPrune() async throws {
         let database = try GameDatabase.bootstrap()
         let now = Date(timeIntervalSince1970: 10_000)
         let refreshed = LockIsolated<[(code: String, priority: RefreshPriority)]>([])
+        let marked = LockIsolated<[String]>([])
 
         try await withDependencies {
             $0.defaultDatabase = database
@@ -305,6 +354,7 @@ private final class SharedCursorStore: EventCursorStore, @unchecked Sendable {
                 await Reconciler().ingest(device("CLONE", at: now))
                 return device("CLONE", at: now)
             }
+            $0.deviceStaleness.markStale = { code, _ in marked.withValue { $0.append(code) } }
         } operation: {
             // Printer + an unrelated device are already local.
             await Reconciler().ingest(device("PRNT", at: now))
@@ -322,9 +372,85 @@ private final class SharedCursorStore: EventCursorStore, @unchecked Sendable {
                 try Device.select(\.deviceCode).fetchAll(db)
             }
             #expect(Set(codes) == ["PRNT", "GONE", "CLONE"])  // clone landed; nothing pruned
-            // The new device was read at high priority; the printer row was too.
+            // The new device was read at high priority; the printer (no open op
+            // closed) was marked stale rather than read.
             #expect(refreshed.value.contains { $0.code == "CLONE" && $0.priority == .high })
-            #expect(refreshed.value.contains { $0.code == "PRNT" })
+            #expect(!refreshed.value.contains { $0.code == "PRNT" })
+            #expect(marked.value == ["PRNT"])
+        }
+    }
+
+    /// Mark-mostly (V3.5): a live event that closes an operation pays one
+    /// high-priority confirm-read; a thin live event and *any* catch-up event
+    /// only mark the device stale — a launch replay costs zero immediate reads.
+    @Test func deviceRouteMarksInsteadOfReadingExceptLiveOpClosings() async throws {
+        let database = try GameDatabase.bootstrap()
+        let now = Date(timeIntervalSince1970: 10_000)
+        let refreshed = LockIsolated<[(code: String, priority: RefreshPriority)]>([])
+        let marked = LockIsolated<[String]>([])
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.uuid = .incrementing
+            $0.date = .constant(now)
+            $0.deviceRefresher = DeviceRefreshClient { code, priority in
+                refreshed.withValue { $0.append((code, priority)) }
+                return nil
+            }
+            $0.deviceStaleness.markStale = { code, _ in marked.withValue { $0.append(code) } }
+        } operation: {
+            let route = GameSync.deviceRoute(reconciler: Reconciler())
+
+            // 1) Thin live event → mark, no read.
+            await route.apply(GameEventEnvelope(
+                id: "1-0", category: "travel", event: "travel.cruising",
+                deviceCode: "SHIP", createdAt: "2026-07-20T01:00:00Z"
+            ))
+            #expect(refreshed.value.isEmpty)
+            #expect(marked.value == ["SHIP"])
+
+            // 2) Live op-closing event → one high-priority read, no mark.
+            try await database.write { db in
+                try Operation.insert {
+                    Operation(
+                        id: "op-1", entityCode: "SHIP", kind: OperationKind.travel.rawValue,
+                        status: .active, source: OperationSource.poll,
+                        startedAt: now.addingTimeInterval(-60), completesAt: now,
+                        lastConfirmedAt: now.addingTimeInterval(-60), detail: .object([:])
+                    )
+                }.execute(db)
+            }
+            await route.apply(GameEventEnvelope(
+                id: "2-0", category: "travel", event: "travel.arrived",
+                deviceCode: "SHIP", createdAt: "2026-07-20T01:01:00Z"
+            ))
+            #expect(refreshed.value.map(\.code) == ["SHIP"])
+            #expect(refreshed.value.first?.priority == .high)
+
+            // 3) Catch-up replay of an op-closing event → mark only, no read
+            //    (the op is closed from the payload either way).
+            try await database.write { db in
+                try Operation.insert {
+                    Operation(
+                        id: "op-2", entityCode: "SHIP", kind: OperationKind.travel.rawValue,
+                        status: .active, source: OperationSource.poll,
+                        startedAt: now.addingTimeInterval(-30), completesAt: now,
+                        lastConfirmedAt: now.addingTimeInterval(-30), detail: .object([:])
+                    )
+                }.execute(db)
+            }
+            await route.apply(GameEventEnvelope(
+                id: "3-0", category: "travel", event: "travel.arrived",
+                deviceCode: "SHIP", createdAt: "2026-07-20T01:02:00Z",
+                provenance: .catchUp
+            ))
+            #expect(refreshed.value.count == 1)   // still just the one live read
+            #expect(marked.value == ["SHIP", "SHIP"])
+
+            let closed = try await database.read { db in
+                try Operation.where { $0.status.eq(OperationStatus.completed) }.fetchCount(db)
+            }
+            #expect(closed == 2)   // both completions folded in from the payload
         }
     }
 }
