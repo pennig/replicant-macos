@@ -142,6 +142,156 @@ private typealias Operation = GameModels.Operation
         #expect(stored?.detail["result"]?["new_device_code"]?.stringValue == "1F63E913")
     }
 
+    /// Kind guard (V3.3-S4): a replayed completion event for one action family
+    /// must not close an open op of a *different* family — the op the event
+    /// completed is long gone (e.g. the server re-tasked the device from mining
+    /// to travel while the app was away, then catch-up replayed the old
+    /// `site.depleted`).
+    @Test func crossFamilyCompletionEventLeavesOpenOpAlone() async throws {
+        let database = try GameDatabase.bootstrap()
+        let travelStart = Date(timeIntervalSince1970: 1_782_000_000)
+        try await database.write { db in
+            try Operation.insert {
+                Operation(
+                    id: "op-travel", entityCode: "D1", kind: OperationKind.travel.rawValue,
+                    status: OperationStatus.active, source: OperationSource.poll,
+                    startedAt: travelStart, completesAt: travelStart.addingTimeInterval(600),
+                    lastConfirmedAt: travelStart, detail: .object([:])
+                )
+            }.execute(db)
+        }
+
+        // A mining completion, stamped comfortably after the travel op started —
+        // only the kind guard can reject it.
+        let event = GameEventEnvelope(
+            id: "9-0", category: "site", event: "site.depleted",
+            deviceCode: "D1", payload: nil,
+            createdAt: travelStart.addingTimeInterval(60).ISO8601Format()
+        )
+
+        let closed = await withDependencies {
+            $0.defaultDatabase = database
+        } operation: {
+            await Reconciler().applyOperationEvent(event)
+        }
+
+        let stored = try await database.read { db in
+            try Operation.where { $0.id.eq("op-travel") }.fetchOne(db)
+        }
+        #expect(closed == false)
+        #expect(stored?.status == OperationStatus.active, "the travel op must survive a mining completion")
+    }
+
+    /// Event-time guard (V3.3-S4): a completion stamped before the open op even
+    /// started belongs to an *earlier* action of the same family — replayed
+    /// history must not close the current op.
+    @Test func completionEventPredatingTheOpIsIgnored() async throws {
+        let database = try GameDatabase.bootstrap()
+        let opStart = Date(timeIntervalSince1970: 1_782_000_000)
+        try await database.write { db in
+            try Operation.insert {
+                Operation(
+                    id: "op-print", entityCode: "D1", kind: OperationKind.print.rawValue,
+                    status: OperationStatus.enqueued, source: OperationSource.optimistic,
+                    startedAt: opStart, completesAt: nil,
+                    lastConfirmedAt: opStart, detail: .object([:])
+                )
+            }.execute(db)
+        }
+
+        // The previous print job's completion, replayed from catch-up: right
+        // family, but stamped an hour before this op existed.
+        let event = GameEventEnvelope(
+            id: "8-0", category: "print", event: "print.completed",
+            deviceCode: "D1",
+            payload: ["new_device_code": .string("OLD1")],
+            createdAt: opStart.addingTimeInterval(-3_600).ISO8601Format()
+        )
+
+        let closed = await withDependencies {
+            $0.defaultDatabase = database
+        } operation: {
+            await Reconciler().applyOperationEvent(event)
+        }
+
+        let stored = try await database.read { db in
+            try Operation.where { $0.id.eq("op-print") }.fetchOne(db)
+        }
+        #expect(closed == false)
+        #expect(stored?.status == OperationStatus.enqueued, "an earlier action's completion must not close the new op")
+        #expect(stored?.detail["result"] == nil)
+    }
+
+    /// A completion stamped *within* the skew tolerance of the op's start (small
+    /// client/server clock disagreement) still completes — the guard only
+    /// refuses genuinely earlier actions, not honest skew.
+    @Test func completionEventWithinSkewToleranceStillCompletes() async throws {
+        let database = try GameDatabase.bootstrap()
+        let opStart = Date(timeIntervalSince1970: 1_782_000_000)
+        try await database.write { db in
+            try Operation.insert {
+                Operation(
+                    id: "op-mine", entityCode: "D1", kind: OperationKind.mine.rawValue,
+                    status: OperationStatus.active, source: OperationSource.optimistic,
+                    startedAt: opStart, completesAt: nil,
+                    lastConfirmedAt: opStart, detail: .object([:])
+                )
+            }.execute(db)
+        }
+
+        let event = GameEventEnvelope(
+            id: "11-0", category: "site", event: "site.depleted",
+            deviceCode: "D1", payload: nil,
+            createdAt: opStart.addingTimeInterval(-3).ISO8601Format()   // 3s "before" — skew, not history
+        )
+
+        let closed = await withDependencies {
+            $0.defaultDatabase = database
+        } operation: {
+            await Reconciler().applyOperationEvent(event)
+        }
+
+        let stored = try await database.read { db in
+            try Operation.where { $0.id.eq("op-mine") }.fetchOne(db)
+        }
+        #expect(closed == true)
+        #expect(stored?.status == OperationStatus.completed)
+    }
+
+    /// `travel.arrived` also closes a recall — the same cruise shape, homeward.
+    @Test func travelArrivedClosesRecallOp() async throws {
+        let database = try GameDatabase.bootstrap()
+        let start = Date(timeIntervalSince1970: 1_782_000_000)
+        try await database.write { db in
+            try Operation.insert {
+                Operation(
+                    id: "op-recall", entityCode: "D1", kind: OperationKind.simple("recall").rawValue,
+                    status: OperationStatus.active, source: OperationSource.poll,
+                    startedAt: start, completesAt: start.addingTimeInterval(300),
+                    lastConfirmedAt: start, detail: .object([:])
+                )
+            }.execute(db)
+        }
+
+        let event = GameEventEnvelope(
+            id: "10-0", category: "travel", event: "travel.arrived",
+            deviceCode: "D1", payload: nil,
+            createdAt: start.addingTimeInterval(290).ISO8601Format()
+        )
+
+        let closed = await withDependencies {
+            $0.defaultDatabase = database
+        } operation: {
+            await Reconciler().applyOperationEvent(event)
+        }
+
+        let stored = try await database.read { db in
+            try Operation.where { $0.id.eq("op-recall") }.fetchOne(db)
+        }
+        #expect(closed == true)
+        #expect(stored?.status == OperationStatus.completed)
+    }
+
     /// No open op on the device → the event is a harmless no-op.
     @Test func printCompleteWithNoOpenOpIsNoOp() async throws {
         let database = try GameDatabase.bootstrap()

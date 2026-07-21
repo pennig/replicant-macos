@@ -212,13 +212,21 @@ public struct Reconciler: Sendable {
 
         // Event names that close the device's open operation. The event is truth
         // for the action it completes (§4.4); the deadline timer is only the
-        // backstop for when one of these is lost.
-        guard Self.completionEventTypes.contains(event.event) else { return false }
-        return await completeOpenOperation(on: deviceCode, source: .event, eventTime: event.date, result: event.payload)
+        // backstop for when one of these is lost. The event also names the
+        // action *family* it closes — passed through as a guard so a stale or
+        // replayed completion can never close an unrelated op (V3.3-S4).
+        guard let allowedKinds = Self.completionEvents[event.event] else { return false }
+        return await completeOpenOperation(
+            on: deviceCode,
+            source: .event,
+            eventTime: event.date,
+            result: event.payload,
+            allowedKinds: allowedKinds
+        )
     }
 
-    /// Dotted event names that complete an operation, keyed in one place so an
-    /// evolving taxonomy is a localized edit.
+    /// Dotted event names that complete an operation → the operation kinds each
+    /// may close, keyed in one place so an evolving taxonomy is a localized edit.
     ///
     /// Travel is completed primarily by the settled-device path (see `ingest`),
     /// not by an arrival event: per-leg arrivals fire on *every* leg and a simple
@@ -226,15 +234,38 @@ public struct Reconciler: Sendable {
     /// means "the trip is done." `travel.arrived` (the whole-route arrival) is
     /// kept here only as a snappy fast-path that closes the op without waiting for
     /// the confirm-read; per-leg arrivals fall through to drive that read.
-    static let completionEventTypes: Set<String> = [
-        "print.completed",   // enqueued print finished (carries the new device code)
-        "travel.arrived",    // whole route finished (multi-leg/interstellar fast-path)
-        "site.depleted",     // mining site exhausted → drone returns to idle
-        "scan.completed",    // survey search located a site → drone now tracks it
+    static let completionEvents: [String: Set<String>] = [
+        // enqueued print finished (carries the new device code)
+        "print.completed": [OperationKind.print.rawValue],
+        // whole route finished (multi-leg/interstellar fast-path); a recall is
+        // the same cruise shape, homeward
+        "travel.arrived": [OperationKind.travel.rawValue, OperationKind.simple("recall").rawValue],
+        // mining site exhausted → drone returns to idle
+        "site.depleted": [OperationKind.mine.rawValue],
+        // survey scan finished — belt search located a site (drone now tracks
+        // it) or a body scan completed; both surface the same `scan` block
+        "scan.completed": [OperationKind.search.rawValue, OperationKind.surveyScan.rawValue],
     ]
+
+    /// Tolerance when comparing an event's timestamp against an op's
+    /// `startedAt` — absorbs client/server clock skew without letting a
+    /// genuinely earlier action's completion leak forward.
+    static let eventTimeSkewTolerance: TimeInterval = 5
 
     /// Mark the single open operation on a device completed, recording any event
     /// result (e.g. a print's `new_device_code`) under `detail.result`.
+    ///
+    /// Two guards keep a stale/replayed completion from closing the wrong op
+    /// (V3.3-S4) — both matter on catch-up replay, where a device that was
+    /// re-tasked while the app was away has a *different* op open than the one
+    /// the replayed event completed:
+    ///   • `allowedKinds`: the event's action family must match the open op's
+    ///     kind (a `site.depleted` can never close a travel op);
+    ///   • event time: a completion stamped before the op even started belongs
+    ///     to an earlier action.
+    /// Neither guard constrains the poll path (`allowedKinds` nil, `eventTime`
+    /// nil — the stamp falls back to `date.now`), where the settled-device
+    /// read is its own proof.
     ///
     /// Returns whether an open operation was found and closed.
     @discardableResult
@@ -242,7 +273,8 @@ public struct Reconciler: Sendable {
         on deviceCode: String,
         source: OperationSource,
         eventTime: Date?,
-        result: [String: JSONValue]?
+        result: [String: JSONValue]?,
+        allowedKinds: Set<String>? = nil
     ) async -> Bool {
         @Dependency(\.defaultDatabase) var database
         @Dependency(\.date) var date
@@ -253,6 +285,15 @@ public struct Reconciler: Sendable {
                     && $0.status.in(OperationStatus.liveCases)
             }).fetchOne(db)
             else { return false }
+
+            if let allowedKinds, !allowedKinds.contains(op.kind) {
+                logger.notice("ignored completion on \(deviceCode, privacy: .public): open op is \(op.kind, privacy: .public), event closes \(allowedKinds.sorted().joined(separator: "/"), privacy: .public) — stale/replayed event")
+                return false
+            }
+            if let eventTime, eventTime < op.startedAt.addingTimeInterval(-Self.eventTimeSkewTolerance) {
+                logger.notice("ignored completion on \(deviceCode, privacy: .public): event time \(eventTime.ISO8601Format(), privacy: .public) predates op start \(op.startedAt.ISO8601Format(), privacy: .public) — stale/replayed event")
+                return false
+            }
 
             if let result {
                 var dict: [String: JSONValue] = {

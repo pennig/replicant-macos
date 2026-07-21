@@ -156,7 +156,7 @@ extension CommandClient: DependencyKey {
                         logger.info("dispatch \(kind.rawValue, privacy: .public) → \(deviceCode, privacy: .public): accepted (immediate)")
                         if terminatingCommands.contains(kind.rawValue) {
                             await Reconciler().completeOpenOperation(
-                                on: deviceCode, source: .poll, eventTime: date.now, result: nil
+                                on: deviceCode, source: .poll, eventTime: nil, result: nil
                             )
                         }
                         let responseJSON = (try? ok.body.json).map(jsonValue(from:)) ?? .object([:])
