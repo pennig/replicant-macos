@@ -72,7 +72,8 @@ let package = Package(
         .target(
             name: "AccountManager",
             dependencies: [
-                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "Dependencies", package: "swift-dependencies"),
+                .product(name: "Sharing", package: "swift-sharing"),
                 .product(name: "SQLiteData", package: "sqlite-data"),
                 "API",
                 "GameModels",
@@ -88,8 +89,10 @@ let package = Package(
                 "GameDatabase",
                 "GameModels",
                 "GameSession",
+                .product(name: "Dependencies", package: "swift-dependencies"),
                 .product(name: "HTTPTypes", package: "swift-http-types"),
                 .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime"),
+                .product(name: "Sharing", package: "swift-sharing"),
                 .product(name: "SQLiteData", package: "sqlite-data"),
             ],
             path: "AccountManager/Tests"
@@ -225,7 +228,7 @@ let package = Package(
                 "UniverseModels",
                 "Utils",
                 .product(name: "SQLiteData", package: "sqlite-data"),
-                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "Dependencies", package: "swift-dependencies"),
             ],
             path: "GameServices/Sources",
         ),
@@ -264,7 +267,7 @@ let package = Package(
                 "GameModels",
                 "GameServices",
                 "GameSession",
-                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "Dependencies", package: "swift-dependencies"),
                 .product(name: "SQLiteData", package: "sqlite-data"),
             ],
             path: "GameSync/Sources"
@@ -475,11 +478,9 @@ let package = Package(
             name: "ReplicantsFeature",
             dependencies: [
                 "AccountManager",
-                "API",
                 "GameModels",
                 "GameServices",
                 "UI",
-                "Utils",
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
                 .product(name: "SQLiteData", package: "sqlite-data"),
             ],

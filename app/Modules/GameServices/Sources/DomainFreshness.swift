@@ -22,7 +22,7 @@
 //  over one process-shared instance.
 //
 
-import ComposableArchitecture
+import Dependencies
 import Foundation
 import OSLog
 

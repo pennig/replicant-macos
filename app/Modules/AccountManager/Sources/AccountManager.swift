@@ -14,7 +14,8 @@
 //
 
 import API
-import ComposableArchitecture
+import Dependencies
+import Sharing
 import Foundation
 import GameModels
 import GameSession

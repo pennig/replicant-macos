@@ -10,7 +10,7 @@
 //  network reads. Vended as `@Dependency(\.deviceRefresher)`.
 //
 
-import ComposableArchitecture
+import Dependencies
 import Foundation
 import GameModels
 

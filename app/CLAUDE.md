@@ -38,11 +38,11 @@ The backend API service has copious documentation:
 - The OpenAPI spec: https://api.replicant.space/swagger/openapi.json. It does a great job of documenting the full capabilities and surface area of the API. We've already run into a few issues though, so this doc seems to be hand-maintained and carries with it mismatches between spec and implementation. Use caution.
 
 The docs website seems to be updated more diligently to match the real implementation, so if there's ever a mismatch between expectation and reality, check the docs site to see if that mismatch can be resolved without further debugging.
+
 ---
----
-## Review Protocols
-All reviewing subagents must utilize Swift-LSP (SourceKit-LSP) to analyze code changes. Before signing off on any code:
-1. Query the Swift-LSP language server for syntax, type correctness, and unresolved references.
+## Review and Code Comprehension Protocols
+All agents and reviewing subagents must utilize Swift-LSP (SourceKit-LSP) to analyze code changes. Before signing off on any code:
+1. Query the Swift-LSP language server (e.g., `goToDefinition`, `findReferences`) for syntax, type correctness, and unresolved references.
 2. Cross-reference usage by checking symbol references.
 3. Treat LSP output as the single source of truth over simple text matching.
 ---
@@ -119,5 +119,6 @@ If it errors, check that the path: values in Package.swift match the directories
 
 ### Notes
 - `swift-composable-architecture` is already declared as a package dependency — do not add it again.
+- **TCA is for feature modules only, by manifest.** The template's `ComposableArchitecture` product is for feature targets; a non-feature module (a service, client, or models tier) declares `.product(name: "Dependencies", package: "swift-dependencies")` instead (plus `Sharing`/`SQLiteData` as needed) — see `GameSession`/`GameServices`/`GameSync`/`AccountManager`.
 - `UI` is an existing target in this package — reference it by string name only, not as a package product.
 - If NAME/Sources or NAME/Tests already exist, skip mkdir and go straight to the Package.swift edits.

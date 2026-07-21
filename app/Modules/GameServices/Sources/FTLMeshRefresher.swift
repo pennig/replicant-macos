@@ -15,7 +15,7 @@
 //  Exposed via `@Dependency(\.ftlMeshRefresher)`.
 //
 
-import ComposableArchitecture
+import Dependencies
 import Foundation
 import GameModels
 import OSLog

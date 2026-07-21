@@ -20,7 +20,7 @@
 //  mine eventually closes without ever polling a still-running one hard.
 //
 
-import ComposableArchitecture
+import Dependencies
 import Foundation
 import GameModels
 import GameServices

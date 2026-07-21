@@ -16,7 +16,7 @@
 //  tying it to the instance keeps "who cancels this" answerable.
 //
 
-import ComposableArchitecture
+import Dependencies
 import Foundation
 import GameModels
 import SQLiteData

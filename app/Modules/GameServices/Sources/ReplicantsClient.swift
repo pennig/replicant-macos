@@ -19,7 +19,7 @@
 //
 
 import API
-import ComposableArchitecture
+import Dependencies
 import Foundation
 import GameModels
 import GameSession

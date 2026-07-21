@@ -10,7 +10,7 @@
 //
 
 import API
-import ComposableArchitecture
+import Dependencies
 import Foundation
 import GameServices
 import OSLog

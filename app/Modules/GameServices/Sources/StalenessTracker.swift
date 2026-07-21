@@ -24,7 +24,7 @@
 //  loop with the session.
 //
 
-import ComposableArchitecture
+import Dependencies
 import Foundation
 import GameModels
 import OSLog
