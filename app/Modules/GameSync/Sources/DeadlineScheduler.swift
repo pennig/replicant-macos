@@ -48,9 +48,19 @@ actor DeadlineScheduler {
     /// Minimum spacing between re-poll attempts once a deadline has passed but
     /// the device is still working (so a slipped estimate doesn't busy-loop).
     private let rearmBackoff: TimeInterval
-    /// How long past `startedAt` to keep polling a still-busy op before giving up
-    /// and marking it `unknown` (a truly stuck backend, not a small skew).
+    /// How long past the first *unanswered* deadline to keep polling a
+    /// still-busy op before giving up and marking it `unknown` (a truly stuck
+    /// backend, not a small skew). Measured from when the deadline went overdue
+    /// — NOT from `startedAt`: a long op's total runtime says nothing about
+    /// whether it's stuck, and measuring from dispatch marked every op longer
+    /// than this window `unknown` on its first slipped estimate (V3.3-S3).
     private let giveUpAfter: TimeInterval
+    /// op id → the deadline that first went overdue without the device offering
+    /// a fresh forward ETA. Give-up is measured from here; cleared whenever the
+    /// op settles, closes, or the server supplies a genuinely later estimate.
+    /// In-memory on purpose: after a relaunch a stuck op simply earns a fresh
+    /// give-up window, which only delays the `unknown` verdict.
+    private var overdueSince: [String: Date] = [:]
     /// Minimum spacing between continuous-op backstop sweeps (mining). Slow on
     /// purpose — a running mine that legitimately continues shouldn't be polled
     /// hard; this only needs to eventually notice a *settled* one.
@@ -82,6 +92,7 @@ actor DeadlineScheduler {
     func stop() {
         loopTask?.cancel()
         loopTask = nil
+        overdueSince.removeAll()
     }
 
     private func run() async {
@@ -118,12 +129,19 @@ actor DeadlineScheduler {
     ///   • settled → the action finished → complete the op;
     ///   • still working → re-arm to the device's fresh ETA and keep polling
     ///     (never complete prematurely, never leave it stuck);
-    ///   • stuck far past dispatch → give up and mark `unknown`.
+    ///   • overdue past the give-up window with no forward ETA → mark `unknown`.
     func processDue(now: Date) async {
         @Dependency(\.defaultDatabase) var database
         @Dependency(\.deviceRefresher) var deviceRefresher
 
-        for due in await openDatedOps() where (due.completesAt ?? .distantFuture) <= now {
+        let dueOps = await openDatedOps()
+        // Drop give-up tracking for ops that left the active set *between*
+        // passes (closed by an event, superseded, pruned) — op ids are never
+        // reused, so stale entries would otherwise accrete for the session.
+        let liveIDs = Set(dueOps.map(\.id))
+        overdueSince = overdueSince.filter { liveIDs.contains($0.key) }
+
+        for due in dueOps where (due.completesAt ?? .distantFuture) <= now {
             logger.info("deadline reached for op \(due.id, privacy: .public) (\(due.kind, privacy: .public)) on \(due.entityCode, privacy: .public) — confirming")
             _ = await deviceRefresher.refresh(due.entityCode, .high)
 
@@ -133,7 +151,7 @@ actor DeadlineScheduler {
                     try Operation.where { $0.id.eq(due.id) }.fetchOne(db)
                 }),
                 op.status == .active
-            else { continue }
+            else { continue }   // closed mid-pass; the next pass's sweep untracks it
 
             let device = try? await database.read { db in
                 try Device.where { $0.deviceCode.eq(op.entityCode) }.fetchOne(db)
@@ -141,17 +159,30 @@ actor DeadlineScheduler {
 
             if let device, device.isSettled {
                 logger.info("op \(op.id, privacy: .public): device settled (\(device.status, privacy: .public)) — completing")
+                overdueSince[op.id] = nil
                 await reconciler.completeOpenOperation(on: op.entityCode, source: .poll, eventTime: now, result: nil)
-            } else if now.timeIntervalSince(op.startedAt) > giveUpAfter {
-                logger.error("op \(op.id, privacy: .public): still busy \(Int(now.timeIntervalSince(op.startedAt)))s after dispatch — marking unknown")
-                await setStatus(op.id, to: .unknown, at: now)
+            } else if let freshETA = device?.activityDeadline, freshETA > now.addingTimeInterval(rearmBackoff) {
+                // The server supplied a genuinely later estimate — the action is
+                // progressing, not stuck. Re-arm to it and restart give-up
+                // tracking from the new deadline.
+                overdueSince[op.id] = nil
+                logger.info("op \(op.id, privacy: .public): still executing — re-armed to fresh ETA \(freshETA.ISO8601Format(), privacy: .public)")
+                await rearm(op.id, to: freshETA, at: now)
             } else {
-                // Still executing: re-arm to the device's fresh ETA (clamped so we
-                // don't re-poll faster than the backoff), so the next loop iteration
-                // confirms again rather than completing now.
-                let next = max(device?.activityDeadline ?? .distantPast, now.addingTimeInterval(rearmBackoff))
-                logger.info("op \(op.id, privacy: .public): still executing — re-armed to \(next.ISO8601Format(), privacy: .public)")
-                await rearm(op.id, to: next, at: now)
+                // Overdue with no forward estimate. Poll on the backoff until the
+                // give-up window — measured from the deadline that first went
+                // unanswered — expires; only then concede `unknown`.
+                let since = overdueSince[op.id] ?? due.completesAt ?? now
+                overdueSince[op.id] = since
+                if now.timeIntervalSince(since) > giveUpAfter {
+                    logger.error("op \(op.id, privacy: .public): still busy \(Int(now.timeIntervalSince(since)))s past its deadline with no fresh ETA — marking unknown")
+                    overdueSince[op.id] = nil
+                    await setStatus(op.id, to: .unknown, at: now)
+                } else {
+                    let next = now.addingTimeInterval(rearmBackoff)
+                    logger.info("op \(op.id, privacy: .public): still executing — re-armed to backoff \(next.ISO8601Format(), privacy: .public)")
+                    await rearm(op.id, to: next, at: now)
+                }
             }
         }
     }

@@ -220,17 +220,17 @@ private func budgetGameClient(remaining: Int) -> GameClient {
         #expect(reads.value == 1)
     }
 
-    /// At the deadline the device is still working (estimate slipped): the op is
-    /// NOT completed — it's re-armed to the device's fresh ETA so polling
+    /// At the deadline the device is still working and the server offers a
+    /// *fresh forward* ETA (`arrivesAt > now + rearmBackoff`): the op is NOT
+    /// completed — it's re-armed to that ETA (the fresh-ETA branch) so polling
     /// continues. Guards against the deadline preempting a not-quite-finished
     /// action (and against a lost arrival event leaving it stuck).
     @Test func stillBusyAtDeadlineRearmsInsteadOfCompleting() async throws {
         let database = try GameDatabase.bootstrap()
         let deadline = Date(timeIntervalSince1970: 1_000)
         try await database.write { db in
-            // Started just before the deadline, so it's well within the give-up cap.
             try Operation.insert {
-                activeOp("op1", device: "D", completesAt: deadline, startedAt: deadline.addingTimeInterval(-50))
+                activeOp("op1", device: "D", completesAt: deadline)
             }.execute(db)
         }
         let now = deadline.addingTimeInterval(1)
@@ -259,6 +259,126 @@ private func budgetGameClient(remaining: Int) -> GameClient {
         #expect(stored?.status == OperationStatus.active)              // not completed
         #expect((stored?.completesAt).map { $0 > deadline } == true)            // re-armed forward
         #expect(reads.value == 1)
+    }
+
+    /// Regression (V3.3-S3): a LONG op — dispatched an hour ago — whose deadline
+    /// just slipped must be re-armed, not abandoned. The old code measured the
+    /// give-up window from `startedAt`, so any op longer than the window was
+    /// marked `unknown` on its very first overdue confirm.
+    @Test func longOpWithSlippedDeadlineRearmsInsteadOfGivingUp() async throws {
+        let database = try GameDatabase.bootstrap()
+        let deadline = Date(timeIntervalSince1970: 10_000)
+        try await database.write { db in
+            try Operation.insert {
+                activeOp("op1", device: "D", completesAt: deadline, startedAt: deadline.addingTimeInterval(-3_600))
+            }.execute(db)
+        }
+        let now = deadline.addingTimeInterval(1)
+        let reconciler = Reconciler()
+        let coordinator = PollCoordinator(reconciler: reconciler)
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(now)
+            $0.gameClient = budgetGameClient(remaining: 100)
+            // Still travelling, and the server offers no *fresh* forward ETA —
+            // the harshest slip: the estimate simply passed.
+            $0.devicesClient.read = { code in travellingDevice(code, arrivesAt: deadline) }
+            $0.deviceRefresher = DeviceRefreshClient { code, priority in
+                await coordinator.refresh(code, priority: priority)
+            }
+        } operation: {
+            let scheduler = DeadlineScheduler(reconciler: reconciler)
+            await scheduler.processDue(now: now)
+        }
+
+        let stored = try await database.read { db in try Operation.where { $0.id.eq("op1") }.fetchOne(db) }
+        #expect(stored?.status == OperationStatus.active, "a fresh slip re-arms; it never gives up")
+        #expect((stored?.completesAt).map { $0 > deadline } == true)
+    }
+
+    /// A genuinely stuck op — overdue past the give-up window with the device
+    /// never advancing its ETA — is still conceded `unknown`, with the window
+    /// measured from the first unanswered deadline.
+    @Test func stuckOpIsMarkedUnknownMeasuredFromItsDeadline() async throws {
+        let database = try GameDatabase.bootstrap()
+        let deadline = Date(timeIntervalSince1970: 10_000)
+        try await database.write { db in
+            try Operation.insert {
+                activeOp("op1", device: "D", completesAt: deadline, startedAt: deadline.addingTimeInterval(-3_600))
+            }.execute(db)
+        }
+        let reconciler = Reconciler()
+        let coordinator = PollCoordinator(reconciler: reconciler)
+        let scheduler = DeadlineScheduler(reconciler: reconciler, giveUpAfter: 300)
+
+        func process(at now: Date) async {
+            await withDependencies {
+                $0.defaultDatabase = database
+                $0.date = .constant(now)
+                $0.gameClient = budgetGameClient(remaining: 100)
+                $0.devicesClient.read = { code in travellingDevice(code, arrivesAt: deadline) }
+                $0.deviceRefresher = DeviceRefreshClient { code, priority in
+                    await coordinator.refresh(code, priority: priority)
+                }
+            } operation: {
+                await scheduler.processDue(now: now)
+            }
+        }
+
+        await process(at: deadline.addingTimeInterval(1))     // overdue → re-arm, window opens
+        let mid = try await database.read { db in try Operation.where { $0.id.eq("op1") }.fetchOne(db) }
+        #expect(mid?.status == OperationStatus.active)
+
+        // 301s past the DEADLINE (> 300) but exactly 300s — not more — past the
+        // first pass, so this only trips if the window is seeded from the
+        // deadline itself, as the name claims.
+        await process(at: deadline.addingTimeInterval(301))
+        let stored = try await database.read { db in try Operation.where { $0.id.eq("op1") }.fetchOne(db) }
+        #expect(stored?.status == OperationStatus.unknown)
+    }
+
+    /// A fresh forward ETA doesn't just re-arm — it RESETS the give-up window.
+    /// A later slip is then measured from the new deadline, not the original
+    /// one, so an op that keeps making visible progress is never abandoned.
+    @Test func freshForwardETAResetsTheGiveUpWindow() async throws {
+        let database = try GameDatabase.bootstrap()
+        let deadline = Date(timeIntervalSince1970: 10_000)
+        try await database.write { db in
+            try Operation.insert {
+                activeOp("op1", device: "D", completesAt: deadline)
+            }.execute(db)
+        }
+        let reconciler = Reconciler()
+        let coordinator = PollCoordinator(reconciler: reconciler)
+        let scheduler = DeadlineScheduler(reconciler: reconciler, giveUpAfter: 300)
+
+        func process(at now: Date, deviceArrivesAt: Date) async {
+            await withDependencies {
+                $0.defaultDatabase = database
+                $0.date = .constant(now)
+                $0.gameClient = budgetGameClient(remaining: 100)
+                $0.devicesClient.read = { code in travellingDevice(code, arrivesAt: deviceArrivesAt) }
+                $0.deviceRefresher = DeviceRefreshClient { code, priority in
+                    await coordinator.refresh(code, priority: priority)
+                }
+            } operation: {
+                await scheduler.processDue(now: now)
+            }
+        }
+
+        // Pass 1: overdue, no forward ETA → window opens at the deadline.
+        await process(at: deadline.addingTimeInterval(1), deviceArrivesAt: deadline)
+        // Pass 2: the server now reports real progress (ETA deadline+150) →
+        // re-arm to it and clear the window.
+        await process(at: deadline.addingTimeInterval(100), deviceArrivesAt: deadline.addingTimeInterval(150))
+        // Pass 3: overdue again at deadline+400 — 400s past the ORIGINAL
+        // deadline (> 300, would be unknown had the window never reset) but
+        // only 250s past the fresh one → must still be re-arming.
+        await process(at: deadline.addingTimeInterval(400), deviceArrivesAt: deadline.addingTimeInterval(150))
+
+        let stored = try await database.read { db in try Operation.where { $0.id.eq("op1") }.fetchOne(db) }
+        #expect(stored?.status == OperationStatus.active, "the reset window is measured from the fresh deadline")
     }
 
     /// An op whose deadline is still in the future is left alone (no read).
