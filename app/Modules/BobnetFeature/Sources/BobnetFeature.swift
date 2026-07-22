@@ -94,6 +94,11 @@ public struct BobnetFeature {
         case latestMessageChanged
         /// The 3-second linger at the newest message elapsed — mark read.
         case lingerElapsed
+        /// The detail view's scrolling content (identified by the channel it
+        /// was rendering) disappeared — tears the linger down if that
+        /// identity is still the current selection (a true pane departure,
+        /// not a stale intra-pane channel switch).
+        case detailDisappeared(String?)
         case sendButtonTapped
         case sendSucceeded
         case sendFailed(String)
@@ -202,6 +207,15 @@ public struct BobnetFeature {
                         try BobnetReadMarker.advance(db, channel: channel, to: maxID)
                     }
                 }
+
+            case let .detailDisappeared(channel):
+                // Stale identities from an intra-pane channel switch (the old `.id`'s
+                // onDisappear can fire after the new channel is already selected) must
+                // not clobber the new channel's linger — only a true pane departure
+                // (the disappearing identity is still the selection) tears down.
+                guard channel == state.selectedChannel else { return .none }
+                state.isAtLatest = false
+                return .cancel(id: CancelID.linger)
 
             case .sendButtonTapped:
                 let text = state.composeText.trimmingCharacters(in: .whitespacesAndNewlines)

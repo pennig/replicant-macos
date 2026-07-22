@@ -52,6 +52,7 @@ public struct BobnetChannelDetailView: View {
             .padding(Space.l)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .id(channel)
         .defaultScrollAnchor(.bottom)
         .onScrollGeometryChange(for: Bool.self) { geometry in
             geometry.contentOffset.y + geometry.containerSize.height
@@ -64,6 +65,7 @@ public struct BobnetChannelDetailView: View {
         .onChange(of: store.channelMessages.messages.last?.id) {
             store.send(.latestMessageChanged)
         }
+        .onDisappear { store.send(.detailDisappeared(channel)) }
         .background(.rcContentBackground)
         .navigationTitle(channel)
         .safeAreaInset(edge: .top, spacing: 0) {

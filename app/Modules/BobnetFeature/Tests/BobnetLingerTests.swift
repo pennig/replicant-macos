@@ -123,6 +123,52 @@ import Testing
         #expect(try await marker(database, "#general") == 3)
     }
 
+    /// Leaving the pane before 3 seconds cancels the pending mark — the same
+    /// as scrolling away, but driven by the view's `onDisappear`.
+    @Test func paneDisappearanceCancelsLinger() async throws {
+        let clock = TestClock()
+        let (store, database) = try await makeStore(clock: clock)
+
+        await store.send(.binding(.set(\.isAtLatest, true)))
+        await clock.advance(by: .seconds(2))
+        await store.send(.detailDisappeared("#general")) {
+            $0.isAtLatest = false
+        }
+        await clock.advance(by: .seconds(5))
+        await store.finish()
+
+        #expect(try await marker(database, "#general") == nil) // no row ever written
+    }
+
+    /// An intra-pane channel switch can deliver the *old* identity's
+    /// `onDisappear` after the new channel is already selected (SwiftUI's
+    /// ordering isn't guaranteed). That stale disappearance must not clobber
+    /// the newly-selected channel's state.
+    @Test func staleDisappearanceFromChannelSwitchIsIgnored() async throws {
+        let clock = TestClock()
+        let (store, database) = try await makeStore(clock: clock)
+
+        await store.send(.binding(.set(\.isAtLatest, true)))
+        await clock.advance(by: .seconds(2))
+        await store.send(.binding(.set(\.selectedChannel, "#trade")))
+
+        // The stale #general identity's onDisappear arrives after the switch.
+        await store.send(.detailDisappeared("#general"))
+
+        // Simulate the new channel's view reporting at-latest; with nothing
+        // unread in #trade nothing arms, but the stale disappear above must
+        // not have reset it out from under the new selection.
+        await store.send(.binding(.set(\.isAtLatest, true))) {
+            $0.isAtLatest = true
+        }
+
+        await clock.advance(by: .seconds(5))
+        await store.finish()
+
+        #expect(try await marker(database, "#general") == nil) // stale disappear wrote nothing
+        #expect(store.state.isAtLatest == true) // untouched by the stale disappear
+    }
+
     /// A fully-read channel arms nothing.
     @Test func nothingUnreadArmsNoTimer() async throws {
         let clock = TestClock()
