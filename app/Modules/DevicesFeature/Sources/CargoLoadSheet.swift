@@ -116,7 +116,7 @@ struct CargoLoadSheet: View {
                     .foregroundStyle(.rcTextTertiary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(Space.m)
-                    .background(cardBackground)
+                    .deviceCardBackground()
             } else {
                 VStack(spacing: 0) {
                     ForEach(Array(stock.enumerated()), id: \.element.id) { index, item in
@@ -125,7 +125,7 @@ struct CargoLoadSheet: View {
                     }
                 }
                 .padding(.vertical, Space.xs)
-                .background(cardBackground)
+                .deviceCardBackground()
 
                 Text("Pick how much of each resource to load, up to the hold's free space.")
                     .font(.rcCaption)
@@ -221,12 +221,4 @@ struct CargoLoadSheet: View {
         )
     }
 
-    private var cardBackground: some View {
-        RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-            .fill(.rcSurfaceRaised)
-            .overlay(
-                RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                    .strokeBorder(.rcSeparator, lineWidth: Hairline.thin)
-            )
-    }
 }

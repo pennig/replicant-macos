@@ -10,8 +10,6 @@
 //  trap under `swift test`; see the project memory note).
 //
 
-import Foundation
-
 /// One of the command grid's named sections, in declaration (= display) order.
 enum CommandGroup: CaseIterable, Hashable {
     case movement, tasks, production, control, carrier, modular, power, special
