@@ -37,8 +37,10 @@ public struct RateLimitMiddleware: ClientMiddleware {
         // Record it into the `stars` bucket so its `limit: 1 / remaining: 0` can't
         // clamp the shared reads budget, and neither gate nor auto-retry it — the
         // survey feature reads the bucket's `resetAt` to gate its button and shows
-        // a cooldown rather than silently blocking on a 429.
-        if operationID == "getV1Stars" {
+        // a cooldown rather than silently blocking on a 429. Match on the
+        // generated id constant: with no operationIds in the spec these are
+        // synthesized "method/path" strings ("get/v1/stars"), not Swift names.
+        if operationID == Operations.GetV1Stars.id {
             let (response, responseBody) = try await next(request, body, baseURL)
             let reset = response.headerFields.doubleValue(.xRateLimitReset)
                 ?? response.headerFields.doubleValue(.retryAfter)

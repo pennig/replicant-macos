@@ -10,6 +10,7 @@
 - [List row preview crash](list-row-preview-crash.md) — Xcode 26 crashes List previews when the row struct is in the same file as #Preview; keep row structs in their own file.
 - [Preview rewriter vs self.init](preview-rewriter-self-init.md) — a #Preview in the same file as a delegating convenience init fails the preview build; keep previews in their own file.
 - [API module name](api-module-name.md) — package is "ReplicouldKit" but the importable module is "API".
+- [OpenAPI operation-id format](openapi-operation-id-format.md) — runtime operationIDs are synthesized "method/path" strings (get/v1/stars), not Swift names; middleware must match Operations.X.id (the getV1Stars mismatch clamped the reads budget).
 - [Ignore sandbox folder](ignore-sandbox-folder.md) — skip `Replicant/sandbox/` in all work unless explicitly asked.
 - [pbxproj link is manual](pbxproj-link-is-manual.md) — linking a new SPM module product to the app target must be done by the user in Xcode; pbxproj edits are blocked.
 - [New Star Map feature](new-star-map-feature.md) — NewStarMapFeature, the raw-Metal port of the star map; DONE per user (live-wired, galaxy→system→body drill-in); SceneKit cutover not yet done.
