@@ -1,5 +1,7 @@
 # Memory Index
 
+- [Directives feature](directives-feature.md) — automations v1 design approved 2026-07-21 (Survey/Relay Run missions, DirectiveEngine, CommandGovernor); spec in docs/superpowers/specs/; not yet implemented.
+
 - [Architecture review V3](architecture-review-v3.md) — 2026-07-20 five-axis review; ALL FOUR tranches DONE 2026-07-20/21 (P0 correctness, P1 budget, P2 modularity, P3 docs/design-system) with invariants recorded (GameSession tier, TCA-by-manifest, EventRoute home, IconSize/logging/loud-testValue rules, app/README.md map); remaining: automation blockers 3–5, S9, T6 optionals.
 - [Event stream migration](event-stream-migration.md) — v2.3.0 native SSE stream replaced the custom relay; single-channel EventPipeline, dotted event taxonomy, EventRoute matchers, loud unhandled-event logging.
 - [Event Log feature](event-log-feature.md) — EventLogFeature: persisted SSE ledger window (Tools menu); write hook in EventRouter.dispatch; unhandled flag+filter; JSONTreeView now shared from UI.
