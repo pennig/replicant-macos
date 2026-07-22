@@ -36,6 +36,7 @@
 - [SwiftUI View statics trap in tests](swiftui-view-statics-trap-in-tests.md) — pure logic as a static/nested type on a SwiftUI View traps (signal 5) under `swift test`; extract to a plain SwiftUI-free namespace.
 - [Device inspector refresh loop](device-inspector-refresh-loop.md) — while-viewing in-place refresh for mining/diverting devices; cadence in `DevicesFeature.refreshDelay`; mining-vs-seeking = pending_* > 0.
 - [Replicants feature](replicants-feature.md) — ReplicantsFeature (galaxy directory) + KnownReplicant table (separate from Replicant roster); last-known-location from system_scan replicants block, hooked in CommandClient.
+- [Bobnet feature](bobnet-feature.md) — BobnetFeature 3-panel channels/messages; BobnetChannel markers; relay catch-up (forward cursor); send via active replicant; 3s linger read rule.
 - [List query in state](list-feature-query-in-state.md) — standard: SQLiteData @FetchAll lives in TCA @ObservableState (not the view), view is a pure renderer; kills empty-state flashes.
 - [Sidebar feature](sidebar-feature.md) — SidebarFeature owns the left column (header+category list+footer+category selection); MainFeature is now a thin container; progress driven by the Operation table.
 - [Account feature](account-feature.md) — AccountFeature module: Profile/Settings/Achievements sheet; consumes achievements + PATCH accounts/me; presented from MainFeature; notifications matrix + email editing deferred.

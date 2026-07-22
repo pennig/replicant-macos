@@ -21,7 +21,7 @@ truth is `Modules/Package.swift`):
 app target (composition root: ReplicantApp, AppFeature, MainFeature)
  │
  ├─ Feature modules (TCA lives ONLY here, by manifest)
- │    DevicesFeature · MessagesFeature · BlueprintsFeature · LocationsFeature
+ │    DevicesFeature · MessagesFeature · BlueprintsFeature · BobnetFeature · LocationsFeature
  │    LocationEventsFeature · ReplicantsFeature · SidebarFeature · AccountFeature
  │    LoginFeature · PrintQueueFeature · NewStarMapFeature · EventLogFeature
  │    RawAPIFeature      (+ TravelUI, PrintingUI: store-free shared UI)
