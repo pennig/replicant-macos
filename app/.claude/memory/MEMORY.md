@@ -51,3 +51,4 @@
 - [SPM stale layout crash](spm-stale-layout-crash.md) — adding stored fields to a shared struct can segfault consumer modules (no library evolution); rm -rf Modules/.build to fix
 - [API drift backlog](api-drift-backlog.md) — no known open drifts as of 2026-07-20; swift test fully green (records the resolved new_resource/terminating/adopt-read fixes).
 - [Preview sheets need .sheet(item:)](preview-sheet-item-not-ispresented.md) — travel/print preview sheets must use .sheet(item:) not isPresented, else rapid back-to-back presentations drop the dialog; fixed in 3 travel entry points + effect cancellation.
+- [SourceKit-LSP warm-up race](sourcekit-lsp-warmup.md) — 0 refs right after session start = index warming, not stale config; fallback-args diagnostics (`No such module`) mean wait+retry, not grep.
