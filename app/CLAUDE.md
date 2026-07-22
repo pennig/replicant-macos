@@ -25,6 +25,7 @@ Look in the `Modules/UI` folder for the Swift package that represents the design
 - **List-row structs live in their own file**, never beside a `#Preview` — the Xcode 26 preview JIT crashes otherwise (see the list-row-preview-crash memory note). Same for delegating convenience inits.
 - **Logging:** `os.Logger` only (no `print`), subsystem `name.pennig.replicould` everywhere, category = the module or service name (`GameSync`, `Reconciler`, `EventStream`, …).
 - **Loud test defaults:** a shared client's `testValue` uses `unimplemented(...)` (with an inert `placeholder:` where the closure returns), never a quiet stub — a test that forgets to stub must fail loudly. Rich fixtures belong on `previewValue`.
+- **Running `swift test`:** always pass `--event-stream-output-path <temp-file>` and read pass/fail from that JSON event stream rather than parsing console text — text scraping is non-deterministic and a grep for "fail" false-positives on test method names containing the word.
 - **Naming map (UI name ≠ type name):** sidebar "Operations Log" = `ActivityView` (DevicesFeature); Tools ▸ "Event Log" = `EventLogFeature` (the SSE diagnostic ledger — a different thing); sidebar "Missions" = `LocationEventsFeature`; the Stars view = `NewStarMapFeature`.
 - Dark‑first, but every screen must read correctly in light mode (the catalog handles both; verify with `.preferredColorScheme`).
 - Prefer `NavigationSplitView`, system materials for chrome, SF for text, SF Mono for IDs/codes/readouts.
