@@ -41,6 +41,7 @@ public enum GameDatabase {
         Device.registerMigrations(&migrator)
         FTLLinkRecord.registerMigrations(&migrator)
         BobnetMessage.registerMigrations(&migrator)
+        BobnetChannel.registerMigrations(&migrator)
         // Qualified: `Operation` would otherwise be ambiguous with Foundation's.
         GameModels.Operation.registerMigrations(&migrator)
         EventLog.registerMigrations(&migrator)
