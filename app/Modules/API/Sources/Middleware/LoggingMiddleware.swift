@@ -44,29 +44,41 @@ public struct LoggingMiddleware: ClientMiddleware {
         // Only pay the buffering cost when someone is actually capturing these
         // debug logs; otherwise the `logger.debug` lines are dropped anyway.
         let capturing = logger.isEnabled(type: .debug)
-
         let loggedRequestBody = capturing ? await bufferForLogging(body) : nil
-        logger.debug("""
-            → \(request.method.rawValue, privacy: .public) \
-            \(baseURL.absoluteString, privacy: .public)\(request.path ?? "", privacy: .public) \
-            [\(operationID, privacy: .public)]
-            headers: \(redacted(request.headerFields), privacy: .public)
-            body: \(describe(loggedRequestBody, orLengthOf: body), privacy: .public)
-            """)
+        
+        if capturing {
+            logger.debug("""
+                → \(request.method.rawValue, privacy: .public) [\(operationID, privacy: .public)]
+                \(baseURL.absoluteString, privacy: .public)\(request.path ?? "", privacy: .public)
+                headers: \(redacted(request.headerFields), privacy: .public)
+                body: \(describe(loggedRequestBody, orLengthOf: body), privacy: .public)
+                """)
+        } else {
+            logger.info("""
+                → \(request.method.rawValue, privacy: .public) [\(operationID, privacy: .public)]
+                \(baseURL.absoluteString, privacy: .public)\(request.path ?? "", privacy: .public)
+                """)
+        }
 
         do {
             let (response, responseBody) = try await next(
                 request,
-                loggedRequestBody.map { HTTPBody($0) } ?? body,
+                loggedRequestBody.flatMap(HTTPBody.init) ?? body,
                 baseURL
             )
             let loggedResponseBody = capturing ? await bufferForLogging(responseBody) : nil
-            logger.debug("""
-                ← \(response.status.code, privacy: .public) [\(operationID, privacy: .public)]
-                headers: \(redacted(response.headerFields), privacy: .public)
-                body: \(describe(loggedResponseBody, orLengthOf: responseBody), privacy: .public)
-                """)
-            return (response, loggedResponseBody.map { HTTPBody($0) } ?? responseBody)
+            if capturing {
+                logger.debug("""
+                    ← \(response.status.code, privacy: .public) [\(operationID, privacy: .public)]
+                    headers: \(redacted(response.headerFields), privacy: .public)
+                    body: \(describe(loggedResponseBody, orLengthOf: responseBody), privacy: .public)
+                    """)
+            } else {
+                logger.info("""
+                    ← \(response.status.code, privacy: .public) [\(operationID, privacy: .public)]
+                    """)
+            }
+            return (response, loggedResponseBody.flatMap(HTTPBody.init) ?? responseBody)
         } catch {
             logger.error("✗ [\(operationID, privacy: .public)] transport error: \(error, privacy: .public)")
             throw error

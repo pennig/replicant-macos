@@ -29,6 +29,7 @@ private typealias Operation = GameModels.Operation
 public struct DeviceDetailView: View {
     let store: StoreOf<DevicesFeature>
     @FetchAll(Operation.order { $0.startedAt.desc() }) private var operations
+    @FetchAll(Replicant.all) private var replicants
     @Environment(\.scenePhase) private var scenePhase
 
     public init(store: StoreOf<DevicesFeature>) {
@@ -272,8 +273,10 @@ public struct DeviceDetailView: View {
     private func details(_ device: Device) -> some View {
         VStack(alignment: .leading, spacing: Space.s) {
             RCSectionHeader("Details")
-            detailRow("Replicant", device.replicantCode)
-            detailRow("Queue capacity", "\(device.queueSize)")
+            replicantRow(device)
+            if device.features.contains("print") {
+                detailRow("Queue capacity", "\(device.queueSize)")
+            }
             if let directive = device.currentDirective {
                 detailRow("Directive", DevicePresentation.displayName(directive))
                 directiveSummaryRows(directive, device: device)
@@ -349,6 +352,42 @@ public struct DeviceDetailView: View {
     private func prioritySummary(_ value: JSONValue?) -> String? {
         let resources = value?.arrayValue?.compactMap(\.stringValue) ?? []
         return resources.isEmpty ? nil : resources.joined(separator: " → ")
+    }
+
+    /// The device's host replicant name from the roster, if known.
+    private func replicantName(for device: Device) -> String? {
+        let name = replicants.first { $0.replicantCode == device.replicantCode }?.name
+        return name.flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    /// The "Replicant" readout: the host's name in a proportional font followed by
+    /// its code in mono, falling back to just the code when the name is unknown.
+    private func replicantRow(_ device: Device) -> some View {
+        HStack(alignment: .top, spacing: Space.m) {
+            Text("Replicant")
+                .font(.rcCaption)
+                .foregroundStyle(.rcTextTertiary)
+                .frame(width: 80, alignment: .leading)
+            Text(replicantValue(device))
+                .foregroundStyle(.rcTextSecondary)
+                .textSelection(.enabled)
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// The replicant value run: "{name} " proportional + "({code})" mono, or just
+    /// the code in mono when the host name is unknown.
+    private func replicantValue(_ device: Device) -> AttributedString {
+        var code = AttributedString(device.replicantCode)
+        code.font = .rcMonoSmall
+        guard let name = replicantName(for: device) else { return code }
+        var namePart = AttributedString("\(name) ")
+        namePart.font = .rcCaption
+        var codePart = AttributedString("(")
+        codePart.append(code)
+        codePart.append(AttributedString(")"))
+        codePart.font = .rcMonoSmall
+        return namePart + codePart
     }
 
     private func detailRow(_ label: String, _ value: String) -> some View {
