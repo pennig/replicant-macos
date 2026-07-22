@@ -1,1 +1,327 @@
-// This file intentionally left minimal.
+//
+//  BobnetFeature.swift
+//  Replicould — Bobnet feature
+//
+//  The reducer behind the Bobnet panes. Channels + messages are observed
+//  straight from SQLite (the SSE route keeps `BobnetMessage` warm); an active
+//  FTL relay fills gaps on appearance (channel directory + forward-cursor
+//  catch-up). Read markers advance after a 3-second linger at the newest
+//  message, or on send. With no relaying relay, the feature is read-only over
+//  stored history and the UI says so.
+//
+
+import ComposableArchitecture
+import Foundation
+import GameModels
+import OSLog
+import SQLiteData
+
+private let logger = Logger(subsystem: "name.pennig.replicould", category: "BobnetFeature")
+
+@Reducer
+public struct BobnetFeature {
+    /// One draft of the "New Channel" sheet (a plain value, per the
+    /// presentation dialect — `.sheet(item:)` with a dismiss-sending binding).
+    public struct NewChannelDraft: Equatable, Identifiable, Sendable {
+        public var name: String = ""
+        public var firstMessage: String = ""
+        /// One sheet at a time — a stable identity is all `.sheet(item:)` needs.
+        public var id: String { "new-channel" }
+        public init() {}
+    }
+
+    @ObservableState
+    public struct State: Equatable {
+        /// Every known channel with activity + unread state, observed from
+        /// SQLite. `@ObservationStateIgnored` because `@Fetch` drives its own
+        /// observation.
+        @ObservationStateIgnored
+        @Fetch(BobnetChannelList()) public var channelList = BobnetChannelList.Value()
+        /// The relay roster, observed live so the no-relay state flips itself
+        /// when a relay (de)activates. Status filtering happens in
+        /// `activeRelayCode` (statusBase is computed, not a column).
+        @ObservationStateIgnored
+        @FetchAll(Device.where { $0.deviceType.eq("ftl_relay") }) public var relays: [Device]
+        /// The selected channel's messages, oldest first; reloaded (new request
+        /// instance) whenever the selection changes.
+        @ObservationStateIgnored
+        @Fetch(BobnetChannelMessages(channel: nil)) public var channelMessages = BobnetChannelMessages.Value()
+
+        public var selectedChannel: String?
+        /// The read marker as it stood when the channel was selected — the
+        /// "New messages" divider anchors here so it doesn't jump while the
+        /// live marker advances.
+        public var markerAtSelection: Int = 0
+        /// Whether the detail view is scrolled to the newest message (reported
+        /// by the view via scroll geometry).
+        public var isAtLatest: Bool = false
+        public var composeText: String = ""
+        public var newChannelDraft: NewChannelDraft?
+        public var isCatchingUp: Bool = false
+        public var isSending: Bool = false
+        public var errorMessage: String?
+
+        @ObservationStateIgnored
+        @Shared(.appStorage(Account.activeReplicantCodeKey)) public var activeReplicantCode: String?
+
+        /// The relay to read from: the first relaying `ftl_relay` by device
+        /// code, for determinism. Nil → Bobnet is offline (stored history only).
+        public var activeRelayCode: String? {
+            relays
+                .filter { $0.statusBase == "relaying" }
+                .map(\.deviceCode)
+                .sorted()
+                .first
+        }
+
+        /// True when sending is possible: an active relay and a replicant to
+        /// speak as.
+        public var canSend: Bool {
+            activeRelayCode != nil && activeReplicantCode != nil
+        }
+
+        public init() {}
+    }
+
+    public enum Action: BindableAction, Equatable {
+        case binding(BindingAction<State>)
+        case task
+        case refreshButtonTapped
+        case catchUpFinished
+        case catchUpFailed(String)
+        /// The newest message in the selected channel changed (view-reported) —
+        /// re-arm the linger window.
+        case latestMessageChanged
+        /// The 3-second linger at the newest message elapsed — mark read.
+        case lingerElapsed
+        case sendButtonTapped
+        case sendSucceeded
+        case sendFailed(String)
+        case newChannelButtonTapped
+        case newChannelDismissed
+        case newChannelSubmitted
+        case channelCreated(String)
+        case dismissError
+    }
+
+    public init() {}
+
+    @Dependency(\.defaultDatabase) var database
+    @Dependency(\.bobnetClient) var bobnetClient
+    @Dependency(\.continuousClock) var clock
+
+    private enum CancelID { case linger }
+
+    public var body: some Reducer<State, Action> {
+        BindingReducer()
+        Reduce { state, action in
+            switch action {
+            case .binding(\.selectedChannel):
+                return selectionChanged(&state)
+
+            case .binding(\.isAtLatest):
+                return reevaluateLinger(state)
+
+            case .binding:
+                return .none
+
+            case .task, .refreshButtonTapped:
+                guard !state.isCatchingUp, let relay = state.activeRelayCode else { return .none }
+                state.isCatchingUp = true
+                state.errorMessage = nil
+                let database = self.database
+                let bobnetClient = self.bobnetClient
+                return .run { send in
+                    // Channel directory → upsert, preserving read markers.
+                    let directory = try await bobnetClient.channels(relay)
+                    try await database.write { db in
+                        for info in directory {
+                            var row = try BobnetChannel
+                                .where { $0.name.eq(info.name) }.fetchOne(db)
+                                ?? BobnetChannel(name: info.name, lastActive: nil, lastReadMessageID: 0)
+                            row.lastActive = info.lastActive
+                            try BobnetChannel.upsert { row }.execute(db)
+                        }
+                    }
+
+                    // History catch-up: forward walk from the local max id, or
+                    // a latest-page seed when the table is empty.
+                    let maxLocalID = try await database.read { db in
+                        try BobnetMessage.all.fetchAll(db).map(\.id).max()
+                    }
+                    if var cursor = maxLocalID {
+                        var pages = 0
+                        while pages < 5 {
+                            let page = try await bobnetClient.messages(relay, cursor, 100, false)
+                            guard !page.messages.isEmpty else { break }
+                            try await database.write { db in
+                                for message in page.messages {
+                                    try BobnetMessage.upsert { message }.execute(db)
+                                }
+                            }
+                            pages += 1
+                            guard page.messages.count >= 100, let next = page.nextCursor else { break }
+                            cursor = next
+                        }
+                        if pages == 5 {
+                            logger.info("catch-up truncated at 5 pages; older gap remains")
+                        }
+                    } else {
+                        let page = try await bobnetClient.messages(relay, nil, 100, true)
+                        try await database.write { db in
+                            for message in page.messages {
+                                try BobnetMessage.upsert { message }.execute(db)
+                            }
+                        }
+                    }
+                    await send(.catchUpFinished)
+                } catch: { error, send in
+                    await send(.catchUpFailed(error.localizedDescription))
+                }
+
+            case .catchUpFinished:
+                state.isCatchingUp = false
+                return .none
+
+            case let .catchUpFailed(message):
+                state.isCatchingUp = false
+                state.errorMessage = message
+                return .none
+
+            case .latestMessageChanged:
+                return reevaluateLinger(state)
+
+            case .lingerElapsed:
+                guard let channel = state.selectedChannel else { return .none }
+                let database = self.database
+                return .run { _ in
+                    try await database.write { db in
+                        let maxID = try BobnetMessage
+                            .where { $0.channel.eq(channel) }
+                            .fetchAll(db).map(\.id).max() ?? 0
+                        try BobnetReadMarker.advance(db, channel: channel, to: maxID)
+                    }
+                }
+
+            case .sendButtonTapped:
+                let text = state.composeText.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !text.isEmpty, !state.isSending,
+                      let channel = state.selectedChannel,
+                      state.activeRelayCode != nil,
+                      let replicant = state.activeReplicantCode
+                else { return .none }
+                state.isSending = true
+                return sendMessage(channel: channel, text: text, as: replicant) { .sendSucceeded }
+
+            case .sendSucceeded:
+                state.isSending = false
+                state.composeText = ""
+                return .none
+
+            case let .sendFailed(message):
+                state.isSending = false
+                state.errorMessage = message
+                return .none
+
+            case .newChannelButtonTapped:
+                guard state.canSend else { return .none }
+                state.newChannelDraft = NewChannelDraft()
+                return .none
+
+            case .newChannelDismissed:
+                state.newChannelDraft = nil
+                return .none
+
+            case .newChannelSubmitted:
+                guard let draft = state.newChannelDraft, !state.isSending,
+                      let name = BobnetChannelName.normalize(draft.name),
+                      let replicant = state.activeReplicantCode,
+                      state.activeRelayCode != nil
+                else { return .none }
+                let text = draft.firstMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !text.isEmpty else { return .none }
+                state.isSending = true
+                return sendMessage(channel: name, text: text, as: replicant) { .channelCreated(name) }
+
+            case let .channelCreated(name):
+                state.isSending = false
+                state.newChannelDraft = nil
+                state.selectedChannel = name
+                return selectionChanged(&state)
+
+            case .dismissError:
+                state.errorMessage = nil
+                return .none
+            }
+        }
+    }
+
+    /// Selection housekeeping shared by direct selection and channel creation:
+    /// snapshot the marker for the divider, reset the scroll flag, reload the
+    /// detail query, and cancel any linger in flight.
+    private func selectionChanged(_ state: inout State) -> Effect<Action> {
+        let channel = state.selectedChannel
+        state.markerAtSelection = state.channelList.rows
+            .first { $0.name == channel }?.lastReadMessageID ?? 0
+        state.isAtLatest = false
+        return .merge(
+            .cancel(id: CancelID.linger),
+            .run { [fetch = state.$channelMessages] _ in
+                _ = try? await fetch.load(BobnetChannelMessages(channel: channel))
+            }
+        )
+    }
+
+    /// (Re)arm or cancel the 3-second read-marker linger: it runs only while a
+    /// channel is selected, the view sits at the newest message, and something
+    /// is unread. `cancelInFlight` restarts the window when a new message
+    /// arrives mid-linger.
+    private func reevaluateLinger(_ state: State) -> Effect<Action> {
+        guard let channel = state.selectedChannel,
+              state.isAtLatest,
+              let row = state.channelList.rows.first(where: { $0.name == channel }),
+              row.latestMessageID > row.lastReadMessageID
+        else { return .cancel(id: CancelID.linger) }
+        let clock = self.clock
+        return .run { send in
+            try await clock.sleep(for: .seconds(3))
+            await send(.lingerElapsed)
+        }
+        .cancellable(id: CancelID.linger, cancelInFlight: true)
+    }
+
+    /// Send `text` to `channel` as `replicant`: persist the echoed message,
+    /// advance the read marker past it (the sender has read their own message),
+    /// then emit `success()`.
+    private func sendMessage(
+        channel: String, text: String, as replicant: String,
+        success: @escaping @Sendable () -> Action
+    ) -> Effect<Action> {
+        let database = self.database
+        let bobnetClient = self.bobnetClient
+        return .run { send in
+            let message = try await bobnetClient.send(replicant, channel, text)
+            try await database.write { db in
+                try BobnetMessage.upsert { message }.execute(db)
+                try BobnetReadMarker.advance(db, channel: channel, to: message.id)
+            }
+            await send(success())
+        } catch: { error, send in
+            await send(.sendFailed(error.localizedDescription))
+        }
+    }
+}
+
+/// Channel-name normalization for the New Channel sheet. Plain namespace —
+/// testable without SwiftUI.
+enum BobnetChannelName {
+    /// Trim, require non-empty and space-free, and ensure the IRC `#` prefix.
+    /// Returns nil for names that can't be normalized.
+    static func normalize(_ raw: String) -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !trimmed.contains(where: \.isWhitespace) else { return nil }
+        let named = trimmed.hasPrefix("#") ? trimmed : "#" + trimmed
+        guard named.count > 1 else { return nil }
+        return named
+    }
+}
