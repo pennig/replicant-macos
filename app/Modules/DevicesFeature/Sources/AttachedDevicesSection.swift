@@ -52,7 +52,7 @@ struct AttachedDevicesSection: View {
                     .foregroundStyle(.rcTextTertiary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(Space.m)
-                    .background(cardBackground)
+                    .deviceCardBackground()
             } else {
                 VStack(spacing: 0) {
                     ForEach(Array(attached.enumerated()), id: \.element.code) { index, entry in
@@ -60,7 +60,7 @@ struct AttachedDevicesSection: View {
                         row(code: entry.code, attached: entry.device)
                     }
                 }
-                .background(cardBackground)
+                .deviceCardBackground()
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -107,14 +107,5 @@ struct AttachedDevicesSection: View {
             .padding(.vertical, Space.s)
         }
         .buttonStyle(.plain)
-    }
-
-    private var cardBackground: some View {
-        RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-            .fill(.rcSurfaceRaised)
-            .overlay(
-                RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                    .strokeBorder(.rcSeparator, lineWidth: Hairline.thin)
-            )
     }
 }

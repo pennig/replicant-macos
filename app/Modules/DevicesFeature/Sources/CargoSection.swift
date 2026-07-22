@@ -36,7 +36,7 @@ struct CargoSection: View {
                     .foregroundStyle(.rcTextTertiary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(Space.m)
-                    .background(cardBackground)
+                    .deviceCardBackground()
             } else {
                 VStack(spacing: 0) {
                     ForEach(Array(device.cargoItems.enumerated()), id: \.element.id) { index, item in
@@ -44,7 +44,7 @@ struct CargoSection: View {
                         row(item)
                     }
                 }
-                .background(cardBackground)
+                .deviceCardBackground()
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -64,15 +64,6 @@ struct CargoSection: View {
         }
         .padding(.horizontal, Space.m)
         .padding(.vertical, Space.s)
-    }
-
-    private var cardBackground: some View {
-        RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-            .fill(.rcSurfaceRaised)
-            .overlay(
-                RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                    .strokeBorder(.rcSeparator, lineWidth: Hairline.thin)
-            )
     }
 
     /// Whole numbers stay whole (`80`), fractions keep one place (`1.5`).
