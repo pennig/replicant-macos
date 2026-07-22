@@ -2,10 +2,10 @@
 //  CommandGrid.swift
 //  Replicould — Devices feature
 //
-//  The device inspector's command surface: a grid of the device's dispatchable
-//  commands and the inline confirm/parameter panel each one reveals when
-//  selected (a text field, a directive picker with its own configuration, a
-//  device checkbox list, a blueprint picker, or a plain confirmation).
+//  The device inspector's command surface: the device's dispatchable commands,
+//  grouped into named sections (Movement / Tasks / …), and the inline confirm/parameter
+//  panel each one reveals when selected (a text field, a directive picker with its own
+//  configuration, a device checkbox list, a blueprint picker, or a plain confirmation).
 //
 
 import ComposableArchitecture
@@ -210,17 +210,26 @@ struct CommandGrid: View {
                 // back in range. The status badge already conveys "out of range", so
                 // this just gates interaction rather than restating it loudly.
                 let outOfRange = device.isOutOfControlRange
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: Space.s)], spacing: Space.s) {
-                    ForEach(commands) { command in
-                        Button {
-                            select(command)
-                        } label: {
-                            Label(command.title, systemImage: command.systemImage)
-                                .lineLimit(1)
-                                .fixedSize(horizontal: true, vertical: false)
-                                .frame(maxWidth: .infinity)
+                VStack(alignment: .leading, spacing: Space.m) {
+                    ForEach(CommandGroup.sections(for: commands), id: \.group) { section in
+                        VStack(alignment: .leading, spacing: Space.xs) {
+                            Text(section.group.title.uppercased())
+                                .font(.rcSectionLabel)
+                                .foregroundStyle(.rcTextTertiary)
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: Space.s)], spacing: Space.s) {
+                                ForEach(section.commands) { command in
+                                    Button {
+                                        select(command)
+                                    } label: {
+                                        Label(command.title, systemImage: command.systemImage)
+                                            .lineLimit(1)
+                                            .fixedSize(horizontal: true, vertical: false)
+                                            .frame(maxWidth: .infinity)
+                                    }
+                                    .buttonStyle(RCButtonStyle(pending == command ? .primary : .secondary))
+                                }
+                            }
                         }
-                        .buttonStyle(RCButtonStyle(pending == command ? .primary : .secondary))
                     }
                 }
                 .disabled(outOfRange)
