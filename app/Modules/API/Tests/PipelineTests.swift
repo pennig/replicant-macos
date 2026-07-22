@@ -68,12 +68,20 @@ import Utils
     // MARK: - Dedup set
 
     @Test func boundedSetEvictsOldest() {
+        // `insert` is mutating, which #expect's function-call expansion can't
+        // invoke directly — bind each result before asserting.
         var set = BoundedEventIDSet(capacity: 2)
-        #expect(set.insert("a"))
-        #expect(set.insert("b"))
-        #expect(!set.insert("a"), "still remembered")
-        #expect(set.insert("c"), "evicts a")
-        #expect(set.insert("a"), "a was evicted, re-insertable")
-        #expect(!set.insert("c"))
+        let insertA = set.insert("a")
+        #expect(insertA)
+        let insertB = set.insert("b")
+        #expect(insertB)
+        let reinsertA = set.insert("a")
+        #expect(!reinsertA, "still remembered")
+        let insertC = set.insert("c")
+        #expect(insertC, "evicts a")
+        let reinsertAAfterEviction = set.insert("a")
+        #expect(reinsertAAfterEviction, "a was evicted, re-insertable")
+        let reinsertC = set.insert("c")
+        #expect(!reinsertC)
     }
 }
