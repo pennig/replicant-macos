@@ -52,11 +52,11 @@ public enum SidebarItem: String, CaseIterable, Identifiable, Hashable, Sendable 
         }
     }
 
-    /// Some categories show content only — no detail pane (Galaxy Map, Bobnet,
-    /// and the live Operations Log ledger).
+    /// Some categories show content only — no detail pane (Galaxy Map and the
+    /// live Operations Log ledger).
     public var hasDetail: Bool {
         switch self {
-        case .operationsLog, .stars, .bobnet: false
+        case .operationsLog, .stars: false
         default: true
         }
     }

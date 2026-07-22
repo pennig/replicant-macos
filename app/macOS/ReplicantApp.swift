@@ -135,7 +135,10 @@ struct ReplicantApp: App {
         accountManager.registerHandler(
             SessionLifecycleHandler(id: "bobnet", onLogout: {
                 @Dependency(\.defaultDatabase) var database
-                try? await database.write { db in try BobnetMessage.delete().execute(db) }
+                try? await database.write { db in
+                    try BobnetMessage.delete().execute(db)
+                    try BobnetChannel.delete().execute(db)
+                }
             })
         )
         accountManager.registerHandler(

@@ -13,6 +13,7 @@ import AccountFeature
 import AccountManager
 import AppKit
 import BlueprintsFeature
+import BobnetFeature
 import ComposableArchitecture
 import DevicesFeature
 import EventLogFeature
@@ -48,6 +49,8 @@ struct MainFeature {
         @Presents var account: AccountFeature.State?
         /// The Messages inbox, persisted locally and seeded with the session key.
         var messages: MessagesFeature.State
+        /// Bobnet — the galactic chat: channels + per-channel history.
+        var bobnet: BobnetFeature.State
         /// The Raw API Access experience, shown in its own window (Tools menu).
         /// Seeded with the session API key so requests authenticate as this user.
         var rawAPI: RawAPIFeature.State
@@ -79,6 +82,7 @@ struct MainFeature {
             self.detailSelection = detailSelection
             self.sidebar = SidebarFeature.State(category: category)
             self.messages = MessagesFeature.State()
+            self.bobnet = BobnetFeature.State()
             self.rawAPI = RawAPIFeature.State(apiKey: apiKey)
             self.eventLog = EventLogFeature.State()
             self.newStarMap = NewStarMapFeature.State()
@@ -102,6 +106,7 @@ struct MainFeature {
         case sidebar(SidebarFeature.Action)
         case account(PresentationAction<AccountFeature.Action>)
         case messages(MessagesFeature.Action)
+        case bobnet(BobnetFeature.Action)
         case rawAPI(RawAPIFeature.Action)
         case eventLog(EventLogFeature.Action)
         case newStarMap(NewStarMapFeature.Action)
@@ -124,6 +129,9 @@ struct MainFeature {
         }
         Scope(state: \.messages, action: \.messages) {
             MessagesFeature()
+        }
+        Scope(state: \.bobnet, action: \.bobnet) {
+            BobnetFeature()
         }
         Scope(state: \.rawAPI, action: \.rawAPI) {
             RawAPIFeature()
@@ -188,7 +196,7 @@ struct MainFeature {
                 state.devices.selectedDeviceCode = code
                 return .none
 
-            case .sidebar, .account, .messages, .rawAPI, .eventLog, .newStarMap, .devices, .blueprints, .locations, .locationEvents, .printQueue, .replicantDirectory:
+            case .sidebar, .account, .messages, .bobnet, .rawAPI, .eventLog, .newStarMap, .devices, .blueprints, .locations, .locationEvents, .printQueue, .replicantDirectory:
                 return .none
             }
         }
@@ -261,6 +269,11 @@ struct MainView: View {
         store.scope(state: \.messages, action: \.messages)
     }
 
+    /// The Bobnet store, scoped from the main session.
+    private var bobnetStore: StoreOf<BobnetFeature> {
+        store.scope(state: \.bobnet, action: \.bobnet)
+    }
+
     /// The Metal star map store, scoped from the main session.
     private var newStarMapStore: StoreOf<NewStarMapFeature> {
         store.scope(state: \.newStarMap, action: \.newStarMap)
@@ -317,7 +330,7 @@ struct MainView: View {
         } else if store.sidebar.category == .operationsLog {
             ActivityView()
         } else if store.sidebar.category == .bobnet {
-            BobnetView()
+            BobnetChannelsView(store: bobnetStore)
         } else if let category = store.sidebar.category {
             if category.hasDetail {
                 List(selection: $store.detailSelection) {
@@ -344,6 +357,8 @@ struct MainView: View {
     @ViewBuilder private var detail: some View {
         if store.sidebar.category == .messages {
             MessageDetailView(store: messagesStore)
+        } else if store.sidebar.category == .bobnet {
+            BobnetChannelDetailView(store: bobnetStore)
         } else if store.sidebar.category == .devices {
             DeviceDetailView(store: devicesStore)
         } else if store.sidebar.category == .blueprints {
