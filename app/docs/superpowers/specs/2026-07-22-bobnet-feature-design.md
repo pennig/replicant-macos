@@ -85,18 +85,22 @@ No `GameServices` dependency.
 }
 ```
 
-Messages for the selected channel are observed in the detail view via a channel-scoped `@FetchAll`
-(re-created on selection change), ascending by `(time, id)`.
+Messages for the selected channel live in state as a channel-scoped `@Fetch`/`@FetchAll` request
+(the list-query-in-state standard), reloaded via `state.$messages.load(...)` when the selection
+changes — the same reload pattern `LocationsFeature` uses for `forest`. Ascending by `(time, id)`.
 
 ### Data flow
 
 - **On `task`** (pane appears) and on manual refresh: pick the active relay (first `relaying`
   `ftl_relay` by device code, for determinism). If none → no network work; the UI shows the
   no-relay state. Otherwise: `channels(relay)` → upsert `BobnetChannel` rows (preserving
-  `lastReadMessageID` — upsert touches only `lastActive`); then catch-up: `messages(relay,
-  latest: true, limit: 100)` and walk `next_cursor` backward up to 2 more pages, stopping early
-  when a page contains only already-known ids; upsert into `BobnetMessage`. Bounded at ≤300
-  messages per catch-up by design (logged when truncated).
+  `lastReadMessageID` — upsert touches only `lastActive`); then catch-up. Cursor semantics
+  (confirmed live 2026-07-22): `cursor=N` pages **forward** — ascending ids > N, `next_cursor` =
+  last id of the page, `null` at the tail; `latest=true` returns the newest page descending with
+  `next_cursor: null`. So: if the local table is empty, seed with `messages(relay, latest: true,
+  limit: 100)`; otherwise walk forward from `cursor = max local id` in pages of 100 until
+  `next_cursor` is nil or a short page arrives, capped at 5 pages (logged when truncated). Upsert
+  into `BobnetMessage`.
 - **Live updates**: the SSE route keeps writing `BobnetMessage`; `@FetchAll` re-renders both panes
   automatically. No new stream plumbing.
 - **Send**: compose bar posts via the active replicant (`@Shared(.appStorage)` active-replicant
