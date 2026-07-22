@@ -45,7 +45,8 @@ The backend API service has copious documentation:
 The docs website seems to be updated more diligently to match the real implementation, so if there's ever a mismatch between expectation and reality, check the docs site to see if that mismatch can be resolved without further debugging.
 
 ---
-## Review and Code Comprehension Protocols
+## Git, Code Review, and Code Comprehension Protocols
+Commits are to be made directly to the main branch, or to a branch/worktree that gets merged to main upon review. No PRs should be created nor should the origin remote be considered while working.
 All agents and reviewing subagents must utilize Swift-LSP (SourceKit-LSP) to analyze code changes. Before signing off on any code:
 1. Query the Swift-LSP language server (e.g., `goToDefinition`, `findReferences`) for syntax, type correctness, and unresolved references.
 2. Cross-reference usage by checking symbol references.

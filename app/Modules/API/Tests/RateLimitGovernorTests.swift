@@ -1,39 +1,40 @@
-import XCTest
+import Foundation
+import Testing
 @testable import API
 
-final class RateLimitGovernorTests: XCTestCase {
+@Suite struct RateLimitGovernorTests {
 
-    func testAcquireConsumesBudget() async {
+    @Test func acquireConsumesBudget() async {
         let governor = RateLimitGovernor(readLimit: 10, actionLimit: 5, reserve: 2)
         await governor.acquire(.reads)
         let snapshot = await governor.snapshot(.reads)
-        XCTAssertEqual(snapshot.remaining, 9)
+        #expect(snapshot.remaining == 9)
     }
 
-    func testRecordNeverInflatesBudget() async {
+    @Test func recordNeverInflatesBudget() async {
         let governor = RateLimitGovernor(readLimit: 10, actionLimit: 5, reserve: 0)
         await governor.acquire(.reads) // local: 9
         // A stale response claiming more budget must not raise the local count.
         await governor.record(bucket: .reads, limit: 10, remaining: 10, resetEpoch: nil)
         let snapshot = await governor.snapshot(.reads)
-        XCTAssertEqual(snapshot.remaining, 9)
+        #expect(snapshot.remaining == 9)
         // A lower server count wins.
         await governor.record(bucket: .reads, limit: 10, remaining: 3, resetEpoch: nil)
         let after = await governor.snapshot(.reads)
-        XCTAssertEqual(after.remaining, 3)
+        #expect(after.remaining == 3)
     }
 
-    func testPenaltyDelaysAcquire() async {
+    @Test func penaltyDelaysAcquire() async {
         let governor = RateLimitGovernor(readLimit: 10, actionLimit: 5, reserve: 0)
         await governor.penalize(bucket: .actions, retryAfter: 1)
 
         let start = Date()
         await governor.acquire(.actions)
         let elapsed = Date().timeIntervalSince(start)
-        XCTAssertGreaterThan(elapsed, 0.9, "acquire should wait out the penalty window")
+        #expect(elapsed > 0.9, "acquire should wait out the penalty window")
     }
 
-    func testBudgetRefillsAfterReset() async {
+    @Test func budgetRefillsAfterReset() async {
         let governor = RateLimitGovernor(readLimit: 2, actionLimit: 2, reserve: 0)
         // Drain, with a reset window slightly in the future.
         await governor.acquire(.reads)
@@ -47,6 +48,6 @@ final class RateLimitGovernorTests: XCTestCase {
         // This acquire must block until the window rolls, then succeed.
         let start = Date()
         await governor.acquire(.reads)
-        XCTAssertGreaterThan(Date().timeIntervalSince(start), 0.3)
+        #expect(Date().timeIntervalSince(start) > 0.3)
     }
 }
