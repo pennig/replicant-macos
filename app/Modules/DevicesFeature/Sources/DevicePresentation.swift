@@ -66,6 +66,14 @@ enum DeviceCommand: Hashable, Identifiable {
     /// (`change_owner`), chosen from the other own replicants (threaded in at
     /// construction; empty — a one-replicant account — hides the command).
     case changeOwner(owners: [DeviceOption])
+    /// Post a message to a BobNet channel from an FTL relay (`message`). The
+    /// channel vocabulary is the locally-known channel list (threaded in at
+    /// construction; empty — no channels synced yet — hides the command).
+    case message(channels: [String])
+    /// Repair a damaged device (`repair`), chosen from the fleet's
+    /// under-capacity members (threaded in at construction; a fully healthy
+    /// fleet hides the command).
+    case repair(candidates: [DeviceOption])
     /// A parameter-less lifecycle command, by backend verb (e.g. `deactivate`).
     case simple(String)
 
@@ -84,7 +92,9 @@ enum DeviceCommand: Hashable, Identifiable {
         attachCapacity: Int = 0,
         detachCandidates: [DeviceOption] = [],
         currentMode: String? = nil,
-        ownerCandidates: [DeviceOption] = []
+        ownerCandidates: [DeviceOption] = [],
+        channels: [String] = [],
+        repairCandidates: [DeviceOption] = []
     ) {
         switch command {
         case "travel":         self = .travel
@@ -104,6 +114,8 @@ enum DeviceCommand: Hashable, Identifiable {
         case "deposit_resources": self = .unloadCargo
         case "configure":         self = .configure(current: currentMode)
         case "change_owner":      self = .changeOwner(owners: ownerCandidates)
+        case "message":           self = .message(channels: channels)
+        case "repair":            self = .repair(candidates: repairCandidates)
         default:
             // Surface only the parameter-less commands CommandClient can dispatch.
             guard CommandClient.supportedSimpleCommands.contains(command) else { return nil }
@@ -131,6 +143,8 @@ enum DeviceCommand: Hashable, Identifiable {
         case .unloadCargo:   return "deposit_resources"
         case .configure:     return "configure"
         case .changeOwner:   return "change_owner"
+        case .message:       return "message"
+        case .repair:        return "repair"
         case let .simple(c): return c
         }
     }
@@ -154,6 +168,8 @@ enum DeviceCommand: Hashable, Identifiable {
         case .unloadCargo:   return .depositResources
         case .configure:     return .configure
         case .changeOwner:   return .changeOwner
+        case .message:       return .message
+        case .repair:        return .repair
         case let .simple(c): return .simple(c)
         }
     }
@@ -177,6 +193,8 @@ enum DeviceCommand: Hashable, Identifiable {
         case .unloadCargo:   return "Unload"
         case .configure:     return "Configure"
         case .changeOwner:   return "Change Owner"
+        case .message:       return "Message"
+        case .repair:        return "Repair"
         case let .simple(c): return DevicePresentation.displayName(c)
         }
     }
@@ -200,6 +218,8 @@ enum DeviceCommand: Hashable, Identifiable {
         case .unloadCargo:   return "tray.and.arrow.up"
         case .configure:     return "gearshape"
         case .changeOwner:   return "person.2"
+        case .message:       return "bubble.left"
+        case .repair:        return "wrench.and.screwdriver"
         case let .simple(c): return Self.simpleSymbols[c] ?? "bolt"
         }
     }
@@ -236,6 +256,8 @@ enum DeviceCommand: Hashable, Identifiable {
         /// A blueprint picker — the options are the unlocked catalog, supplied by
         /// the command grid from its `@FetchAll` (not carried in the enum).
         case blueprint(label: String)
+        /// A BobNet post: a channel dropdown plus the message body text field.
+        case channelMessage(label: String, channels: [String])
         /// An informational message with no input and a disabled confirm — e.g. a
         /// carrier that's at capacity, so attach can't proceed until a slot frees.
         case notice(String)
@@ -265,6 +287,10 @@ enum DeviceCommand: Hashable, Identifiable {
             return .choice(label: "Mode", options: SurgeMode.all)
         case let .changeOwner(owners):
             return .deviceChoice(label: "New Owner", options: owners)
+        case let .message(channels):
+            return .channelMessage(label: "Channel", channels: channels)
+        case let .repair(candidates):
+            return .deviceChoice(label: "Device", options: candidates)
         // loadCargo opens its own sheet (intercepted before an inline panel shows);
         // unloadCargo is a plain confirm. Neither collects an inline parameter.
         case .scan, .surveyScan, .census, .stow, .loadCargo, .unloadCargo, .simple: return .none
@@ -297,9 +323,11 @@ enum DeviceCommand: Hashable, Identifiable {
         case .setDirective:    return CommandParams(directive: value)
         case .configure:       return CommandParams(mode: value)
         case .changeOwner:     return CommandParams(target: value)
+        case .repair:          return CommandParams(target: value)
         // adopt/release/attach build their params from the picker selection in the
-        // command grid, not this single-value mapping.
-        case .adopt, .release, .attach, .detach, .scan, .surveyScan, .census, .stow, .loadCargo, .unloadCargo, .simple: return CommandParams()
+        // command grid, not this single-value mapping; message builds its params
+        // from two fields (channel + body) in the command grid as well.
+        case .adopt, .release, .attach, .detach, .scan, .surveyScan, .census, .stow, .loadCargo, .unloadCargo, .message, .simple: return CommandParams()
         }
     }
 }

@@ -6,14 +6,14 @@ struct CommandGroupTests {
         let expected: [(String, CommandGroup)] = [
             ("travel", .movement), ("recall", .movement), ("deploy", .movement), ("stow", .movement),
             ("start_mining", .tasks), ("retarget", .tasks), ("scan", .tasks),
-            ("search", .tasks), ("system_scan", .tasks), ("stellar_census", .tasks),
+            ("search", .tasks), ("system_scan", .tasks), ("stellar_census", .tasks), ("repair", .tasks),
             ("enqueue_print", .production), ("clear_queue", .production),
             ("set_directive", .control), ("clear_directive", .control), ("adopt", .control),
             ("release", .control), ("launch", .control), ("withdraw", .control), ("assemble", .control),
             ("attach", .carrier), ("detach", .carrier), ("configure", .carrier),
             ("collect_resources", .carrier), ("deposit_resources", .carrier),
             ("compact", .modular), ("unfurl", .modular),
-            ("activate", .power), ("deactivate", .power),
+            ("activate", .power), ("deactivate", .power), ("message", .power),
             ("decommission", .special), ("set_entry_point", .special), ("change_owner", .special),
         ]
         for (verb, group) in expected {

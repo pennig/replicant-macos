@@ -33,12 +33,12 @@ enum CommandGroup: CaseIterable, Hashable {
     var commandOrder: [String] {
         switch self {
         case .movement:   return ["travel", "recall", "deploy", "stow"]
-        case .tasks:      return ["start_mining", "retarget", "scan", "search", "system_scan", "stellar_census"]
+        case .tasks:      return ["start_mining", "retarget", "scan", "search", "system_scan", "stellar_census", "repair"]
         case .production: return ["enqueue_print", "clear_queue"]
         case .control:    return ["set_directive", "clear_directive", "adopt", "release", "launch", "withdraw", "assemble"]
         case .carrier:    return ["attach", "detach", "configure", "collect_resources", "deposit_resources"]
         case .modular:    return ["compact", "unfurl"]
-        case .power:      return ["activate", "deactivate"]
+        case .power:      return ["activate", "deactivate", "message"]
         case .special:    return ["decommission", "set_entry_point", "change_owner"]
         }
     }

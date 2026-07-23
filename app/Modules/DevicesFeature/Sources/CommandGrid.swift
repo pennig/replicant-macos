@@ -27,6 +27,8 @@ struct CommandGrid: View {
     @FetchAll(Blueprint.order { $0.deviceType }) private var blueprints
     /// The account's own replicants, backing the `change_owner` target picker.
     @FetchAll(Replicant.all) private var replicants
+    /// The locally-known BobNet channels, backing the `message` channel picker.
+    @FetchAll(BobnetChannel.order { $0.name }) private var channels
     @State private var pending: DeviceCommand?
     @State private var textValue: String = ""
     @State private var choiceValue: String = ""
@@ -107,6 +109,15 @@ struct CommandGrid: View {
             .map { DeviceOption(id: $0.replicantCode, subtitle: $0.name.isEmpty ? "Replicant" : $0.name) }
     }
 
+    /// Fleet members needing repair — anything under full operational capacity
+    /// except the bot itself. The server arbitrates range/eligibility; the gate
+    /// here just keeps the picker meaningful ("Mining Drone · 62%").
+    private var repairCandidates: [DeviceOption] {
+        fleet
+            .filter { $0.deviceCode != device.deviceCode && $0.operationalCapacity < 100 }
+            .map { DeviceOption(id: $0.deviceCode, subtitle: "\(DevicePresentation.displayName($0.deviceType)) · \(Int($0.operationalCapacity))%") }
+    }
+
     /// The dispatchable subset of the device's available commands. `retarget` is
     /// gated on the device actually mining (the server rejects it otherwise);
     /// `set_directive` only surfaces when the device offers directives, and
@@ -120,6 +131,8 @@ struct CommandGrid: View {
         let owners = ownerCandidates
         let attachedNow = device.attachedDeviceCodes.count
         let capacity = device.attachCapacity
+        let repairable = repairCandidates
+        let channelNames = channels.map(\.name)
         return device.availableCommands
             .compactMap {
                 DeviceCommand(
@@ -132,7 +145,9 @@ struct CommandGrid: View {
                     attachCapacity: capacity,
                     detachCandidates: detach,
                     currentMode: device.taxiMode,
-                    ownerCandidates: owners
+                    ownerCandidates: owners,
+                    channels: channelNames,
+                    repairCandidates: repairable
                 )
             }
             .filter { command in
@@ -144,6 +159,8 @@ struct CommandGrid: View {
                 case let .attach(candidates, _, _): return !candidates.isEmpty
                 case let .detach(attached):    return !attached.isEmpty
                 case let .changeOwner(owners):  return !owners.isEmpty
+                case let .message(channels):    return !channels.isEmpty
+                case let .repair(candidates):   return !candidates.isEmpty
                 // Cargo commands only make sense while the transport is stationed at
                 // a location: Load needs free hold space, Unload needs cargo aboard.
                 case .loadCargo:   return device.cargoRemaining > 0 && device.location?.isEmpty == false
@@ -241,6 +258,9 @@ struct CommandGrid: View {
         case let .deviceChoice(_, options):
             // Seed the dropdown with the first candidate device code.
             choiceValue = options.first?.id ?? ""
+        case let .channelMessage(_, channels):
+            // Seed the channel dropdown; the body text starts empty.
+            choiceValue = channels.first ?? ""
         default:
             choiceValue = ""
         }
@@ -266,6 +286,16 @@ struct CommandGrid: View {
                 deviceChoicePicker(label, options: options)
             case let .blueprint(label):
                 blueprintPicker(label)
+            case let .channelMessage(label, channels):
+                VStack(alignment: .leading, spacing: Space.s) {
+                    VStack(alignment: .leading, spacing: Space.xs) {
+                        Text(label.uppercased())
+                            .font(.rcSectionLabel)
+                            .foregroundStyle(.rcTextTertiary)
+                        RCValueSelect(label, options: channels, selection: $choiceValue)
+                    }
+                    RCField("Message", text: $textValue, placeholder: "On our way with the volatiles.")
+                }
             case let .notice(message):
                 Text(message)
                     .font(.rcCaption)
@@ -362,6 +392,7 @@ struct CommandGrid: View {
         case .choice:       return choiceValue
         case .deviceChoice: return choiceValue
         case .blueprint:    return blueprintType
+        case .channelMessage: return choiceValue
         case .multiSelect:  return ""
         case .notice:       return ""
         case .none:         return ""
@@ -381,6 +412,8 @@ struct CommandGrid: View {
                 return CommandParams(devices: [choiceValue])
             }
             return CommandParams(devices: Array(selectedCodes))
+        case .message:
+            return CommandParams(channel: choiceValue, text: textValue.trimmingCharacters(in: .whitespaces))
         default:
             return command.params(confirmValue(for: command))
         }
@@ -516,6 +549,8 @@ struct CommandGrid: View {
         case .choice:      return !choiceValue.isEmpty
         case .deviceChoice: return !choiceValue.isEmpty
         case .blueprint:   return !blueprintType.isEmpty
+        case .channelMessage:
+            return !choiceValue.isEmpty && !textValue.trimmingCharacters(in: .whitespaces).isEmpty
         case .multiSelect: return !selectedCodes.isEmpty
         case .notice:      return false
         case .none:        return true
