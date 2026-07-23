@@ -74,6 +74,12 @@ enum DeviceCommand: Hashable, Identifiable {
     /// under-capacity members (threaded in at construction; a fully healthy
     /// fleet hides the command).
     case repair(candidates: [DeviceOption])
+    /// Spawn a new replicant from this matrix (`replicate`) into an empty
+    /// replicant matrix at its location (threaded in at construction; no
+    /// eligible matrix nearby hides the command). Dispatches through
+    /// `ReplicantsClient` — the one command that answers 201 with a new
+    /// replicant rather than a command result.
+    case replicate(targets: [DeviceOption])
     /// A parameter-less lifecycle command, by backend verb (e.g. `deactivate`).
     case simple(String)
 
@@ -94,7 +100,8 @@ enum DeviceCommand: Hashable, Identifiable {
         currentMode: String? = nil,
         ownerCandidates: [DeviceOption] = [],
         channels: [String] = [],
-        repairCandidates: [DeviceOption] = []
+        repairCandidates: [DeviceOption] = [],
+        replicateTargets: [DeviceOption] = []
     ) {
         switch command {
         case "travel":         self = .travel
@@ -116,6 +123,7 @@ enum DeviceCommand: Hashable, Identifiable {
         case "change_owner":      self = .changeOwner(owners: ownerCandidates)
         case "message":           self = .message(channels: channels)
         case "repair":            self = .repair(candidates: repairCandidates)
+        case "replicate":         self = .replicate(targets: replicateTargets)
         default:
             // Surface only the parameter-less commands CommandClient can dispatch.
             guard CommandClient.supportedSimpleCommands.contains(command) else { return nil }
@@ -145,6 +153,7 @@ enum DeviceCommand: Hashable, Identifiable {
         case .changeOwner:   return "change_owner"
         case .message:       return "message"
         case .repair:        return "repair"
+        case .replicate:     return "replicate"
         case let .simple(c): return c
         }
     }
@@ -170,6 +179,8 @@ enum DeviceCommand: Hashable, Identifiable {
         case .changeOwner:   return .changeOwner
         case .message:       return .message
         case .repair:        return .repair
+        // never dispatched via CommandClient — replicate routes through ReplicantsClient
+        case .replicate:     return OperationKind(rawValue: "replicate")
         case let .simple(c): return .simple(c)
         }
     }
@@ -195,6 +206,7 @@ enum DeviceCommand: Hashable, Identifiable {
         case .changeOwner:   return "Change Owner"
         case .message:       return "Message"
         case .repair:        return "Repair"
+        case .replicate:     return "Replicate"
         case let .simple(c): return DevicePresentation.displayName(c)
         }
     }
@@ -220,6 +232,7 @@ enum DeviceCommand: Hashable, Identifiable {
         case .changeOwner:   return "person.2"
         case .message:       return "bubble.left"
         case .repair:        return "wrench.and.screwdriver"
+        case .replicate:     return "person.badge.plus"
         case let .simple(c): return Self.simpleSymbols[c] ?? "bolt"
         }
     }
@@ -258,6 +271,9 @@ enum DeviceCommand: Hashable, Identifiable {
         case blueprint(label: String)
         /// A BobNet post: a channel dropdown plus the message body text field.
         case channelMessage(label: String, channels: [String])
+        /// A replication: the target empty-matrix dropdown plus an optional
+        /// name for the new replicant.
+        case replicateTarget(label: String, options: [DeviceOption])
         /// An informational message with no input and a disabled confirm — e.g. a
         /// carrier that's at capacity, so attach can't proceed until a slot frees.
         case notice(String)
@@ -291,6 +307,8 @@ enum DeviceCommand: Hashable, Identifiable {
             return .channelMessage(label: "Channel", channels: channels)
         case let .repair(candidates):
             return .deviceChoice(label: "Device", options: candidates)
+        case let .replicate(targets):
+            return .replicateTarget(label: "Target Matrix", options: targets)
         // loadCargo opens its own sheet (intercepted before an inline panel shows);
         // unloadCargo is a plain confirm. Neither collects an inline parameter.
         case .scan, .surveyScan, .census, .stow, .loadCargo, .unloadCargo, .simple: return .none
@@ -326,8 +344,10 @@ enum DeviceCommand: Hashable, Identifiable {
         case .repair:          return CommandParams(target: value)
         // adopt/release/attach build their params from the picker selection in the
         // command grid, not this single-value mapping; message builds its params
-        // from two fields (channel + body) in the command grid as well.
-        case .adopt, .release, .attach, .detach, .scan, .surveyScan, .census, .stow, .loadCargo, .unloadCargo, .message, .simple: return CommandParams()
+        // from two fields (channel + body) in the command grid as well; replicate
+        // never dispatches through this path at all — it routes through
+        // ReplicantsClient via `.replicateConfirmed`, not `params(for:)`.
+        case .adopt, .release, .attach, .detach, .scan, .surveyScan, .census, .stow, .loadCargo, .unloadCargo, .message, .replicate, .simple: return CommandParams()
         }
     }
 }

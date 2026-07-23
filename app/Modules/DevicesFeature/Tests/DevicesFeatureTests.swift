@@ -270,4 +270,50 @@ private func device(_ code: String, status: String = "idle") -> Device {
         #expect(dispatched.value?.2.directive == "survey_system")
         #expect(dispatched.value?.2.configuration?["planets"] == .string("all"))
     }
+
+    /// A confirmed replication routes through ReplicantsClient (not
+    /// CommandClient) and re-ingests the fleet on success.
+    @Test func replicateConfirmedRoutesThroughReplicantsClient() async throws {
+        let database = try GameDatabase.bootstrap()
+        let replicated = LockIsolated<(String, String, String?)?>(nil)
+
+        let store = TestStore(initialState: DevicesFeature.State()) {
+            DevicesFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
+            $0.replicantsClient.replicate = { source, target, name in
+                replicated.setValue((source, target, name))
+                return .success(newReplicantCode: "REP2", newReplicantName: "Bob")
+            }
+            // ReplicantsClient.refresh's real signature returns the known-replicant
+            // count (`async throws -> Int`), not an array — the brief's `{ [] }`
+            // stub was a guess against a different shape; adapted to compile.
+            $0.replicantsClient.refresh = { 0 }
+            $0.devicesClient.fetchAll = { [] }
+        }
+        store.exhaustivity = .off
+
+        await store.send(.replicateConfirmed(deviceCode: "MATRIX1", target: "EMPTY1", name: "Bob"))
+        await store.finish()
+
+        #expect(replicated.value?.0 == "MATRIX1")
+        #expect(replicated.value?.1 == "EMPTY1")
+        #expect(replicated.value?.2 == "Bob")
+    }
+
+    /// A rejected replication surfaces in the command alert.
+    @Test func replicateRejectionSurfacesCommandError() async throws {
+        let database = try GameDatabase.bootstrap()
+        let store = TestStore(initialState: DevicesFeature.State()) {
+            DevicesFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
+            $0.replicantsClient.replicate = { _, _, _ in .rejected("No empty matrix at this location.") }
+        }
+        store.exhaustivity = .off
+
+        await store.send(.replicateConfirmed(deviceCode: "MATRIX1", target: "EMPTY1", name: nil))
+        await store.receive(\.commandFinished)
+        #expect(store.state.commandError == "No empty matrix at this location.")
+    }
 }

@@ -132,6 +132,11 @@ public struct DevicesFeature {
         case cargoLoadResponse(CargoLoadPreview.Phase)
         case cargoLoadConfirmed(resources: [String: Int])
         case cargoLoadDismissed
+        /// The inspector's Replicate confirm: spawn a new replicant from this
+        /// matrix into `target`. Routes through `ReplicantsClient` (201 → new
+        /// replicant), not `CommandClient`; on success the fleet and roster
+        /// re-ingest so the consumed matrix and rehosted device reconcile.
+        case replicateConfirmed(deviceCode: String, target: String, name: String?)
         /// The inspector's Directive command. A thin intent mirroring
         /// `travelConfirmed`: ends field editing and yields a runloop tick
         /// before the composer sheet presents (see `.travelConfirmed` for why).
@@ -167,6 +172,7 @@ public struct DevicesFeature {
     @Dependency(\.deviceRefresher) var deviceRefresher
     @Dependency(\.deviceStaleness) var deviceStaleness
     @Dependency(\.commandClient) var commandClient
+    @Dependency(\.replicantsClient) var replicantsClient
     @Dependency(\.locationsClient) var locationsClient
     @Dependency(\.continuousClock) var clock
     @Dependency(\.date) var date
@@ -430,6 +436,27 @@ public struct DevicesFeature {
             case .cargoLoadDismissed:
                 state.cargoLoad = nil
                 return .cancel(id: CancelID.cargoLoad)
+
+            case let .replicateConfirmed(deviceCode, target, name):
+                let replicantsClient = self.replicantsClient
+                let devicesClient = self.devicesClient
+                logger.info("replicate \(deviceCode, privacy: .public) → \(target, privacy: .public) confirmed")
+                return .run { send in
+                    let outcome = await replicantsClient.replicate(deviceCode, target, name)
+                    if let message = outcome.failureMessage {
+                        await send(.commandFinished(.rejected(message)))
+                        return
+                    }
+                    // Success: the source matrix is consumed and its device
+                    // rehosted — re-ingest the fleet and refresh the roster so
+                    // the inspector reflects the new topology.
+                    if let devices = try? await devicesClient.fetchAll() {
+                        let reconciler = Reconciler()
+                        for device in devices { await reconciler.ingest(device) }
+                        await reconciler.pruneDevices(presentCodes: devices.map(\.deviceCode))
+                    }
+                    _ = try? await replicantsClient.refresh()
+                }
 
             case .directiveComposeTapped:
                 // Same dance as `.travelConfirmed`: end field editing and yield

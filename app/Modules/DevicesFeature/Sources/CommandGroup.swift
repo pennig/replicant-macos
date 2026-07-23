@@ -39,7 +39,7 @@ enum CommandGroup: CaseIterable, Hashable {
         case .carrier:    return ["attach", "detach", "configure", "collect_resources", "deposit_resources"]
         case .modular:    return ["compact", "unfurl"]
         case .power:      return ["activate", "deactivate", "message"]
-        case .special:    return ["decommission", "set_entry_point", "change_owner"]
+        case .special:    return ["decommission", "replicate", "set_entry_point", "change_owner"]
         }
     }
 

@@ -1,3 +1,4 @@
+import GameServices
 import Testing
 @testable import DevicesFeature
 
@@ -14,11 +15,29 @@ struct CommandGroupTests {
             ("collect_resources", .carrier), ("deposit_resources", .carrier),
             ("compact", .modular), ("unfurl", .modular),
             ("activate", .power), ("deactivate", .power), ("message", .power),
-            ("decommission", .special), ("set_entry_point", .special), ("change_owner", .special),
+            ("decommission", .special), ("replicate", .special), ("set_entry_point", .special), ("change_owner", .special),
         ]
         for (verb, group) in expected {
             #expect(CommandGroup.group(for: verb) == group, "\(verb) should map to \(group)")
         }
+    }
+
+    /// The taxonomy and the dispatchable universe must be the same set: every
+    /// verb the grid can construct has a home group, and every verb the
+    /// taxonomy orders is actually constructible. Catches both a new command
+    /// landing without a group (it would silently fall to Special) and a
+    /// taxonomy entry going stale when a verb is removed.
+    @Test func taxonomyExactlyCoversTheDispatchableUniverse() {
+        let structured = [
+            "travel", "start_mining", "retarget", "system_scan", "scan",
+            "stellar_census", "enqueue_print", "stow", "set_directive",
+            "adopt", "release", "attach", "detach",
+            "collect_resources", "deposit_resources",
+            "configure", "message", "repair", "replicate", "change_owner",
+        ]
+        let universe = Set(structured).union(CommandClient.supportedSimpleCommands)
+        let taxonomy = Set(CommandGroup.allCases.flatMap(\.commandOrder))
+        #expect(taxonomy == universe)
     }
 
     @Test func unknownVerbFallsBackToSpecial() {

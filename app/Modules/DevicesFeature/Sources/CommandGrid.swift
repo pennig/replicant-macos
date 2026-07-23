@@ -118,6 +118,16 @@ struct CommandGrid: View {
             .map { DeviceOption(id: $0.deviceCode, subtitle: "\(DevicePresentation.displayName($0.deviceType)) · \(Int($0.operationalCapacity))%") }
     }
 
+    /// Empty replicant matrices sharing this matrix's location — the vessels a
+    /// replication can spawn into (the server requires one at the current
+    /// location). Empty hides Replicate.
+    private var replicateTargets: [DeviceOption] {
+        guard let location = device.location, !location.isEmpty else { return [] }
+        return fleet
+            .filter { $0.deviceType == "empty_replicant_matrix" && $0.location == location }
+            .map { DeviceOption(id: $0.deviceCode, subtitle: DevicePresentation.displayName($0.deviceType)) }
+    }
+
     /// The dispatchable subset of the device's available commands. `retarget` is
     /// gated on the device actually mining (the server rejects it otherwise);
     /// `set_directive` only surfaces when the device offers directives, and
@@ -133,6 +143,7 @@ struct CommandGrid: View {
         let capacity = device.attachCapacity
         let repairable = repairCandidates
         let channelNames = channels.map(\.name)
+        let replicateCandidates = replicateTargets
         return device.availableCommands
             .compactMap {
                 DeviceCommand(
@@ -147,7 +158,8 @@ struct CommandGrid: View {
                     currentMode: device.taxiMode,
                     ownerCandidates: owners,
                     channels: channelNames,
-                    repairCandidates: repairable
+                    repairCandidates: repairable,
+                    replicateTargets: replicateCandidates
                 )
             }
             .filter { command in
@@ -161,6 +173,7 @@ struct CommandGrid: View {
                 case let .changeOwner(owners):  return !owners.isEmpty
                 case let .message(channels):    return !channels.isEmpty
                 case let .repair(candidates):   return !candidates.isEmpty
+                case let .replicate(targets):   return !targets.isEmpty
                 // Cargo commands only make sense while the transport is stationed at
                 // a location: Load needs free hold space, Unload needs cargo aboard.
                 case .loadCargo:   return device.cargoRemaining > 0 && device.location?.isEmpty == false
@@ -261,6 +274,8 @@ struct CommandGrid: View {
         case let .channelMessage(_, channels):
             // Seed the channel dropdown; the body text starts empty.
             choiceValue = channels.first ?? ""
+        case let .replicateTarget(_, options):
+            choiceValue = options.first?.id ?? ""
         default:
             choiceValue = ""
         }
@@ -295,6 +310,11 @@ struct CommandGrid: View {
                         RCValueSelect(label, options: channels, selection: $choiceValue)
                     }
                     RCField("Message", text: $textValue, placeholder: "On our way with the volatiles.")
+                }
+            case let .replicateTarget(label, options):
+                VStack(alignment: .leading, spacing: Space.s) {
+                    deviceChoicePicker(label, options: options)
+                    RCField("Name", text: $textValue, placeholder: "Optional — server names it otherwise")
                 }
             case let .notice(message):
                 Text(message)
@@ -336,6 +356,13 @@ struct CommandGrid: View {
                             locationName: device.locationName,
                             required: requiredLines(for: blueprintType)
                         ))
+                    } else if case .replicate = command {
+                        let name = textValue.trimmingCharacters(in: .whitespaces)
+                        store.send(.replicateConfirmed(
+                            deviceCode: device.deviceCode,
+                            target: choiceValue,
+                            name: name.isEmpty ? nil : name
+                        ))
                     } else {
                         // No sheet — dispatch straight through.
                         store.send(.commandConfirmed(
@@ -376,6 +403,7 @@ struct CommandGrid: View {
         if command == .travel { return "Review Route…" }
         if command == .print { return "Review Cost…" }
         if case .unloadCargo = command { return "Unload All" }
+        if case .replicate = command { return "Replicate" }
         if !selectedCodes.isEmpty {
             if case .adopt = command { return "Adopt \(selectedCodes.count)" }
             if case .release = command { return "Release \(selectedCodes.count)" }
@@ -393,6 +421,7 @@ struct CommandGrid: View {
         case .deviceChoice: return choiceValue
         case .blueprint:    return blueprintType
         case .channelMessage: return choiceValue
+        case .replicateTarget: return choiceValue
         case .multiSelect:  return ""
         case .notice:       return ""
         case .none:         return ""
@@ -551,6 +580,7 @@ struct CommandGrid: View {
         case .blueprint:   return !blueprintType.isEmpty
         case .channelMessage:
             return !choiceValue.isEmpty && !textValue.trimmingCharacters(in: .whitespaces).isEmpty
+        case .replicateTarget: return !choiceValue.isEmpty
         case .multiSelect: return !selectedCodes.isEmpty
         case .notice:      return false
         case .none:        return true
