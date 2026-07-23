@@ -59,6 +59,13 @@ enum DeviceCommand: Hashable, Identifiable {
     /// Unload a transport's cargo hold at its current location (`deposit_resources`),
     /// emptying it entirely. A confirm-only action.
     case unloadCargo
+    /// Set a surge plate's carry mode (`configure`). `current` is the mode in
+    /// force, seeding the picker so re-opening reflects reality.
+    case configure(current: String?)
+    /// Reassign this device to another of the account's replicants
+    /// (`change_owner`), chosen from the other own replicants (threaded in at
+    /// construction; empty — a one-replicant account — hides the command).
+    case changeOwner(owners: [DeviceOption])
     /// A parameter-less lifecycle command, by backend verb (e.g. `deactivate`).
     case simple(String)
 
@@ -75,7 +82,9 @@ enum DeviceCommand: Hashable, Identifiable {
         attachCandidates: [DeviceOption] = [],
         attachedCount: Int = 0,
         attachCapacity: Int = 0,
-        detachCandidates: [DeviceOption] = []
+        detachCandidates: [DeviceOption] = [],
+        currentMode: String? = nil,
+        ownerCandidates: [DeviceOption] = []
     ) {
         switch command {
         case "travel":         self = .travel
@@ -93,6 +102,8 @@ enum DeviceCommand: Hashable, Identifiable {
         case "detach":         self = .detach(attached: detachCandidates)
         case "collect_resources": self = .loadCargo
         case "deposit_resources": self = .unloadCargo
+        case "configure":         self = .configure(current: currentMode)
+        case "change_owner":      self = .changeOwner(owners: ownerCandidates)
         default:
             // Surface only the parameter-less commands CommandClient can dispatch.
             guard CommandClient.supportedSimpleCommands.contains(command) else { return nil }
@@ -118,6 +129,8 @@ enum DeviceCommand: Hashable, Identifiable {
         case .detach:        return "detach"
         case .loadCargo:     return "collect_resources"
         case .unloadCargo:   return "deposit_resources"
+        case .configure:     return "configure"
+        case .changeOwner:   return "change_owner"
         case let .simple(c): return c
         }
     }
@@ -139,6 +152,8 @@ enum DeviceCommand: Hashable, Identifiable {
         case .detach:        return .detach
         case .loadCargo:     return .collectResources
         case .unloadCargo:   return .depositResources
+        case .configure:     return .configure
+        case .changeOwner:   return .changeOwner
         case let .simple(c): return .simple(c)
         }
     }
@@ -160,6 +175,8 @@ enum DeviceCommand: Hashable, Identifiable {
         case .detach:        return "Detach"
         case .loadCargo:     return "Load"
         case .unloadCargo:   return "Unload"
+        case .configure:     return "Configure"
+        case .changeOwner:   return "Change Owner"
         case let .simple(c): return DevicePresentation.displayName(c)
         }
     }
@@ -181,6 +198,8 @@ enum DeviceCommand: Hashable, Identifiable {
         case .detach:        return "link.badge.minus"
         case .loadCargo:     return "tray.and.arrow.down"
         case .unloadCargo:   return "tray.and.arrow.up"
+        case .configure:     return "gearshape"
+        case .changeOwner:   return "person.2"
         case let .simple(c): return Self.simpleSymbols[c] ?? "bolt"
         }
     }
@@ -242,6 +261,10 @@ enum DeviceCommand: Hashable, Identifiable {
             return attached.count == 1
                 ? .deviceChoice(label: "Device", options: attached)
                 : .multiSelect(label: "Devices", options: attached, limit: nil)
+        case .configure:
+            return .choice(label: "Mode", options: SurgeMode.all)
+        case let .changeOwner(owners):
+            return .deviceChoice(label: "New Owner", options: owners)
         // loadCargo opens its own sheet (intercepted before an inline panel shows);
         // unloadCargo is a plain confirm. Neither collects an inline parameter.
         case .scan, .surveyScan, .census, .stow, .loadCargo, .unloadCargo, .simple: return .none
@@ -250,6 +273,9 @@ enum DeviceCommand: Hashable, Identifiable {
 
     /// The `resource_type` values `start_mining` / `retarget` accept.
     static let miningResources = ["structural", "conductive", "silicates", "carbon", "volatiles", "rares"]
+
+    /// The `configure` carry modes a surge plate accepts.
+    enum SurgeMode { static let all = ["taxi", "manual"] }
 
     /// The worker device type an AMI controller adopts, or nil if the type isn't a
     /// controller that scopes adoption to one kind. Mining/survey/transport
@@ -269,6 +295,8 @@ enum DeviceCommand: Hashable, Identifiable {
         case .print:           return CommandParams(deviceType: value)
         case .mine, .retarget: return CommandParams(resourceType: value)
         case .setDirective:    return CommandParams(directive: value)
+        case .configure:       return CommandParams(mode: value)
+        case .changeOwner:     return CommandParams(target: value)
         // adopt/release/attach build their params from the picker selection in the
         // command grid, not this single-value mapping.
         case .adopt, .release, .attach, .detach, .scan, .surveyScan, .census, .stow, .loadCargo, .unloadCargo, .simple: return CommandParams()

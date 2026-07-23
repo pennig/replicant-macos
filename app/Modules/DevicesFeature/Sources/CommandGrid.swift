@@ -25,6 +25,8 @@ struct CommandGrid: View {
     @FetchAll(Device.order { $0.deviceCode }) private var fleet
     /// The unlocked blueprint catalog, backing the `enqueue_print` dropdown.
     @FetchAll(Blueprint.order { $0.deviceType }) private var blueprints
+    /// The account's own replicants, backing the `change_owner` target picker.
+    @FetchAll(Replicant.all) private var replicants
     @State private var pending: DeviceCommand?
     @State private var textValue: String = ""
     @State private var choiceValue: String = ""
@@ -96,6 +98,15 @@ struct CommandGrid: View {
         }
     }
 
+    /// The other replicants this device could be reassigned to. Empty on a
+    /// one-replicant account, which hides Change Owner entirely (the same
+    /// candidate-gating pattern as adopt/release).
+    private var ownerCandidates: [DeviceOption] {
+        replicants
+            .filter { $0.replicantCode != device.replicantCode }
+            .map { DeviceOption(id: $0.replicantCode, subtitle: $0.name.isEmpty ? "Replicant" : $0.name) }
+    }
+
     /// The dispatchable subset of the device's available commands. `retarget` is
     /// gated on the device actually mining (the server rejects it otherwise);
     /// `set_directive` only surfaces when the device offers directives, and
@@ -106,6 +117,7 @@ struct CommandGrid: View {
         let release = releaseCandidates
         let attach = attachCandidates
         let detach = detachCandidates
+        let owners = ownerCandidates
         let attachedNow = device.attachedDeviceCodes.count
         let capacity = device.attachCapacity
         return device.availableCommands
@@ -118,7 +130,9 @@ struct CommandGrid: View {
                     attachCandidates: attach,
                     attachedCount: attachedNow,
                     attachCapacity: capacity,
-                    detachCandidates: detach
+                    detachCandidates: detach,
+                    currentMode: device.taxiMode,
+                    ownerCandidates: owners
                 )
             }
             .filter { command in
@@ -129,6 +143,7 @@ struct CommandGrid: View {
                 case let .release(controlled): return !controlled.isEmpty
                 case let .attach(candidates, _, _): return !candidates.isEmpty
                 case let .detach(attached):    return !attached.isEmpty
+                case let .changeOwner(owners):  return !owners.isEmpty
                 // Cargo commands only make sense while the transport is stationed at
                 // a location: Load needs free hold space, Unload needs cargo aboard.
                 case .loadCargo:   return device.cargoRemaining > 0 && device.location?.isEmpty == false
@@ -216,8 +231,13 @@ struct CommandGrid: View {
         }
         switch command.parameter {
         case let .choice(_, options):
-            // Seed the dropdown with the first option (mine/retarget resources).
-            choiceValue = options.first ?? ""
+            // Seed the dropdown with the first option (mine/retarget resources) —
+            // except Configure, which seeds from the mode currently in force.
+            if case let .configure(current) = command, let current, options.contains(current) {
+                choiceValue = current
+            } else {
+                choiceValue = options.first ?? ""
+            }
         case let .deviceChoice(_, options):
             // Seed the dropdown with the first candidate device code.
             choiceValue = options.first?.id ?? ""

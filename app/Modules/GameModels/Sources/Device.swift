@@ -303,6 +303,13 @@ extension Device {
             $0["device_code"]?.stringValue ?? $0.stringValue
         } ?? []
     }
+
+    /// A surge plate's carry mode (`taxi_mode` in the variable tail): "taxi"
+    /// (any same-owner device may ride) or "manual" (explicit attach only).
+    /// Nil when the device doesn't report one. Seeds the `configure` picker.
+    public var taxiMode: String? {
+        detail["taxi_mode"]?.stringValue
+    }
 }
 
 // MARK: - Stowage

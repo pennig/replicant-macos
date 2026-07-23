@@ -10,11 +10,11 @@ struct CommandGroupTests {
             ("enqueue_print", .production), ("clear_queue", .production),
             ("set_directive", .control), ("clear_directive", .control), ("adopt", .control),
             ("release", .control), ("launch", .control), ("withdraw", .control), ("assemble", .control),
-            ("attach", .carrier), ("detach", .carrier),
+            ("attach", .carrier), ("detach", .carrier), ("configure", .carrier),
             ("collect_resources", .carrier), ("deposit_resources", .carrier),
             ("compact", .modular), ("unfurl", .modular),
             ("activate", .power), ("deactivate", .power),
-            ("decommission", .special), ("set_entry_point", .special),
+            ("decommission", .special), ("set_entry_point", .special), ("change_owner", .special),
         ]
         for (verb, group) in expected {
             #expect(CommandGroup.group(for: verb) == group, "\(verb) should map to \(group)")

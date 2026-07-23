@@ -36,10 +36,10 @@ enum CommandGroup: CaseIterable, Hashable {
         case .tasks:      return ["start_mining", "retarget", "scan", "search", "system_scan", "stellar_census"]
         case .production: return ["enqueue_print", "clear_queue"]
         case .control:    return ["set_directive", "clear_directive", "adopt", "release", "launch", "withdraw", "assemble"]
-        case .carrier:    return ["attach", "detach", "collect_resources", "deposit_resources"]
+        case .carrier:    return ["attach", "detach", "configure", "collect_resources", "deposit_resources"]
         case .modular:    return ["compact", "unfurl"]
         case .power:      return ["activate", "deactivate"]
-        case .special:    return ["decommission", "set_entry_point"]
+        case .special:    return ["decommission", "set_entry_point", "change_owner"]
         }
     }
 
