@@ -37,6 +37,9 @@ public struct NewStarMapView: View {
     /// frame. Held here but NOT read in `body` — only `TransitCalloutLayer` reads
     /// `.callouts`, so a per-frame update re-renders just that overlay.
     @State private var transitProjection = TransitProjectionModel()
+    /// Memoizes the focused system's blob decode across body evaluations (see
+    /// `SystemDecodeCache`). Reference type: reading through it never invalidates.
+    @State private var decodeCache = SystemDecodeCache()
     /// The charted galaxy, straight from SQLite — the same table the SceneKit map
     /// reads. Sorted by insertion order so new survey rows append deterministically.
     @FetchAll(UniverseModels.Star.order(by: \.createdAt)) private var surveyed
@@ -65,9 +68,15 @@ public struct NewStarMapView: View {
     private var stars: [Star] {
         let current = currentStar
         let relays = relaySystems
+        // One O(details) pass up front instead of a linear `systemDetails` scan
+        // per star row — per-row `detailRecon` made this O(stars × details), and
+        // it re-ran (on the main thread) for every observed table change.
+        let recon = Dictionary(
+            systemDetails.compactMap { d in Recon(rawValue: d.recon).map { (d.designation, $0) } },
+            uniquingKeysWith: { first, _ in first })
         return surveyed.map { row in
             var s = Star(surveyed: row)
-            switch detailRecon(row.designation) {
+            switch recon[row.designation] {
             case .scanned: s.scan = .full
             case .visited: if s.scan == .unexplored { s.scan = .partial }
             default: break
@@ -175,8 +184,9 @@ public struct NewStarMapView: View {
 
     /// Charted stars whose designation matches the live search query (case-
     /// insensitive substring). Prefix matches rank first, then nearer stars; the
-    /// list is capped so the dropdown stays compact.
-    private var searchResults: [Star] {
+    /// list is capped so the dropdown stays compact. Takes the already-built
+    /// terrain so it never rebuilds the star array.
+    private func searchResults(in stars: [Star]) -> [Star] {
         let query = store.searchQuery.trimmingCharacters(in: .whitespaces).uppercased()
         guard !query.isEmpty else { return [] }
         return stars
@@ -203,7 +213,7 @@ public struct NewStarMapView: View {
     private func exactPlanetCount(_ designation: String) -> Int? {
         guard detailRecon(designation) == .scanned,
               let detail = systemDetails.first(where: { $0.designation == designation }),
-              let system = try? detail.system()
+              let system = decodeCache.system(for: detail)
         else { return nil }
         return system.planets.count
     }
@@ -249,9 +259,12 @@ public struct NewStarMapView: View {
     }
 
     /// The decoded persisted `StarSystem` for a designation, if we hold one.
+    /// Decodes through `decodeCache`, so the several callers that need the focused
+    /// system within one body evaluation (and across evaluations while the row is
+    /// unchanged) share ONE decode of the blob instead of repeating it.
     private func persistedSystem(_ designation: String) -> StarSystem? {
         systemDetails.first(where: { $0.designation == designation })
-            .flatMap { try? $0.system() }
+            .flatMap { decodeCache.system(for: $0) }
     }
 
     /// The system the current focus sits in (nil in the galaxy).
@@ -268,7 +281,7 @@ public struct NewStarMapView: View {
     /// `Device` roster (own, authoritative, live status) with the persisted scan blob
     /// (others, coarse), deduped by device code — own wins. Empty in the galaxy. Fed to
     /// the renderer (badge placement) and the dossier (device list).
-    private var deviceClusters: [DeviceCluster] {
+    private func deviceClusters(model focusedModel: SystemModel?) -> [DeviceCluster] {
         guard let model = focusedModel, let sys = focusedSystemDesignation else { return [] }
         // A transform-free layout: only its code dispatch (planet/moon/belt/Lagrange/…)
         // matters for grouping, not the world coordinates.
@@ -321,24 +334,33 @@ public struct NewStarMapView: View {
         return nil
     }
 
-    /// Window title reflecting the current focus level.
-    private var navTitle: String {
+    /// Window title reflecting the current focus level. Takes the already-computed
+    /// focused model so it never re-derives (and re-decodes) it.
+    private func navTitle(model: SystemModel?) -> String {
         switch store.focus {
         case .galaxy:
             return "Galaxy"
         case .system:
-            return focusedModel.map { "Galaxy · \($0.star.name ?? $0.star.designation)" } ?? "Galaxy"
+            return model.map { "Galaxy · \($0.star.name ?? $0.star.designation)" } ?? "Galaxy"
         case .body:
-            return focusedModel.map { "System · \($0.star.name ?? $0.star.designation)" } ?? "Galaxy"
+            return model.map { "System · \($0.star.name ?? $0.star.designation)" } ?? "Galaxy"
         }
     }
 
     public var body: some View {
+        // Derived data computed ONCE per evaluation and threaded through. As
+        // computed properties these were re-derived at every use site — the
+        // terrain twice, the focused model (a JSON blob decode) up to four times,
+        // the clusters twice — on every observed table change, all on the main
+        // thread.
+        let terrain = stars
+        let model = focusedModel
+        let clusters = deviceClusters(model: model)
         ZStack {
-            MetalStarView(store: store, stars: stars, overlays: overlays,
-                          focus: store.focus, systemModel: focusedModel,
+            MetalStarView(store: store, stars: terrain, overlays: overlays,
+                          focus: store.focus, systemModel: model,
                           shipProjection: shipProjection,
-                          deviceClusters: deviceClusters,
+                          deviceClusters: clusters,
                           clusterProjection: clusterProjection,
                           transitProjection: transitProjection)
                 .ignoresSafeArea()
@@ -376,15 +398,15 @@ public struct NewStarMapView: View {
 
             switch store.focus {
             case .galaxy:
-                galaxyHUD.transition(.opacity)
+                galaxyHUD(terrain: terrain).transition(.opacity)
             case .system, .body:
-                if let model = focusedModel {
+                if let model {
                     SystemHUD(
                         model: model,
                         level: { if case .body = store.focus { return .body } else { return .system } }(),
                         isTransitioning: store.isTransitioning,
                         selectedLocation: store.selectedLocation,
-                        clusters: deviceClusters,
+                        clusters: clusters,
                         locationDetail: store.selectedLocation.flatMap(locationDetail(for:)),
                         onBack: { store.send(.zoomOutRequested) },
                         onScan: { store.send(.scanCurrentSystemTapped) },
@@ -411,7 +433,7 @@ public struct NewStarMapView: View {
         .animation(.easeInOut(duration: 0.15), value: store.searchQuery)
         .animation(.easeInOut(duration: 0.22), value: store.activeFilterName)
         .animation(.easeInOut(duration: 0.4), value: store.bootPhase)
-        .navigationTitle(navTitle)
+        .navigationTitle(navTitle(model: model))
         .navigationSubtitle(store.focus == .galaxy ? Text("^[\(chartedStarCount) known star](inflect: true)") : Text(""))
         // Item-driven (not `isPresented:`) so plotting travel for one system then
         // another in quick succession re-presents reliably — keyed on the
@@ -443,7 +465,7 @@ public struct NewStarMapView: View {
 
     // MARK: - Galaxy HUD
 
-    private var galaxyHUD: some View {
+    private func galaxyHUD(terrain: [Star]) -> some View {
         ZStack {
             VStack(alignment: .leading, spacing: Space.m) {
                 GalaxyNavigator(
@@ -451,7 +473,7 @@ public struct NewStarMapView: View {
                         get: { store.searchQuery },
                         set: { store.send(.searchQueryChanged($0)) }
                     ),
-                    results: searchResults,
+                    results: searchResults(in: terrain),
                     currentLocationID: currentLocationID,
                     onSelect: { store.send(.searchResultSelected($0)) }
                 )

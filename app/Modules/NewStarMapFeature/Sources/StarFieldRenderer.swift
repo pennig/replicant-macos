@@ -230,6 +230,22 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     private var labelOpacity: [Int: Float] = [:]   // per-star eased fade (starIndex → 0…1)
     private var lastLabelTime: Double = 0
     private let labelFadeTau: Double = 0.06        // fade time constant (quick)
+    // The label MEMBERSHIP pass (project every star, sort by distance, collision-
+    // resolve) runs on this cadence — or immediately when the selection / symbols /
+    // terrain change — instead of every frame; see `encodeLabels`. Between
+    // refreshes each placed label re-anchors to its star's fresh projection, so
+    // labels stay frame-locked; only which labels show (and their collision
+    // nudges) updates at the cadence, which the eased fades smooth over anyway.
+    private var lastLabelLayoutTime: Double = 0
+    private let labelLayoutInterval: Double = 0.05
+    private var labelLayoutKey: LabelLayoutKey?
+    private struct LabelLayoutKey: Equatable {
+        var selected: Int?
+        var symbols: Bool
+        var starCount: Int
+    }
+    /// starIndex → (collision-resolved origin offset from the label's anchor, size).
+    private var cachedLabelPlacements: [Int: (offset: SIMD2<Float>, size: SIMD2<Float>)] = [:]
     // Labels belong to the galaxy overview. They fade to nothing as the camera
     // drills into a system — decoupled from `fieldDim` (which now floors at a
     // faint backdrop) so they reach true 0 and stay silent while orbiting the
@@ -295,6 +311,11 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     /// Device-presence clusters, grouped by the anchor the focused level draws (built by
     /// the view from the live roster + scan blob). Projected each frame in `draw`.
     private var deviceClusters: [DeviceCluster] = []
+    /// The active layer's location resolver for THIS frame, built once at the top of
+    /// `draw` and shared by every consumer (orrery ship heads, transit lines, and the
+    /// three SwiftUI overlay projections) — it was being reconstructed up to five
+    /// times per frame. Nil in the galaxy / while the orrery is fully hidden.
+    private var frameOrreryLayout: OrreryLayout?
     /// The location the player has picked (mirrored from the reducer). A planet's Lagrange
     /// points are only drawn/pickable when that planet (or the point itself) is selected —
     /// otherwise only occupied points show, so an idle system isn't cluttered with ticks.
@@ -606,7 +627,8 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         let dt = Float(min(max(now - lastFrameTime, 0), 0.1))   // clamp long stalls
         lastFrameTime = now
         advanceAutoRotate(now: now, dt: dt)
-        relevance.step()                     // advance eased relevance transitions
+        let relevanceMoving = relevance.step()   // advance eased relevance transitions
+        updateFramePacing(view, now: now, relevanceAnimating: relevanceMoving)
         // Freeze orbital motion while focused on / transitioning to a body, so the
         // drilled planet holds still (no camera-follow needed) and its siblings stay
         // put; it resumes seamlessly from the same phase on the way back out.
@@ -641,6 +663,15 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         // Capture the live viewpoint each frame so the next renderer rebuild (tab
         // switch / survey) lands exactly here. Cheap: value types + COW model arrays.
         persistViewpoint()
+
+        // Resolve the active layer's orrery layout once for this frame — the ship
+        // heads, transit lines, and all three SwiftUI overlay projections share it.
+        frameOrreryLayout = {
+            guard systemFocused, orreryReveal > 0.001, let model = orreryModel else { return nil }
+            let reveal = orreryIsBody ? bodyProgress : orreryReveal
+            return orreryLayout(model: model, center: orreryCenter, scale: orreryScale,
+                                reveal: reveal, time: orbitClock)
+        }()
 
         guard let hdr = hdrTexture,
               let drawable = view.currentDrawable,
@@ -834,6 +865,26 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         emitTransitProjection(view: view, now: now)
     }
 
+    // MARK: Frame pacing
+
+    /// Full rate only while responsiveness is visible: a gesture, an eased camera
+    /// move, a drill/zoom transition, or a relevance fade. The rest of the time —
+    /// idle ambience and the slow auto-rotate spin — half rate is indistinguishable
+    /// and halves what this view (which draws on the MAIN thread) takes from every
+    /// other window in the process.
+    private let activeFramesPerSecond = 120
+    private let idleFramesPerSecond = 60
+
+    private func updateFramePacing(_ view: MTKView, now: Double, relevanceAnimating: Bool) {
+        let active = camera.isFraming
+            || transitionInFlight(now: now)
+            || departing != nil
+            || relevanceAnimating
+            || (now - lastInteractionTime) < 1.5
+        let fps = active ? activeFramesPerSecond : idleFramesPerSecond
+        if view.preferredFramesPerSecond != fps { view.preferredFramesPerSecond = fps }
+    }
+
     /// Project each in-transit ship's comet head to view points (top-left origin,
     /// mirroring `pickStar`) and push them to the SwiftUI overlay via
     /// `onShipsProjected`. Emits an empty set while drilled into a system — the pips
@@ -848,17 +899,13 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         let size = view.bounds.size
         let w = Float(size.width), h = Float(size.height)
         guard w > 0, h > 0 else { emit([]); return }
+        let pixelScale = pixelGridScale(for: view)
 
         // In-orrery resolver: a ship whose active leg is wholly within the focused system
         // stays visible + placed on its intra-system cruise leg (opacity ramps with the
         // reveal). A ship not in this system — or when in the galaxy — falls back to the
         // galaxy straight-line placement, fading with `overlayDim` on drill-in.
-        let shipLayout: OrreryLayout? = {
-            guard systemFocused, orreryReveal > 0.001, let model = orreryModel else { return nil }
-            let reveal = orreryIsBody ? bodyProgress : orreryReveal
-            return orreryLayout(model: model, center: orreryCenter, scale: orreryScale,
-                                reveal: reveal, time: orbitClock)
-        }()
+        let shipLayout = frameOrreryLayout
         let dim = overlayDim
 
         var projected: [ProjectedShip] = []
@@ -877,7 +924,9 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
             guard let world, opacity > 0.001,
                   let point = projectViewPoint(world, view: viewM, proj: proj, width: w, height: h)
             else { continue }
-            projected.append(ProjectedShip(deviceCode: ship.deviceCode, point: point, opacity: opacity))
+            projected.append(ProjectedShip(deviceCode: ship.deviceCode,
+                                           point: snapToPixelGrid(point, scale: pixelScale),
+                                           opacity: opacity))
         }
         emit(projected)
     }
@@ -893,16 +942,15 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     /// `bounds.size` (POINTS), not `drawableSize` (pixels), for SwiftUI's local space.
     private func emitClusterProjection(view: MTKView) {
         guard let emit = onClustersProjected else { return }
-        guard systemFocused, orreryReveal > 0.001, !deviceClusters.isEmpty, let model = orreryModel
+        guard !deviceClusters.isEmpty, let layout = frameOrreryLayout
         else { emit([]); return }
-        let reveal = orreryIsBody ? bodyProgress : orreryReveal
-        let layout = orreryLayout(model: model, center: orreryCenter, scale: orreryScale,
-                                  reveal: reveal, time: orbitClock)
+        let model = layout.model
         let viewM = camera.viewMatrix()
         let proj = camera.projectionMatrix(aspect: aspect)
         let size = view.bounds.size
         let w = Float(size.width), h = Float(size.height)
         guard w > 0, h > 0 else { emit([]); return }
+        let pixelScale = pixelGridScale(for: view)
         let op = Double(orreryReveal)
 
         var out: [ProjectedCluster] = []
@@ -922,7 +970,9 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
                     screenR = abs(CGFloat((edge.x * 0.5 + 0.5) * w) - center.x)
                 }
             }
-            let point = CGPoint(x: center.x, y: center.y - screenR - 16)   // 16 ≈ badge half-height + margin
+            let point = snapToPixelGrid(
+                CGPoint(x: center.x, y: center.y - screenR - 16),   // 16 ≈ badge half-height + margin
+                scale: pixelScale)
             out.append(ProjectedCluster(
                 anchorCode: cluster.anchorCode, point: point,
                 count: cluster.count, primaryType: cluster.primaryType,
@@ -1823,30 +1873,48 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         guard let buffer = device.makeBuffer(
             bytes: instances,
             length: instances.count * MemoryLayout<StarInstance>.stride,
-            options: .storageModeShared),
-              let field = RelevanceField(device: device, positions: newStars.map(\.position))
+            options: .storageModeShared)
         else { return }
+
+        // Positions are invariant while the count holds (the table only appends, and
+        // the row→Star mapping is deterministic), so a FLAG-only change — the
+        // current-location reticle moving, a recon upgrade, a relay appearing —
+        // needs fresh instance data but neither a new relevance field (which would
+        // snap the eased fades) nor a nebula re-diffusion (O(puffs × stars), and it
+        // runs on the main thread).
+        let starCountChanged = newStars.count != stars.count
+        var freshField: RelevanceField?
+        if starCountChanged {
+            guard let field = RelevanceField(device: device, positions: newStars.map(\.position))
+            else { return }
+            freshField = field
+        }
         stars = newStars
         starBuffer = buffer
-        relevance = field
+        if let freshField { relevance = freshField }
 
         // Rebuild overlays against the new indices (also re-sets the state clamp and
         // republishes the mesh contribution if the mesh overlay is on).
         applyOverlays(overlays)
 
-        // Re-light the focus/filter the fresh relevance field started neutral.
+        // Recompute an active filter unconditionally — it reads star FLAGS (scan
+        // state, life, …), which are exactly what a flag-only change updates.
         if let filter = activeFilter {
             relevance.write(.filter, filter.relevance(for: stars, floor: relevance.floor))
         }
-        if systemFocused, let focused = focusedStarIndex, focused < stars.count {
-            relevance.focus(on: focused)
-        } else if let selected = selectedStarIndex, selected < stars.count {
-            relevance.focus(on: selected)
-        }
 
-        // Re-diffuse the nebulae against the new star set (deterministic — same seed,
-        // only the star-avoidance changes as systems stream in).
-        regenerateNebula()
+        if starCountChanged {
+            // Re-light the focus the fresh relevance field started neutral.
+            if systemFocused, let focused = focusedStarIndex, focused < stars.count {
+                relevance.focus(on: focused)
+            } else if let selected = selectedStarIndex, selected < stars.count {
+                relevance.focus(on: selected)
+            }
+
+            // Re-diffuse the nebulae against the new star set (deterministic — same
+            // seed, only the star-avoidance changes as systems stream in).
+            regenerateNebula()
+        }
     }
 
     // MARK: Nebulae
@@ -2075,10 +2143,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     /// uses). Additive glow, always on top — the in-orrery counterpart of the galaxy heads.
     private func encodeOrreryShipHeads(_ enc: MTLRenderCommandEncoder,
                                        uniforms: inout Uniforms, params: inout MeshParams, now: Double) {
-        guard systemFocused, !ships.isEmpty, let model = orreryModel else { return }
-        let reveal = orreryIsBody ? bodyProgress : orreryReveal
-        let layout = orreryLayout(model: model, center: orreryCenter, scale: orreryScale,
-                                  reveal: reveal, time: orbitClock)
+        guard !ships.isEmpty, let layout = frameOrreryLayout else { return }
         let heads: [StateMarker] = ships.compactMap { ship in
             guard let pos = ship.orreryPosition(at: now, resolve: { layout.position(ofLocation: $0) })
             else { return nil }
@@ -2105,12 +2170,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
 
     /// The active orrery layer's resolver for transit placement (system focus only), or nil
     /// in the galaxy. Mirrors `encodeOrreryShipHeads` / `emitClusterProjection`.
-    private func orreryTransitLayout() -> OrreryLayout? {
-        guard systemFocused, orreryReveal > 0.001, let model = orreryModel else { return nil }
-        let reveal = orreryIsBody ? bodyProgress : orreryReveal
-        return orreryLayout(model: model, center: orreryCenter, scale: orreryScale,
-                            reveal: reveal, time: orbitClock)
-    }
+    private func orreryTransitLayout() -> OrreryLayout? { frameOrreryLayout }
 
     /// The world height of a transit riser — a fraction of the framed system radius, so it
     /// stays proportional at system and body level and emerges with the orrery `reveal`.
@@ -2190,6 +2250,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         let size = view.bounds.size
         let w = Float(size.width), h = Float(size.height)
         guard w > 0, h > 0 else { emit([]); return }
+        let pixelScale = pixelGridScale(for: view)
         let op = Double(orreryReveal)
 
         var out: [ProjectedTransit] = []
@@ -2207,7 +2268,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
                     endpointCode: boundary.endpointCode,
                     viaCode: boundary.viaCode,
                     arrivesAt: ship.arrivesAt,
-                    point: point, opacity: op))
+                    point: snapToPixelGrid(point, scale: pixelScale), opacity: op))
             }
         }
         emit(out)
@@ -2274,6 +2335,8 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         let labelDim = self.labelDim
         if labelDim <= 0.001 {
             labelOpacity.removeAll()   // already invisible; snapping the bookkeeping is unseen
+            cachedLabelPlacements.removeAll()
+            labelLayoutKey = nil
             return
         }
 
@@ -2323,6 +2386,83 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
             return (px, simd_length(wp - eye), ringR)
         }
 
+        // Membership + collision layout on the throttled cadence (or immediately
+        // when the selection / symbols / terrain change). Projecting and distance-
+        // sorting the ENTIRE star field every frame was one of the map's main-thread
+        // hogs at full frame rate; label membership changes far too slowly to need it.
+        let now = CACurrentMediaTime()
+        let layoutKey = LabelLayoutKey(selected: selectedStarIndex, symbols: showSymbols,
+                                       starCount: stars.count)
+        if layoutKey != labelLayoutKey || now - lastLabelLayoutTime >= labelLayoutInterval {
+            labelLayoutKey = layoutKey
+            lastLabelLayoutTime = now
+            refreshLabelLayout(screen: screen)
+        }
+
+        // Ease each label's opacity toward 1 (placed) or 0 (not), so labels fade in
+        // and out instead of snapping. Labels leaving the set fade in place; once
+        // nearly gone (or off-screen), they're dropped.
+        var dt = now - lastLabelTime
+        if dt <= 0 || dt > 0.25 { dt = 1.0 / 60 }
+        lastLabelTime = now
+        let ease = Float(1 - exp(-dt / labelFadeTau))
+        for id in cachedLabelPlacements.keys {
+            labelOpacity[id, default: 0] += (1 - (labelOpacity[id] ?? 0)) * ease
+        }
+        for id in Array(labelOpacity.keys) where cachedLabelPlacements[id] == nil {
+            labelOpacity[id]! += (0 - labelOpacity[id]!) * ease
+        }
+
+        enc.setRenderPipelineState(labelPipeline)
+        var stale: [Int] = []
+        for (id, opacity) in labelOpacity {
+            if opacity < 0.01 { stale.append(id); continue }
+
+            // Per-frame: re-anchor to the star's FRESH projection (a handful of
+            // stars, not the whole field) so the label tracks it frame-locked; a
+            // placed label carries its collision offset from the throttled layout.
+            guard let s = screen(id),
+                  let label = labelCache.texture(name: stars[id].name,
+                                                 symbols: showSymbols ? stars[id].statusSymbols : [])
+            else {
+                stale.append(id); continue   // gone off-screen mid-fade → drop
+            }
+            let anchor = SIMD2<Float>(s.px.x, s.px.y + s.ringR + labelGap)
+            var origin: SIMD2<Float>, size: SIMD2<Float>
+            let tex: MTLTexture = label.texture
+            if let p = cachedLabelPlacements[id] {
+                origin = anchor + p.offset
+                size = p.size
+            } else {
+                // Fading out: centred position (not collision-tested).
+                size = label.size
+                origin = SIMD2<Float>(anchor.x - size.x * 0.5, anchor.y)
+            }
+
+            // Shrink with the star's recession, keeping the top-centre point (the edge
+            // nearest the star) fixed so the label stays hugging the reticle ring.
+            let scale = recessionScale(id)
+            if scale < 0.999 {
+                let centerX = origin.x + size.x * 0.5
+                size *= scale
+                origin = SIMD2<Float>(centerX - size.x * 0.5, origin.y)
+            }
+
+            var lp = LabelParams(originPx: origin, sizePx: size, viewportPx: viewportPx,
+                                 opacity: opacity * labelDim, _pad: 0)   // fade out on drill-in
+            enc.setVertexBytes(&lp, length: MemoryLayout<LabelParams>.stride, index: 0)
+            enc.setFragmentTexture(tex, index: 0)
+            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+        }
+        for id in stale { labelOpacity.removeValue(forKey: id) }
+    }
+
+    /// The throttled half of the label pass: project every star, rank by nearness,
+    /// pick the zoom-gated curated set (+ the selection, always labelled), and
+    /// collision-resolve (LabelEngine). Each survivor is stored as an OFFSET from
+    /// its anchor so the per-frame draw can carry the resolved position along on
+    /// the star's fresh projection.
+    private func refreshLabelLayout(screen: (Int) -> (px: SIMD2<Float>, dist: Float, ringR: Float)?) {
         var onscreen: [(i: Int, px: SIMD2<Float>, dist: Float, ringR: Float)] = []
         for i in stars.indices {
             if let s = screen(i) { onscreen.append((i, s.px, s.dist, s.ringR)) }
@@ -2342,68 +2482,36 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         // at a top-centre point just below its star, clear of the ring. The selected
         // star gets top priority; the rest rank by nearness (closer = higher).
         var candidates: [LabelEngine.Candidate] = []
-        var textures: [Int: MTLTexture] = [:]
+        var anchors: [Int: SIMD2<Float>] = [:]
         for c in chosen {
             let symbols = showSymbols ? stars[c.i].statusSymbols : []
             guard let label = labelCache.texture(name: stars[c.i].name, symbols: symbols) else { continue }
-            textures[c.i] = label.texture
             let priority: Float = (c.i == selectedStarIndex) ? .greatestFiniteMagnitude : -c.dist
             let anchor = SIMD2<Float>(c.px.x, c.px.y + c.ringR + labelGap)
+            anchors[c.i] = anchor
             candidates.append(.init(id: c.i, anchor: anchor, size: label.size, priority: priority))
         }
         let placements = LabelEngine.layout(candidates)
-        let placedById = Dictionary(placements.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        cachedLabelPlacements = Dictionary(
+            placements.compactMap { p in
+                anchors[p.id].map { (p.id, (offset: p.origin - $0, size: p.size)) }
+            },
+            uniquingKeysWith: { a, _ in a })
+    }
 
-        // Ease each label's opacity toward 1 (placed) or 0 (not), so labels fade in
-        // and out instead of snapping. Labels leaving the set fade in place; once
-        // nearly gone (or off-screen), they're dropped.
-        let now = CACurrentMediaTime()
-        var dt = now - lastLabelTime
-        if dt <= 0 || dt > 0.25 { dt = 1.0 / 60 }
-        lastLabelTime = now
-        let ease = Float(1 - exp(-dt / labelFadeTau))
-        for id in placedById.keys {
-            labelOpacity[id, default: 0] += (1 - (labelOpacity[id] ?? 0)) * ease
-        }
-        for id in Array(labelOpacity.keys) where placedById[id] == nil {
-            labelOpacity[id]! += (0 - labelOpacity[id]!) * ease
-        }
+    /// Snap an emitted overlay point to the physical pixel grid. The SwiftUI layers
+    /// already snap for crispness, so this loses nothing visually — but doing it
+    /// BEFORE the `!=` publish guards means the sub-pixel per-frame drift of a slow
+    /// auto-rotate no longer re-renders the overlay views at the full frame rate.
+    private func snapToPixelGrid(_ p: CGPoint, scale: CGFloat) -> CGPoint {
+        CGPoint(x: (p.x * scale).rounded() / scale,
+                y: (p.y * scale).rounded() / scale)
+    }
 
-        enc.setRenderPipelineState(labelPipeline)
-        var stale: [Int] = []
-        for (id, opacity) in labelOpacity {
-            if opacity < 0.01 { stale.append(id); continue }
-
-            var origin: SIMD2<Float>, size: SIMD2<Float>
-            let tex: MTLTexture
-            if let p = placedById[id], let t = textures[id] {
-                origin = p.origin; size = p.size; tex = t
-            } else if let s = screen(id),
-                      let label = labelCache.texture(name: stars[id].name,
-                                                     symbols: showSymbols ? stars[id].statusSymbols : []) {
-                // Fading out: recompute its centred position (not collision-tested).
-                size = label.size; tex = label.texture
-                origin = SIMD2<Float>(s.px.x - size.x * 0.5, s.px.y + s.ringR + labelGap)
-            } else {
-                stale.append(id); continue   // gone off-screen mid-fade → drop
-            }
-
-            // Shrink with the star's recession, keeping the top-centre point (the edge
-            // nearest the star) fixed so the label stays hugging the reticle ring.
-            let scale = recessionScale(id)
-            if scale < 0.999 {
-                let centerX = origin.x + size.x * 0.5
-                size *= scale
-                origin = SIMD2<Float>(centerX - size.x * 0.5, origin.y)
-            }
-
-            var lp = LabelParams(originPx: origin, sizePx: size, viewportPx: viewportPx,
-                                 opacity: opacity * labelDim, _pad: 0)   // fade out on drill-in
-            enc.setVertexBytes(&lp, length: MemoryLayout<LabelParams>.stride, index: 0)
-            enc.setFragmentTexture(tex, index: 0)
-            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
-        }
-        for id in stale { labelOpacity.removeValue(forKey: id) }
+    /// The view's backing-store density for `snapToPixelGrid` (2 is the safe modern
+    /// default when the view isn't in a window yet).
+    private func pixelGridScale(for view: MTKView) -> CGFloat {
+        max(view.window?.backingScaleFactor ?? 2, 1)
     }
 
     /// Project a world point to view POINTS (top-left origin) for the SwiftUI overlays —
