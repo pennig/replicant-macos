@@ -181,6 +181,7 @@ let package = Package(
                 "GameDatabase",
                 "GameModels",
                 "GameServices",
+                "Utils",
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
                 .product(name: "SQLiteData", package: "sqlite-data"),
             ],

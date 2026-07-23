@@ -365,7 +365,10 @@ private func makeState(device: Device, fleet: [Device] = []) throws -> Directive
         }
 
         await store.send(.confirmTapped)
-        await store.skipReceivedActions()
+        await store.receive({ action in
+            if case .delegate(.confirmed(directive: "survey_system", configuration: _)) = action { return true }
+            return false
+        })
         await store.finish()
         #expect(dismissed.value == true)
     }
