@@ -193,13 +193,12 @@ enum DeviceCommand: Hashable, Identifiable {
         "compact": "arrow.down.right.and.arrow.up.left", "launch": "paperplane",
         "unfurl": "arrow.up.left.and.arrow.down.right", "withdraw": "tray.and.arrow.down",
         "search": "magnifyingglass", "set_entry_point": "mappin.and.ellipse",
-        "detonate": "burst",
     ]
 
     /// Whether firing this command warrants a danger-styled confirm.
     var isDestructive: Bool {
         switch self {
-        case let .simple(c): return c == "decommission" || c == "detonate"
+        case let .simple(c): return c == "decommission"
         default:             return false
         }
     }

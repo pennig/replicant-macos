@@ -66,7 +66,6 @@ extension CommandClient {
         case "withdraw":        return .json(.withdraw(schema))
         case "search":          return .json(.search(schema))
         case "set_entry_point": return .json(.setEntryPoint(schema))
-        case "detonate":        return .json(.detonate(schema))
         default:                return nil
         }
     }
@@ -76,7 +75,7 @@ extension CommandClient {
     public static let supportedSimpleCommands: Set<String> = [
         "activate", "deactivate", "deploy", "recall", "decommission",
         "clear_queue", "clear_directive", "assemble", "compact", "launch",
-        "unfurl", "withdraw", "search", "set_entry_point", "detonate",
+        "unfurl", "withdraw", "search", "set_entry_point",
     ]
 
     /// Bridge the loosely-typed `set_directive` configuration into the generated
