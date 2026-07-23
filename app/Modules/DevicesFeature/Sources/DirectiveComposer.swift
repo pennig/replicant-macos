@@ -254,6 +254,7 @@ public struct DirectiveComposer {
         case cancelTapped
         case delegate(Delegate)
 
+        @CasePathable
         public enum Delegate: Equatable {
             case confirmed(directive: String, configuration: [String: JSONValue]?)
         }

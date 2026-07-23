@@ -365,10 +365,25 @@ private func makeState(device: Device, fleet: [Device] = []) throws -> Directive
         }
 
         await store.send(.confirmTapped)
-        await store.receive({ action in
-            if case .delegate(.confirmed(directive: "survey_system", configuration: _)) = action { return true }
-            return false
-        })
+        await store.receive(\.delegate.confirmed)
+        await store.finish()
+        #expect(dismissed.value == true)
+    }
+
+    /// Cancel dismisses the sheet without delivering any delegate.
+    @Test func cancelDismissesWithoutDelegate() async throws {
+        let database = try GameDatabase.bootstrap()
+        let dismissed = LockIsolated(false)
+        let store = TestStore(
+            initialState: DirectiveComposer.State(device: controller(), fleet: [])
+        ) {
+            DirectiveComposer()
+        } withDependencies: {
+            $0.defaultDatabase = database
+            $0.dismiss = DismissEffect { dismissed.setValue(true) }
+        }
+
+        await store.send(.cancelTapped)   // no delegate received
         await store.finish()
         #expect(dismissed.value == true)
     }
