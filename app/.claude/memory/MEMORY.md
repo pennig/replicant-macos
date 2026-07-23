@@ -26,7 +26,6 @@
 - [Locations catalog feature](locations-catalog-feature.md) — Catalog › Locations disclosure tree; domain+persistence in UniverseModels, StarsClient/LocationsClient in GameServices (since 2026-07-21), UI in LocationsFeature; blob-per-system persistence, hydrate-on-select.
 - [UniverseModels module](locations-catalog-feature.md) — pure models module (no clients since 2026-07-21): census Star/Position/Recon/LifeTier/InventoryItem + the locations domain; wire DTOs internal behind the public LocationDecoding facade.
 - [Running package tests](running-package-tests.md) — SPM module tests ARE in the Xcode test plan; schemes with test targets work as expected (`swift test` also works).
-- [swift test event-stream quirks](swift-test-event-stream-quirks.md) — --filter + --event-stream-output-path yields an EMPTY stream (vacuous 0); unfiltered captures only the LAST bundle; gate filtered runs on the swift-testing summary line.
 - [OpenAPI spec drift leniency](openapi-spec-drift-leniency.md) — POLICY: keep spec STRICT, do NOT relax additionalProperties; patch drift with targeted typed keys.
 - [OpenAPI spec layout](openapi-spec-layout.md) — spec files in Modules/API/Sources/OpenAPI/ as pristine + -edits per version; openapi.json symlinks the active -edits.
 - [Device command shapes](device-command-shapes.md) — per-command POST response classes (travel=deadline, mine=continuous, scan/census=synchronous, print=enqueued, lifecycle=immediate) + mining lifecycle.
