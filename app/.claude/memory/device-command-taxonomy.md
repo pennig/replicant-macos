@@ -1,6 +1,6 @@
 ---
 name: device-command-taxonomy
-description: "Full device-command inventory (feature gates), live-roster coverage, unsurfaced commands, and the approved command-grouping + presentation plan for the DeviceDetailView command revamp."
+description: "Full device-command inventory (feature gates), live-roster coverage, Stage 4 folded all verbs in (detonate dropped), and the approved command-grouping + presentation plan for the DeviceDetailView command revamp."
 metadata:
   node_type: memory
   type: reference
@@ -54,3 +54,9 @@ Stable order; only non-empty groups render:
 ## Presentation rule (kills the sheet/inline mishmash)
 
 **needs live server data / rich preview / heavy form → sheet · light local params → inline · no params → confirm.** This moves **Directive → sheet** (all three controller types), joining Travel/Print/Load. The ~500-line directive editor extracts into its own sheet-presented `DirectiveComposer` feature (`@Presents`; dismissal cancels `salvageSitesRequested`). Directive naming clash to resolve: AMI-controller "directive" vs the planned automation feature [[directives-feature]] — keep them lexically distinct.
+
+## Stage 4 status (2026-07-23)
+
+Folded in: `configure` (Carrier & Cargo, mode picker seeded from `taxi_mode`), `message` (Power, BobNet channel picker + body), `repair` (Tasks, under-capacity fleet picker, deadline-tracked), `replicate` (Special, via ReplicantsClient — never CommandClient), `change_owner` (Special, other-own-replicants picker). `detonate` dropped everywhere. Derived-universe test pins taxonomy == 34 dispatchable verbs.
+
+**Re-check when these paths go live** (dormant on this account today): (1) repair — no service_bot owned; when one appears, sanity-check `repairCandidates`' `operationalCapacity < 100` filter against devices whose payload omits `operational_capacity` (defaulted to 0 → spurious "0%" rows); (2) change_owner — 1 replicant; verify the picker on a 2-replicant account. Known UX gap, deliberate: `message` hides until BobNet has synced channels (a `.notice` fallback was suggested in final review, deferred).

@@ -454,8 +454,12 @@ public struct DevicesFeature {
                         let reconciler = Reconciler()
                         for device in devices { await reconciler.ingest(device) }
                         await reconciler.pruneDevices(presentCodes: devices.map(\.deviceCode))
+                    } else {
+                        logger.warning("post-replication fleet re-ingest failed; awaiting stream echo")
                     }
-                    _ = try? await replicantsClient.refresh()
+                    if (try? await replicantsClient.refresh()) == nil {
+                        logger.warning("post-replication roster refresh failed; awaiting stream echo")
+                    }
                 }
 
             case .directiveComposeTapped:
