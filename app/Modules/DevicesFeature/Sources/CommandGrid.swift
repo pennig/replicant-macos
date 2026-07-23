@@ -4,8 +4,9 @@
 //
 //  The device inspector's command surface: the device's dispatchable commands,
 //  grouped into named sections (Movement / Tasks / …), and the inline confirm/parameter
-//  panel each one reveals when selected (a text field, a directive picker with its own
-//  configuration, a device checkbox list, a blueprint picker, or a plain confirmation).
+//  panel each one reveals when selected (a text field, a resource picker, a device
+//  checkbox list, a blueprint picker, or a plain confirmation); heavier commands (travel /
+//  print / cargo / directive) confirm in their own sheets.
 //
 
 import ComposableArchitecture
@@ -14,8 +15,6 @@ import GameServices
 import SQLiteData
 import SwiftUI
 import UI
-import UniverseModels
-import Utils
 
 struct CommandGrid: View {
     let device: Device
@@ -26,9 +25,6 @@ struct CommandGrid: View {
     @FetchAll(Device.order { $0.deviceCode }) private var fleet
     /// The unlocked blueprint catalog, backing the `enqueue_print` dropdown.
     @FetchAll(Blueprint.order { $0.deviceType }) private var blueprints
-    /// The local locations catalog, source of the `gather_salvage` site picker.
-    /// One blob per explored system; the controller's system is decoded on demand.
-    @FetchAll(SystemDetail.all) private var systemDetails
     @State private var pending: DeviceCommand?
     @State private var textValue: String = ""
     @State private var choiceValue: String = ""
@@ -36,60 +32,6 @@ struct CommandGrid: View {
     @State private var blueprintType: String = ""
     /// The checked device codes for a pending `adopt`.
     @State private var selectedCodes: Set<String> = []
-    /// `survey_system` directive configuration, revealed when that directive is the
-    /// pending `set_directive` selection.
-    @State private var planetsScope: String = SurveyScope.all
-    @State private var moonsScope: String = SurveyScope.none
-    @State private var recall: Bool = true
-    /// `gather_salvage` directive configuration: the chosen salvage-site
-    /// designation, revealed when that directive is the pending selection.
-    @State private var salvageLocation: String = ""
-    /// AMI transport-controller directive configuration (`delivery` / `shuttle` /
-    /// `ferry` / `consolidate`), revealed when one of those is the pending
-    /// selection. `collect`/`deliver` are location designations; `requirement` is
-    /// the per-resource target for a one-shot `delivery`; `priorityResources` is
-    /// the ordered resource preference for the continuous directives.
-    @State private var collectLocation: String = ""
-    @State private var deliverLocation: String = ""
-    @State private var requirement: [String: String] = [:]
-    @State private var priorityResources: [String] = []
-
-    /// The `all` / `none` scope values the survey config dropdowns offer.
-    private enum SurveyScope { static let all = "all", none = "none" }
-
-    /// The body the controller operates at — where its salvage drones are. A
-    /// stowed controller carries no location of its own, so fall back to a
-    /// controlled drone, then the stow-parent vessel, then any same-replicant
-    /// device that reports a location.
-    private var controllerBody: String? {
-        if let loc = device.location, !loc.isEmpty { return loc }
-        if let loc = device.controlledDevices.compactMap(\.location).first(where: { !$0.isEmpty }) { return loc }
-        if let parent = device.stowedInDeviceCode,
-           let loc = fleet.first(where: { $0.deviceCode == parent })?.location, !loc.isEmpty { return loc }
-        return fleet.first { $0.replicantCode == device.replicantCode && ($0.location?.isEmpty == false) }?.location
-    }
-
-    /// The controller's star system designation (the leading segment of its
-    /// operating body, e.g. "SHERATANON-7-4" → "SHERATANON").
-    private var controllerSystem: String? {
-        guard let body = controllerBody else { return nil }
-        let system = String(body.split(separator: "-").first ?? "")
-        return system.isEmpty ? nil : system
-    }
-
-    /// Salvage-bearing bodies in the controller's system, read from the local
-    /// catalog. `gather_salvage` targets a body (working every site on it), so the
-    /// picker offers bodies, not individual sites. Empty until the system is
-    /// hydrated (see `.salvageSitesRequested`); depleted bodies drop out (stream
-    /// depletion events keep this current — see LocationsClient.markSalvage*).
-    private var salvageBodies: [SalvageBody] {
-        guard
-            let system = controllerSystem,
-            let row = systemDetails.first(where: { $0.designation == system }),
-            let starSystem = try? row.system()
-        else { return [] }
-        return starSystem.salvageBodies
-    }
 
     /// The devices this controller can adopt: fleet members of the type it
     /// shepherds (mining drones for a mining controller, etc.) that it doesn't
@@ -274,16 +216,8 @@ struct CommandGrid: View {
         }
         switch command.parameter {
         case let .choice(_, options):
-            // Seed the directive picker with the device's current directive when
-            // it's a valid option, so re-opening reflects what's in force.
-            if case .setDirective = command, let current = device.currentDirective, options.contains(current) {
-                choiceValue = current
-                seedDirectiveConfig()
-            } else {
-                choiceValue = options.first ?? ""
-            }
-            // Load any data the initially-selected directive's config needs.
-            if case .setDirective = command { prepareDirective(choiceValue) }
+            // Seed the dropdown with the first option (mine/retarget resources).
+            choiceValue = options.first ?? ""
         case let .deviceChoice(_, options):
             // Seed the dropdown with the first candidate device code.
             choiceValue = options.first?.id ?? ""
@@ -293,66 +227,6 @@ struct CommandGrid: View {
         pending = command
     }
 
-    /// Prepare the config controls for a newly-selected directive: seed defaults
-    /// and, for `gather_salvage`, kick off a hydrate of the controller's system so
-    /// the salvage-body dropdown fills from the local catalog.
-    private func prepareDirective(_ directive: String) {
-        guard directive == "gather_salvage" else { return }
-        if salvageLocation.isEmpty { salvageLocation = salvageBodies.first?.designation ?? "" }
-        if let system = controllerSystem, let body = controllerBody {
-            store.send(.salvageSitesRequested(system: system, body: body))
-        }
-    }
-
-    /// Seed the config controls from the directive currently in force, so
-    /// re-opening the picker mirrors what's running. Falls back to the documented
-    /// defaults (survey planets: all, moons: none, recall: on) when no config is
-    /// present.
-    private func seedDirectiveConfig() {
-        planetsScope = SurveyScope.all
-        moonsScope = SurveyScope.none
-        recall = true
-        salvageLocation = ""
-        collectLocation = ""
-        deliverLocation = ""
-        requirement = [:]
-        priorityResources = []
-        guard let config = device.currentDirectiveConfig else { return }
-        switch device.currentDirective {
-        case "survey_system":
-            planetsScope = config["planets"]?.stringValue ?? planetsScope
-            moonsScope = config["moons"]?.stringValue ?? moonsScope
-            recall = config["recall"]?.boolValue ?? recall
-        case "gather_salvage":
-            salvageLocation = config["location"]?.stringValue ?? ""
-            recall = config["recall"]?.boolValue ?? recall
-        case "delivery":
-            // The backend nests a one-shot delivery's endpoints under `route`.
-            collectLocation = config["route"]?["collect"]?.stringValue ?? ""
-            deliverLocation = config["route"]?["deliver"]?.stringValue ?? ""
-            if case let .object(target)? = config["requirement"] {
-                requirement = target.reduce(into: [:]) { acc, pair in
-                    if let amount = pair.value.numberValue { acc[pair.key] = Self.amountString(amount) }
-                }
-            }
-        case "shuttle", "ferry":
-            collectLocation = config["collect"]?.stringValue ?? ""
-            deliverLocation = config["deliver"]?.stringValue ?? ""
-            priorityResources = config["priority"]?.arrayValue?.compactMap(\.stringValue) ?? []
-        case "consolidate":
-            deliverLocation = config["deliver"]?.stringValue ?? ""
-            priorityResources = config["priority"]?.arrayValue?.compactMap(\.stringValue) ?? []
-        default:
-            break
-        }
-    }
-
-    /// Render a requirement amount without a trailing `.0` so a whole number
-    /// round-trips as "50" rather than "50.0".
-    private static func amountString(_ value: Double) -> String {
-        value == value.rounded() ? String(Int(value)) : String(value)
-    }
-
     @ViewBuilder
     private func parameterPanel(_ command: DeviceCommand) -> some View {
         VStack(alignment: .leading, spacing: Space.s) {
@@ -360,22 +234,11 @@ struct CommandGrid: View {
             case let .text(label, placeholder):
                 RCField(label, text: $textValue, placeholder: placeholder, mono: true)
             case let .choice(label, options):
-                VStack(alignment: .leading, spacing: Space.s) {
-                    VStack(alignment: .leading, spacing: Space.xs) {
-                        Text(label.uppercased())
-                            .font(.rcSectionLabel)
-                            .foregroundStyle(.rcTextTertiary)
-                        RCValueSelect(label, options: options, selection: $choiceValue)
-                    }
-                    // A directive with its own configuration reveals it inline once
-                    // selected (survey_system and gather_salvage; other directives
-                    // take none).
-                    if case .setDirective = command {
-                        directiveConfiguration(choiceValue)
-                            .onChange(of: choiceValue) { _, newValue in
-                                prepareDirective(newValue)
-                            }
-                    }
+                VStack(alignment: .leading, spacing: Space.xs) {
+                    Text(label.uppercased())
+                        .font(.rcSectionLabel)
+                        .foregroundStyle(.rcTextTertiary)
+                    RCValueSelect(label, options: options, selection: $choiceValue)
                 }
             case let .multiSelect(label, options, limit):
                 deviceCheckboxList(label, options: options, limit: limit)
@@ -485,13 +348,10 @@ struct CommandGrid: View {
         }
     }
 
-    /// The dispatch params for a command. `set_directive` attaches the selected
-    /// directive's configuration and `adopt` the checked device codes; every other
-    /// command uses the plain single-value mapping.
+    /// The dispatch params for a command. `adopt` uses the checked device codes;
+    /// every other command uses the plain single-value mapping.
     private func params(for command: DeviceCommand) -> CommandParams {
         switch command {
-        case .setDirective:
-            return CommandParams(directive: choiceValue, configuration: directiveConfig(for: choiceValue))
         case .adopt, .release:
             return CommandParams(devices: Array(selectedCodes))
         case .attach, .detach:
@@ -503,328 +363,6 @@ struct CommandGrid: View {
             return CommandParams(devices: Array(selectedCodes))
         default:
             return command.params(confirmValue(for: command))
-        }
-    }
-
-    /// The configuration object for a directive, or nil for directives that take
-    /// none (belt_search and the rest). `survey_system` and `gather_salvage` are
-    /// configurable today.
-    private func directiveConfig(for directive: String) -> [String: JSONValue]? {
-        switch directive {
-        case "survey_system":
-            return [
-                "planets": .string(planetsScope),
-                "moons": .string(moonsScope),
-                "recall": .bool(recall),
-            ]
-        case "gather_salvage":
-            return [
-                "location": .string(salvageLocation),
-                "recall": .bool(recall),
-            ]
-        case "delivery":
-            // A one-shot transfer: endpoints nest under `route`, and the
-            // per-resource `requirement` defines when the run is complete.
-            var config: [String: JSONValue] = [
-                "route": .object([
-                    "collect": .string(collectLocation),
-                    "deliver": .string(deliverLocation),
-                ]),
-            ]
-            let target = requirementPayload
-            if !target.isEmpty { config["requirement"] = .object(target) }
-            return config
-        case "shuttle", "ferry":
-            // Continuous in-system (shuttle) / interstellar (ferry) transport:
-            // flat endpoints with an optional ordered resource `priority`.
-            var config: [String: JSONValue] = [
-                "collect": .string(collectLocation),
-                "deliver": .string(deliverLocation),
-            ]
-            if !priorityResources.isEmpty {
-                config["priority"] = .array(priorityResources.map(JSONValue.string))
-            }
-            return config
-        case "consolidate":
-            // Gather dispersed system resources to a single destination.
-            var config: [String: JSONValue] = ["deliver": .string(deliverLocation)]
-            if !priorityResources.isEmpty {
-                config["priority"] = .array(priorityResources.map(JSONValue.string))
-            }
-            return config
-        default:
-            return nil
-        }
-    }
-
-    /// The `delivery` requirement object: the resources with a positive amount,
-    /// keyed by resource type. Blank or non-positive rows are dropped.
-    private var requirementPayload: [String: JSONValue] {
-        requirement.reduce(into: [:]) { acc, pair in
-            let trimmed = pair.value.trimmingCharacters(in: .whitespaces)
-            if let amount = Double(trimmed), amount > 0 { acc[pair.key] = .number(amount) }
-        }
-    }
-
-    /// Inline configuration controls for a configurable directive. Empty for
-    /// directives that carry no configuration.
-    @ViewBuilder
-    private func directiveConfiguration(_ directive: String) -> some View {
-        switch directive {
-        case "survey_system":
-            VStack(alignment: .leading, spacing: Space.s) {
-                configField("Planets", selection: $planetsScope)
-                configField("Moons", selection: $moonsScope)
-                Toggle(isOn: $recall) {
-                    Text("Recall when complete")
-                        .font(.rcCaption)
-                        .foregroundStyle(.rcTextSecondary)
-                }
-                .toggleStyle(.switch)
-                .tint(.rcAccent)
-            }
-            .padding(.top, Space.xs)
-        case "gather_salvage":
-            salvageConfiguration
-        case "delivery":
-            deliveryConfiguration
-        case "shuttle":
-            transportRouteConfiguration(interstellar: false)
-        case "ferry":
-            transportRouteConfiguration(interstellar: true)
-        case "consolidate":
-            consolidateConfiguration
-        default:
-            EmptyView()
-        }
-    }
-
-    /// The `delivery` config: a one-shot collect → deliver route plus the
-    /// per-resource target that defines when the run is complete. The backend
-    /// rejects the directive without a requirement, so confirm stays disabled
-    /// until both endpoints and at least one amount are set.
-    @ViewBuilder
-    private var deliveryConfiguration: some View {
-        VStack(alignment: .leading, spacing: Space.s) {
-            RCField("Collect From", text: $collectLocation, placeholder: "ATIANFU-BELT-1", mono: true)
-            RCField("Deliver To", text: $deliverLocation, placeholder: "ALPHERATOZ-8-L4", mono: true)
-            requirementEditor
-        }
-        .padding(.top, Space.xs)
-    }
-
-    /// The `shuttle` (in-system) / `ferry` (interstellar) config: a continuous
-    /// collect → deliver route with an optional ordered resource priority.
-    @ViewBuilder
-    private func transportRouteConfiguration(interstellar: Bool) -> some View {
-        VStack(alignment: .leading, spacing: Space.s) {
-            RCField(
-                "Collect From",
-                text: $collectLocation,
-                placeholder: interstellar ? "TARAZEDAR-BELT-1" : "ATIANFU-BELT-1",
-                hint: interstellar ? "source system" : nil,
-                mono: true
-            )
-            RCField(
-                "Deliver To",
-                text: $deliverLocation,
-                placeholder: "ALPHERATOZ-8-L4",
-                hint: interstellar ? "destination system" : nil,
-                mono: true
-            )
-            priorityEditor
-        }
-        .padding(.top, Space.xs)
-    }
-
-    /// The `consolidate` config: a single destination that dispersed system
-    /// resources are gathered to, with an optional ordered resource priority.
-    @ViewBuilder
-    private var consolidateConfiguration: some View {
-        VStack(alignment: .leading, spacing: Space.s) {
-            RCField("Deliver To", text: $deliverLocation, placeholder: "ALPHERATOZ-8-L4", mono: true)
-            priorityEditor
-        }
-        .padding(.top, Space.xs)
-    }
-
-    /// The `delivery` requirement editor: one numeric field per resource type.
-    /// Only resources with a positive amount are sent; together they define the
-    /// quota that completes the one-shot run.
-    @ViewBuilder
-    private var requirementEditor: some View {
-        VStack(alignment: .leading, spacing: Space.xs) {
-            RCSectionHeader("Requirement")
-            Text("Amounts to deliver before the run completes.")
-                .font(.rcCaption)
-                .foregroundStyle(.rcTextTertiary)
-            VStack(spacing: 0) {
-                ForEach(Array(DeviceCommand.miningResources.enumerated()), id: \.element) { index, resource in
-                    if index > 0 { Divider().overlay(Color.rcSeparator) }
-                    requirementRow(resource)
-                }
-            }
-            .background(
-                RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
-                    .fill(.rcSurfaceRaised)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
-                            .strokeBorder(.rcSeparator, lineWidth: 1)
-                    )
-            )
-        }
-    }
-
-    /// One requirement row — a resource label and a trailing numeric field.
-    private func requirementRow(_ resource: String) -> some View {
-        HStack(spacing: Space.s) {
-            Text(resource.capitalized)
-                .font(.rcCaption)
-                .foregroundStyle(.rcTextSecondary)
-            Spacer(minLength: 0)
-            TextField("0", text: requirementBinding(resource))
-                .textFieldStyle(.plain)
-                .multilineTextAlignment(.trailing)
-                .font(.rcMonoSmall)
-                .frame(width: 56)
-        }
-        .padding(.horizontal, Space.m)
-        .padding(.vertical, Space.s)
-    }
-
-    /// A string binding into the `requirement` map for a resource, so an empty
-    /// field clears the entry rather than leaving a stale amount.
-    private func requirementBinding(_ resource: String) -> Binding<String> {
-        Binding(
-            get: { requirement[resource] ?? "" },
-            set: { newValue in
-                let trimmed = newValue.trimmingCharacters(in: .whitespaces)
-                if trimmed.isEmpty { requirement[resource] = nil }
-                else { requirement[resource] = trimmed }
-            }
-        )
-    }
-
-    /// The ordered resource-priority editor for the continuous transport
-    /// directives. Tapping a resource appends it (its badge shows the rank);
-    /// tapping again removes it and the remaining ranks close up. Empty means
-    /// "balance everything".
-    @ViewBuilder
-    private var priorityEditor: some View {
-        VStack(alignment: .leading, spacing: Space.xs) {
-            RCSectionHeader("Priority")
-            Text("Tap to rank resources in order. Leave empty to balance all.")
-                .font(.rcCaption)
-                .foregroundStyle(.rcTextTertiary)
-            LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 96), spacing: Space.xs)],
-                spacing: Space.xs
-            ) {
-                ForEach(DeviceCommand.miningResources, id: \.self) { resource in
-                    priorityChip(resource)
-                }
-            }
-        }
-    }
-
-    /// A single priority chip: accent-filled with its rank number when selected,
-    /// a bordered surface otherwise.
-    private func priorityChip(_ resource: String) -> some View {
-        let rank = priorityResources.firstIndex(of: resource)
-        let selected = rank != nil
-        return Button {
-            togglePriority(resource)
-        } label: {
-            HStack(spacing: Space.xs) {
-                if let rank {
-                    Text("\(rank + 1)")
-                        .font(.rcMonoSmall)
-                        .foregroundStyle(.rcAccentOnColor)
-                }
-                Text(resource.capitalized)
-                    .font(.rcCaption)
-                    .lineLimit(1)
-                    .foregroundStyle(selected ? .rcAccentOnColor : .rcTextSecondary)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, Space.xs)
-            .padding(.horizontal, Space.s)
-            .background(
-                RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
-                    .fill(selected ? Color.rcAccent : Color.rcSurfaceRaised)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
-                            .strokeBorder(selected ? Color.clear : Color.rcSeparator, lineWidth: 1)
-                    )
-            )
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
-    /// Toggle a resource in the ordered priority list, appending it at the end
-    /// (lowest current rank) or removing it.
-    private func togglePriority(_ resource: String) {
-        if let index = priorityResources.firstIndex(of: resource) {
-            priorityResources.remove(at: index)
-        } else {
-            priorityResources.append(resource)
-        }
-    }
-
-    /// The `gather_salvage` config: a required salvage-body picker (sourced from
-    /// the controller's system in the local catalog) plus the recall toggle. The
-    /// directive targets a body — its drones work every salvage site there — so
-    /// the picker offers bodies. The backend rejects the directive without a
-    /// `location`, so confirm stays disabled until a body is chosen.
-    @ViewBuilder
-    private var salvageConfiguration: some View {
-        VStack(alignment: .leading, spacing: Space.s) {
-            VStack(alignment: .leading, spacing: Space.xs) {
-                RCSectionHeader("Salvage Location")
-                if salvageBodies.isEmpty {
-                    Text("No known salvage in this system yet. Scan its bodies in Locations to reveal them.")
-                        .font(.rcCaption)
-                        .foregroundStyle(.rcTextTertiary)
-                } else {
-                    RCValueSelect(
-                        "Salvage Location",
-                        options: salvageBodies.map {
-                            (label: salvageBodyLabel($0), value: $0.designation)
-                        },
-                        selection: $salvageLocation
-                    )
-                }
-            }
-            Toggle(isOn: $recall) {
-                Text("Recall when complete")
-                    .font(.rcCaption)
-                    .foregroundStyle(.rcTextSecondary)
-            }
-            .toggleStyle(.switch)
-            .tint(.rcAccent)
-        }
-        .padding(.top, Space.xs)
-        // Auto-select the first body once the catalog hydrates, unless one is
-        // already chosen (kept selection or a seeded running directive).
-        .onChange(of: salvageBodies.map(\.id)) { _, _ in
-            if salvageLocation.isEmpty { salvageLocation = salvageBodies.first?.designation ?? "" }
-        }
-    }
-
-    /// A salvage body's dropdown label — its name/designation, annotated with the
-    /// site count when it holds more than one (the drones work them all).
-    private func salvageBodyLabel(_ body: SalvageBody) -> String {
-        body.siteCount > 1 ? "\(body.displayName) · \(body.siteCount) sites" : body.displayName
-    }
-
-    /// A labeled all/none scope dropdown for a survey config field.
-    private func configField(_ label: String, selection: Binding<String>) -> some View {
-        VStack(alignment: .leading, spacing: Space.xs) {
-            Text(label.uppercased())
-                .font(.rcSectionLabel)
-                .foregroundStyle(.rcTextTertiary)
-            RCValueSelect(label, options: [SurveyScope.all, SurveyScope.none], selection: selection)
         }
     }
 
@@ -955,24 +493,7 @@ struct CommandGrid: View {
     private func isConfirmable(_ command: DeviceCommand) -> Bool {
         switch command.parameter {
         case .text:        return !textValue.trimmingCharacters(in: .whitespaces).isEmpty
-        case .choice:
-            // Some directives carry required config the backend rejects without.
-            if case .setDirective = command {
-                switch choiceValue {
-                case "gather_salvage":
-                    return !salvageLocation.isEmpty
-                case "delivery":
-                    // Needs both endpoints and at least one resource target.
-                    return !collectLocation.isEmpty && !deliverLocation.isEmpty && !requirementPayload.isEmpty
-                case "shuttle", "ferry":
-                    return !collectLocation.isEmpty && !deliverLocation.isEmpty
-                case "consolidate":
-                    return !deliverLocation.isEmpty
-                default:
-                    break
-                }
-            }
-            return !choiceValue.isEmpty
+        case .choice:      return !choiceValue.isEmpty
         case .deviceChoice: return !choiceValue.isEmpty
         case .blueprint:   return !blueprintType.isEmpty
         case .multiSelect: return !selectedCodes.isEmpty

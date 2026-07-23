@@ -152,10 +152,6 @@ public struct DevicesFeature {
         case inspectorVisibilityChanged(deviceCode: String?)
         /// A refreshed diversion snapshot for the viewed device (nil clears it).
         case diversionResponse(DiversionSnapshot?)
-        /// The inspector opened the `gather_salvage` directive for a controller in
-        /// `system`; hydrate that controller's operating `body` into the local
-        /// locations catalog so the salvage-site dropdown can offer its sites.
-        case salvageSitesRequested(system: String, body: String)
         /// The inspector edited the selected device's tags (added or removed one).
         /// `tags` is the full new set — the PATCH replaces all tags at once, and
         /// the fresh device row reconciles back into the observed tables on success.
@@ -503,16 +499,6 @@ public struct DevicesFeature {
             case let .diversionResponse(snapshot):
                 state.diversion = snapshot
                 return .none
-
-            case let .salvageSitesRequested(system, body):
-                // Fill the local catalog for this controller's system in the
-                // background; the SystemDetail write flows back to the picker's
-                // @FetchAll. Best-effort — an unreadable system just leaves the
-                // dropdown empty with its "scan the system" hint.
-                let locationsClient = self.locationsClient
-                return .run { _ in
-                    try? await locationsClient.hydrateBody(systemDesignation: system, bodyDesignation: body)
-                }
 
             case let .tagsEdited(deviceCode, tags):
                 let devicesClient = self.devicesClient
