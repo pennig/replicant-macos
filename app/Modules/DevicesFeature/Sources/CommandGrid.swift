@@ -238,7 +238,7 @@ struct CommandGrid: View {
         // location's live stockpile, so it opens a sheet straight from the grid.
         if case .loadCargo = command {
             pending = nil
-            store.send(.cargoLoadRequested(
+            store.send(.cargoLoadTapped(
                 deviceCode: device.deviceCode,
                 location: device.location,
                 locationName: device.locationName,

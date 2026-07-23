@@ -316,4 +316,67 @@ private func device(_ code: String, status: String = "idle") -> Device {
         await store.receive(\.commandFinished)
         #expect(store.state.commandError == "No empty matrix at this location.")
     }
+
+    /// A dropped sheet presentation (AppKit refused `beginSheet` — see
+    /// EndEditingClient's note) leaves its item state non-nil with nothing on
+    /// screen, and since dismiss actions only fire from a *visible* sheet, that
+    /// state used to be permanently stuck — pinning the item binding non-nil so
+    /// no later sheet could ever present. A grid tap is impossible while a real
+    /// modal is up, so any presentation state alive when a present flow starts
+    /// is provably stale: starting a flow must clear it all so the fresh
+    /// presentation passes through nil and SwiftUI reconciles.
+    @Test func startingAPresentFlowClearsStalePresentationState() async throws {
+        let database = try GameDatabase.bootstrap()
+        let store = withDependencies {
+            $0.defaultDatabase = database
+            $0.continuousClock = ImmediateClock()
+            $0.endEditing = EndEditingClient {}
+            $0.commandClient.previewTravel = { _, _ in .plan(TravelPlan()) }
+        } operation: {
+            var state = DevicesFeature.State()
+            state.travelPreview = TravelPreview(deviceCode: "OLD", destination: "STALE")
+            state.printPreview = PrintPreview(deviceCode: "OLD", deviceType: "autofactory")
+            state.cargoLoad = CargoLoadPreview(deviceCode: "OLD", locationName: nil, capacityRemaining: 1)
+            state.commandError = "stale alert"
+            return TestStore(initialState: state) { DevicesFeature() }
+        }
+
+        await store.send(.travelConfirmed(deviceCode: "A", destination: "IZARUM")) {
+            $0.travelPreview = nil
+            $0.printPreview = nil
+            $0.cargoLoad = nil
+            $0.commandError = nil
+        }
+        await store.receive(\.travelPreviewRequested) {
+            $0.travelPreview = TravelPreview(deviceCode: "A", destination: "IZARUM")
+        }
+        await store.receive(\.travelPreviewResponse) {
+            $0.travelPreview?.phase = .loaded(TravelPlan())
+        }
+    }
+
+    /// Load Cargo presents a sheet like travel/print, so it gets the same
+    /// stale-state clear + end-editing + runloop-yield guard (it used to
+    /// present synchronously from the grid tap — the one sheet flow without
+    /// the dance).
+    @Test func cargoLoadTappedEndsEditingThenRequests() async throws {
+        let database = try GameDatabase.bootstrap()
+        let endedEditing = LockIsolated(false)
+        let store = TestStore(initialState: DevicesFeature.State()) {
+            DevicesFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
+            $0.continuousClock = ImmediateClock()
+            $0.endEditing = EndEditingClient { endedEditing.setValue(true) }
+        }
+
+        await store.send(.cargoLoadTapped(deviceCode: "A", location: nil, locationName: nil, capacityRemaining: 5))
+        await store.receive(\.cargoLoadRequested) {
+            $0.cargoLoad = CargoLoadPreview(deviceCode: "A", locationName: nil, capacityRemaining: 5)
+        }
+        await store.receive(\.cargoLoadResponse) {
+            $0.cargoLoad?.phase = .failed("This device isn’t at a location, so there’s no stockpile to load from.")
+        }
+        #expect(endedEditing.value == true)
+    }
 }

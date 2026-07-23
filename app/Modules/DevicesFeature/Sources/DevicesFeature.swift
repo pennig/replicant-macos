@@ -125,6 +125,10 @@ public struct DevicesFeature {
         case printPreviewResponse(PrintPreview.Phase)
         case printPreviewConfirmed
         case printPreviewDismissed
+        /// The grid's Load Cargo button. A thin intent mirroring `travelConfirmed`:
+        /// clears any stale presentation state, ends field editing, and yields a
+        /// runloop tick before `cargoLoadRequested` presents the picker.
+        case cargoLoadTapped(deviceCode: String, location: String?, locationName: String?, capacityRemaining: Int)
         /// Load-cargo flow: open the picker (fetching the location's stockpile),
         /// receive the resolved stockpile, then either confirm (dispatch
         /// `collect_resources` with the chosen per-resource amounts) or dismiss.
@@ -182,6 +186,39 @@ public struct DevicesFeature {
     /// changes; `travelPreview` cancels an in-flight dry-run so a prior device's
     /// late response can't land on the current preview.
     private enum CancelID { case refresh, travelPreview, printPreview, cargoLoad }
+
+    /// Clear every modal the inspector could be presenting, cancelling their
+    /// in-flight effects. Called at the head of each present flow: a grid tap is
+    /// impossible while a real sheet/alert is on screen, so any non-nil
+    /// presentation state here is provably stale — a presentation AppKit dropped
+    /// (`_beginWindowBlockingModalSessionForSheet:` refuses while another
+    /// window-blocking session is still tearing down; see EndEditingClient).
+    /// Left in place, stale state pins the item binding non-nil and no sheet can
+    /// ever present again — the dismiss actions that would clear it only fire
+    /// from a *visible* sheet. Clearing here lets the new presentation pass
+    /// through nil (the flow's runloop yield gives SwiftUI the tick to
+    /// reconcile), so a retry always shakes the stuck sheet loose. Logged
+    /// loudly: each occurrence is a dropped presentation we otherwise can't see.
+    private static func clearStalePresentations(_ state: inout State) -> Effect<Action> {
+        var stale: [String] = []
+        if state.travelPreview != nil { stale.append("travel") }
+        if state.printPreview != nil { stale.append("print") }
+        if state.cargoLoad != nil { stale.append("cargo") }
+        if state.directiveComposer != nil { stale.append("directive") }
+        if state.commandError != nil { stale.append("alert") }
+        guard !stale.isEmpty else { return .none }
+        logger.warning("cleared stale presentation state (\(stale.joined(separator: "+"), privacy: .public)) — an earlier sheet presentation was dropped")
+        state.travelPreview = nil
+        state.printPreview = nil
+        state.cargoLoad = nil
+        state.directiveComposer = nil
+        state.commandError = nil
+        return .merge(
+            .cancel(id: CancelID.travelPreview),
+            .cancel(id: CancelID.printPreview),
+            .cancel(id: CancelID.cargoLoad)
+        )
+    }
 
     public var body: some ReducerOf<Self> {
         BindingReducer()
@@ -277,20 +314,22 @@ public struct DevicesFeature {
                 return .none
 
             case let .travelConfirmed(deviceCode, destination):
-                // End field editing and yield a runloop tick before the sheet is
-                // presented. Setting `travelPreview` (in `.travelPreviewRequested`)
-                // is what presents the sheet, and presenting while the destination
+                // Clear anything stale (see `clearStalePresentations`), end field
+                // editing, and yield a runloop tick before the sheet is presented.
+                // Setting `travelPreview` (in `.travelPreviewRequested`) is what
+                // presents the sheet, and presenting while the destination
                 // field's text-completion popover is still on screen crashes
-                // AppKit's sheet presentation. Both side effects live behind
+                // AppKit's sheet presentation. All side effects live behind
                 // dependencies (`endEditing`, `clock`) so this is testable — the
                 // view just sends the intent.
+                let reset = Self.clearStalePresentations(&state)
                 let endEditing = self.endEditing
                 let clock = self.clock
-                return .run { send in
+                return .merge(reset, .run { send in
                     await endEditing()
                     try await clock.sleep(for: .zero)
                     await send(.travelPreviewRequested(deviceCode: deviceCode, destination: destination))
-                }
+                })
 
             case let .travelPreviewRequested(deviceCode, destination):
                 state.travelPreview = TravelPreview(deviceCode: deviceCode, destination: destination)
@@ -328,11 +367,12 @@ public struct DevicesFeature {
                 return .cancel(id: CancelID.travelPreview)
 
             case let .printConfirmed(deviceCode, deviceType, location, locationName, required):
-                // Mirror of `.travelConfirmed`: end editing + yield before the
-                // print preview sheet presents.
+                // Mirror of `.travelConfirmed`: clear stale state, end editing,
+                // and yield before the print preview sheet presents.
+                let reset = Self.clearStalePresentations(&state)
                 let endEditing = self.endEditing
                 let clock = self.clock
-                return .run { send in
+                return .merge(reset, .run { send in
                     await endEditing()
                     try await clock.sleep(for: .zero)
                     await send(.printPreviewRequested(
@@ -342,7 +382,7 @@ public struct DevicesFeature {
                         locationName: locationName,
                         required: required
                     ))
-                }
+                })
 
             case let .printPreviewRequested(deviceCode, deviceType, location, locationName, required):
                 state.printPreview = PrintPreview(deviceCode: deviceCode, deviceType: deviceType)
@@ -379,6 +419,23 @@ public struct DevicesFeature {
             case .printPreviewDismissed:
                 state.printPreview = nil
                 return .cancel(id: CancelID.printPreview)
+
+            case let .cargoLoadTapped(deviceCode, location, locationName, capacityRemaining):
+                // Same guard as `.travelConfirmed`: clear stale state, end
+                // editing, and yield a runloop tick before the picker presents.
+                let reset = Self.clearStalePresentations(&state)
+                let endEditing = self.endEditing
+                let clock = self.clock
+                return .merge(reset, .run { send in
+                    await endEditing()
+                    try await clock.sleep(for: .zero)
+                    await send(.cargoLoadRequested(
+                        deviceCode: deviceCode,
+                        location: location,
+                        locationName: locationName,
+                        capacityRemaining: capacityRemaining
+                    ))
+                })
 
             case let .cargoLoadRequested(deviceCode, location, locationName, capacityRemaining):
                 state.cargoLoad = CargoLoadPreview(
@@ -463,17 +520,18 @@ public struct DevicesFeature {
                 }
 
             case .directiveComposeTapped:
-                // Same dance as `.travelConfirmed`: end field editing and yield
-                // a runloop tick before the sheet-presenting state is set — a
-                // sheet presented while a text field's completion popover is up
-                // crashes AppKit's sheet presentation.
+                // Same dance as `.travelConfirmed`: clear stale state, end field
+                // editing, and yield a runloop tick before the sheet-presenting
+                // state is set — a sheet presented while a text field's
+                // completion popover is up crashes AppKit's sheet presentation.
+                let reset = Self.clearStalePresentations(&state)
                 let endEditing = self.endEditing
                 let clock = self.clock
-                return .run { send in
+                return .merge(reset, .run { send in
                     await endEditing()
                     try await clock.sleep(for: .zero)
                     await send(.directiveComposerPresented)
-                }
+                })
 
             case .directiveComposerPresented:
                 guard let device = state.selectedDevice else { return .none }
