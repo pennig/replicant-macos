@@ -198,7 +198,9 @@ struct CommandGrid: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.m) {
-            RCSectionHeader("Commands")
+            Text("Commands")
+                .font(.rcBodyEmph)
+                .foregroundStyle(.rcTextSecondary)
 
             if commands.isEmpty {
                 Text("No dispatchable commands for this device yet.")

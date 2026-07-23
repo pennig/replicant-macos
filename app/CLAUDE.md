@@ -25,7 +25,7 @@ Look in the `Modules/UI` folder for the Swift package that represents the design
 - **List-row structs live in their own file**, never beside a `#Preview` — the Xcode 26 preview JIT crashes otherwise (see the list-row-preview-crash memory note). Same for delegating convenience inits.
 - **Logging:** `os.Logger` only (no `print`), subsystem `name.pennig.replicould` everywhere, category = the module or service name (`GameSync`, `Reconciler`, `EventStream`, …).
 - **Loud test defaults:** a shared client's `testValue` uses `unimplemented(...)` (with an inert `placeholder:` where the closure returns), never a quiet stub — a test that forgets to stub must fail loudly. Rich fixtures belong on `previewValue`.
-- **Running `swift test`:** always pass `--event-stream-output-path <temp-file>` and read pass/fail from that JSON event stream rather than parsing console text — text scraping is non-deterministic and a grep for "fail" false-positives on test method names containing the word.
+- **Running `swift test`:** always pass `--event-stream-output-path <temp-file>` and read pass/fail from that JSON event stream using `jq`. Never parse console text — text scraping is non-deterministic and a grep for "fail" or "error" could result in false-positives on test method names or other console output.
 - **Naming map (UI name ≠ type name):** sidebar "Operations Log" = `ActivityView` (DevicesFeature); Tools ▸ "Event Log" = `EventLogFeature` (the SSE diagnostic ledger — a different thing); sidebar "Missions" = `LocationEventsFeature`; the Stars view = `NewStarMapFeature`.
 - Dark‑first, but every screen must read correctly in light mode (the catalog handles both; verify with `.preferredColorScheme`).
 - Prefer `NavigationSplitView`, system materials for chrome, SF for text, SF Mono for IDs/codes/readouts.
@@ -52,8 +52,8 @@ All agents and reviewing subagents must utilize Swift-LSP (SourceKit-LSP) to ana
 1. Query the Swift-LSP language server (e.g., `goToDefinition`, `findReferences`) for syntax, type correctness, and unresolved references.
 2. Cross-reference usage by checking symbol references.
 3. Treat LSP output as the single source of truth over simple text matching.
-
 **LSP root is `Modules/`** (where `Package.swift` lives) — nearly all code is in that SPM package, which SourceKit-LSP resolves with no build-server config. Root the language server there, not at the repo top level. The thin app-target shell (`macOS/AppFeature.swift`, `MainFeature.swift`, `ReplicantApp.swift`) lives in the `.xcodeproj` and is *not* covered without an `xcode-build-server`-generated `buildServer.json`; grep is acceptable for that sliver. Build the package once so the index store is populated (a stale index yields stale symbol answers). The LSP tools load at Claude Code startup, so a session must be (re)launched with the Swift LSP plugin active to have them. **0 references right after session start is usually the index warming up, not a config problem** — if the file's diagnostics show fallback-args errors (`No such module …`), wait and re-query rather than falling back to grep; see `.claude/memory/sourcekit-lsp-warmup.md`.
+If a worktree is made, be sure to build the swift package right off the bat to seed the LSP index before starting work.
 ---
 
 ## Implementation Notes

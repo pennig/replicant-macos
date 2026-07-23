@@ -74,7 +74,12 @@ public struct SidebarView: View {
     private func categoryRow(for item: SidebarItem) -> some View {
         let accent = accentCount(for: item)
         return HStack(spacing: Space.xs) {
-            Label(item.title, systemImage: item.symbol)
+            Label {
+                Text(item.title)
+            } icon: {
+                Image(systemName:item.symbol)
+                    .frame(width: 16)
+            }
             Spacer(minLength: Space.xs)
             SidebarCategoryBadge(
                 storyCount: accent,
@@ -280,8 +285,13 @@ struct SidebarCategoryBadge: View {
                 },
                 rowID: \.self
             ) { item, isSelected in
-                HStack(spacing: Space.xs) {
-                    Label(item.title, systemImage: item.symbol)
+                HStack(alignment: .center, spacing: Space.xs) {
+                    Label {
+                        Text(item.title)
+                    } icon: {
+                        Image(systemName:item.symbol)
+                            .frame(width: 16)
+                    }
                     Spacer(minLength: Space.xs)
                     SidebarCategoryBadge(
                         storyCount: item == .messages ? 1 : 0,

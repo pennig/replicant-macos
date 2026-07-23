@@ -20,11 +20,14 @@ public struct BobnetChannelsView: View {
     }
 
     public var body: some View {
-        List(store.channelList.rows, selection: $store.selectedChannel) { row in
-            BobnetChannelListRow(row: row)
-                .listRowSeparator(.hidden)
+        SelectableList(
+            store.channelList.rows,
+            selection: $store.selectedChannel,
+            style: .inline
+        ) { row, isSelected in
+            BobnetChannelListRow(row: row).rcSidebarRow(isSelected: isSelected)
         }
-        .listStyle(.inset)
+        .background(.rcContentBackground)
         .overlay {
             if store.channelList.rows.isEmpty {
                 ContentUnavailableView(
