@@ -24,12 +24,16 @@ public enum MessagesIngestion {
         @Dependency(\.messagesClient) var messagesClient
         @Dependency(\.defaultDatabase) var database
         guard let page = try? await messagesClient.fetch(nil, 50, false) else { return false }
-        let wrote = try? await database.write { db in
-            for message in page.messages {
-                try Message.upsert { message }.execute(db)
+        do {
+            try await database.write { db in
+                for message in page.messages {
+                    try Message.upsert { message }.execute(db)
+                }
             }
+            return true
+        } catch {
+            return false
         }
-        return wrote != nil
     })
 
     /// The inbox's event routes. Both are invalidate-only — nothing slow runs

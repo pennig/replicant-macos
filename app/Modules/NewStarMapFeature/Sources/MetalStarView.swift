@@ -268,29 +268,23 @@ struct MetalStarView: NSViewRepresentable {
                 view.renderer = renderer
                 view.delegate = renderer
                 // Push each frame's ship screen points to the overlay model. The
-                // renderer draws on the main thread, so the main-actor hop is safe;
+                // renderer is main-actor, so these callbacks fire on the main actor;
                 // the `!=` guard keeps an idle fleet (or empty set) from churning
                 // SwiftUI. The same renderer object persists across in-place terrain/
                 // overlay updates, so this is wired exactly once.
                 renderer.onShipsProjected = { [weak projection] ships in
-                    MainActor.assumeIsolated {
-                        guard let projection, projection.ships != ships else { return }
-                        projection.ships = ships
-                    }
+                    guard let projection, projection.ships != ships else { return }
+                    projection.ships = ships
                 }
                 // Device-presence badges: same once-wired, `!=`-guarded push as ships.
                 renderer.onClustersProjected = { [weak clusterProjection] clusters in
-                    MainActor.assumeIsolated {
-                        guard let clusterProjection, clusterProjection.clusters != clusters else { return }
-                        clusterProjection.clusters = clusters
-                    }
+                    guard let clusterProjection, clusterProjection.clusters != clusters else { return }
+                    clusterProjection.clusters = clusters
                 }
                 // Inbound/outbound transit callouts: same once-wired, `!=`-guarded push.
                 renderer.onTransitsProjected = { [weak transitProjection] callouts in
-                    MainActor.assumeIsolated {
-                        guard let transitProjection, transitProjection.callouts != callouts else { return }
-                        transitProjection.callouts = callouts
-                    }
+                    guard let transitProjection, transitProjection.callouts != callouts else { return }
+                    transitProjection.callouts = callouts
                 }
             } else if stars != loadedStars {
                 loadedStars = stars
@@ -305,18 +299,18 @@ struct MetalStarView: NSViewRepresentable {
         /// Pushes the current device-presence clusters into the renderer (projected each
         /// frame while focused). Cheap value-type handoff; changes when the roster or
         /// focused system changes.
-        func applyClusters(_ clusters: [DeviceCluster]) {
+        @MainActor func applyClusters(_ clusters: [DeviceCluster]) {
             renderer?.updateDeviceClusters(clusters)
         }
 
         /// Mirrors the reducer's selected location into the renderer so it can reveal that
         /// planet's Lagrange points (drawn/pickable only when selected or occupied).
-        func applySelectedLocation(_ code: String?) {
+        @MainActor func applySelectedLocation(_ code: String?) {
             renderer?.selectedLocationCode = code
         }
 
         /// Pushes the declarative HUD controls into the imperative renderer.
-        func applyControls(autoRotate: Bool, recenterToken: Int) {
+        @MainActor func applyControls(autoRotate: Bool, recenterToken: Int) {
             renderer?.autoRotate = autoRotate
             if recenterToken != lastResetToken {
                 lastResetToken = recenterToken
@@ -328,7 +322,7 @@ struct MetalStarView: NSViewRepresentable {
         /// diving to a close framing (same as a double-click), not just re-aiming.
         /// Resolves the star by designation in the current terrain; a no-op if it
         /// isn't charted (e.g. terrain not yet rebuilt).
-        func applyStarFocus(token: Int, designation: String?, stars: [Star]) {
+        @MainActor func applyStarFocus(token: Int, designation: String?, stars: [Star]) {
             guard token != lastStarFocusToken else { return }
             lastStarFocusToken = token
             guard let designation,

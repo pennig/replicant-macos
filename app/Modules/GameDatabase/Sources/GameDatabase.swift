@@ -63,7 +63,7 @@ public enum GameDatabase {
     /// to the logger when live and the console in previews, and staying silent in
     /// tests. Statements emitted by triggers (prefixed `--`) are skipped.
     public static var configuration: Configuration {
-        var configuration = Configuration()
+        let configuration = Configuration()
         #if DEBUG
 //        configuration.prepareDatabase { db in
 //            db.trace(options: .profile) { event in

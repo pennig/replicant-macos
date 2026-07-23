@@ -567,7 +567,7 @@ public struct NewStarMapView: View {
                 if let until = store.surveyCooldownUntil {
                     // Live-updating relative countdown; the reducer clears the
                     // cooldown (re-enabling the button) the moment it lifts.
-                    (Text("Available ") + Text(until, style: .relative))
+                    Text("Available \(Text(until, style: .relative))")
                         .font(.rcMonoSmall)
                         .foregroundStyle(.rcTextTertiary)
                 } else if let error = store.surveyError {

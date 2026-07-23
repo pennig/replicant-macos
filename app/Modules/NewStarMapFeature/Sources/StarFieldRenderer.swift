@@ -3,6 +3,7 @@ import MetalKit
 import simd
 import QuartzCore   // CACurrentMediaTime — the clock we feed the camera's easing
 
+@MainActor
 final class StarFieldRenderer: NSObject, MTKViewDelegate {
 
     private let device: MTLDevice
@@ -276,21 +277,21 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
 
     /// Pushed each frame with the ships' projected screen points (view points,
     /// top-left) so the SwiftUI overlay can float a tappable device icon over each
-    /// pip. Set by `MetalStarView`; nil until then. Invoked on the main thread (the
-    /// MTKView draws there), so the closure may hop to the main-actor overlay model.
-    var onShipsProjected: (([ProjectedShip]) -> Void)?
+    /// pip. Set by `MetalStarView`; nil until then. Main-actor (this renderer is), so
+    /// the closure can touch the main-actor overlay model directly.
+    var onShipsProjected: (@MainActor ([ProjectedShip]) -> Void)?
 
     /// Pushed each frame with the device clusters' projected screen points (view points,
     /// top-left) while focused into a system, so the SwiftUI overlay floats one tappable
     /// badge over each occupied location. nil until set by `MetalStarView`. Empty in the
     /// galaxy (clusters are a system-focus overlay).
-    var onClustersProjected: (([ProjectedCluster]) -> Void)?
+    var onClustersProjected: (@MainActor ([ProjectedCluster]) -> Void)?
 
     /// Pushed each frame with the inbound/outbound transit callouts' projected screen points
     /// (the top of each dotted riser) while focused into a system, so the SwiftUI overlay
     /// floats a "Traveling from/to …" card at each boundary crossing. nil until set by
     /// `MetalStarView`. Empty in the galaxy and for routes that don't touch the view.
-    var onTransitsProjected: (([ProjectedTransit]) -> Void)?
+    var onTransitsProjected: (@MainActor ([ProjectedTransit]) -> Void)?
     /// Device-presence clusters, grouped by the anchor the focused level draws (built by
     /// the view from the live roster + scan blob). Projected each frame in `draw`.
     private var deviceClusters: [DeviceCluster] = []
