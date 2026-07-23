@@ -80,7 +80,14 @@ public struct LoggingMiddleware: ClientMiddleware {
             }
             return (response, loggedResponseBody.flatMap(HTTPBody.init) ?? responseBody)
         } catch {
-            logger.error("✗ [\(operationID, privacy: .public)] transport error: \(error, privacy: .public)")
+            // A torn-down request (stream consumer stopped early, task
+            // cancelled) is expected teardown, not a transport failure — keep
+            // it out of the error log.
+            if TransportCancellation.isCancellation(error) {
+                logger.debug("⊘ [\(operationID, privacy: .public)] cancelled by caller")
+            } else {
+                logger.error("✗ [\(operationID, privacy: .public)] transport error: \(error, privacy: .public)")
+            }
             throw error
         }
     }

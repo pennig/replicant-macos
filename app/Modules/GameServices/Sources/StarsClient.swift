@@ -110,7 +110,13 @@ extension StarsClient: DependencyKey {
                     } while page <= totalPages
                     continuation.finish()
                 } catch {
-                    continuation.finish(throwing: error)
+                    // Cancellation is the consumer tearing the walk down (early
+                    // break, task cancelled) — end cleanly, it isn't a failure.
+                    if TransportCancellation.isCancellation(error) {
+                        continuation.finish()
+                    } else {
+                        continuation.finish(throwing: error)
+                    }
                 }
             }
             continuation.onTermination = { _ in task.cancel() }
