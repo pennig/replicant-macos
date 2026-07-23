@@ -17,6 +17,7 @@
 		C961BC5F2FF6A58600D9C273 /* ReplicantsFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C961BC5E2FF6A58600D9C273 /* ReplicantsFeature */; };
 		C9702B6D2FF202A5002E2CCE /* BlueprintsFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C9702B6C2FF202A5002E2CCE /* BlueprintsFeature */; };
 		C98EDC7C2FFFD6EF0033AF54 /* AccountFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C98EDC7B2FFFD6EF0033AF54 /* AccountFeature */; };
+		C98FB669301175110064E694 /* BobnetFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C98FB668301175110064E694 /* BobnetFeature */; };
 		C9ACF1382FF865C900337F11 /* PrintingUI in Frameworks */ = {isa = PBXBuildFile; productRef = C9ACF1372FF865C900337F11 /* PrintingUI */; };
 		C9B188932FF72F130018FA8F /* SidebarFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C9B188922FF72F130018FA8F /* SidebarFeature */; };
 		C9B188952FF856310018FA8F /* GameModels in Frameworks */ = {isa = PBXBuildFile; productRef = C9B188942FF856310018FA8F /* GameModels */; };
@@ -74,6 +75,7 @@
 				C91E72192FF9931B0092DF05 /* LocationEventsFeature in Frameworks */,
 				C9ACF1382FF865C900337F11 /* PrintingUI in Frameworks */,
 				C9B5309D2FE1DEE2006F79A8 /* GameServices in Frameworks */,
+				C98FB669301175110064E694 /* BobnetFeature in Frameworks */,
 				C9B5309B2FE1DC5E006F79A8 /* LoginFeature in Frameworks */,
 				C91E721B2FFA954A0092DF05 /* GameDatabase in Frameworks */,
 				C9F814C02FEEB96000ACFAC3 /* DevicesFeature in Frameworks */,
@@ -163,6 +165,7 @@
 				C98EDC7B2FFFD6EF0033AF54 /* AccountFeature */,
 				C9E7D9783001D264002C2A16 /* TravelUI */,
 				C9582DF8300E699600EBDC60 /* EventLogFeature */,
+				C98FB668301175110064E694 /* BobnetFeature */,
 			);
 			productName = Replicant;
 			productReference = C922A8B62FDC493200431320 /* Replicould.app */;
@@ -512,6 +515,10 @@
 		C98EDC7B2FFFD6EF0033AF54 /* AccountFeature */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = AccountFeature;
+		};
+		C98FB668301175110064E694 /* BobnetFeature */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = BobnetFeature;
 		};
 		C9ACF1372FF865C900337F11 /* PrintingUI */ = {
 			isa = XCSwiftPackageProductDependency;
