@@ -720,6 +720,105 @@ private typealias Operation = GameModels.Operation
         #expect(response.originName == "Atianfu I")
         #expect(response.travelType == "cruise")
     }
+
+    /// The four Stage 4 utility verbs serialize the documented wire bodies.
+    @Test func utilityVerbBodiesSerializeAsDocumented() async throws {
+        let cases: [(OperationKind, CommandParams, [String: JSONValue])] = [
+            (.configure, CommandParams(mode: "taxi"),
+             ["command": .string("configure"), "mode": .string("taxi")]),
+            (.message, CommandParams(channel: "#general", text: "hello"),
+             ["command": .string("message"), "channel": .string("#general"), "text": .string("hello")]),
+            (.changeOwner, CommandParams(target: "REP2"),
+             ["command": .string("change_owner"), "target": .string("REP2")]),
+        ]
+        for (kind, params, expected) in cases {
+            let database = try GameDatabase.bootstrap()
+            let captured = LockIsolated<Data?>(nil)
+            await withDependencies {
+                $0.defaultDatabase = database
+                $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+                $0.uuid = .incrementing
+                $0.deviceRefresher = coordinatorBackedRefresher()
+                $0.gameClient = capturingGameClient(
+                    onBody: { captured.setValue($0) },
+                    response: jsonResponse(200, #"{"status":"ok"}"#)
+                )
+                $0.devicesClient.read = { code in makeDevice(code: code, status: "idle") }
+            } operation: {
+                let outcome = await CommandClient.liveValue.dispatch(kind, "DEV1", params)
+                #expect(outcome == .accepted(operationID: nil), "\(kind.rawValue)")
+            }
+            let body = try #require(captured.value, "\(kind.rawValue) sent no body")
+            let json = try JSONDecoder().decode(JSONValue.self, from: body)
+            #expect(json == .object(expected), "\(kind.rawValue)")
+        }
+    }
+
+    /// `repair` sends `target` (not `device`) and is deadline-tracked: it
+    /// confirms an active op, back-filling `completesAt` from the post-command
+    /// read's `repair` block when the response withholds a deadline.
+    @Test func repairTracksDeadlineAndSendsTarget() async throws {
+        let database = try GameDatabase.bootstrap()
+        let captured = LockIsolated<Data?>(nil)
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.deviceRefresher = coordinatorBackedRefresher()
+            $0.gameClient = capturingGameClient(
+                onBody: { captured.setValue($0) },
+                response: jsonResponse(200, #"{"status":"repairing"}"#)
+            )
+            $0.devicesClient.read = { code in
+                var device = makeDevice(code: code, status: "repairing")
+                device.detail = .object([
+                    "repair": .object(["completes_at": .string("2026-07-23T12:00:00Z")]),
+                ])
+                return device
+            }
+        } operation: {
+            let outcome = await CommandClient.liveValue.dispatch(.repair, "BOT1", CommandParams(target: "7C79FCE1"))
+            if case .accepted(let opID) = outcome { #expect(opID != nil) } else {
+                Issue.record("expected accepted, got \(outcome)")
+            }
+        }
+        let body = try #require(captured.value)
+        let json = try JSONDecoder().decode(JSONValue.self, from: body)
+        #expect(json == .object(["command": .string("repair"), "target": .string("7C79FCE1")]))
+
+        let stored = try await database.read { db in
+            try GameModels.Operation.where { $0.entityCode.eq("BOT1") }.fetchOne(db)
+        }
+        #expect(stored?.status == OperationStatus.active)
+        #expect(stored?.kind == "repair")
+        #expect(stored?.completesAt == (try Date("2026-07-23T12:00:00Z", strategy: .iso8601)))
+    }
+
+    /// A missing required parameter fails fast, before any request or op row.
+    @Test func utilityVerbsFailFastOnMissingParams() async throws {
+        let database = try GameDatabase.bootstrap()
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.deviceRefresher = coordinatorBackedRefresher()
+            $0.gameClient = stubGameClient { _ in
+                Issue.record("no request should be sent")
+                return jsonResponse(200, "{}")
+            }
+        } operation: {
+            for (kind, params) in [
+                (OperationKind.configure, CommandParams()),
+                (.configure, CommandParams(mode: "warp")),   // invalid value
+                (.message, CommandParams(channel: "#general")),  // missing text
+                (.repair, CommandParams()),
+                (.changeOwner, CommandParams()),
+            ] {
+                let outcome = await CommandClient.liveValue.dispatch(kind, "DEV1", params)
+                if case .failed = outcome {} else { Issue.record("\(kind.rawValue): expected .failed, got \(outcome)") }
+            }
+        }
+    }
 }
 
 // MARK: - Helpers
@@ -752,6 +851,21 @@ private func stubGameClient(
 ) -> GameClient {
     GameClient(make: {
         Client(serverURL: URL(string: "https://stub.invalid")!, transport: StubTransport(respond: respond))
+    })
+}
+
+/// Vends a `GameClient` whose generated `Client` is backed by a
+/// `CapturingTransport` — captures the request body via `onBody` before
+/// answering with `response`.
+private func capturingGameClient(
+    onBody: @escaping @Sendable (Data) async -> Void,
+    response: (HTTPResponse, HTTPBody?)
+) -> GameClient {
+    GameClient(make: {
+        Client(
+            serverURL: URL(string: "https://stub.invalid")!,
+            transport: CapturingTransport(onBody: onBody, response: response)
+        )
     })
 }
 

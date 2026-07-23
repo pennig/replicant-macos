@@ -184,6 +184,25 @@ public struct OperationKind: RawRepresentable, Hashable, Sendable {
     /// Immediate: the controller adopts the directive at once; no tracked op.
     public static let setDirective = OperationKind(rawValue: "set_directive")
 
+    /// Set a surge plate's carry mode (`taxi` — any same-owner device may ride —
+    /// or `manual` — only explicitly attached devices). A synchronous
+    /// configuration change; no tracked op.
+    public static let configure = OperationKind(rawValue: "configure")
+
+    /// Post a message to a BobNet channel from an FTL relay. Immediate: the
+    /// relay accepts the message synchronously; no tracked op.
+    public static let message = OperationKind(rawValue: "message")
+
+    /// Repair a damaged device (service/maintenance bot). Long-running: the bot
+    /// works the target back to capacity, reporting progress in its `repair`
+    /// block — a tracked deadline op whose `completesAt` back-fills from the
+    /// post-command read when the dispatch response withholds it (like `search`).
+    public static let repair = OperationKind(rawValue: "repair")
+
+    /// Reassign a device to another of the account's replicants. A synchronous
+    /// administrative change; no tracked op.
+    public static let changeOwner = OperationKind(rawValue: "change_owner")
+
     /// Adopt one or more worker devices under an AMI controller (mining drones
     /// under a mining controller, survey drones under a survey controller) so the
     /// controller's directive drives them. Immediate: a synchronous topology change

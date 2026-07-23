@@ -39,8 +39,11 @@ extension CommandClient {
     /// its `completesAt` is back-filled from the post-command read. `compact`
     /// packs the device down for transport over a fixed window and returns
     /// `completes_at`, so it's a tracked deadline op too; `unfurl` is its inverse
-    /// (expanding a packed device back) and behaves identically.
-    static let deadlineCommands: Set<String> = ["recall", "search", "compact", "unfurl"]
+    /// (expanding a packed device back) and behaves identically. `repair`
+    /// (parameterized, but classified here too) works a target back to capacity
+    /// over time — its deadline lives in the bot's `repair` block, back-filled
+    /// from the post-command read like `search`.
+    static let deadlineCommands: Set<String> = ["recall", "search", "compact", "unfurl", "repair"]
 
     /// Immediate commands that stop a device's running action — closing its open
     /// operation so a lingering mining/travel row doesn't survive the stop.

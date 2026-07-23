@@ -337,6 +337,10 @@ extension CommandClient: DependencyKey {
         case .depositResources: return try depositResourcesBody(params)
         case .stow:             return stowBody(params)
         case .setDirective:     return try setDirectiveBody(params)
+        case .configure:        return try configureBody(params)
+        case .message:          return try messageBody(params)
+        case .repair:           return try repairBody(params)
+        case .changeOwner:      return try changeOwnerBody(params)
         default:
             guard let body = simpleBody(for: kind.rawValue) else { throw CommandError.unsupported(kind) }
             return body

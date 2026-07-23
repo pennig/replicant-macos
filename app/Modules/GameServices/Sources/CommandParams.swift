@@ -18,6 +18,11 @@ public struct CommandParams: Sendable, Equatable {
     public var resourceType: String?  // mine (start_mining) — one of the belt resources
     public var target: String?        // mine — optional resource-site designation
     public var directive: String?     // set_directive — one of the device's available_directives
+    /// configure — a surge plate's carry mode: "taxi" or "manual".
+    public var mode: String?
+    /// message — the BobNet channel to post into, and the message body.
+    public var channel: String?
+    public var text: String?
     public var index: Int?            // dequeue_print — the queue position to remove
     /// set_directive — the directive's optional configuration object (e.g. a
     /// survey controller's `{planets, moons, recall}`). Loosely typed since the
@@ -36,6 +41,9 @@ public struct CommandParams: Sendable, Equatable {
         resourceType: String? = nil,
         target: String? = nil,
         directive: String? = nil,
+        mode: String? = nil,
+        channel: String? = nil,
+        text: String? = nil,
         index: Int? = nil,
         configuration: [String: JSONValue]? = nil,
         devices: [String]? = nil,
@@ -46,6 +54,9 @@ public struct CommandParams: Sendable, Equatable {
         self.resourceType = resourceType
         self.target = target
         self.directive = directive
+        self.mode = mode
+        self.channel = channel
+        self.text = text
         self.index = index
         self.configuration = configuration
         self.devices = devices
@@ -59,6 +70,9 @@ public struct CommandParams: Sendable, Equatable {
         if let resourceType { dict["resource_type"] = .string(resourceType) }
         if let target { dict["target"] = .string(target) }
         if let directive { dict["directive"] = .string(directive) }
+        if let mode { dict["mode"] = .string(mode) }
+        if let channel { dict["channel"] = .string(channel) }
+        if let text { dict["text"] = .string(text) }
         if let index { dict["index"] = .number(Double(index)) }
         if let configuration, !configuration.isEmpty { dict["configuration"] = .object(configuration) }
         if let devices, !devices.isEmpty { dict["devices"] = .array(devices.map(JSONValue.string)) }
