@@ -259,6 +259,13 @@ struct CommandGrid: View {
             ))
             return
         }
+        // Directive skips the inline panel too — its editor is a full form fed
+        // by live catalog data, so it opens the composer sheet from the grid.
+        if case .setDirective = command {
+            pending = nil
+            store.send(.directiveComposeTapped)
+            return
+        }
         textValue = ""
         selectedCodes = []
         if case .print = command {

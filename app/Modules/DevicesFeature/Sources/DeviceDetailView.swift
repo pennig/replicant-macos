@@ -6,9 +6,9 @@
 //  operational-capacity ring, an active-task card (live progress + ETA from the
 //  device's open `Operation`, interpolated with zero network by
 //  `OperationProgressView`), a details readout, and a command grid whose
-//  parameterized commands (travel / print) reveal an inline confirm panel.
-//  Everything observes SQLite, so a stream update or a dispatched op re-renders
-//  the pane automatically.
+//  commands confirm inline or through their own sheets (travel / print /
+//  cargo / directive). Everything observes SQLite, so a stream update or a
+//  dispatched op re-renders the pane automatically.
 //
 
 import ComposableArchitecture
@@ -27,7 +27,7 @@ import Utils
 private typealias Operation = GameModels.Operation
 
 public struct DeviceDetailView: View {
-    let store: StoreOf<DevicesFeature>
+    @Bindable var store: StoreOf<DevicesFeature>
     @FetchAll(Operation.order { $0.startedAt.desc() }) private var operations
     @FetchAll(Replicant.all) private var replicants
     @Environment(\.scenePhase) private var scenePhase
@@ -99,6 +99,12 @@ public struct DeviceDetailView: View {
                         onConfirm: { store.send(.cargoLoadConfirmed(resources: $0)) },
                         onDismiss: { store.send(.cargoLoadDismissed) }
                     )
+                }
+                // The directive composer is a *feature* sheet (its own reducer),
+                // so it scopes a presented child store rather than binding a
+                // plain preview value like the sheets above.
+                .sheet(item: $store.scope(state: \.directiveComposer, action: \.directiveComposer)) { composerStore in
+                    DirectiveComposerSheet(store: composerStore)
                 }
             } else {
                 RCContentUnavailableView(

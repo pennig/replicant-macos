@@ -13,6 +13,7 @@ import GameModels
 import GameServices
 import SQLiteData
 import Testing
+import Utils
 @testable import DevicesFeature
 
 private func device(_ code: String, status: String = "idle") -> Device {
@@ -205,5 +206,68 @@ private func device(_ code: String, status: String = "idle") -> Device {
         #expect(dispatched.value?.0 == .travel)
         #expect(dispatched.value?.1 == "A")
         #expect(dispatched.value?.2.destination == "IZARUM")
+    }
+
+    /// The Directive command ends field editing, yields, then presents the
+    /// composer seeded from the inspected device.
+    @Test func directiveComposeTappedPresentsComposerForSelectedDevice() async throws {
+        let database = try GameDatabase.bootstrap()
+        var ami = device("AMI1")
+        ami.detail = .object([
+            "available_directives": .array([.string("survey_system"), .string("belt_search")]),
+        ])
+        let seeded = ami
+        try await database.write { db in try Device.insert { seeded }.execute(db) }
+        let endedEditing = LockIsolated(false)
+
+        let store = TestStore(initialState: DevicesFeature.State(selectedDeviceCode: "AMI1")) {
+            DevicesFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
+            $0.continuousClock = ImmediateClock()
+            $0.endEditing = EndEditingClient { endedEditing.setValue(true) }
+        }
+        store.exhaustivity = .off
+
+        await store.send(.directiveComposeTapped)
+        await store.receive(\.directiveComposerPresented)
+        #expect(endedEditing.value == true)
+        #expect(store.state.directiveComposer?.deviceCode == "AMI1")
+        #expect(store.state.directiveComposer?.directive == "survey_system")
+    }
+
+    /// The composer's confirmed delegate dispatches `set_directive` with the
+    /// built configuration for the presented device.
+    @Test func directiveComposerConfirmedDispatchesSetDirective() async throws {
+        let database = try GameDatabase.bootstrap()
+        let dispatched = LockIsolated<(OperationKind, String, CommandParams)?>(nil)
+
+        let store = withDependencies {
+            $0.defaultDatabase = database
+            $0.commandClient.dispatch = { kind, code, params in
+                dispatched.setValue((kind, code, params))
+                return .accepted(operationID: "op")
+            }
+        } operation: {
+            var state = DevicesFeature.State(selectedDeviceCode: "AMI1")
+            var ami = device("AMI1")
+            ami.detail = .object([
+                "available_directives": .array([.string("survey_system")]),
+            ])
+            state.directiveComposer = DirectiveComposer.State(device: ami, fleet: [])
+            return TestStore(initialState: state) { DevicesFeature() }
+        }
+        store.exhaustivity = .off
+
+        await store.send(.directiveComposer(.presented(.delegate(.confirmed(
+            directive: "survey_system",
+            configuration: ["planets": .string("all"), "moons": .string("none"), "recall": .bool(true)]
+        )))))
+        await store.finish()
+
+        #expect(dispatched.value?.0 == .setDirective)
+        #expect(dispatched.value?.1 == "AMI1")
+        #expect(dispatched.value?.2.directive == "survey_system")
+        #expect(dispatched.value?.2.configuration?["planets"] == .string("all"))
     }
 }

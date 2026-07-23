@@ -54,6 +54,11 @@ public struct DevicesFeature {
         /// its active-task readout is fetched from the object it's attached to (see
         /// `.diversionRequested`) rather than derived from the device row.
         public var diversion: DiversionSnapshot?
+        /// The `set_directive` composer, presented as a sheet. A *feature*
+        /// sheet (its own reducer), so it uses the `@Presents` tier of the
+        /// presentation dialect rather than the plain-value item bindings the
+        /// preview sheets use. Non-nil ⇒ the sheet is presented.
+        @Presents public var directiveComposer: DirectiveComposer.State?
 
         public init(selectedDeviceCode: String? = nil) {
             self.selectedDeviceCode = selectedDeviceCode
@@ -127,6 +132,13 @@ public struct DevicesFeature {
         case cargoLoadResponse(CargoLoadPreview.Phase)
         case cargoLoadConfirmed(resources: [String: Int])
         case cargoLoadDismissed
+        /// The inspector's Directive command. A thin intent mirroring
+        /// `travelConfirmed`: ends field editing and yields a runloop tick
+        /// before the composer sheet presents (see `.travelConfirmed` for why).
+        case directiveComposeTapped
+        /// Present the composer, seeded from the currently-inspected device.
+        case directiveComposerPresented
+        case directiveComposer(PresentationAction<DirectiveComposer.Action>)
         /// The inspector is viewing a device whose activity refreshes in place
         /// (mining cycles, a diversion's slow progress). Non-nil starts a
         /// while-viewing refresh loop for that device; nil (deselect / settled)
@@ -423,6 +435,36 @@ public struct DevicesFeature {
                 state.cargoLoad = nil
                 return .cancel(id: CancelID.cargoLoad)
 
+            case .directiveComposeTapped:
+                // Same dance as `.travelConfirmed`: end field editing and yield
+                // a runloop tick before the sheet-presenting state is set — a
+                // sheet presented while a text field's completion popover is up
+                // crashes AppKit's sheet presentation.
+                let endEditing = self.endEditing
+                let clock = self.clock
+                return .run { send in
+                    await endEditing()
+                    try await clock.sleep(for: .zero)
+                    await send(.directiveComposerPresented)
+                }
+
+            case .directiveComposerPresented:
+                guard let device = state.selectedDevice else { return .none }
+                logger.info("directive composer \(device.deviceCode, privacy: .public) presented")
+                state.directiveComposer = DirectiveComposer.State(device: device, fleet: state.devices)
+                return .none
+
+            case let .directiveComposer(.presented(.delegate(.confirmed(directive, configuration)))):
+                guard let deviceCode = state.directiveComposer?.deviceCode else { return .none }
+                return .send(.commandConfirmed(
+                    kind: .setDirective,
+                    deviceCode: deviceCode,
+                    params: CommandParams(directive: directive, configuration: configuration)
+                ))
+
+            case .directiveComposer:
+                return .none
+
             case let .viewingChanged(deviceCode):
                 // Any prior device's overlay is stale the moment the selection
                 // changes; clear it before the new loop repopulates it.
@@ -495,6 +537,9 @@ public struct DevicesFeature {
                 state.commandError = message
                 return .none
             }
+        }
+        .ifLet(\.$directiveComposer, action: \.directiveComposer) {
+            DirectiveComposer()
         }
     }
 
