@@ -1,6 +1,6 @@
 //
 //  PrintQueueDetailView.swift
-//  Replicould — Print Queue feature
+//  Replicould — Printing feature
 //
 //  The printer inspector for the split view's detail column: the active job with
 //  a live progress bar (interpolated on device by `OperationProgressView`), any

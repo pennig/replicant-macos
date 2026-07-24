@@ -1,12 +1,12 @@
 //
 //  PrintQueueListView.swift
-//  Replicould — Print Queue feature
+//  Replicould — Printing feature
 //
 //  The master list for the split view's content column: every device that can
-//  print and is currently printing or holding queued jobs. Rows render straight
-//  from the `Device` table via `@FetchAll` (filtered to `isPrintingOrQueued`), so
-//  a stream update or a dispatched command flows in automatically; the store
-//  drives selection and the cold-load / refresh.
+//  print, whether or not it is currently printing or holding queued jobs. Rows
+//  render straight from the `Device` table via `@FetchAll` (filtered to
+//  `canPrint`), so a stream update or a dispatched command flows in
+//  automatically; the store drives selection and the cold-load / refresh.
 //
 
 import ComposableArchitecture
@@ -38,14 +38,14 @@ public struct PrintQueueListView: View {
                     ProgressView()
                 } else {
                     ContentUnavailableView(
-                        "Nothing Printing",
+                        "No Printers",
                         systemImage: "printer",
-                        description: Text("Printers with an active job or a queue will appear here.")
+                        description: Text("Devices capable of printing will appear here.")
                     )
                 }
             }
         }
-        .navigationTitle("Print Queue")
+        .navigationTitle("Printing")
         .navigationSubtitle(store.printers.isEmpty ? Text("") : Text("^[\(store.printers.count) printer](inflect: true)").monospacedDigit())
         .safeAreaInset(edge: .top, spacing: 0) {
             if let errorMessage = store.errorMessage {
@@ -105,6 +105,7 @@ private struct PrintQueueRow: View {
                             .foregroundStyle(.rcTextSecondary)
                             .lineLimit(1)
                         Spacer(minLength: Space.xs)
+                        locationLabel
                     }
                     if let pct = printing.progressPercent {
                         ProgressView(value: min(max(pct / 100, 0), 1))
@@ -112,12 +113,34 @@ private struct PrintQueueRow: View {
                             .controlSize(.small)
                     }
                 } else {
-                    // No active job, but queued — waiting to start.
-                    StatusBadge(device.statusBase)
+                    // Not printing — idle or waiting on a queued job. Show its
+                    // status alongside where it's parked.
+                    HStack(spacing: Space.s) {
+                        StatusBadge(device.statusBase)
+                        Spacer(minLength: Space.xs)
+                        locationLabel
+                    }
                 }
             }
         }
         .padding(.vertical, Space.xs)
+    }
+
+    /// Where the device is parked — a location designation, so it renders in
+    /// mono. Nothing when the device isn't deployed.
+    @ViewBuilder
+    private var locationLabel: some View {
+        if let location = device.location {
+            HStack(spacing: Space.xs) {
+                Image(systemName: "mappin.and.ellipse")
+                    .font(.system(size: IconSize.s))
+                    .foregroundStyle(.rcTextTertiary)
+                Text(device.locationName ?? location)
+                    .font(.rcMonoSmall)
+                    .foregroundStyle(.rcTextTertiary)
+                    .lineLimit(1)
+            }
+        }
     }
 
     private func queueBadge(_ count: Int) -> some View {

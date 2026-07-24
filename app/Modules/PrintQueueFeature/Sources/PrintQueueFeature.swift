@@ -1,12 +1,12 @@
 //
 //  PrintQueueFeature.swift
-//  Replicould — Print Queue feature
+//  Replicould — Printing feature (type name kept as PrintQueueFeature)
 //
-//  The fleet's fabrication view: every device that can print and is either
-//  printing or holding queued jobs. Like the Devices feature, the list itself is
-//  observed straight from the `Device` SQLite table (via `@FetchAll` in the
-//  views, filtered to `isPrintingOrQueued`) and kept live by `GameSync`; the
-//  reducer owns only intent — the cold load / explicit refresh and command
+//  The fleet's fabrication view: every device that can print, whether or not it
+//  is currently printing or holding queued jobs. Like the Devices feature, the
+//  list itself is observed straight from the `Device` SQLite table (via
+//  `@FetchAll` in the views, filtered to `canPrint`) and kept live by `GameSync`;
+//  the reducer owns only intent — the cold load / explicit refresh and command
 //  dispatch (enqueue a new print, dequeue a queued job, clear the queue). Firing
 //  a command goes through `CommandClient` so the UI keeps observing tables rather
 //  than inspecting responses.
@@ -53,11 +53,11 @@ public struct PrintQueueFeature {
             self.printPreview = nil
         }
 
-        /// The printers to list: those actively printing or with queued jobs. A
-        /// synchronous derivation of the fetched fleet (the `isPrintingOrQueued`
-        /// gate reads the device's JSON detail, so it can't be a SQL predicate).
+        /// The printers to list: every device capable of printing, whether or not
+        /// it is currently printing or holding a queue. A synchronous derivation of
+        /// the fetched fleet (the `canPrint` gate reads the device's `features`).
         public var printers: [Device] {
-            fleet.filter(\.isPrintingOrQueued)
+            fleet.filter(\.canPrint)
         }
 
         /// The inspected printer, resolved synchronously from the observed fleet.

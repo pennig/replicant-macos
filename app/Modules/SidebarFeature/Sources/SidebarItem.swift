@@ -31,7 +31,7 @@ public enum SidebarItem: String, CaseIterable, Identifiable, Hashable, Sendable 
         case .blueprints: "Blueprints"
         case .civilisations: "Civilisations"
         case .locationEvents: "Location Events"
-        case .printQueue: "Print Queue"
+        case .printQueue: "Printing"
         case .operationsLog: "Operations Log"
         case .messages: "Messages"
         case .bobnet: "Bobnet"

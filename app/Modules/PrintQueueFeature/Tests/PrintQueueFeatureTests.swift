@@ -1,6 +1,6 @@
 //
 //  PrintQueueFeatureTests.swift
-//  Replicould — Print Queue feature
+//  Replicould — Printing feature
 //
 //  The reducer owns only intent — cold load / refresh and command dispatch
 //  (enqueue / dequeue / clear). These pin that a dispatched command routes
@@ -15,6 +15,7 @@ import GameModels
 import GameServices
 import SQLiteData
 import Testing
+import Utils
 @testable import PrintQueueFeature
 
 /// A stand-in error whose `localizedDescription` is a known string.
@@ -23,8 +24,50 @@ private struct StubError: LocalizedError {
     var errorDescription: String? { message }
 }
 
+/// A fleet member with an explicit feature set / detail blob, for exercising the
+/// `printers` filter.
+private func device(
+    _ code: String,
+    features: [String],
+    detail: JSONValue = .object([:])
+) -> Device {
+    Device(
+        deviceCode: code, deviceType: "printer", replicantCode: "R1", status: "idle",
+        location: "SOL-3", locationName: nil, operationalCapacity: 100, queueSize: 0,
+        stowedInDeviceCode: nil, controllerDeviceCode: nil, attachedToDeviceCode: nil,
+        createdAt: Date(timeIntervalSince1970: 0), availableCommands: [], features: features, tags: [],
+        detail: detail, updatedAt: Date(timeIntervalSince1970: 1_000),
+        firstSeenAt: Date(timeIntervalSince1970: 1_000)
+    )
+}
+
 @MainActor
 @Suite struct PrintQueueFeatureTests {
+
+    /// The list shows every print-capable device — idle, actively printing, or
+    /// queued — and excludes devices without the `print` feature.
+    @Test func printersListsAllPrintCapableDevices() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Device.insert {
+                device("IDLE", features: ["print"])
+                device("BUSY", features: ["print"], detail: .object(["printing": .object(["device_type": .string("ftl_beacon")])]))
+                device("MINER", features: ["mine"])
+            }
+            .execute(db)
+        }
+
+        let state = withDependencies {
+            $0.defaultDatabase = database
+        } operation: {
+            PrintQueueFeature.State()
+        }
+        let store = TestStore(initialState: state) { PrintQueueFeature() } withDependencies: {
+            $0.defaultDatabase = database
+        }
+
+        #expect(Set(store.state.printers.map(\.deviceCode)) == ["IDLE", "BUSY"])
+    }
 
     /// A rejected command surfaces its message as the inspector command error.
     @Test func rejectedCommandSurfacesError() async throws {
