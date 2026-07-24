@@ -41,9 +41,30 @@ Also: `updateTerrain` skips the RelevanceField rebuild AND the ~16k-puff
 changes (star COUNT unchanged ⇒ positions unchanged, table is append-only); an
 active data filter is still recomputed because it reads exactly those flags.
 
-Verification note: couldn't confirm at runtime from a background session — a
-scratch debug build (different DerivedData path) can't read the Keychain session
-token, so it sits at the login screen; `screencapture`/System Events are
-TCC-blocked. Verified by swift build (0 warnings) + all 102 module tests; the
-user should confirm the scroll feel live. Related: [[metal-hud-glass-hitch]],
-[[new-star-map-feature]].
+**Round 2 (2026-07-23, `0cbae94`, on the user's ask "push more to the GPU"):**
+- **Ship icons are GPU-drawn now.** `ShipIconTextureCache` bakes the glyph-in-disc
+  per (deviceType, state ∈ normal/hovered/selected) — same CGContext→texture path
+  as `LabelTextureCache`, tokens resolved under forced-dark — and
+  `encodeShipIcons` draws them via the label pipeline in the SAME command buffer/
+  camera as the trajectory (sync is structural; the SwiftUI overlay + its
+  per-frame observable bridge, `ShipOverlayLayer`/`ShipProjectionModel`, are
+  DELETED). Input moved to the AppKit layer: `pickShip` over
+  `shipIconHitTargets` (ships preempt star picking, no double-click deferral),
+  hover + tooltip in `mouseMoved`, selection mirrored via
+  `renderer.selectedShipDeviceCode`. `ShipRoute`/`Ship` carry `deviceType`.
+  Cluster badges + transit callouts stay SwiftUI (text/live countdown).
+- **Label selection runs off-main.** The O(n log n) project/cull/sort/budget half
+  is `LabelSelection` (nonisolated pure namespace, unit-tested) run by a detached
+  task on value snapshots at the 20 Hz cadence; only texture lookup + collision
+  layout over the ~20 survivors finishes on the main actor
+  (`applyLabelChoices`). Gotcha: the module defaults to MainActor isolation
+  (SWIFT_DEFAULT_ACTOR_ISOLATION), so off-main helpers AND the `Math.swift`
+  simd extensions they use must be marked `nonisolated` explicitly.
+- Full-GPU labels were considered and rejected: sort/collision/text-raster are
+  CPU-shaped, and a GPU readback would reintroduce a main-thread sync stall.
+
+Verification note: couldn't confirm at runtime from a background session (see
+[[no-gui-verification-from-bg-jobs]] in user memory — scratch builds sit at the
+Keychain login wall). Verified by swift build (0 warnings) + all module tests
+(107 as of round 2); the user should confirm the scroll feel live. Related:
+[[metal-hud-glass-hitch]], [[new-star-map-feature]], [[star-map-live-overlays]].
