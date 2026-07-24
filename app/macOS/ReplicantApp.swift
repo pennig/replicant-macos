@@ -160,6 +160,15 @@ struct ReplicantApp: App {
             })
         )
         accountManager.registerHandler(
+            // The species roster is global, but the merged `totalReputation`
+            // column is account-scoped — wipe the table so a second account
+            // re-cold-loads instead of inheriting the first's standings.
+            SessionLifecycleHandler(id: "civilisations", onLogout: {
+                @Dependency(\.defaultDatabase) var database
+                try? await database.write { db in try Civilisation.delete().execute(db) }
+            })
+        )
+        accountManager.registerHandler(
             SessionLifecycleHandler(id: "knownReplicants", onLogout: {
                 @Dependency(\.defaultDatabase) var database
                 try? await database.write { db in try KnownReplicant.delete().execute(db) }

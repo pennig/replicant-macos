@@ -3760,6 +3760,12 @@
           },
           "tech_affinity": {
             "type": "string"
+          },
+          "star_regions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         },
         "additionalProperties": false

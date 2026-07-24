@@ -18,6 +18,7 @@
 		C9702B6D2FF202A5002E2CCE /* BlueprintsFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C9702B6C2FF202A5002E2CCE /* BlueprintsFeature */; };
 		C98EDC7C2FFFD6EF0033AF54 /* AccountFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C98EDC7B2FFFD6EF0033AF54 /* AccountFeature */; };
 		C98FB669301175110064E694 /* BobnetFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C98FB668301175110064E694 /* BobnetFeature */; };
+		C98FB6893013AA950064E694 /* CivilisationsFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C98FB6883013AA950064E694 /* CivilisationsFeature */; };
 		C9ACF1382FF865C900337F11 /* PrintingUI in Frameworks */ = {isa = PBXBuildFile; productRef = C9ACF1372FF865C900337F11 /* PrintingUI */; };
 		C9B188932FF72F130018FA8F /* SidebarFeature in Frameworks */ = {isa = PBXBuildFile; productRef = C9B188922FF72F130018FA8F /* SidebarFeature */; };
 		C9B188952FF856310018FA8F /* GameModels in Frameworks */ = {isa = PBXBuildFile; productRef = C9B188942FF856310018FA8F /* GameModels */; };
@@ -65,6 +66,7 @@
 				C9F814BE2FEE1EED00ACFAC3 /* GameSync in Frameworks */,
 				C9B188932FF72F130018FA8F /* SidebarFeature in Frameworks */,
 				C9E7D9793001D264002C2A16 /* TravelUI in Frameworks */,
+				C98FB6893013AA950064E694 /* CivilisationsFeature in Frameworks */,
 				C9B5309F2FE72B0B006F79A8 /* RawAPIFeature in Frameworks */,
 				C98EDC7C2FFFD6EF0033AF54 /* AccountFeature in Frameworks */,
 				C90D75CF2FED785C00B293DE /* AccountManager in Frameworks */,
@@ -166,6 +168,7 @@
 				C9E7D9783001D264002C2A16 /* TravelUI */,
 				C9582DF8300E699600EBDC60 /* EventLogFeature */,
 				C98FB668301175110064E694 /* BobnetFeature */,
+				C98FB6883013AA950064E694 /* CivilisationsFeature */,
 			);
 			productName = Replicant;
 			productReference = C922A8B62FDC493200431320 /* Replicould.app */;
@@ -519,6 +522,10 @@
 		C98FB668301175110064E694 /* BobnetFeature */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = BobnetFeature;
+		};
+		C98FB6883013AA950064E694 /* CivilisationsFeature */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = CivilisationsFeature;
 		};
 		C9ACF1372FF865C900337F11 /* PrintingUI */ = {
 			isa = XCSwiftPackageProductDependency;

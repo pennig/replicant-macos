@@ -13,6 +13,7 @@ import AccountFeature
 import AccountManager
 import AppKit
 import BlueprintsFeature
+import CivilisationsFeature
 import BobnetFeature
 import ComposableArchitecture
 import DevicesFeature
@@ -63,6 +64,8 @@ struct MainFeature {
         var devices: DevicesFeature.State
         /// The unlocked blueprint catalog (Blueprints view) — list + inspector.
         var blueprints: BlueprintsFeature.State
+        /// The civilisations catalog (species + account reputation) — list + dossier.
+        var civilisations: CivilisationsFeature.State
         /// The stellar-locations catalog (Locations view) — disclosure list + inspector.
         var locations: LocationsFeature.State
         /// The Location Events quest log (Missions) — discovered events + quest sheet.
@@ -88,6 +91,7 @@ struct MainFeature {
             self.newStarMap = NewStarMapFeature.State()
             self.devices = DevicesFeature.State()
             self.blueprints = BlueprintsFeature.State()
+            self.civilisations = CivilisationsFeature.State()
             self.locations = LocationsFeature.State()
             self.locationEvents = LocationEventsFeature.State()
             self.printQueue = PrintQueueFeature.State()
@@ -112,6 +116,7 @@ struct MainFeature {
         case newStarMap(NewStarMapFeature.Action)
         case devices(DevicesFeature.Action)
         case blueprints(BlueprintsFeature.Action)
+        case civilisations(CivilisationsFeature.Action)
         case locations(LocationsFeature.Action)
         case locationEvents(LocationEventsFeature.Action)
         case printQueue(PrintQueueFeature.Action)
@@ -147,6 +152,9 @@ struct MainFeature {
         }
         Scope(state: \.blueprints, action: \.blueprints) {
             BlueprintsFeature()
+        }
+        Scope(state: \.civilisations, action: \.civilisations) {
+            CivilisationsFeature()
         }
         Scope(state: \.locations, action: \.locations) {
             LocationsFeature()
@@ -196,7 +204,7 @@ struct MainFeature {
                 state.devices.selectedDeviceCode = code
                 return .none
 
-            case .sidebar, .account, .messages, .bobnet, .rawAPI, .eventLog, .newStarMap, .devices, .blueprints, .locations, .locationEvents, .printQueue, .replicantDirectory:
+            case .sidebar, .account, .messages, .bobnet, .rawAPI, .eventLog, .newStarMap, .devices, .blueprints, .civilisations, .locations, .locationEvents, .printQueue, .replicantDirectory:
                 return .none
             }
         }
@@ -289,6 +297,11 @@ struct MainView: View {
         store.scope(state: \.blueprints, action: \.blueprints)
     }
 
+    /// The Civilisations catalog store, scoped from the main session.
+    private var civilisationsStore: StoreOf<CivilisationsFeature> {
+        store.scope(state: \.civilisations, action: \.civilisations)
+    }
+
     /// The Locations catalog store, scoped from the main session.
     private var locationsStore: StoreOf<LocationsFeature> {
         store.scope(state: \.locations, action: \.locations)
@@ -319,6 +332,8 @@ struct MainView: View {
             DevicesListView(store: devicesStore)
         } else if store.sidebar.category == .blueprints {
             BlueprintsListView(store: blueprintsStore)
+        } else if store.sidebar.category == .civilisations {
+            CivilisationsListView(store: civilisationsStore)
         } else if store.sidebar.category == .locations {
             LocationsListView(store: locationsStore)
         } else if store.sidebar.category == .locationEvents {
@@ -363,6 +378,8 @@ struct MainView: View {
             DeviceDetailView(store: devicesStore)
         } else if store.sidebar.category == .blueprints {
             BlueprintDetailView(store: blueprintsStore)
+        } else if store.sidebar.category == .civilisations {
+            CivilisationDetailView(store: civilisationsStore)
         } else if store.sidebar.category == .locations {
             LocationDetailView(store: locationsStore)
         } else if store.sidebar.category == .locationEvents {

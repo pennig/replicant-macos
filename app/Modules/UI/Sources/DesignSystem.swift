@@ -212,6 +212,7 @@ public enum HostKind: String, CaseIterable {
 // enum SidebarItem -> symbol. Replace any with custom symbols as desired.
 public enum SidebarSymbol {
     public static let stars      = "sparkles"
+    public static let civilisations = "person.2.wave.2"
     public static let devices    = "circle.hexagongrid"
     public static let replicants = "point.3.connected.trianglepath.dotted"
     public static let blueprints = "doc.plaintext"

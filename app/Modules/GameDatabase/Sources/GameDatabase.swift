@@ -32,6 +32,7 @@ public enum GameDatabase {
         #endif
         Message.registerMigrations(&migrator)
         Blueprint.registerMigrations(&migrator)
+        Civilisation.registerMigrations(&migrator)
         Star.registerMigrations(&migrator)
         SystemDetail.registerMigrations(&migrator)
         LocationFootprint.registerMigrations(&migrator)

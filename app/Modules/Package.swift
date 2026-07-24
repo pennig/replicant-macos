@@ -12,6 +12,7 @@ let package = Package(
         .library(name: "API", targets: ["API"]),
         .library(name: "BlueprintsFeature", targets: ["BlueprintsFeature"]),
         .library(name: "BobnetFeature", targets: ["BobnetFeature"]),
+        .library(name: "CivilisationsFeature", targets: ["CivilisationsFeature"]),
         .library(name: "DevicesFeature", targets: ["DevicesFeature"]),
         .library(name: "EventLogFeature", targets: ["EventLogFeature"]),
         .library(name: "GameDatabase", targets: ["GameDatabase"]),
@@ -158,6 +159,30 @@ let package = Package(
             name: "BobnetFeatureTests",
             dependencies: ["BobnetFeature"],
             path: "BobnetFeature/Tests"
+        ),
+        .target(
+            name: "CivilisationsFeature",
+            dependencies: [
+                "API",
+                "GameDatabase",
+                "GameModels",
+                "GameSession",
+                "UI",
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "SQLiteData", package: "sqlite-data"),
+            ],
+            path: "CivilisationsFeature/Sources"
+        ),
+        .testTarget(
+            name: "CivilisationsFeatureTests",
+            dependencies: [
+                "CivilisationsFeature",
+                "GameDatabase",
+                "GameModels",
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "SQLiteData", package: "sqlite-data"),
+            ],
+            path: "CivilisationsFeature/Tests"
         ),
         .target(
             name: "DevicesFeature",
