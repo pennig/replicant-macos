@@ -24,11 +24,6 @@ import UniverseModels
 
 public struct NewStarMapView: View {
     @Bindable var store: StoreOf<NewStarMapFeature>
-    /// The bridge the Metal renderer pushes ship pip screen positions to each
-    /// frame. Held here but NOT read in `body` — only the sibling `ShipOverlayLayer`
-    /// reads `.ships`, so a per-frame update re-renders just that overlay and never
-    /// this view (which would otherwise rebuild the whole star terrain per frame).
-    @State private var shipProjection = ShipProjectionModel()
     /// The bridge the renderer pushes projected device-cluster badge positions to each
     /// frame. Held here but NOT read in `body` — only `LocationClusterLayer` reads
     /// `.clusters`, so a per-frame update re-renders just that overlay.
@@ -158,14 +153,15 @@ public struct NewStarMapView: View {
                 guard let f = leg.from, let t = leg.to else { return nil }
                 return RouteLeg(from: f, to: t, seconds: leg.timeSeconds)
             }
-            return ShipRoute(deviceCode: device.deviceCode, from: origin, to: destination,
+            return ShipRoute(deviceCode: device.deviceCode, deviceType: device.deviceType,
+                             from: origin, to: destination,
                              departedAt: departedAt, arrivesAt: arrivesAt, legs: legs)
         }
     }
 
-    /// deviceCode → deviceType for every device on the roster, so the ship overlay
-    /// can resolve each pip's `device.<type>` glyph. Recomputed only when `body`
-    /// re-evaluates (not per frame — `body` never reads `shipProjection.ships`).
+    /// deviceCode → deviceType for every device on the roster, so the transit
+    /// callout cards can resolve each ship's `device.<type>` glyph. (The ship
+    /// icons themselves are GPU-drawn now and carry their type on `ShipRoute`.)
     private var shipDeviceTypes: [String: String] {
         Dictionary(devices.map { ($0.deviceCode, $0.deviceType) }, uniquingKeysWith: { first, _ in first })
     }
@@ -357,24 +353,15 @@ public struct NewStarMapView: View {
         let model = focusedModel
         let clusters = deviceClusters(model: model)
         ZStack {
+            // Ship icons draw inside the Metal frame itself (see `encodeShipIcons`)
+            // — no SwiftUI overlay to fall out of sync; clicks/hover route through
+            // the AppKit input layer's `pickShip`.
             MetalStarView(store: store, stars: terrain, overlays: overlays,
                           focus: store.focus, systemModel: model,
-                          shipProjection: shipProjection,
                           deviceClusters: clusters,
                           clusterProjection: clusterProjection,
                           transitProjection: transitProjection)
                 .ignoresSafeArea()
-
-            // Tappable device icons over the ship pips. Renders nothing unless the
-            // renderer is publishing projected ships (galaxy scale only); empty
-            // areas capture no hits, so map gestures pass through.
-            ShipOverlayLayer(
-                projection: shipProjection,
-                deviceTypes: shipDeviceTypes,
-                selectedDeviceCode: store.selectedShipDeviceCode,
-                onSelect: { store.send(.shipSelected($0)) }
-            )
-            .ignoresSafeArea()
 
             // Device-presence badges over occupied orrery locations (system focus only;
             // the renderer emits nothing in the galaxy). Tapping selects the location,

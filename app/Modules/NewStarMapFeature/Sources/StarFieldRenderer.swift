@@ -239,6 +239,8 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     private var lastLabelLayoutTime: Double = 0
     private let labelLayoutInterval: Double = 0.05
     private var labelLayoutKey: LabelLayoutKey?
+    /// One off-main selection at a time; the cadence retries next frame if busy.
+    private var labelSelectionInFlight = false
     private struct LabelLayoutKey: Equatable {
         var selected: Int?
         var symbols: Bool
@@ -291,11 +293,16 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     private let playerColor = SIMD3<Float>(1.0, 0.82, 0.35)   // gold
     private let shipColor   = SIMD3<Float>(0.55, 0.95, 1.0)   // bright cyan-white
 
-    /// Pushed each frame with the ships' projected screen points (view points,
-    /// top-left) so the SwiftUI overlay can float a tappable device icon over each
-    /// pip. Set by `MetalStarView`; nil until then. Main-actor (this renderer is), so
-    /// the closure can touch the main-actor overlay model directly.
-    var onShipsProjected: (@MainActor ([ProjectedShip]) -> Void)?
+    // Ship icons are drawn IN the Metal frame (same command buffer + camera as the
+    // trajectories, so they can never desync), from textures baked by
+    // `ShipIconTextureCache`. The view mirrors the reducer's selection in and the
+    // AppKit input layer feeds hover; picking reads `shipIconHitTargets`.
+    var selectedShipDeviceCode: String?
+    var hoveredShipDeviceCode: String?
+    private let shipIconCache: ShipIconTextureCache
+    /// Last frame's icon centres in view POINTS (top-left origin) — the hit
+    /// targets `pickShip`/hover use, refreshed by `encodeShipIcons`.
+    private(set) var shipIconHitTargets: [(deviceCode: String, center: CGPoint)] = []
 
     /// Pushed each frame with the device clusters' projected screen points (view points,
     /// top-left) while focused into a system, so the SwiftUI overlay floats one tappable
@@ -411,6 +418,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         self.relevance = relevance
 
         labelCache = LabelTextureCache(device: device)
+        shipIconCache = ShipIconTextureCache(device: device)
 
         // Ambient interstellar medium: one additive point-sprite buffer, generated
         // once and drawn behind the terrain.
@@ -849,16 +857,17 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
 
             let size = view.drawableSize
             encodeLabels(enc, viewportPx: SIMD2<Float>(Float(size.width), Float(size.height)))
+            // Ship icons over the labels — drawn in THIS frame with THIS camera,
+            // so they are frame-locked to the trajectories by construction.
+            encodeShipIcons(enc, view: view, now: now,
+                            viewportPx: SIMD2<Float>(Float(size.width), Float(size.height)))
             enc.endEncoding()
         }
 
         cmd.present(drawable)
         cmd.commit()
 
-        // Publish the ships' screen positions for the SwiftUI icon overlay, using
-        // the same camera pose just rendered so the icons are frame-locked to the pips.
-        emitShipProjection(view: view, now: now)
-        // And the device-presence cluster badges (system focus only).
+        // Publish the device-presence cluster badges (system focus only).
         emitClusterProjection(view: view)
         // And the inbound/outbound transit callouts (system focus only), anchored to the
         // top of each riser the orrery pass drew.
@@ -885,50 +894,74 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         if view.preferredFramesPerSecond != fps { view.preferredFramesPerSecond = fps }
     }
 
-    /// Project each in-transit ship's comet head to view points (top-left origin,
-    /// mirroring `pickStar`) and push them to the SwiftUI overlay via
-    /// `onShipsProjected`. Emits an empty set while drilled into a system — the pips
-    /// fade out via `overlayDim`, so the icons vanish with them (same gate as the
-    /// pip encode at `overlayDim > 0.001`). Uses `bounds.size` (POINTS), not
-    /// `drawableSize` (pixels), so the points land in SwiftUI's local space.
-    private func emitShipProjection(view: MTKView, now: Double) {
-        guard let emit = onShipsProjected else { return }
-        guard !ships.isEmpty else { emit([]); return }
+    /// Draw each in-transit ship's tappable icon — the `device.<type>` glyph in its
+    /// disc — as a textured quad in the screen pass, at the comet head's projected
+    /// position. Rendering the icon in the SAME command buffer with the SAME camera
+    /// as the trajectory makes icon/pip sync structural (the retired SwiftUI overlay
+    /// re-positioned per frame through an observable and fell behind whenever the
+    /// main thread was busy). Also refreshes `shipIconHitTargets` (view POINTS) for
+    /// `pickShip`/hover. A ship in the galaxy fades with `overlayDim` on drill-in; a
+    /// ship on an intra-system leg of the focused system rides its orrery placement.
+    private func encodeShipIcons(_ enc: MTLRenderCommandEncoder, view: MTKView,
+                                 now: Double, viewportPx: SIMD2<Float>) {
+        guard !ships.isEmpty else { shipIconHitTargets = []; return }
         let viewM = camera.viewMatrix()
         let proj = camera.projectionMatrix(aspect: aspect)
         let size = view.bounds.size
         let w = Float(size.width), h = Float(size.height)
-        guard w > 0, h > 0 else { emit([]); return }
-        let pixelScale = pixelGridScale(for: view)
+        guard w > 0, h > 0, viewportPx.x > 0 else { shipIconHitTargets = []; return }
+        let pxPerPoint = viewportPx.x / w
+        let quadPx = Float(ShipIconTextureCache.canvasPoints) * pxPerPoint
 
-        // In-orrery resolver: a ship whose active leg is wholly within the focused system
-        // stays visible + placed on its intra-system cruise leg (opacity ramps with the
-        // reveal). A ship not in this system — or when in the galaxy — falls back to the
-        // galaxy straight-line placement, fading with `overlayDim` on drill-in.
         let shipLayout = frameOrreryLayout
         let dim = overlayDim
 
-        var projected: [ProjectedShip] = []
-        projected.reserveCapacity(ships.count)
+        var targets: [(deviceCode: String, center: CGPoint)] = []
+        targets.reserveCapacity(ships.count)
+        enc.setRenderPipelineState(labelPipeline)
         for ship in ships {
             var world: SIMD3<Float>?
-            var opacity = 0.0
+            var opacity: Float = 0
             if let layout = shipLayout,
                let op = ship.orreryPosition(at: now, resolve: { layout.position(ofLocation: $0) }) {
                 world = op
-                opacity = Double(orreryReveal)
+                opacity = orreryReveal
             } else if dim > 0.001 {
                 world = ship.position(at: now, stars: stars)
-                opacity = Double(dim)
+                opacity = dim
             }
             guard let world, opacity > 0.001,
                   let point = projectViewPoint(world, view: viewM, proj: proj, width: w, height: h)
             else { continue }
-            projected.append(ProjectedShip(deviceCode: ship.deviceCode,
-                                           point: snapToPixelGrid(point, scale: pixelScale),
-                                           opacity: opacity))
+            targets.append((ship.deviceCode, point))
+
+            let state: ShipIconState = ship.deviceCode == selectedShipDeviceCode ? .selected
+                : (ship.deviceCode == hoveredShipDeviceCode ? .hovered : .normal)
+            guard let icon = shipIconCache.texture(deviceType: ship.deviceType, state: state)
+            else { continue }
+            var lp = LabelParams(
+                originPx: SIMD2<Float>(Float(point.x) * pxPerPoint - quadPx * 0.5,
+                                       Float(point.y) * pxPerPoint - quadPx * 0.5),
+                sizePx: SIMD2<Float>(repeating: quadPx),
+                viewportPx: viewportPx,
+                opacity: opacity, _pad: 0)
+            enc.setVertexBytes(&lp, length: MemoryLayout<LabelParams>.stride, index: 0)
+            enc.setFragmentTexture(icon.texture, index: 0)
+            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
         }
-        emit(projected)
+        shipIconHitTargets = targets
+    }
+
+    /// The ship icon under a view point (top-left origin, POINTS), from the last
+    /// rendered frame's hit targets — the click/hover companion of `pickStar`.
+    func pickShip(atViewPoint p: CGPoint) -> String? {
+        let reach = ShipIconTextureCache.canvasPoints / 2   // the icon disc + AA margin
+        var best: (code: String, distance: CGFloat)?
+        for target in shipIconHitTargets {
+            let d = hypot(target.center.x - p.x, target.center.y - p.y)
+            if d <= reach, d < (best?.distance ?? .infinity) { best = (target.deviceCode, d) }
+        }
+        return best?.code
     }
 
     /// Replace the device-presence clusters (the view rebuilds these off the live roster
@@ -2014,7 +2047,8 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
                 }
                 shipLegs.reverse()
             }
-            return Ship(deviceCode: route.deviceCode, fromStar: from, toStar: to,
+            return Ship(deviceCode: route.deviceCode, deviceType: route.deviceType,
+                        fromStar: from, toStar: to,
                         departedMedia: departed, arrivesMedia: arrives,
                         arrivesAt: route.arrivesAt, legs: shipLegs)
         }
@@ -2387,16 +2421,43 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         }
 
         // Membership + collision layout on the throttled cadence (or immediately
-        // when the selection / symbols / terrain change). Projecting and distance-
-        // sorting the ENTIRE star field every frame was one of the map's main-thread
-        // hogs at full frame rate; label membership changes far too slowly to need it.
+        // when the selection / symbols / terrain change). The heavy half — project
+        // and distance-sort the ENTIRE star field — runs OFF the main thread on
+        // value-type snapshots (`LabelSelection`); only the tiny finish over the
+        // ~20 survivors (texture lookup + collision layout) hops back here. Label
+        // membership changes far too slowly for the one-refresh latency to show,
+        // and the eased fades smooth the handover anyway.
         let now = CACurrentMediaTime()
         let layoutKey = LabelLayoutKey(selected: selectedStarIndex, symbols: showSymbols,
                                        starCount: stars.count)
-        if layoutKey != labelLayoutKey || now - lastLabelLayoutTime >= labelLayoutInterval {
+        if !labelSelectionInFlight,
+           layoutKey != labelLayoutKey || now - lastLabelLayoutTime >= labelLayoutInterval {
+            labelSelectionInFlight = true
             labelLayoutKey = layoutKey
             lastLabelLayoutTime = now
-            refreshLabelLayout(screen: screen)
+            // Plain-value snapshots (two float arrays + the pose) so the detached
+            // task captures only Sendable data — the O(n) projection + sort then
+            // runs entirely off this thread.
+            let field = LabelSelection.Field(
+                positions: stars.map(\.position),
+                worldRadii: stars.map(\.worldRadius),
+                focusedStar: focusedStarIndex, orreryReveal: orreryReveal,
+                orreryCenter: orreryCenter, systemPush: systemPush,
+                minAngularSize: minAngularSize, maxAngularSize: maxAngularSize,
+                ringFloor: labelRingFloor)
+            let cameraSnapshot = LabelSelection.Camera(
+                view: view, projection: proj, width: w, height: h, eye: eye)
+            let budget = Int((Float(maxContextLabels) * camera.zoomedInFraction).rounded())
+            let selected = selectedStarIndex
+            Task.detached(priority: .userInitiated) { [weak self] in
+                let choices = LabelSelection.choose(field: field, camera: cameraSnapshot,
+                                                    budget: budget, selected: selected)
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    self.labelSelectionInFlight = false
+                    self.applyLabelChoices(choices, selected: selected)
+                }
+            }
         }
 
         // Ease each label's opacity toward 1 (placed) or 0 (not), so labels fade in
@@ -2457,39 +2518,24 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         for id in stale { labelOpacity.removeValue(forKey: id) }
     }
 
-    /// The throttled half of the label pass: project every star, rank by nearness,
-    /// pick the zoom-gated curated set (+ the selection, always labelled), and
-    /// collision-resolve (LabelEngine). Each survivor is stored as an OFFSET from
-    /// its anchor so the per-frame draw can carry the resolved position along on
-    /// the star's fresh projection.
-    private func refreshLabelLayout(screen: (Int) -> (px: SIMD2<Float>, dist: Float, ringR: Float)?) {
-        var onscreen: [(i: Int, px: SIMD2<Float>, dist: Float, ringR: Float)] = []
-        for i in stars.indices {
-            if let s = screen(i) { onscreen.append((i, s.px, s.dist, s.ringR)) }
-        }
-        onscreen.sort { $0.dist < $1.dist }
-
-        // Curated set, gated by zoom: 0 labels when fully zoomed out, up to
-        // maxContextLabels fully zoomed in. The selected star is always labelled.
-        let budget = Int((Float(maxContextLabels) * camera.zoomedInFraction).rounded())
-        var chosen = Array(onscreen.prefix(budget))
-        if let sel = selectedStarIndex, !chosen.contains(where: { $0.i == sel }),
-           let s = screen(sel) {
-            chosen.append((sel, s.px, 0, s.ringR))
-        }
-
-        // Measure (rasterize once, cached) and build candidates. Each label anchors
-        // at a top-centre point just below its star, clear of the ring. The selected
-        // star gets top priority; the rest rank by nearness (closer = higher).
+    /// The main-thread finish of a label refresh: measure the chosen stars'
+    /// textures (rasterize once, cached), collision-resolve (LabelEngine), and
+    /// store each survivor as an OFFSET from its anchor so the per-frame draw can
+    /// carry the resolved position along on the star's fresh projection. Tiny —
+    /// it touches only the ~20 chosen labels; the all-star projection + sort that
+    /// produced `choices` ran off-main in `LabelSelection.choose`.
+    private func applyLabelChoices(_ choices: [LabelSelection.Choice], selected: Int?) {
         var candidates: [LabelEngine.Candidate] = []
         var anchors: [Int: SIMD2<Float>] = [:]
-        for c in chosen {
-            let symbols = showSymbols ? stars[c.i].statusSymbols : []
-            guard let label = labelCache.texture(name: stars[c.i].name, symbols: symbols) else { continue }
-            let priority: Float = (c.i == selectedStarIndex) ? .greatestFiniteMagnitude : -c.dist
-            let anchor = SIMD2<Float>(c.px.x, c.px.y + c.ringR + labelGap)
-            anchors[c.i] = anchor
-            candidates.append(.init(id: c.i, anchor: anchor, size: label.size, priority: priority))
+        for c in choices {
+            guard stars.indices.contains(c.index) else { continue }   // terrain swapped mid-flight
+            let symbols = showSymbols ? stars[c.index].statusSymbols : []
+            guard let label = labelCache.texture(name: stars[c.index].name, symbols: symbols)
+            else { continue }
+            let priority: Float = (c.index == selected) ? .greatestFiniteMagnitude : -c.distance
+            let anchor = SIMD2<Float>(c.screen.x, c.screen.y + c.ringRadius + labelGap)
+            anchors[c.index] = anchor
+            candidates.append(.init(id: c.index, anchor: anchor, size: label.size, priority: priority))
         }
         let placements = LabelEngine.layout(candidates)
         cachedLabelPlacements = Dictionary(

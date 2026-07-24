@@ -3,7 +3,7 @@
 //  NewStarMapFeature
 //
 //  The tappable SwiftUI layer that floats one device-presence badge over each occupied
-//  orrery location. Like `ShipOverlayLayer`, it is a DEDICATED view whose `body` reads
+//  orrery location. Like `TransitCalloutLayer`, it is a DEDICATED view whose `body` reads
 //  `projection.clusters` (mutated every frame by the renderer) — so only this view
 //  re-renders per frame, never the map view. One badge per location (not per device)
 //  keeps the on-screen icon count ≈ occupied locations however many devices sit there.
@@ -39,7 +39,7 @@ struct LocationClusterLayer: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    /// Snap to the physical pixel grid (see `ShipOverlayLayer.snapped`) so the flattened
+    /// Snap to the physical pixel grid (see `TransitCalloutLayer.snapped`) so the flattened
     /// badge bitmap stays crisp as the anchor's projected point streams in fractionally.
     private func snapped(_ point: CGPoint) -> CGPoint {
         let scale = max(displayScale, 1)

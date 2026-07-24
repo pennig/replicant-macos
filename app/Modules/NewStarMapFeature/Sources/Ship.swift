@@ -17,6 +17,9 @@ import simd
 struct Ship {
     /// The device in transit — the identity the tappable overlay icon carries.
     let deviceCode: String
+    /// The device's type, resolving the icon's `device.<type>` glyph. Defaults to
+    /// empty for callers that don't draw icons (tests).
+    var deviceType: String = ""
     /// Overall endpoint systems (indices into the star array). Both are state-clamped so
     /// they never dim; they anchor the drawn ribbon.
     let fromStar: Int

@@ -10,6 +10,7 @@
 //  change `.main` below to `.module`.
 //
 
+import AppKit
 import SwiftUI
 
 private let rcBundle: Bundle = .module
@@ -29,7 +30,27 @@ public extension Image {
     }
 }
 
+public extension NSImage {
+    /// `Image.rcSymbol`'s AppKit twin: the same custom-symbol lookup for callers
+    /// that rasterize outside SwiftUI (e.g. the star map baking overlay icons to
+    /// Metal textures). Same fallback contract.
+    static func rcSymbol(_ name: String, fallback: String = "circle.hexagonpath") -> NSImage? {
+        rcBundle.image(forResource: name)
+            ?? NSImage(systemSymbolName: fallback, accessibilityDescription: nil)
+    }
+}
+
 // MARK: - Semantic colors
+
+// AppKit mirrors of the tokens needed by raster paths that draw OUTSIDE SwiftUI
+// (the star map bakes overlay icons into Metal textures via CGContext). Same
+// asset-catalog entries as the SwiftUI tokens — never a parallel palette. Add a
+// token here only when an AppKit/CG raster path actually needs it.
+public extension NSColor {
+    static var rcSurfaceRaised: NSColor { NSColor(named: "SurfaceRaised", bundle: rcBundle) ?? .windowBackgroundColor }
+    static var rcTextPrimary:   NSColor { NSColor(named: "TextPrimary",   bundle: rcBundle) ?? .labelColor }
+    static var rcAccent:        NSColor { NSColor(named: "AccentPrimary", bundle: rcBundle) ?? .controlAccentColor }
+}
 
 // Defined on `ShapeStyle where Self == Color` so each token is usable both as a
 // plain `Color` value (`Color.rcAccent`, `let c: Color = .rcAccent`) and in any

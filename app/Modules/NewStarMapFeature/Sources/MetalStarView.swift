@@ -92,7 +92,18 @@ final class StarMTKView: MTKView {
     }
 
     override func mouseMoved(with event: NSEvent) {
-        renderer?.registerInteraction()
+        guard let r = renderer else { return }
+        r.registerInteraction()
+        // Hover the ship icon under the cursor (the icons are GPU-drawn now, so
+        // the renderer owns their hit targets). Mirrors the retired SwiftUI
+        // button's hover ring + "View device" tooltip.
+        let loc = convert(event.locationInWindow, from: nil)
+        let p = CGPoint(x: loc.x, y: bounds.height - loc.y)
+        let hovered = r.pickShip(atViewPoint: p)
+        if hovered != r.hoveredShipDeviceCode {
+            r.hoveredShipDeviceCode = hovered
+            toolTip = hovered != nil ? "View device" : nil
+        }
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -127,6 +138,16 @@ final class StarMTKView: MTKView {
         let loc = convert(event.locationInWindow, from: nil)
         // AppKit origin is bottom-left; flip to match the renderer's top-left.
         let p = CGPoint(x: loc.x, y: bounds.height - loc.y)
+
+        // A ship icon wins over anything under it (it draws on top) — at galaxy
+        // scale AND in-orrery. Selecting a ship never defers: there's no dive on
+        // a ship, so nothing for a second click to preempt.
+        if let ship = r.pickShip(atViewPoint: p) {
+            pendingClick?.cancel()
+            pendingClick = nil
+            send?(.shipSelected(ship))
+            return
+        }
 
         // Orrery (system/body focus): single-click selects a location; double-click on a
         // planet drills into its body view. Mirrors the galaxy double-click deferral so a
@@ -214,9 +235,6 @@ struct MetalStarView: NSViewRepresentable {
     /// The orrery to show when `focus` is `.system` — built by the view from the
     /// live row. Nil in galaxy mode.
     let systemModel: SystemModel?
-    /// The bridge the renderer pushes ship screen positions to each frame, read by
-    /// the sibling `ShipOverlayLayer` to float tappable device icons over the pips.
-    let shipProjection: ShipProjectionModel
     /// Device-presence clusters (built by the view from the roster + scan blob), pushed
     /// to the renderer and projected each frame while focused into a system.
     let deviceClusters: [DeviceCluster]
@@ -253,7 +271,6 @@ struct MetalStarView: NSViewRepresentable {
         /// left the viewport black through the initial survey and made the camera
         /// feel dead on first load (each rebuild cancelled the in-flight camera fly).
         @MainActor func syncTerrain(_ stars: [Star], overlays: StarMapOverlays,
-                                    projection: ShipProjectionModel,
                                     clusterProjection: DeviceClusterProjectionModel,
                                     transitProjection: TransitProjectionModel,
                                     into view: StarMTKView) {
@@ -267,16 +284,12 @@ struct MetalStarView: NSViewRepresentable {
                 self.renderer = renderer
                 view.renderer = renderer
                 view.delegate = renderer
-                // Push each frame's ship screen points to the overlay model. The
-                // renderer is main-actor, so these callbacks fire on the main actor;
-                // the `!=` guard keeps an idle fleet (or empty set) from churning
-                // SwiftUI. The same renderer object persists across in-place terrain/
-                // overlay updates, so this is wired exactly once.
-                renderer.onShipsProjected = { [weak projection] ships in
-                    guard let projection, projection.ships != ships else { return }
-                    projection.ships = ships
-                }
-                // Device-presence badges: same once-wired, `!=`-guarded push as ships.
+                // Ship icons draw inside the Metal frame now — no per-frame bridge.
+                // Device-presence badges: pushed per frame; the renderer is
+                // main-actor, so these callbacks fire on the main actor, and the
+                // `!=` guard keeps an unchanged set from churning SwiftUI. The same
+                // renderer object persists across in-place terrain/overlay updates,
+                // so this is wired exactly once.
                 renderer.onClustersProjected = { [weak clusterProjection] clusters in
                     guard let clusterProjection, clusterProjection.clusters != clusters else { return }
                     clusterProjection.clusters = clusters
@@ -307,6 +320,12 @@ struct MetalStarView: NSViewRepresentable {
         /// planet's Lagrange points (drawn/pickable only when selected or occupied).
         @MainActor func applySelectedLocation(_ code: String?) {
             renderer?.selectedLocationCode = code
+        }
+
+        /// Mirrors the reducer's selected ship into the renderer, which draws the
+        /// icons (accent ring + glyph on the selected one).
+        @MainActor func applySelectedShip(_ code: String?) {
+            renderer?.selectedShipDeviceCode = code
         }
 
         /// Pushes the declarative HUD controls into the imperative renderer.
@@ -394,11 +413,12 @@ struct MetalStarView: NSViewRepresentable {
         view.isPaused = false                      // continuous for slice 1; see note
         view.enableSetNeedsDisplay = false
         view.send = { [store] action in store.send(action) }
-        context.coordinator.syncTerrain(stars, overlays: overlays, projection: shipProjection,
+        context.coordinator.syncTerrain(stars, overlays: overlays,
                                         clusterProjection: clusterProjection,
                                         transitProjection: transitProjection, into: view)
         context.coordinator.applyClusters(deviceClusters)
         context.coordinator.applySelectedLocation(store.selectedLocation)
+        context.coordinator.applySelectedShip(store.selectedShipDeviceCode)
         context.coordinator.applyControls(autoRotate: store.autoRotate,
                                           recenterToken: store.cameraResetToken)
         context.coordinator.applyStarFocus(token: store.starFocusToken,
@@ -408,11 +428,12 @@ struct MetalStarView: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: StarMTKView, context: Context) {
-        context.coordinator.syncTerrain(stars, overlays: overlays, projection: shipProjection,
+        context.coordinator.syncTerrain(stars, overlays: overlays,
                                         clusterProjection: clusterProjection,
                                         transitProjection: transitProjection, into: nsView)
         context.coordinator.applyClusters(deviceClusters)
         context.coordinator.applySelectedLocation(store.selectedLocation)
+        context.coordinator.applySelectedShip(store.selectedShipDeviceCode)
         context.coordinator.applyControls(autoRotate: store.autoRotate,
                                           recenterToken: store.cameraResetToken)
         context.coordinator.applyStarFocus(token: store.starFocusToken,

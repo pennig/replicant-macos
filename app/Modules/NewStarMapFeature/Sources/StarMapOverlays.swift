@@ -28,6 +28,9 @@ struct ShipRoute: Equatable {
     /// The device in transit — carried through to the renderer's `Ship` so the
     /// tappable overlay icon can identify which device a pip represents.
     var deviceCode: String
+    /// The device's type — resolves the `device.<type>` glyph the renderer bakes
+    /// into the ship's GPU-drawn icon.
+    var deviceType: String
     /// Overall origin system designation (e.g. `SOL`) — anchors the drawn ribbon.
     var from: String
     /// Overall destination system designation.

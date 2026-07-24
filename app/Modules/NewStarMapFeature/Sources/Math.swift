@@ -3,7 +3,9 @@ import simd
 // Right-handed view/projection math with Metal's z ∈ [0, 1] clip space.
 // Kept tiny and explicit so the camera code below reads unambiguously.
 
-extension simd_float4x4 {
+// `nonisolated`: pure value math, callable from any isolation (the off-main
+// label selection uses it; the module otherwise defaults to MainActor).
+nonisolated extension simd_float4x4 {
 
     /// Right-handed perspective with Metal NDC (z ∈ [0,1], camera looks down -Z).
     static func perspective(fovyRadians fovy: Float, aspect: Float, near: Float, far: Float) -> simd_float4x4 {
@@ -32,7 +34,7 @@ extension simd_float4x4 {
     }
 }
 
-extension SIMD4 {
+nonisolated extension SIMD4 {
     /// The first three lanes as a SIMD3 — Swift's simd lacks the `.xyz` swizzle
     /// that Metal Shading Language provides.
     var xyz: SIMD3<Scalar> { SIMD3(x, y, z) }
