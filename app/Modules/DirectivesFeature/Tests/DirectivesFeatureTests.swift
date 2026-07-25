@@ -102,9 +102,34 @@ struct DirectivesFeatureTests {
         #expect(store.state.errorMessage == "No directive in force.")
     }
 
-    /// An AMI controller fixture carrying an in-force directive.
+    /// Reconfigure opens the shared composer seeded from the selected device.
+    @Test func reconfigurePresentsTheComposer() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Device.insert { Self.controller(code: "AMI1", directive: "survey_system") }.execute(db)
+        }
+        let store = TestStore(initialState: DirectivesFeature.State(selectedRowID: "builtin:AMI1")) {
+            DirectivesFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
+        }
+        store.exhaustivity = .off
+
+        await store.send(.reconfigureTapped)
+        #expect(store.state.composer?.deviceCode == "AMI1")
+        #expect(store.state.composer?.directive == "survey_system")
+    }
+
+    /// An AMI controller fixture carrying an in-force directive. Real
+    /// controllers always advertise `available_directives` at runtime (see
+    /// `Device.availableDirectives`'s doc comment — the fallback vocabulary
+    /// is for worker devices only), so the fixture mirrors that: the passed
+    /// directive is always included, alongside a second option so the shape
+    /// matches a real survey controller's `["survey_system", "belt_search"]`
+    /// pairing (see `GameServices/Tests/DeviceDirectiveTests.swift`).
     nonisolated static func controller(code: String, directive: String) -> Device {
-        Device(
+        let availableDirectives = [directive] + (["survey_system", "belt_search"].filter { $0 != directive })
+        return Device(
             deviceCode: code,
             deviceType: "ami_survey_controller",
             replicantCode: "R1",
@@ -120,7 +145,10 @@ struct DirectivesFeatureTests {
             availableCommands: ["set_directive", "clear_directive"],
             features: [],
             tags: [],
-            detail: .object(["ami_directive": .object(["name": .string(directive)])]),
+            detail: .object([
+                "ami_directive": .object(["name": .string(directive)]),
+                "available_directives": .array(availableDirectives.map(JSONValue.string)),
+            ]),
             updatedAt: Date(timeIntervalSince1970: 0),
             firstSeenAt: Date(timeIntervalSince1970: 0)
         )
