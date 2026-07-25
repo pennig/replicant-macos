@@ -50,6 +50,11 @@ public struct LocationsFeature {
         /// features (`surge`, `system_scan`).
         @ObservationStateIgnored
         @FetchAll(Device.all) public var devices: [Device]
+        /// Stored original resource totals per site designation. Queried in
+        /// state (not the view) per the list-query-in-state standard, so the
+        /// inspector re-renders when a discovery event lands.
+        @ObservationStateIgnored
+        @FetchAll(SiteAssay.all) public var siteAssays: [SiteAssay]
 
         /// Selected node designation (system or body).
         public var selection: String?
@@ -150,6 +155,12 @@ public struct LocationsFeature {
                 let row = systemDetails.first(where: { $0.designation == id })
             else { return nil }
             return try? row.system()
+        }
+
+        /// Site designation → original totals, the denominator half of every
+        /// amount the inspector renders.
+        public var assayTotals: [String: [String: Double]] {
+            siteAssays.reduce(into: [:]) { $0[$1.id] = $1.totals }
         }
     }
 

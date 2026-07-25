@@ -28,13 +28,13 @@ public struct LocationDetailView: View {
         Group {
             if let id = store.selection, let system = store.selectedSystem {
                 if id == system.designation {
-                    SystemInspector(system: system, accessory: topAccessory)
+                    SystemInspector(system: system, accessory: topAccessory, assayTotals: store.assayTotals)
                 } else if let planet = system.planets.first(where: { $0.designation == id }) {
-                    PlanetInspector(planet: planet, accessory: topAccessory)
+                    PlanetInspector(planet: planet, accessory: topAccessory, assayTotals: store.assayTotals)
                 } else if let moon = system.planets.flatMap(\.moons).first(where: { $0.designation == id }) {
-                    MoonInspector(moon: moon, accessory: topAccessory)
+                    MoonInspector(moon: moon, accessory: topAccessory, assayTotals: store.assayTotals)
                 } else if let belt = system.belts.first(where: { $0.designation == id }) {
-                    BeltInspector(belt: belt, accessory: topAccessory)
+                    BeltInspector(belt: belt, accessory: topAccessory, assayTotals: store.assayTotals)
                 } else if let object = system.structures.first(where: { $0.designation == id }) {
                     ObjectInspector(site: object, accessory: topAccessory)
                 } else if let n = LocationTree.lPointNumber(id),
@@ -143,6 +143,7 @@ public struct LocationDetailView: View {
 private struct SystemInspector: View {
     let system: StarSystem
     let accessory: AnyView?
+    let assayTotals: [String: [String: Double]]
 
     var body: some View {
         InspectorScroll(title: system.name ?? system.designation, code: system.designation,
@@ -181,8 +182,13 @@ private struct SystemInspector: View {
             if !sites.isEmpty {
                 RCReadoutCard("Resource Sites", count: sites.count) {
                     ForEach(sites) { site in
-                        BubbleRow(title: site.name ?? site.designation, code: site.designation,
-                                  detail: remainingSummary(site.remaining))
+                        SiteAmountsRow(
+                            title: site.name ?? site.designation, code: site.designation,
+                            amounts: SiteAmounts.amounts(
+                                remainingPct: site.remaining, totals: assayTotals[site.designation]
+                            ),
+                            status: nil
+                        )
                     }
                 }
             }
@@ -191,8 +197,13 @@ private struct SystemInspector: View {
             if !salvage.isEmpty {
                 RCReadoutCard("Salvage", count: salvage.count) {
                     ForEach(salvage) { s in
-                        BubbleRow(title: s.name ?? s.designation, code: s.designation,
-                                  detail: (s.depleted ? "Depleted · " : "") + s.resourcesAvailable.joined(separator: ", "))
+                        SiteAmountsRow(
+                            title: s.name ?? s.designation, code: s.designation,
+                            amounts: SiteSalvageSections.salvageAmounts(
+                                s, totals: assayTotals[s.designation]
+                            ),
+                            status: s.depleted ? "Depleted" : nil
+                        )
                     }
                 }
             }
@@ -224,17 +235,12 @@ private struct SystemInspector: View {
             }
         }
     }
-
-    private func remainingSummary(_ remaining: [String: Double]) -> String? {
-        guard !remaining.isEmpty else { return nil }
-        let avg = remaining.values.reduce(0, +) / Double(remaining.count)
-        return String(format: "%.0f%% remaining", avg)
-    }
 }
 
 private struct PlanetInspector: View {
     let planet: Planet
     let accessory: AnyView?
+    let assayTotals: [String: [String: Double]]
     var body: some View {
         InspectorScroll(title: planet.name ?? planet.designation, code: planet.designation,
                         recon: planet.recon, accessory: accessory) {
@@ -246,7 +252,7 @@ private struct PlanetInspector: View {
                 if let n = planet.moonCount { Readout("Moons", "\(n)") }
             }
             if let phys = planet.physical { PhysicalCard(phys) }
-            SiteSalvageSections(sites: planet.sites, salvage: planet.salvage)
+            SiteSalvageSections(sites: planet.sites, salvage: planet.salvage, assayTotals: assayTotals)
             // Roll up the planet's own stock plus any held on its moons, attributed
             // per body.
             let holdings = planet.inventoryHoldings
@@ -262,6 +268,7 @@ private struct PlanetInspector: View {
 private struct MoonInspector: View {
     let moon: Moon
     let accessory: AnyView?
+    let assayTotals: [String: [String: Double]]
     var body: some View {
         InspectorScroll(title: moon.name ?? moon.designation, code: moon.designation,
                         recon: moon.recon, accessory: accessory) {
@@ -269,7 +276,7 @@ private struct MoonInspector: View {
                 Readout("Type", moon.type ?? "—")
             }
             if let phys = moon.physical { PhysicalCard(phys) }
-            SiteSalvageSections(sites: moon.sites, salvage: moon.salvage)
+            SiteSalvageSections(sites: moon.sites, salvage: moon.salvage, assayTotals: assayTotals)
             InventoryCard(moon.inventory)
         }
     }
@@ -278,6 +285,7 @@ private struct MoonInspector: View {
 private struct BeltInspector: View {
     let belt: Belt
     let accessory: AnyView?
+    let assayTotals: [String: [String: Double]]
     var body: some View {
         InspectorScroll(title: belt.designation, code: belt.designation,
                         recon: .scanned, accessory: accessory) {
@@ -297,9 +305,13 @@ private struct BeltInspector: View {
             if !belt.sites.isEmpty {
                 RCReadoutCard("Resource Sites", count: belt.sites.count) {
                     ForEach(belt.sites) { site in
-                        BubbleRow(title: site.name ?? site.designation, code: site.designation,
-                                  detail: site.remaining.isEmpty ? nil
-                                      : "\(Int(site.remaining.values.reduce(0, +) / Double(site.remaining.count)))% remaining")
+                        SiteAmountsRow(
+                            title: site.name ?? site.designation, code: site.designation,
+                            amounts: SiteAmounts.amounts(
+                                remainingPct: site.remaining, totals: assayTotals[site.designation]
+                            ),
+                            status: nil
+                        )
                     }
                 }
             }
@@ -408,22 +420,45 @@ private struct InventoryHoldingRow: View {
 private struct SiteSalvageSections: View {
     let sites: [ResourceSite]
     let salvage: [SalvageSite]
+    let assayTotals: [String: [String: Double]]
     var body: some View {
         if !sites.isEmpty {
             RCReadoutCard("Resource Sites", count: sites.count) {
                 ForEach(sites) { site in
-                    BubbleRow(title: site.name ?? site.designation, code: site.designation, detail: nil)
+                    SiteAmountsRow(
+                        title: site.name ?? site.designation, code: site.designation,
+                        amounts: SiteAmounts.amounts(
+                            remainingPct: site.remaining, totals: assayTotals[site.designation]
+                        ),
+                        status: nil
+                    )
                 }
             }
         }
         if !salvage.isEmpty {
             RCReadoutCard("Salvage", count: salvage.count) {
                 ForEach(salvage) { s in
-                    BubbleRow(title: s.name ?? s.designation, code: s.designation,
-                              detail: (s.depleted ? "Depleted · " : "") + s.resourcesAvailable.joined(separator: ", "))
+                    SiteAmountsRow(
+                        title: s.name ?? s.designation, code: s.designation,
+                        amounts: Self.salvageAmounts(s, totals: assayTotals[s.designation]),
+                        status: s.depleted ? "Depleted" : nil
+                    )
                 }
             }
         }
+    }
+
+    /// A site from the `salvage[]` roster block has resource names but no
+    /// percentages. Map those to zero-percent entries so the row can still list
+    /// what's there — `SiteAmountsRow` falls back to a name summary when no
+    /// amount is known — instead of rendering an empty card.
+    static func salvageAmounts(
+        _ site: SalvageSite, totals: [String: Double]?
+    ) -> [ResourceAmount] {
+        guard site.remainingPct.isEmpty else {
+            return SiteAmounts.amounts(remainingPct: site.remainingPct, totals: totals)
+        }
+        return site.resourcesAvailable.map { ResourceAmount(resource: $0, percentRemaining: 0) }
     }
 }
 
