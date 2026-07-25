@@ -17,6 +17,51 @@ import SwiftUI
 import UI
 import Utils
 
+/// The built-in detail pane's config-flattening logic, deliberately kept out
+/// of `DirectiveDetailView` itself. A `View` conformance infers `@MainActor`
+/// isolation onto everything nested inside it (including otherwise-pure
+/// static helpers), which both traps `swift test` on this SwiftUI-free logic
+/// and forces every caller through the main actor for no reason. See the
+/// "SwiftUI View statics trap in tests" memory note.
+enum DirectiveConfigFlattening {
+    /// Flatten a directive's config object into displayable label/value pairs.
+    /// Nested objects — at any depth, e.g. the `delivery` route's `route.collect`,
+    /// or deeper — render as dotted key paths rather than being dropped. `nil`
+    /// only for a non-object top level; an empty object yields `[]`.
+    static func pairs(_ config: JSONValue) -> [(key: String, value: String)]? {
+        guard case .object = config else { return nil }
+        return flatten(config, prefix: "")
+    }
+
+    /// The recursive step behind `pairs`. Keys are sorted at every level so
+    /// the rendered order stays deterministic across renders regardless of
+    /// dictionary iteration order.
+    private static func flatten(_ value: JSONValue, prefix: String) -> [(key: String, value: String)] {
+        guard case let .object(fields) = value else {
+            return [(key: prefix, value: scalarString(value))]
+        }
+        return fields.keys.sorted().flatMap { key -> [(key: String, value: String)] in
+            guard let child = fields[key] else { return [] }
+            let path = prefix.isEmpty ? key : "\(prefix).\(key)"
+            return flatten(child, prefix: path)
+        }
+    }
+
+    /// Render a scalar JSON value for display. Arrays join; anything else falls
+    /// back to a compact description.
+    static func scalarString(_ value: JSONValue) -> String {
+        if let string = value.stringValue { return string }
+        if let bool = value.boolValue { return bool ? "Yes" : "No" }
+        if let number = value.numberValue {
+            return number == number.rounded() ? String(Int(number)) : String(number)
+        }
+        if let array = value.arrayValue {
+            return array.compactMap(\.stringValue).joined(separator: ", ")
+        }
+        return "—"
+    }
+}
+
 public struct DirectiveDetailView: View {
     @Bindable var store: StoreOf<DirectivesFeature>
 
@@ -53,7 +98,8 @@ public struct DirectiveDetailView: View {
                     caption: BlueprintPresentation.displayName(builtIn.deviceType)
                 )
 
-                if let config = builtIn.config, let pairs = configPairs(config), !pairs.isEmpty {
+                if let config = builtIn.config,
+                   let pairs = DirectiveConfigFlattening.pairs(config), !pairs.isEmpty {
                     VStack(alignment: .leading, spacing: Space.xs) {
                         RCSectionHeader("Configuration")
                         ForEach(pairs, id: \.key) { pair in
@@ -103,36 +149,6 @@ public struct DirectiveDetailView: View {
         .padding(.vertical, Space.xxs)
     }
 
-    /// Flatten a directive's config object into displayable label/value pairs.
-    /// Nested objects (the `delivery` route) render as `route.collect` style
-    /// keys rather than being dropped.
-    private func configPairs(_ config: JSONValue) -> [(key: String, value: String)]? {
-        guard case let .object(fields) = config else { return nil }
-        return fields.keys.sorted().flatMap { key -> [(key: String, value: String)] in
-            guard let value = fields[key] else { return [] }
-            if case let .object(nested) = value {
-                return nested.keys.sorted().compactMap { inner in
-                    nested[inner].map { (key: "\(key).\(inner)", value: scalarString($0)) }
-                }
-            }
-            return [(key: key, value: scalarString(value))]
-        }
-    }
-
-    /// Render a scalar JSON value for display. Arrays join; anything else falls
-    /// back to a compact description.
-    private func scalarString(_ value: JSONValue) -> String {
-        if let string = value.stringValue { return string }
-        if let bool = value.boolValue { return bool ? "Yes" : "No" }
-        if let number = value.numberValue {
-            return number == number.rounded() ? String(Int(number)) : String(number)
-        }
-        if let array = value.arrayValue {
-            return array.compactMap(\.stringValue).joined(separator: ", ")
-        }
-        return "—"
-    }
-
     // MARK: Custom
 
     /// Missions can't exist until Stage 3 lands the engine, but the pane is
@@ -149,7 +165,10 @@ public struct DirectiveDetailView: View {
                 )
                 VStack(alignment: .leading, spacing: Space.xs) {
                     RCSectionHeader("Targets")
-                    ForEach(Array(directive.targets.enumerated()), id: \.element) { index, target in
+                    // Keyed by position, not element: `targets` is a revisit
+                    // queue and the same system designation can legitimately
+                    // appear twice, which would collide as a SwiftUI id.
+                    ForEach(Array(directive.targets.enumerated()), id: \.offset) { index, target in
                         HStack(spacing: Space.s) {
                             Image(systemName: index < directive.targetIndex
                                   ? "checkmark.circle.fill" : "circle")
