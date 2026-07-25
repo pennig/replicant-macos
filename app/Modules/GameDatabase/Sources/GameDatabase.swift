@@ -36,6 +36,7 @@ public enum GameDatabase {
         Star.registerMigrations(&migrator)
         SystemDetail.registerMigrations(&migrator)
         LocationFootprint.registerMigrations(&migrator)
+        SiteAssay.registerMigrations(&migrator)
         LocationEvent.registerMigrations(&migrator)
         Replicant.registerMigrations(&migrator)
         KnownReplicant.registerMigrations(&migrator)

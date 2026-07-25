@@ -117,6 +117,84 @@ public struct LocationFootprint: Identifiable, Equatable, Sendable {
     }
 }
 
+// MARK: - SiteAssay
+
+/// The original resource totals of one site, in absolute units.
+///
+/// Percentages (`resources_remaining_pct`) are catalog state and live on the
+/// site inside the `StarSystem` blob; these totals are *historical event
+/// knowledge* the catalog payload never carries. They arrive only on a
+/// `salvage.discovered` (or a `scan.completed` salvage block) and must survive
+/// the blob rewrites that `mergingScan` / `applying(_:)` perform on every
+/// re-scan — hence a table of their own, keyed by site designation rather than
+/// a field on `SalvageSite`.
+///
+/// `siteType` distinguishes salvage from mining so mining assays need no
+/// schema change when they land.
+@Table
+public struct SiteAssay: Identifiable, Equatable, Sendable {
+    /// Site designation, e.g. `TAANSI-6-SAL-1` — the natural primary key.
+    @Column(primaryKey: true) public var id: String
+    /// The body hosting the site, e.g. `TAANSI-6`. Always taken from the event
+    /// PAYLOAD: the envelope's `location` names the acting device's position,
+    /// not the site's.
+    public var body: String
+    /// Leading designation segment, denormalized so a system's assays are one
+    /// indexed read rather than a scan-and-parse.
+    public var system: String
+    /// `"salvage"` or `"mining"`, matching the backend's `site_type`.
+    public var siteType: String
+    /// Resource name → original unit count.
+    @Column(as: [String: Double].JSONRepresentation.self) public var totals: [String: Double]
+    /// When `totals` was last raised.
+    public var assayedAt: Date
+
+    public init(
+        id: String, body: String, system: String, siteType: String,
+        totals: [String: Double], assayedAt: Date
+    ) {
+        self.id = id
+        self.body = body
+        self.system = system
+        self.siteType = siteType
+        self.totals = totals
+        self.assayedAt = assayedAt
+    }
+}
+
+extension SiteAssay {
+    /// Merge an observation into stored totals. A site's original capacity is
+    /// fixed and absolute remaining is always ≤ total, so a write may only ever
+    /// raise a value — applied **per resource key**, so an observation naming a
+    /// subset leaves the rest alone. Non-positive observations say nothing
+    /// about capacity and are ignored.
+    public static func raising(
+        _ stored: [String: Double], with observed: [String: Double]
+    ) -> [String: Double] {
+        var out = stored
+        for (resource, amount) in observed where amount > 0 {
+            out[resource] = Swift.max(out[resource] ?? 0, amount)
+        }
+        return out
+    }
+
+    /// The original total implied by an absolute remaining amount and the
+    /// percentage still present — how a `scan.completed` observation is turned
+    /// into a capacity figure. Nil when the percentage is unusable (≤ 0): the
+    /// remaining amount is then 0 and reveals nothing, and the division would
+    /// overflow to infinity.
+    public static func impliedTotal(remaining: Double, percentRemaining: Double) -> Double? {
+        guard percentRemaining > 0 else { return nil }
+        return remaining / (percentRemaining / 100)
+    }
+
+    /// The star system a designation belongs to — its leading segment
+    /// (`TAANSI-6-5-SAL-1` → `TAANSI`).
+    public static func system(of designation: String) -> String {
+        String(designation.split(separator: "-").first ?? "")
+    }
+}
+
 // MARK: - Schema
 
 extension SystemDetail {
@@ -155,6 +233,28 @@ extension LocationFootprint {
                   "locationEvents" INTEGER NOT NULL DEFAULT 0,
                   "replicants" INTEGER NOT NULL DEFAULT 0,
                   "fetchedAt" TEXT NOT NULL
+                ) STRICT
+                """
+            )
+            .execute(db)
+        }
+    }
+}
+
+extension SiteAssay {
+    /// Registers the `siteAssays` table. Call from `GameDatabase.migrator()`
+    /// alongside the other tables.
+    public static func registerMigrations(_ migrator: inout DatabaseMigrator) {
+        migrator.registerMigration("Create 'siteAssays' table") { db in
+            try #sql(
+                """
+                CREATE TABLE "siteAssays" (
+                  "id" TEXT PRIMARY KEY NOT NULL,
+                  "body" TEXT NOT NULL DEFAULT '',
+                  "system" TEXT NOT NULL DEFAULT '',
+                  "siteType" TEXT NOT NULL DEFAULT 'salvage',
+                  "totals" TEXT NOT NULL DEFAULT '{}',
+                  "assayedAt" TEXT NOT NULL
                 ) STRICT
                 """
             )

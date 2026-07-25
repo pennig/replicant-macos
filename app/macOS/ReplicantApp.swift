@@ -127,6 +127,12 @@ struct ReplicantApp: App {
             })
         )
         accountManager.registerHandler(
+            SessionLifecycleHandler(id: "siteAssays", onLogout: {
+                @Dependency(\.defaultDatabase) var database
+                try? await database.write { db in try SiteAssay.delete().execute(db) }
+            })
+        )
+        accountManager.registerHandler(
             SessionLifecycleHandler(id: "devices", onLogout: {
                 @Dependency(\.defaultDatabase) var database
                 try? await database.write { db in try Device.delete().execute(db) }
