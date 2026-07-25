@@ -91,9 +91,11 @@ public struct ResourceSite: Identifiable, Equatable, Sendable, Codable {
 
 /// Discoverable wreckage/debris at a planet or moon (designation `…-SAL-N`).
 /// Distinct from a mining `ResourceSite`: salvage lists *which* resources it can
-/// yield (`resourcesAvailable`) and whether it is spent (`depleted`), with no
-/// per-resource percentages. `salvageType` is a flavor tag (e.g.
-/// "research_station").
+/// yield (`resourcesAvailable`) and whether it is spent (`depleted`). Sites
+/// sourced from `resource_sites[]` (`site_type: "salvage"`) also carry
+/// per-resource percentages in `remainingPct`; sites sourced from the
+/// `salvage[]` roster block carry only names, so `remainingPct` is empty there.
+/// `salvageType` is a flavor tag (e.g. "research_station").
 public struct SalvageSite: Identifiable, Equatable, Sendable, Codable {
     public var designation: String
     public var name: String?
