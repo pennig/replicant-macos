@@ -104,7 +104,8 @@ wipes (the same ordering rule as ingestion teardown).
 
 ## 3. Verified API facts
 
-Supplied by the operator (2026-07-24), load-bearing for §4:
+Supplied by the operator and **confirmed by live probe** (2026-07-24). Load-bearing for §4 — if any
+of these turn out to have drifted, the affected step sequence changes:
 
 - **`stow`** requires the target device to be **co-located** with the stowing vessel. It can be
   issued on the target device with no arguments, *or* on the stowing device with target(s).
