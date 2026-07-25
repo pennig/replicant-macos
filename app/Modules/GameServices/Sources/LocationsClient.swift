@@ -171,6 +171,7 @@ extension LocationsClient {
         else { return false }
         let system = String(detail.designation.split(separator: "-").first ?? "")
         guard !system.isEmpty else { return false }
+        let observations = LocationDecoding.salvageObservations(fromScanResult: result)
 
         @Dependency(\.defaultDatabase) var database
         @Dependency(\.date.now) var now
@@ -180,6 +181,36 @@ extension LocationsClient {
             let merged = base.seedingParent(of: detail).applying(detail)
             let row = try SystemDetail(system: merged, hydratedAt: now)
             try SystemDetail.upsert { row }.execute(db)
+
+            // The scan's absolute remaining is a second source of capacity.
+            // With a known percentage it implies the original total; without
+            // one it is at least a floor. Read the percentage from the system
+            // as it stood BEFORE this scan's merge, since `applying` may have
+            // replaced the site wholesale.
+            let knownPct = base.knownSalvageSites.reduce(into: [String: [String: Double]]()) {
+                $0[$1.designation] = $1.remainingPct
+            }
+            for observation in observations {
+                let stored = try SiteAssay.where { $0.id.eq(observation.designation) }.fetchOne(db)
+                var observed: [String: Double] = [:]
+                for (resource, remaining) in observation.resourcesRemaining {
+                    if let pct = knownPct[observation.designation]?[resource],
+                       let implied = SiteAssay.impliedTotal(remaining: remaining, percentRemaining: pct) {
+                        observed[resource] = implied
+                    } else {
+                        observed[resource] = remaining
+                    }
+                }
+                let assay = SiteAssay(
+                    id: observation.designation,
+                    body: observation.body,
+                    system: SiteAssay.system(of: observation.designation),
+                    siteType: "salvage",
+                    totals: SiteAssay.raising(stored?.totals ?? [:], with: observed),
+                    assayedAt: now
+                )
+                try SiteAssay.upsert { assay }.execute(db)
+            }
         }
         return true
     }

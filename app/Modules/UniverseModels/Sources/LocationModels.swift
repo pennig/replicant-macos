@@ -160,6 +160,22 @@ public struct SalvageSite: Identifiable, Equatable, Sendable, Codable {
     }
 }
 
+/// A salvage site's absolute remaining amounts as one payload reported them.
+/// Distinct from `SalvageSite` (which is catalog state) because these are raw
+/// unit counts destined for a `SiteAssay`, not for the tree.
+public struct SalvageObservation: Equatable, Sendable {
+    public var designation: String
+    public var body: String
+    /// Resource name → absolute units still present.
+    public var resourcesRemaining: [String: Double]
+
+    public init(designation: String, body: String, resourcesRemaining: [String: Double]) {
+        self.designation = designation
+        self.body = body
+        self.resourcesRemaining = resourcesRemaining
+    }
+}
+
 /// A body (planet or moon) that hosts one or more salvage sites — the unit the
 /// `gather_salvage` directive targets. Dispatching to the body works every
 /// salvage site on it, so the picker offers bodies rather than sites.

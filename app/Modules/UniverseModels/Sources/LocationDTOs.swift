@@ -16,6 +16,7 @@
 //
 
 import Foundation
+import Utils
 
 // MARK: - Round-trip decode
 
@@ -67,6 +68,37 @@ extension LocationDecoding {
     public static func scanResultBody(from body: some Encodable) throws -> BodyDetail? {
         try reinterpret(body, as: RawScanEventResult.self).bodyDetail()
     }
+
+    /// The absolute salvage amounts inside a `scan.completed` result. A second
+    /// decode over the same payload rather than a field on `SalvageSite`: these
+    /// are raw counts bound for `SiteAssay`, and the domain type deliberately
+    /// carries percentages, not units.
+    public static func salvageObservations(fromScanResult result: JSONValue) -> [SalvageObservation] {
+        guard
+            let data = try? JSONEncoder().encode(result),
+            let raw = try? decoder.decode(RawScanResultSalvage.self, from: data)
+        else { return [] }
+        let blocks = [raw.planet?.salvage, raw.moon?.salvage, raw.salvage].compactMap { $0 }.flatMap { $0 }
+        return blocks.compactMap { entry -> SalvageObservation? in
+            guard
+                let designation = entry.designation,
+                let remaining = entry.resourcesRemaining, !remaining.isEmpty
+            else { return nil }
+            return SalvageObservation(
+                designation: designation,
+                body: entry.location ?? SalvageSite.bodyDesignation(ofSite: designation),
+                resourcesRemaining: remaining
+            )
+        }
+    }
+}
+
+/// Just enough of a `scan.completed` result to reach its salvage blocks.
+struct RawScanResultSalvage: Decodable {
+    struct Body: Decodable { var salvage: [RawSalvage]? }
+    var planet: Body?
+    var moon: Body?
+    var salvage: [RawSalvage]?
 }
 
 /// A decoded `GET /v1/locations/{designation}` response. The endpoint is
