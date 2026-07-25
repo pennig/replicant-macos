@@ -13,10 +13,8 @@ import Foundation
 public enum SidebarItem: String, CaseIterable, Identifiable, Hashable, Sendable {
     // Catalog
     case stars, locations, devices, replicants, blueprints, civilisations
-    // Missions
-    case locationEvents
     // Operations
-    case printQueue, operationsLog
+    case locationEvents, printQueue, operationsLog
     // Comms
     case messages, bobnet
 
@@ -75,8 +73,7 @@ public enum SidebarItem: String, CaseIterable, Identifiable, Hashable, Sendable 
 
     public static let groups: [Group] = [
         Group(id: "Catalog", items: [.stars, .locations, .devices, .replicants, .blueprints, .civilisations]),
-        Group(id: "Missions", items: [.locationEvents]),
-        Group(id: "Operations", items: [.printQueue, .operationsLog]),
+        Group(id: "Operations", items: [.locationEvents, .printQueue, .operationsLog]),
         Group(id: "Comms", items: [.messages, .bobnet]),
     ]
 }
