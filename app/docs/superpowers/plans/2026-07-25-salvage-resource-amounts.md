@@ -1852,29 +1852,28 @@ private struct SiteSalvageSections: View {
                 ForEach(salvage) { s in
                     SiteAmountsRow(
                         title: s.name ?? s.designation, code: s.designation,
-                        amounts: SiteAmounts.amounts(
-                            remainingPct: s.remainingPct, totals: assayTotals[s.designation]
-                        ),
+                        amounts: Self.salvageAmounts(s, totals: assayTotals[s.designation]),
                         status: s.depleted ? "Depleted" : nil
                     )
                 }
             }
         }
     }
+
+    /// A site from the `salvage[]` roster block has resource names but no
+    /// percentages. Map those to zero-percent entries so the row can still list
+    /// what's there — `SiteAmountsRow` falls back to a name summary when no
+    /// amount is known — instead of rendering an empty card.
+    static func salvageAmounts(
+        _ site: SalvageSite, totals: [String: Double]?
+    ) -> [ResourceAmount] {
+        guard site.remainingPct.isEmpty else {
+            return SiteAmounts.amounts(remainingPct: site.remainingPct, totals: totals)
+        }
+        return site.resourcesAvailable.map { ResourceAmount(resource: $0, percentRemaining: 0) }
+    }
 }
 ```
-
-A salvage site with no percentages yet (`remainingPct` empty) produces no `ResourceAmount`s, so `SiteAmountsRow` falls back to its resource-name summary — matching today's row until the body is hydrated. To keep that fallback accurate for such sites, pass the names through by using `s.resourcesAvailable` when `remainingPct` is empty:
-
-```swift
-                        amounts: s.remainingPct.isEmpty
-                            ? s.resourcesAvailable.map { ResourceAmount(resource: $0, percentRemaining: 0) }
-                            : SiteAmounts.amounts(
-                                remainingPct: s.remainingPct, totals: assayTotals[s.designation]
-                            ),
-```
-
-Use that form for the salvage branch.
 
 - [ ] **Step 4: Thread the lookup through every call site**
 
@@ -1904,11 +1903,9 @@ In `SystemInspector`, replace the "Resource Sites" and "Salvage" cards (`Locatio
                     ForEach(salvage) { s in
                         SiteAmountsRow(
                             title: s.name ?? s.designation, code: s.designation,
-                            amounts: s.remainingPct.isEmpty
-                                ? s.resourcesAvailable.map { ResourceAmount(resource: $0, percentRemaining: 0) }
-                                : SiteAmounts.amounts(
-                                    remainingPct: s.remainingPct, totals: assayTotals[s.designation]
-                                ),
+                            amounts: SiteSalvageSections.salvageAmounts(
+                                s, totals: assayTotals[s.designation]
+                            ),
                             status: s.depleted ? "Depleted" : nil
                         )
                     }
