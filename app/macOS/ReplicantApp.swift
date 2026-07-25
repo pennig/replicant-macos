@@ -188,6 +188,19 @@ struct ReplicantApp: App {
                 }
             })
         )
+        // Directives are account-scoped: a second account on this machine must
+        // not inherit the first's missions or their audit trail. Stage 3 adds
+        // the engine, whose executors are cancelled by the gameSync handler
+        // registered FIRST — so the wipe below can never race a live write.
+        accountManager.registerHandler(
+            SessionLifecycleHandler(id: "directives", onLogout: {
+                @Dependency(\.defaultDatabase) var database
+                try? await database.write { db in
+                    try Directive.delete().execute(db)
+                    try DirectiveLogEntry.delete().execute(db)
+                }
+            })
+        )
         // The event-stream cursor is account-scoped: resuming a different
         // account from the previous account's cursor would skip its catch-up
         // (the cursor looks fresh) and replay a foreign id-space. The next

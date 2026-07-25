@@ -40,6 +40,8 @@ public enum GameDatabase {
         Replicant.registerMigrations(&migrator)
         KnownReplicant.registerMigrations(&migrator)
         Device.registerMigrations(&migrator)
+        Directive.registerMigrations(&migrator)
+        DirectiveLogEntry.registerMigrations(&migrator)
         FTLLinkRecord.registerMigrations(&migrator)
         BobnetMessage.registerMigrations(&migrator)
         BobnetChannel.registerMigrations(&migrator)

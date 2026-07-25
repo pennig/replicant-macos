@@ -184,6 +184,10 @@ public struct OperationKind: RawRepresentable, Hashable, Sendable {
     /// Immediate: the controller adopts the directive at once; no tracked op.
     public static let setDirective = OperationKind(rawValue: "set_directive")
 
+    /// Clear an AMI controller's autonomous directive, returning it to idle.
+    /// Immediate: the controller drops the directive at once; no tracked op.
+    public static let clearDirective = OperationKind(rawValue: "clear_directive")
+
     /// Set a surge plate's carry mode (`taxi` — any same-owner device may ride —
     /// or `manual` — only explicitly attached devices). A synchronous
     /// configuration change; no tracked op.
