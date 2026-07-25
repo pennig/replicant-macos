@@ -54,6 +54,7 @@ private func mission(id: String, kind: DirectiveKind = .surveyRun) -> Directive 
     Directive(
         id: id, kind: kind, status: .running, deviceCode: "VESSEL1",
         targets: ["TAU", "SHERATANON"], targetIndex: 1, step: "surveying",
+        stepStartedAt: Date(timeIntervalSince1970: 0),
         returnToOrigin: false, originDesignation: "SOL", attentionReason: nil,
         createdAt: Date(timeIntervalSince1970: 0),
         updatedAt: Date(timeIntervalSince1970: 0)

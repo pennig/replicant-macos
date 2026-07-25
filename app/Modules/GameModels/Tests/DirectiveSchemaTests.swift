@@ -15,7 +15,8 @@ import Testing
 
 @Suite("Directive schema")
 struct DirectiveSchemaTests {
-    /// A custom mission round-trips every column, including the JSON target queue.
+    /// A custom mission round-trips every column, including the JSON target
+    /// queue, `stepStartedAt`, and a typed `attentionReason`.
     @Test func directiveRoundTrips() throws {
         let database = try GameDatabase.bootstrap()
         let directive = Directive(
@@ -26,6 +27,7 @@ struct DirectiveSchemaTests {
             targets: ["TAU", "SHERATANON"],
             targetIndex: 1,
             step: "surveying",
+            stepStartedAt: Date(timeIntervalSince1970: 150),
             returnToOrigin: true,
             originDesignation: "SOL",
             attentionReason: nil,
@@ -39,22 +41,49 @@ struct DirectiveSchemaTests {
         #expect(loaded.first?.targets == ["TAU", "SHERATANON"])
         #expect(loaded.first?.kind == .surveyRun)
         #expect(loaded.first?.returnToOrigin == true)
+        #expect(loaded.first?.stepStartedAt == Date(timeIntervalSince1970: 150))
+    }
+
+    /// A typed `attentionReason` round-trips too — the stalled-directive path,
+    /// distinct from the happy-path row above.
+    @Test func attentionReasonRoundTrips() throws {
+        let database = try GameDatabase.bootstrap()
+        let directive = Directive(
+            id: "D2",
+            kind: .relayRun,
+            status: .needsAttention,
+            deviceCode: "VESSEL2",
+            targets: ["TAU"],
+            targetIndex: 0,
+            step: "relaying",
+            stepStartedAt: Date(timeIntervalSince1970: 300),
+            returnToOrigin: false,
+            originDesignation: nil,
+            attentionReason: .noRelayCoLocated,
+            createdAt: Date(timeIntervalSince1970: 100),
+            updatedAt: Date(timeIntervalSince1970: 200)
+        )
+        try database.write { db in try Directive.insert { directive }.execute(db) }
+
+        let loaded = try database.read { db in try Directive.all.fetchAll(db) }
+        #expect(loaded.first?.attentionReason == .noRelayCoLocated)
     }
 
     /// A log entry attaches to a custom directive OR to a device (a built-in
     /// AMI directive) — the optional pair is what lets one table serve both
-    /// row kinds in the Directives list.
+    /// row kinds in the Directives list. `step` round-trips too, so a
+    /// `.stepStarted` entry can be attributed without string-matching `summary`.
     @Test func logEntryAttachesToEitherKind() throws {
         let database = try GameDatabase.bootstrap()
         let custom = DirectiveLogEntry(
             id: "L1", directiveID: "D1", deviceCode: nil,
-            kind: .stepStarted, summary: "Travelling to TAU",
+            kind: .stepStarted, summary: "Travelling to TAU", step: "travelling",
             operationID: "OP1", eventID: nil,
             occurredAt: Date(timeIntervalSince1970: 10)
         )
         let builtIn = DirectiveLogEntry(
             id: "L2", directiveID: nil, deviceCode: "AMI1",
-            kind: .directiveCompleted, summary: "survey_system completed",
+            kind: .directiveCompleted, summary: "survey_system completed", step: nil,
             operationID: nil, eventID: "E9",
             occurredAt: Date(timeIntervalSince1970: 20)
         )
@@ -68,6 +97,53 @@ struct DirectiveSchemaTests {
         }
         #expect(loaded == [custom, builtIn])
         #expect(loaded.first?.deviceCode == nil)
+        #expect(loaded.first?.step == "travelling")
         #expect(loaded.last?.directiveID == nil)
+        #expect(loaded.last?.step == nil)
+    }
+
+    /// The partial unique index rejects a second entry with the same non-nil
+    /// `eventID` (a replayed or catch-up-redelivered SSE event would otherwise
+    /// duplicate the timeline row), while entries with no event at all
+    /// (`eventID == nil`) are unconstrained — there can be many.
+    @Test func eventIDUniquenessIsPartial() throws {
+        let database = try GameDatabase.bootstrap()
+        let first = DirectiveLogEntry(
+            id: "L1", directiveID: "D1", deviceCode: nil,
+            kind: .stepStarted, summary: "first", step: nil,
+            operationID: nil, eventID: "E1",
+            occurredAt: Date(timeIntervalSince1970: 10)
+        )
+        let duplicate = DirectiveLogEntry(
+            id: "L2", directiveID: "D1", deviceCode: nil,
+            kind: .stepStarted, summary: "replayed", step: nil,
+            operationID: nil, eventID: "E1",
+            occurredAt: Date(timeIntervalSince1970: 11)
+        )
+        try database.write { db in try DirectiveLogEntry.insert { first }.execute(db) }
+        #expect(throws: (any Error).self) {
+            try database.write { db in try DirectiveLogEntry.insert { duplicate }.execute(db) }
+        }
+
+        // Multiple nil-eventID entries are unaffected by the partial index.
+        let nilA = DirectiveLogEntry(
+            id: "L3", directiveID: "D1", deviceCode: nil,
+            kind: .stepStarted, summary: "no event a", step: nil,
+            operationID: nil, eventID: nil,
+            occurredAt: Date(timeIntervalSince1970: 12)
+        )
+        let nilB = DirectiveLogEntry(
+            id: "L4", directiveID: "D1", deviceCode: nil,
+            kind: .stepStarted, summary: "no event b", step: nil,
+            operationID: nil, eventID: nil,
+            occurredAt: Date(timeIntervalSince1970: 13)
+        )
+        try database.write { db in
+            try DirectiveLogEntry.insert { nilA }.execute(db)
+            try DirectiveLogEntry.insert { nilB }.execute(db)
+        }
+
+        let loaded = try database.read { db in try DirectiveLogEntry.all.fetchAll(db) }
+        #expect(loaded.count == 3)
     }
 }

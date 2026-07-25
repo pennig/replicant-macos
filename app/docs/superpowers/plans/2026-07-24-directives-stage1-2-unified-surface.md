@@ -1076,16 +1076,6 @@ public enum DirectiveRow: Equatable, Identifiable, Sendable {
         }
     }
 
-    /// Custom missions sort ahead of the standing built-in set, so an actively
-    /// running mission is never buried under it. Within a kind, ordering is the
-    /// caller's (the queries are already ordered).
-    var sortRank: Int {
-        switch self {
-        case .custom: 0
-        case .builtIn: 1
-        }
-    }
-
     /// Merge the two sources into one ordered list. `devices` contributes a row
     /// for each device with a directive in force; `directives` contributes one
     /// per custom mission.

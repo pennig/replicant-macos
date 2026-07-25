@@ -3,8 +3,8 @@
 //  Replicould — Directives feature
 //
 //  The list reducer: rows come from the two live queries, selection resolves to
-//  a row, and clearing a built-in directive dispatches clear_directive and
-//  confirms through the device refresher.
+//  a row, and the two built-in-only actions (reconfigure/clear) dispatch
+//  against the selected controller and no-op when a custom row is selected.
 //
 
 import ComposableArchitecture
@@ -59,8 +59,9 @@ struct DirectivesFeatureTests {
         #expect(store.state.selectedRow == nil)
     }
 
-    /// Clearing dispatches clear_directive for the selected controller and
-    /// confirms the result through the shared device refresher.
+    /// Clearing dispatches clear_directive for the selected controller. No
+    /// explicit refresh follows — the accepted op surfaces via table
+    /// observation (see `DirectivesFeature.dispatch`'s doc comment).
     @Test func clearDispatchesClearDirective() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in
@@ -75,7 +76,6 @@ struct DirectivesFeatureTests {
                 dispatched.setValue((kind, code))
                 return .accepted(operationID: nil)
             }
-            $0.deviceRefresher.refresh = { _, _ in nil }
         }
         store.exhaustivity = .off
 
@@ -93,7 +93,6 @@ struct DirectivesFeatureTests {
         } withDependencies: {
             $0.defaultDatabase = database
             $0.commandClient.dispatch = { _, _, _ in .rejected("No directive in force.") }
-            $0.deviceRefresher.refresh = { _, _ in nil }
         }
         store.exhaustivity = .off
 
@@ -118,6 +117,49 @@ struct DirectivesFeatureTests {
         await store.send(.reconfigureTapped)
         #expect(store.state.composer?.deviceCode == "AMI1")
         #expect(store.state.composer?.directive == "survey_system")
+    }
+
+    /// Reconfigure is a no-op with a custom row selected — its `deviceCode` is
+    /// the mission's vessel, not a directive-capable controller, so opening
+    /// the AMI composer from it would be nonsensical.
+    @Test func reconfigureIsANoOpForACustomRow() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { Self.mission(id: "D1") }.execute(db)
+        }
+        let store = TestStore(initialState: DirectivesFeature.State(selectedRowID: "custom:D1")) {
+            DirectivesFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
+        }
+        store.exhaustivity = .off
+
+        await store.send(.reconfigureTapped)
+        #expect(store.state.composer == nil)
+    }
+
+    /// Clear is a no-op with a custom row selected — dispatching
+    /// `clear_directive` at a mission's vessel would send an AMI command to a
+    /// device that was never a directive controller.
+    @Test func clearIsANoOpForACustomRow() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { Self.mission(id: "D1") }.execute(db)
+        }
+        let dispatched = LockIsolated<Bool>(false)
+        let store = TestStore(initialState: DirectivesFeature.State(selectedRowID: "custom:D1")) {
+            DirectivesFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
+            $0.commandClient.dispatch = { _, _, _ in
+                dispatched.setValue(true)
+                return .accepted(operationID: nil)
+            }
+        }
+        store.exhaustivity = .off
+
+        await store.send(.clearTapped)
+        #expect(dispatched.value == false)
     }
 
     /// An AMI controller fixture carrying an in-force directive. Real
@@ -151,6 +193,19 @@ struct DirectivesFeatureTests {
             ]),
             updatedAt: Date(timeIntervalSince1970: 0),
             firstSeenAt: Date(timeIntervalSince1970: 0)
+        )
+    }
+
+    /// A minimal custom mission fixture, for tests asserting the built-in-only
+    /// actions no-op when a custom row is selected.
+    nonisolated static func mission(id: String) -> Directive {
+        Directive(
+            id: id, kind: .surveyRun, status: .running, deviceCode: "VESSEL1",
+            targets: ["TAU"], targetIndex: 0, step: "surveying",
+            stepStartedAt: Date(timeIntervalSince1970: 0),
+            returnToOrigin: false, originDesignation: "SOL", attentionReason: nil,
+            createdAt: Date(timeIntervalSince1970: 0),
+            updatedAt: Date(timeIntervalSince1970: 0)
         )
     }
 }

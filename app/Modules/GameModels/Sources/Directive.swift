@@ -40,6 +40,22 @@ public enum DirectiveStatus: String, Codable, Equatable, Sendable, CaseIterable,
     case cancelled
 }
 
+/// Why a directive stalled into `.needsAttention`. A closed set (design spec
+/// §8) — the engine pauses and surfaces rather than improvising, so every
+/// stall it can produce has a name here.
+public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, CaseIterable, QueryBindable {
+    /// No relay is co-located with the vessel for a Relay Run step.
+    case noRelayCoLocated
+    /// No survey drone is aboard the vessel for a Survey Run step.
+    case noSurveyDroneAboard
+    /// The device the step needs is unreachable (offline/unknown state).
+    case unreachableDevice
+    /// The `locations/{star}` backstop read disagrees with a completion event.
+    case surveyIncomplete
+    /// The server rejected the step's command.
+    case commandRejected
+}
+
 /// One custom mission instance. Policy-ready by design: nothing here records
 /// whether a click or a future standing policy created the row.
 @Table
@@ -54,14 +70,24 @@ public struct Directive: Identifiable, Equatable, Sendable {
     /// How far through `targets` the run is. Equal to `targets.count` when done.
     public var targetIndex: Int
     /// The current step's identifier within the mission's step machine.
+    ///
+    /// Deliberately a bare `String`, not an enum: each `DirectiveKind` has its
+    /// own step vocabulary (Survey Run's steps aren't Relay Run's), so there is
+    /// no single closed set to type this against. Do not "fix" this.
     public var step: String
+    /// When the current `step` began. Mirrors `Operation.startedAt`: the
+    /// completion guard is `eventTime >= stepStartedAt - 5s`, issue-time
+    /// relative rather than wall-clock relative, exactly like
+    /// `Reconciler.completeOpenOperation` (design spec §5). Cannot be
+    /// reconstructed from `DirectiveLogEntry` alone, hence its own column.
+    public var stepStartedAt: Date
     /// Append a final leg home when the queue empties. Default off — the common
     /// case is chaining onward, and an unwanted return leg costs fuel and time.
     public var returnToOrigin: Bool
     /// The system the run started from, so `returnToOrigin` has a destination.
     public var originDesignation: String?
     /// Set only while `status == .needsAttention`.
-    public var attentionReason: String?
+    public var attentionReason: DirectiveAttentionReason?
     public var createdAt: Date
     public var updatedAt: Date
 
@@ -73,9 +99,10 @@ public struct Directive: Identifiable, Equatable, Sendable {
         targets: [String],
         targetIndex: Int,
         step: String,
+        stepStartedAt: Date,
         returnToOrigin: Bool,
         originDesignation: String?,
-        attentionReason: String?,
+        attentionReason: DirectiveAttentionReason?,
         createdAt: Date,
         updatedAt: Date
     ) {
@@ -86,6 +113,7 @@ public struct Directive: Identifiable, Equatable, Sendable {
         self.targets = targets
         self.targetIndex = targetIndex
         self.step = step
+        self.stepStartedAt = stepStartedAt
         self.returnToOrigin = returnToOrigin
         self.originDesignation = originDesignation
         self.attentionReason = attentionReason
@@ -95,7 +123,7 @@ public struct Directive: Identifiable, Equatable, Sendable {
 
     /// Progress through the queue, for the list row's "m/n" readout.
     public var progress: (completed: Int, total: Int) {
-        (min(targetIndex, targets.count), targets.count)
+        (Swift.min(targetIndex, targets.count), targets.count)
     }
 
     /// The target currently being worked, or nil when the queue is exhausted.
@@ -126,6 +154,10 @@ public struct DirectiveLogEntry: Identifiable, Equatable, Sendable {
     public var kind: DirectiveLogKind
     /// The human-readable line shown in the timeline.
     public var summary: String
+    /// Which step (`Directive.step`) this entry belongs to, set for
+    /// `.stepStarted` entries. Without this the only way to tell which step a
+    /// timeline entry names is string-matching `summary`.
+    public var step: String?
     /// The op this entry created or closed, when there is one.
     public var operationID: String?
     /// The SSE event that produced this entry, when there is one.
@@ -138,6 +170,7 @@ public struct DirectiveLogEntry: Identifiable, Equatable, Sendable {
         deviceCode: String?,
         kind: DirectiveLogKind,
         summary: String,
+        step: String?,
         operationID: String?,
         eventID: String?,
         occurredAt: Date
@@ -147,6 +180,7 @@ public struct DirectiveLogEntry: Identifiable, Equatable, Sendable {
         self.deviceCode = deviceCode
         self.kind = kind
         self.summary = summary
+        self.step = step
         self.operationID = operationID
         self.eventID = eventID
         self.occurredAt = occurredAt
@@ -170,6 +204,7 @@ extension Directive {
                   "targets" TEXT NOT NULL DEFAULT '[]',
                   "targetIndex" INTEGER NOT NULL DEFAULT 0,
                   "step" TEXT NOT NULL DEFAULT '',
+                  "stepStartedAt" TEXT NOT NULL,
                   "returnToOrigin" INTEGER NOT NULL DEFAULT 0,
                   "originDesignation" TEXT,
                   "attentionReason" TEXT,
@@ -195,6 +230,7 @@ extension DirectiveLogEntry {
                   "deviceCode" TEXT,
                   "kind" TEXT NOT NULL,
                   "summary" TEXT NOT NULL DEFAULT '',
+                  "step" TEXT,
                   "operationID" TEXT,
                   "eventID" TEXT,
                   "occurredAt" TEXT NOT NULL
@@ -215,6 +251,18 @@ extension DirectiveLogEntry {
                 """
                 CREATE INDEX "directive_log_by_device"
                   ON "directiveLogEntries" ("deviceCode", "occurredAt")
+                """
+            )
+            .execute(db)
+            // Replay immunity (design spec §6): the `directive.*` SSE route's
+            // only job is writing one of these rows, and a replayed or
+            // catch-up-redelivered event must not duplicate the timeline entry.
+            // `eventID` is nullable (not every entry comes from an event), so
+            // the uniqueness only applies where it's set.
+            try #sql(
+                """
+                CREATE UNIQUE INDEX "directive_log_unique_event"
+                  ON "directiveLogEntries" ("eventID") WHERE "eventID" IS NOT NULL
                 """
             )
             .execute(db)

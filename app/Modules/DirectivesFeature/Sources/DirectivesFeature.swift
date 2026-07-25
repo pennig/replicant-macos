@@ -86,7 +86,6 @@ public struct DirectivesFeature {
     public init() {}
 
     @Dependency(\.commandClient) var commandClient
-    @Dependency(\.deviceRefresher) var deviceRefresher
 
     public var body: some ReducerOf<Self> {
         BindingReducer()
@@ -96,12 +95,14 @@ public struct DirectivesFeature {
                 return .none
 
             case .reconfigureTapped:
+                guard case .builtIn = state.selectedRow else { return .none }
                 guard let device = state.selectedDevice else { return .none }
                 logger.info("directive composer \(device.deviceCode, privacy: .public) presented")
                 state.composer = DirectiveComposer.State(device: device, fleet: state.devices)
                 return .none
 
             case .clearTapped:
+                guard case .builtIn = state.selectedRow else { return .none }
                 guard let code = state.selectedRow?.deviceCode else { return .none }
                 return .send(.clearConfirmed(deviceCode: code))
 
@@ -139,19 +140,20 @@ public struct DirectivesFeature {
         }
     }
 
-    /// Dispatch a command and confirm it with a high-priority device read, so
-    /// the row reflects the new directive without waiting for the SSE echo.
+    /// Dispatch a command. `CommandClient.dispatch` already issues the
+    /// authoritative `.high` confirm-read for `.immediate`-class commands
+    /// (`set_directive`/`clear_directive` both are) and deliberately skips it
+    /// on the rejected path — so there is no explicit refresh here: the
+    /// accepted op surfaces via table observation, matching
+    /// `DevicesFeature.commandConfirmed`.
     private func dispatch(
         _ kind: OperationKind,
         _ deviceCode: String,
         _ params: CommandParams
     ) -> Effect<Action> {
         let commandClient = self.commandClient
-        let deviceRefresher = self.deviceRefresher
         return .run { send in
-            let outcome = await commandClient.dispatch(kind, deviceCode, params)
-            _ = await deviceRefresher.refresh(deviceCode, .high)
-            await send(.commandFinished(outcome))
+            await send(.commandFinished(commandClient.dispatch(kind, deviceCode, params)))
         }
     }
 }

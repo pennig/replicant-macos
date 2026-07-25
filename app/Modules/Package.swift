@@ -14,14 +14,8 @@ let package = Package(
         .library(name: "BobnetFeature", targets: ["BobnetFeature"]),
         .library(name: "CivilisationsFeature", targets: ["CivilisationsFeature"]),
         .library(name: "DevicesFeature", targets: ["DevicesFeature"]),
-        .library(
-            name: "DirectiveComposerFeature",
-            targets: ["DirectiveComposerFeature"]
-        ),
-        .library(
-            name: "DirectivesFeature",
-            targets: ["DirectivesFeature"]
-        ),
+        .library(name: "DirectiveComposerFeature", targets: ["DirectiveComposerFeature"]),
+        .library(name: "DirectivesFeature", targets: ["DirectivesFeature"]),
         .library(name: "EventLogFeature", targets: ["EventLogFeature"]),
         .library(name: "GameDatabase", targets: ["GameDatabase"]),
         .library(name: "GameModels", targets: ["GameModels"]),
@@ -240,6 +234,11 @@ let package = Package(
             dependencies: [
                 "DirectiveComposerFeature",
                 "GameDatabase",
+                "GameModels",
+                "GameServices",
+                "Utils",
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "SQLiteData", package: "sqlite-data"),
             ],
             path: "DirectiveComposerFeature/Tests"
         ),
