@@ -1,6 +1,6 @@
 //
 //  DirectiveComposerTests.swift
-//  Replicould — Devices feature
+//  Replicould — Directive composer feature
 //
 //  The directive composer's pure core: seeding the draft from the directive in
 //  force, building each directive's configuration payload, the per-directive
@@ -16,7 +16,7 @@ import GameServices
 import SQLiteData
 import Testing
 import Utils
-@testable import DevicesFeature
+@testable import DirectiveComposerFeature
 
 /// An AMI controller fixture. `detail` carries the runtime directive vocabulary
 /// and, when `current` is set, the in-force `ami_directive` block.

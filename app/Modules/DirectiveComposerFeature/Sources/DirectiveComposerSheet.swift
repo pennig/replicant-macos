@@ -1,6 +1,6 @@
 //
 //  DirectiveComposerSheet.swift
-//  Replicould — Devices feature
+//  Replicould — Directive composer feature
 //
 //  The `set_directive` composer sheet: a directive picker plus the selected
 //  directive's configuration form (survey scopes, the salvage-body picker fed
@@ -12,14 +12,19 @@
 //
 
 import ComposableArchitecture
+import GameModels
 import SwiftUI
 import UI
 import UniverseModels
 
-struct DirectiveComposerSheet: View {
+public struct DirectiveComposerSheet: View {
     @Bindable var store: StoreOf<DirectiveComposer>
 
-    var body: some View {
+    public init(store: StoreOf<DirectiveComposer>) {
+        self.store = store
+    }
+
+    public var body: some View {
         VStack(alignment: .leading, spacing: Space.l) {
             header
             Divider().overlay(Color.rcSeparator)
@@ -62,7 +67,7 @@ struct DirectiveComposerSheet: View {
             RCValueSelect(
                 "Directive",
                 options: store.availableDirectives.map {
-                    (label: DevicePresentation.displayName($0), value: $0)
+                    (label: BlueprintPresentation.displayName($0), value: $0)
                 },
                 selection: $store.directive
             )
@@ -228,7 +233,7 @@ struct DirectiveComposerSheet: View {
                 .font(.rcCaption)
                 .foregroundStyle(.rcTextTertiary)
             VStack(spacing: 0) {
-                ForEach(Array(DeviceCommand.miningResources.enumerated()), id: \.element) { index, resource in
+                ForEach(Array(MiningResource.all.enumerated()), id: \.element) { index, resource in
                     if index > 0 { Divider().overlay(Color.rcSeparator) }
                     requirementRow(resource)
                 }
@@ -293,7 +298,7 @@ struct DirectiveComposerSheet: View {
                 columns: [GridItem(.adaptive(minimum: 96), spacing: Space.xs)],
                 spacing: Space.xs
             ) {
-                ForEach(DeviceCommand.miningResources, id: \.self) { resource in
+                ForEach(MiningResource.all, id: \.self) { resource in
                     priorityChip(resource)
                 }
             }

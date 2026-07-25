@@ -12,6 +12,7 @@
 //
 
 import ComposableArchitecture
+import DirectiveComposerFeature
 import GameModels
 import GameServices
 import IssueReporting

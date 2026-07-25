@@ -1,16 +1,19 @@
 //
 //  DirectiveComposer.swift
-//  Replicould — Devices feature
+//  Replicould — Directive composer feature
 //
 //  The `set_directive` editor, presented as a sheet from the device inspector
-//  (per the presentation rule: live-data / heavy-form commands get a sheet).
-//  Seeds its draft from the directive currently in force, validates the
-//  configuration the backend requires per directive, and hands the confirmed
-//  directive + configuration back to `DevicesFeature` through its delegate.
-//  Selecting `gather_salvage` hydrates the controller's system into the local
-//  locations catalog so the salvage-body picker can fill; dismissing the sheet
-//  cancels that in-flight hydrate (the `.ifLet` presentation tears down child
-//  effects automatically).
+//  and from the Directives list (per the presentation rule: live-data /
+//  heavy-form commands get a sheet). Seeds its draft from the directive
+//  currently in force, validates the configuration the backend requires per
+//  directive, and hands the confirmed directive + configuration back to its
+//  parent through the delegate. Selecting `gather_salvage` hydrates the
+//  controller's system into the local locations catalog so the salvage-body
+//  picker can fill; dismissing the sheet cancels that in-flight hydrate (the
+//  `.ifLet` presentation tears down child effects automatically).
+//
+//  It is its own module because two features present it. It owns a reducer, so
+//  it cannot live in the TCA-free UI-tier modules (PrintingUI / TravelUI).
 //
 
 import ComposableArchitecture

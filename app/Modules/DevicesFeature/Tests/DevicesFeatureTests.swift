@@ -7,6 +7,7 @@
 //
 
 import ComposableArchitecture
+import DirectiveComposerFeature
 import Foundation
 import GameDatabase
 import GameModels

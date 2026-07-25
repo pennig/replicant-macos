@@ -14,6 +14,10 @@ let package = Package(
         .library(name: "BobnetFeature", targets: ["BobnetFeature"]),
         .library(name: "CivilisationsFeature", targets: ["CivilisationsFeature"]),
         .library(name: "DevicesFeature", targets: ["DevicesFeature"]),
+        .library(
+            name: "DirectiveComposerFeature",
+            targets: ["DirectiveComposerFeature"]
+        ),
         .library(name: "EventLogFeature", targets: ["EventLogFeature"]),
         .library(name: "GameDatabase", targets: ["GameDatabase"]),
         .library(name: "GameModels", targets: ["GameModels"]),
@@ -187,6 +191,7 @@ let package = Package(
         .target(
             name: "DevicesFeature",
             dependencies: [
+                "DirectiveComposerFeature",
                 "GameModels",
                 "GameServices",
                 "PrintingUI",
@@ -203,6 +208,7 @@ let package = Package(
             name: "DevicesFeatureTests",
             dependencies: [
                 "DevicesFeature",
+                "DirectiveComposerFeature",
                 "GameDatabase",
                 "GameModels",
                 "GameServices",
@@ -211,6 +217,27 @@ let package = Package(
                 .product(name: "SQLiteData", package: "sqlite-data"),
             ],
             path: "DevicesFeature/Tests"
+        ),
+        .target(
+            name: "DirectiveComposerFeature",
+            dependencies: [
+                "GameModels",
+                "GameServices",
+                "UI",
+                "UniverseModels",
+                "Utils",
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "SQLiteData", package: "sqlite-data"),
+            ],
+            path: "DirectiveComposerFeature/Sources"
+        ),
+        .testTarget(
+            name: "DirectiveComposerFeatureTests",
+            dependencies: [
+                "DirectiveComposerFeature",
+                "GameDatabase",
+            ],
+            path: "DirectiveComposerFeature/Tests"
         ),
         .target(
             name: "EventLogFeature",
