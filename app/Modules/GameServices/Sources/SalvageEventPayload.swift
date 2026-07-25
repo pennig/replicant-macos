@@ -13,6 +13,7 @@
 
 import API
 import Foundation
+import UniverseModels
 import Utils
 
 /// A `salvage.discovered` payload: which site, on which body, and how much of
@@ -68,11 +69,10 @@ public struct SalvageEventPayload: Equatable, Sendable {
         return nil
     }
 
-    /// The body hosting a site, by dropping the trailing `-SAL-N`
-    /// (`TAANSI-6-5-SAL-1` → `TAANSI-6-5`).
+    /// The body hosting a site. Thin forwarder to `SalvageSite`'s static —
+    /// that's the one place the `-SAL-N` stripping convention is encoded, so
+    /// GameServices never keeps its own copy of the rule.
     static func body(ofSite designation: String) -> String {
-        var parts = designation.split(separator: "-")
-        if let i = parts.lastIndex(of: "SAL") { parts = Array(parts[..<i]) }
-        return parts.joined(separator: "-")
+        SalvageSite.bodyDesignation(ofSite: designation)
     }
 }

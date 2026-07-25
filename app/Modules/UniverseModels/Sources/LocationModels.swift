@@ -145,6 +145,15 @@ public struct SalvageSite: Identifiable, Equatable, Sendable, Codable {
     /// `gather_salvage` directive targets (a body, not the site itself).
     public var bodyDesignation: String {
         if let location, !location.isEmpty { return location }
+        return Self.bodyDesignation(ofSite: designation)
+    }
+
+    /// The body a site designation implies, by dropping its trailing `-SAL-N`
+    /// (`SHERATANON-7-4-SAL-1` → `SHERATANON-7-4`). The one place the `-SAL-N`
+    /// convention is encoded — callers with only a designation (no `SalvageSite`
+    /// value, e.g. a `salvage.discovered`/`salvage.depleted` event payload) use
+    /// this directly; `bodyDesignation` above delegates to it as its fallback.
+    public static func bodyDesignation(ofSite designation: String) -> String {
         var parts = designation.split(separator: "-")
         if let i = parts.lastIndex(of: "SAL") { parts = Array(parts[..<i]) }
         return parts.joined(separator: "-")
