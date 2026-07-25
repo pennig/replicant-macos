@@ -14,7 +14,7 @@ public enum SidebarItem: String, CaseIterable, Identifiable, Hashable, Sendable 
     // Catalog
     case stars, locations, devices, replicants, blueprints, civilisations
     // Operations
-    case locationEvents, printQueue, operationsLog
+    case directives, locationEvents, printQueue, operationsLog
     // Comms
     case messages, bobnet
 
@@ -28,6 +28,7 @@ public enum SidebarItem: String, CaseIterable, Identifiable, Hashable, Sendable 
         case .replicants: "Replicants"
         case .blueprints: "Blueprints"
         case .civilisations: "Civilisations"
+        case .directives: "Directives"
         case .locationEvents: "Location Events"
         case .printQueue: "Printing"
         case .operationsLog: "Operations Log"
@@ -44,6 +45,7 @@ public enum SidebarItem: String, CaseIterable, Identifiable, Hashable, Sendable 
         case .replicants: "point.3.connected.trianglepath.dotted"
         case .blueprints: "doc.plaintext"
         case .civilisations: "person.2.wave.2"
+        case .directives: "brain.head.profile"
         case .locationEvents: "flag"
         case .printQueue: "printer"
         case .operationsLog: "list.bullet.rectangle"
@@ -73,7 +75,7 @@ public enum SidebarItem: String, CaseIterable, Identifiable, Hashable, Sendable 
 
     public static let groups: [Group] = [
         Group(id: "Catalog", items: [.stars, .locations, .devices, .replicants, .blueprints, .civilisations]),
-        Group(id: "Operations", items: [.locationEvents, .printQueue, .operationsLog]),
+        Group(id: "Operations", items: [.directives, .locationEvents, .printQueue, .operationsLog]),
         Group(id: "Comms", items: [.messages, .bobnet]),
     ]
 }

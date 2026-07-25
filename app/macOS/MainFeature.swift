@@ -17,6 +17,7 @@ import CivilisationsFeature
 import BobnetFeature
 import ComposableArchitecture
 import DevicesFeature
+import DirectivesFeature
 import EventLogFeature
 import GameModels
 import LocationEventsFeature
@@ -66,6 +67,9 @@ struct MainFeature {
         var blueprints: BlueprintsFeature.State
         /// The civilisations catalog (species + account reputation) — list + dossier.
         var civilisations: CivilisationsFeature.State
+        /// The unified Directives surface (Operations) — built-in AMI directives
+        /// beside custom missions.
+        var directives: DirectivesFeature.State
         /// The stellar-locations catalog (Locations view) — disclosure list + inspector.
         var locations: LocationsFeature.State
         /// The Location Events quest log (Missions) — discovered events + quest sheet.
@@ -92,6 +96,7 @@ struct MainFeature {
             self.devices = DevicesFeature.State()
             self.blueprints = BlueprintsFeature.State()
             self.civilisations = CivilisationsFeature.State()
+            self.directives = DirectivesFeature.State()
             self.locations = LocationsFeature.State()
             self.locationEvents = LocationEventsFeature.State()
             self.printQueue = PrintQueueFeature.State()
@@ -117,6 +122,7 @@ struct MainFeature {
         case devices(DevicesFeature.Action)
         case blueprints(BlueprintsFeature.Action)
         case civilisations(CivilisationsFeature.Action)
+        case directives(DirectivesFeature.Action)
         case locations(LocationsFeature.Action)
         case locationEvents(LocationEventsFeature.Action)
         case printQueue(PrintQueueFeature.Action)
@@ -155,6 +161,9 @@ struct MainFeature {
         }
         Scope(state: \.civilisations, action: \.civilisations) {
             CivilisationsFeature()
+        }
+        Scope(state: \.directives, action: \.directives) {
+            DirectivesFeature()
         }
         Scope(state: \.locations, action: \.locations) {
             LocationsFeature()
@@ -204,7 +213,7 @@ struct MainFeature {
                 state.devices.selectedDeviceCode = code
                 return .none
 
-            case .sidebar, .account, .messages, .bobnet, .rawAPI, .eventLog, .newStarMap, .devices, .blueprints, .civilisations, .locations, .locationEvents, .printQueue, .replicantDirectory:
+            case .sidebar, .account, .messages, .bobnet, .rawAPI, .eventLog, .newStarMap, .devices, .blueprints, .civilisations, .directives, .locations, .locationEvents, .printQueue, .replicantDirectory:
                 return .none
             }
         }
@@ -302,6 +311,11 @@ struct MainView: View {
         store.scope(state: \.civilisations, action: \.civilisations)
     }
 
+    /// The Directives store, scoped from the main session.
+    private var directivesStore: StoreOf<DirectivesFeature> {
+        store.scope(state: \.directives, action: \.directives)
+    }
+
     /// The Locations catalog store, scoped from the main session.
     private var locationsStore: StoreOf<LocationsFeature> {
         store.scope(state: \.locations, action: \.locations)
@@ -336,6 +350,8 @@ struct MainView: View {
             CivilisationsListView(store: civilisationsStore)
         } else if store.sidebar.category == .locations {
             LocationsListView(store: locationsStore)
+        } else if store.sidebar.category == .directives {
+            DirectivesListView(store: directivesStore)
         } else if store.sidebar.category == .locationEvents {
             LocationEventsListView(store: locationEventsStore)
         } else if store.sidebar.category == .printQueue {
@@ -382,6 +398,8 @@ struct MainView: View {
             CivilisationDetailView(store: civilisationsStore)
         } else if store.sidebar.category == .locations {
             LocationDetailView(store: locationsStore)
+        } else if store.sidebar.category == .directives {
+            DirectiveDetailView(store: directivesStore)
         } else if store.sidebar.category == .locationEvents {
             LocationEventDetailView(store: locationEventsStore)
         } else if store.sidebar.category == .printQueue {
