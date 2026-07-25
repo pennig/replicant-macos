@@ -33,7 +33,11 @@ enum DeviceCommand: Hashable, Identifiable {
     case surveyScan
     case census
     case print
-    case stow
+    /// Stow this device inside another vessel. `targets` are the co-located
+    /// vessels reporting free stow capacity; the inspector offers them behind an
+    /// opt-in checkbox. Left unspecified (or with no candidates), the server
+    /// stows the device in its replicant owner's vessel.
+    case stow(targets: [DeviceOption])
     /// Set an AMI controller's directive, chosen from the device's
     /// `available_directives` (threaded in at construction since the vocabulary is
     /// per-device).
@@ -101,7 +105,8 @@ enum DeviceCommand: Hashable, Identifiable {
         ownerCandidates: [DeviceOption] = [],
         channels: [String] = [],
         repairCandidates: [DeviceOption] = [],
-        replicateTargets: [DeviceOption] = []
+        replicateTargets: [DeviceOption] = [],
+        stowTargets: [DeviceOption] = []
     ) {
         switch command {
         case "travel":         self = .travel
@@ -111,7 +116,7 @@ enum DeviceCommand: Hashable, Identifiable {
         case "scan":           self = .surveyScan
         case "stellar_census": self = .census
         case "enqueue_print":  self = .print
-        case "stow":           self = .stow
+        case "stow":           self = .stow(targets: stowTargets)
         case "set_directive":  self = .setDirective(available: availableDirectives)
         case "adopt":          self = .adopt(candidates: adoptCandidates)
         case "release":        self = .release(controlled: releaseCandidates)
@@ -266,6 +271,10 @@ enum DeviceCommand: Hashable, Identifiable {
         /// A single-select dropdown of devices — the user picks exactly one of
         /// `options` (attach into a single free slot, or detach a lone attachment).
         case deviceChoice(label: String, options: [DeviceOption])
+        /// An *optional* single-select device dropdown gated behind a checkbox
+        /// (`toggleLabel`): unchecked, the command sends no target; checked, it
+        /// reveals the dropdown and sends the picked code. `stow`'s target vessel.
+        case optionalDeviceChoice(label: String, options: [DeviceOption], toggleLabel: String)
         /// A blueprint picker — the options are the unlocked catalog, supplied by
         /// the command grid from its `@FetchAll` (not carried in the enum).
         case blueprint(label: String)
@@ -309,9 +318,16 @@ enum DeviceCommand: Hashable, Identifiable {
             return .deviceChoice(label: "Device", options: candidates)
         case let .replicate(targets):
             return .replicateTarget(label: "Target Matrix", options: targets)
+        case let .stow(targets):
+            // With co-located vessels to choose from, offer an opt-in target
+            // picker; otherwise fall back to a plain confirm (server default:
+            // the replicant owner's vessel).
+            return targets.isEmpty
+                ? .none
+                : .optionalDeviceChoice(label: "Vessel", options: targets, toggleLabel: "Stow in a specific vessel")
         // loadCargo opens its own sheet (intercepted before an inline panel shows);
         // unloadCargo is a plain confirm. Neither collects an inline parameter.
-        case .scan, .surveyScan, .census, .stow, .loadCargo, .unloadCargo, .simple: return .none
+        case .scan, .surveyScan, .census, .loadCargo, .unloadCargo, .simple: return .none
         }
     }
 

@@ -36,6 +36,9 @@ struct CommandGrid: View {
     @State private var blueprintType: String = ""
     /// The checked device codes for a pending `adopt`.
     @State private var selectedCodes: Set<String> = []
+    /// Whether a pending `stow` names an explicit target vessel (the opt-in
+    /// checkbox). Off means "let the server stow it in the owner's vessel".
+    @State private var targetEnabled: Bool = false
 
     /// The devices this controller can adopt: fleet members of the type it
     /// shepherds (mining drones for a mining controller, etc.) that it doesn't
@@ -100,6 +103,23 @@ struct CommandGrid: View {
         }
     }
 
+    /// The vessels this device could be stowed into: fleet members sharing its
+    /// location that report free stow capacity, excluding the device itself.
+    /// Empty when the device reports no location — the stow command then just
+    /// confirms and the server stows it in the replicant owner's vessel. The
+    /// subtitle pairs the vessel's display type with its free slots, so an entry
+    /// reads "Heaven Vessel · 2 free" (the picker appends the device code).
+    private var stowTargets: [DeviceOption] {
+        guard let location = device.location, !location.isEmpty else { return [] }
+        return fleet
+            .filter {
+                $0.deviceCode != device.deviceCode
+                    && $0.location == location
+                    && $0.stowRemaining > 0
+            }
+            .map { DeviceOption(id: $0.deviceCode, subtitle: "\(DevicePresentation.displayName($0.deviceType)) · \($0.stowRemaining) free") }
+    }
+
     /// The other replicants this device could be reassigned to. Empty on a
     /// one-replicant account, which hides Change Owner entirely (the same
     /// candidate-gating pattern as adopt/release).
@@ -144,6 +164,7 @@ struct CommandGrid: View {
         let repairable = repairCandidates
         let channelNames = channels.map(\.name)
         let replicateCandidates = replicateTargets
+        let stowInto = stowTargets
         return device.availableCommands
             .compactMap {
                 DeviceCommand(
@@ -159,7 +180,8 @@ struct CommandGrid: View {
                     ownerCandidates: owners,
                     channels: channelNames,
                     repairCandidates: repairable,
-                    replicateTargets: replicateCandidates
+                    replicateTargets: replicateCandidates,
+                    stowTargets: stowInto
                 )
             }
             .filter { command in
@@ -205,7 +227,12 @@ struct CommandGrid: View {
                             Text(section.group.title.uppercased())
                                 .font(.rcSectionLabel)
                                 .foregroundStyle(.rcTextTertiary)
-                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: Space.s)], spacing: Space.s) {
+                            // A flow layout rather than a fixed adaptive grid: every
+                            // button gets a uniform width that flexes between max(120,
+                            // 20% of the panel) and a 200 cap, but any whose label needs
+                            // more room grows past the cap, instead of clipping the way a
+                            // 120-wide grid cell would.
+                            FlowLayout(spacing: Space.s, minItemWidth: 120, minItemWidthFraction: 0.2, maxItemWidth: 200) {
                                 ForEach(section.commands) { command in
                                     Button {
                                         select(command)
@@ -255,6 +282,7 @@ struct CommandGrid: View {
         }
         textValue = ""
         selectedCodes = []
+        targetEnabled = false
         if case .print = command {
             // Seed the blueprint picker with the first catalog entry.
             blueprintType = blueprints.first?.deviceType ?? ""
@@ -270,6 +298,9 @@ struct CommandGrid: View {
             }
         case let .deviceChoice(_, options):
             // Seed the dropdown with the first candidate device code.
+            choiceValue = options.first?.id ?? ""
+        case let .optionalDeviceChoice(_, options, _):
+            // Seed the (initially hidden) target dropdown with the first vessel.
             choiceValue = options.first?.id ?? ""
         case let .channelMessage(_, channels):
             // Seed the channel dropdown; the body text starts empty.
@@ -299,6 +330,20 @@ struct CommandGrid: View {
                 deviceCheckboxList(label, options: options, limit: limit)
             case let .deviceChoice(label, options):
                 deviceChoicePicker(label, options: options)
+            case let .optionalDeviceChoice(label, options, toggleLabel):
+                VStack(alignment: .leading, spacing: Space.s) {
+                    Toggle(toggleLabel, isOn: $targetEnabled)
+                        .toggleStyle(.checkbox)
+                        .font(.rcCaption)
+                        .foregroundStyle(.rcTextSecondary)
+                    if targetEnabled {
+                        deviceChoicePicker(label, options: options)
+                    } else {
+                        Text("Stows in the replicant owner's vessel.")
+                            .font(.rcCaption)
+                            .foregroundStyle(.rcTextTertiary)
+                    }
+                }
             case let .blueprint(label):
                 blueprintPicker(label)
             case let .channelMessage(label, channels):
@@ -419,6 +464,7 @@ struct CommandGrid: View {
         case .text:         return textValue
         case .choice:       return choiceValue
         case .deviceChoice: return choiceValue
+        case .optionalDeviceChoice: return targetEnabled ? choiceValue : ""
         case .blueprint:    return blueprintType
         case .channelMessage: return choiceValue
         case .replicateTarget: return choiceValue
@@ -441,6 +487,9 @@ struct CommandGrid: View {
                 return CommandParams(devices: [choiceValue])
             }
             return CommandParams(devices: Array(selectedCodes))
+        case .stow:
+            // The target vessel is optional: only send it when the checkbox is on.
+            return CommandParams(target: targetEnabled ? choiceValue : nil)
         case .message:
             return CommandParams(channel: choiceValue, text: textValue.trimmingCharacters(in: .whitespaces))
         default:
@@ -577,6 +626,8 @@ struct CommandGrid: View {
         case .text:        return !textValue.trimmingCharacters(in: .whitespaces).isEmpty
         case .choice:      return !choiceValue.isEmpty
         case .deviceChoice: return !choiceValue.isEmpty
+        // Optional target: always confirmable; if the checkbox is on it needs a pick.
+        case .optionalDeviceChoice: return !targetEnabled || !choiceValue.isEmpty
         case .blueprint:   return !blueprintType.isEmpty
         case .channelMessage:
             return !choiceValue.isEmpty && !textValue.trimmingCharacters(in: .whitespaces).isEmpty

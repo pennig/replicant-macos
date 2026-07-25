@@ -13,9 +13,10 @@
 //    2. The target is stowed in a device that has the `cradle` feature.
 //    3. The cradle device is at the same location as the source matrix.
 //
-//  Plus the implicit source-side condition: the replicant must be hosted in a
-//  `replicant_matrix` that currently lists `replicate` among its
-//  `available_commands`.
+//  Plus the implicit source-side condition: the replicant's host vessel must
+//  contain a `replicant_matrix` (stowed inside it) that currently lists
+//  `replicate` among its `available_commands`. `hosted_device_code` names the
+//  vessel, not the matrix — the matrix is a distinct stowed device.
 //
 //  Kept a plain, SwiftUI-free value type (not a static on a View) so it resolves
 //  from already-persisted `Device` fields and is straightforward to unit-test.
@@ -93,24 +94,34 @@ public struct ReplicationEligibility: Equatable, Sendable {
     public static func resolve(hostDeviceCode: String?, devices: [Device]) -> ReplicationEligibility {
         let byCode = Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { first, _ in first })
 
-        // 1) Source matrix — the replicant's host, when it's a matrix that can act.
-        let source = hostDeviceCode.flatMap { byCode[$0] }
-        let sourceIsMatrix = source?.deviceType == "replicant_matrix"
+        // 1) Source matrix — the `replicant_matrix` stowed *inside* the replicant's
+        //    host vessel. `hostDeviceCode` is the vessel (e.g. a heaven_vessel), not
+        //    the matrix itself; the matrix is a distinct device with
+        //    `stowedInDeviceCode == hostDeviceCode` that carries the `replicate` command.
+        let hostVessel = hostDeviceCode.flatMap { byCode[$0] }
+        let source = hostDeviceCode.flatMap { host in
+            devices.first { $0.deviceType == "replicant_matrix" && $0.stowedInDeviceCode == host }
+        }
+        let sourceIsMatrix = source != nil
         let canIssueCommand = source?.availableCommands.contains("replicate") ?? false
         let sourceReady = sourceIsMatrix && canIssueCommand
-        let sourceLocation = source?.location
+        // A stowed matrix has no location of its own — use the host vessel's location.
+        let sourceLocation = hostVessel?.location
 
         // 2) Candidate empty matrices anywhere in the fleet.
         let empties = devices.filter { $0.deviceType == "empty_replicant_matrix" }
         let hasEmpty = !empties.isEmpty
 
-        // 3) Of those, the ones stowed in a cradle-feature carrier co-located with
-        //    the source matrix are valid targets.
+        // 3) Of those, the ones stowed in a cradle-feature carrier — a *different*
+        //    vessel than the source matrix's own host — co-located with the source
+        //    matrix are valid targets. The empty matrix can't share the source's
+        //    vessel (a replicant replicates itself out into a separate cradle).
         var stowedInCradle = false
         var targets: [ReplicationTarget] = []
         for empty in empties {
             guard
                 let carrierCode = empty.stowedInDeviceCode,
+                carrierCode != hostDeviceCode,
                 let carrier = byCode[carrierCode],
                 carrier.features.contains("cradle")
             else { continue }
@@ -146,7 +157,7 @@ public struct ReplicationEligibility: Equatable, Sendable {
                 id: "cradle",
                 label: "Empty matrix stowed in a cradle",
                 isMet: stowedInCradle,
-                hint: "Stow the empty matrix in a device that has the cradle feature."
+                hint: "Stow the empty matrix in a separate cradle-feature device — not the source matrix's own host vessel."
             ),
             ReplicationRequirement(
                 id: "colocated",

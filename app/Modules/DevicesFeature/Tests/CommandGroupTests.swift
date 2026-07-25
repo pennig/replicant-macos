@@ -54,9 +54,9 @@ struct CommandGroupTests {
     }
 
     @Test func withinGroupOrderFollowsTaxonomyNotInputOrder() {
-        let sections = CommandGroup.sections(for: [.stow, .simple("deploy"), .simple("recall"), .travel])
+        let sections = CommandGroup.sections(for: [.stow(targets: []), .simple("deploy"), .simple("recall"), .travel])
         #expect(sections == [
-            CommandSection(group: .movement, commands: [.travel, .simple("recall"), .simple("deploy"), .stow])
+            CommandSection(group: .movement, commands: [.travel, .simple("recall"), .simple("deploy"), .stow(targets: [])])
         ])
     }
 

@@ -74,10 +74,14 @@ struct ShipLineVaryings {
     float along;
     float side;
     float fade;
-    // Screen-space arc-length from endpoint A, in pixels. Interpolated WITHOUT
-    // perspective correction (screen-linear) so a fragment's value is its true
-    // pixel distance along the ribbon — that's what makes dashes uniform in screen
-    // space even when the trajectory is foreshortened toward/away from the camera.
+    // Screen-space arc-length from endpoint B (the destination), in pixels.
+    // Interpolated WITHOUT perspective correction (screen-linear) so a fragment's
+    // value is its true pixel distance along the ribbon — that's what makes dashes
+    // uniform in screen space even when the trajectory is foreshortened toward/away
+    // from the camera. Anchored at B, not A, so the dash cadence stays PINNED to the
+    // destination: when the camera auto-orbits the destination star and the line's
+    // screen length changes, the fractional slack accumulates at the far (origin)
+    // end instead of sliding/rescaling the dashes near the pivot.
     float screenDist [[center_no_perspective]];
 };
 
@@ -103,9 +107,10 @@ vertex ShipLineVaryings ship_line_vertex(uint vid                          [[ver
     out.along = v.along;
     out.side = v.side;
     out.fade = u.overlayDim;
-    // 0 at A, full screen length at B; screen-linear interpolation (see the varying)
-    // turns this into the fragment's true pixel distance along the trajectory.
-    out.screenDist = v.along * length(delta);
+    // 0 at B (destination), full screen length at A; screen-linear interpolation
+    // (see the varying) turns this into the fragment's true pixel distance measured
+    // BACK from the destination, so the dash pattern is pinned there.
+    out.screenDist = (1.0 - v.along) * length(delta);
     return out;
 }
 

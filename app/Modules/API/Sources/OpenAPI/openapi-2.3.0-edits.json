@@ -2546,6 +2546,9 @@
           "carrier_code": {
             "type": "string"
           },
+          "replicant_code": {
+            "type": "string"
+          },
           "new_replicant_code": {
             "type": "string"
           },

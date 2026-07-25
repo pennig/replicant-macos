@@ -126,8 +126,8 @@ public struct RCActiveReplicantHeader: View {
                     planDraft = plan ?? ""
                     isEditingPlan = true
                 } label: {
-                    Image(systemName: "pencil")
-                        .font(.system(size: IconSize.m, weight: .semibold))
+                    Image(systemName: "pencil.line")
+                        .font(.system(size: IconSize.m, weight: .black))
                         .foregroundStyle(.rcTextTertiary)
                         .padding(Space.xs)
                         .contentShape(Rectangle())
