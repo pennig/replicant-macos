@@ -53,7 +53,7 @@
 - [SQLite DB location](sqlite-db-location.md) — path to the running app DB for direct sqlite3 inspection; census `stars` lags `systemDetails`
 - [Location response schema drift](location-response-schema-drift.md) — openapi.json patch so GET locations/{designation} decodes (asteroid_belt); re-apply after re-fetch
 - [Decode diagnostics decorator](decode-diagnostics-decorator.md) — OpenAPI decode errors logged centrally via DiagnosticAPIClient (APIProtocol decorator); regen with scripts/gen-diagnostic-client.py; call sites stay clean
-- [SPM stale layout crash](spm-stale-layout-crash.md) — adding stored fields to a shared struct can segfault consumer modules (no library evolution); rm -rf Modules/.build to fix
+- [SPM stale layout crash](spm-stale-layout-crash.md) — RETESTED 2026-07-25: does NOT reproduce under the default swiftbuild engine; the rm -rf Modules/.build ritual is obsolete for swift test (was a deprecated-llbuild artifact). Xcode app-target half still stands.
 - [API drift backlog](api-drift-backlog.md) — no known open drifts as of 2026-07-20; swift test fully green (records the resolved new_resource/terminating/adopt-read fixes).
 - [Preview sheets need .sheet(item:)](preview-sheet-item-not-ispresented.md) — travel/print preview sheets must use .sheet(item:) not isPresented, else rapid back-to-back presentations drop the dialog; fixed in 3 travel entry points + effect cancellation.
 - [SourceKit-LSP warm-up race](sourcekit-lsp-warmup.md) — 0 refs right after session start = index warming, not stale config; fallback-args diagnostics (`No such module`) mean wait+retry, not grep.
