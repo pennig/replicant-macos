@@ -42,6 +42,41 @@ Non-obvious decisions (the why, beyond the spec text):
 - Recorded follow-up: **device-list organization at scale** (fleet will grow to hundreds; flat 3-pane
   list won't hold) — deliberately deferred, deliberately written down.
 
+## Stages 1–2 SHIPPED 2026-07-25
+
+Plan: `docs/superpowers/plans/2026-07-24-directives-stage1-2-unified-surface.md`. What landed:
+`DirectiveComposerFeature` (the composer extracted out of DevicesFeature so two features present it),
+the `Directive`/`DirectiveLogEntry` tables, and `DirectivesFeature` — the unified list + detail with
+built-in rows reconfigurable/clearable in place. Sidebar: Operations ▸ Directives. **No engine** —
+the custom half of the list is empty until Stage 3.
+
+Invariants established (don't undo these):
+- **Built-in rows are derived, never persisted.** No production code writes the `Directive` table.
+  `DirectiveRow.merge(devices:directives:)` recomputes on every read, so a derived row cannot drift.
+- Row ids are namespaced `custom:` / `builtin:` so a device code and a directive id can't collide.
+- `.reconfigureTapped` / `.clearTapped` **guard on `case .builtIn`** — for a custom row, `deviceCode`
+  is the mission's *vessel*, so an unguarded handler would clear a directive on the wrong device.
+- **`DirectivesFeature` does NOT issue its own confirm-read** after dispatch. `CommandClient` already
+  does it for `.immediate` commands, and `PollCoordinator` TTL-limits only `.low` — so an extra
+  `.high` read always hits the network and fires even on the rejected path. Matches
+  `DevicesFeature.commandConfirmed`. See [[device-refresher-dependency]].
+- `DirectiveConfigFlattening` is a top-level enum, not a static on the view — see
+  [[swiftui-view-statics-trap-in-tests]]. It bit us mid-implementation.
+- `Space.xxs = 2` was added to DesignSystem (half-step below `xs`). `UI/DESIGN_SPEC.md`'s spacing
+  scale line is now stale and should be updated.
+
+Deferred to Stage 3 (from the whole-branch review — worth reading before starting it):
+- **Mono-token gaps (spec §7 mandates these):** `DirectiveRowView` bakes a system designation into a
+  non-mono title string ("Survey Run → SHERATANON"); `DirectiveDetailView` renders config *values*
+  proportionally, so a `gather_salvage` location shows un-monospaced — the composer writes it mono.
+- `DirectiveStatus` has no display name, so the detail pane renders `needsAttention` raw.
+- No test for the `set_directive` dispatch path (the feature's headline write); `DevicesFeatureTests`
+  has the equivalent for the other presenter.
+- `merge`'s `!directive.isEmpty` guard is unexercised — every fixture passes a non-empty name.
+- The sidebar needs-attention badge (spec §1) is unimplemented and was never declared as deferred.
+- **Open design question:** a device that is both a mission's vessel *and* carries an AMI directive
+  appears as TWO rows. Arguably correct, but decide deliberately before Stage 3.
+
 Verified API facts backing the step sequences live in §3 of the spec (stow co-location, `deploy`
 doesn't activate, `launch` auto-deploys adopted stowed devices, `directive.completed` payload).
 
