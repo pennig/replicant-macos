@@ -149,6 +149,9 @@ public final class LocationsIngestion: Sendable {
             case "scan.completed":
                 // Full scanned body (physical, salvage, sites, inventory).
                 _ = try? await locationsClient.ingestScanResult(payload: payload)
+            case "salvage.discovered":
+                // The only source of a site's absolute resource totals.
+                _ = try? await locationsClient.recordSalvageDiscovery(payload: payload)
             case "salvage.depleted":
                 if let site = SalvageEventPayload.depletedSite(from: payload) {
                     _ = try? await locationsClient.markSalvageDepleted(site: site)

@@ -858,6 +858,45 @@ extension StarSystem {
         return copy
     }
 
+    /// Attach a discovered salvage site to the tree, seeding its host body if
+    /// the roster doesn't know it yet (a discovery can arrive long before the
+    /// body is scanned). Matches the host by designation, planet then moon.
+    /// Returns nil when the site is already present unchanged, so callers can
+    /// skip a pointless blob rewrite.
+    public func insertingSalvage(_ site: SalvageSite) -> StarSystem? {
+        let body = site.bodyDesignation
+        guard !body.isEmpty else { return nil }
+        var copy = self
+
+        func upsert(into salvage: inout [SalvageSite]) -> Bool {
+            if let i = salvage.firstIndex(where: { $0.designation == site.designation }) {
+                // Preserve observed percentages; the discovery carries none.
+                var merged = site
+                merged.remainingPct = salvage[i].remainingPct
+                merged.depleted = salvage[i].depleted
+                guard salvage[i] != merged else { return false }
+                salvage[i] = merged
+                return true
+            }
+            salvage.append(site)
+            return true
+        }
+
+        for pi in copy.planets.indices {
+            if copy.planets[pi].designation == body {
+                return upsert(into: &copy.planets[pi].salvage) ? copy : nil
+            }
+            for mi in copy.planets[pi].moons.indices where copy.planets[pi].moons[mi].designation == body {
+                return upsert(into: &copy.planets[pi].moons[mi].salvage) ? copy : nil
+            }
+        }
+
+        // Unknown body: seed a minimal planet so the site isn't lost. A later
+        // hydrate replaces this stub with the real roster entry.
+        copy.planets.append(Planet(designation: body, salvage: [site]))
+        return copy
+    }
+
     /// Ensure the container a body attaches to exists before `applying`, so a
     /// body from a stream-event scan isn't dropped for lack of a roster: a moon needs its
     /// parent planet; planets, belts, and specials self-attach. Used when folding

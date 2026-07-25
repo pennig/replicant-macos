@@ -184,6 +184,57 @@ extension LocationsClient {
         return true
     }
 
+    /// Record a `salvage.discovered` event.
+    ///
+    /// Two writes in one transaction. The **assay** is the durable half: this
+    /// event is the only place absolute resource counts appear, and the catalog
+    /// payload never carries them. The **catalog fold-in** is convenience: the
+    /// payload has everything `SalvageSite` needs, so a discovery is visible
+    /// immediately instead of waiting for the next scan.
+    ///
+    /// `remainingPct` is deliberately left empty rather than synthesised as
+    /// 100%. Live sites do read 100% right after discovery, but writing that in
+    /// would present an inference as observed data; the site reads as discovered
+    /// totals until a hydrate supplies real percentages.
+    ///
+    /// Best-effort and idempotent. Returns whether an assay was written.
+    @discardableResult
+    public func recordSalvageDiscovery(payload: [String: JSONValue]) async throws -> Bool {
+        guard let discovery = SalvageEventPayload.discovery(from: payload) else { return false }
+        let system = SiteAssay.system(of: discovery.designation)
+        guard !system.isEmpty else { return false }
+
+        @Dependency(\.defaultDatabase) var database
+        @Dependency(\.date.now) var now
+        try await database.write { db in
+            let stored = try SiteAssay.where { $0.id.eq(discovery.designation) }.fetchOne(db)
+            let assay = SiteAssay(
+                id: discovery.designation,
+                body: discovery.body,
+                system: system,
+                siteType: "salvage",
+                totals: SiteAssay.raising(stored?.totals ?? [:], with: discovery.resources),
+                assayedAt: now
+            )
+            try SiteAssay.upsert { assay }.execute(db)
+
+            let cached = try SystemDetail.where { $0.designation.eq(system) }.fetchOne(db)
+            let base = (try? cached?.system()) ?? StarSystem(designation: system, recon: .visited)
+            let site = SalvageSite(
+                designation: discovery.designation,
+                name: discovery.name,
+                salvageType: discovery.salvageType,
+                location: discovery.body,
+                resourcesAvailable: discovery.resources.keys.sorted(),
+                depleted: false
+            )
+            guard let merged = base.insertingSalvage(site) else { return }
+            let row = try SystemDetail(system: merged, hydratedAt: now)
+            try SystemDetail.upsert { row }.execute(db)
+        }
+        return true
+    }
+
     /// Mark ONE salvage site as fully spent (a `salvage.depleted` event). Keyed
     /// by site designation, not by body: a body can host several sites, and
     /// spending one must not spend its siblings. No-op if the system isn't
