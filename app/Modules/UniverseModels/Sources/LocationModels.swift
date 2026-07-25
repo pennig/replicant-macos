@@ -101,11 +101,17 @@ public struct SalvageSite: Identifiable, Equatable, Sendable, Codable {
     public var location: String?
     public var resourcesAvailable: [String]
     public var depleted: Bool
+    /// Resource name → percent still present (0…100), from
+    /// `resources_remaining_pct`. Empty when the site came from the `salvage[]`
+    /// roster block, which carries names but no percentages. Combine with a
+    /// `SiteAssay`'s totals via `SiteAmounts.amounts` for absolute units.
+    public var remainingPct: [String: Double]
     public var id: String { designation }
 
     public init(
         designation: String, name: String? = nil, salvageType: String? = nil,
-        location: String? = nil, resourcesAvailable: [String] = [], depleted: Bool = false
+        location: String? = nil, resourcesAvailable: [String] = [], depleted: Bool = false,
+        remainingPct: [String: Double] = [:]
     ) {
         self.designation = designation
         self.name = name
@@ -113,6 +119,22 @@ public struct SalvageSite: Identifiable, Equatable, Sendable, Codable {
         self.location = location
         self.resourcesAvailable = resourcesAvailable
         self.depleted = depleted
+        self.remainingPct = remainingPct
+    }
+
+    /// Hand-written so a `StarSystem` blob persisted before `remainingPct`
+    /// existed still decodes. Synthesized `Decodable` ignores stored-property
+    /// defaults and throws `keyNotFound` for an absent key, which would make
+    /// every pre-existing `systemDetails` row unreadable.
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        designation = try c.decode(String.self, forKey: .designation)
+        name = try c.decodeIfPresent(String.self, forKey: .name)
+        salvageType = try c.decodeIfPresent(String.self, forKey: .salvageType)
+        location = try c.decodeIfPresent(String.self, forKey: .location)
+        resourcesAvailable = try c.decodeIfPresent([String].self, forKey: .resourcesAvailable) ?? []
+        depleted = try c.decodeIfPresent(Bool.self, forKey: .depleted) ?? false
+        remainingPct = try c.decodeIfPresent([String: Double].self, forKey: .remainingPct) ?? [:]
     }
 
     /// The body that hosts this salvage — its `location` when known, else derived

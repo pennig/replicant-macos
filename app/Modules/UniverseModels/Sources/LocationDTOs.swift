@@ -371,15 +371,16 @@ extension RawResourceSite {
     }
 
     /// Reinterpret a salvage-typed resource site as a `SalvageSite`. Its
-    /// `resources_remaining_pct` keys are the yieldable resources; all-zero (or
-    /// empty) remaining means it's spent.
+    /// `resources_remaining_pct` keys are the yieldable resources and its values
+    /// are how much of each is left; all-zero (or empty) remaining means spent.
     var salvageDomain: SalvageSite? {
         guard let designation else { return nil }
         let remaining = resourcesRemainingPct ?? [:]
         return SalvageSite(
             designation: designation, name: name,
             resourcesAvailable: remaining.keys.sorted(),
-            depleted: !remaining.isEmpty && remaining.values.allSatisfy { $0 <= 0 }
+            depleted: !remaining.isEmpty && remaining.values.allSatisfy { $0 <= 0 },
+            remainingPct: remaining
         )
     }
 }
