@@ -101,16 +101,18 @@ struct DirectiveRowTests {
         #expect(builtIn.controlledDevices.map(\.deviceCode) == ["DRONE1"])
     }
 
-    /// Custom rows and built-in rows coexist; custom rows sort first so an
-    /// actively-running mission is never buried under the standing set.
+    /// Custom rows sort as a whole block ahead of built-ins — not merely ahead of
+    /// a single one — and each source's own internal ordering (the caller's,
+    /// since the queries are already ordered) is preserved within its block.
     @Test func customRowsSortAheadOfBuiltIns() {
         let rows = DirectiveRow.merge(
-            devices: [device(code: "AMI1", directive: "survey_system")],
-            directives: [mission(id: "D1")]
+            devices: [
+                device(code: "AMI1", directive: "survey_system"),
+                device(code: "AMI2", directive: "gather_salvage"),
+            ],
+            directives: [mission(id: "D1"), mission(id: "D2")]
         )
-        #expect(rows.count == 2)
-        #expect(rows.first?.id == "custom:D1")
-        #expect(rows.last?.id == "builtin:AMI1")
+        #expect(rows.map(\.id) == ["custom:D1", "custom:D2", "builtin:AMI1", "builtin:AMI2"])
     }
 
     /// Row ids are stable and namespaced, so a device code and a directive id

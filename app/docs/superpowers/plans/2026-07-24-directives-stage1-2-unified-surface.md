@@ -797,7 +797,7 @@ The list's core logic, kept SwiftUI-free so it is testable (per the View-statics
 
 **Interfaces:**
 - Consumes: `Device` (`currentDirective`, `currentDirectiveConfig`, `controlledDevices`, `deviceCode`, `deviceType`, `status`, `location`), `Directive` (Task 3).
-- Produces: `BuiltInDirective`, `DirectiveRow` (with `.builtIn` / `.custom` cases, `id`, `title`, `deviceCode`, `sortKey`), `DirectiveRow.merge(devices:directives:)`. Tasks 5 and 6 rely on these.
+- Produces: `BuiltInDirective`, `DirectiveRow` (with `.builtIn` / `.custom` cases, `id`, `title`, `deviceCode`), `DirectiveRow.merge(devices:directives:)`. Tasks 5 and 6 rely on these.
 
 - [ ] **Step 1: Add the module to `Package.swift`**
 
