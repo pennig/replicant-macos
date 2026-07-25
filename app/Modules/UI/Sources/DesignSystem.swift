@@ -226,6 +226,7 @@ public enum SidebarSymbol {
 // MARK: - Spacing, radius, type tokens
 
 public enum Space {
+    public static let xxs: CGFloat = 2
     public static let xs: CGFloat = 4
     public static let s:  CGFloat = 8
     public static let m:  CGFloat = 12

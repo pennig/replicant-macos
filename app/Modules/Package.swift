@@ -260,8 +260,12 @@ let package = Package(
             name: "DirectivesFeatureTests",
             dependencies: [
                 "DirectivesFeature",
+                "GameDatabase",
                 "GameModels",
+                "GameServices",
                 "Utils",
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "SQLiteData", package: "sqlite-data"),
             ],
             path: "DirectivesFeature/Tests"
         ),
