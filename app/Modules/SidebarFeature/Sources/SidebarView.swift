@@ -166,10 +166,15 @@ public struct SidebarView: View {
 
     // — Active replicant derivation —
 
-    /// The currently-active replicant, falling back to the first in the roster
-    /// when nothing (or a stale code) is selected.
+    /// The currently-active replicant: the stored selection, or the sole replicant
+    /// when there's exactly one. On a multi-replicant roster with nothing (or a
+    /// stale code) selected it's nil rather than a guessed first — matching the
+    /// resolution used by Locations / Stars so the whole app agrees on "active".
+    /// (The switcher itself still shows a first-option default for display; see
+    /// `switcherSelection`.)
     private var activeReplicant: Replicant? {
-        store.replicants.first { $0.replicantCode == activeReplicantCode } ?? store.replicants.first
+        store.replicants.first { $0.replicantCode == activeReplicantCode }
+            ?? (store.replicants.count == 1 ? store.replicants.first : nil)
     }
 
     /// The roster mapped to switcher options, each carrying its host glyph.

@@ -43,6 +43,17 @@ import Testing
         )
     }
 
+    /// A second replicant hosted by a different vessel, to prove the ingestion
+    /// route never treats "the first on the roster" as a stand-in for "current".
+    private func secondReplicant() -> Replicant {
+        Replicant(
+            replicantCode: "R2", name: "R2", createdAt: Date(timeIntervalSince1970: 0),
+            currentStar: "ATIANFU", currentStarName: "Atianfu",
+            currentLocation: "ATIANFU-KUIPER", currentLocationName: "Kuiper",
+            hostedDeviceCode: "HOST2"
+        )
+    }
+
     /// A `LocationsClient` whose `scan` records each call and stops there
     /// (`scanAndPersist` calls `scan` first, so the throw skips only the
     /// persistence this test doesn't observe).
@@ -137,6 +148,79 @@ import Testing
         }
 
         #expect(scans.value == ["R1"])
+    }
+
+    /// An arrival naming a specific replicant moves *that* replicant, not the
+    /// first on the roster — even when the named one is listed second.
+    @Test func arrivalMovesTheNamedReplicantNotTheFirst() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { [r1 = replicant(), r2 = secondReplicant()] db in
+            try Replicant.insert { r1 }.execute(db)
+            try Replicant.insert { r2 }.execute(db)
+        }
+
+        // Arrival of R2's host vessel (HOST2), R2 named explicitly.
+        let event = GameEventEnvelope(
+            id: "1-0", category: "travel", event: "travel.arrived",
+            replicantCode: "R2", deviceCode: "HOST2",
+            star: "AINALRAM", location: "AINALRAM-BELT-1",
+            createdAt: "2026-07-21T09:00:00Z",
+            provenance: .stream
+        )
+
+        let ingestion = LocationsIngestion()
+        let route = try scanRoute(in: ingestion)
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.continuousClock = TestClock()
+        } operation: {
+            await route.apply(event)
+        }
+        ingestion.cancelPendingWork()
+
+        let rows = try await database.read { db in
+            try Replicant.order { $0.replicantCode }.fetchAll(db)
+        }
+        // R1 (first on the roster) is untouched; R2 moved.
+        #expect(rows.first { $0.replicantCode == "R1" }?.currentLocation == "ATIANFU-KUIPER")
+        #expect(rows.first { $0.replicantCode == "R2" }?.currentLocation == "AINALRAM-BELT-1")
+    }
+
+    /// An arrival with no `replicant_code` is roster-wide: the host-device gate
+    /// picks the one replicant it concerns (R2, by its vessel), rather than
+    /// defaulting to the first on the roster.
+    @Test func codelessArrivalIsResolvedByHostDeviceNotFirst() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { [r1 = replicant(), r2 = secondReplicant()] db in
+            try Replicant.insert { r1 }.execute(db)
+            try Replicant.insert { r2 }.execute(db)
+        }
+
+        // Same arrival, but the envelope carries no replicant code — only the
+        // arriving vessel (HOST2, which is R2's host).
+        let event = GameEventEnvelope(
+            id: "1-0", category: "travel", event: "travel.arrived",
+            replicantCode: nil, deviceCode: "HOST2",
+            star: "AINALRAM", location: "AINALRAM-BELT-1",
+            createdAt: "2026-07-21T09:00:00Z",
+            provenance: .stream
+        )
+
+        let ingestion = LocationsIngestion()
+        let route = try scanRoute(in: ingestion)
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.continuousClock = TestClock()
+        } operation: {
+            await route.apply(event)
+        }
+        ingestion.cancelPendingWork()
+
+        let rows = try await database.read { db in
+            try Replicant.order { $0.replicantCode }.fetchAll(db)
+        }
+        #expect(rows.first { $0.replicantCode == "R1" }?.currentLocation == "ATIANFU-KUIPER")
+        #expect(rows.first { $0.replicantCode == "R2" }?.currentLocation == "AINALRAM-BELT-1")
     }
 
     @Test func cancelPendingWorkStopsAnArmedScan() async throws {

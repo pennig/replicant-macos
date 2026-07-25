@@ -62,6 +62,11 @@ public struct LocationsListView: View {
         .searchable(text: $store.searchText, placement: .sidebar, prompt: "Search systems")
         .toolbar { toolbarContent }
         .task { store.send(.task) }
+        // The active replicant is a `@Shared(.appStorage)` written externally (the
+        // sidebar switcher), so its change fires no binding action and touches no
+        // observed table — reload the forest here so the distance sort re-measures
+        // from the new probe.
+        .onChange(of: store.activeReplicantCode) { store.send(.activeReplicantChanged) }
         .safeAreaInset(edge: .top, spacing: 0) {
             if let errorMessage = store.errorMessage {
                 RCErrorBanner(errorMessage) { store.send(.dismissError) }

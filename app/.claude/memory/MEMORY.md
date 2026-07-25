@@ -1,5 +1,7 @@
 # Memory Index
 
+- [Active replicant, not first](active-replicant-not-first.md) — multi-replicant invariant: never use roster.first / Replicant.fetchAll.first as a proxy for the active/current replicant; resolve via activeReplicantCode (count==1 fallback), reload distance sort on activeReplicantCode change, and fan event ingestion out over the whole roster when the event has no replicant_code (per-code scan debounce).
+
 - [Directives feature](directives-feature.md) — automations v2: Stages 1–2 SHIPPED 2026-07-25 (unified built-in+custom Directives surface, Directive/DirectiveLogEntry tables, composer extracted to its own module); engine is Stage 3. Invariants + Stage 3 follow-ups in the note.
 
 - [Architecture review V3](architecture-review-v3.md) — 2026-07-20 five-axis review; ALL FOUR tranches DONE 2026-07-20/21 (P0 correctness, P1 budget, P2 modularity, P3 docs/design-system) with invariants recorded (GameSession tier, TCA-by-manifest, EventRoute home, IconSize/logging/loud-testValue rules, app/README.md map); remaining: automation blockers 3–5, S9, T6 optionals.

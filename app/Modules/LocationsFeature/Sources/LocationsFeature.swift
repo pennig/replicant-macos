@@ -36,7 +36,7 @@ public struct LocationsFeature {
         /// query and no empty-state flash. `@ObservationStateIgnored` because
         /// `@Fetch` drives its own observation.
         @ObservationStateIgnored
-        @Fetch(LocationForest(search: "", sort: .distance, filter: .all)) public var forest = LocationForest.Value()
+        @Fetch(LocationForest(search: "", sort: .distance, filter: .all, activeReplicantCode: nil)) public var forest = LocationForest.Value()
         /// The hydrated system blobs, observed so the inspector resolves the
         /// selected system synchronously (no view-local `@FetchOne` that resets to
         /// nil — and reverts to "Uncharted" — when a hydration write re-emits).
@@ -94,14 +94,11 @@ public struct LocationsFeature {
         }
 
         /// The forest query for the current selections — reloaded whenever search /
-        /// sort / filter change.
+        /// sort / filter change, or the active replicant switches (so the distance
+        /// sort re-measures from the new probe's position).
         var forestRequest: LocationForest {
-            LocationForest(search: searchText, sort: sort, filter: filter)
+            LocationForest(search: searchText, sort: sort, filter: filter, activeReplicantCode: activeReplicantCode)
         }
-
-        /// The probe's current star (the roster's first replicant), to mark the
-        /// inspected system as the current one.
-        public var currentStar: String? { roster.first?.currentStar }
 
         /// The session's active replicant, preferring the stored selection and
         /// falling back to the sole replicant on the roster — mirroring the star
@@ -159,6 +156,7 @@ public struct LocationsFeature {
     public enum Action: BindableAction {
         case binding(BindingAction<State>)
         case task
+        case activeReplicantChanged
         case toggleExpansion(String)
         case hydrate(system: String, body: String?)
         case hydrated(String)
@@ -210,6 +208,16 @@ public struct LocationsFeature {
 
             case .binding:
                 return .none
+
+            case .activeReplicantChanged:
+                // The active replicant is a `@Shared(.appStorage)` written elsewhere
+                // (the sidebar switcher, login), so its change produces no binding
+                // action here and doesn't touch any table the `@Fetch` observes.
+                // Reload the forest explicitly so the distance sort re-measures from
+                // the new probe's position.
+                return .run { [fetch = state.$forest, request = state.forestRequest] _ in
+                    _ = try? await fetch.load(request)
+                }
 
             case let .toggleExpansion(id):
                 if state.expanded.contains(id) {
@@ -396,16 +404,21 @@ public struct LocationForest: FetchKeyRequest {
     public var search: String
     public var sort: LocationSort
     public var filter: LocationFilter
+    /// The active replicant, whose current star is the origin for the distance
+    /// sort. Included in the request so switching the active replicant reloads the
+    /// forest and re-measures distances. Nil falls back to the sole replicant.
+    public var activeReplicantCode: String?
 
     public struct Value: Equatable, Sendable {
         public var nodes: [LocationNode] = []
         public init(nodes: [LocationNode] = []) { self.nodes = nodes }
     }
 
-    public init(search: String, sort: LocationSort, filter: LocationFilter) {
+    public init(search: String, sort: LocationSort, filter: LocationFilter, activeReplicantCode: String?) {
         self.search = search
         self.sort = sort
         self.filter = filter
+        self.activeReplicantCode = activeReplicantCode
     }
 
     public func fetch(_ db: Database) throws -> Value {
@@ -416,10 +429,14 @@ public struct LocationForest: FetchKeyRequest {
             .fetchAll(db)
         let detailRows = try SystemDetail.all.fetchAll(db)
         let footprintRows = try LocationFootprint.all.fetchAll(db)
-        // The probe's position (for distance sort) — the first roster replicant's
-        // current star, matching the prior behavior.
-        let currentStar = try Replicant.all.fetchAll(db).first?.currentStar
-        let myStar = try currentStar.flatMap { code in
+        // The probe's position (for distance sort) — the active replicant's current
+        // star, resolved the same way as `State.activeReplicant`: prefer the stored
+        // selection, else fall back to the sole replicant on the roster. This is
+        // what makes the distance sort follow the active replicant.
+        let roster = try Replicant.all.fetchAll(db)
+        let activeReplicant = roster.first { $0.replicantCode == activeReplicantCode }
+            ?? (roster.count == 1 ? roster.first : nil)
+        let myStar = try activeReplicant?.currentStar.flatMap { code in
             try Star.where { $0.designation.eq(code) }.fetchOne(db)
         }
 

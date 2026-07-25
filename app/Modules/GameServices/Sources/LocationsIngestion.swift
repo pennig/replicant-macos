@@ -22,9 +22,11 @@ import GameModels
 import SQLiteData
 
 public final class LocationsIngestion: Sendable {
-    /// The armed passive-scan debounce, if any. Cancelled and re-armed per
-    /// qualifying event; cancelled outright by `cancelPendingWork()`.
-    private let pendingPassiveScan = LockIsolated<Task<Void, Never>?>(nil)
+    /// The armed passive-scan debounces, keyed by replicant code. Each replicant
+    /// scans its *own* current location, so the debounce is per-replicant: a
+    /// qualifying event (re)arms that replicant's timer without disturbing another
+    /// replicant's pending scan. Cancelled outright by `cancelPendingWork()`.
+    private let pendingPassiveScans = LockIsolated<[String: Task<Void, Never>]>([:])
 
     public init() {}
 
@@ -32,9 +34,12 @@ public final class LocationsIngestion: Sendable {
         [scanRoute(), catalogRoute()]
     }
 
-    /// Logout teardown: cancel a scan still waiting out its debounce window.
+    /// Logout teardown: cancel every scan still waiting out its debounce window.
     public func cancelPendingWork() {
-        pendingPassiveScan.withValue { $0?.cancel(); $0 = nil }
+        pendingPassiveScans.withValue { scans in
+            for task in scans.values { task.cancel() }
+            scans = [:]
+        }
     }
 
     /// Passively refresh the catalog. Shops, megastructures/objects, and the
@@ -61,59 +66,67 @@ public final class LocationsIngestion: Sendable {
     /// relevant event (re)arms a short timer, and a single scan runs once the
     /// events quiet — the same live state one immediate scan would have read.
     private func scanRoute() -> EventRoute {
-        EventRoute(id: "locations.scan", match: .all) { [pendingPassiveScan] event in
+        EventRoute(id: "locations.scan", match: .all) { [pendingPassiveScans] event in
             @Dependency(\.defaultDatabase) var database
-            // The replicant the event pertains to (else the sole/first on the
-            // roster) — the source of the host-device and current-system gates.
-            let replicant = try? await database.read { db -> Replicant? in
+            // The replicant(s) the event pertains to. An explicit `replicant_code`
+            // names exactly one; without it the event is roster-wide, so every
+            // replicant is evaluated and `LocationEventPolicy`'s own gates (the
+            // arrival host-device match, the location-scoped current-system match)
+            // select which ones it actually concerns — never a blind "first on the
+            // roster", which would silently drop events for every other replicant.
+            let replicants = try? await database.read { db -> [Replicant] in
                 if let code = event.replicantCode,
                    let match = try Replicant.where({ $0.replicantCode.eq(code) }).fetchOne(db) {
-                    return match
+                    return [match]
                 }
-                return try Replicant.fetchAll(db).first
+                return try Replicant.fetchAll(db)
             }
-            guard let replicant, !replicant.replicantCode.isEmpty else { return }
-            let code = replicant.replicantCode
+            guard let replicants else { return }
 
-            let decision = LocationEventPolicy.decide(event: event, replicant: replicant)
+            for replicant in replicants where !replicant.replicantCode.isEmpty {
+                let code = replicant.replicantCode
+                let decision = LocationEventPolicy.decide(event: event, replicant: replicant)
 
-            // A host-vessel arrival IS the authoritative location change: fold
-            // the destination straight into the roster row so `currentStar` /
-            // `currentLocation` are never stale between the move and the next
-            // `accounts/me` refresh. The name columns are cleared (the arrival
-            // carries no display names, and the UI falls back to the mono
-            // designation) — except the star name survives an intra-system hop.
-            //
-            // Only *live stream* arrivals move the roster. A catch-up arrival
-            // is history being replayed on launch (see `EventPipeline.catchUp`):
-            // folding those in would walk the roster through stale waypoints —
-            // the location flicker — before settling. The roster's launch truth
-            // is `accounts/me`; catch-up exists to repair the other tables
-            // (devices, etc.), which it still does.
-            if event.provenance == .stream, let update = decision.rosterUpdate {
-                let priorStarName = replicant.currentStarName
-                try? await database.write { db in
-                    try Replicant.where { $0.replicantCode.eq(code) }.update {
-                        $0.currentStar = #bind(update.star)
-                        $0.currentLocation = #bind(update.location)
-                        $0.currentStarName = #bind(update.systemChanged ? nil : priorStarName)
-                        $0.currentLocationName = #bind(String?.none)
+                // A host-vessel arrival IS the authoritative location change: fold
+                // the destination straight into the roster row so `currentStar` /
+                // `currentLocation` are never stale between the move and the next
+                // `accounts/me` refresh. The name columns are cleared (the arrival
+                // carries no display names, and the UI falls back to the mono
+                // designation) — except the star name survives an intra-system hop.
+                //
+                // Only *live stream* arrivals move the roster. A catch-up arrival
+                // is history being replayed on launch (see `EventPipeline.catchUp`):
+                // folding those in would walk the roster through stale waypoints —
+                // the location flicker — before settling. The roster's launch truth
+                // is `accounts/me`; catch-up exists to repair the other tables
+                // (devices, etc.), which it still does.
+                if event.provenance == .stream, let update = decision.rosterUpdate {
+                    let priorStarName = replicant.currentStarName
+                    try? await database.write { db in
+                        try Replicant.where { $0.replicantCode.eq(code) }.update {
+                            $0.currentStar = #bind(update.star)
+                            $0.currentLocation = #bind(update.location)
+                            $0.currentStarName = #bind(update.systemChanged ? nil : priorStarName)
+                            $0.currentLocationName = #bind(String?.none)
+                        }
+                        .execute(db)
                     }
-                    .execute(db)
                 }
-            }
 
-            guard decision.shouldScan else { return }
+                guard decision.shouldScan else { continue }
 
-            // Debounce: cancel any scan still waiting out its window and re-arm.
-            pendingPassiveScan.withValue { pending in
-                pending?.cancel()
-                pending = Task {
-                    @Dependency(\.continuousClock) var clock
-                    try? await clock.sleep(for: .seconds(2))
-                    guard !Task.isCancelled else { return }
-                    @Dependency(\.locationsClient) var locationsClient
-                    try? await locationsClient.scanAndPersist(replicantCode: code)
+                // Debounce per replicant: cancel this replicant's own pending scan
+                // (if still waiting out its window) and re-arm, leaving any other
+                // replicant's armed scan untouched.
+                pendingPassiveScans.withValue { scans in
+                    scans[code]?.cancel()
+                    scans[code] = Task {
+                        @Dependency(\.continuousClock) var clock
+                        try? await clock.sleep(for: .seconds(2))
+                        guard !Task.isCancelled else { return }
+                        @Dependency(\.locationsClient) var locationsClient
+                        try? await locationsClient.scanAndPersist(replicantCode: code)
+                    }
                 }
             }
         }
