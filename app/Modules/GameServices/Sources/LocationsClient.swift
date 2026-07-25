@@ -184,28 +184,36 @@ extension LocationsClient {
         return true
     }
 
-    /// Mark a body's salvage as fully spent in the catalog (a `salvage_depleted`
-    /// event). No-op if the system isn't cached or nothing matches. Returns
-    /// whether a row changed.
+    /// Mark ONE salvage site as fully spent (a `salvage.depleted` event). Keyed
+    /// by site designation, not by body: a body can host several sites, and
+    /// spending one must not spend its siblings. No-op if the system isn't
+    /// cached or nothing matches. Returns whether a row changed.
     @discardableResult
-    public func markSalvageDepleted(location: String) async throws -> Bool {
-        try await mutateSalvage(atBody: location) { $0.depleted = true; $0.resourcesAvailable = [] }
+    public func markSalvageDepleted(site: String) async throws -> Bool {
+        try await mutateSalvage(atSite: site) {
+            $0.depleted = true
+            $0.resourcesAvailable = []
+            $0.remainingPct = $0.remainingPct.mapValues { _ in 0 }
+        }
     }
 
-    /// Drop one depleted resource from a body's salvage (a
-    /// `salvage_resource_depleted` event). Full depletion arrives separately as
-    /// `salvage_depleted`, so this only prunes the resource list.
+    /// Drop one depleted resource from a site (a resource-level depletion
+    /// event). Full depletion arrives separately as `salvage.depleted`, so this
+    /// only prunes that resource.
     @discardableResult
-    public func markSalvageResourceDepleted(location: String, resource: String) async throws -> Bool {
-        try await mutateSalvage(atBody: location) { $0.resourcesAvailable.removeAll { $0 == resource } }
+    public func markSalvageResourceDepleted(site: String, resource: String) async throws -> Bool {
+        try await mutateSalvage(atSite: site) {
+            $0.resourcesAvailable.removeAll { $0 == resource }
+            $0.remainingPct[resource] = 0
+        }
     }
 
-    /// Shared body: load the cached system, apply the salvage transform, and
-    /// persist only if it actually changed something.
+    /// Shared body: load the cached system, apply the transform to the ONE site
+    /// with this designation, and persist only if something actually changed.
     private func mutateSalvage(
-        atBody location: String, _ transform: @Sendable (inout SalvageSite) -> Void
+        atSite site: String, _ transform: @Sendable (inout SalvageSite) -> Void
     ) async throws -> Bool {
-        let system = String(location.split(separator: "-").first ?? "")
+        let system = SiteAssay.system(of: site)
         guard !system.isEmpty else { return false }
         @Dependency(\.defaultDatabase) var database
         @Dependency(\.date.now) var now
@@ -214,7 +222,11 @@ extension LocationsClient {
                 let cached = try SystemDetail.where({ $0.designation.eq(system) }).fetchOne(db),
                 let starSystem = try? cached.system()
             else { return false }
-            let updated = starSystem.updatingSalvage(at: location, transform)
+            let body = SalvageEventPayload.body(ofSite: site)
+            let updated = starSystem.updatingSalvage(at: body) { salvage in
+                guard salvage.designation == site else { return }
+                transform(&salvage)
+            }
             guard updated != starSystem else { return false }
             let row = try SystemDetail(system: updated, hydratedAt: now)
             try SystemDetail.upsert { row }.execute(db)

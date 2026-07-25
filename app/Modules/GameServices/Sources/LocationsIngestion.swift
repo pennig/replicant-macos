@@ -141,19 +141,17 @@ public final class LocationsIngestion: Sendable {
     private func catalogRoute() -> EventRoute {
         EventRoute(id: "locations.catalog", match: .all) { event in
             @Dependency(\.locationsClient) var locationsClient
-            let payload = event.payload
-            // Prefer the envelope's first-class `location`; fall back to payload.
-            let location = event.location ?? payload?["location"]?.stringValue
+            guard let payload = event.payload else { return }
+            // Targets come from the PAYLOAD, never `event.location` — that names
+            // the acting device's position (an AMI controller parked at a
+            // Lagrange point), not the body holding the salvage.
             switch event.event {
             case "scan.completed":
                 // Full scanned body (physical, salvage, sites, inventory).
-                if let payload {
-                    _ = try? await locationsClient.ingestScanResult(payload: payload)
-                }
+                _ = try? await locationsClient.ingestScanResult(payload: payload)
             case "salvage.depleted":
-                // A salvage site at `location` is fully spent.
-                if let location {
-                    _ = try? await locationsClient.markSalvageDepleted(location: location)
+                if let site = SalvageEventPayload.depletedSite(from: payload) {
+                    _ = try? await locationsClient.markSalvageDepleted(site: site)
                 }
             // NOTE: the resource-level salvage-depletion event's new dotted name
             // is unconfirmed post-migration; it will surface in the event log so
