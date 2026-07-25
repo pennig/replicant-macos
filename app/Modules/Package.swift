@@ -18,6 +18,10 @@ let package = Package(
             name: "DirectiveComposerFeature",
             targets: ["DirectiveComposerFeature"]
         ),
+        .library(
+            name: "DirectivesFeature",
+            targets: ["DirectivesFeature"]
+        ),
         .library(name: "EventLogFeature", targets: ["EventLogFeature"]),
         .library(name: "GameDatabase", targets: ["GameDatabase"]),
         .library(name: "GameModels", targets: ["GameModels"]),
@@ -238,6 +242,28 @@ let package = Package(
                 "GameDatabase",
             ],
             path: "DirectiveComposerFeature/Tests"
+        ),
+        .target(
+            name: "DirectivesFeature",
+            dependencies: [
+                "DirectiveComposerFeature",
+                "GameModels",
+                "GameServices",
+                "UI",
+                "Utils",
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "SQLiteData", package: "sqlite-data"),
+            ],
+            path: "DirectivesFeature/Sources"
+        ),
+        .testTarget(
+            name: "DirectivesFeatureTests",
+            dependencies: [
+                "DirectivesFeature",
+                "GameModels",
+                "Utils",
+            ],
+            path: "DirectivesFeature/Tests"
         ),
         .target(
             name: "EventLogFeature",
