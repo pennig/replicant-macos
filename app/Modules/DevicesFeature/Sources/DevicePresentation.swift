@@ -316,7 +316,9 @@ enum DeviceCommand: Hashable, Identifiable {
     }
 
     /// The `resource_type` values `start_mining` / `retarget` accept.
-    static let miningResources = ["structural", "conductive", "silicates", "carbon", "volatiles", "rares"]
+    /// The mineable resource vocabulary, shared with the directive composer
+    /// (which lives in its own module now) — see `MiningResource` in GameModels.
+    static let miningResources = MiningResource.all
 
     /// The `configure` carry modes a surge plate accepts.
     enum SurgeMode { static let all = ["taxi", "manual"] }
