@@ -1,7 +1,13 @@
 # Directives — automations groundwork + v1 feature design
 
+> **SUPERSEDED 2026-07-24 by `2026-07-24-directives-design.md`.** The vision, engine architecture,
+> and V3.9 groundwork below carry over intact. Revised there: the surface now unifies built-in AMI
+> directives with custom missions (and moves to the Operations sidebar group), both mission step
+> sequences are corrected against verified API facts, completion detection is specified, and
+> print-if-missing is dropped as unimplementable. Read the newer doc for implementation.
+
 **Date:** 2026-07-21
-**Status:** Approved design, pre-implementation
+**Status:** Superseded (was: approved design, pre-implementation)
 **Prereq reading:** `ARCHITECTURE_REVIEW.md` §V3.9 (automations readiness), `app/README.md` (event/command lifecycles)
 
 ## Vision
