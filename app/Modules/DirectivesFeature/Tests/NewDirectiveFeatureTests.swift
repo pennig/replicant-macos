@@ -37,6 +37,24 @@ struct NewDirectiveFeatureTests {
         #expect(store.state.eligibleVessels.map(\.deviceCode) == ["VES1"])
     }
 
+    /// The launcher must offer a vessel whose staging is legible only from the
+    /// drone side. `GET devices` omits `controlled_devices`, so for any
+    /// controller nobody has opened the inspector on, the adoption link lives
+    /// exclusively in the drone's `controller_device_code` column — the normal
+    /// case, and the one that used to hide every staged vessel.
+    @Test func aVesselStagedButSyncedFromTheListIsEligible() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            for device in Self.listSyncedFleet() { try Device.insert { device }.execute(db) }
+        }
+        let store = TestStore(initialState: NewDirectiveFeature.State()) {
+            NewDirectiveFeature()
+        } withDependencies: { $0.defaultDatabase = database }
+        store.exhaustivity = .off
+
+        #expect(store.state.eligibleVessels.map(\.deviceCode) == ["VES1"])
+    }
+
     /// A vessel carrying a controller with NO adopted drone is not eligible
     /// either — `launch` would deploy nothing.
     @Test func aControllerWithoutDronesIsNotEligible() async throws {
@@ -174,6 +192,16 @@ struct NewDirectiveFeatureTests {
         drone.stowedInDeviceCode = "VES1"
         drone.controllerDeviceCode = "AMI1"
         return [bareVessel("VES1"), controller("AMI1", stowedIn: "VES1", controlling: ["DRONE1"]), drone]
+    }
+
+    /// The staged fleet as the fleet-wide sync stores it: no `controlled_devices`
+    /// on the controller, adoption visible only on the drone.
+    nonisolated static func listSyncedFleet() -> [Device] {
+        var drone = bareVessel("DRONE1")
+        drone.deviceType = "survey_drone"
+        drone.stowedInDeviceCode = "VES1"
+        drone.controllerDeviceCode = "AMI1"
+        return [bareVessel("VES1"), controller("AMI1", stowedIn: "VES1", controlling: []), drone]
     }
 
     nonisolated static func star(_ designation: String) -> Star {

@@ -62,6 +62,22 @@ private func stagedFleet(vesselAt location: String = "SOL-3") -> [Device] {
     ]
 }
 
+/// The SAME staged fleet as `stagedFleet`, but as the fleet-wide sync actually
+/// stores it: `GET devices` omits `controlled_devices` (that key is detail-only,
+/// from `GET devices/{code}`), so the controller's blob carries no adoption list
+/// and the link survives only in the drone's `controller_device_code` column.
+/// This is the shape a real launcher sees for a controller nobody has opened the
+/// inspector on.
+private func listSyncedFleet(vesselAt location: String = "SOL-3") -> [Device] {
+    [
+        device("VES1", type: "transport_hauler", location: location),
+        device("AMI1", type: "ami_survey_controller", location: location,
+               stowedIn: "VES1", directives: ["survey_system", "belt_search"]),
+        device("DRONE1", type: "survey_drone", location: location,
+               stowedIn: "VES1", controlledBy: "AMI1"),
+    ]
+}
+
 private func withDirective(_ device: Device, name: String, config: [String: JSONValue]) -> Device {
     var updated = device
     var detail: [String: JSONValue] = {
@@ -190,6 +206,16 @@ struct SurveyRunPreflightTests {
     /// A staged fleet claims its controller and moves to travel.
     @Test func preflightClaimsTheController() {
         #expect(SurveyRun().nextAction(directive: run(), world: world(stagedFleet()))
+                == .assignController(deviceCode: "AMI1", nextStep: SurveyRun.Step.travelling))
+    }
+
+    /// The same staging, read back from the fleet-wide sync rather than a
+    /// per-device read. Adoption is legible only from the drone's
+    /// `controller_device_code`, because `GET devices` never sends
+    /// `controlled_devices` — and a properly staged vessel must not stall just
+    /// because nobody happened to open the controller's inspector.
+    @Test func preflightAcceptsAdoptionRecordedOnlyOnTheDrone() {
+        #expect(SurveyRun().nextAction(directive: run(), world: world(listSyncedFleet()))
                 == .assignController(deviceCode: "AMI1", nextStep: SurveyRun.Step.travelling))
     }
 

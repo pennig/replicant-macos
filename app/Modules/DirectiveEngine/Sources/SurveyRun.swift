@@ -95,12 +95,23 @@ public struct SurveyRun: MissionStepMachine {
     /// The controller's adopted drones that are also aboard the vessel. Both
     /// halves matter: `launch` only deploys devices this controller has adopted,
     /// and only ones that actually travelled with it.
+    ///
+    /// Adoption is read from BOTH ends of the link, because only one end is
+    /// always present. `controlled_devices` — the controller's side — ships only
+    /// in the single-device payload (`GET devices/{code}`); the fleet-wide
+    /// `GET devices` omits it entirely, and since a list sync rewrites the whole
+    /// `detail` blob it also erases whatever a previous inspector read had put
+    /// there. The drone's side, `controller_device_code`, is a promoted column
+    /// present in every payload. Reading only the controller's side meant a
+    /// perfectly staged vessel looked unstaged unless someone had recently
+    /// opened that controller's inspector.
     public static func adoptedDrones(
         of controller: Device, aboard vessel: Device, in world: WorldSnapshot
     ) -> [Device] {
-        let adopted = Set(controller.controlledDeviceCodes)
+        let claimed = Set(controller.controlledDeviceCodes)
         return world.devices.values
-            .filter { adopted.contains($0.deviceCode) && $0.stowedInDeviceCode == vessel.deviceCode }
+            .filter { $0.stowedInDeviceCode == vessel.deviceCode }
+            .filter { $0.controllerDeviceCode == controller.deviceCode || claimed.contains($0.deviceCode) }
             .sorted { $0.deviceCode < $1.deviceCode }
     }
 
