@@ -110,9 +110,10 @@ ownership knowable; the vessel can't stand in for it, since a Survey Run's vesse
 are different devices. `.completed`/`.cancelled` release ownership; `.paused`/`.needsAttention` keep
 it (the directive is still in force server-side).
 
-**Manual step outstanding:** the `DirectiveEngine` product must be added to the Replicould app
-target's linked libraries in Xcode before the `.xcodeproj` will build — `swift build`/`swift test`
-are green regardless. See [[pbxproj-link-is-manual]].
+**App-target link: DONE** (user, 2026-07-25). `DirectiveEngine` is in the Replicould target's
+`packageProductDependencies` and Frameworks phase. It was made in the Stage 3 worktree and swept into
+`ab6e977` by a broad `git add -A`, so that commit's "still needs linking" message is stale — the link
+is committed. See [[pbxproj-link-is-manual]] for why this half is always manual.
 
 Stage 4 (Survey Run) and Stage 5 (Relay Run + FTL-mesh incremental add) are now unblocked and
 independent of each other. `.opCompleted` log entries are unwritten until Stage 4 gives the engine an
