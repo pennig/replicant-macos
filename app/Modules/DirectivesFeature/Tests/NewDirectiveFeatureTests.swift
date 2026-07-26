@@ -55,6 +55,39 @@ struct NewDirectiveFeatureTests {
         #expect(store.state.eligibleVessels.map(\.deviceCode) == ["VES1"])
     }
 
+    /// The real fleet topology this bug was found on (2026-07-26): two vessels
+    /// and two survey controllers, only one of them staged. The staged vessel
+    /// carries its controller and six drones stowed, with adoption recorded
+    /// ONLY on the drones — and the second controller is deployed elsewhere, so
+    /// it must not be mistaken for the idle vessel's. Exactly one vessel is
+    /// offered.
+    @Test func offersOnlyTheStagedVesselOfTwo() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            // The staged vessel: controller + six drones aboard, adoption on the
+            // drone side only (what `GET devices` actually returns).
+            try Device.insert { Self.bareVessel("F2908E6E") }.execute(db)
+            try Device.insert {
+                Self.controller("B2CBDEC6", stowedIn: "F2908E6E", controlling: [])
+            }.execute(db)
+            for code in ["A697D0E8", "416059AA", "A1D08194", "71AF5FE8", "7487448E", "89C1A6EF"] {
+                try Device.insert {
+                    Self.drone(code, stowedIn: "F2908E6E", controlledBy: "B2CBDEC6")
+                }.execute(db)
+            }
+            // The other vessel, carrying no controller, and the other survey
+            // controller — deployed in another system, stowed in nothing.
+            try Device.insert { Self.bareVessel("965AC2C3") }.execute(db)
+            try Device.insert { Self.deployedController("E45C43AB") }.execute(db)
+        }
+        let store = TestStore(initialState: NewDirectiveFeature.State()) {
+            NewDirectiveFeature()
+        } withDependencies: { $0.defaultDatabase = database }
+        store.exhaustivity = .off
+
+        #expect(store.state.eligibleVessels.map(\.deviceCode) == ["F2908E6E"])
+    }
+
     /// A vessel carrying a controller with NO adopted drone is not eligible
     /// either — `launch` would deploy nothing.
     @Test func aControllerWithoutDronesIsNotEligible() async throws {
@@ -192,6 +225,26 @@ struct NewDirectiveFeatureTests {
         drone.stowedInDeviceCode = "VES1"
         drone.controllerDeviceCode = "AMI1"
         return [bareVessel("VES1"), controller("AMI1", stowedIn: "VES1", controlling: ["DRONE1"]), drone]
+    }
+
+    /// A survey drone stowed aboard `stowedIn` and adopted by `controlledBy`,
+    /// with adoption recorded only here — the drone's side of the link.
+    nonisolated static func drone(_ code: String, stowedIn: String, controlledBy: String) -> Device {
+        var device = bareVessel(code)
+        device.deviceType = "survey_drone"
+        device.status = "stowed"
+        device.stowedInDeviceCode = stowedIn
+        device.controllerDeviceCode = controlledBy
+        return device
+    }
+
+    /// A survey controller out in the world rather than stowed in anything.
+    nonisolated static func deployedController(_ code: String) -> Device {
+        var device = bareVessel(code)
+        device.deviceType = "ami_survey_controller"
+        device.status = "coordinating"
+        device.detail = .object(["available_directives": .array([.string("survey_system")])])
+        return device
     }
 
     /// The staged fleet as the fleet-wide sync stores it: no `controlled_devices`

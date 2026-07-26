@@ -22,9 +22,10 @@ inspector read had stored.
 
 **Read adoption from the drone's end instead.** `controller_device_code` is a
 promoted typed column (`Device.controllerDeviceCode`), present in every payload
-including the list, and it survives stowing (the docs confirm you can "adopt,
-release and set directives while your devices are stowed in your vessel, then
-launch the controller"). `SurveyRun.adoptedDrones` now accepts either end of the
+including the list, and it survives stowing — confirmed directly on the live
+fleet: vessel `F2908E6E` at AMEDIOHA-3-L4 held controller `B2CBDEC6` plus six
+survey drones all stowed, every drone reporting `controller_device_code:
+"B2CBDEC6"` while the controller's own row had no `controlled_devices` at all. `SurveyRun.adoptedDrones` now accepts either end of the
 link — the drone's column, or the controller's `controlled_devices` when a
 detail read happens to have populated it.
 
