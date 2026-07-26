@@ -1,6 +1,6 @@
 ---
 name: directives-feature
-description: "Directives v2 design approved 2026-07-24: ONE surface unifying built-in AMI directives with custom Survey/Relay Run missions; DirectiveEngine + CommandGovernor; spec in docs/superpowers/specs/2026-07-24-directives-design.md."
+description: "Directives v2: Stages 1-3 SHIPPED 2026-07-25 (unified surface, then CommandGovernor + the DirectiveEngine module + the directive.* route). Engine loop is live but registers NO mission machines until Stage 4 (Survey Run). Spec in docs/superpowers/specs/2026-07-24-directives-design.md."
 metadata:
   type: project
 ---
@@ -65,17 +65,58 @@ Invariants established (don't undo these):
 - `Space.xxs = 2` was added to DesignSystem (half-step below `xs`). `UI/DESIGN_SPEC.md`'s spacing
   scale line is now stale and should be updated.
 
-Deferred to Stage 3 (from the whole-branch review — worth reading before starting it):
-- **Mono-token gaps (spec §7 mandates these):** `DirectiveRowView` bakes a system designation into a
-  non-mono title string ("Survey Run → SHERATANON"); `DirectiveDetailView` renders config *values*
-  proportionally, so a `gather_salvage` location shows un-monospaced — the composer writes it mono.
-- `DirectiveStatus` has no display name, so the detail pane renders `needsAttention` raw.
-- No test for the `set_directive` dispatch path (the feature's headline write); `DevicesFeatureTests`
-  has the equivalent for the other presenter.
-- `merge`'s `!directive.isEmpty` guard is unexercised — every fixture passes a non-empty name.
-- The sidebar needs-attention badge (spec §1) is unimplemented and was never declared as deferred.
-- **Open design question:** a device that is both a mission's vessel *and* carries an AMI directive
-  appears as TWO rows. Arguably correct, but decide deliberately before Stage 3.
+All six Stage-3 follow-ups from the whole-branch review are now CLEARED (see the Stage 3 section).
+
+## Stage 3 SHIPPED 2026-07-25
+
+Plan: `docs/superpowers/plans/2026-07-25-directives-stage3-engine.md`. What landed: `CommandGovernor`
++ `@Dependency(\.commandGovernor)` in GameServices; the **`DirectiveEngine` module** (non-feature
+tier — `Dependencies`, no TCA) holding `WorldSnapshot`, the `MissionStepMachine`/`MissionAction`
+seam, the supervisor+executor loop, and `DirectiveIngestion.eventRoute`; `Directive.controllerCode`;
+and the composition-root wiring. Full suite at ship: **775 tests over 26 products, 0 failing.**
+
+**No mission machines ship yet** — the registry is empty in production, so starting the engine is a
+no-op on real data until Stage 4 registers Survey Run. That is deliberate, not an oversight: the loop
+is proven end-to-end by scripted fake machines in `DirectiveEngineTests`.
+
+Invariants established (don't undo these):
+- **Evaluation is clock-driven (5s tick), not event-driven.** An evaluation is a local SQLite read
+  plus a pure function, and only touches the network when the mission asks for a command. This is
+  what buys replay immunity (the engine never sees an event, so its own command echo can't spook it)
+  and deterministic tests under `TestClock` — with no observation plumbing to get wrong. Resisting a
+  "kick the executor on table change" optimization is the point.
+- **A `.deferred` dispatch writes NOTHING and is not a failure.** The governor refuses under
+  actions-budget pressure or a per-device in-flight claim; the step is late, never lost, and the
+  directive's status is untouched. Only a `.rejected`/`.failed` outcome stalls.
+- **A directive whose kind has no registered machine is left entirely alone** — no writes at all.
+  In Stage 3 that is every production row, so a bug here would corrupt data the moment the app runs.
+- **Only `.running` directives are evaluated.** A stall or pause is the user's to resolve; a tick
+  must never resume one behind their back.
+- `DirectiveExecutor` commits the row and its log entries in **one transaction** — a mission is never
+  observed half-advanced.
+- **Engine stops BEFORE `gameSync`, and both before the table wipes** (the `gameSync` lifecycle
+  handler is registered first, wipes are registered later and so run later).
+- `CommandGovernor`'s in-flight claim is released on **every** path including rejection — a retained
+  claim would wedge that device for the session. Floor is 6 of the 60/min actions bucket
+  (proportional to `PollCoordinator`'s 12 of 120 reads).
+- `WorldSnapshot` qualifies `GameModels.Operation` rather than aliasing it: a file-private typealias
+  cannot appear in public API, and `Foundation.Operation` would otherwise win the name.
+
+**The open two-rows design question is SETTLED: badge and lock, not hide.** A built-in row whose
+controller a live mission drives shows "driven by <mission>" and refuses Reconfigure/Clear (guarded
+in the reducer, not merely `.disabled` in the view) — clearing a directive a step is waiting on would
+stall the mission with a confusing `surveyIncomplete`. `Directive.controllerCode` exists to make that
+ownership knowable; the vessel can't stand in for it, since a Survey Run's vessel and its controller
+are different devices. `.completed`/`.cancelled` release ownership; `.paused`/`.needsAttention` keep
+it (the directive is still in force server-side).
+
+**Manual step outstanding:** the `DirectiveEngine` product must be added to the Replicould app
+target's linked libraries in Xcode before the `.xcodeproj` will build — `swift build`/`swift test`
+are green regardless. See [[pbxproj-link-is-manual]].
+
+Stage 4 (Survey Run) and Stage 5 (Relay Run + FTL-mesh incremental add) are now unblocked and
+independent of each other. `.opCompleted` log entries are unwritten until Stage 4 gives the engine an
+op to watch.
 
 Verified API facts backing the step sequences live in §3 of the spec (stow co-location, `deploy`
 doesn't activate, `launch` auto-deploys adopted stowed devices, `directive.completed` payload).

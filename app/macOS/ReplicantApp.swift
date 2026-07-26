@@ -10,6 +10,7 @@ import AccountManager
 import AppKit
 import BlueprintsFeature
 import ComposableArchitecture
+import DirectiveEngine
 import GameDatabase
 import GameModels
 import GameServices
@@ -58,6 +59,7 @@ struct ReplicantApp: App {
         @Dependency(\.accountManager) var accountManager
         @Dependency(\.gameSync) var gameSync
         @Dependency(\.domainFreshness) var domainFreshness
+        @Dependency(\.directiveEngine) var directiveEngine
 
         // The non-device domains' refresh policies (V3.5): each names the
         // authoritative re-read its event routes debounce into. Routes only
@@ -75,6 +77,10 @@ struct ReplicantApp: App {
         for route in MessagesIngestion.eventRoutes { gameSync.registerRoute(route) }
         for route in locationsIngestion.eventRoutes { gameSync.registerRoute(route) }
         gameSync.registerRoute(LocationEventsIngestion.eventRoute)
+        // `directive.*` had no route at all before Stage 3. It only writes a
+        // `DirectiveLogEntry`; the engine observes that row rather than the
+        // event, which is what keeps observe-reconciled-state intact.
+        gameSync.registerRoute(DirectiveIngestion.eventRoute)
 
         // Start consuming the stream on login, stop on logout. Registered FIRST
         // (init calls `registerGameSync()` before `registerSessionCleanup()`)
@@ -82,8 +88,19 @@ struct ReplicantApp: App {
         accountManager.registerHandler(
             SessionLifecycleHandler(
                 id: "gameSync",
-                onLogin: { await gameSync.start() },
+                onLogin: {
+                    await gameSync.start()
+                    // After ingestion: the engine reads reconciled tables, so
+                    // it should never be running while the stream that fills
+                    // them is not.
+                    await directiveEngine.start()
+                },
                 onLogout: {
+                    // Executors FIRST: a directive step must never POST — or
+                    // write a log row — after the tables it reads are cleared.
+                    // The wipes themselves run in `registerSessionCleanup`'s
+                    // handlers, registered later and therefore run later.
+                    await directiveEngine.stop()
                     await gameSync.stop()
                     // The route debounces live outside the engine's
                     // cancellation domain — cancel them here so a scan or
@@ -101,7 +118,10 @@ struct ReplicantApp: App {
         // A returning user's session is restored from the Keychain without a
         // login, so start the stream here too (start() is idempotent).
         if accountManager.restoredAPIKey() != nil {
-            Task { await gameSync.start() }
+            Task {
+                await gameSync.start()
+                await directiveEngine.start()
+            }
         }
     }
 
@@ -195,9 +215,9 @@ struct ReplicantApp: App {
             })
         )
         // Directives are account-scoped: a second account on this machine must
-        // not inherit the first's missions or their audit trail. Stage 3 adds
-        // the engine, whose executors are cancelled by the gameSync handler
-        // registered FIRST — so the wipe below can never race a live write.
+        // not inherit the first's missions or their audit trail. The engine's
+        // executors are cancelled by the gameSync handler, registered FIRST —
+        // so the wipe below can never race a live write.
         accountManager.registerHandler(
             SessionLifecycleHandler(id: "directives", onLogout: {
                 @Dependency(\.defaultDatabase) var database
