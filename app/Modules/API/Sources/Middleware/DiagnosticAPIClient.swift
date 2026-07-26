@@ -222,6 +222,12 @@ public struct DiagnosticAPIClient: APIProtocol {
     public func getV1LeaderboardsMegastructure(_ input: Operations.GetV1LeaderboardsMegastructure.Input) async throws -> Operations.GetV1LeaderboardsMegastructure.Output {
         try await DecodingDiagnostics.capture("getV1LeaderboardsMegastructure") { try await wrapped.getV1LeaderboardsMegastructure(input) }
     }
+    public func getV1LeaderboardsColonyPlanet(_ input: Operations.GetV1LeaderboardsColonyPlanet.Input) async throws -> Operations.GetV1LeaderboardsColonyPlanet.Output {
+        try await DecodingDiagnostics.capture("getV1LeaderboardsColonyPlanet") { try await wrapped.getV1LeaderboardsColonyPlanet(input) }
+    }
+    public func getV1LeaderboardsColonyMoon(_ input: Operations.GetV1LeaderboardsColonyMoon.Input) async throws -> Operations.GetV1LeaderboardsColonyMoon.Output {
+        try await DecodingDiagnostics.capture("getV1LeaderboardsColonyMoon") { try await wrapped.getV1LeaderboardsColonyMoon(input) }
+    }
     public func getV1LeaderboardsSimulations(_ input: Operations.GetV1LeaderboardsSimulations.Input) async throws -> Operations.GetV1LeaderboardsSimulations.Output {
         try await DecodingDiagnostics.capture("getV1LeaderboardsSimulations") { try await wrapped.getV1LeaderboardsSimulations(input) }
     }

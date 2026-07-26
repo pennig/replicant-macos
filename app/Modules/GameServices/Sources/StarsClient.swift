@@ -206,6 +206,22 @@ extension StarPage {
 }
 
 extension StarItem {
+    /// The full-catalogue row (`GET /v1/stars`), which the spec models with its
+    /// own schema as of 2.3.2. It carries no per-replicant knowledge, so
+    /// `explored` / `hasLife` start unset here and are overlaid by `survey`.
+    fileprivate init(schema: Components.Schemas.AppSchemasStarsCatalogueStarSchema) {
+        self.init(
+            designation: schema.designation ?? "",
+            spectralType: schema.spectralType ?? "",
+            color: schema.color ?? "",
+            position: schema.position.map(Position.init(schema:)) ?? Position(x: 0, y: 0, z: 0),
+            estimatedPlanets: schema.estimatedPlanets ?? 0,
+            explored: false,
+            hasLife: nil,
+            entryPoint: schema.entryPoint
+        )
+    }
+
     fileprivate init(schema: Components.Schemas.AppSchemasStarsStarItemSchema) {
         self.init(
             designation: schema.designation ?? "",
