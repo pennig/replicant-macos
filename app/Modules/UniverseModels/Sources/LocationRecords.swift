@@ -203,65 +203,79 @@ extension SiteAssay {
 extension SystemDetail {
     /// Registers the `systemDetails` table. Call from the app's
     /// `bootstrapDatabase` alongside the other tables.
+    public static let createSystemDetails = SchemaMigration("Create 'systemDetails' table") { db in
+        try #sql(
+            """
+            CREATE TABLE "systemDetails" (
+              "designation" TEXT PRIMARY KEY NOT NULL,
+              "systemJSON" TEXT NOT NULL DEFAULT '',
+              "recon" TEXT NOT NULL DEFAULT 'aware',
+              "systemScanned" INTEGER NOT NULL DEFAULT 0,
+              "hydratedAt" TEXT NOT NULL
+            ) STRICT
+            """
+        )
+        .execute(db)
+    }
+
+    /// Temporary shim so `GameDatabase` keeps compiling mid-conversion.
+    /// Deleted in the manifest task.
     public static func registerMigrations(_ migrator: inout DatabaseMigrator) {
-        migrator.registerMigration("Create 'systemDetails' table") { db in
-            try #sql(
-                """
-                CREATE TABLE "systemDetails" (
-                  "designation" TEXT PRIMARY KEY NOT NULL,
-                  "systemJSON" TEXT NOT NULL DEFAULT '',
-                  "recon" TEXT NOT NULL DEFAULT 'aware',
-                  "systemScanned" INTEGER NOT NULL DEFAULT 0,
-                  "hydratedAt" TEXT NOT NULL
-                ) STRICT
-                """
-            )
-            .execute(db)
-        }
+        createSystemDetails.register(in: &migrator)
     }
 }
 
 extension LocationFootprint {
     /// Registers the `locationFootprints` table. Call from the app's
     /// `bootstrapDatabase` alongside the other tables.
+    public static let createLocationFootprints = SchemaMigration(
+        "Create 'locationFootprints' table"
+    ) { db in
+        try #sql(
+            """
+            CREATE TABLE "locationFootprints" (
+              "location" TEXT PRIMARY KEY NOT NULL,
+              "devices" INTEGER NOT NULL DEFAULT 0,
+              "resources" INTEGER NOT NULL DEFAULT 0,
+              "resourceSites" INTEGER NOT NULL DEFAULT 0,
+              "locationEvents" INTEGER NOT NULL DEFAULT 0,
+              "replicants" INTEGER NOT NULL DEFAULT 0,
+              "fetchedAt" TEXT NOT NULL
+            ) STRICT
+            """
+        )
+        .execute(db)
+    }
+
+    /// Temporary shim so `GameDatabase` keeps compiling mid-conversion.
+    /// Deleted in the manifest task.
     public static func registerMigrations(_ migrator: inout DatabaseMigrator) {
-        migrator.registerMigration("Create 'locationFootprints' table") { db in
-            try #sql(
-                """
-                CREATE TABLE "locationFootprints" (
-                  "location" TEXT PRIMARY KEY NOT NULL,
-                  "devices" INTEGER NOT NULL DEFAULT 0,
-                  "resources" INTEGER NOT NULL DEFAULT 0,
-                  "resourceSites" INTEGER NOT NULL DEFAULT 0,
-                  "locationEvents" INTEGER NOT NULL DEFAULT 0,
-                  "replicants" INTEGER NOT NULL DEFAULT 0,
-                  "fetchedAt" TEXT NOT NULL
-                ) STRICT
-                """
-            )
-            .execute(db)
-        }
+        createLocationFootprints.register(in: &migrator)
     }
 }
 
 extension SiteAssay {
     /// Registers the `siteAssays` table. Call from `GameDatabase.migrator()`
     /// alongside the other tables.
+    public static let createSiteAssays = SchemaMigration("Create 'siteAssays' table") { db in
+        try #sql(
+            """
+            CREATE TABLE "siteAssays" (
+              "id" TEXT PRIMARY KEY NOT NULL,
+              "body" TEXT NOT NULL DEFAULT '',
+              "system" TEXT NOT NULL DEFAULT '',
+              "siteType" TEXT NOT NULL DEFAULT 'salvage',
+              "totals" TEXT NOT NULL DEFAULT '{}',
+              "assayedAt" TEXT NOT NULL
+            ) STRICT
+            """
+        )
+        .execute(db)
+    }
+
+    /// Temporary shim so `GameDatabase` keeps compiling mid-conversion.
+    /// Deleted in the manifest task.
     public static func registerMigrations(_ migrator: inout DatabaseMigrator) {
-        migrator.registerMigration("Create 'siteAssays' table") { db in
-            try #sql(
-                """
-                CREATE TABLE "siteAssays" (
-                  "id" TEXT PRIMARY KEY NOT NULL,
-                  "body" TEXT NOT NULL DEFAULT '',
-                  "system" TEXT NOT NULL DEFAULT '',
-                  "siteType" TEXT NOT NULL DEFAULT 'salvage',
-                  "totals" TEXT NOT NULL DEFAULT '{}',
-                  "assayedAt" TEXT NOT NULL
-                ) STRICT
-                """
-            )
-            .execute(db)
-        }
+        createSiteAssays.register(in: &migrator)
     }
 }

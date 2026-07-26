@@ -13,6 +13,7 @@
 //
 
 import Foundation
+import GameModels
 import SQLiteData
 
 @Table
@@ -105,28 +106,32 @@ extension Star {
 extension Star {
     /// Registers the `stars` table migration. Kept beside the model so schema
     /// and type never drift. Called from the app's `bootstrapDatabase`.
+    public static let createStars = SchemaMigration("Create 'stars' table") { db in
+        try #sql(
+            """
+            CREATE TABLE "stars" (
+              "designation" TEXT PRIMARY KEY NOT NULL,
+              "spectralType" TEXT NOT NULL DEFAULT '',
+              "color" TEXT NOT NULL DEFAULT '',
+              "positionX" REAL NOT NULL DEFAULT 0,
+              "positionY" REAL NOT NULL DEFAULT 0,
+              "positionZ" REAL NOT NULL DEFAULT 0,
+              "estimatedPlanets" INTEGER NOT NULL DEFAULT 0,
+              "explored" INTEGER NOT NULL DEFAULT 0,
+              "hasLife" INTEGER,
+              "entryPoint" TEXT,
+              "createdAt" TEXT NOT NULL,
+              "firstVisitedAt" TEXT,
+              "fullyScannedAt" TEXT
+            ) STRICT
+            """
+        )
+        .execute(db)
+    }
+
+    /// Temporary shim so `GameDatabase` keeps compiling mid-conversion.
+    /// Deleted in the manifest task.
     public static func registerMigrations(_ migrator: inout DatabaseMigrator) {
-        migrator.registerMigration("Create 'stars' table") { db in
-            try #sql(
-                """
-                CREATE TABLE "stars" (
-                  "designation" TEXT PRIMARY KEY NOT NULL,
-                  "spectralType" TEXT NOT NULL DEFAULT '',
-                  "color" TEXT NOT NULL DEFAULT '',
-                  "positionX" REAL NOT NULL DEFAULT 0,
-                  "positionY" REAL NOT NULL DEFAULT 0,
-                  "positionZ" REAL NOT NULL DEFAULT 0,
-                  "estimatedPlanets" INTEGER NOT NULL DEFAULT 0,
-                  "explored" INTEGER NOT NULL DEFAULT 0,
-                  "hasLife" INTEGER,
-                  "entryPoint" TEXT,
-                  "createdAt" TEXT NOT NULL,
-                  "firstVisitedAt" TEXT,
-                  "fullyScannedAt" TEXT
-                ) STRICT
-                """
-            )
-            .execute(db)
-        }
+        createStars.register(in: &migrator)
     }
 }
