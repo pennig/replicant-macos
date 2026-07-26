@@ -968,10 +968,16 @@ extension StarSystem {
     /// wins — a merged site that *does* carry percentages is left alone, and
     /// only an empty `remainingPct` is filled from `percentages` (site
     /// designation → resource → 0…100).
+    ///
+    /// A site the scan reports as `depleted` is skipped: its remembered
+    /// percentages describe a site that no longer holds anything, so restoring
+    /// them would make the inspector read "Depleted · ~339 units" — live
+    /// tonnage claimed at a spent site. A depleted site keeps its empty map and
+    /// falls back to the honest name list.
     public func restoringSalvagePercentages(_ percentages: [String: [String: Double]]) -> StarSystem {
         guard !percentages.isEmpty else { return self }
         func restore(_ salvage: inout [SalvageSite]) {
-            for i in salvage.indices where salvage[i].remainingPct.isEmpty {
+            for i in salvage.indices where salvage[i].remainingPct.isEmpty && !salvage[i].depleted {
                 guard let pct = percentages[salvage[i].designation], !pct.isEmpty else { continue }
                 salvage[i].remainingPct = pct
             }

@@ -311,6 +311,36 @@ import Testing
         #expect(sites.count == 2)
     }
 
+    /// A scan that newly flags a site depleted must not have its remembered
+    /// percentages restored — they describe a site that no longer holds
+    /// anything, and the inspector would read "Depleted · ~339 units", claiming
+    /// live tonnage at a spent site.
+    @Test func restoringSalvagePercentagesSkipsDepletedSites() {
+        let system = StarSystem(
+            designation: "TAANSI",
+            planets: [Planet(
+                designation: "TAANSI-6",
+                moons: [Moon(
+                    designation: "TAANSI-6-1",
+                    salvage: [SalvageSite(designation: "TAANSI-6-1-SAL-1", depleted: true)]
+                )],
+                salvage: [
+                    SalvageSite(designation: "TAANSI-6-SAL-1", depleted: true),
+                    SalvageSite(designation: "TAANSI-6-SAL-2", depleted: false),
+                ]
+            )]
+        )
+        let restored = system.restoringSalvagePercentages([
+            "TAANSI-6-SAL-1": ["structural": 60],     // depleted — must stay empty
+            "TAANSI-6-SAL-2": ["structural": 60],     // live — must be restored
+            "TAANSI-6-1-SAL-1": ["carbon": 40],       // depleted, on a moon — must stay empty
+        ])
+        let sites = Dictionary(uniqueKeysWithValues: restored.knownSalvageSites.map { ($0.designation, $0) })
+        #expect(sites["TAANSI-6-SAL-1"]?.remainingPct.isEmpty == true)
+        #expect(sites["TAANSI-6-SAL-2"]?.remainingPct == ["structural": 60])
+        #expect(sites["TAANSI-6-1-SAL-1"]?.remainingPct.isEmpty == true)
+    }
+
     @Test func updatingSalvageMarksBodySiteDepleted() {
         // `updatingSalvage(at:)` is the body-keyed *primitive*: it hands the
         // transform every salvage site on the named body. Depletion no longer
