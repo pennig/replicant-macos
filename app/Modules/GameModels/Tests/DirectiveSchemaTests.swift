@@ -44,6 +44,17 @@ struct DirectiveSchemaTests {
         #expect(loaded.first?.stepStartedAt == Date(timeIntervalSince1970: 150))
     }
 
+    /// Every stall reason reads as a sentence, not a case name — the detail
+    /// pane shows these directly to the user, who is being asked to fix
+    /// something and needs to know what.
+    @Test func everyAttentionReasonHasWords() {
+        for reason in DirectiveAttentionReason.allCases {
+            #expect(reason.displayName != reason.rawValue)
+            #expect(!reason.displayName.isEmpty)
+            #expect(!reason.guidance.isEmpty)
+        }
+    }
+
     /// `controllerCode` round-trips, and defaults to nil for a mission that
     /// hasn't reached its `set_directive` step yet. It is what makes an
     /// engine-driven built-in row knowable: the vessel (`deviceCode`) can never

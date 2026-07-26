@@ -71,6 +71,38 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
     case surveyIncomplete
     /// The server rejected the step's command.
     case commandRejected
+
+    /// The stall panel's headline.
+    public var displayName: String {
+        switch self {
+        case .noRelayCoLocated: "No relay aboard"
+        case .noSurveyDroneAboard: "No survey drone aboard"
+        case .noSurveyControllerAboard: "No survey controller aboard"
+        case .unreachableDevice: "Device unreachable"
+        case .surveyIncomplete: "Survey incomplete"
+        case .commandRejected: "Command rejected"
+        }
+    }
+
+    /// What the user can do about it. Staging is the player's job — a Survey Run
+    /// never stows or adopts — so these name the fix rather than implying the
+    /// engine will sort it out on its own.
+    public var guidance: String {
+        switch self {
+        case .noRelayCoLocated:
+            "Stow an FTL relay aboard the vessel, then retry."
+        case .noSurveyDroneAboard:
+            "Stow a survey drone aboard the vessel and adopt it with the controller, then retry."
+        case .noSurveyControllerAboard:
+            "Stow an AMI survey controller aboard the vessel, then retry."
+        case .unreachableDevice:
+            "The mission's device is missing from the fleet. Cancel the run, or retry once it's back."
+        case .surveyIncomplete:
+            "The controller reported finishing, but the system isn't fully scanned. Retry to keep waiting, or skip this target."
+        case .commandRejected:
+            "The server refused the last command. Check the device, then retry or skip this target."
+        }
+    }
 }
 
 /// One custom mission instance. Policy-ready by design: nothing here records
