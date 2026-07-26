@@ -50,10 +50,15 @@ private func device(
     )
 }
 
-private func mission(id: String, kind: DirectiveKind = .surveyRun) -> Directive {
+private func mission(
+    id: String,
+    kind: DirectiveKind = .surveyRun,
+    targets: [String] = ["TAU", "SHERATANON"],
+    targetIndex: Int = 1
+) -> Directive {
     Directive(
         id: id, kind: kind, status: .running, deviceCode: "VESSEL1",
-        targets: ["TAU", "SHERATANON"], targetIndex: 1, step: "surveying",
+        targets: targets, targetIndex: targetIndex, step: "surveying",
         stepStartedAt: Date(timeIntervalSince1970: 0),
         returnToOrigin: false, originDesignation: "SOL", attentionReason: nil,
         createdAt: Date(timeIntervalSince1970: 0),
@@ -130,5 +135,33 @@ struct DirectiveRowTests {
     @Test func customRowTitleNamesKindAndTarget() {
         let rows = DirectiveRow.merge(devices: [], directives: [mission(id: "D1")])
         #expect(rows.first?.title == "Survey Run → SHERATANON")
+    }
+
+    /// The headline splits so the view can render the designation half in a
+    /// mono token — a single interpolated string forces one font on both.
+    @Test func missionHeadlineSplitsOffTheDesignation() {
+        let row = DirectiveRow.custom(mission(id: "D1"))
+        #expect(row.headline == "Survey Run")
+        #expect(row.headlineDesignation == "SHERATANON")
+        #expect(row.title == "Survey Run → SHERATANON")
+    }
+
+    /// An exhausted queue has no current target, so there is no designation half.
+    @Test func exhaustedMissionHasNoDesignation() {
+        let row = DirectiveRow.custom(mission(id: "D1", targets: ["SOL"], targetIndex: 1))
+        #expect(row.headline == "Survey Run")
+        #expect(row.headlineDesignation == nil)
+        #expect(row.title == "Survey Run")
+    }
+
+    /// A built-in row names a directive, never a place — so it has no
+    /// designation half at all.
+    @Test func builtInRowHasNoDesignation() {
+        let row = DirectiveRow.merge(
+            devices: [device(code: "AMI1", directive: "survey_system")],
+            directives: []
+        ).first
+        #expect(row?.headlineDesignation == nil)
+        #expect(row?.headline == row?.title)
     }
 }

@@ -7,6 +7,7 @@
 //  dependency) rather than indirectly through the view.
 //
 
+import GameModels
 import Testing
 import Utils
 @testable import DirectivesFeature
@@ -67,5 +68,28 @@ struct DirectiveDetailViewTests {
         let second = DirectiveConfigFlattening.pairs(config)?.map(\.key)
         #expect(first == second)
         #expect(first == ["a", "b.x", "b.y"])
+    }
+
+    /// Config values that are designation codes render mono; prose does not.
+    /// Keys can't drive this — each directive names its target differently
+    /// (`location`, `target`, `destination`) — so the value's shape decides.
+    @Test func designationDetection() {
+        #expect(DirectiveConfigFlattening.isDesignation("SOL"))
+        #expect(DirectiveConfigFlattening.isDesignation("SOL-3-1"))
+        #expect(DirectiveConfigFlattening.isDesignation("TAU-4-SAL-2"))
+        #expect(!DirectiveConfigFlattening.isDesignation("all"))
+        #expect(!DirectiveConfigFlattening.isDesignation("Yes"))
+        #expect(!DirectiveConfigFlattening.isDesignation("No"))
+        #expect(!DirectiveConfigFlattening.isDesignation("SO"))
+        #expect(!DirectiveConfigFlattening.isDesignation("SOL AND MORE"))
+    }
+
+    /// Every status has a display name — the detail pane must never print the
+    /// raw case name (`needsAttention`) at the user.
+    @Test func everyStatusHasADisplayName() {
+        for status in DirectiveStatus.allCases {
+            #expect(status.displayName != status.rawValue)
+            #expect(!status.displayName.isEmpty)
+        }
     }
 }

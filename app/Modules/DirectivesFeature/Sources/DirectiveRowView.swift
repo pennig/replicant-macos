@@ -20,10 +20,21 @@ struct DirectiveRowView: View {
                 .foregroundStyle(.rcAccent)
                 .frame(width: IconSize.m)
             VStack(alignment: .leading, spacing: Space.xxs) {
-                Text(row.title)
-                    .font(.rcBodyEmph)
-                    .foregroundStyle(.rcTextPrimary)
-                    .lineLimit(1)
+                HStack(spacing: Space.xxs) {
+                    Text(row.headline)
+                        .font(.rcBodyEmph)
+                        .foregroundStyle(.rcTextPrimary)
+                        .lineLimit(1)
+                    if let designation = row.headlineDesignation {
+                        Text("→")
+                            .font(.rcCaption)
+                            .foregroundStyle(.rcTextTertiary)
+                        Text(designation)
+                            .font(.rcBodyEmphMono)
+                            .foregroundStyle(.rcTextPrimary)
+                            .lineLimit(1)
+                    }
+                }
                 HStack(spacing: Space.xs) {
                     Text(row.deviceCode)
                         .font(.rcMonoSmall)

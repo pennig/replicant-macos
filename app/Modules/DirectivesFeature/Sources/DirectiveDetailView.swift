@@ -47,6 +47,20 @@ enum DirectiveConfigFlattening {
         }
     }
 
+    /// Whether a flattened config value is a designation code — which must
+    /// render in a mono token — rather than prose. Designations are upper-case
+    /// alphanumerics with optional `-` groups (`SOL`, `SOL-3-1`, `TAU-4-SAL-2`)
+    /// and never contain spaces. Config *keys* can't drive this: each directive
+    /// names its target differently (`location`, `target`, `destination`), so
+    /// the value's own shape is the stable signal.
+    ///
+    /// Known over-match, deliberately accepted: an all-caps resource name like
+    /// `IRON` also renders mono. It reads as a code either way.
+    static func isDesignation(_ value: String) -> Bool {
+        guard value.count >= 3, !value.contains(" ") else { return false }
+        return value.allSatisfy { $0.isUppercase || $0.isNumber || $0 == "-" }
+    }
+
     /// Render a scalar JSON value for display. Arrays join; anything else falls
     /// back to a compact description.
     static func scalarString(_ value: JSONValue) -> String {
@@ -161,7 +175,7 @@ public struct DirectiveDetailView: View {
                 header(
                     title: directive.kind.title,
                     subtitle: directive.deviceCode,
-                    caption: directive.status.rawValue
+                    caption: directive.status.displayName
                 )
                 VStack(alignment: .leading, spacing: Space.xs) {
                     RCSectionHeader("Targets")
@@ -213,7 +227,7 @@ public struct DirectiveDetailView: View {
                 .foregroundStyle(.rcTextTertiary)
                 .frame(width: 120, alignment: .leading)
             Text(value)
-                .font(.rcCaption)
+                .font(DirectiveConfigFlattening.isDesignation(value) ? .rcMonoSmall : .rcCaption)
                 .foregroundStyle(.rcTextPrimary)
             Spacer(minLength: 0)
         }

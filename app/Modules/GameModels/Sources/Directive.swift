@@ -38,6 +38,18 @@ public enum DirectiveStatus: String, Codable, Equatable, Sendable, CaseIterable,
     case paused
     case completed
     case cancelled
+
+    /// The pane's label. Without this the detail view renders the raw case name
+    /// ("needsAttention") straight at the user.
+    public var displayName: String {
+        switch self {
+        case .running: "Running"
+        case .needsAttention: "Needs Attention"
+        case .paused: "Paused"
+        case .completed: "Completed"
+        case .cancelled: "Cancelled"
+        }
+    }
 }
 
 /// Why a directive stalled into `.needsAttention`. A closed set (design spec

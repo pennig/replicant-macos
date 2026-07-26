@@ -49,7 +49,7 @@ Use the named colors from `Colors.xcassets` (see `Color.rc*` in
 
 ## 3. Spacing / radius / type
 
-- **Spacing** 4 · 8 · 12 · 16 · 24 (`Space.xs…xl`).
+- **Spacing** 2 · 4 · 8 · 12 · 16 · 24 (`Space.xxs…xl`).
 - **Radius** controls 8, cards 12, pills full (`Radius.*`). Window corners are the OS's.
 - **Type** (`Font.rc*`): Title 20/bold · Headline 15/semibold · Body 13 · Caption 11 · Section label 11/bold UPPERCASE + tracking · Mono 12 (IDs).
 - Selected list rows carry a **3pt amber left bar** + `AccentMuted` fill + `AccentBorder` hairline.

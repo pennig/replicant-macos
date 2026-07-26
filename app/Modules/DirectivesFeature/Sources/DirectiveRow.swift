@@ -66,18 +66,32 @@ public enum DirectiveRow: Equatable, Identifiable, Sendable {
         }
     }
 
-    /// The row's headline. Missions name their current target; built-ins name
-    /// the directive.
-    public var title: String {
+    /// The row's headline, **without** any designation — see
+    /// `headlineDesignation`. Split because a designation must render in a mono
+    /// token (house rule) and a single interpolated string forces one font on
+    /// the whole line.
+    public var headline: String {
         switch self {
-        case let .custom(directive):
-            if let target = directive.currentTarget {
-                return "\(directive.kind.title) → \(target)"
-            }
-            return directive.kind.title
-        case let .builtIn(builtIn):
-            return BlueprintPresentation.displayName(builtIn.directive)
+        case let .custom(directive): directive.kind.title
+        case let .builtIn(builtIn): BlueprintPresentation.displayName(builtIn.directive)
         }
+    }
+
+    /// The designation half of the headline — a mission's current target, or nil
+    /// (built-in rows name a directive, never a place).
+    public var headlineDesignation: String? {
+        switch self {
+        case let .custom(directive): directive.currentTarget
+        case .builtIn: nil
+        }
+    }
+
+    /// The whole headline as one string, for `navigationTitle` and
+    /// accessibility, where a single `String` is all the API accepts. Anywhere
+    /// that can render two runs should use `headline` + `headlineDesignation`.
+    public var title: String {
+        guard let designation = headlineDesignation else { return headline }
+        return "\(headline) → \(designation)"
     }
 
     /// Merge the two sources into one ordered list. `devices` contributes a row
