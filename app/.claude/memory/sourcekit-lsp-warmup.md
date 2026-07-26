@@ -32,6 +32,33 @@ Indexing there is **lazy and demand-driven, not a proactive whole-package sweep.
 - Concurrent sessions each run their own server against the same `.build` and serialize on the SwiftPM build lock.
 - `macOS/` app-target files (xcodeproj) stay uncovered without xcode-build-server — grep remains the tool for that sliver.
 
+## Priming the index deliberately (partially validated)
+
+Because indexing is demand-driven, you can force it rather than waiting. Run
+the same build sourcekit-lsp would, into its own scratch path:
+
+```bash
+cd app/Modules
+swift build --scratch-path .build/index-build --build-system native --enable-index-store
+```
+
+Observed 2026-07-25: this added **+409 units** in one run (3763 → 4172),
+including units for branch-new files that idle indexing had never touched.
+
+Two caveats, both real:
+- **It contends with live sourcekit-lsp servers for the SwiftPM build lock** and
+  gets partially cancelled (`error: cancelled`) when any are running — three
+  were, during the measured run, so that +409 is a *floor*, not what a clean run
+  achieves. Close editors/sessions first for a full prime. This is the reason
+  the recipe is only partially validated: it was never run uncontended.
+- `--build-system native` is deprecated and warns. It is still the right choice
+  here because sourcekit-lsp's scratch dir uses the native layout — building
+  into it with the default `swiftbuild` engine would write a layout LSP does not
+  read.
+
+Then **restart the session**: priming fills the shared store, but layer 2 still
+applies, so the currently running server won't see any of it.
+
 **CLAUDE.md mandates LSP verification before sign-off.** That is only satisfiable once the index covers the symbols in question; for same-session code and fresh worktrees it generally is not, and the compiler is the honest fallback. Worth softening the mandate rather than having agents report LSP checks they could not actually perform.
 
 See [[running-package-tests]] and [[spm-stale-layout-crash]] — the latter records the swiftbuild/native build-system split behind all of this, and had its own `rm -rf .build` ritual retired the same day.
