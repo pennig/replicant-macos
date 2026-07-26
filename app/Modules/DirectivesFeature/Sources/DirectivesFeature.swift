@@ -46,6 +46,8 @@ public struct DirectivesFeature {
         /// The `set_directive` editor, presented from a built-in row's detail
         /// pane. Feature-tier sheet ⇒ `@Presents` + `.ifLet`.
         @Presents public var composer: DirectiveComposer.State?
+        /// The new-mission launcher. Also feature-tier.
+        @Presents public var newDirective: NewDirectiveFeature.State?
 
         public init(selectedRowID: String? = nil) {
             self.selectedRowID = selectedRowID
@@ -80,7 +82,10 @@ public struct DirectivesFeature {
         case clearConfirmed(deviceCode: String)
         case commandFinished(CommandOutcome)
         case dismissError
+        /// Open the new-mission launcher.
+        case newDirectiveTapped
         case composer(PresentationAction<DirectiveComposer.Action>)
+        case newDirective(PresentationAction<NewDirectiveFeature.Action>)
     }
 
     public init() {}
@@ -144,10 +149,26 @@ public struct DirectivesFeature {
             case .dismissError:
                 state.errorMessage = nil
                 return .none
+
+            case .newDirectiveTapped:
+                state.newDirective = NewDirectiveFeature.State()
+                return .none
+
+            case let .newDirective(.presented(.delegate(.created(directive)))):
+                // Select the run that was just launched, so the detail pane is
+                // showing its timeline as the engine starts working it.
+                state.selectedRowID = "custom:\(directive.id)"
+                return .none
+
+            case .newDirective:
+                return .none
             }
         }
         .ifLet(\.$composer, action: \.composer) {
             DirectiveComposer()
+        }
+        .ifLet(\.$newDirective, action: \.newDirective) {
+            NewDirectiveFeature()
         }
     }
 

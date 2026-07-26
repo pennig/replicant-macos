@@ -277,8 +277,10 @@ let package = Package(
             name: "DirectivesFeature",
             dependencies: [
                 "DirectiveComposerFeature",
+                "DirectiveEngine",
                 "GameModels",
                 "GameServices",
+                "UniverseModels",
                 "UI",
                 "Utils",
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
@@ -289,10 +291,12 @@ let package = Package(
         .testTarget(
             name: "DirectivesFeatureTests",
             dependencies: [
+                "DirectiveEngine",
                 "DirectivesFeature",
                 "GameDatabase",
                 "GameModels",
                 "GameServices",
+                "UniverseModels",
                 "Utils",
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
                 .product(name: "SQLiteData", package: "sqlite-data"),

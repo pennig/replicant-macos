@@ -39,6 +39,18 @@ public struct DirectivesListView: View {
                     .padding(Space.s)
             }
         }
+        .toolbar {
+            ToolbarItem {
+                Button { store.send(.newDirectiveTapped) } label: {
+                    Label("New Survey Run", systemImage: "plus")
+                }
+                .help("Launch a new Survey Run")
+            }
+        }
+        // Feature-tier sheet: @Presents + scope, never .sheet(isPresented:).
+        .sheet(item: $store.scope(state: \.newDirective, action: \.newDirective)) { newStore in
+            NewDirectiveSheet(store: newStore)
+        }
         .navigationTitle("Directives")
     }
 }
