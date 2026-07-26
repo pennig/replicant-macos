@@ -493,3 +493,63 @@ private final class SharedCursorStore: EventCursorStore, @unchecked Sendable {
         #expect(BobnetMessage(eventPayload: ["message": .string("hi")], createdAt: nil) == nil)
     }
 }
+
+// MARK: - Stowage claims
+
+/// Which events are allowed to move a device's `stowed_in_device_code`.
+///
+/// The column decides every "is this vessel staged?" question, so the mapping is
+/// deliberately narrow: two events speak, everything else stays silent. Reading
+/// silence as "not stowed" would unstage a staged vessel on any unrelated event.
+@Suite("GameSync — stowage claims")
+struct StowChangeTests {
+    private func event(
+        _ name: String,
+        payload: [String: JSONValue]? = nil
+    ) -> GameEventEnvelope {
+        GameEventEnvelope(
+            id: "1-0",
+            category: String(name.split(separator: ".").first ?? ""),
+            event: name,
+            deviceCode: "AMI1",
+            payload: payload,
+            createdAt: "2026-06-25T09:42:06-05:00"
+        )
+    }
+
+    @Test func stowedNamesTheCarrier() {
+        #expect(
+            GameSync.stowChange(for: event(
+                "device.stowed", payload: ["stowed_in_device_code": .string("VES1")]
+            )) == .stowed(inDeviceCode: "VES1")
+        )
+    }
+
+    /// `device.deployed` needs no payload field at all — leaving the carrier IS
+    /// the claim — so a renamed `deployed_from_device_code` can't silently break
+    /// the clear.
+    @Test func deployedClearsWithoutReadingThePayload() {
+        #expect(GameSync.stowChange(for: event("device.deployed")) == .deployed)
+    }
+
+    /// A stow event we can't read the carrier out of makes NO claim rather than
+    /// a guessed one; the staleness mark still owns that repair.
+    @Test func stowedWithoutACarrierMakesNoClaim() {
+        #expect(GameSync.stowChange(for: event("device.stowed")) == nil)
+        #expect(
+            GameSync.stowChange(for: event(
+                "device.stowed", payload: ["stowed_in_device_code": .string("")]
+            )) == nil
+        )
+    }
+
+    /// Everything else — including the events that fly during a survey — stays
+    /// out of the stowage column entirely.
+    @Test(arguments: [
+        "device.attached", "device.detached", "device.decommissioned",
+        "device.changed_owner", "travel.arrived", "ami.withdrawn", "print.completed",
+    ])
+    func otherEventsMakeNoClaim(name: String) {
+        #expect(GameSync.stowChange(for: event(name)) == nil)
+    }
+}

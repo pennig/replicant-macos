@@ -39,6 +39,25 @@ public enum MissionAction: Equatable, Sendable {
     /// evaluation. Presence-gated (403 away from the system), so only ever
     /// asked for after arrival.
     case refreshSystem(designation: String, nextStep: String)
+    /// "Before I believe this, read it." The engine re-reads each named device
+    /// authoritatively — plus whatever those devices report stowed aboard them,
+    /// because containment is a two-ended fact and one end alone can't settle it
+    /// — then asks the machine again against the fresh snapshot. If the machine
+    /// still wants a refresh, the engine stalls with `thenStall` instead.
+    ///
+    /// This exists because a `WorldSnapshot` is a read of local SQLite, and those
+    /// rows are kept current by `.low` confirm-reads that the read-budget floor
+    /// may defer indefinitely. Without this, a mission could not tell "the vessel
+    /// is genuinely unstaged" from "we have not been allowed to look recently",
+    /// and it stalled on the second as if it were the first — the run that
+    /// prompted this went `noSurveyControllerAboard` on a controller the server
+    /// had already re-stowed, and no amount of Retry could clear it, because
+    /// Retry re-runs a pure function over the identical stale snapshot.
+    ///
+    /// The reads are `.high`, so they bypass the TTL and the budget floor: this
+    /// is issued only where the alternative is a dead stop that needs a human.
+    /// Exactly ONE refresh-and-re-ask per evaluation — never a loop.
+    case refreshDevices(deviceCodes: [String], thenStall: DirectiveAttentionReason)
     /// Pause and surface. The engine sets `needsAttention` plus the typed reason
     /// and stops evaluating until the user resolves it. Never auto-retried at
     /// the mission layer (spec §8).

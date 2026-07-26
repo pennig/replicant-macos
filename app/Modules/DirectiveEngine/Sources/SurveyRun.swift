@@ -178,11 +178,27 @@ public struct SurveyRun: MissionStepMachine {
             else { return .done }
             return .advanceStep(nextStep: Step.returning)
         }
+        // Both staging checks are NEGATIVE findings over local rows, and a local
+        // row can be silent for two very different reasons: nothing is aboard, or
+        // nobody has been allowed to look lately (the confirm-read that would say
+        // so is `.low` and the read budget may have deferred it for minutes).
+        // Only the first is worth stopping a run for, so demand an authoritative
+        // look before surfacing either — the engine re-asks once against fresh
+        // rows and stalls with the carried reason if the answer holds.
         guard let controller = Self.controller(aboard: vessel, in: world) else {
-            return .stall(.noSurveyControllerAboard)
+            return .refreshDevices(
+                deviceCodes: [vessel.deviceCode], thenStall: .noSurveyControllerAboard
+            )
         }
         guard !Self.adoptedDrones(of: controller, aboard: vessel, in: world).isEmpty else {
-            return .stall(.noSurveyDroneAboard)
+            // The controller too: `controlled_devices` is detail-only, so a
+            // list-synced controller under-reports adoption and the drones' own
+            // `controller_device_code` is the half that survives — reading both
+            // ends is what makes this answer trustworthy.
+            return .refreshDevices(
+                deviceCodes: [vessel.deviceCode, controller.deviceCode],
+                thenStall: .noSurveyDroneAboard
+            )
         }
         // Cached-only skip check: `GET locations/{star}` is presence-gated, so a
         // target we haven't reached can only be judged from what we already hold.

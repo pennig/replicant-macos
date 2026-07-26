@@ -170,7 +170,13 @@ actor DirectiveEngineCore {
             return
         }
 
-        let action = machine.nextAction(directive: directive, world: world)
+        var action = machine.nextAction(directive: directive, world: world)
+        if case let .refreshDevices(deviceCodes, thenStall) = action {
+            action = await resolveRefresh(
+                deviceCodes: deviceCodes, thenStall: thenStall,
+                directive: directive, machine: machine
+            )
+        }
         let stillRunnable = await DirectiveExecutor.apply(action, to: directive, machine: machine)
         if !stillRunnable {
             // The row is no longer `.running`, so the supervisor would retire
@@ -179,6 +185,65 @@ actor DirectiveEngineCore {
             executors[directiveID]?.cancel()
             executors[directiveID] = nil
         }
+    }
+
+    /// Spend authoritative reads on a mission's `.refreshDevices` request, then
+    /// ask it once more against the fresh world.
+    ///
+    /// The re-ask is what makes the action worth having: the mission gets to
+    /// distinguish "genuinely not staged" from "our rows were stale", which a
+    /// `WorldSnapshot` alone cannot express. It happens here rather than in
+    /// `DirectiveExecutor` because it needs a second snapshot read and a second
+    /// call into the machine — the executor's job is applying ONE decided action
+    /// to the database, and threading re-evaluation through it would blur that.
+    ///
+    /// Bounded by construction: a second `.refreshDevices` becomes the carried
+    /// stall, so an evaluation issues at most one refresh round no matter what
+    /// the machine says, and a genuinely unstaged vessel still surfaces to the
+    /// user on this same tick.
+    private func resolveRefresh(
+        deviceCodes: [String],
+        thenStall reason: DirectiveAttentionReason,
+        directive: Directive,
+        machine: any MissionStepMachine
+    ) async -> MissionAction {
+        @Dependency(\.deviceRefresher) var deviceRefresher
+        @Dependency(\.defaultDatabase) var database
+        @Dependency(\.date) var date
+
+        // `.high` deliberately: the TTL and the read-budget floor exist to keep
+        // background chatter cheap, and this is the opposite of background — the
+        // alternative to these reads is a run that stops dead until a human
+        // notices. `seen` keeps the fan-out to one read per device.
+        var seen = Set<String>()
+        for code in deviceCodes where seen.insert(code).inserted {
+            guard let device = await deviceRefresher.refresh(code, .high) else { continue }
+            // Containment is two-ended. The carrier's fresh row names who is
+            // aboard, but the staging checks read each CHILD's stow column, so
+            // refreshing the vessel alone would leave the very rows the answer
+            // depends on exactly as stale as they were.
+            for stowed in device.stowedDeviceCodes where seen.insert(stowed).inserted {
+                _ = await deviceRefresher.refresh(stowed, .high)
+            }
+        }
+        logger.info("directive \(directive.id, privacy: .public): refreshed \(seen.count) device(s) before \(reason.rawValue, privacy: .public)")
+
+        let fresh: WorldSnapshot
+        do {
+            fresh = try await WorldSnapshot.read(from: database, now: date.now, directive: directive)
+        } catch {
+            // The reads may well have landed; we just can't see them. Surfacing
+            // the stall is the honest outcome — the user's Retry now re-reads.
+            logger.error("world snapshot after refresh failed: \(error)")
+            return .stall(reason)
+        }
+
+        let action = machine.nextAction(directive: directive, world: fresh)
+        if case .refreshDevices = action {
+            logger.notice("directive \(directive.id, privacy: .public): fresh reads confirm \(reason.rawValue, privacy: .public)")
+            return .stall(reason)
+        }
+        return action
     }
 }
 

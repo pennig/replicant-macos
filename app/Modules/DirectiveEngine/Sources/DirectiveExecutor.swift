@@ -90,6 +90,16 @@ enum DirectiveExecutor {
             await move(directive, to: nextStep, controllerCode: directive.controllerCode)
             return true
 
+        case let .refreshDevices(_, thenStall):
+            // The engine resolves this one before it ever reaches the executor
+            // (it needs a second world read and a second call into the machine).
+            // Reaching here means that resolution was bypassed, so honour the
+            // carried reason rather than silently dropping the action: the run
+            // surfaces instead of spinning.
+            logger.notice("directive \(directive.id, privacy: .public): unresolved refreshDevices — stalling with \(thenStall.rawValue, privacy: .public)")
+            await stall(directive, reason: thenStall, detail: nil)
+            return false
+
         case let .stall(reason):
             await stall(directive, reason: reason, detail: nil)
             return false

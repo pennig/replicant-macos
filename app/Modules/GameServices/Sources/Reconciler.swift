@@ -30,6 +30,23 @@ import Utils
 
 private let logger = Logger(subsystem: "name.pennig.replicould", category: "Reconciler")
 
+/// What a device event asserts about the device's stowage.
+///
+/// Deliberately a three-state question (`.stowed` / `.deployed` / no opinion at
+/// all, expressed as `nil` by the caller): only `device.stowed` and
+/// `device.deployed` speak to stowage, and every other device event must leave
+/// the column untouched rather than reading its own silence as "not stowed".
+/// Both events name the other end of the link — `stowed_in_device_code` and
+/// `deployed_from_device_code` respectively (docs event catalogue, checked
+/// 2026-07-26) — which is what makes settling the column from the event alone
+/// possible.
+public enum StowChange: Equatable, Sendable {
+    /// `device.stowed` — the device is now aboard this carrier.
+    case stowed(inDeviceCode: String)
+    /// `device.deployed` — the device is now standing on its own.
+    case deployed
+}
+
 public struct Reconciler: Sendable {
     public init() {}
 
@@ -195,6 +212,16 @@ public struct Reconciler: Sendable {
     /// caller then marks the device stale; a later authoritative read
     /// reconciles the rest of the row.
     ///
+    /// `stow` carries the same treatment for the stowage column, and for the
+    /// same reason it matters more than it looks: `stowed_in_device_code` is
+    /// what every "is this vessel staged?" question reads, and the only repair
+    /// path it used to have was a `.low` confirm-read the budget floor may defer
+    /// indefinitely. A Survey Run's preflight then read a re-stowed controller as
+    /// absent and stalled `noSurveyControllerAboard` while the truth sat unread
+    /// in an event we had already received. Both stowage events name the other
+    /// end of the link in their payload, so the column is now settled from the
+    /// event itself — free, and immune to budget pressure.
+    ///
     /// Guarded last-writer-wins by event time against the row's synthesized
     /// event-time (`updatedAt`, the read's request-issue clock): at-or-newer
     /// (`>=`), because live `createdAt` stamps have second granularity and an
@@ -213,6 +240,7 @@ public struct Reconciler: Sendable {
     public func applyEventFields(
         deviceCode: String,
         location: String?,
+        stow: StowChange? = nil,
         eventTime: Date?
     ) async -> Bool {
         guard let eventTime else { return false }
@@ -232,9 +260,17 @@ public struct Reconciler: Sendable {
                 // UI falls back to the mono designation until the next read.
                 device.locationName = nil
             }
+            // Only the two stowage events say anything here; every other event
+            // leaves the column exactly as it was rather than asserting "not
+            // stowed" by omission.
+            switch stow {
+            case let .stowed(carrier): device.stowedInDeviceCode = carrier
+            case .deployed: device.stowedInDeviceCode = nil
+            case nil: break
+            }
             device.updatedAt = max(device.updatedAt, stamp)
             try Device.upsert { device }.execute(db)
-            logger.debug("applyEventFields \(deviceCode, privacy: .public): location=\(location ?? "-", privacy: .public) @ \(eventTime.ISO8601Format(), privacy: .public)")
+            logger.debug("applyEventFields \(deviceCode, privacy: .public): location=\(location ?? "-", privacy: .public) stow=\(String(describing: stow), privacy: .public) @ \(eventTime.ISO8601Format(), privacy: .public)")
             return true
             }
         } ?? false

@@ -480,3 +480,166 @@ struct DirectiveEngineTests {
         }
     }
 }
+
+// MARK: - Staging freshness (.refreshDevices)
+
+/// A device carrying a `stowed_devices` manifest, as the single-device read
+/// returns it — the list the engine expands a carrier refresh into.
+private func carrier(_ code: String, stowing: [String] = []) -> Device {
+    var detail: [String: JSONValue] = [:]
+    if !stowing.isEmpty {
+        detail["stowed_devices"] = .array(stowing.map { .object(["device_code": .string($0)]) })
+    }
+    return Device(
+        deviceCode: code, deviceType: "transport_hauler", replicantCode: "R1", status: "idle",
+        location: "SOL-3", locationName: nil, operationalCapacity: 100, queueSize: 0,
+        stowedInDeviceCode: nil, controllerDeviceCode: nil, attachedToDeviceCode: nil,
+        createdAt: Date(timeIntervalSince1970: 0), availableCommands: [], features: [], tags: [],
+        detail: .object(detail), updatedAt: Date(timeIntervalSince1970: 0),
+        firstSeenAt: Date(timeIntervalSince1970: 0)
+    )
+}
+
+/// `.refreshDevices` is the mission's way of saying "read this before I believe
+/// it" — the answer to a stalled Survey Run that was judging staging from rows
+/// the read budget had kept it from refreshing.
+@Suite("DirectiveEngine — staging freshness")
+struct DirectiveRefreshDevicesTests {
+    /// Fresh reads that repair the rows let the run continue: the machine's
+    /// second answer is the one applied, and no stall is ever written.
+    @Test func refreshedRowsLetTheRunProceed() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { mission(step: "start") }.execute(db)
+        }
+        let reads = LockIsolated<[(String, RefreshPriority)]>([])
+        let core = DirectiveEngineCore(
+            machines: [ScriptedMachine([
+                .refreshDevices(deviceCodes: ["VES1"], thenStall: .noSurveyControllerAboard),
+                .advanceStep(nextStep: "travelling"),
+            ])],
+            tick: .seconds(5)
+        )
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.deviceRefresher.refresh = { code, priority in
+                reads.withValue { $0.append((code, priority)) }
+                return carrier(code)
+            }
+        } operation: {
+            await core.evaluateOnce(directiveID: "D1")
+            let directive = try await database.read { db in
+                try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+            }
+            #expect(directive?.status == .running)
+            #expect(directive?.step == "travelling")
+            #expect(directive?.attentionReason == nil)
+        }
+        #expect(reads.value.map(\.0) == ["VES1"])
+        // `.high`, so neither the TTL nor the read-budget floor can defer the
+        // one read standing between the run and a dead stop.
+        #expect(reads.value.allSatisfy { $0.1 == .high })
+    }
+
+    /// A carrier refresh expands into its stowed children: the staging checks
+    /// read each CHILD's stow column, so refreshing the vessel alone would leave
+    /// the rows the answer depends on exactly as stale as they were.
+    @Test func aCarrierRefreshExpandsToItsStowedDevices() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { mission(step: "start") }.execute(db)
+        }
+        let reads = LockIsolated<[String]>([])
+        let core = DirectiveEngineCore(
+            machines: [ScriptedMachine([
+                .refreshDevices(deviceCodes: ["VES1"], thenStall: .noSurveyControllerAboard),
+                .advanceStep(nextStep: "travelling"),
+            ])],
+            tick: .seconds(5)
+        )
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.deviceRefresher.refresh = { code, _ in
+                reads.withValue { $0.append(code) }
+                return code == "VES1" ? carrier(code, stowing: ["AMI1", "DRONE1"]) : carrier(code)
+            }
+        } operation: {
+            await core.evaluateOnce(directiveID: "D1")
+        }
+        #expect(reads.value.sorted() == ["AMI1", "DRONE1", "VES1"])
+    }
+
+    /// Asked twice with an authoritative read in between and still unstaged: the
+    /// staging really is missing, so the carried reason surfaces. This is the
+    /// loop guard — exactly ONE refresh round per evaluation, no matter how
+    /// insistent the machine is.
+    @Test func aConfirmedFindingStallsWithTheCarriedReason() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { mission(step: "start") }.execute(db)
+        }
+        let reads = LockIsolated<[String]>([])
+        let core = DirectiveEngineCore(
+            machines: [ScriptedMachine([
+                .refreshDevices(deviceCodes: ["VES1"], thenStall: .noSurveyControllerAboard),
+                .refreshDevices(deviceCodes: ["VES1"], thenStall: .noSurveyControllerAboard),
+                .refreshDevices(deviceCodes: ["VES1"], thenStall: .noSurveyControllerAboard),
+            ])],
+            tick: .seconds(5)
+        )
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.deviceRefresher.refresh = { code, _ in
+                reads.withValue { $0.append(code) }
+                return carrier(code)
+            }
+        } operation: {
+            await core.evaluateOnce(directiveID: "D1")
+            let directive = try await database.read { db in
+                try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+            }
+            #expect(directive?.status == .needsAttention)
+            #expect(directive?.attentionReason == .noSurveyControllerAboard)
+        }
+        #expect(reads.value == ["VES1"], "one refresh round per evaluation, never a loop")
+    }
+
+    /// A read that fails outright still surfaces the finding rather than
+    /// spinning: the run stops with the reason the user can act on.
+    @Test func failedReadsStillSurfaceTheFinding() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { mission(step: "start") }.execute(db)
+        }
+        let core = DirectiveEngineCore(
+            machines: [ScriptedMachine([
+                .refreshDevices(deviceCodes: ["VES1"], thenStall: .noSurveyDroneAboard),
+                .refreshDevices(deviceCodes: ["VES1"], thenStall: .noSurveyDroneAboard),
+            ])],
+            tick: .seconds(5)
+        )
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.deviceRefresher.refresh = { _, _ in nil }
+        } operation: {
+            await core.evaluateOnce(directiveID: "D1")
+            let directive = try await database.read { db in
+                try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+            }
+            #expect(directive?.status == .needsAttention)
+            #expect(directive?.attentionReason == .noSurveyDroneAboard)
+        }
+    }
+}

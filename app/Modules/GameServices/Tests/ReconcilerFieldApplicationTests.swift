@@ -247,3 +247,118 @@ import Testing
         #expect(device?.location == "TENEGSHE-7-L4")
     }
 }
+
+/// Stowage folded straight out of the event, the same way location already was.
+///
+/// This is the free half of the Survey Run staleness fix: `stowed_in_device_code`
+/// is what every "is this vessel staged?" question reads, and its only repair
+/// path used to be a `.low` confirm-read the budget floor may defer for minutes.
+/// Both stowage events name the far end of the link, so the column now settles
+/// from the event itself — at zero read cost and immune to budget pressure.
+@Suite struct ReconcilerStowApplicationTests {
+
+    private func seed(
+        _ database: any DatabaseWriter,
+        code: String = "AMI1",
+        stowedIn: String?,
+        updatedAt: Date
+    ) async throws {
+        let device = Device(
+            deviceCode: code, deviceType: "ami_survey_controller", replicantCode: "R1",
+            status: "idle", location: nil, locationName: nil, operationalCapacity: 100,
+            queueSize: 0, stowedInDeviceCode: stowedIn, controllerDeviceCode: nil,
+            attachedToDeviceCode: nil, createdAt: Date(timeIntervalSince1970: 0),
+            availableCommands: [], features: [], tags: [], detail: .object([:]),
+            updatedAt: updatedAt, firstSeenAt: updatedAt
+        )
+        try await database.write { db in try Device.upsert { device }.execute(db) }
+    }
+
+    private func row(_ database: any DatabaseWriter, _ code: String = "AMI1") async throws -> Device? {
+        try await database.read { db in
+            try Device.where { $0.deviceCode.eq(code) }.fetchOne(db)
+        }
+    }
+
+    /// The exact repair the stalled run needed: a controller that had been
+    /// deployed is recorded as back aboard the moment the event says so.
+    @Test func stowedEventRecordsTheCarrier() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await seed(database, stowedIn: nil, updatedAt: Date(timeIntervalSince1970: 1_000))
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 2_000))
+        } operation: {
+            let applied = await Reconciler().applyEventFields(
+                deviceCode: "AMI1", location: nil, stow: .stowed(inDeviceCode: "VES1"),
+                eventTime: Date(timeIntervalSince1970: 1_010)
+            )
+            #expect(applied)
+        }
+
+        let device = try await row(database)
+        #expect(device?.stowedInDeviceCode == "VES1")
+    }
+
+    /// Deploying clears the column — the far half of the same link.
+    @Test func deployedEventClearsTheCarrier() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await seed(database, stowedIn: "VES1", updatedAt: Date(timeIntervalSince1970: 1_000))
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 2_000))
+        } operation: {
+            _ = await Reconciler().applyEventFields(
+                deviceCode: "AMI1", location: "SOL-3", stow: .deployed,
+                eventTime: Date(timeIntervalSince1970: 1_010)
+            )
+        }
+
+        let device = try await row(database)
+        #expect(device?.stowedInDeviceCode == nil)
+    }
+
+    /// An event with no stowage opinion leaves the column ALONE. The important
+    /// negative: most device events say nothing about containment, and reading
+    /// their silence as "not stowed" would unstage a perfectly staged vessel on
+    /// every unrelated event that arrived.
+    @Test func anEventWithNoStowClaimLeavesTheColumnAlone() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await seed(database, stowedIn: "VES1", updatedAt: Date(timeIntervalSince1970: 1_000))
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 2_000))
+        } operation: {
+            _ = await Reconciler().applyEventFields(
+                deviceCode: "AMI1", location: nil, eventTime: Date(timeIntervalSince1970: 1_010)
+            )
+        }
+
+        let device = try await row(database)
+        #expect(device?.stowedInDeviceCode == "VES1")
+    }
+
+    /// Stowage obeys the same event-time guard as everything else: a replayed
+    /// deploy from before the row's clock can't un-stow a re-stowed controller.
+    @Test func staleStowEventIsDropped() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await seed(database, stowedIn: "VES1", updatedAt: Date(timeIntervalSince1970: 1_000))
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 2_000))
+        } operation: {
+            let applied = await Reconciler().applyEventFields(
+                deviceCode: "AMI1", location: "SOL-3", stow: .deployed,
+                eventTime: Date(timeIntervalSince1970: 990)
+            )
+            #expect(!applied)
+        }
+
+        let device = try await row(database)
+        #expect(device?.stowedInDeviceCode == "VES1")
+    }
+}

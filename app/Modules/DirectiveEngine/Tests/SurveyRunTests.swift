@@ -128,6 +128,26 @@ private func run(
     )
 }
 
+/// The reason a world ultimately surfaces, whether the machine stalls with it
+/// directly or demands an authoritative read first.
+///
+/// Preflight's two staging checks are NEGATIVE findings over local rows, and a
+/// local row can be silent because nothing is aboard OR because the `.low`
+/// confirm-read that would say so has been deferred under read-budget pressure.
+/// So they route through `.refreshDevices`, and the engine re-asks once against
+/// fresh rows before stalling with the carried reason
+/// (`DirectiveEngineCore.resolveRefresh`). The matrix below asserts the REASON —
+/// its actual contract, "every way the world can fail the run has a named
+/// outcome" — while `SurveyRunStagingFreshnessTests` pins the demand-a-read
+/// step itself.
+private func stallReason(_ action: MissionAction) -> DirectiveAttentionReason? {
+    switch action {
+    case let .stall(reason): return reason
+    case let .refreshDevices(_, thenStall): return thenStall
+    default: return nil
+    }
+}
+
 // MARK: - Stall matrix
 
 @Suite("Survey Run — stall matrix")
@@ -136,8 +156,8 @@ struct SurveyRunStallTests {
     /// stalls with a reason naming exactly what's missing.
     @Test func stallsWithNoControllerAboard() {
         let fleet = [device("VES1", type: "transport_hauler")]
-        #expect(SurveyRun().nextAction(directive: run(), world: world(fleet))
-                == .stall(.noSurveyControllerAboard))
+        #expect(stallReason(SurveyRun().nextAction(directive: run(), world: world(fleet)))
+                == .noSurveyControllerAboard)
     }
 
     /// A controller that is co-located but NOT stowed doesn't count: `launch`
@@ -150,8 +170,8 @@ struct SurveyRunStallTests {
                    directives: ["survey_system"]),
             device("DRONE1", type: "survey_drone", controlledBy: "AMI1"),
         ]
-        #expect(SurveyRun().nextAction(directive: run(), world: world(fleet))
-                == .stall(.noSurveyControllerAboard))
+        #expect(stallReason(SurveyRun().nextAction(directive: run(), world: world(fleet)))
+                == .noSurveyControllerAboard)
     }
 
     /// Controller aboard but no adopted drone with it: `launch` would deploy
@@ -162,8 +182,8 @@ struct SurveyRunStallTests {
             device("AMI1", type: "ami_survey_controller", stowedIn: "VES1",
                    directives: ["survey_system"]),
         ]
-        #expect(SurveyRun().nextAction(directive: run(), world: world(fleet))
-                == .stall(.noSurveyDroneAboard))
+        #expect(stallReason(SurveyRun().nextAction(directive: run(), world: world(fleet)))
+                == .noSurveyDroneAboard)
     }
 
     /// A drone stowed aboard but adopted by a DIFFERENT controller doesn't
@@ -175,8 +195,8 @@ struct SurveyRunStallTests {
                    directives: ["survey_system"]),
             device("DRONE1", type: "survey_drone", stowedIn: "VES1", controlledBy: "AMI9"),
         ]
-        #expect(SurveyRun().nextAction(directive: run(), world: world(fleet))
-                == .stall(.noSurveyDroneAboard))
+        #expect(stallReason(SurveyRun().nextAction(directive: run(), world: world(fleet)))
+                == .noSurveyDroneAboard)
     }
 
     /// An adopted drone that was left behind (not stowed aboard this vessel)
@@ -188,14 +208,66 @@ struct SurveyRunStallTests {
                    controlled: ["DRONE1"], directives: ["survey_system"]),
             device("DRONE1", type: "survey_drone", controlledBy: "AMI1"),
         ]
-        #expect(SurveyRun().nextAction(directive: run(), world: world(fleet))
-                == .stall(.noSurveyDroneAboard))
+        #expect(stallReason(SurveyRun().nextAction(directive: run(), world: world(fleet)))
+                == .noSurveyDroneAboard)
     }
 
     /// The vessel isn't in the fleet at all (decommissioned, or never read).
     @Test func stallsOnAMissingVessel() {
         #expect(SurveyRun().nextAction(directive: run(), world: world([]))
                 == .stall(.unreachableDevice))
+    }
+}
+
+// MARK: - Staging freshness
+
+/// Preflight must not read stale silence as "not staged".
+///
+/// The bug this pins: a run's second target stalled `noSurveyControllerAboard`
+/// on a controller the server had already re-stowed after the first survey's
+/// recall. The stow event had arrived and marked the device stale, but the
+/// repair read was `.low` and the read budget sat at its floor, so it was
+/// deferred for minutes. Preflight then judged the vessel unstaged from rows the
+/// app itself knew were stale — and Retry, which re-runs a pure function over an
+/// unchanged snapshot, could never clear it.
+@Suite("Survey Run — staging freshness")
+struct SurveyRunStagingFreshnessTests {
+    /// A missing controller demands an authoritative read of the VESSEL before
+    /// it counts: the vessel's own row is what names who is aboard, and the
+    /// engine expands that into reads of the children.
+    @Test func missingControllerDemandsAReadFirst() {
+        let fleet = [device("VES1", type: "transport_hauler")]
+        #expect(SurveyRun().nextAction(directive: run(), world: world(fleet))
+                == .refreshDevices(deviceCodes: ["VES1"], thenStall: .noSurveyControllerAboard))
+    }
+
+    /// A missing drone demands the controller too — `controlled_devices` is
+    /// detail-only, so a list-synced controller under-reports adoption and only
+    /// reading both ends of the link makes the answer trustworthy.
+    @Test func missingDroneDemandsVesselAndControllerReads() {
+        let fleet = [
+            device("VES1", type: "transport_hauler"),
+            device("AMI1", type: "ami_survey_controller", stowedIn: "VES1",
+                   directives: ["survey_system"]),
+        ]
+        #expect(SurveyRun().nextAction(directive: run(), world: world(fleet))
+                == .refreshDevices(deviceCodes: ["VES1", "AMI1"],
+                                   thenStall: .noSurveyDroneAboard))
+    }
+
+    /// A properly staged vessel never asks for a read: the freshness demand is
+    /// paid only when the answer would otherwise be a stall, so the happy path
+    /// costs nothing.
+    @Test func stagedVesselSpendsNoReads() {
+        #expect(SurveyRun().nextAction(directive: run(), world: world(stagedFleet()))
+                == .assignController(deviceCode: "AMI1", nextStep: SurveyRun.Step.travelling))
+    }
+
+    /// Same for the list-synced shape, where adoption survives only on the
+    /// drone's column — it is staged, so no read is demanded.
+    @Test func listSyncedStagedVesselSpendsNoReads() {
+        #expect(SurveyRun().nextAction(directive: run(), world: world(listSyncedFleet()))
+                == .assignController(deviceCode: "AMI1", nextStep: SurveyRun.Step.travelling))
     }
 }
 

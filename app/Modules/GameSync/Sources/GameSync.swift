@@ -354,9 +354,16 @@ extension GameSync {
             // knowing: the decoder can't tell `location: null` from an omitted
             // field, so a future device event that merely omits it would wipe
             // the row to "in transit" until the mark's read repairs it.)
+            //
+            // The two stowage events carry the containment link the same way, so
+            // `stowed_in_device_code` settles here too rather than waiting on a
+            // `.low` read the budget floor can defer indefinitely — the exact
+            // gap that let a Survey Run stall on a controller it had already
+            // been told was re-stowed.
             await reconciler.applyEventFields(
                 deviceCode: code,
                 location: event.location,
+                stow: stowChange(for: event),
                 eventTime: event.date
             )
             if completedOp, event.provenance == .stream {
@@ -373,6 +380,34 @@ extension GameSync {
                 // loop already own that repair.
                 await deviceStaleness.markStale(code, event.event)
             }
+        }
+    }
+
+    /// The stowage claim a device event makes, or nil when it makes none.
+    ///
+    /// Only these two events speak to containment, and each names the far end in
+    /// its payload (docs event catalogue, checked 2026-07-26). `device.deployed`
+    /// needs no payload field at all — leaving the carrier IS the claim — so a
+    /// renamed `deployed_from_device_code` can't silently break the clear, while
+    /// `device.stowed` without a readable carrier code is treated as no claim
+    /// rather than guessed at: the staleness mark still owns that repair.
+    ///
+    /// There is no `device.recalled`; an AMI recall reports `ami.withdrawn` and
+    /// the per-device `device.stowed` events are what actually land here.
+    static func stowChange(for event: GameEventEnvelope) -> StowChange? {
+        switch event.event {
+        case "device.stowed":
+            guard let carrier = event.payload?["stowed_in_device_code"]?.stringValue,
+                  !carrier.isEmpty
+            else {
+                logger.notice("⚠️ device.stowed WITHOUT stowed_in_device_code — stowage left to the staleness mark")
+                return nil
+            }
+            return .stowed(inDeviceCode: carrier)
+        case "device.deployed":
+            return .deployed
+        default:
+            return nil
         }
     }
 
