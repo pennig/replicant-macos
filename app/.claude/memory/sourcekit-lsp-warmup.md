@@ -22,7 +22,24 @@ Why it's needed: SwiftPM's BSP server advertises `indexStorePath: .build/index-s
 
 Measured before/after on the same symbols: `SiteAssay` (written that day, used in 6 files) went **0 → 45 references across 8 files**; `ResourceSite` 0 → 19. Both had returned 0 under the swiftbuild config until the symlink was added.
 
-Trade-off to know: with `backgroundIndexing: false`, LSP no longer indexes on its own — **the index is only as fresh as your last build.** Build, then query. In exchange there's no lazy-indexing lag, no duplicate index build, and no build-lock contention (6.4 passes `--experimental-skip-acquiring-lock` in this mode specifically so LSP doesn't block your builds).
+Trade-off to know: with `backgroundIndexing: false`, LSP no longer indexes on its own — **the index is only as fresh as your last build.** Build, then query. In exchange there's no lazy-indexing lag, no duplicate index build, and no build-lock contention.
+
+### Why not `backgroundIndexing: true`? (measured 2026-07-25 — don't re-litigate)
+
+It genuinely works, and it does pick up edits with no build: added a type plus a reference to it, ran no build, and a `findReferences` **resolved it 80 seconds later** (index units 1966 → 1977). Tempting.
+
+The cost is the SwiftPM workspace lock. With background indexing **off**, sourcekit-lsp launches the BSP server with `--experimental-skip-acquiring-lock` (the 6.4 source says, verbatim, "do not acquire the workspace lock, or else user-initiated builds will be blocked"). Turn it **on** and that flag is not passed, so the BSP server holds the lock for its whole lifetime and your builds queue behind it:
+
+| | wall clock | SwiftPM's own reported build time |
+|---|---|---|
+| `swift build` with an LSP session alive (240s) | **351s** | 112s |
+| same build, no LSP running | **21s** | 12.5s |
+
+The ~239s gap matches the server's lifetime almost exactly — it isn't waiting on indexing work, it's waiting for the editor to exit.
+
+For a build-heavy workflow that's the wrong trade: we build constantly to verify, so `backgroundIndexing: false` keeps the index fresh for free after every build and never stalls one. Flip it to `true` only for a long editing session with no builds in it — and expect the first build afterwards to hang until you close the editor.
+
+Footnote on why the *old* native default was so much worse than background indexing sounds: it maintained a second, cold `.build/index-build` that had to be built from scratch, so it never caught up. Background indexing is only fast here because it shares an already-warm `.build`.
 
 ## Why the default behaviour was so confusing (background)
 
