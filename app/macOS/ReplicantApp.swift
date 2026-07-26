@@ -241,6 +241,40 @@ struct ReplicantApp: App {
         // and keeping it across sessions is part of its taxonomy-discovery job.
     }
 
+    #if DEBUG
+    /// Arms a database reset and relaunches. The wipe itself happens at the
+    /// next bootstrap, before ingestion or any observer is running — see
+    /// `DatabaseReset`. The Keychain session is untouched, so the app comes
+    /// back signed in and the catalogue can be reloaded straight away.
+    private func confirmDatabaseReset() {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Reset the local database?"
+        alert.informativeText = """
+            Every locally cached table is erased and rebuilt on relaunch, \
+            including the stars catalogue and surveyed locations. The stars \
+            catalogue endpoint is rate limited to roughly one call a minute, \
+            and locations rehydrate only when selected.
+
+            You stay signed in.
+            """
+        alert.addButton(withTitle: "Reset and Relaunch")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        DatabaseReset.requestOnNextLaunch()
+
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.createsNewApplicationInstance = true
+        NSWorkspace.shared.openApplication(
+            at: Bundle.main.bundleURL,
+            configuration: configuration
+        ) { _, _ in
+            DispatchQueue.main.async { NSApp.terminate(nil) }
+        }
+    }
+    #endif
+
     var body: some Scene {
         // The first-launch / sign-in window. It lives in its own window so the
         // login ⇄ main transition is a clean window hand-off, and so it can pin
@@ -277,6 +311,14 @@ struct ReplicantApp: App {
                 }
                 .keyboardShortcut("e", modifiers: [.command, .option])
                 .disabled(store.isLoggedOut)
+
+                #if DEBUG
+                Divider()
+
+                Button("Reset Local Database…") {
+                    confirmDatabaseReset()
+                }
+                #endif
             }
         }
 
