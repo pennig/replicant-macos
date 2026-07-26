@@ -199,9 +199,7 @@ private struct SystemInspector: View {
                     ForEach(salvage) { s in
                         SiteAmountsRow(
                             title: s.name ?? s.designation, code: s.designation,
-                            amounts: SiteSalvageSections.salvageAmounts(
-                                s, totals: assayTotals[s.designation]
-                            ),
+                            amounts: SiteAmounts.amounts(for: s, totals: assayTotals[s.designation]),
                             status: s.depleted ? "Depleted" : nil
                         )
                     }
@@ -440,25 +438,18 @@ private struct SiteSalvageSections: View {
                 ForEach(salvage) { s in
                     SiteAmountsRow(
                         title: s.name ?? s.designation, code: s.designation,
-                        amounts: Self.salvageAmounts(s, totals: assayTotals[s.designation]),
+                        // `SiteAmounts.amounts(for:)` handles both salvage
+                        // shapes: a hydrated site reads live (`132 / 331 40%`),
+                        // and a site with names but no percentages — the
+                        // `salvage[]` roster block, a scan body, a discovery
+                        // event — still reports its assayed total as a
+                        // discovered figure rather than a bare name.
+                        amounts: SiteAmounts.amounts(for: s, totals: assayTotals[s.designation]),
                         status: s.depleted ? "Depleted" : nil
                     )
                 }
             }
         }
-    }
-
-    /// A site from the `salvage[]` roster block has resource names but no
-    /// percentages. Map those to zero-percent entries so the row can still list
-    /// what's there — `SiteAmountsRow` falls back to a name summary when no
-    /// amount is known — instead of rendering an empty card.
-    static func salvageAmounts(
-        _ site: SalvageSite, totals: [String: Double]?
-    ) -> [ResourceAmount] {
-        guard site.remainingPct.isEmpty else {
-            return SiteAmounts.amounts(remainingPct: site.remainingPct, totals: totals)
-        }
-        return site.resourcesAvailable.map { ResourceAmount(resource: $0, percentRemaining: nil) }
     }
 }
 

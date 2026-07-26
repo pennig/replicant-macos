@@ -167,14 +167,24 @@ public struct DirectiveComposerSheet: View {
 
     /// A salvage body's dropdown label — its name/designation, annotated with
     /// the site count when it holds more than one (the drones work them all)
-    /// and the units still on it when any site has been assayed.
+    /// and what's on it when any site has been assayed. A body the user hasn't
+    /// opened has an assay but no live percentages, so it reports what was
+    /// discovered there rather than nothing at all; the wording keeps the
+    /// historical figure distinct from the live one. Never assayed stays silent
+    /// — unknown, not zero.
     private func salvageBodyLabel(_ body: SalvageBody) -> String {
         var parts = [body.displayName]
         if body.siteCount > 1 { parts.append("\(body.siteCount) sites") }
         if let units = body.unitsRemaining {
-            parts.append("~\(units.formatted(.number.precision(.fractionLength(0)))) units")
+            parts.append("~\(format(units)) units")
+        } else if let discovered = body.discoveredTotal {
+            parts.append("~\(format(discovered)) discovered")
         }
         return parts.joined(separator: " · ")
+    }
+
+    private func format(_ value: Double) -> String {
+        value.formatted(.number.precision(.fractionLength(0)))
     }
 
     /// The `delivery` config: a one-shot collect → deliver route plus the

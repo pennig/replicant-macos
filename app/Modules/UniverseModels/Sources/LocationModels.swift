@@ -187,18 +187,25 @@ public struct SalvageBody: Identifiable, Equatable, Sendable {
     /// Total units still present across the body's live sites, when assayed.
     /// Nil when no site on the body has a stored total — unknown, not zero.
     public var unitsRemaining: Double?
+    /// Total units *discovered* across the body's live sites whose live
+    /// percentage isn't known yet — the assayed-but-unhydrated case, which is
+    /// the common one until the user opens the body. A historical figure, not a
+    /// live one, so it is kept apart from `unitsRemaining` rather than summed
+    /// into it. Nil when nothing on the body is in that state.
+    public var discoveredTotal: Double?
     public var id: String { designation }
     /// Body name when the server provides one, else its designation.
     public var displayName: String { name ?? designation }
 
     public init(
         designation: String, name: String? = nil, siteCount: Int = 1,
-        unitsRemaining: Double? = nil
+        unitsRemaining: Double? = nil, discoveredTotal: Double? = nil
     ) {
         self.designation = designation
         self.name = name
         self.siteCount = siteCount
         self.unitsRemaining = unitsRemaining
+        self.discoveredTotal = discoveredTotal
     }
 }
 
@@ -716,25 +723,32 @@ extension StarSystem {
     /// Bodies holding at least one live (non-depleted) salvage site, each with
     /// its site count — the targets the `gather_salvage` directive picker
     /// offers. Pass stored `SiteAssay` totals (site designation → totals) to
-    /// have each body report the units still on it.
+    /// have each body report the units still on it — or, for a site whose live
+    /// percentages haven't been fetched yet, the units discovered on it.
     public func salvageBodies(totals: [String: [String: Double]] = [:]) -> [SalvageBody] {
         var counts: [String: Int] = [:]
         var units: [String: Double] = [:]
+        var discovered: [String: Double] = [:]
         for site in knownSalvageSites where !site.depleted {
             let body = site.bodyDesignation
             guard !body.isEmpty else { continue }
             counts[body, default: 0] += 1
-            let amounts = SiteAmounts.amounts(
-                remainingPct: site.remainingPct, totals: totals[site.designation]
-            )
+            let amounts = SiteAmounts.amounts(for: site, totals: totals[site.designation])
+            // A site with percentages reports live units; one without still
+            // reports what was discovered on it, so a body the user hasn't
+            // opened isn't silently worthless in the picker.
             if let siteUnits = SiteAmounts.totalRemaining(amounts) {
                 units[body, default: 0] += siteUnits
+            }
+            if let siteDiscovered = SiteAmounts.totalDiscovered(amounts) {
+                discovered[body, default: 0] += siteDiscovered
             }
         }
         return counts.keys.sorted().map {
             SalvageBody(
                 designation: $0, name: bodyName(for: $0),
-                siteCount: counts[$0]!, unitsRemaining: units[$0]
+                siteCount: counts[$0]!, unitsRemaining: units[$0],
+                discoveredTotal: discovered[$0]
             )
         }
     }
@@ -930,9 +944,45 @@ extension StarSystem {
             }
         }
 
-        // Unknown body: seed a minimal planet so the site isn't lost. A later
-        // hydrate replaces this stub with the real roster entry.
+        // Unknown body: seed a minimal planet so the site isn't lost for now.
+        // This stub is provisional, not durable: `mergingScan` rebuilds
+        // `planets` from the fresh scan roster, so a stub the roster doesn't
+        // name is discarded along with the site on it (and a moon stubbed as a
+        // planet never matches the roster). The site returns with the next scan
+        // or hydrate of its real body; the assay in `SiteAssay` — the half the
+        // catalog can never re-derive — survives either way.
         copy.planets.append(Planet(designation: body, salvage: [site]))
+        return copy
+    }
+
+    /// Re-apply salvage percentages that a merge dropped.
+    ///
+    /// `applying(_:)` replaces a body's salvage wholesale from the payload it
+    /// was handed, and the `scan.completed` payload carries absolute
+    /// `resources_remaining` but no `resources_remaining_pct` — so folding a
+    /// scan in would otherwise wipe the percentages a `body(_:)` hydrate had
+    /// established, dropping the inspector back to a bare name list and
+    /// degrading the next scan's implied-total calculation to a raw floor.
+    ///
+    /// Same idiom as `mergingMoons`: keep the richer of the two. Fresher data
+    /// wins — a merged site that *does* carry percentages is left alone, and
+    /// only an empty `remainingPct` is filled from `percentages` (site
+    /// designation → resource → 0…100).
+    public func restoringSalvagePercentages(_ percentages: [String: [String: Double]]) -> StarSystem {
+        guard !percentages.isEmpty else { return self }
+        func restore(_ salvage: inout [SalvageSite]) {
+            for i in salvage.indices where salvage[i].remainingPct.isEmpty {
+                guard let pct = percentages[salvage[i].designation], !pct.isEmpty else { continue }
+                salvage[i].remainingPct = pct
+            }
+        }
+        var copy = self
+        for pi in copy.planets.indices {
+            restore(&copy.planets[pi].salvage)
+            for mi in copy.planets[pi].moons.indices {
+                restore(&copy.planets[pi].moons[mi].salvage)
+            }
+        }
         return copy
     }
 

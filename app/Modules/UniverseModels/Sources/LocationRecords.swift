@@ -139,8 +139,11 @@ public struct SiteAssay: Identifiable, Equatable, Sendable {
     /// PAYLOAD: the envelope's `location` names the acting device's position,
     /// not the site's.
     public var body: String
-    /// Leading designation segment, denormalized so a system's assays are one
-    /// indexed read rather than a scan-and-parse.
+    /// Leading designation segment, denormalized so a per-system query is a
+    /// plain column comparison rather than a scan-and-parse. Nothing queries it
+    /// today (both readers `@FetchAll` the whole table, which is tiny), so
+    /// there is deliberately no index on it — add one with the first query that
+    /// wants it.
     public var system: String
     /// `"salvage"` or `"mining"`, matching the backend's `site_type`.
     public var siteType: String

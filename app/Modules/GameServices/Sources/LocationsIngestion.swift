@@ -19,7 +19,22 @@
 import Dependencies
 import Foundation
 import GameModels
+import OSLog
 import SQLiteData
+import Utils
+
+private let logger = Logger(subsystem: "name.pennig.replicould", category: "LocationsIngestion")
+
+/// A payload rendered for the log, so a diagnostic shows the keys the server
+/// actually sent rather than only the ones we looked for.
+private func describe(_ payload: [String: JSONValue]) -> String {
+    guard !payload.isEmpty else { return "{}" }
+    guard
+        let data = try? JSONEncoder().encode(payload),
+        let json = String(data: data, encoding: .utf8)
+    else { return "<unencodable>" }
+    return json
+}
 
 public final class LocationsIngestion: Sendable {
     /// The armed passive-scan debounces, keyed by replicant code. Each replicant
@@ -153,8 +168,26 @@ public final class LocationsIngestion: Sendable {
                 // The only source of a site's absolute resource totals.
                 _ = try? await locationsClient.recordSalvageDiscovery(payload: payload)
             case "salvage.depleted":
-                if let site = SalvageEventPayload.depletedSite(from: payload) {
-                    _ = try? await locationsClient.markSalvageDepleted(site: site)
+                // The one salvage path never seen live. Its payload key is
+                // taken from the docs catalogue, and the sibling
+                // `salvage.discovered` capture says payload `location` is the
+                // BODY — so if depletion really keys on `location`, the
+                // extracted "site" is a body, nothing matches, and a spent site
+                // keeps ranking in the picker forever. Tolerant extraction
+                // absorbs that silently, so both failure modes are logged at
+                // `.notice` (the level unhandled events use) to make the
+                // assumption falsifiable from the event log alone.
+                guard let site = SalvageEventPayload.depletedSite(from: payload) else {
+                    logger.notice(
+                        "⚠️ salvage.depleted: no site/designation/location key in payload \(describe(payload), privacy: .public)"
+                    )
+                    break
+                }
+                let depleted = (try? await locationsClient.markSalvageDepleted(site: site)) ?? false
+                if !depleted {
+                    logger.notice(
+                        "⚠️ salvage.depleted matched no cached salvage site — extracted \(site, privacy: .public) from payload \(describe(payload), privacy: .public)"
+                    )
                 }
             // NOTE: the resource-level salvage-depletion event's new dotted name
             // is unconfirmed post-migration; it will surface in the event log so

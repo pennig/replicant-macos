@@ -100,4 +100,83 @@ import Testing
         let amount = ResourceAmount(resource: "conductive", percentRemaining: 40, total: nil)
         #expect(amount.remaining == nil)
     }
+
+    // MARK: - amounts(for site:) — the assayed-but-unhydrated case
+
+    /// A hydrated site reads live: the site's own percentages drive the output.
+    @Test func siteAmountsUseThePercentagesWhenTheSiteHasThem() {
+        let site = SalvageSite(
+            designation: "TAANSI-6-SAL-1",
+            resourcesAvailable: ["conductive"], remainingPct: ["conductive": 40]
+        )
+        let out = SiteAmounts.amounts(for: site, totals: ["conductive": 331])
+        #expect(out.map(\.resource) == ["conductive"])
+        #expect(out[0].percentRemaining == 40)
+        #expect(out[0].remaining == 132.4)
+    }
+
+    /// The common case, and the one this exists for: the site is known and
+    /// assayed but has never been hydrated (star-level fetch, scan event, or
+    /// discovery event), so there are names and totals but no percentage. The
+    /// total must survive to the row as a *discovered* figure — dropping it is
+    /// what left the inspector showing bare names.
+    @Test func siteAmountsReportTotalsWhenThereAreNoPercentages() {
+        let site = SalvageSite(
+            designation: "TAANSI-6-SAL-1",
+            resourcesAvailable: ["conductive", "silicates"]
+        )
+        let out = SiteAmounts.amounts(for: site, totals: ["conductive": 331, "silicates": 248])
+        #expect(out.map(\.resource) == ["conductive", "silicates"])
+        #expect(out.map(\.total) == [331, 248])
+        // Nothing is invented: with no percentage there is no live remainder.
+        #expect(out.allSatisfy { $0.percentRemaining == nil && $0.remaining == nil })
+    }
+
+    /// Unknown stays nil. No percentage AND no assay is a bare name, never a
+    /// zero standing in for missing data.
+    @Test func siteAmountsWithNeitherPercentageNorAssayAreAllUnknown() {
+        let site = SalvageSite(designation: "TAANSI-6-SAL-1", resourcesAvailable: ["conductive"])
+        let out = SiteAmounts.amounts(for: site, totals: nil)
+        #expect(out.count == 1)
+        #expect(out[0].percentRemaining == nil)
+        #expect(out[0].total == nil)
+    }
+
+    @Test func siteAmountsAreSortedByResourceName() {
+        let site = SalvageSite(
+            designation: "TAANSI-6-SAL-1",
+            resourcesAvailable: ["silicates", "conductive", "rares"]
+        )
+        #expect(
+            SiteAmounts.amounts(for: site, totals: nil).map(\.resource)
+                == ["conductive", "rares", "silicates"]
+        )
+    }
+
+    // MARK: - totalDiscovered
+
+    @Test func totalDiscoveredSumsTotalsWithNoLivePercentage() {
+        let site = SalvageSite(
+            designation: "TAANSI-6-SAL-1", resourcesAvailable: ["conductive", "silicates"]
+        )
+        let out = SiteAmounts.amounts(for: site, totals: ["conductive": 331, "silicates": 248])
+        #expect(SiteAmounts.totalDiscovered(out) == 579)
+        // A discovered figure is not a live one, so the live sum stays unknown.
+        #expect(SiteAmounts.totalRemaining(out) == nil)
+    }
+
+    /// Once percentages arrive, `totalRemaining` speaks for those resources and
+    /// `totalDiscovered` must stop double-counting them.
+    @Test func totalDiscoveredExcludesResourcesThatHaveAPercentage() {
+        let out = SiteAmounts.amounts(
+            remainingPct: ["conductive": 40], totals: ["conductive": 331]
+        )
+        #expect(SiteAmounts.totalDiscovered(out) == nil)
+        #expect(SiteAmounts.totalRemaining(out) == 132.4)
+    }
+
+    @Test func totalDiscoveredIsNilWithoutAnAssay() {
+        let site = SalvageSite(designation: "TAANSI-6-SAL-1", resourcesAvailable: ["conductive"])
+        #expect(SiteAmounts.totalDiscovered(SiteAmounts.amounts(for: site, totals: nil)) == nil)
+    }
 }

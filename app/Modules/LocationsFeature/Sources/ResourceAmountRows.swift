@@ -49,7 +49,12 @@ struct SiteAmountsRow: View {
     }
 }
 
-/// One resource line: `conductive   132 / 331   40%`.
+/// One resource line, in one of three shapes depending on what's known:
+/// `Conductive   132 / 331   40%` when the site is hydrated and assayed,
+/// `Conductive   331 discovered` when only the assay is in (no live
+/// percentage — a historical figure, so it reads differently on purpose), and
+/// `Conductive   40%` when only the percentage is. Nothing known at all leaves
+/// the bare resource name: unknown renders as absence, never as a zero.
 struct ResourceAmountLine: View {
     let amount: ResourceAmount
 
@@ -61,6 +66,11 @@ struct ResourceAmountLine: View {
             if let remaining = amount.remaining, let total = amount.total {
                 Text("\(format(remaining)) / \(format(total))")
                     .font(.rcMonoSmall).foregroundStyle(.rcTextPrimary)
+            } else if let total = amount.total, amount.percentRemaining == nil {
+                Text(format(total))
+                    .font(.rcMonoSmall).foregroundStyle(.rcTextPrimary)
+                Text("discovered")
+                    .font(.rcCaption).foregroundStyle(.rcTextTertiary)
             }
             if let percentRemaining = amount.percentRemaining {
                 Text("\(format(percentRemaining))%")

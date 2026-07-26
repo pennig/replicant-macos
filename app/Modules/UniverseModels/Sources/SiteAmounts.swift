@@ -62,11 +62,40 @@ public enum SiteAmounts {
         }
     }
 
+    /// Amounts for a salvage site, tolerant of the two shapes salvage arrives in.
+    ///
+    /// A site sourced from `resource_sites[]` carries percentages, so it reads
+    /// live. A site sourced from the `salvage[]` roster block, a `scan.completed`
+    /// body, or a `salvage.discovered` event carries only resource *names* — the
+    /// percentage is genuinely unknown there. Rather than dropping the assay on
+    /// the floor, each name still reports its original total, which the UI shows
+    /// as a **discovered** figure rather than a live one. Nothing is invented:
+    /// `percentRemaining` stays nil, so `remaining` stays nil.
+    public static func amounts(for site: SalvageSite, totals: [String: Double]?) -> [ResourceAmount] {
+        guard site.remainingPct.isEmpty else {
+            return amounts(remainingPct: site.remainingPct, totals: totals)
+        }
+        return site.resourcesAvailable.sorted().map {
+            ResourceAmount(resource: $0, percentRemaining: nil, total: totals?[$0])
+        }
+    }
+
     /// Sum of the *known* remaining units. Unassayed resources are omitted, so
     /// the result is a floor — callers mark it approximate. Nil when nothing is
     /// assayed at all, which is unknown rather than zero.
     public static func totalRemaining(_ amounts: [ResourceAmount]) -> Double? {
         let known = amounts.compactMap(\.remaining)
+        return known.isEmpty ? nil : known.reduce(0, +)
+    }
+
+    /// Sum of the original totals for resources whose live percentage is *not*
+    /// known — what was discovered at the site, not what is left on it now. The
+    /// honest thing to report for an assayed-but-unhydrated site, where
+    /// `totalRemaining` is necessarily nil. Nil when no such resource is
+    /// assayed; resources that do carry a percentage are excluded, because
+    /// `totalRemaining` already speaks for them.
+    public static func totalDiscovered(_ amounts: [ResourceAmount]) -> Double? {
+        let known = amounts.filter { $0.percentRemaining == nil }.compactMap(\.total)
         return known.isEmpty ? nil : known.reduce(0, +)
     }
 }

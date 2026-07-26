@@ -178,18 +178,24 @@ extension LocationsClient {
         try await database.write { db in
             let cached = try SystemDetail.where { $0.designation.eq(system) }.fetchOne(db)
             let base = (try? cached?.system()) ?? StarSystem(designation: system, recon: .visited)
+
+            // The percentages as they stood BEFORE this scan's merge. Needed
+            // twice, and both times because `applying` replaces a body's
+            // salvage wholesale from a payload that carries no
+            // `resources_remaining_pct`: once to imply totals from the scan's
+            // absolute amounts, and once to put the percentages back on the
+            // merged tree so the scan doesn't destroy the data it just used.
+            let knownPct = base.knownSalvageSites.reduce(into: [String: [String: Double]]()) {
+                $0[$1.designation] = $1.remainingPct
+            }
             let merged = base.seedingParent(of: detail).applying(detail)
+                .restoringSalvagePercentages(knownPct)
             let row = try SystemDetail(system: merged, hydratedAt: now)
             try SystemDetail.upsert { row }.execute(db)
 
             // The scan's absolute remaining is a second source of capacity.
             // With a known percentage it implies the original total; without
-            // one it is at least a floor. Read the percentage from the system
-            // as it stood BEFORE this scan's merge, since `applying` may have
-            // replaced the site wholesale.
-            let knownPct = base.knownSalvageSites.reduce(into: [String: [String: Double]]()) {
-                $0[$1.designation] = $1.remainingPct
-            }
+            // one it is at least a floor.
             for observation in observations {
                 let stored = try SiteAssay.where { $0.id.eq(observation.designation) }.fetchOne(db)
                 var observed: [String: Double] = [:]

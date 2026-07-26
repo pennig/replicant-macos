@@ -62,6 +62,15 @@ public struct SalvageEventPayload: Equatable, Sendable {
     /// The site a `salvage.depleted` event names. The documented key is `site`;
     /// `designation` and `location` are accepted as fallbacks because that key
     /// comes from the docs catalogue rather than a live capture.
+    ///
+    /// The `location` fallback is the shaky one: on the sibling
+    /// `salvage.discovered` — the only member of this family captured live —
+    /// payload `location` is the BODY, so if depletion keys on `location` too,
+    /// this returns a body designation and nothing downstream will match it.
+    /// Kept as a fallback anyway (a wrong key is no worse than no key), but
+    /// `LocationsIngestion.catalogRoute` logs both a nil result here and a
+    /// no-match downstream so the guess is falsifiable from the event log
+    /// rather than failing silently.
     public static func depletedSite(from payload: [String: JSONValue]) -> String? {
         for key in ["site", "designation", "location"] {
             if let value = payload[key]?.stringValue, !value.isEmpty { return value }

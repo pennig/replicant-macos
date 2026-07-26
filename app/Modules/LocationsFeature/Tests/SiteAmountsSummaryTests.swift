@@ -20,9 +20,9 @@ import UniverseModels
         #expect(SiteAmountsSummary.summary(status: nil, amounts: amounts) == "~132 units")
     }
 
-    /// A roster-sourced salvage site has names but no percentage at all (the
-    /// `salvageAmounts` fallback passes `percentRemaining: nil`) — the summary
-    /// lists the names and fabricates no figure.
+    /// A roster-sourced salvage site has names but no percentage at all
+    /// (`SiteAmounts.amounts(for:)` leaves `percentRemaining` nil) and no assay
+    /// either — the summary lists the names and fabricates no figure.
     @Test func summaryListsNamesWhenNoPercentageIsKnown() {
         let amounts = ["conductive", "rares"].map {
             ResourceAmount(resource: $0, percentRemaining: nil)
@@ -68,5 +68,49 @@ import UniverseModels
     /// Nothing to show at all: no status, no amounts.
     @Test func summaryIsNilWhenThereIsNothingToShow() {
         #expect(SiteAmountsSummary.summary(status: nil, amounts: []) == nil)
+    }
+
+    // MARK: - Assayed but not hydrated
+
+    /// The common case: the assay is in but the body has never been fetched, so
+    /// there are totals and no percentages. The summary reports the discovered
+    /// figure — worded apart from the live one — instead of degrading to names.
+    @Test func summaryShowsDiscoveredTotalWhenNoPercentageIsKnown() {
+        let site = SalvageSite(
+            designation: "TAANSI-6-SAL-1", resourcesAvailable: ["conductive", "rares"]
+        )
+        let amounts = SiteAmounts.amounts(for: site, totals: ["conductive": 331, "rares": 99])
+        #expect(SiteAmountsSummary.summary(status: nil, amounts: amounts) == "~430 discovered")
+    }
+
+    /// A partial assay still yields a floor, same as the live figure does.
+    @Test func discoveredTotalCountsOnlyTheAssayedResources() {
+        let site = SalvageSite(
+            designation: "TAANSI-6-SAL-1", resourcesAvailable: ["conductive", "rares"]
+        )
+        let amounts = SiteAmounts.amounts(for: site, totals: ["conductive": 331])
+        #expect(SiteAmountsSummary.summary(status: nil, amounts: amounts) == "~331 discovered")
+    }
+
+    /// The live figure outranks the discovered one, so hydrating a site never
+    /// shows both claims at once.
+    @Test func liveUnitsWinOverTheDiscoveredFigure() {
+        let site = SalvageSite(
+            designation: "TAANSI-6-SAL-1",
+            resourcesAvailable: ["conductive"], remainingPct: ["conductive": 40]
+        )
+        let amounts = SiteAmounts.amounts(for: site, totals: ["conductive": 331])
+        #expect(SiteAmountsSummary.summary(status: nil, amounts: amounts) == "~132 units")
+    }
+
+    @Test func depletedStatusComposesWithTheDiscoveredFigure() {
+        let site = SalvageSite(
+            designation: "TAANSI-6-SAL-1", resourcesAvailable: ["conductive"], depleted: true
+        )
+        let amounts = SiteAmounts.amounts(for: site, totals: ["conductive": 331])
+        #expect(
+            SiteAmountsSummary.summary(status: "Depleted", amounts: amounts)
+                == "Depleted · ~331 discovered"
+        )
     }
 }

@@ -250,9 +250,74 @@ import Testing
         #expect(system.knownSalvageSites.map(\.designation) == ["SHERATANON-6-26-SAL-1"])
     }
 
+    @Test func restoringSalvagePercentagesSurvivesAScanMerge() throws {
+        // `applying(_:)` replaces a body's salvage wholesale, and a
+        // `scan.completed` body carries `resources_remaining` but never
+        // `resources_remaining_pct` — so a scan would silently wipe percentages
+        // a hydrate had established. Restore them across the merge.
+        let hydrated = StarSystem(
+            designation: "SHERATANON",
+            planets: [Planet(
+                designation: "SHERATANON-6",
+                moons: [Moon(
+                    designation: "SHERATANON-6-26",
+                    salvage: [SalvageSite(
+                        designation: "SHERATANON-6-26-SAL-1",
+                        resourcesAvailable: ["carbon", "conductive", "structural"],
+                        remainingPct: ["structural": 30, "conductive": 100]
+                    )]
+                )]
+            )]
+        )
+        let knownPct = hydrated.knownSalvageSites.reduce(into: [String: [String: Double]]()) {
+            $0[$1.designation] = $1.remainingPct
+        }
+
+        let raw = try LocationDecoding.decoder.decode(RawScanEventResult.self, from: Data(Self.scanResultJSON.utf8))
+        let detail = try #require(raw.bodyDetail())
+        let clobbered = hydrated.seedingParent(of: detail).applying(detail)
+        // Precondition: the merge really does drop them.
+        #expect(clobbered.knownSalvageSites.first?.remainingPct.isEmpty == true)
+
+        let restored = clobbered.restoringSalvagePercentages(knownPct)
+        let site = try #require(restored.knownSalvageSites.first)
+        #expect(site.designation == "SHERATANON-6-26-SAL-1")
+        #expect(site.remainingPct == ["structural": 30, "conductive": 100])
+        // The scan's own contribution is still there.
+        #expect(site.name == "Crashed Vessel")
+    }
+
+    @Test func restoringSalvagePercentagesLeavesFresherDataAlone() {
+        // Fresher wins: a merged site that already carries percentages keeps
+        // them, and a site with no remembered percentage is left untouched
+        // rather than zero-filled.
+        let system = StarSystem(
+            designation: "TAANSI",
+            planets: [Planet(
+                designation: "TAANSI-6",
+                salvage: [
+                    SalvageSite(designation: "TAANSI-6-SAL-1", remainingPct: ["conductive": 12]),
+                    SalvageSite(designation: "TAANSI-6-SAL-2"),
+                ]
+            )]
+        )
+        let restored = system.restoringSalvagePercentages([
+            "TAANSI-6-SAL-1": ["conductive": 100],   // stale — must not win
+            "TAANSI-6-SAL-3": ["rares": 50],         // not on the tree — ignored
+        ])
+        let sites = Dictionary(uniqueKeysWithValues: restored.knownSalvageSites.map { ($0.designation, $0) })
+        #expect(sites["TAANSI-6-SAL-1"]?.remainingPct == ["conductive": 12])
+        #expect(sites["TAANSI-6-SAL-2"]?.remainingPct.isEmpty == true)
+        #expect(sites.count == 2)
+    }
+
     @Test func updatingSalvageMarksBodySiteDepleted() {
-        // A `salvage_depleted` event names the body; every salvage site under it
-        // (matched by designation prefix) is marked spent.
+        // `updatingSalvage(at:)` is the body-keyed *primitive*: it hands the
+        // transform every salvage site on the named body. Depletion no longer
+        // uses it that way — `salvage.depleted` names ONE site, and
+        // `LocationsClient.mutateSalvage(atSite:)` filters to that designation
+        // inside the transform — but the primitive still visits by body, which
+        // is what this exercises.
         let system = StarSystem(
             designation: "SHERATANON",
             planets: [Planet(

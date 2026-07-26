@@ -14,10 +14,11 @@
 import Foundation
 import UniverseModels
 
-/// The collapsed figure shown beside a site's name: total units still
-/// present, summed across resources, when at least one resource has been
-/// assayed — falling back to the resource names when nothing has, which is
-/// what the row showed before assays existed.
+/// The collapsed figure shown beside a site's name, in descending order of
+/// what's known: the total units still present (summed across resources) when
+/// the site is both hydrated and assayed; else the total *discovered* when the
+/// assay is in but the live percentages aren't; else the resource names, which
+/// is what the row showed before assays existed.
 enum SiteAmountsSummary {
     /// - Parameters:
     ///   - status: Rendered before the rest, e.g. "Depleted". Nil/empty is
@@ -30,10 +31,19 @@ enum SiteAmountsSummary {
         var parts: [String] = []
         if let status, !status.isEmpty { parts.append(status) }
         if let units = SiteAmounts.totalRemaining(amounts) {
-            parts.append("~\(units.formatted(.number.precision(.fractionLength(0)))) units")
+            parts.append("~\(format(units)) units")
+        } else if let discovered = SiteAmounts.totalDiscovered(amounts) {
+            // Assayed but not hydrated: we know what was found, not what's
+            // left. Worded apart from the live figure so the two never read as
+            // the same claim.
+            parts.append("~\(format(discovered)) discovered")
         } else if !amounts.isEmpty {
             parts.append(amounts.map(\.resource).joined(separator: ", "))
         }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    private static func format(_ value: Double) -> String {
+        value.formatted(.number.precision(.fractionLength(0)))
     }
 }
