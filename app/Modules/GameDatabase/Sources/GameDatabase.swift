@@ -62,11 +62,13 @@ public enum GameDatabase {
 
     /// Builds a migrator from `entries`. The parameter exists so tests can
     /// migrate a deliberately-modified manifest through the real code path.
+    ///
+    /// `eraseDatabaseOnSchemaChange` is deliberately NOT set. It wiped the
+    /// database whenever a migration landed anywhere but the end of the list,
+    /// which cost the stars catalogue repeatedly. A migration that throws now
+    /// surfaces through `bootstrapDatabase`'s `withErrorReporting` instead.
     public static func migrator(_ entries: [SchemaMigration] = manifest) -> DatabaseMigrator {
         var migrator = DatabaseMigrator()
-        #if DEBUG
-        migrator.eraseDatabaseOnSchemaChange = true
-        #endif
         for entry in entries {
             entry.register(in: &migrator)
         }

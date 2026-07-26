@@ -341,6 +341,7 @@ let package = Package(
             dependencies: [
                 "GameDatabase",
                 "GameModels",
+                "UniverseModels",
                 .product(name: "SQLiteData", package: "sqlite-data"),
             ],
             path: "GameDatabase/Tests"
