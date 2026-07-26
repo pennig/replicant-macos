@@ -77,13 +77,13 @@ public enum GameDatabase {
 
     /// Opens the default database and runs every migration, returning the writer.
     ///
-    /// SQLiteData vends an in-memory store automatically in test and preview
+    /// SQLiteData vends a fresh database automatically in test and preview
     /// contexts, so the same call bootstraps production, previews, and tests.
     /// The writer is returned so tests can read and write it directly.
     ///
     /// Honours a requested reset (see `DatabaseReset`) before migrating. The
     /// check is skipped outside `.live`: tests and previews already get a
-    /// fresh in-memory store, where erasing would be meaningless.
+    /// fresh database, where erasing would be meaningless.
     public static func bootstrap() throws -> any DatabaseWriter {
         let database = try SQLiteData.defaultDatabase(configuration: configuration)
         @Dependency(\.context) var context
