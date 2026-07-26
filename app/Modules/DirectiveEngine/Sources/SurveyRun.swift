@@ -61,6 +61,8 @@ public struct SurveyRun: MissionStepMachine {
         switch directive.step {
         case Step.preflight: return preflight(directive, vessel, world)
         case Step.travelling: return travel(directive, vessel, world)
+        case Step.configuring: return configure(directive, vessel, world)
+        case Step.launching: return launch(directive, vessel, world)
         default:
             // An unrecognised step must never dispatch. Waiting is inert and
             // recoverable; the user can cancel or the row can be repaired.
@@ -147,6 +149,52 @@ public struct SurveyRun: MissionStepMachine {
         // target we haven't reached can only be judged from what we already hold.
         if Self.isFullyScanned(world.system(target)) { return .advanceTarget }
         return .assignController(deviceCode: controller.deviceCode, nextStep: Step.travelling)
+    }
+
+    /// The controller this run claimed, re-resolved from the fleet on every
+    /// evaluation — the row is the checkpoint, and a controller since released
+    /// or decommissioned must surface rather than be dispatched at.
+    private func claimedController(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> Device? {
+        guard let code = directive.controllerCode else {
+            return Self.controller(aboard: vessel, in: world)
+        }
+        return world.device(code)
+    }
+
+    private func configure(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
+        guard let controller = claimedController(directive, vessel, world) else {
+            return .stall(.noSurveyControllerAboard)
+        }
+        if controller.currentDirective == "survey_system",
+           Self.configMatches(controller.currentDirectiveConfig) {
+            return .advanceStep(nextStep: Step.launching)
+        }
+        return .dispatch(
+            kind: .setDirective, deviceCode: controller.deviceCode,
+            params: CommandParams(directive: "survey_system", configuration: Self.surveyConfig),
+            nextStep: Step.launching
+        )
+    }
+
+    private func launch(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
+        guard let controller = claimedController(directive, vessel, world) else {
+            return .stall(.noSurveyControllerAboard)
+        }
+        return .dispatch(
+            kind: OperationKind.simple("launch"), deviceCode: controller.deviceCode,
+            params: CommandParams(), nextStep: Step.awaiting
+        )
+    }
+
+    /// Whether an in-force config already equals `surveyConfig` on the three
+    /// fields that matter. Compared field by field rather than whole-object: the
+    /// server may echo extra keys, and an inequality there is not a reason to
+    /// re-issue.
+    static func configMatches(_ config: JSONValue?) -> Bool {
+        guard let config else { return false }
+        return config["planets"]?.stringValue == "all"
+            && config["moons"]?.stringValue == "all"
+            && config["recall"]?.boolValue == true
     }
 
     private func travel(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {

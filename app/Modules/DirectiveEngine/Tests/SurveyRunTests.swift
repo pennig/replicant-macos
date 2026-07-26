@@ -254,3 +254,97 @@ struct SurveyRunPreflightTests {
                 == .wait)
     }
 }
+
+// MARK: - Configure and launch
+
+@Suite("Survey Run — configure and launch")
+struct SurveyRunConfigureTests {
+    /// A controller with no directive in force gets the full-survey config.
+    @Test func setsTheSurveyDirective() {
+        let directive = run(step: SurveyRun.Step.configuring, controllerCode: "AMI1")
+        #expect(SurveyRun().nextAction(directive: directive, world: world(stagedFleet(vesselAt: "TAU-2")))
+                == .dispatch(
+                    kind: .setDirective, deviceCode: "AMI1",
+                    params: CommandParams(directive: "survey_system", configuration: SurveyRun.surveyConfig),
+                    nextStep: SurveyRun.Step.launching
+                ))
+    }
+
+    /// An in-force directive that already matches EXACTLY is not re-issued
+    /// (spec §4 step 4).
+    @Test func skipsSetDirectiveWhenAlreadyExact() {
+        var fleet = stagedFleet(vesselAt: "TAU-2")
+        fleet[1] = withDirective(fleet[1], name: "survey_system", config: [
+            "planets": .string("all"), "moons": .string("all"), "recall": .bool(true),
+        ])
+        let directive = run(step: SurveyRun.Step.configuring, controllerCode: "AMI1")
+        #expect(SurveyRun().nextAction(directive: directive, world: world(fleet))
+                == .advanceStep(nextStep: SurveyRun.Step.launching))
+    }
+
+    /// A MISMATCHED config is re-issued — `moons: none` left over from manual
+    /// use would silently survey half the system.
+    @Test func reissuesAMismatchedConfig() {
+        var fleet = stagedFleet(vesselAt: "TAU-2")
+        fleet[1] = withDirective(fleet[1], name: "survey_system", config: [
+            "planets": .string("all"), "moons": .string("none"), "recall": .bool(true),
+        ])
+        let directive = run(step: SurveyRun.Step.configuring, controllerCode: "AMI1")
+        guard case let .dispatch(kind, _, _, _) =
+                SurveyRun().nextAction(directive: directive, world: world(fleet))
+        else {
+            Issue.record("expected the mismatched config to be re-issued")
+            return
+        }
+        #expect(kind == .setDirective)
+    }
+
+    /// `recall: false` is a mismatch too — without recall the drones don't come
+    /// home and the vessel can't move on to the next target.
+    @Test func reissuesWhenRecallIsOff() {
+        var fleet = stagedFleet(vesselAt: "TAU-2")
+        fleet[1] = withDirective(fleet[1], name: "survey_system", config: [
+            "planets": .string("all"), "moons": .string("all"), "recall": .bool(false),
+        ])
+        let directive = run(step: SurveyRun.Step.configuring, controllerCode: "AMI1")
+        guard case let .dispatch(kind, _, _, _) =
+                SurveyRun().nextAction(directive: directive, world: world(fleet))
+        else {
+            Issue.record("expected recall: false to be re-issued")
+            return
+        }
+        #expect(kind == .setDirective)
+    }
+
+    /// A different directive entirely is replaced.
+    @Test func replacesADifferentDirective() {
+        var fleet = stagedFleet(vesselAt: "TAU-2")
+        fleet[1] = withDirective(fleet[1], name: "belt_search", config: [:])
+        let directive = run(step: SurveyRun.Step.configuring, controllerCode: "AMI1")
+        guard case let .dispatch(kind, _, _, _) =
+                SurveyRun().nextAction(directive: directive, world: world(fleet))
+        else {
+            Issue.record("expected a replacement")
+            return
+        }
+        #expect(kind == .setDirective)
+    }
+
+    /// Launch goes to the CONTROLLER, not the vessel — it is what deploys the
+    /// adopted stowed drones (spec §3).
+    @Test func launchesTheController() {
+        let directive = run(step: SurveyRun.Step.launching, controllerCode: "AMI1")
+        #expect(SurveyRun().nextAction(directive: directive, world: world(stagedFleet(vesselAt: "TAU-2")))
+                == .dispatch(kind: OperationKind.simple("launch"), deviceCode: "AMI1",
+                             params: CommandParams(), nextStep: SurveyRun.Step.awaiting))
+    }
+
+    /// The controller vanishing mid-run (released, decommissioned) stalls rather
+    /// than dispatching at a device that is no longer there.
+    @Test func stallsWhenTheClaimedControllerIsGone() {
+        let directive = run(step: SurveyRun.Step.launching, controllerCode: "AMI1")
+        let fleet = [device("VES1", type: "transport_hauler", location: "TAU-2")]
+        #expect(SurveyRun().nextAction(directive: directive, world: world(fleet))
+                == .stall(.noSurveyControllerAboard))
+    }
+}
