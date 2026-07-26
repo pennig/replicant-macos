@@ -43,9 +43,12 @@ public struct LocationEventError: Error, Equatable, Sendable {
 // MARK: - Live implementation
 
 extension LocationEventsClient: DependencyKey {
-    /// Page size (the endpoint caps at 200); a generous page keeps the walk to a
-    /// handful of requests.
-    private static let pageSize = 200
+    /// Page size. Ask for the endpoint's maximum so the walk is as few requests
+    /// as possible. 100 is the measured ceiling across every paged endpoint big
+    /// enough to test (`events`, `replicants`, `messages` all return exactly 100
+    /// for any larger ask); over-asking is silently clamped, never rejected, so
+    /// the old 200 here was never actually fetching 200.
+    private static let pageSize = 100
     /// A backstop so a misbehaving cursor can't loop forever.
     private static let maxPages = 50
 

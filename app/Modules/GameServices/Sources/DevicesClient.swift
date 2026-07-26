@@ -69,6 +69,13 @@ public struct DevicesClient: Sendable {
 // MARK: - Live implementation
 
 extension DevicesClient: DependencyKey {
+    /// Page size for the fleet walk. `GET devices` caps at 50 — lower than the
+    /// 100 every other paged endpoint allows — and over-asking is silently
+    /// clamped rather than rejected, so asking for more just misrepresents the
+    /// page size at the call site. Ask for exactly the maximum: fewest requests
+    /// against the reads budget, and the number here matches what arrives.
+    private static let pageSize = 50
+
     public static let liveValue = DevicesClient(
         read: { deviceCode in
             @Dependency(\.gameClient) var gameClient
@@ -99,7 +106,7 @@ extension DevicesClient: DependencyKey {
                 // slow page can't regress a newer single-device read that landed
                 // in the meantime.
                 let issuedAt = date.now
-                let output = try await client.getV1Devices(query: .init(cursor: cursor, limit: 100))
+                let output = try await client.getV1Devices(query: .init(cursor: cursor, limit: Self.pageSize))
                 let body = try output.ok.body.json
                 devices.append(contentsOf: (body.devices ?? []).map { Device(schema: $0, fetchedAt: issuedAt) })
                 cursor = body.nextCursor
