@@ -154,6 +154,72 @@ struct DirectiveRowTests {
         #expect(row.title == "Survey Run")
     }
 
+    /// A live mission driving a controller marks that controller's built-in row
+    /// as engine-owned, so the pane can badge and lock it.
+    @Test func liveMissionOwnsItsControllersBuiltInRow() {
+        var driving = mission(id: "D1")
+        driving.controllerCode = "AMI1"
+        let rows = DirectiveRow.merge(
+            devices: [device(code: "AMI1", directive: "survey_system")],
+            directives: [driving]
+        )
+        let builtIns = rows.compactMap { row -> BuiltInDirective? in
+            if case let .builtIn(builtIn) = row { return builtIn } else { return nil }
+        }
+        #expect(builtIns.count == 1)
+        #expect(builtIns[0].drivenBy == DirectiveOwner(directiveID: "D1", kindTitle: "Survey Run"))
+    }
+
+    /// A finished mission releases its controller — the row is the user's again.
+    @Test func finishedMissionDoesNotOwnItsController() {
+        for status in [DirectiveStatus.completed, .cancelled] {
+            var finished = mission(id: "D1")
+            finished.controllerCode = "AMI1"
+            finished.status = status
+            let rows = DirectiveRow.merge(
+                devices: [device(code: "AMI1", directive: "survey_system")],
+                directives: [finished]
+            )
+            let builtIns = rows.compactMap { row -> BuiltInDirective? in
+                if case let .builtIn(builtIn) = row { return builtIn } else { return nil }
+            }
+            #expect(builtIns[0].drivenBy == nil, "\(status) must not hold ownership")
+        }
+    }
+
+    /// A paused or stalled mission KEEPS ownership: its directive is still in
+    /// force server-side, and the user resolving the stall expects it intact.
+    @Test func pausedAndStalledMissionsKeepOwnership() {
+        for status in [DirectiveStatus.paused, .needsAttention] {
+            var held = mission(id: "D1")
+            held.controllerCode = "AMI1"
+            held.status = status
+            let rows = DirectiveRow.merge(
+                devices: [device(code: "AMI1", directive: "survey_system")],
+                directives: [held]
+            )
+            let builtIns = rows.compactMap { row -> BuiltInDirective? in
+                if case let .builtIn(builtIn) = row { return builtIn } else { return nil }
+            }
+            #expect(builtIns[0].drivenBy != nil, "\(status) must hold ownership")
+        }
+    }
+
+    /// A controller no mission is driving stays unowned — the common case, and
+    /// the one a bug here would wrongly lock.
+    @Test func unrelatedControllerIsUnowned() {
+        var elsewhere = mission(id: "D1")
+        elsewhere.controllerCode = "AMI9"
+        let rows = DirectiveRow.merge(
+            devices: [device(code: "AMI1", directive: "survey_system")],
+            directives: [elsewhere]
+        )
+        let builtIns = rows.compactMap { row -> BuiltInDirective? in
+            if case let .builtIn(builtIn) = row { return builtIn } else { return nil }
+        }
+        #expect(builtIns[0].drivenBy == nil)
+    }
+
     /// A device whose `ami_directive.name` is present but EMPTY contributes no
     /// built-in row. The guard matters because an empty name would otherwise
     /// render a row with a blank headline and a Clear button that clears

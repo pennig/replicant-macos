@@ -45,6 +45,11 @@ struct DirectiveRowView: View {
                             .font(.rcCaption)
                             .foregroundStyle(.rcTextSecondary)
                     }
+                    if isEngineOwned {
+                        Image(systemName: "lock.fill")
+                            .font(.system(size: IconSize.s))
+                            .foregroundStyle(.rcTextTertiary)
+                    }
                 }
             }
             Spacer(minLength: 0)
@@ -61,16 +66,24 @@ struct DirectiveRowView: View {
         }
     }
 
-    /// Progress for a mission; the controlled-drone count for a built-in.
+    /// Progress for a mission; the controlled-drone count for a built-in — or,
+    /// when the engine owns it, the mission driving it.
     private var subtitle: String? {
         switch row {
         case let .custom(directive):
             let progress = directive.progress
             return "\(progress.completed)/\(progress.total)"
         case let .builtIn(builtIn):
+            if let owner = builtIn.drivenBy { return "driven by \(owner.kindTitle)" }
             let count = builtIn.controlledDevices.count
             return count > 0 ? "\(count) controlled" : nil
         }
+    }
+
+    /// Whether this row's directive belongs to the engine rather than the user.
+    private var isEngineOwned: Bool {
+        if case let .builtIn(builtIn) = row { return builtIn.drivenBy != nil }
+        return false
     }
 
     private var kindBadge: some View {

@@ -162,6 +162,39 @@ struct DirectivesFeatureTests {
         #expect(dispatched.value == false)
     }
 
+    /// Reconfigure and Clear are refused on a row the engine owns. The guard
+    /// lives in the reducer, not only in the view's `.disabled`, so a stale
+    /// click or a future keyboard path can't clear a directive a mission step
+    /// is waiting on.
+    @Test func engineOwnedRowRefusesReconfigureAndClear() async throws {
+        let database = try GameDatabase.bootstrap()
+        let driving: Directive = {
+            var mission = Self.mission(id: "D1")
+            mission.controllerCode = "AMI1"
+            return mission
+        }()
+        try await database.write { db in
+            try Device.insert { Self.controller(code: "AMI1", directive: "survey_system") }.execute(db)
+            try Directive.insert { driving }.execute(db)
+        }
+        let dispatched = LockIsolated(false)
+        let store = TestStore(initialState: DirectivesFeature.State(selectedRowID: "builtin:AMI1")) {
+            DirectivesFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
+            $0.commandClient.dispatch = { _, _, _ in
+                dispatched.setValue(true)
+                return .accepted(operationID: nil)
+            }
+        }
+        store.exhaustivity = .off
+
+        await store.send(.reconfigureTapped)
+        #expect(store.state.composer == nil)
+        await store.send(.clearTapped)
+        #expect(dispatched.value == false)
+    }
+
     /// The composer's confirmation dispatches `set_directive` at the controller
     /// the composer was opened on, carrying the chosen directive and its config.
     /// This is the feature's headline write — the one path whose regression

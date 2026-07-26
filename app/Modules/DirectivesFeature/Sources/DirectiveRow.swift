@@ -15,6 +15,20 @@ import Foundation
 import GameModels
 import Utils
 
+/// The custom mission currently driving a built-in AMI directive. Present only
+/// while that mission is live — the engine set the directive, so the user must
+/// not Reconfigure or Clear it out from under a step that is waiting on it.
+public struct DirectiveOwner: Equatable, Sendable {
+    public let directiveID: String
+    /// The mission's display title, e.g. "Survey Run" — what the badge says.
+    public let kindTitle: String
+
+    public init(directiveID: String, kindTitle: String) {
+        self.directiveID = directiveID
+        self.kindTitle = kindTitle
+    }
+}
+
 /// An AMI directive currently in force on a device, projected for the list.
 public struct BuiltInDirective: Equatable, Identifiable, Sendable {
     public let deviceCode: String
@@ -25,6 +39,8 @@ public struct BuiltInDirective: Equatable, Identifiable, Sendable {
     public let config: JSONValue?
     /// The drones this controller is running, with their live status.
     public let controlledDevices: [Device.ControlledDevice]
+    /// Set when a live mission is driving this directive (see `DirectiveOwner`).
+    public let drivenBy: DirectiveOwner?
 
     public var id: String { deviceCode }
 
@@ -33,13 +49,15 @@ public struct BuiltInDirective: Equatable, Identifiable, Sendable {
         deviceType: String,
         directive: String,
         config: JSONValue?,
-        controlledDevices: [Device.ControlledDevice]
+        controlledDevices: [Device.ControlledDevice],
+        drivenBy: DirectiveOwner? = nil
     ) {
         self.deviceCode = deviceCode
         self.deviceType = deviceType
         self.directive = directive
         self.config = config
         self.controlledDevices = controlledDevices
+        self.drivenBy = drivenBy
     }
 }
 
@@ -94,10 +112,26 @@ public enum DirectiveRow: Equatable, Identifiable, Sendable {
         return "\(headline) → \(designation)"
     }
 
+    /// Statuses that still hold a controller. `paused` and `needsAttention`
+    /// KEEP ownership: the directive is still in force server-side, and a user
+    /// resolving a stall expects to find it intact. Only a finished mission
+    /// gives the row back.
+    static let owningStatuses: Set<DirectiveStatus> = [.running, .needsAttention, .paused]
+
     /// Merge the two sources into one ordered list. `devices` contributes a row
     /// for each device with a directive in force; `directives` contributes one
-    /// per custom mission.
+    /// per custom mission. A built-in row whose controller a live mission is
+    /// driving carries that mission as `drivenBy`.
     public static func merge(devices: [Device], directives: [Directive]) -> [DirectiveRow] {
+        let owners: [String: DirectiveOwner] = directives.reduce(into: [:]) { owners, directive in
+            guard let controller = directive.controllerCode,
+                  owningStatuses.contains(directive.status)
+            else { return }
+            owners[controller] = DirectiveOwner(
+                directiveID: directive.id,
+                kindTitle: directive.kind.title
+            )
+        }
         let custom = directives.map { DirectiveRow.custom($0) }
         let builtIn = devices.compactMap { device -> DirectiveRow? in
             guard let directive = device.currentDirective, !directive.isEmpty else { return nil }
@@ -107,7 +141,8 @@ public enum DirectiveRow: Equatable, Identifiable, Sendable {
                     deviceType: device.deviceType,
                     directive: directive,
                     config: device.currentDirectiveConfig,
-                    controlledDevices: device.controlledDevices
+                    controlledDevices: device.controlledDevices,
+                    drivenBy: owners[device.deviceCode]
                 )
             )
         }

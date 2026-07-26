@@ -131,6 +131,17 @@ public struct DirectiveDetailView: View {
                     }
                 }
 
+                if let owner = builtIn.drivenBy {
+                    HStack(spacing: Space.xs) {
+                        Image(systemName: "lock.fill")
+                            .font(.system(size: IconSize.s))
+                            .foregroundStyle(.rcTextTertiary)
+                        Text("Driven by \(owner.kindTitle) — Reconfigure and Clear are disabled while the mission is running.")
+                            .font(.rcCaption)
+                            .foregroundStyle(.rcTextSecondary)
+                    }
+                }
+
                 HStack(spacing: Space.s) {
                     Button("Reconfigure") { store.send(.reconfigureTapped) }
                         .buttonStyle(RCButtonStyle(.primary))
@@ -138,6 +149,7 @@ public struct DirectiveDetailView: View {
                         .buttonStyle(RCButtonStyle(.secondary))
                     Spacer()
                 }
+                .disabled(builtIn.drivenBy != nil)
             }
             .padding(Space.xl)
             .frame(maxWidth: .infinity, alignment: .leading)
