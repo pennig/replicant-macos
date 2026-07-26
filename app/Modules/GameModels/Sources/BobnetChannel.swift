@@ -33,8 +33,7 @@ public struct BobnetChannel: Identifiable, Equatable, Sendable {
 // MARK: - Schema
 
 extension BobnetChannel {
-    /// Registers the `bobnetChannels` table migration. Composed into the app's
-    /// `bootstrapDatabase` alongside other tables.
+    /// Creates the `bobnetChannels` table.
     public static let createBobnetChannels = SchemaMigration("Create 'bobnetChannels' table") { db in
         try #sql(
             """
@@ -46,11 +45,5 @@ extension BobnetChannel {
             """
         )
         .execute(db)
-    }
-
-    /// Temporary shim so `GameDatabase` keeps compiling mid-conversion.
-    /// Deleted in the manifest task.
-    public static func registerMigrations(_ migrator: inout DatabaseMigrator) {
-        createBobnetChannels.register(in: &migrator)
     }
 }

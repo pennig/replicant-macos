@@ -349,9 +349,8 @@ extension KnownReplicant {
 // MARK: - Schema
 
 extension KnownReplicant {
-    /// Registers the `knownReplicants` table migration. Kept beside the model so
-    /// the schema and the type never drift. Composed into the app's
-    /// `bootstrapDatabase` alongside the other tables.
+    /// Creates the `knownReplicants` table. Kept beside the model so the schema
+    /// and the type never drift.
     public static let createKnownReplicants = SchemaMigration("Create 'knownReplicants' table") { db in
         try #sql(
             """
@@ -374,11 +373,5 @@ extension KnownReplicant {
             """
         )
         .execute(db)
-    }
-
-    /// Temporary shim so `GameDatabase` keeps compiling mid-conversion.
-    /// Deleted in the manifest task.
-    public static func registerMigrations(_ migrator: inout DatabaseMigrator) {
-        createKnownReplicants.register(in: &migrator)
     }
 }

@@ -115,9 +115,8 @@ extension SpeciesReputation {
 // MARK: - Schema
 
 extension Civilisation {
-    /// Registers the `civilisations` table migration. Kept beside the model so
-    /// the schema and the type never drift. Composed into the app's
-    /// `bootstrapDatabase` alongside other features' tables.
+    /// Creates the `civilisations` table. Kept beside the model so the schema
+    /// and the type never drift.
     public static let createCivilisations = SchemaMigration("Create 'civilisations' table") { db in
         try #sql(
             """
@@ -136,12 +135,6 @@ extension Civilisation {
             """
         )
         .execute(db)
-    }
-
-    /// Temporary shim so `GameDatabase` keeps compiling mid-conversion.
-    /// Deleted in the manifest task.
-    public static func registerMigrations(_ migrator: inout DatabaseMigrator) {
-        createCivilisations.register(in: &migrator)
     }
 }
 

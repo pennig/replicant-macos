@@ -55,9 +55,8 @@ public struct Message: Identifiable, Equatable, Sendable {
 // MARK: - Schema
 
 extension Message {
-    /// Registers the `messages` table migration. Kept here, alongside the model,
-    /// so the schema and the type it backs never drift apart. Composed into the
-    /// app's `bootstrapDatabase` alongside other features' tables.
+    /// Creates the `messages` table. Kept here, alongside the model, so the
+    /// schema and the type it backs never drift apart.
     public static let createMessages = SchemaMigration("Create 'messages' table") { db in
         try #sql(
             """
@@ -80,13 +79,6 @@ extension Message {
     ) { db in
         try #sql(#"ALTER TABLE "messages" ADD COLUMN "category" TEXT"#).execute(db)
         try #sql(#"ALTER TABLE "messages" ADD COLUMN "subcategory" TEXT"#).execute(db)
-    }
-
-    /// Temporary shim so `GameDatabase` keeps compiling mid-conversion.
-    /// Deleted in the manifest task.
-    public static func registerMigrations(_ migrator: inout DatabaseMigrator) {
-        createMessages.register(in: &migrator)
-        addMessageCategories.register(in: &migrator)
     }
 }
 

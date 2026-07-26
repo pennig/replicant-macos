@@ -633,9 +633,8 @@ extension Operation {
 // MARK: - Schema
 
 extension Device {
-    /// Registers the `devices` table migration. Kept beside the model so the
-    /// schema and the type never drift. Composed into the app's
-    /// `bootstrapDatabase` alongside other tables.
+    /// Creates the `devices` table. Kept beside the model so the schema and
+    /// the type never drift.
     public static let createDevices = SchemaMigration("Create 'devices' table") { db in
         try #sql(
             """
@@ -662,11 +661,5 @@ extension Device {
             """
         )
         .execute(db)
-    }
-
-    /// Temporary shim so `GameDatabase` keeps compiling mid-conversion.
-    /// Deleted in the manifest task.
-    public static func registerMigrations(_ migrator: inout DatabaseMigrator) {
-        createDevices.register(in: &migrator)
     }
 }

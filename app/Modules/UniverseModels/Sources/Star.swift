@@ -104,8 +104,8 @@ extension Star {
 // MARK: - Schema
 
 extension Star {
-    /// Registers the `stars` table migration. Kept beside the model so schema
-    /// and type never drift. Called from the app's `bootstrapDatabase`.
+    /// Creates the `stars` table. Kept beside the model so schema and type
+    /// never drift.
     public static let createStars = SchemaMigration("Create 'stars' table") { db in
         try #sql(
             """
@@ -127,11 +127,5 @@ extension Star {
             """
         )
         .execute(db)
-    }
-
-    /// Temporary shim so `GameDatabase` keeps compiling mid-conversion.
-    /// Deleted in the manifest task.
-    public static func registerMigrations(_ migrator: inout DatabaseMigrator) {
-        createStars.register(in: &migrator)
     }
 }

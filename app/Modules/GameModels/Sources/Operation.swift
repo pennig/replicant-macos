@@ -245,8 +245,8 @@ public enum OperationSource: String, Sendable, QueryBindable {
 // MARK: - Schema
 
 extension Operation {
-    /// Registers the `operations` table migration plus the partial unique index
-    /// that enforces at most one open operation per device.
+    /// Creates the `operations` table plus the partial unique index that
+    /// enforces at most one open operation per device.
     public static let createOperations = SchemaMigration("Create 'operations' table") { db in
         try #sql(
             """
@@ -275,11 +275,5 @@ extension Operation {
             """
         )
         .execute(db)
-    }
-
-    /// Temporary shim so `GameDatabase` keeps compiling mid-conversion.
-    /// Deleted in the manifest task.
-    public static func registerMigrations(_ migrator: inout DatabaseMigrator) {
-        createOperations.register(in: &migrator)
     }
 }

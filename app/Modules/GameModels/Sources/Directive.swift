@@ -251,8 +251,8 @@ public struct DirectiveLogEntry: Identifiable, Equatable, Sendable {
 // MARK: - Schema
 
 extension Directive {
-    /// Registers the `directives` table migration. Kept beside the model so the
-    /// schema and the type never drift.
+    /// Creates the `directives` table. Kept beside the model so the schema
+    /// and the type never drift.
     public static let createDirectives = SchemaMigration("Create 'directives' table") { db in
         try #sql(
             """
@@ -286,17 +286,10 @@ extension Directive {
         )
         .execute(db)
     }
-
-    /// Temporary shim so `GameDatabase` keeps compiling mid-conversion.
-    /// Deleted in the manifest task.
-    public static func registerMigrations(_ migrator: inout DatabaseMigrator) {
-        createDirectives.register(in: &migrator)
-        addControllerCode.register(in: &migrator)
-    }
 }
 
 extension DirectiveLogEntry {
-    /// Registers the `directiveLogEntries` table migration.
+    /// Creates the `directiveLogEntries` table and its supporting indexes.
     public static let createDirectiveLogEntries = SchemaMigration("Create 'directiveLogEntries' table") { db in
         try #sql(
             """
@@ -342,11 +335,5 @@ extension DirectiveLogEntry {
             """
         )
         .execute(db)
-    }
-
-    /// Temporary shim so `GameDatabase` keeps compiling mid-conversion.
-    /// Deleted in the manifest task.
-    public static func registerMigrations(_ migrator: inout DatabaseMigrator) {
-        createDirectiveLogEntries.register(in: &migrator)
     }
 }

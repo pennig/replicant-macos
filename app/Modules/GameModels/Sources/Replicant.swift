@@ -94,9 +94,8 @@ extension Replicant {
 // MARK: - Schema
 
 extension Replicant {
-    /// Registers the `replicants` table migration. Kept beside the model so the
-    /// schema and the type never drift. Composed into the app's
-    /// `bootstrapDatabase` alongside other features' tables.
+    /// Creates the `replicants` table. Kept beside the model so the schema
+    /// and the type never drift.
     public static let createReplicants = SchemaMigration("Create 'replicants' table") { db in
         try #sql(
             """
@@ -115,11 +114,5 @@ extension Replicant {
             """
         )
         .execute(db)
-    }
-
-    /// Temporary shim so `GameDatabase` keeps compiling mid-conversion.
-    /// Deleted in the manifest task.
-    public static func registerMigrations(_ migrator: inout DatabaseMigrator) {
-        createReplicants.register(in: &migrator)
     }
 }

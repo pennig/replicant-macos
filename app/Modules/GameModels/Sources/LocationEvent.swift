@@ -165,9 +165,8 @@ extension LocationEvent {
 // MARK: - Schema
 
 extension LocationEvent {
-    /// Registers the `locationEvents` table migration. Kept beside the model so the
-    /// schema and the type never drift. Composed into `bootstrapDatabase` alongside
-    /// the other tables.
+    /// Creates the `locationEvents` table. Kept beside the model so the
+    /// schema and the type never drift.
     public static let createLocationEvents = SchemaMigration("Create 'locationEvents' table") { db in
         try #sql(
             """
@@ -193,6 +192,7 @@ extension LocationEvent {
         .execute(db)
     }
 
+    /// Adds the denormalized `objectivesMet` column to `locationEvents`.
     public static let addObjectivesMet = SchemaMigration("Add 'objectivesMet' to locationEvents") { db in
         try #sql(
             """
@@ -201,13 +201,6 @@ extension LocationEvent {
             """
         )
         .execute(db)
-    }
-
-    /// Temporary shim so `GameDatabase` keeps compiling mid-conversion.
-    /// Deleted in the manifest task.
-    public static func registerMigrations(_ migrator: inout DatabaseMigrator) {
-        createLocationEvents.register(in: &migrator)
-        addObjectivesMet.register(in: &migrator)
     }
 }
 

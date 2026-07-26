@@ -91,8 +91,7 @@ extension BobnetMessage {
 // MARK: - Schema
 
 extension BobnetMessage {
-    /// Registers the `bobnetMessages` table migration. Composed into the app's
-    /// `bootstrapDatabase` alongside other tables.
+    /// Creates the `bobnetMessages` table.
     public static let createBobnetMessages = SchemaMigration("Create 'bobnetMessages' table") { db in
         try #sql(
             """
@@ -108,11 +107,5 @@ extension BobnetMessage {
             """
         )
         .execute(db)
-    }
-
-    /// Temporary shim so `GameDatabase` keeps compiling mid-conversion.
-    /// Deleted in the manifest task.
-    public static func registerMigrations(_ migrator: inout DatabaseMigrator) {
-        createBobnetMessages.register(in: &migrator)
     }
 }

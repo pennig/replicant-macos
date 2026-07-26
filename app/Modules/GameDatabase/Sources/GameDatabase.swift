@@ -16,8 +16,18 @@ import os
 
 /// The single composition point for the app's database schema.
 public enum GameDatabase {
-    /// A migrator with every feature's table registered. Ordered so that tables
-    /// referenced by others are created first.
+    /// Every migration, in order. **The array index is the order** — there is
+    /// deliberately no sequence number, so there is no ordering key that can
+    /// collide and no reliance on a sort (Swift's is not stable, and a tie
+    /// would order non-deterministically between runs).
+    ///
+    /// Append new migrations to the END. Never edit an entry that has shipped:
+    /// its identifier is already recorded in real databases, so an edit simply
+    /// never runs and leaves the schema silently stale. The golden schema test
+    /// exists to catch exactly that.
+    ///
+    /// This order reproduces the original per-table registration order, so the
+    /// identifiers written to `grdb_migrations` are unchanged.
     ///
     /// Adding a table? Decide its logout fate at the same time: account-scoped
     /// tables need a clear registered in `ReplicantApp.registerSessionCleanup()`
@@ -25,30 +35,41 @@ public enum GameDatabase {
     /// machine inherits the first's rows — and "table is empty" cold-load
     /// gates then skip the fetch. `EventLog` is the one deliberate exemption
     /// (user-managed diagnostic ledger).
-    public static func migrator() -> DatabaseMigrator {
+    public static let manifest: [SchemaMigration] = [
+        Message.createMessages,
+        Message.addMessageCategories,
+        Blueprint.createBlueprints,
+        Civilisation.createCivilisations,
+        Star.createStars,
+        SystemDetail.createSystemDetails,
+        LocationFootprint.createLocationFootprints,
+        SiteAssay.createSiteAssays,
+        LocationEvent.createLocationEvents,
+        LocationEvent.addObjectivesMet,
+        Replicant.createReplicants,
+        KnownReplicant.createKnownReplicants,
+        Device.createDevices,
+        Directive.createDirectives,
+        Directive.addControllerCode,
+        DirectiveLogEntry.createDirectiveLogEntries,
+        FTLLinkRecord.createFTLLinks,
+        BobnetMessage.createBobnetMessages,
+        BobnetChannel.createBobnetChannels,
+        // Qualified: `Operation` would otherwise be ambiguous with Foundation's.
+        GameModels.Operation.createOperations,
+        EventLog.createEventLogs,
+    ]
+
+    /// Builds a migrator from `entries`. The parameter exists so tests can
+    /// migrate a deliberately-modified manifest through the real code path.
+    public static func migrator(_ entries: [SchemaMigration] = manifest) -> DatabaseMigrator {
         var migrator = DatabaseMigrator()
         #if DEBUG
         migrator.eraseDatabaseOnSchemaChange = true
         #endif
-        Message.registerMigrations(&migrator)
-        Blueprint.registerMigrations(&migrator)
-        Civilisation.registerMigrations(&migrator)
-        Star.registerMigrations(&migrator)
-        SystemDetail.registerMigrations(&migrator)
-        LocationFootprint.registerMigrations(&migrator)
-        SiteAssay.registerMigrations(&migrator)
-        LocationEvent.registerMigrations(&migrator)
-        Replicant.registerMigrations(&migrator)
-        KnownReplicant.registerMigrations(&migrator)
-        Device.registerMigrations(&migrator)
-        Directive.registerMigrations(&migrator)
-        DirectiveLogEntry.registerMigrations(&migrator)
-        FTLLinkRecord.registerMigrations(&migrator)
-        BobnetMessage.registerMigrations(&migrator)
-        BobnetChannel.registerMigrations(&migrator)
-        // Qualified: `Operation` would otherwise be ambiguous with Foundation's.
-        GameModels.Operation.registerMigrations(&migrator)
-        EventLog.registerMigrations(&migrator)
+        for entry in entries {
+            entry.register(in: &migrator)
+        }
         return migrator
     }
 

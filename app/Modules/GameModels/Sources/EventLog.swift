@@ -146,8 +146,8 @@ extension EventLog {
 // MARK: - Schema
 
 extension EventLog {
-    /// Registers the `eventLogs` table migration. Kept beside the model so the
-    /// schema and the type never drift. Composed into `bootstrapDatabase`.
+    /// Creates the `eventLogs` table. Kept beside the model so the schema and
+    /// the type never drift.
     public static let createEventLogs = SchemaMigration("Create 'eventLogs' table") { db in
         try #sql(
             """
@@ -171,11 +171,5 @@ extension EventLog {
             """
         )
         .execute(db)
-    }
-
-    /// Temporary shim so `GameDatabase` keeps compiling mid-conversion.
-    /// Deleted in the manifest task.
-    public static func registerMigrations(_ migrator: inout DatabaseMigrator) {
-        createEventLogs.register(in: &migrator)
     }
 }

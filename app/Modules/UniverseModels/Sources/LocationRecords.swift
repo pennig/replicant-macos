@@ -201,8 +201,7 @@ extension SiteAssay {
 // MARK: - Schema
 
 extension SystemDetail {
-    /// Registers the `systemDetails` table. Call from the app's
-    /// `bootstrapDatabase` alongside the other tables.
+    /// Creates the `systemDetails` table.
     public static let createSystemDetails = SchemaMigration("Create 'systemDetails' table") { db in
         try #sql(
             """
@@ -217,17 +216,10 @@ extension SystemDetail {
         )
         .execute(db)
     }
-
-    /// Temporary shim so `GameDatabase` keeps compiling mid-conversion.
-    /// Deleted in the manifest task.
-    public static func registerMigrations(_ migrator: inout DatabaseMigrator) {
-        createSystemDetails.register(in: &migrator)
-    }
 }
 
 extension LocationFootprint {
-    /// Registers the `locationFootprints` table. Call from the app's
-    /// `bootstrapDatabase` alongside the other tables.
+    /// Creates the `locationFootprints` table.
     public static let createLocationFootprints = SchemaMigration(
         "Create 'locationFootprints' table"
     ) { db in
@@ -246,17 +238,10 @@ extension LocationFootprint {
         )
         .execute(db)
     }
-
-    /// Temporary shim so `GameDatabase` keeps compiling mid-conversion.
-    /// Deleted in the manifest task.
-    public static func registerMigrations(_ migrator: inout DatabaseMigrator) {
-        createLocationFootprints.register(in: &migrator)
-    }
 }
 
 extension SiteAssay {
-    /// Registers the `siteAssays` table. Call from `GameDatabase.migrator()`
-    /// alongside the other tables.
+    /// Creates the `siteAssays` table.
     public static let createSiteAssays = SchemaMigration("Create 'siteAssays' table") { db in
         try #sql(
             """
@@ -271,11 +256,5 @@ extension SiteAssay {
             """
         )
         .execute(db)
-    }
-
-    /// Temporary shim so `GameDatabase` keeps compiling mid-conversion.
-    /// Deleted in the manifest task.
-    public static func registerMigrations(_ migrator: inout DatabaseMigrator) {
-        createSiteAssays.register(in: &migrator)
     }
 }

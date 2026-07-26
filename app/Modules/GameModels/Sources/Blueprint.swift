@@ -197,9 +197,8 @@ extension Blueprint {
 // MARK: - Schema
 
 extension Blueprint {
-    /// Registers the `blueprints` table migration. Kept beside the model so the
-    /// schema and the type never drift. Composed into the app's
-    /// `bootstrapDatabase` alongside other features' tables.
+    /// Creates the `blueprints` table. Kept beside the model so the schema and
+    /// the type never drift.
     public static let createBlueprints = SchemaMigration("Create 'blueprints' table") { db in
         try #sql(
             """
@@ -221,12 +220,6 @@ extension Blueprint {
             """
         )
         .execute(db)
-    }
-
-    /// Temporary shim so `GameDatabase` keeps compiling mid-conversion.
-    /// Deleted in the manifest task.
-    public static func registerMigrations(_ migrator: inout DatabaseMigrator) {
-        createBlueprints.register(in: &migrator)
     }
 }
 
