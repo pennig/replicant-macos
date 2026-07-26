@@ -29,6 +29,12 @@ public struct SidebarView: View {
     /// count, exactly like unread *story* messages, so "ready to complete" reads at
     /// a glance.
     @FetchOne(LocationEvent.where { $0.status.eq("active") && $0.objectivesMet }.count()) private var readyEventCount = 0
+    /// Live count of custom missions stalled in `needsAttention` — the sidebar's
+    /// "a mission is waiting on you" signal (directives design spec §1). A
+    /// stalled directive is never merely informational: the engine pauses and
+    /// surfaces rather than retrying, so nothing moves until the user acts.
+    /// Hence it drives the accent pill, not a plain count.
+    @FetchOne(Directive.where { $0.status.eq(DirectiveStatus.needsAttention) }.count()) private var stalledDirectiveCount = 0
     /// The whole fleet — the header resolves the active replicant's host glyph
     /// (and the tint/label of any running progress) from it.
     @FetchAll private var devices: [Device]
@@ -51,6 +57,7 @@ public struct SidebarView: View {
         switch item {
         case .messages: unreadCount
         case .locationEvents: activeEventCount
+        case .directives: stalledDirectiveCount
         default: 0
         }
     }
@@ -62,6 +69,10 @@ public struct SidebarView: View {
         switch item {
         case .messages: unreadStoryCount
         case .locationEvents: readyEventCount
+        // Same count on both sides on purpose: the badge renders
+        // `otherCount: max(0, badgeCount - accent)`, so equal values yield one
+        // accent pill and no plain remainder.
+        case .directives: stalledDirectiveCount
         default: 0
         }
     }
