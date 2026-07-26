@@ -138,6 +138,28 @@ extension LocationsClient {
     /// body's sites without opening the Locations feature. Best-effort: a system
     /// with no replicant present (403), an uncharted system, or an unreadable
     /// body simply leaves the catalog untouched rather than throwing.
+    /// Re-read one star system and fold it into the cached blob.
+    ///
+    /// Best-effort by contract: `GET locations/{star}` is **presence-gated**
+    /// (403 "No replicant in system" whenever no replicant is there — see the
+    /// location-endpoint-presence-gate memory note), and a caller away from the
+    /// system is the normal case, not a failure. A 403 leaves the cache exactly
+    /// as it was. Used by `DirectiveEngine`'s `refreshSystem` action to pull
+    /// fresh scan counts after a survey completes.
+    public func hydrateSystem(designation: String) async throws {
+        @Dependency(\.defaultDatabase) var database
+        @Dependency(\.date.now) var now
+        guard let fresh = try? await system(designation) else { return }
+        let cached = try? await database.read { db in
+            try SystemDetail.where { $0.designation.eq(designation) }.fetchOne(db)
+        }
+        let merged = (try? cached?.system()).flatMap { $0 }.map { $0.mergingSystemDetail(fresh) } ?? fresh
+        let row = try SystemDetail(system: merged, hydratedAt: now)
+        try await database.write { db in
+            try SystemDetail.upsert { row }.execute(db)
+        }
+    }
+
     public func hydrateBody(systemDesignation: String, bodyDesignation: String) async throws {
         @Dependency(\.defaultDatabase) var database
         @Dependency(\.date.now) var now

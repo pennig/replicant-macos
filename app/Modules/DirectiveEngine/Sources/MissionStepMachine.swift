@@ -26,6 +26,19 @@ public enum MissionAction: Equatable, Sendable {
     /// Nothing to do yet — something server-side is still in progress. Expected
     /// and cheap; the engine takes no action at all.
     case wait
+    /// Move to `nextStep` with no command at all. The machine's way of saying
+    /// "this step's work was already done" — a target already reached, a
+    /// directive already configured — without a pointless POST.
+    case advanceStep(nextStep: String)
+    /// Record the AMI controller this run is driving, then move on. The
+    /// ownership handshake `Directive.controllerCode` exists for: it is what
+    /// badges and locks the controller's built-in row while the mission runs.
+    case assignController(deviceCode: String, nextStep: String)
+    /// Re-read `locations/{star}`, persist it, then move to `nextStep`. The
+    /// engine owns the I/O; the machine sees the fresh counts on its next
+    /// evaluation. Presence-gated (403 away from the system), so only ever
+    /// asked for after arrival.
+    case refreshSystem(designation: String, nextStep: String)
     /// Pause and surface. The engine sets `needsAttention` plus the typed reason
     /// and stops evaluating until the user resolves it. Never auto-retried at
     /// the mission layer (spec §8).

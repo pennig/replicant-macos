@@ -72,6 +72,24 @@ enum DirectiveExecutor {
                 }
             }
 
+        case let .advanceStep(nextStep):
+            await move(directive, to: nextStep, controllerCode: directive.controllerCode)
+            return true
+
+        case let .assignController(deviceCode, nextStep):
+            logger.info("directive \(directive.id, privacy: .public) claims controller \(deviceCode, privacy: .public)")
+            await move(directive, to: nextStep, controllerCode: deviceCode)
+            return true
+
+        case let .refreshSystem(designation, nextStep):
+            // Best-effort by contract: the endpoint 403s away from the system,
+            // and a stale cache just means the confirming step waits. Stalling
+            // on a transient read would strand a mission that is fine.
+            @Dependency(\.locationsClient) var locationsClient
+            try? await locationsClient.hydrateSystem(designation: designation)
+            await move(directive, to: nextStep, controllerCode: directive.controllerCode)
+            return true
+
         case let .stall(reason):
             await stall(directive, reason: reason, detail: nil)
             return false
@@ -103,6 +121,28 @@ enum DirectiveExecutor {
             logger.info("directive \(directive.id, privacy: .public) completed")
             return false
         }
+    }
+
+    /// Move to a step, optionally claiming a controller, with the matching
+    /// timeline entry. `stepStartedAt` is re-stamped: it is the reference point
+    /// for the issue-time-relative completion guard.
+    private static func move(
+        _ directive: Directive,
+        to nextStep: String,
+        controllerCode: String?
+    ) async {
+        @Dependency(\.date) var date
+        @Dependency(\.uuid) var uuid
+        var updated = directive
+        updated.step = nextStep
+        updated.controllerCode = controllerCode
+        updated.stepStartedAt = date.now
+        updated.updatedAt = date.now
+        await commit(updated, [
+            entry(directive, .stepStarted, "Step: \(nextStep)",
+                  step: nextStep, operationID: nil,
+                  id: uuid().uuidString, at: date.now),
+        ])
     }
 
     /// Pause and surface (design spec §8) — a typed reason, never a retry at

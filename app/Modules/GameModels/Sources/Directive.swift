@@ -60,6 +60,11 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
     case noRelayCoLocated
     /// No survey drone is aboard the vessel for a Survey Run step.
     case noSurveyDroneAboard
+    /// No AMI survey controller is stowed aboard the vessel. Staging one is the
+    /// player's job — a Survey Run uses what is already aboard and adopted, it
+    /// never stows or adopts (adoption is persistent state that would outlive
+    /// the mission).
+    case noSurveyControllerAboard
     /// The device the step needs is unreachable (offline/unknown state).
     case unreachableDevice
     /// The `locations/{star}` backstop read disagrees with a completion event.

@@ -15,6 +15,7 @@ import GameModels
 import GameServices
 import SQLiteData
 import Testing
+import UniverseModels
 import Utils
 @testable import DirectiveEngine
 
@@ -258,6 +259,120 @@ struct DirectiveEngineTests {
             #expect(directive?.updatedAt == Date(timeIntervalSince1970: 0))
             let entries = try await database.read { db in try DirectiveLogEntry.all.fetchAll(db) }
             #expect(entries.isEmpty)
+        }
+    }
+
+    /// `.advanceStep` moves the step with no command at all — the machine's way
+    /// of saying "this step's work was already done".
+    @Test func advanceStepMovesWithoutDispatching() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { mission(step: "preflight") }.execute(db)
+        }
+        let core = DirectiveEngineCore(
+            machines: [ScriptedMachine([.advanceStep(nextStep: "travelling")])],
+            tick: .seconds(5)
+        )
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.commandGovernor.dispatch = { _, _, _ in
+                Issue.record("advanceStep must not POST")
+                return .deferred(.budgetExhausted)
+            }
+        } operation: {
+            await core.evaluateOnce(directiveID: "D1")
+            let directive = try await database.read { db in
+                try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+            }
+            #expect(directive?.step == "travelling")
+            #expect(directive?.stepStartedAt == Date(timeIntervalSince1970: 1_000))
+            let entries = try await database.read { db in try DirectiveLogEntry.all.fetchAll(db) }
+            #expect(entries.map(\.kind) == [.stepStarted])
+        }
+    }
+
+    /// `.assignController` records the controller — this is what badges and
+    /// locks its built-in row for the life of the run.
+    @Test func assignControllerRecordsTheController() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { mission(step: "preflight") }.execute(db)
+        }
+        let core = DirectiveEngineCore(
+            machines: [ScriptedMachine([.assignController(deviceCode: "AMI1", nextStep: "travelling")])],
+            tick: .seconds(5)
+        )
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+        } operation: {
+            await core.evaluateOnce(directiveID: "D1")
+            let directive = try await database.read { db in
+                try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+            }
+            #expect(directive?.controllerCode == "AMI1")
+            #expect(directive?.step == "travelling")
+        }
+    }
+
+    /// `.refreshSystem` performs the read, then advances.
+    @Test func refreshSystemReadsThenAdvances() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { mission(step: "awaiting") }.execute(db)
+        }
+        let asked = LockIsolated<String?>(nil)
+        let core = DirectiveEngineCore(
+            machines: [ScriptedMachine([.refreshSystem(designation: "SOL", nextStep: "confirming")])],
+            tick: .seconds(5)
+        )
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.locationsClient.system = { designation in
+                asked.setValue(designation)
+                return StarSystem(designation: designation, planetsScanned: 2, planetsTotal: 2)
+            }
+        } operation: {
+            await core.evaluateOnce(directiveID: "D1")
+            #expect(asked.value == "SOL")
+            let directive = try await database.read { db in
+                try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+            }
+            #expect(directive?.step == "confirming")
+            let stored = try await database.read { db in
+                try SystemDetail.where { $0.designation.eq("SOL") }.fetchOne(db)
+            }
+            #expect(try stored?.system().planetsScanned == 2, "the fresh counts must be persisted")
+        }
+    }
+
+    /// A refresh that 403s (vessel not in that system) still advances — the read
+    /// is best-effort, and stalling on it would strand a mission that is fine.
+    @Test func refreshSystemAdvancesEvenWhenTheReadFails() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { mission(step: "awaiting") }.execute(db)
+        }
+        let core = DirectiveEngineCore(
+            machines: [ScriptedMachine([.refreshSystem(designation: "SOL", nextStep: "confirming")])],
+            tick: .seconds(5)
+        )
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.locationsClient.system = { _ in throw LocationsError.noReplicantInSystem }
+        } operation: {
+            await core.evaluateOnce(directiveID: "D1")
+            let directive = try await database.read { db in
+                try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+            }
+            #expect(directive?.step == "confirming")
         }
     }
 

@@ -161,7 +161,7 @@ actor DirectiveEngineCore {
 
         let world: WorldSnapshot
         do {
-            world = try await WorldSnapshot.read(from: database, now: date.now)
+            world = try await WorldSnapshot.read(from: database, now: date.now, directive: directive)
         } catch {
             logger.error("world snapshot failed: \(error)")
             return
