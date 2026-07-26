@@ -65,6 +65,10 @@ public struct DirectiveComposer {
         @ObservationStateIgnored
         @FetchAll(SystemDetail.all) public var systemDetails: [SystemDetail]
 
+        /// Stored site totals, so the picker can rank bodies by what's on them.
+        @ObservationStateIgnored
+        @FetchAll(SiteAssay.all) public var siteAssays: [SiteAssay]
+
         /// Seed the draft for a device: the picker lands on the directive in
         /// force when it's still offered (falling back to the first option),
         /// and that directive's configuration form mirrors what's running.
@@ -156,7 +160,9 @@ public struct DirectiveComposer {
                 let row = systemDetails.first(where: { $0.designation == system }),
                 let starSystem = try? row.system()
             else { return [] }
-            return starSystem.salvageBodies
+            return starSystem.salvageBodies(
+                totals: siteAssays.reduce(into: [:]) { $0[$1.id] = $1.totals }
+            )
         }
 
         /// Whether Set Directive may fire. Some directives carry required

@@ -166,9 +166,15 @@ public struct DirectiveComposerSheet: View {
     }
 
     /// A salvage body's dropdown label — its name/designation, annotated with
-    /// the site count when it holds more than one (the drones work them all).
+    /// the site count when it holds more than one (the drones work them all)
+    /// and the units still on it when any site has been assayed.
     private func salvageBodyLabel(_ body: SalvageBody) -> String {
-        body.siteCount > 1 ? "\(body.displayName) · \(body.siteCount) sites" : body.displayName
+        var parts = [body.displayName]
+        if body.siteCount > 1 { parts.append("\(body.siteCount) sites") }
+        if let units = body.unitsRemaining {
+            parts.append("~\(units.formatted(.number.precision(.fractionLength(0)))) units")
+        }
+        return parts.joined(separator: " · ")
     }
 
     /// The `delivery` config: a one-shot collect → deliver route plus the

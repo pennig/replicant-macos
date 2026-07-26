@@ -184,14 +184,21 @@ public struct SalvageBody: Identifiable, Equatable, Sendable {
     public var name: String?
     /// How many live salvage sites the body holds.
     public var siteCount: Int
+    /// Total units still present across the body's live sites, when assayed.
+    /// Nil when no site on the body has a stored total — unknown, not zero.
+    public var unitsRemaining: Double?
     public var id: String { designation }
     /// Body name when the server provides one, else its designation.
     public var displayName: String { name ?? designation }
 
-    public init(designation: String, name: String? = nil, siteCount: Int = 1) {
+    public init(
+        designation: String, name: String? = nil, siteCount: Int = 1,
+        unitsRemaining: Double? = nil
+    ) {
         self.designation = designation
         self.name = name
         self.siteCount = siteCount
+        self.unitsRemaining = unitsRemaining
     }
 }
 
@@ -706,18 +713,34 @@ extension StarSystem {
         return byDesignation.values.sorted { $0.designation < $1.designation }
     }
 
-    /// Bodies holding at least one live (non-depleted) salvage site, each with its
-    /// site count — the targets the `gather_salvage` directive picker offers.
-    public var salvageBodies: [SalvageBody] {
+    /// Bodies holding at least one live (non-depleted) salvage site, each with
+    /// its site count — the targets the `gather_salvage` directive picker
+    /// offers. Pass stored `SiteAssay` totals (site designation → totals) to
+    /// have each body report the units still on it.
+    public func salvageBodies(totals: [String: [String: Double]] = [:]) -> [SalvageBody] {
         var counts: [String: Int] = [:]
+        var units: [String: Double] = [:]
         for site in knownSalvageSites where !site.depleted {
             let body = site.bodyDesignation
-            if !body.isEmpty { counts[body, default: 0] += 1 }
+            guard !body.isEmpty else { continue }
+            counts[body, default: 0] += 1
+            let amounts = SiteAmounts.amounts(
+                remainingPct: site.remainingPct, totals: totals[site.designation]
+            )
+            if let siteUnits = SiteAmounts.totalRemaining(amounts) {
+                units[body, default: 0] += siteUnits
+            }
         }
         return counts.keys.sorted().map {
-            SalvageBody(designation: $0, name: bodyName(for: $0), siteCount: counts[$0]!)
+            SalvageBody(
+                designation: $0, name: bodyName(for: $0),
+                siteCount: counts[$0]!, unitsRemaining: units[$0]
+            )
         }
     }
+
+    /// Salvage-bearing bodies with no assay data joined in.
+    public var salvageBodies: [SalvageBody] { salvageBodies() }
 
     /// The display name of a planet or moon by designation, if the tree holds it.
     private func bodyName(for designation: String) -> String? {
