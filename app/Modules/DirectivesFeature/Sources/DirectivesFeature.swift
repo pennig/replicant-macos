@@ -41,6 +41,13 @@ public struct DirectivesFeature {
         @FetchAll(Directive.order { $0.createdAt.desc() }, animation: .default)
         public var directives: [Directive]
 
+        /// The selected row's timeline — a mission's steps, or a built-in
+        /// directive's completion history. Reloaded on selection change (see
+        /// `selectionChanged`), since the query is keyed by what's selected.
+        @ObservationStateIgnored
+        @Fetch(DirectiveTimeline(directiveID: nil, deviceCode: nil))
+        public var timeline = DirectiveTimeline.Value()
+
         /// The selected row's namespaced id (see `DirectiveRow.id`).
         public var selectedRowID: String?
         /// A failed or rejected command, shown as a banner over the list.
@@ -105,6 +112,9 @@ public struct DirectivesFeature {
         BindingReducer()
         Reduce { state, action in
             switch action {
+            case .binding(\.selectedRowID):
+                return selectionChanged(&state)
+
             case .binding:
                 return .none
 
@@ -180,9 +190,11 @@ public struct DirectivesFeature {
 
             case let .newDirective(.presented(.delegate(.created(directive)))):
                 // Select the run that was just launched, so the detail pane is
-                // showing its timeline as the engine starts working it.
+                // showing its timeline as the engine starts working it. Set the
+                // selection BEFORE building the request, or it resolves against
+                // the previous one.
                 state.selectedRowID = "custom:\(directive.id)"
-                return .none
+                return selectionChanged(&state)
 
             case .newDirective:
                 return .none
@@ -193,6 +205,17 @@ public struct DirectivesFeature {
         }
         .ifLet(\.$newDirective, action: \.newDirective) {
             NewDirectiveFeature()
+        }
+    }
+
+    /// Re-run the timeline query for whatever is selected now. Called from BOTH
+    /// selection paths — the binding and the launcher's programmatic select —
+    /// because missing the second is the easy bug (`BobnetFeature` carries the
+    /// same helper for the same reason).
+    private func selectionChanged(_ state: inout State) -> Effect<Action> {
+        let request = DirectiveTimeline.request(for: state.selectedRow)
+        return .run { [fetch = state.$timeline] _ in
+            _ = try? await fetch.load(request)
         }
     }
 

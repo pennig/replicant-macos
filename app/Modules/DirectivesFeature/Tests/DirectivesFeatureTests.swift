@@ -298,6 +298,97 @@ struct DirectivesFeatureTests {
         #expect(calls.value == ["pause:D1", "resume:D1"])
     }
 
+    /// Selecting a mission loads its timeline — and only its own entries.
+    @Test func selectingAMissionLoadsItsTimeline() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { Self.stalledMission(id: "D1") }.execute(db)
+            try DirectiveLogEntry.insert { Self.logEntry("L1", directiveID: "D1", at: 10) }.execute(db)
+            try DirectiveLogEntry.insert { Self.logEntry("L2", directiveID: "D9", at: 20) }.execute(db)
+        }
+        let store = TestStore(initialState: DirectivesFeature.State()) {
+            DirectivesFeature()
+        } withDependencies: { $0.defaultDatabase = database }
+        store.exhaustivity = .off
+
+        await store.send(.binding(.set(\.selectedRowID, "custom:D1")))
+        #expect(store.state.timeline.entries.map(\.id) == ["L1"])
+    }
+
+    /// Selecting a built-in row loads that controller's completion history.
+    @Test func selectingABuiltInRowLoadsItsHistory() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Device.insert { Self.controller(code: "AMI1", directive: "survey_system") }.execute(db)
+            try DirectiveLogEntry.insert {
+                Self.logEntry("L1", deviceCode: "AMI1", kind: .directiveCompleted, at: 10)
+            }.execute(db)
+        }
+        let store = TestStore(initialState: DirectivesFeature.State()) {
+            DirectivesFeature()
+        } withDependencies: { $0.defaultDatabase = database }
+        store.exhaustivity = .off
+
+        await store.send(.binding(.set(\.selectedRowID, "builtin:AMI1")))
+        #expect(store.state.timeline.entries.map(\.id) == ["L1"])
+    }
+
+    /// Deselecting clears the timeline rather than leaving the last run's
+    /// entries under an empty pane.
+    @Test func deselectingClearsTheTimeline() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { Self.stalledMission(id: "D1") }.execute(db)
+            try DirectiveLogEntry.insert { Self.logEntry("L1", directiveID: "D1", at: 10) }.execute(db)
+        }
+        let store = TestStore(initialState: DirectivesFeature.State()) {
+            DirectivesFeature()
+        } withDependencies: { $0.defaultDatabase = database }
+        store.exhaustivity = .off
+
+        await store.send(.binding(.set(\.selectedRowID, "custom:D1")))
+        #expect(store.state.timeline.entries.count == 1)
+        await store.send(.binding(.set(\.selectedRowID, String?.none)))
+        #expect(store.state.timeline.entries.isEmpty)
+    }
+
+    /// Launching a run selects it AND loads its timeline — the programmatic
+    /// selection path must not skip the reload.
+    @Test func launchingARunLoadsItsTimeline() async throws {
+        let database = try GameDatabase.bootstrap()
+        let launched = Self.stalledMission(id: "D2")
+        try await database.write { db in
+            try Directive.insert { launched }.execute(db)
+            try DirectiveLogEntry.insert { Self.logEntry("L9", directiveID: "D2", at: 10) }.execute(db)
+        }
+        let store = TestStore(initialState: DirectivesFeature.State()) {
+            DirectivesFeature()
+        } withDependencies: { $0.defaultDatabase = database }
+        store.exhaustivity = .off
+
+        // Present the sheet first: a `.presented` action with absent
+        // destination state is an application-logic error, not a path the app
+        // can take.
+        await store.send(.newDirectiveTapped)
+        await store.send(.newDirective(.presented(.delegate(.created(launched)))))
+        #expect(store.state.selectedRowID == "custom:D2")
+        #expect(store.state.timeline.entries.map(\.id) == ["L9"])
+    }
+
+    nonisolated static func logEntry(
+        _ id: String,
+        directiveID: String? = nil,
+        deviceCode: String? = nil,
+        kind: DirectiveLogKind = .stepStarted,
+        at seconds: TimeInterval
+    ) -> DirectiveLogEntry {
+        DirectiveLogEntry(
+            id: id, directiveID: directiveID, deviceCode: deviceCode, kind: kind,
+            summary: "entry \(id)", step: nil, operationID: nil, eventID: nil,
+            occurredAt: Date(timeIntervalSince1970: seconds)
+        )
+    }
+
     /// A stalled mission fixture, for the resolution verbs.
     nonisolated static func stalledMission(id: String) -> Directive {
         Directive(
