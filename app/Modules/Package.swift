@@ -15,6 +15,7 @@ let package = Package(
         .library(name: "CivilisationsFeature", targets: ["CivilisationsFeature"]),
         .library(name: "DevicesFeature", targets: ["DevicesFeature"]),
         .library(name: "DirectiveComposerFeature", targets: ["DirectiveComposerFeature"]),
+        .library(name: "DirectiveEngine", targets: ["DirectiveEngine"]),
         .library(name: "DirectivesFeature", targets: ["DirectivesFeature"]),
         .library(name: "EventLogFeature", targets: ["EventLogFeature"]),
         .library(name: "GameDatabase", targets: ["GameDatabase"]),
@@ -241,6 +242,34 @@ let package = Package(
                 .product(name: "SQLiteData", package: "sqlite-data"),
             ],
             path: "DirectiveComposerFeature/Tests"
+        ),
+        // Non-feature tier: `Dependencies`, never TCA (manifest rule).
+        .target(
+            name: "DirectiveEngine",
+            dependencies: [
+                "API",
+                "GameModels",
+                "GameServices",
+                "Utils",
+                .product(name: "Dependencies", package: "swift-dependencies"),
+                .product(name: "SQLiteData", package: "sqlite-data"),
+            ],
+            path: "DirectiveEngine/Sources"
+        ),
+        .testTarget(
+            name: "DirectiveEngineTests",
+            dependencies: [
+                "API",
+                "DirectiveEngine",
+                "GameDatabase",
+                "GameModels",
+                "GameServices",
+                "GameSession",
+                "Utils",
+                .product(name: "Dependencies", package: "swift-dependencies"),
+                .product(name: "SQLiteData", package: "sqlite-data"),
+            ],
+            path: "DirectiveEngine/Tests"
         ),
         .target(
             name: "DirectivesFeature",
