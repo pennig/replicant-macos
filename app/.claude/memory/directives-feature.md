@@ -1,6 +1,6 @@
 ---
 name: directives-feature
-description: "Directives v2: Stages 1-4 + stall resolution SHIPPED. Unified surface; CommandGovernor + DirectiveEngine; Survey Run + launcher sheet; Retry/Skip/Cancel/Pause/Resume. Survey Run NEVER stows or adopts — staging is the player's job. Remaining: the §7 step timeline, then Stage 5 Relay Run."
+description: "Directives v2: Stages 1-4 + stall resolution + the §7 step timeline SHIPPED. Unified surface; CommandGovernor + DirectiveEngine; Survey Run + launcher; Retry/Skip/Cancel/Pause/Resume; live timeline serving both row kinds. Survey Run NEVER stows or adopts. Remaining: Stage 5 Relay Run, and .opCompleted entries are still unwritten."
 metadata:
   type: project
 ---
@@ -205,6 +205,37 @@ detail pane. Full suite at ship: **848 tests over 26 products, 0 failing.**
 **Still open:** the §7 **live step timeline** fed by `DirectiveLogEntry` (the sit-back-and-watch view —
 every entry it needs is already written, including these `.resolved` ones), and **Stage 5 Relay Run**
 + the FTL-mesh incremental add. Independent of each other.
+
+## Step timeline SHIPPED 2026-07-26
+
+Plan: `docs/superpowers/plans/2026-07-26-directive-step-timeline.md`. Closes §7's "sit-back-and-watch
+view". **Read-only** — the engine and the `directive.*` route already wrote every entry it renders;
+nothing about mission execution changed. Full suite at ship: **863 tests over 26 products, 0 failing.**
+
+- **One `DirectiveTimeline` `FetchKeyRequest` serves BOTH row kinds** — a mission's timeline is
+  `directiveID == id`, a built-in directive's completion history is `deviceCode == controller`. This
+  is what §2's optional `directiveID`/`deviceCode` pair was for, finally realized. `request(for:)` is
+  the single place that knows which id goes in which slot; **never mix them** — a controller's history
+  under a mission that merely drives it would read as the mission's own work.
+- Newest-first, capped at `entryLimit` (100). A run accumulates ~6 entries per target and nothing
+  prunes the table; oldest-first would push the end you're watching off screen.
+- **`selectionChanged(_:)` is called from BOTH selection paths** — the `selectedRowID` binding and the
+  launcher's `.created` delegate, which selects programmatically. Missing the second is the easy bug;
+  `BobnetFeature` carries the same helper for the same reason. Set the selection *before* building the
+  request or it resolves against the previous row.
+- Times render with `Text(date, style: .relative)` — ticks on its own, no timer and no formatter to
+  test. The custom pane's **Now** readout (current step + elapsed) uses the same thing and is what
+  covers a long quiet step.
+- `DirectiveLogPresentation` (glyph + prominence per kind) is a SwiftUI-free namespace, not statics on
+  the view — [[swiftui-view-statics-trap-in-tests]].
+- A TCA note that cost a cycle: sending `.newDirective(.presented(.delegate(...)))` in a test without
+  first presenting the sheet is an `ifLet` application-logic error, not a valid path. Send
+  `.newDirectiveTapped` first.
+
+**Still not written: `.opCompleted` entries.** The timeline shows step transitions, dispatches, stalls
+and resolutions, so a long travel reads as a quiet gap until the next step starts — which the Now
+readout covers. Writing them is engine work (the executor would have to notice a dispatched op
+closing) and remains the one gap in the audit trail.
 
 Verified API facts backing the step sequences live in §3 of the spec (stow co-location, `deploy`
 doesn't activate, `launch` auto-deploys adopted stowed devices, `directive.completed` payload).
