@@ -44,6 +44,38 @@ struct DirectiveSchemaTests {
         #expect(loaded.first?.stepStartedAt == Date(timeIntervalSince1970: 150))
     }
 
+    /// `controllerCode` round-trips, and defaults to nil for a mission that
+    /// hasn't reached its `set_directive` step yet. It is what makes an
+    /// engine-driven built-in row knowable: the vessel (`deviceCode`) can never
+    /// stand in for it, since a Survey Run's vessel and its AMI controller are
+    /// two different devices.
+    @Test func controllerCodeRoundTrips() throws {
+        let database = try GameDatabase.bootstrap()
+        let unassigned = Directive(
+            id: "D1", kind: .surveyRun, status: .running, deviceCode: "VESSEL1",
+            targets: ["SOL"], targetIndex: 0, step: "stow",
+            stepStartedAt: Date(timeIntervalSince1970: 0), returnToOrigin: false,
+            originDesignation: nil, attentionReason: nil,
+            createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0)
+        )
+        let driving = Directive(
+            id: "D2", kind: .surveyRun, status: .running, deviceCode: "VESSEL2",
+            controllerCode: "AMI1",
+            targets: ["SOL"], targetIndex: 0, step: "surveying",
+            stepStartedAt: Date(timeIntervalSince1970: 0), returnToOrigin: false,
+            originDesignation: nil, attentionReason: nil,
+            createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0)
+        )
+        try database.write { db in
+            try Directive.insert { unassigned }.execute(db)
+            try Directive.insert { driving }.execute(db)
+        }
+
+        let loaded = try database.read { db in try Directive.order { $0.id }.fetchAll(db) }
+        #expect(loaded.map(\.controllerCode) == [nil, "AMI1"])
+        #expect(loaded == [unassigned, driving])
+    }
+
     /// A typed `attentionReason` round-trips too — the stalled-directive path,
     /// distinct from the happy-path row above.
     @Test func attentionReasonRoundTrips() throws {

@@ -77,6 +77,16 @@ public struct Directive: Identifiable, Equatable, Sendable {
     public var status: DirectiveStatus
     /// The vessel carrying out the mission.
     public var deviceCode: String
+    /// The AMI controller this mission is currently driving, once it has issued
+    /// `set_directive` on one. Nil before that step, and after the mission
+    /// clears it.
+    ///
+    /// This is what makes the resulting built-in row's ownership knowable: a
+    /// server-run directive on `controllerCode` is the engine's own work, not
+    /// something the user should Reconfigure or Clear out from under a step
+    /// that is waiting on it. `deviceCode` cannot stand in for this — a Survey
+    /// Run's vessel and its controller are two different devices.
+    public var controllerCode: String?
     /// The ordered queue of star-system designations still to visit.
     @Column(as: [String].JSONRepresentation.self) public var targets: [String]
     /// How far through `targets` the run is. Equal to `targets.count` when done.
@@ -108,6 +118,7 @@ public struct Directive: Identifiable, Equatable, Sendable {
         kind: DirectiveKind,
         status: DirectiveStatus,
         deviceCode: String,
+        controllerCode: String? = nil,
         targets: [String],
         targetIndex: Int,
         step: String,
@@ -122,6 +133,7 @@ public struct Directive: Identifiable, Equatable, Sendable {
         self.kind = kind
         self.status = status
         self.deviceCode = deviceCode
+        self.controllerCode = controllerCode
         self.targets = targets
         self.targetIndex = targetIndex
         self.step = step
@@ -223,6 +235,16 @@ extension Directive {
                   "createdAt" TEXT NOT NULL,
                   "updatedAt" TEXT NOT NULL
                 ) STRICT
+                """
+            )
+            .execute(db)
+        }
+        // A separate migration, not an edit to the one above: the original
+        // shipped 2026-07-25 and is already applied in real databases.
+        migrator.registerMigration("Add 'controllerCode' to 'directives'") { db in
+            try #sql(
+                """
+                ALTER TABLE "directives" ADD COLUMN "controllerCode" TEXT
                 """
             )
             .execute(db)
