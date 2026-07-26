@@ -7,13 +7,15 @@
 //  table, app-executed). Both queries live in state per the house standard, so
 //  the views stay pure renderers and the list never flashes empty.
 //
-//  There is no engine yet — Stage 3 adds it. Today the custom half of the list
-//  is simply empty, and the feature's only writes are the built-in half's
-//  Reconfigure (via the shared composer) and Clear.
+//  The feature's writes are the built-in half's Reconfigure (via the shared
+//  composer) and Clear, launching a new mission, and resolving a stalled one.
+//  It never advances a mission itself — that is `DirectiveEngine`'s job, and
+//  the list simply observes the rows the engine writes.
 //
 
 import ComposableArchitecture
 import DirectiveComposerFeature
+import DirectiveEngine
 import Foundation
 import GameModels
 import GameServices
@@ -84,6 +86,12 @@ public struct DirectivesFeature {
         case dismissError
         /// Open the new-mission launcher.
         case newDirectiveTapped
+        /// Stall resolution on the selected custom mission (design spec §8).
+        case retryTapped
+        case skipTargetTapped
+        case cancelRunTapped
+        case pauseTapped
+        case resumeTapped
         case composer(PresentationAction<DirectiveComposer.Action>)
         case newDirective(PresentationAction<NewDirectiveFeature.Action>)
     }
@@ -91,6 +99,7 @@ public struct DirectivesFeature {
     public init() {}
 
     @Dependency(\.commandClient) var commandClient
+    @Dependency(\.directiveResolution) var directiveResolution
 
     public var body: some ReducerOf<Self> {
         BindingReducer()
@@ -154,6 +163,21 @@ public struct DirectivesFeature {
                 state.newDirective = NewDirectiveFeature.State()
                 return .none
 
+            case .retryTapped:
+                return resolve(state) { await $0.retry($1) }
+
+            case .skipTargetTapped:
+                return resolve(state) { await $0.skipTarget($1) }
+
+            case .cancelRunTapped:
+                return resolve(state) { await $0.cancel($1) }
+
+            case .pauseTapped:
+                return resolve(state) { await $0.pause($1) }
+
+            case .resumeTapped:
+                return resolve(state) { await $0.resume($1) }
+
             case let .newDirective(.presented(.delegate(.created(directive)))):
                 // Select the run that was just launched, so the detail pane is
                 // showing its timeline as the engine starts working it.
@@ -170,6 +194,22 @@ public struct DirectivesFeature {
         .ifLet(\.$newDirective, action: \.newDirective) {
             NewDirectiveFeature()
         }
+    }
+
+    /// Run a resolution verb against the selected CUSTOM row. Guarded on row
+    /// kind for the same reason the built-in verbs are: a built-in row's
+    /// `deviceCode` is a controller, not a directive id, so an unguarded handler
+    /// would resolve nothing — or the wrong thing.
+    private func resolve(
+        _ state: State,
+        _ verb: @escaping @Sendable (DirectiveResolutionClient, String) async -> Void
+    ) -> Effect<Action> {
+        guard case let .custom(directive) = state.selectedRow else { return .none }
+        // Bound to a local: referencing the property wrapper inside the
+        // @Sendable closure would capture the non-Sendable reducer.
+        let resolution = self.directiveResolution
+        let id = directive.id
+        return .run { _ in await verb(resolution, id) }
     }
 
     /// Dispatch a command. `CommandClient.dispatch` already issues the

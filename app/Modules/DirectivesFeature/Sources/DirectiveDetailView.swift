@@ -184,11 +184,25 @@ public struct DirectiveDetailView: View {
     private func customDetail(_ directive: Directive) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Space.l) {
-                header(
-                    title: directive.kind.title,
-                    subtitle: directive.deviceCode,
-                    caption: directive.status.displayName
-                )
+                HStack(alignment: .top, spacing: Space.s) {
+                    header(
+                        title: directive.kind.title,
+                        subtitle: directive.deviceCode,
+                        caption: directive.status.displayName
+                    )
+                    Spacer(minLength: 0)
+                    holdControl(directive)
+                }
+
+                if directive.status == .needsAttention, let reason = directive.attentionReason {
+                    DirectiveStallPanel(
+                        reason: reason,
+                        retry: { store.send(.retryTapped) },
+                        skip: { store.send(.skipTargetTapped) },
+                        cancel: { store.send(.cancelRunTapped) }
+                    )
+                }
+
                 VStack(alignment: .leading, spacing: Space.xs) {
                     RCSectionHeader("Targets")
                     // Keyed by position, not element: `targets` is a revisit
@@ -211,6 +225,22 @@ public struct DirectiveDetailView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .navigationTitle(directive.kind.title)
+    }
+
+    /// Pause / Resume, shown only where it applies. A finished run offers
+    /// neither — there is nothing left to hold.
+    @ViewBuilder
+    private func holdControl(_ directive: Directive) -> some View {
+        switch directive.status {
+        case .running:
+            Button("Pause") { store.send(.pauseTapped) }
+                .buttonStyle(RCButtonStyle(.secondary))
+        case .paused:
+            Button("Resume") { store.send(.resumeTapped) }
+                .buttonStyle(RCButtonStyle(.primary))
+        case .needsAttention, .completed, .cancelled:
+            EmptyView()
+        }
     }
 
     // MARK: Shared chrome

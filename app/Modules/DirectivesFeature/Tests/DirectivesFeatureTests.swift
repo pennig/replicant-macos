@@ -232,6 +232,83 @@ struct DirectivesFeatureTests {
         #expect(call.2.configuration?["planets"]?.stringValue == "all")
     }
 
+    /// The three verbs reach the resolution client for the selected mission.
+    @Test func stallVerbsResolveTheSelectedRun() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { Self.stalledMission(id: "D1") }.execute(db)
+        }
+        let calls = LockIsolated<[String]>([])
+        let store = TestStore(initialState: DirectivesFeature.State(selectedRowID: "custom:D1")) {
+            DirectivesFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
+            $0.directiveResolution.retry = { id in calls.withValue { $0.append("retry:\(id)") } }
+            $0.directiveResolution.skipTarget = { id in calls.withValue { $0.append("skip:\(id)") } }
+            $0.directiveResolution.cancel = { id in calls.withValue { $0.append("cancel:\(id)") } }
+        }
+        store.exhaustivity = .off
+
+        await store.send(.retryTapped)
+        await store.send(.skipTargetTapped)
+        await store.send(.cancelRunTapped)
+        #expect(calls.value == ["retry:D1", "skip:D1", "cancel:D1"])
+    }
+
+    /// The verbs are no-ops with a BUILT-IN row selected — it has no mission to
+    /// resolve, and its `deviceCode` is a controller, not a directive id.
+    @Test func stallVerbsAreNoOpsForABuiltInRow() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Device.insert { Self.controller(code: "AMI1", directive: "survey_system") }.execute(db)
+        }
+        let called = LockIsolated(false)
+        let store = TestStore(initialState: DirectivesFeature.State(selectedRowID: "builtin:AMI1")) {
+            DirectivesFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
+            $0.directiveResolution.retry = { _ in called.setValue(true) }
+            $0.directiveResolution.cancel = { _ in called.setValue(true) }
+        }
+        store.exhaustivity = .off
+
+        await store.send(.retryTapped)
+        await store.send(.cancelRunTapped)
+        #expect(called.value == false)
+    }
+
+    /// Pause and resume reach the client too.
+    @Test func pauseAndResumeReachTheClient() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { Self.stalledMission(id: "D1") }.execute(db)
+        }
+        let calls = LockIsolated<[String]>([])
+        let store = TestStore(initialState: DirectivesFeature.State(selectedRowID: "custom:D1")) {
+            DirectivesFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
+            $0.directiveResolution.pause = { id in calls.withValue { $0.append("pause:\(id)") } }
+            $0.directiveResolution.resume = { id in calls.withValue { $0.append("resume:\(id)") } }
+        }
+        store.exhaustivity = .off
+
+        await store.send(.pauseTapped)
+        await store.send(.resumeTapped)
+        #expect(calls.value == ["pause:D1", "resume:D1"])
+    }
+
+    /// A stalled mission fixture, for the resolution verbs.
+    nonisolated static func stalledMission(id: String) -> Directive {
+        Directive(
+            id: id, kind: .surveyRun, status: .needsAttention, deviceCode: "VESSEL1",
+            controllerCode: "AMI1", targets: ["TAU"], targetIndex: 0, step: "configuring",
+            stepStartedAt: Date(timeIntervalSince1970: 100), returnToOrigin: false,
+            originDesignation: "SOL", attentionReason: .commandRejected,
+            createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0)
+        )
+    }
+
     /// An AMI controller fixture carrying an in-force directive. Real
     /// controllers always advertise `available_directives` at runtime (see
     /// `Device.availableDirectives`'s doc comment — the fallback vocabulary
