@@ -131,6 +131,10 @@ public struct DirectiveDetailView: View {
                     }
                 }
 
+                // The completion history §2 promised a built-in row when it
+                // gave `DirectiveLogEntry` its optional device key.
+                timelineSection(title: "History")
+
                 if let owner = builtIn.drivenBy {
                     HStack(spacing: Space.xs) {
                         Image(systemName: "lock.fill")
@@ -203,6 +207,24 @@ public struct DirectiveDetailView: View {
                     )
                 }
 
+                if directive.status == .running {
+                    VStack(alignment: .leading, spacing: Space.xxs) {
+                        RCSectionHeader("Now")
+                        HStack(spacing: Space.xs) {
+                            ProgressView().controlSize(.small)
+                            Text(directive.step)
+                                .font(.rcBodyEmph)
+                                .foregroundStyle(.rcTextPrimary)
+                            Text("·").foregroundStyle(.rcTextTertiary)
+                            // Ticks on its own — no timer, no formatter.
+                            Text(directive.stepStartedAt, style: .relative)
+                                .font(.rcMonoSmall)
+                                .foregroundStyle(.rcTextSecondary)
+                            Spacer(minLength: 0)
+                        }
+                    }
+                }
+
                 VStack(alignment: .leading, spacing: Space.xs) {
                     RCSectionHeader("Targets")
                     // Keyed by position, not element: `targets` is a revisit
@@ -220,11 +242,28 @@ public struct DirectiveDetailView: View {
                         }
                     }
                 }
+
+                timelineSection(title: "Timeline")
             }
             .padding(Space.xl)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .navigationTitle(directive.kind.title)
+    }
+
+    /// The timeline, shared by both panes: a mission's step history and a
+    /// built-in directive's completion history come from one query keyed by
+    /// whichever id the selected row carries.
+    @ViewBuilder
+    private func timelineSection(title: String) -> some View {
+        if !store.timeline.entries.isEmpty {
+            VStack(alignment: .leading, spacing: Space.xs) {
+                RCSectionHeader(title)
+                ForEach(store.timeline.entries) { entry in
+                    DirectiveTimelineRow(entry: entry)
+                }
+            }
+        }
     }
 
     /// Pause / Resume, shown only where it applies. A finished run offers
