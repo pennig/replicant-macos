@@ -63,6 +63,9 @@ public struct SurveyRun: MissionStepMachine {
         case Step.travelling: return travel(directive, vessel, world)
         case Step.configuring: return configure(directive, vessel, world)
         case Step.launching: return launch(directive, vessel, world)
+        case Step.awaiting: return awaitCompletion(directive, world)
+        case Step.confirming: return confirm(directive, world)
+        case Step.returning: return returnHome(directive, vessel, world)
         default:
             // An unrecognised step must never dispatch. Waiting is inert and
             // recoverable; the user can cancel or the row can be repaired.
@@ -127,6 +130,31 @@ public struct SurveyRun: MissionStepMachine {
         device.location.map { SiteAssay.system(of: $0) }
     }
 
+    // MARK: - Completion detection (spec §5)
+
+    /// How long to wait on the `directive.completed` fast path before polling
+    /// the counts anyway. A dropped SSE frame must not strand a run forever, and
+    /// ten minutes keeps the cost to a handful of reads per survey.
+    public static let backstopInterval: TimeInterval = 10 * 60
+
+    /// Tolerance when comparing a completion's time against the step's start.
+    /// Same value and reasoning as `Reconciler.eventTimeSkewTolerance`.
+    static let eventTimeSkewTolerance: TimeInterval = 5
+
+    /// Whether a completion for THIS step has landed in the timeline.
+    ///
+    /// Issue-time relative, not wall-clock: a completion delivered by catch-up
+    /// after the app was closed still counts, while one predating this step is a
+    /// replay and does not. Same guard shape as
+    /// `Reconciler.completeOpenOperation` and the `directive.*` route.
+    public static func completionSeen(_ directive: Directive, _ world: WorldSnapshot) -> Bool {
+        world.log.contains { entry in
+            entry.kind == .directiveCompleted
+                && entry.occurredAt >= directive.stepStartedAt
+                    .addingTimeInterval(-eventTimeSkewTolerance)
+        }
+    }
+
     // MARK: - Steps
 
     private func preflight(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
@@ -149,6 +177,46 @@ public struct SurveyRun: MissionStepMachine {
         // target we haven't reached can only be judged from what we already hold.
         if Self.isFullyScanned(world.system(target)) { return .advanceTarget }
         return .assignController(deviceCode: controller.deviceCode, nextStep: Step.travelling)
+    }
+
+    /// The riskiest wait in the design: the controller drives its drones
+    /// server-side, so there is no operation the app created to key off. Two
+    /// tiers — the completion entry the `directive.*` route writes, and a
+    /// counts poll as the lost-event backstop.
+    private func awaitCompletion(_ directive: Directive, _ world: WorldSnapshot) -> MissionAction {
+        guard let target = directive.currentTarget else {
+            return .advanceStep(nextStep: Step.preflight)
+        }
+        if Self.completionSeen(directive, world) {
+            return .refreshSystem(designation: target, nextStep: Step.confirming)
+        }
+        if world.now.timeIntervalSince(directive.stepStartedAt) > Self.backstopInterval {
+            return .refreshSystem(designation: target, nextStep: Step.confirming)
+        }
+        return .wait
+    }
+
+    private func confirm(_ directive: Directive, _ world: WorldSnapshot) -> MissionAction {
+        guard let target = directive.currentTarget else {
+            return .advanceStep(nextStep: Step.preflight)
+        }
+        if Self.isFullyScanned(world.system(target)) { return .advanceTarget }
+        // The server SAID it finished and the counts disagree — surface that
+        // rather than advancing over a half-surveyed system.
+        if Self.completionSeen(directive, world) { return .stall(.surveyIncomplete) }
+        // A backstop poll that found it unfinished: nothing ever claimed
+        // completion, so there is nothing to disbelieve. Keep waiting.
+        return .advanceStep(nextStep: Step.awaiting)
+    }
+
+    private func returnHome(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
+        guard let origin = directive.originDesignation else { return .done }
+        if Self.system(of: vessel) == origin { return .done }
+        if world.openOperation(for: vessel.deviceCode) != nil { return .wait }
+        return .dispatch(
+            kind: .travel, deviceCode: vessel.deviceCode,
+            params: CommandParams(destination: origin), nextStep: Step.returning
+        )
     }
 
     /// The controller this run claimed, re-resolved from the fleet on every

@@ -41,10 +41,10 @@ public struct DirectiveEngine: Sendable {
         self.stop = stop
     }
 
-    /// `machines` is EMPTY in this stage — Survey Run lands in Stage 4, Relay
-    /// Run in Stage 5. With no machine registered for a kind the engine leaves
-    /// the row completely alone, so starting it today is a no-op on real data.
-    public static func makeLive(machines: [any MissionStepMachine] = []) -> DirectiveEngine {
+    /// Survey Run is registered; Relay Run lands in Stage 5. With no machine
+    /// registered for a kind the engine leaves those rows completely alone, so
+    /// a `relayRun` directive is inert rather than mishandled.
+    public static func makeLive(machines: [any MissionStepMachine] = [SurveyRun()]) -> DirectiveEngine {
         let core = DirectiveEngineCore(machines: machines, tick: .seconds(5))
         return DirectiveEngine(
             start: { await core.start() },

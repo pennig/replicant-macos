@@ -348,3 +348,179 @@ struct SurveyRunConfigureTests {
                 == .stall(.noSurveyControllerAboard))
     }
 }
+
+// MARK: - Completion detection
+
+private func completionEntry(at occurredAt: Date) -> DirectiveLogEntry {
+    DirectiveLogEntry(
+        id: "L1", directiveID: "D1", deviceCode: "AMI1", kind: .directiveCompleted,
+        summary: "Survey System completed at TAU", step: "awaiting",
+        operationID: nil, eventID: "E1", occurredAt: occurredAt
+    )
+}
+
+@Suite("Survey Run — completion detection")
+struct SurveyRunCompletionTests {
+    /// No completion yet, inside the backstop window: just wait. Cheap, and the
+    /// common case for most of a survey's duration.
+    @Test func waitsForCompletion() {
+        let directive = run(step: SurveyRun.Step.awaiting, controllerCode: "AMI1",
+                            stepStartedAt: Date(timeIntervalSince1970: 900))
+        #expect(SurveyRun().nextAction(
+            directive: directive,
+            world: world(stagedFleet(vesselAt: "TAU-2"), now: Date(timeIntervalSince1970: 1_000))
+        ) == .wait)
+    }
+
+    /// A completion entry triggers the confirming read (spec §5 fast path).
+    @Test func completionEventTriggersTheConfirmingRead() {
+        let directive = run(step: SurveyRun.Step.awaiting, controllerCode: "AMI1",
+                            stepStartedAt: Date(timeIntervalSince1970: 900))
+        let snapshot = world(
+            stagedFleet(vesselAt: "TAU-2"),
+            log: [completionEntry(at: Date(timeIntervalSince1970: 950))],
+            now: Date(timeIntervalSince1970: 1_000)
+        )
+        #expect(SurveyRun().nextAction(directive: directive, world: snapshot)
+                == .refreshSystem(designation: "TAU", nextStep: SurveyRun.Step.confirming))
+    }
+
+    /// A completion stamped BEFORE this step began is a replay — it must not end
+    /// a survey that only just started. Issue-time relative, not wall-clock.
+    @Test func ignoresAReplayedPreStepCompletion() {
+        let directive = run(step: SurveyRun.Step.awaiting, controllerCode: "AMI1",
+                            stepStartedAt: Date(timeIntervalSince1970: 900))
+        let snapshot = world(
+            stagedFleet(vesselAt: "TAU-2"),
+            log: [completionEntry(at: Date(timeIntervalSince1970: 500))],
+            now: Date(timeIntervalSince1970: 1_000)
+        )
+        #expect(SurveyRun().nextAction(directive: directive, world: snapshot) == .wait)
+    }
+
+    /// Within the 5s skew tolerance a marginally older entry still counts —
+    /// client and server clocks are not identical.
+    @Test func toleratesClockSkewOnTheCompletionGuard() {
+        let directive = run(step: SurveyRun.Step.awaiting, controllerCode: "AMI1",
+                            stepStartedAt: Date(timeIntervalSince1970: 900))
+        let snapshot = world(
+            stagedFleet(vesselAt: "TAU-2"),
+            log: [completionEntry(at: Date(timeIntervalSince1970: 897))],
+            now: Date(timeIntervalSince1970: 1_000)
+        )
+        #expect(SurveyRun().nextAction(directive: directive, world: snapshot)
+                == .refreshSystem(designation: "TAU", nextStep: SurveyRun.Step.confirming))
+    }
+
+    /// A non-completion entry (a step marker) never triggers confirmation —
+    /// the timeline is full of those.
+    @Test func ignoresNonCompletionLogEntries() {
+        let directive = run(step: SurveyRun.Step.awaiting, controllerCode: "AMI1",
+                            stepStartedAt: Date(timeIntervalSince1970: 900))
+        let stepEntry = DirectiveLogEntry(
+            id: "L2", directiveID: "D1", deviceCode: nil, kind: .stepStarted,
+            summary: "Step: awaiting", step: "awaiting", operationID: nil,
+            eventID: nil, occurredAt: Date(timeIntervalSince1970: 950)
+        )
+        let snapshot = world(stagedFleet(vesselAt: "TAU-2"), log: [stepEntry],
+                             now: Date(timeIntervalSince1970: 1_000))
+        #expect(SurveyRun().nextAction(directive: directive, world: snapshot) == .wait)
+    }
+
+    /// The lost-event backstop: after the interval, poll the counts even with no
+    /// completion event. A dropped SSE frame must not strand the run forever.
+    @Test func backstopPollsAfterTheInterval() {
+        let directive = run(step: SurveyRun.Step.awaiting, controllerCode: "AMI1",
+                            stepStartedAt: Date(timeIntervalSince1970: 900))
+        let late = Date(timeIntervalSince1970: 900 + SurveyRun.backstopInterval + 1)
+        #expect(SurveyRun().nextAction(
+            directive: directive,
+            world: world(stagedFleet(vesselAt: "TAU-2"), now: late)
+        ) == .refreshSystem(designation: "TAU", nextStep: SurveyRun.Step.confirming))
+    }
+
+    /// Counts agree: the target is done, move on.
+    @Test func confirmingAdvancesWhenFullyScanned() {
+        let scanned = StarSystem(designation: "TAU", planetsScanned: 4, planetsTotal: 4)
+        let directive = run(step: SurveyRun.Step.confirming, controllerCode: "AMI1")
+        let snapshot = world(
+            stagedFleet(vesselAt: "TAU-2"),
+            log: [completionEntry(at: Date(timeIntervalSince1970: 950))],
+            systems: ["TAU": scanned], now: Date(timeIntervalSince1970: 1_000)
+        )
+        #expect(SurveyRun().nextAction(directive: directive, world: snapshot) == .advanceTarget)
+    }
+
+    /// A completion event whose counts DISAGREE stalls `surveyIncomplete` rather
+    /// than silently advancing over a half-surveyed system (spec §5).
+    @Test func confirmingStallsWhenTheEventDisagrees() {
+        let partial = StarSystem(designation: "TAU", planetsScanned: 2, planetsTotal: 4)
+        let directive = run(step: SurveyRun.Step.confirming, controllerCode: "AMI1")
+        let snapshot = world(
+            stagedFleet(vesselAt: "TAU-2"),
+            log: [completionEntry(at: Date(timeIntervalSince1970: 950))],
+            systems: ["TAU": partial], now: Date(timeIntervalSince1970: 1_000)
+        )
+        #expect(SurveyRun().nextAction(directive: directive, world: snapshot)
+                == .stall(.surveyIncomplete))
+    }
+
+    /// A BACKSTOP poll that finds the survey unfinished goes back to waiting —
+    /// nothing claimed completion, so there is nothing to disbelieve.
+    @Test func backstopDisagreementReturnsToWaiting() {
+        let partial = StarSystem(designation: "TAU", planetsScanned: 2, planetsTotal: 4)
+        let directive = run(step: SurveyRun.Step.confirming, controllerCode: "AMI1")
+        let snapshot = world(stagedFleet(vesselAt: "TAU-2"), systems: ["TAU": partial],
+                             now: Date(timeIntervalSince1970: 1_000))
+        #expect(SurveyRun().nextAction(directive: directive, world: snapshot)
+                == .advanceStep(nextStep: SurveyRun.Step.awaiting))
+    }
+}
+
+// MARK: - Finishing
+
+@Suite("Survey Run — finishing")
+struct SurveyRunFinishTests {
+    /// Queue exhausted with returnToOrigin off: done, and the vessel stays put
+    /// ready to be chained onward.
+    @Test func finishesWithoutReturning() {
+        let directive = run(targets: ["TAU"], targetIndex: 1)
+        #expect(SurveyRun().nextAction(directive: directive, world: world(stagedFleet(vesselAt: "TAU-2")))
+                == .done)
+    }
+
+    /// returnToOrigin on and away from home: one final leg.
+    @Test func returnsToOriginWhenAsked() {
+        let directive = run(targets: ["TAU"], targetIndex: 1, returnToOrigin: true, origin: "SOL")
+        #expect(SurveyRun().nextAction(directive: directive, world: world(stagedFleet(vesselAt: "TAU-2")))
+                == .advanceStep(nextStep: SurveyRun.Step.returning))
+    }
+
+    /// Already home: done, no pointless leg.
+    @Test func doesNotReturnWhenAlreadyHome() {
+        let directive = run(targets: ["TAU"], targetIndex: 1, returnToOrigin: true, origin: "SOL")
+        #expect(SurveyRun().nextAction(directive: directive, world: world(stagedFleet(vesselAt: "SOL-3")))
+                == .done)
+    }
+
+    /// The return leg dispatches travel home, then completes on arrival.
+    @Test func returningTravelsHomeThenCompletes() {
+        let directive = run(step: SurveyRun.Step.returning, targets: ["TAU"], targetIndex: 1,
+                            returnToOrigin: true, origin: "SOL")
+        #expect(SurveyRun().nextAction(directive: directive, world: world(stagedFleet(vesselAt: "TAU-2")))
+                == .dispatch(kind: .travel, deviceCode: "VES1",
+                             params: CommandParams(destination: "SOL"),
+                             nextStep: SurveyRun.Step.returning))
+        #expect(SurveyRun().nextAction(directive: directive, world: world(stagedFleet(vesselAt: "SOL-3")))
+                == .done)
+    }
+
+    /// The return leg waits while in transit rather than re-dispatching.
+    @Test func returningWaitsWhileTravelling() {
+        let directive = run(step: SurveyRun.Step.returning, targets: ["TAU"], targetIndex: 1,
+                            returnToOrigin: true, origin: "SOL")
+        #expect(SurveyRun().nextAction(directive: directive,
+                                       world: world(stagedFleet(vesselAt: "TAU-2"), travelling: true))
+                == .wait)
+    }
+}
