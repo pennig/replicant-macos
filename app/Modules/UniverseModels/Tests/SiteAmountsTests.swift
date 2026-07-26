@@ -84,4 +84,20 @@ import Testing
         let out = SiteAmounts.amounts(remainingPct: ["conductive": 40], totals: nil)
         #expect(SiteAmounts.totalRemaining(out) == nil)
     }
+
+    /// `percentRemaining` is itself optional — a roster-sourced salvage site
+    /// (names only, no percentage at all) constructs one directly rather than
+    /// through `amounts`. `remaining` must require *both* dimensions known,
+    /// never treating a missing percentage as zero.
+    @Test func remainingIsNilWhenThePercentageItselfIsUnknown() {
+        let amount = ResourceAmount(resource: "conductive", percentRemaining: nil, total: 331)
+        #expect(amount.remaining == nil)
+    }
+
+    /// The inverse of the existing "no assay" case: percentage known, total
+    /// unknown. Both gaps collapse to the same honest nil.
+    @Test func remainingIsNilWhenOnlyTheTotalIsUnknown() {
+        let amount = ResourceAmount(resource: "conductive", percentRemaining: 40, total: nil)
+        #expect(amount.remaining == nil)
+    }
 }

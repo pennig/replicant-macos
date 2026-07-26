@@ -41,16 +41,11 @@ struct SiteAmountsRow: View {
     /// The collapsed figure: total units still present, summed across resources.
     /// Unassayed resources are omitted, so it is a floor — the `~` says so.
     /// Falls back to the resource names when nothing is assayed at all, which is
-    /// what the row showed before assays existed.
+    /// what the row showed before assays existed. Composition lives in
+    /// `SiteAmountsSummary`, a SwiftUI-free helper, so it's independently
+    /// testable.
     private var summary: String? {
-        var parts: [String] = []
-        if let status, !status.isEmpty { parts.append(status) }
-        if let units = SiteAmounts.totalRemaining(amounts) {
-            parts.append("~\(units.formatted(.number.precision(.fractionLength(0)))) units")
-        } else if !amounts.isEmpty {
-            parts.append(amounts.map(\.resource).joined(separator: ", "))
-        }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+        SiteAmountsSummary.summary(status: status, amounts: amounts)
     }
 }
 
@@ -67,8 +62,10 @@ struct ResourceAmountLine: View {
                 Text("\(format(remaining)) / \(format(total))")
                     .font(.rcMonoSmall).foregroundStyle(.rcTextPrimary)
             }
-            Text("\(format(amount.percentRemaining))%")
-                .font(.rcMonoSmall).foregroundStyle(.rcTextTertiary)
+            if let percentRemaining = amount.percentRemaining {
+                Text("\(format(percentRemaining))%")
+                    .font(.rcMonoSmall).foregroundStyle(.rcTextTertiary)
+            }
         }
     }
 

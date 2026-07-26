@@ -19,19 +19,24 @@ import Foundation
 /// site has been assayed — in absolute units.
 public struct ResourceAmount: Identifiable, Equatable, Sendable {
     public var resource: String
-    /// 0…100, straight from `resources_remaining_pct`.
-    public var percentRemaining: Double
+    /// 0…100, straight from `resources_remaining_pct`. Nil when the site
+    /// carries only a resource name and no percentage at all (the `salvage[]`
+    /// roster block) — an honest "we don't know", never a zero standing in for
+    /// missing data.
+    public var percentRemaining: Double?
     /// Original unit count. Nil when no assay covers this resource.
     public var total: Double?
     public var id: String { resource }
 
-    /// Absolute units still present. Nil when the total is unknown — an honest
-    /// "we don't know", never a zero standing in for missing data.
+    /// Absolute units still present. Nil unless both the percentage and the
+    /// total are known — an honest "we don't know", never a zero standing in
+    /// for missing data.
     public var remaining: Double? {
-        total.map { $0 * percentRemaining / 100 }
+        guard let total, let percentRemaining else { return nil }
+        return total * percentRemaining / 100
     }
 
-    public init(resource: String, percentRemaining: Double, total: Double? = nil) {
+    public init(resource: String, percentRemaining: Double?, total: Double? = nil) {
         self.resource = resource
         self.percentRemaining = percentRemaining
         self.total = total

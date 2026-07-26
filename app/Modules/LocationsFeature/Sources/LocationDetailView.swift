@@ -458,7 +458,7 @@ private struct SiteSalvageSections: View {
         guard site.remainingPct.isEmpty else {
             return SiteAmounts.amounts(remainingPct: site.remainingPct, totals: totals)
         }
-        return site.resourcesAvailable.map { ResourceAmount(resource: $0, percentRemaining: 0) }
+        return site.resourcesAvailable.map { ResourceAmount(resource: $0, percentRemaining: nil) }
     }
 }
 
