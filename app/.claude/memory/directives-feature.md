@@ -1,6 +1,6 @@
 ---
 name: directives-feature
-description: "Directives v2: Stages 1-4 SHIPPED (unified surface; CommandGovernor + DirectiveEngine + the directive.* route; Survey Run + its launcher sheet). The run NEVER stows or adopts — staging is the player's job and missing it is a stall. Remaining: stall-resolution verbs, then Stage 5 Relay Run."
+description: "Directives v2: Stages 1-4 + stall resolution SHIPPED. Unified surface; CommandGovernor + DirectiveEngine; Survey Run + launcher sheet; Retry/Skip/Cancel/Pause/Resume. Survey Run NEVER stows or adopts — staging is the player's job. Remaining: the §7 step timeline, then Stage 5 Relay Run."
 metadata:
   type: project
 ---
@@ -167,6 +167,44 @@ Invariants (don't undo these):
 Cancel) from spec §7. A stalled run is visible in the detail pane but cannot be resolved from the UI —
 today it needs a direct SQLite edit. Stage 5 (Relay Run + the FTL-mesh incremental add) is the other
 open piece; the two are independent.
+
+## Stall resolution SHIPPED 2026-07-26
+
+Plan: `docs/superpowers/plans/2026-07-26-directive-stall-resolution.md`. Closes the gap Stage 4 left:
+a stalled run was visible but inert, and clearing it meant editing SQLite by hand. What landed:
+`DirectiveResolutionClient` (`@Dependency(\.directiveResolution)`) with **retry / skipTarget / cancel
+/ pause / resume**, `MissionRegistry` as the single mission-registration point, per-reason
+`displayName` + `guidance` on `DirectiveAttentionReason`, and a `DirectiveStallPanel` in the custom
+detail pane. Full suite at ship: **848 tests over 26 products, 0 failing.**
+
+| Verb | Effect | Allowed from |
+| --- | --- | --- |
+| retry | same step, `stepStartedAt` re-stamped, back to `.running` | `needsAttention` |
+| skipTarget | `targetIndex += 1`, step reset to the machine's `firstStep`, `.running` | `needsAttention`, `paused` |
+| cancel | `.cancelled` | `running`, `needsAttention`, `paused` |
+| pause | `.paused` | `running` |
+| resume | `.running`, `stepStartedAt` re-stamped | `paused` |
+
+- **Why retry re-stamps `stepStartedAt`** (the non-obvious bit): the completion guard is issue-time
+  relative, so re-stamping makes a `surveyIncomplete` stall's stale completion entry predate the step.
+  The machine drops back to waiting and the backstop re-polls, instead of instantly re-stalling on the
+  same evidence. Resume re-stamps for the same reason.
+- **A verb applied from a status it doesn't apply to is a logged no-op**, not a crash or a corrupt
+  row — the UI shouldn't offer it, but a stale click must not land.
+- **`cancel` deliberately leaves the AMI directive in force** on the controller. Clearing it is a
+  server command with its own failure modes; cancelling releases ownership (`.cancelled` is outside
+  `DirectiveRow.owningStatuses`), so the built-in row's Clear button becomes available for the user to
+  do it deliberately.
+- Each verb writes the row change and its `.resolved` timeline entry **in one transaction**.
+- **Deviation from spec §7:** it names `RCErrorBanner` for the verbs, but that control hard-codes a
+  single Dismiss button and four other screens depend on its shape. A purpose-made
+  `DirectiveStallPanel` carries the same intent without shared-control churn.
+- Tests exercising the live client must set `$0.directiveResolution = .liveValue` — the `testValue` is
+  `unimplemented` per the loud-defaults rule.
+
+**Still open:** the §7 **live step timeline** fed by `DirectiveLogEntry` (the sit-back-and-watch view —
+every entry it needs is already written, including these `.resolved` ones), and **Stage 5 Relay Run**
++ the FTL-mesh incremental add. Independent of each other.
 
 Verified API facts backing the step sequences live in §3 of the spec (stow co-location, `deploy`
 doesn't activate, `launch` auto-deploys adopted stowed devices, `directive.completed` payload).
