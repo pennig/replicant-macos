@@ -1,6 +1,6 @@
 ---
 name: directives-feature
-description: "Directives v2: Stages 1-3 SHIPPED 2026-07-25 (unified surface, then CommandGovernor + the DirectiveEngine module + the directive.* route). Engine loop is live but registers NO mission machines until Stage 4 (Survey Run). Spec in docs/superpowers/specs/2026-07-24-directives-design.md."
+description: "Directives v2: Stages 1-4 SHIPPED (unified surface; CommandGovernor + DirectiveEngine + the directive.* route; Survey Run + its launcher sheet). The run NEVER stows or adopts — staging is the player's job and missing it is a stall. Remaining: stall-resolution verbs, then Stage 5 Relay Run."
 metadata:
   type: project
 ---
@@ -118,6 +118,55 @@ is committed. See [[pbxproj-link-is-manual]] for why this half is always manual.
 Stage 4 (Survey Run) and Stage 5 (Relay Run + FTL-mesh incremental add) are now unblocked and
 independent of each other. `.opCompleted` log entries are unwritten until Stage 4 gives the engine an
 op to watch.
+
+## Stage 4 SHIPPED 2026-07-26 — Survey Run
+
+Plan: `docs/superpowers/plans/2026-07-26-directives-stage4-survey-run.md`. What landed: the
+`SurveyRun` step machine (registered in `DirectiveEngine.makeLive`, so **the engine is no longer
+inert**), three new mission actions (`advanceStep`, `assignController`, `refreshSystem`), a
+`WorldSnapshot` that also carries the directive's log entries and the cached `StarSystem` blobs for
+its targets, `LocationsClient.hydrateSystem`, `DirectiveAttentionReason.noSurveyControllerAboard`, and
+a minimal **New Survey Run** sheet. Full suite at ship: **833 tests over 26 products, 0 failing.**
+
+**The precondition contract (operator decision, 2026-07-26 — this is the load-bearing one).** A
+Survey Run **never stows and never adopts**. It uses an AMI survey controller already stowed aboard
+the vessel and drones that controller has already adopted and that are stowed with it. Missing either
+is a stall (`noSurveyControllerAboard` / `noSurveyDroneAboard`), not a step the engine performs. The
+reason: adoption is persistent state that outlives the mission, and re-parenting the player's fleet
+behind their back is not the engine's call. This is why spec §4's step 1 (stow) has no counterpart in
+the machine — don't "restore" it.
+
+**§5 deviation, forced by the API.** `GET locations/{star}` is presence-gated (403 unless a replicant
+is in that system — [[location-endpoint-presence-gate]]), so the "skip an already-scanned target"
+precondition can only consult the **cached** `SystemDetail` blob. Live re-reads happen only after
+arrival. Spec §5 reads as though one live call serves both purposes; it can't.
+
+Invariants (don't undo these):
+- **Unknown scan counts are never "fully scanned."** A wasted trip to a finished system is cheap;
+  silently skipping an unscanned one loses the point of the run. `isFullyScanned(nil) == false`.
+- **Completion is two-tier and issue-time relative.** The `directive.completed` log entry Stage 3's
+  route writes is the fast path, guarded `occurredAt >= stepStartedAt - 5s` (so a catch-up completion
+  after a close still counts and a replay doesn't) → `refreshSystem` → counts agree ⇒ `advanceTarget`,
+  counts disagree ⇒ **stall `surveyIncomplete`**, never a silent advance. A 10-minute backstop poll
+  covers a dropped event; its disagreement returns to *waiting*, not a stall, because nothing claimed
+  completion so there is nothing to disbelieve.
+- **`refreshSystem` is best-effort.** A 403/failed read still advances the step — stalling on a
+  transient read would strand a mission that is fine.
+- **The controller is claimed at preflight, not at creation.** The sheet writes `controllerCode: nil`;
+  recording it at creation would go stale if the fleet moved first. `assignController` is what sets it
+  (and therefore what badges/locks the built-in row).
+- **The controller is identified by capability**, `availableDirectives.contains("survey_system")`, not
+  by `device_type` — and STOWED, not merely co-located, since `launch` deploys stowed devices.
+- **`set_directive` is re-issued unless the in-force config matches exactly** on planets/moons/recall.
+  A leftover `moons: none` from manual use would silently survey half the system. Note Survey Run's
+  config (`moons: all`) deliberately differs from the composer's manual default (`moons: none`).
+- The **launcher offers only staged vessels**, computed through `SurveyRun`'s own fleet queries so the
+  picker and the engine share one definition of "staged" and the sheet can't manufacture a stall.
+
+**Not built, and the natural next slice:** the `needsAttention` resolution verbs (Retry / Skip target /
+Cancel) from spec §7. A stalled run is visible in the detail pane but cannot be resolved from the UI —
+today it needs a direct SQLite edit. Stage 5 (Relay Run + the FTL-mesh incremental add) is the other
+open piece; the two are independent.
 
 Verified API facts backing the step sequences live in §3 of the spec (stow co-location, `deploy`
 doesn't activate, `launch` auto-deploys adopted stowed devices, `directive.completed` payload).
