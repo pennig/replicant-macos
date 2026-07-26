@@ -154,6 +154,15 @@ struct DirectiveRowTests {
         #expect(row.title == "Survey Run")
     }
 
+    /// A device whose `ami_directive.name` is present but EMPTY contributes no
+    /// built-in row. The guard matters because an empty name would otherwise
+    /// render a row with a blank headline and a Clear button that clears
+    /// nothing.
+    @Test func emptyDirectiveNameYieldsNoBuiltInRow() {
+        let rows = DirectiveRow.merge(devices: [device(code: "AMI1", directive: "")], directives: [])
+        #expect(rows.isEmpty)
+    }
+
     /// A built-in row names a directive, never a place — so it has no
     /// designation half at all.
     @Test func builtInRowHasNoDesignation() {

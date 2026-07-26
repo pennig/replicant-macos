@@ -162,6 +162,43 @@ struct DirectivesFeatureTests {
         #expect(dispatched.value == false)
     }
 
+    /// The composer's confirmation dispatches `set_directive` at the controller
+    /// the composer was opened on, carrying the chosen directive and its config.
+    /// This is the feature's headline write — the one path whose regression
+    /// would silently stop directives being set at all.
+    @Test func composerConfirmationDispatchesSetDirective() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Device.insert { Self.controller(code: "AMI1", directive: "patrol") }.execute(db)
+        }
+        let dispatched = LockIsolated<(OperationKind, String, CommandParams)?>(nil)
+        let store = TestStore(initialState: DirectivesFeature.State(selectedRowID: "builtin:AMI1")) {
+            DirectivesFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
+            $0.commandClient.dispatch = { kind, code, params in
+                dispatched.setValue((kind, code, params))
+                return .accepted(operationID: nil)
+            }
+        }
+        store.exhaustivity = .off
+
+        await store.send(.reconfigureTapped)
+        await store.send(
+            .composer(.presented(.delegate(.confirmed(
+                directive: "survey_system",
+                configuration: ["planets": .string("all")]
+            ))))
+        )
+        await store.receive(\.commandFinished)
+
+        let call = try #require(dispatched.value)
+        #expect(call.0 == .setDirective)
+        #expect(call.1 == "AMI1")
+        #expect(call.2.directive == "survey_system")
+        #expect(call.2.configuration?["planets"]?.stringValue == "all")
+    }
+
     /// An AMI controller fixture carrying an in-force directive. Real
     /// controllers always advertise `available_directives` at runtime (see
     /// `Device.availableDirectives`'s doc comment — the fallback vocabulary
