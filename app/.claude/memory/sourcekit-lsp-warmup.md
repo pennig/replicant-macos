@@ -1,64 +1,45 @@
 ---
 name: sourcekit-lsp-warmup
-description: "Empty LSP references = the index hasn't reached that symbol, not broken config. Indexing is LAZY (demand-driven by open files) and each server imports the store ONCE at startup, so a long-lived session never sees newly indexed symbols. Don't point LSP at the swiftbuild store — indexStorePath is ignored for SwiftPM."
+description: "FIXED 2026-07-25: .sourcekit-lsp/config.json now points LSP at SwiftPM's swiftbuild BSP server so it reads the index YOUR builds write. Requires scripts/link-index-store.sh (upstream advertises .build/index-store but builds write .build/out). Background info on the old lazy/stale-index behaviour retained below."
 metadata:
   node_type: memory
   type: project
 ---
 
-`findReferences`/`workspaceSymbol` returning **0 results is the index not covering that symbol, not a configuration problem.** First diagnosed 2026-07-22; substantially corrected and extended 2026-07-25 after every subagent on a feature branch independently concluded "LSP is broken".
+## Current setup (working — verified 2026-07-25)
 
-**Sharpest discriminator:** query a long-existing symbol, then one your branch just added. On main, `ResourceSite` returned 18–19 references while `SiteAssay` — added that day, referenced from six files — returned 0, from the same server in the same session. `hover` answered both. **"hover works but findReferences is empty" means the index hasn't covered that symbol**, not that config is broken.
+`Modules/.sourcekit-lsp/config.json`:
 
-## Two layers, and the second one is the trap
-
-**Layer 1 — the shared index store.** sourcekit-lsp does *not* read the store your `swift build` produces. It runs its own build into `Modules/.build/index-build/` (native/llbuild layout) and reads `…/arm64-apple-macosx/debug/index/store/v5/{units,records}`.
-
-Indexing there is **lazy and demand-driven, not a proactive whole-package sweep.** Measured 2026-07-25: holding a server open with four files opened added ~22 units in the first 60s then **plateaued completely** for the next 90s. Files nobody opened were never indexed at all — `ResourceAmountRows.swift` still had zero units after the entire exercise. "Leave it running and it'll finish" is false.
-
-**Layer 2 — each server imports the store into its own per-process LMDB database at startup and does not pick up units added later.** Proven directly: with `SiteAssay` present in the shared store, a *freshly spawned* sourcekit-lsp returned 2 references while the long-running session's server returned 0 — same store, same second. **Waiting cannot fix a long-lived session; only a new server process (a new Claude Code session) sees newly indexed symbols.** This is why the old "wait and re-query" advice kept failing for same-session code.
-
-## Two dead ends — don't repeat them
-
-- **`index.indexStorePath` is ignored for SwiftPM workspaces.** The `swiftbuild` engine writes a genuinely complete, current store to `Modules/.build/out/v5/` (it had units for every new file while LSP's store had none), so redirecting LSP at it looks like the obvious fix. It does nothing: setting `indexStorePath` to `/tmp/definitely-not-an-index-store` still returned 18 references. A `.sourcekit-lsp/config.json` was created and deleted during this investigation.
-- **`backgroundIndexing` is already on by default.** The store grew 3543 → 3741 units across sessions that never set it.
-- The tempting theory that "swiftbuild writes to `.build/out` so LSP can't find its index" is **wrong on both counts** — LSP never uses that store, and its own store works fine, it's just incomplete.
-
-## How to apply
-
-- Empty refs on **long-existing** code → warm-up; wait and re-query. A prior `swift build` in `Modules/` makes target *preparation* near-instant.
-- Empty refs on **code written this session**, or in a **fresh worktree** (which starts from an empty index — the expensive case, and what bit every subagent on the salvage-amounts branch) → the running server will never see it. Either restart the session, or use the compiler as the source of truth: a clean `swift build --build-tests` type-checks every cross-module call site, which is what `findReferences` was approximating. State which you used.
-- Cold-index noise reads exactly like real errors. `No such module 'ComposableArchitecture'`, `Cannot find 'SiteAssay' in scope`, `Type 'SystemDetail' has no member 'where'` all appeared constantly during the salvage branch while `swift build` stayed green throughout. **Diagnostics on code that demonstrably compiles are noise.**
-- Concurrent sessions each run their own server against the same `.build` and serialize on the SwiftPM build lock.
-- `macOS/` app-target files (xcodeproj) stay uncovered without xcode-build-server — grep remains the tool for that sliver.
-
-## Priming the index deliberately (partially validated)
-
-Because indexing is demand-driven, you can force it rather than waiting. Run
-the same build sourcekit-lsp would, into its own scratch path:
-
-```bash
-cd app/Modules
-swift build --scratch-path .build/index-build --build-system native --enable-index-store
+```json
+{ "backgroundIndexing": false, "swiftPM": { "buildSystem": "swiftbuild" } }
 ```
 
-Observed 2026-07-25: this added **+409 units** in one run (3763 → 4172),
-including units for branch-new files that idle indexing had never touched.
+This makes sourcekit-lsp launch `swift package experimental-build-server --build-system swiftbuild` and read the index store **your own `swift build` produces**, instead of maintaining a second 3.8 GB index build of its own. `swift build` has `--auto-index-store` on by default, so building keeps the index current — including code you just wrote.
 
-Two caveats, both real:
-- **It contends with live sourcekit-lsp servers for the SwiftPM build lock** and
-  gets partially cancelled (`error: cancelled`) when any are running — three
-  were, during the measured run, so that +409 is a *floor*, not what a clean run
-  achieves. Close editors/sessions first for a full prime. This is the reason
-  the recipe is only partially validated: it was never run uncontended.
-- `--build-system native` is deprecated and warns. It is still the right choice
-  here because sourcekit-lsp's scratch dir uses the native layout — building
-  into it with the default `swiftbuild` engine would write a layout LSP does not
-  read.
+**One required local step, per checkout/worktree:** run `Modules/scripts/link-index-store.sh` after your first `swift build`.
 
-Then **restart the session**: priming fills the shared store, but layer 2 still
-applies, so the currently running server won't see any of it.
+Why it's needed: SwiftPM's BSP server advertises `indexStorePath: .build/index-store`, but the swiftbuild engine compiles with `-index-store-path .build/out` — so the advertised store is empty and every query returns nothing. (Confirmed by driving `build/initialize` against the BSP server directly; it also reports `indexDatabasePath: .build/out`, which looks like the two paths are crossed.) The script symlinks `.build/index-store -> out` so they agree. Re-run it after anything that wipes `.build`. **This looks like an upstream bug worth reporting** against swiftlang/swift-package-manager.
 
-**CLAUDE.md mandates LSP verification before sign-off.** That is only satisfiable once the index covers the symbols in question; for same-session code and fresh worktrees it generally is not, and the compiler is the honest fallback. Worth softening the mandate rather than having agents report LSP checks they could not actually perform.
+Measured before/after on the same symbols: `SiteAssay` (written that day, used in 6 files) went **0 → 45 references across 8 files**; `ResourceSite` 0 → 19. Both had returned 0 under the swiftbuild config until the symlink was added.
 
-See [[running-package-tests]] and [[spm-stale-layout-crash]] — the latter records the swiftbuild/native build-system split behind all of this, and had its own `rm -rf .build` ritual retired the same day.
+Trade-off to know: with `backgroundIndexing: false`, LSP no longer indexes on its own — **the index is only as fresh as your last build.** Build, then query. In exchange there's no lazy-indexing lag, no duplicate index build, and no build-lock contention (6.4 passes `--experimental-skip-acquiring-lock` in this mode specifically so LSP doesn't block your builds).
+
+## Why the default behaviour was so confusing (background)
+
+Left here because the default config will still be in play in other checkouts, and because every subagent on the salvage branch independently concluded "LSP is broken".
+
+**Discriminator:** query a long-existing symbol, then one just added. On main, `ResourceSite` returned 18–19 references while `SiteAssay` returned 0, same server, same moment. `hover` answered both — hover needs no cross-file index. "hover works, findReferences empty" = the index hasn't covered that symbol.
+
+**Layer 1 — separate store.** By default (`backgroundIndexing: true`) sourcekit-lsp does *not* read your build's store. `SwiftPMBuildServer.swift` sets its scratch dir to `.build/index-build` — the source comment says "independent of the user's build" — and hardcodes `buildSystemKind: .native`. Indexing there is **lazy and demand-driven**: a server held open with four files added ~22 units in 60s then plateaued; files nobody opened were never indexed at all.
+
+**Layer 2 — refresh is deliberately rare.** `pollForUnitChangesAndWait()` runs only at initial indexing, after LSP's own index tasks, and on `workspace/synchronize`. The source explains why: "a costly operation since it iterates through all the unit files on the file system… worth the cost during initial indexing and during the manual re-index command." **Nothing triggers it when an external process writes units**, which is why a manual index-store prime never showed up in a running session while a freshly spawned server saw it immediately.
+
+**The native default is explicitly temporary.** `BuildServerManager.swift` selects the build system as: explicit `swiftPM.buildSystem` wins; otherwise background-indexing → `.native` with the comment *"default to native **for now**"*; otherwise it infers from `.build` contents ("to match the user's manually initiated builds to maximize compatibility"). So sharing the user's build system was always intended — it just isn't the default yet.
+
+**Dead ends — don't retry.** `index.indexStorePath` **does not exist** in 6.4.x; `IndexOptions` has only `indexPrefixMap`, `maxCoresPercentageToUseForBackgroundIndexing`, `updateIndexStoreTimeout`, so that key is silently dropped. `backgroundIndexing` already defaults to `true`. And `workspace/triggerReindex` exists but re-runs the whole graph+index pipeline — on this package it showed no new units after a minute and reads as a hang.
+
+**Verifying the config is actually read:** set `swiftPM.configuration: "release"` temporarily — a known-good symbol should drop to 0 references, because the scratch subdirectory changes. That's how the config file's location was confirmed.
+
+`macOS/` app-target files (xcodeproj) stay uncovered without xcode-build-server — grep remains the tool for that sliver.
+
+See [[running-package-tests]] and [[spm-stale-layout-crash]] (which records the swiftbuild/native split behind all of this).
