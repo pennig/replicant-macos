@@ -80,8 +80,22 @@ public enum GameDatabase {
     /// SQLiteData vends an in-memory store automatically in test and preview
     /// contexts, so the same call bootstraps production, previews, and tests.
     /// The writer is returned so tests can read and write it directly.
+    ///
+    /// Honours a requested reset (see `DatabaseReset`) before migrating. The
+    /// check is skipped outside `.live`: tests and previews already get a
+    /// fresh in-memory store, where erasing would be meaningless.
     public static func bootstrap() throws -> any DatabaseWriter {
         let database = try SQLiteData.defaultDatabase(configuration: configuration)
+        @Dependency(\.context) var context
+        if context == .live,
+           DatabaseReset.consumeRequest(
+               defaults: .standard,
+               environment: ProcessInfo.processInfo.environment
+           )
+        {
+            logger.warning("Reset requested — erasing the local database before migrating.")
+            try database.erase()
+        }
         try migrator().migrate(database)
         return database
     }
