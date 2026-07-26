@@ -253,90 +253,100 @@ public struct DirectiveLogEntry: Identifiable, Equatable, Sendable {
 extension Directive {
     /// Registers the `directives` table migration. Kept beside the model so the
     /// schema and the type never drift.
+    public static let createDirectives = SchemaMigration("Create 'directives' table") { db in
+        try #sql(
+            """
+            CREATE TABLE "directives" (
+              "id" TEXT PRIMARY KEY NOT NULL,
+              "kind" TEXT NOT NULL,
+              "status" TEXT NOT NULL,
+              "deviceCode" TEXT NOT NULL DEFAULT '',
+              "targets" TEXT NOT NULL DEFAULT '[]',
+              "targetIndex" INTEGER NOT NULL DEFAULT 0,
+              "step" TEXT NOT NULL DEFAULT '',
+              "stepStartedAt" TEXT NOT NULL,
+              "returnToOrigin" INTEGER NOT NULL DEFAULT 0,
+              "originDesignation" TEXT,
+              "attentionReason" TEXT,
+              "createdAt" TEXT NOT NULL,
+              "updatedAt" TEXT NOT NULL
+            ) STRICT
+            """
+        )
+        .execute(db)
+    }
+
+    /// A separate migration, not an edit to the one above: the original
+    /// shipped 2026-07-25 and is already applied in real databases.
+    public static let addControllerCode = SchemaMigration("Add 'controllerCode' to 'directives'") { db in
+        try #sql(
+            """
+            ALTER TABLE "directives" ADD COLUMN "controllerCode" TEXT
+            """
+        )
+        .execute(db)
+    }
+
+    /// Temporary shim so `GameDatabase` keeps compiling mid-conversion.
+    /// Deleted in the manifest task.
     public static func registerMigrations(_ migrator: inout DatabaseMigrator) {
-        migrator.registerMigration("Create 'directives' table") { db in
-            try #sql(
-                """
-                CREATE TABLE "directives" (
-                  "id" TEXT PRIMARY KEY NOT NULL,
-                  "kind" TEXT NOT NULL,
-                  "status" TEXT NOT NULL,
-                  "deviceCode" TEXT NOT NULL DEFAULT '',
-                  "targets" TEXT NOT NULL DEFAULT '[]',
-                  "targetIndex" INTEGER NOT NULL DEFAULT 0,
-                  "step" TEXT NOT NULL DEFAULT '',
-                  "stepStartedAt" TEXT NOT NULL,
-                  "returnToOrigin" INTEGER NOT NULL DEFAULT 0,
-                  "originDesignation" TEXT,
-                  "attentionReason" TEXT,
-                  "createdAt" TEXT NOT NULL,
-                  "updatedAt" TEXT NOT NULL
-                ) STRICT
-                """
-            )
-            .execute(db)
-        }
-        // A separate migration, not an edit to the one above: the original
-        // shipped 2026-07-25 and is already applied in real databases.
-        migrator.registerMigration("Add 'controllerCode' to 'directives'") { db in
-            try #sql(
-                """
-                ALTER TABLE "directives" ADD COLUMN "controllerCode" TEXT
-                """
-            )
-            .execute(db)
-        }
+        createDirectives.register(in: &migrator)
+        addControllerCode.register(in: &migrator)
     }
 }
 
 extension DirectiveLogEntry {
     /// Registers the `directiveLogEntries` table migration.
+    public static let createDirectiveLogEntries = SchemaMigration("Create 'directiveLogEntries' table") { db in
+        try #sql(
+            """
+            CREATE TABLE "directiveLogEntries" (
+              "id" TEXT PRIMARY KEY NOT NULL,
+              "directiveID" TEXT,
+              "deviceCode" TEXT,
+              "kind" TEXT NOT NULL,
+              "summary" TEXT NOT NULL DEFAULT '',
+              "step" TEXT,
+              "operationID" TEXT,
+              "eventID" TEXT,
+              "occurredAt" TEXT NOT NULL
+            ) STRICT
+            """
+        )
+        .execute(db)
+        // The timeline reads are always "entries for one directive" or
+        // "entries for one device", newest last.
+        try #sql(
+            """
+            CREATE INDEX "directive_log_by_directive"
+              ON "directiveLogEntries" ("directiveID", "occurredAt")
+            """
+        )
+        .execute(db)
+        try #sql(
+            """
+            CREATE INDEX "directive_log_by_device"
+              ON "directiveLogEntries" ("deviceCode", "occurredAt")
+            """
+        )
+        .execute(db)
+        // Replay immunity (design spec §6): the `directive.*` SSE route's
+        // only job is writing one of these rows, and a replayed or
+        // catch-up-redelivered event must not duplicate the timeline entry.
+        // `eventID` is nullable (not every entry comes from an event), so
+        // the uniqueness only applies where it's set.
+        try #sql(
+            """
+            CREATE UNIQUE INDEX "directive_log_unique_event"
+              ON "directiveLogEntries" ("eventID") WHERE "eventID" IS NOT NULL
+            """
+        )
+        .execute(db)
+    }
+
+    /// Temporary shim so `GameDatabase` keeps compiling mid-conversion.
+    /// Deleted in the manifest task.
     public static func registerMigrations(_ migrator: inout DatabaseMigrator) {
-        migrator.registerMigration("Create 'directiveLogEntries' table") { db in
-            try #sql(
-                """
-                CREATE TABLE "directiveLogEntries" (
-                  "id" TEXT PRIMARY KEY NOT NULL,
-                  "directiveID" TEXT,
-                  "deviceCode" TEXT,
-                  "kind" TEXT NOT NULL,
-                  "summary" TEXT NOT NULL DEFAULT '',
-                  "step" TEXT,
-                  "operationID" TEXT,
-                  "eventID" TEXT,
-                  "occurredAt" TEXT NOT NULL
-                ) STRICT
-                """
-            )
-            .execute(db)
-            // The timeline reads are always "entries for one directive" or
-            // "entries for one device", newest last.
-            try #sql(
-                """
-                CREATE INDEX "directive_log_by_directive"
-                  ON "directiveLogEntries" ("directiveID", "occurredAt")
-                """
-            )
-            .execute(db)
-            try #sql(
-                """
-                CREATE INDEX "directive_log_by_device"
-                  ON "directiveLogEntries" ("deviceCode", "occurredAt")
-                """
-            )
-            .execute(db)
-            // Replay immunity (design spec §6): the `directive.*` SSE route's
-            // only job is writing one of these rows, and a replayed or
-            // catch-up-redelivered event must not duplicate the timeline entry.
-            // `eventID` is nullable (not every entry comes from an event), so
-            // the uniqueness only applies where it's set.
-            try #sql(
-                """
-                CREATE UNIQUE INDEX "directive_log_unique_event"
-                  ON "directiveLogEntries" ("eventID") WHERE "eventID" IS NOT NULL
-                """
-            )
-            .execute(db)
-        }
+        createDirectiveLogEntries.register(in: &migrator)
     }
 }

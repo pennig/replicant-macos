@@ -636,33 +636,37 @@ extension Device {
     /// Registers the `devices` table migration. Kept beside the model so the
     /// schema and the type never drift. Composed into the app's
     /// `bootstrapDatabase` alongside other tables.
+    public static let createDevices = SchemaMigration("Create 'devices' table") { db in
+        try #sql(
+            """
+            CREATE TABLE "devices" (
+              "deviceCode" TEXT PRIMARY KEY NOT NULL,
+              "deviceType" TEXT NOT NULL DEFAULT '',
+              "replicantCode" TEXT NOT NULL DEFAULT '',
+              "status" TEXT NOT NULL DEFAULT '',
+              "location" TEXT,
+              "locationName" TEXT,
+              "operationalCapacity" REAL NOT NULL DEFAULT 0,
+              "queueSize" INTEGER NOT NULL DEFAULT 0,
+              "stowedInDeviceCode" TEXT,
+              "controllerDeviceCode" TEXT,
+              "attachedToDeviceCode" TEXT,
+              "createdAt" TEXT NOT NULL,
+              "availableCommands" TEXT NOT NULL DEFAULT '[]',
+              "features" TEXT NOT NULL DEFAULT '[]',
+              "tags" TEXT NOT NULL DEFAULT '[]',
+              "detail" TEXT NOT NULL DEFAULT '{}',
+              "updatedAt" TEXT NOT NULL,
+              "firstSeenAt" TEXT NOT NULL
+            ) STRICT
+            """
+        )
+        .execute(db)
+    }
+
+    /// Temporary shim so `GameDatabase` keeps compiling mid-conversion.
+    /// Deleted in the manifest task.
     public static func registerMigrations(_ migrator: inout DatabaseMigrator) {
-        migrator.registerMigration("Create 'devices' table") { db in
-            try #sql(
-                """
-                CREATE TABLE "devices" (
-                  "deviceCode" TEXT PRIMARY KEY NOT NULL,
-                  "deviceType" TEXT NOT NULL DEFAULT '',
-                  "replicantCode" TEXT NOT NULL DEFAULT '',
-                  "status" TEXT NOT NULL DEFAULT '',
-                  "location" TEXT,
-                  "locationName" TEXT,
-                  "operationalCapacity" REAL NOT NULL DEFAULT 0,
-                  "queueSize" INTEGER NOT NULL DEFAULT 0,
-                  "stowedInDeviceCode" TEXT,
-                  "controllerDeviceCode" TEXT,
-                  "attachedToDeviceCode" TEXT,
-                  "createdAt" TEXT NOT NULL,
-                  "availableCommands" TEXT NOT NULL DEFAULT '[]',
-                  "features" TEXT NOT NULL DEFAULT '[]',
-                  "tags" TEXT NOT NULL DEFAULT '[]',
-                  "detail" TEXT NOT NULL DEFAULT '{}',
-                  "updatedAt" TEXT NOT NULL,
-                  "firstSeenAt" TEXT NOT NULL
-                ) STRICT
-                """
-            )
-            .execute(db)
-        }
+        createDevices.register(in: &migrator)
     }
 }

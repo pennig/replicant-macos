@@ -200,29 +200,33 @@ extension Blueprint {
     /// Registers the `blueprints` table migration. Kept beside the model so the
     /// schema and the type never drift. Composed into the app's
     /// `bootstrapDatabase` alongside other features' tables.
+    public static let createBlueprints = SchemaMigration("Create 'blueprints' table") { db in
+        try #sql(
+            """
+            CREATE TABLE "blueprints" (
+              "deviceType" TEXT PRIMARY KEY NOT NULL,
+              "shortDescription" TEXT NOT NULL DEFAULT '',
+              "fullDescription" TEXT NOT NULL DEFAULT '',
+              "printTime" INTEGER NOT NULL DEFAULT 0,
+              "features" TEXT NOT NULL DEFAULT '[]',
+              "directives" TEXT NOT NULL DEFAULT '[]',
+              "resources" TEXT NOT NULL DEFAULT '{}',
+              "stowCapacity" INTEGER NOT NULL DEFAULT 0,
+              "cargoCapacity" INTEGER NOT NULL DEFAULT 0,
+              "attachCapacity" INTEGER NOT NULL DEFAULT 0,
+              "queueSize" INTEGER NOT NULL DEFAULT 0,
+              "strength" REAL NOT NULL DEFAULT 0,
+              "currentHubs" INTEGER
+            ) STRICT
+            """
+        )
+        .execute(db)
+    }
+
+    /// Temporary shim so `GameDatabase` keeps compiling mid-conversion.
+    /// Deleted in the manifest task.
     public static func registerMigrations(_ migrator: inout DatabaseMigrator) {
-        migrator.registerMigration("Create 'blueprints' table") { db in
-            try #sql(
-                """
-                CREATE TABLE "blueprints" (
-                  "deviceType" TEXT PRIMARY KEY NOT NULL,
-                  "shortDescription" TEXT NOT NULL DEFAULT '',
-                  "fullDescription" TEXT NOT NULL DEFAULT '',
-                  "printTime" INTEGER NOT NULL DEFAULT 0,
-                  "features" TEXT NOT NULL DEFAULT '[]',
-                  "directives" TEXT NOT NULL DEFAULT '[]',
-                  "resources" TEXT NOT NULL DEFAULT '{}',
-                  "stowCapacity" INTEGER NOT NULL DEFAULT 0,
-                  "cargoCapacity" INTEGER NOT NULL DEFAULT 0,
-                  "attachCapacity" INTEGER NOT NULL DEFAULT 0,
-                  "queueSize" INTEGER NOT NULL DEFAULT 0,
-                  "strength" REAL NOT NULL DEFAULT 0,
-                  "currentHubs" INTEGER
-                ) STRICT
-                """
-            )
-            .execute(db)
-        }
+        createBlueprints.register(in: &migrator)
     }
 }
 

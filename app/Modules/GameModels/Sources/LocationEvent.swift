@@ -168,40 +168,46 @@ extension LocationEvent {
     /// Registers the `locationEvents` table migration. Kept beside the model so the
     /// schema and the type never drift. Composed into `bootstrapDatabase` alongside
     /// the other tables.
+    public static let createLocationEvents = SchemaMigration("Create 'locationEvents' table") { db in
+        try #sql(
+            """
+            CREATE TABLE "locationEvents" (
+              "designation" TEXT PRIMARY KEY NOT NULL,
+              "location" TEXT NOT NULL DEFAULT '',
+              "locationName" TEXT,
+              "eventType" TEXT NOT NULL DEFAULT '',
+              "title" TEXT NOT NULL DEFAULT '',
+              "category" TEXT,
+              "tier" INTEGER NOT NULL DEFAULT 0,
+              "status" TEXT NOT NULL DEFAULT 'active',
+              "broadcastMessage" TEXT,
+              "eventDescription" TEXT,
+              "discoveredAt" TEXT,
+              "completedAt" TEXT,
+              "detail" TEXT NOT NULL DEFAULT '{}',
+              "firstSeenAt" TEXT NOT NULL,
+              "updatedAt" TEXT NOT NULL
+            ) STRICT
+            """
+        )
+        .execute(db)
+    }
+
+    public static let addObjectivesMet = SchemaMigration("Add 'objectivesMet' to locationEvents") { db in
+        try #sql(
+            """
+            ALTER TABLE "locationEvents"
+            ADD COLUMN "objectivesMet" INTEGER NOT NULL DEFAULT 0
+            """
+        )
+        .execute(db)
+    }
+
+    /// Temporary shim so `GameDatabase` keeps compiling mid-conversion.
+    /// Deleted in the manifest task.
     public static func registerMigrations(_ migrator: inout DatabaseMigrator) {
-        migrator.registerMigration("Create 'locationEvents' table") { db in
-            try #sql(
-                """
-                CREATE TABLE "locationEvents" (
-                  "designation" TEXT PRIMARY KEY NOT NULL,
-                  "location" TEXT NOT NULL DEFAULT '',
-                  "locationName" TEXT,
-                  "eventType" TEXT NOT NULL DEFAULT '',
-                  "title" TEXT NOT NULL DEFAULT '',
-                  "category" TEXT,
-                  "tier" INTEGER NOT NULL DEFAULT 0,
-                  "status" TEXT NOT NULL DEFAULT 'active',
-                  "broadcastMessage" TEXT,
-                  "eventDescription" TEXT,
-                  "discoveredAt" TEXT,
-                  "completedAt" TEXT,
-                  "detail" TEXT NOT NULL DEFAULT '{}',
-                  "firstSeenAt" TEXT NOT NULL,
-                  "updatedAt" TEXT NOT NULL
-                ) STRICT
-                """
-            )
-            .execute(db)
-        }
-        migrator.registerMigration("Add 'objectivesMet' to locationEvents") { db in
-            try #sql(
-                """
-                ALTER TABLE "locationEvents"
-                ADD COLUMN "objectivesMet" INTEGER NOT NULL DEFAULT 0
-                """
-            )
-            .execute(db)
-        }
+        createLocationEvents.register(in: &migrator)
+        addObjectivesMet.register(in: &migrator)
     }
 }
 

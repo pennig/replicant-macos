@@ -247,35 +247,39 @@ public enum OperationSource: String, Sendable, QueryBindable {
 extension Operation {
     /// Registers the `operations` table migration plus the partial unique index
     /// that enforces at most one open operation per device.
+    public static let createOperations = SchemaMigration("Create 'operations' table") { db in
+        try #sql(
+            """
+            CREATE TABLE "operations" (
+              "id" TEXT PRIMARY KEY NOT NULL,
+              "entityCode" TEXT NOT NULL,
+              "kind" TEXT NOT NULL,
+              "status" TEXT NOT NULL,
+              "source" TEXT NOT NULL,
+              "startedAt" TEXT NOT NULL,
+              "completesAt" TEXT,
+              "lastConfirmedAt" TEXT NOT NULL,
+              "detail" TEXT NOT NULL DEFAULT '{}'
+            ) STRICT
+            """
+        )
+        .execute(db)
+        // One open operation per device. `optimistic` is intentionally not in
+        // this set, so dispatch can stage a row without conflicting with the
+        // op it may replace.
+        try #sql(
+            """
+            CREATE UNIQUE INDEX "operation_one_open_per_device"
+              ON "operations" ("entityCode")
+              WHERE "status" IN ('enqueued', 'active')
+            """
+        )
+        .execute(db)
+    }
+
+    /// Temporary shim so `GameDatabase` keeps compiling mid-conversion.
+    /// Deleted in the manifest task.
     public static func registerMigrations(_ migrator: inout DatabaseMigrator) {
-        migrator.registerMigration("Create 'operations' table") { db in
-            try #sql(
-                """
-                CREATE TABLE "operations" (
-                  "id" TEXT PRIMARY KEY NOT NULL,
-                  "entityCode" TEXT NOT NULL,
-                  "kind" TEXT NOT NULL,
-                  "status" TEXT NOT NULL,
-                  "source" TEXT NOT NULL,
-                  "startedAt" TEXT NOT NULL,
-                  "completesAt" TEXT,
-                  "lastConfirmedAt" TEXT NOT NULL,
-                  "detail" TEXT NOT NULL DEFAULT '{}'
-                ) STRICT
-                """
-            )
-            .execute(db)
-            // One open operation per device. `optimistic` is intentionally not in
-            // this set, so dispatch can stage a row without conflicting with the
-            // op it may replace.
-            try #sql(
-                """
-                CREATE UNIQUE INDEX "operation_one_open_per_device"
-                  ON "operations" ("entityCode")
-                  WHERE "status" IN ('enqueued', 'active')
-                """
-            )
-            .execute(db)
-        }
+        createOperations.register(in: &migrator)
     }
 }

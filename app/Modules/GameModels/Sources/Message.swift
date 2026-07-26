@@ -58,27 +58,35 @@ extension Message {
     /// Registers the `messages` table migration. Kept here, alongside the model,
     /// so the schema and the type it backs never drift apart. Composed into the
     /// app's `bootstrapDatabase` alongside other features' tables.
+    public static let createMessages = SchemaMigration("Create 'messages' table") { db in
+        try #sql(
+            """
+            CREATE TABLE "messages" (
+              "id" INTEGER PRIMARY KEY NOT NULL,
+              "messageType" TEXT NOT NULL DEFAULT '',
+              "title" TEXT NOT NULL DEFAULT '',
+              "body" TEXT NOT NULL DEFAULT '',
+              "isRead" INTEGER NOT NULL DEFAULT 0,
+              "createdAt" TEXT NOT NULL
+            ) STRICT
+            """
+        )
+        .execute(db)
+    }
+
+    /// v2.3.0 added optional category/subcategory groupings to messages.
+    public static let addMessageCategories = SchemaMigration(
+        "Add category/subcategory to 'messages'"
+    ) { db in
+        try #sql(#"ALTER TABLE "messages" ADD COLUMN "category" TEXT"#).execute(db)
+        try #sql(#"ALTER TABLE "messages" ADD COLUMN "subcategory" TEXT"#).execute(db)
+    }
+
+    /// Temporary shim so `GameDatabase` keeps compiling mid-conversion.
+    /// Deleted in the manifest task.
     public static func registerMigrations(_ migrator: inout DatabaseMigrator) {
-        migrator.registerMigration("Create 'messages' table") { db in
-            try #sql(
-                """
-                CREATE TABLE "messages" (
-                  "id" INTEGER PRIMARY KEY NOT NULL,
-                  "messageType" TEXT NOT NULL DEFAULT '',
-                  "title" TEXT NOT NULL DEFAULT '',
-                  "body" TEXT NOT NULL DEFAULT '',
-                  "isRead" INTEGER NOT NULL DEFAULT 0,
-                  "createdAt" TEXT NOT NULL
-                ) STRICT
-                """
-            )
-            .execute(db)
-        }
-        // v2.3.0 added optional category/subcategory groupings to messages.
-        migrator.registerMigration("Add category/subcategory to 'messages'") { db in
-            try #sql(#"ALTER TABLE "messages" ADD COLUMN "category" TEXT"#).execute(db)
-            try #sql(#"ALTER TABLE "messages" ADD COLUMN "subcategory" TEXT"#).execute(db)
-        }
+        createMessages.register(in: &migrator)
+        addMessageCategories.register(in: &migrator)
     }
 }
 

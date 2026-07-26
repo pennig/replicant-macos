@@ -352,29 +352,33 @@ extension KnownReplicant {
     /// Registers the `knownReplicants` table migration. Kept beside the model so
     /// the schema and the type never drift. Composed into the app's
     /// `bootstrapDatabase` alongside the other tables.
+    public static let createKnownReplicants = SchemaMigration("Create 'knownReplicants' table") { db in
+        try #sql(
+            """
+            CREATE TABLE "knownReplicants" (
+              "replicantCode" TEXT PRIMARY KEY NOT NULL,
+              "name" TEXT NOT NULL DEFAULT '',
+              "isNPC" INTEGER NOT NULL DEFAULT 0,
+              "directoryLocation" TEXT,
+              "lastKnownLocation" TEXT,
+              "lastKnownLocationName" TEXT,
+              "lastSeenAt" TEXT,
+              "status" TEXT,
+              "experiencePoints" INTEGER NOT NULL DEFAULT 0,
+              "hostedDeviceCode" TEXT,
+              "detail" TEXT NOT NULL DEFAULT '{}',
+              "detailFetchedAt" TEXT,
+              "firstSeenAt" TEXT NOT NULL,
+              "updatedAt" TEXT NOT NULL
+            ) STRICT
+            """
+        )
+        .execute(db)
+    }
+
+    /// Temporary shim so `GameDatabase` keeps compiling mid-conversion.
+    /// Deleted in the manifest task.
     public static func registerMigrations(_ migrator: inout DatabaseMigrator) {
-        migrator.registerMigration("Create 'knownReplicants' table") { db in
-            try #sql(
-                """
-                CREATE TABLE "knownReplicants" (
-                  "replicantCode" TEXT PRIMARY KEY NOT NULL,
-                  "name" TEXT NOT NULL DEFAULT '',
-                  "isNPC" INTEGER NOT NULL DEFAULT 0,
-                  "directoryLocation" TEXT,
-                  "lastKnownLocation" TEXT,
-                  "lastKnownLocationName" TEXT,
-                  "lastSeenAt" TEXT,
-                  "status" TEXT,
-                  "experiencePoints" INTEGER NOT NULL DEFAULT 0,
-                  "hostedDeviceCode" TEXT,
-                  "detail" TEXT NOT NULL DEFAULT '{}',
-                  "detailFetchedAt" TEXT,
-                  "firstSeenAt" TEXT NOT NULL,
-                  "updatedAt" TEXT NOT NULL
-                ) STRICT
-                """
-            )
-            .execute(db)
-        }
+        createKnownReplicants.register(in: &migrator)
     }
 }
