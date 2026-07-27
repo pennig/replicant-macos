@@ -49,8 +49,8 @@ Present on every scanned moon:
 ### Retrograde rotation
 
 **Retrograde is carried by a negative `rotation_period_hours`, and independently by
-an obliquity greater than 90°.** It is *not* signalled by a tilt past 180° — no
-observed tilt exceeds 177.4.
+an obliquity greater than 90°** — the standard astronomical convention. Tilt is
+reported in `0…180` and never exceeds it (max observed 177.4).
 
 | Body | `axial_tilt_deg` | `rotation_period_hours` |
 | --- | --- | --- |
@@ -62,7 +62,11 @@ observed tilt exceeds 177.4.
 This simplifies the renderer: apply the obliquity *geometrically* and retrograde
 emerges on its own. A body at 177.4° points its north pole nearly straight down, so
 spinning right-handed about that pole reads as backwards from above. Uranus at 97.77°
-rolls on its side. No special case.
+rolls on its side. No special case — the "> 90° means retrograde" rule *is* the
+geometry, not a branch to write.
+
+Only the explicit negative period needs handling in code, as an override for the case
+where the backend calls a rotation retrograde without the obliquity implying it.
 
 ### The one genuine gap
 
@@ -107,9 +111,8 @@ struct RingSystem: Equatable, Sendable {
 
 `BodySpin` derives:
 
-- `obliquityDeg` — `tiltDeg` normalized into `0…360`, then folded to `0…180`
-  (a value past 180 becomes `360 − tilt` **and** sets `flipped`, honouring the
-  stated convention should it ever appear in data).
+- `obliquityDeg` — `tiltDeg` normalized into `0…180`. Defensive only; the backend
+  already reports within that range.
 - `pole` — `+Y` rotated by `obliquityDeg` about a stable per-body azimuth derived
   from the appearance seed, so two same-tilt worlds don't line up.
 - `spinRate(anchor:)` — signed radians/second (see below).
