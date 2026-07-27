@@ -39,13 +39,14 @@ struct ActiveTaskCard: View {
     /// carries its state in the device's own `repair` block and refreshes in place.
     var repair: RepairSnapshot? = nil
 
-    /// The itinerary to display for a travel op: the whole route captured at
-    /// dispatch when we have it, else the device's remaining-legs snapshot. Nil
-    /// for a non-travel op.
+    /// The itinerary to display for a travel op — the shared rule (whole route
+    /// frozen at dispatch when we have it, else the device's remaining-legs
+    /// snapshot), with the backend's bare-system proxy codes resolved. Nil for a
+    /// non-travel op.
     private var itinerary: TravelSnapshot? {
         guard operation?.kind == OperationKind.travel.rawValue else { return nil }
-        if let stored = operation?.travelSnapshot, !stored.legs.isEmpty { return stored }
-        return liveTravel
+        return TravelSnapshot.itinerary(stored: operation?.travelSnapshot, live: liveTravel)?
+            .resolvingSystemProxies
     }
 
     var body: some View {

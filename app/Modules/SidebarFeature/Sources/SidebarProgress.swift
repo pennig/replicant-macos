@@ -47,8 +47,12 @@ enum SidebarProgress {
         let label: String
         let symbol: String?
         if kind == .travel {
-            label = operation.travelSnapshot?.destinationLabel
-                ?? device.travelSnapshot?.destinationLabel
+            // The shared rule, so the header names the same destination the device
+            // detail and the star map do.
+            let itinerary = TravelSnapshot.itinerary(
+                stored: operation.travelSnapshot, live: device.travelSnapshot
+            )?.resolvingSystemProxies
+            label = itinerary?.destinationLabel
                 ?? device.locationName ?? device.location ?? "In transit"
             symbol = "arrow.right"
         } else if kind == .print {

@@ -47,6 +47,12 @@ public struct NewStarMapView: View {
     /// The live device roster — the source of the real FTL relay nodes (relay
     /// device locations) and the ships in transit (devices with a travel block).
     @FetchAll(Device.all) private var devices
+    /// Open operations, for the travel route frozen at dispatch. The live `travel`
+    /// block lists only remaining legs and goes stale; the stored command response
+    /// has the whole route with resolved location codes — and it's what the sidebar
+    /// and device detail already read, so reading it here is what keeps all three
+    /// naming the same destination.
+    @FetchAll(Operation.order { $0.startedAt.desc() }) private var operations
     /// The persisted FTL mesh — the edges the reducer rebuilds off each relay's
     /// network view. Read straight from SQLite so the mesh draws instantly on
     /// launch and survives a moment where a relay's network read fails.
@@ -139,10 +145,20 @@ public struct NewStarMapView: View {
     private var ships: [ShipRoute] {
         devices.compactMap { device -> ShipRoute? in
             guard let activity = device.derivedActivity, activity.kind == .travel,
-                  let departedAt = activity.startedAt, let arrivesAt = activity.completesAt,
-                  let snapshot = device.travelSnapshot,
-                  let origin = snapshot.origin.map(Self.systemDesignation),
-                  let destination = snapshot.destination.map(Self.systemDesignation),
+                  let departedAt = activity.startedAt, let arrivesAt = activity.completesAt
+            else { return nil }
+            // The same itinerary the sidebar and device detail read: the whole route
+            // frozen at dispatch when we have it, else the device's remaining-legs
+            // block — with the backend's bare-system proxy codes resolved, so a trip
+            // to "ASTELLIO" anchors on ASTELLIO-1-L4 and not on the star.
+            let stored = operations.first {
+                $0.entityCode == device.deviceCode && $0.status.isOpen
+                    && $0.kind == OperationKind.travel.rawValue
+            }?.travelSnapshot
+            guard let snapshot = TravelSnapshot.itinerary(stored: stored, live: device.travelSnapshot)?
+                    .resolvingSystemProxies,
+                  let origin = snapshot.origin.map(TravelSnapshot.systemDesignation),
+                  let destination = snapshot.destination.map(TravelSnapshot.systemDesignation),
                   origin != destination
             else { return nil }
             // Per-leg route (location-level) so the renderer places the ship along its
@@ -173,9 +189,11 @@ public struct NewStarMapView: View {
     }
 
     /// The star system a location code belongs to — the designation up to the
-    /// first hyphen (`AINALRAM-1-L4` → `AINALRAM`, `SOL-3` → `SOL`).
+    /// first hyphen (`AINALRAM-1-L4` → `AINALRAM`, `SOL-3` → `SOL`). Delegates to
+    /// the GameModels definition so the map and the travel-itinerary normalization
+    /// can never disagree about where a system designation ends.
     private static func systemDesignation(_ location: String) -> String {
-        String(location.split(separator: "-").first ?? "")
+        TravelSnapshot.systemDesignation(location)
     }
 
     /// Charted stars whose designation matches the live search query (case-

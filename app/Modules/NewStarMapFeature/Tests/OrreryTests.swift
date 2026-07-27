@@ -1,9 +1,11 @@
 import ComposableArchitecture
 import Foundation
+import GameModels
 import GameServices
 import SQLiteData
 import Testing
 import UniverseModels
+import Utils
 import simd
 @testable import NewStarMapFeature
 
@@ -638,5 +640,130 @@ struct OrreryLayoutTests {
         let firstTwoOwn = c.devices.prefix(2).allSatisfy { $0.isOwn }
         #expect(firstTwoOwn)
         #expect(c.primaryType == "mining_drone")    // first own device's glyph
+    }
+}
+
+/// The date-domain twin of the renderer's media-time walk: the LAST leg ends at
+/// the trip's arrival and each earlier leg's end is found by subtracting the
+/// durations after it. The callout counts down to one of these.
+struct ShipLegDateTests {
+    private let arrival = Date(timeIntervalSince1970: 1_000)
+
+    @Test func lastLegEndsAtArrivalAndEarlierLegsWalkBackwards() {
+        let dates = Ship.legEndDates(seconds: [45, 388, 35], arrivesAt: arrival)
+
+        #expect(dates == [
+            Date(timeIntervalSince1970: 1_000 - 388 - 35),
+            Date(timeIntervalSince1970: 1_000 - 35),
+            Date(timeIntervalSince1970: 1_000),
+        ])
+    }
+
+    @Test func singleLegEndsAtArrival() {
+        #expect(Ship.legEndDates(seconds: [265], arrivesAt: arrival) == [arrival])
+    }
+
+    /// A leg with no duration makes the whole walk meaningless — the renderer
+    /// already falls back to a straight segment in exactly this case.
+    @Test func anyMissingDurationYieldsNoDates() {
+        #expect(Ship.legEndDates(seconds: [45, nil, 35], arrivesAt: arrival) == nil)
+    }
+
+    @Test func noLegsYieldsNoDates() {
+        #expect(Ship.legEndDates(seconds: [], arrivesAt: arrival) == nil)
+    }
+}
+
+/// The reported bug, end to end across the two pure layers that caused it: a route
+/// naming a bare system designation used to anchor its riser on the star, because
+/// `OrreryLayout` resolves a system code to the centre. Normalizing the proxy
+/// against the code the same payload supplies moves it to the entry point.
+///
+/// Built from a real `travel` payload rather than hand-assembled values, so the
+/// parse and the normalization are both exercised.
+struct BareSystemRouteAnchorTests {
+    private func planet(_ id: String, semi: Double, lagrange: [LagrangePoint]) -> OrreryPlanet {
+        OrreryPlanet(
+            designation: id, name: nil, type: nil, planetType: .unknown(""), estimated: false,
+            tags: [], surfaceTempC: nil, atmosphere: Atmosphere(apiValue: nil), appearanceSeed: 0,
+            orbitalDistanceAu: 1, inHabitableZone: false, scanned: true, moonCount: 0, lifeStage: nil,
+            inventory: [], semiMajorScene: semi, periodDays: 100, phase0Deg: 0,
+            displayRadius: 1, colorHex: "#ffffff", hasRing: false, indicators: [],
+            hasInterestingMoon: false, moons: [], lagrange: lagrange)
+    }
+
+    /// ASTELLIO's orrery, with planet 1 carrying the L4 the backend uses as the
+    /// system's entry point.
+    private var layout: OrreryLayout {
+        let model = SystemModel(
+            star: StarDetail(designation: "ASTELLIO", name: nil, spectralType: nil, color: nil,
+                             position: Position(x: 0, y: 0, z: 0), temperatureK: nil, massSolar: nil,
+                             luminositySolar: nil, ageMy: nil, habitableZone: nil, miningBonusPct: nil),
+            hzInnerScene: nil, hzOuterScene: nil,
+            planets: [planet("ASTELLIO-1", semi: 10,
+                             lagrange: [LagrangePoint(designation: "ASTELLIO-1-L4", point: 4)])],
+            belts: [], hazards: [], structures: [], kuiperScene: nil,
+            frameScene: 20, deviceCount: 0, vesselCount: 0)
+        return OrreryLayout(model: model, center: .zero, scale: 1, reveal: 1, time: 0)
+    }
+
+    /// The live block for a device surging to "ASTELLIO": the leg names the proxy,
+    /// `final_destination` names the entry point.
+    private var snapshot: TravelSnapshot {
+        TravelSnapshot(travelObject: .object([
+            "origin": .string("ALKALUROP-3-L4"),
+            "destination": .string("ASTELLIO"),
+            "final_destination": .string("ASTELLIO-1-L4"),
+            "route": .array([
+                .object([
+                    "leg": .number(1),
+                    "from": .string("ALKALUROP-3-L4"),
+                    "to": .string("ASTELLIO"),
+                    "type": .string("surge"),
+                    "time_seconds": .number(265),
+                    "active": .bool(true),
+                ])
+            ]),
+        ]))!
+    }
+
+    /// `Ship.orderedCodes`' input: the route's location codes, origin → each leg's
+    /// destination.
+    private func orderedCodes(_ s: TravelSnapshot) -> [String] {
+        let pairs = s.legs.compactMap { leg -> (String, String)? in
+            guard let f = leg.from, let t = leg.to else { return nil }
+            return (f, t)
+        }
+        guard let first = pairs.first else { return [] }
+        return [first.0] + pairs.map(\.1)
+    }
+
+    @Test func rawProxyCodeAnchorsOnTheStar() {
+        // The bug: "ASTELLIO" resolves to the layer's centre.
+        #expect(layout.position(ofLocation: "ASTELLIO") == .zero)
+
+        let r = SystemTransit.resolve(
+            orderedCodes: orderedCodes(snapshot), deviceCode: "F2908E6E",
+            resolves: { layout.position(ofLocation: $0) != nil })
+
+        #expect(r.boundaries.map(\.anchorCode) == ["ASTELLIO"])
+        #expect(layout.position(ofLocation: r.boundaries[0].anchorCode) == .zero)  // the sun
+    }
+
+    @Test func normalizedRouteAnchorsOnTheEntryPoint() {
+        let codes = orderedCodes(snapshot.resolvingSystemProxies)
+        #expect(codes == ["ALKALUROP-3-L4", "ASTELLIO-1-L4"])
+
+        let r = SystemTransit.resolve(
+            orderedCodes: codes, deviceCode: "F2908E6E",
+            resolves: { layout.position(ofLocation: $0) != nil })
+
+        #expect(r.boundaries.map(\.anchorCode) == ["ASTELLIO-1-L4"])
+        #expect(r.boundaries.map(\.direction) == [.inbound])
+        #expect(r.boundaries.map(\.anchorIndex) == [1])
+        // The riser now sits off-centre, on the planet's leading Lagrange point.
+        let anchor = layout.position(ofLocation: "ASTELLIO-1-L4")
+        #expect(anchor != nil)
+        #expect(anchor != .zero)
     }
 }
