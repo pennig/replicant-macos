@@ -1195,3 +1195,38 @@ struct CameraTranslationTests {
         #expect(simd_length(cam.target - SIMD3<Float>(4, 5, 6)) < 1e-6)
     }
 }
+
+// MARK: - Dossier fact formatting
+
+struct BodyFactFormatTests {
+    @Test func rotationSwitchesFromHoursToDays() {
+        // SOL-6 turns in 10.66 h — hours read naturally.
+        #expect(BodyFactFormat.hours(10.66) == "10.7 h")
+        // SOL-2 takes 5832.5 h; "5832 h" is unreadable, "243 d" is not.
+        #expect(BodyFactFormat.hours(5832.5) == "243 d")
+        #expect(BodyFactFormat.hours(47.9).hasSuffix(" h"))
+        #expect(BodyFactFormat.hours(48).hasSuffix(" d"))
+    }
+
+    @Test func orbitalPeriodSwitchesFromDaysToYears() {
+        #expect(BodyFactFormat.days(224.7) == "224.7 d")       // SOL-2
+        #expect(BodyFactFormat.days(10747).hasSuffix(" y"))     // SOL-6
+        #expect(BodyFactFormat.days(30589).hasSuffix(" y"))     // SOL-7
+        #expect(BodyFactFormat.days(899.9).hasSuffix(" d"))
+        #expect(BodyFactFormat.days(900).hasSuffix(" y"))
+    }
+
+    @Test func moonDistanceSwitchesToMillions() {
+        #expect(BodyFactFormat.km(384_400) == "384400 km")      // SOL-3-1
+        #expect(BodyFactFormat.km(1_221_870) == "1.22 M km")    // SOL-6-1
+        #expect(BodyFactFormat.km(999_999).hasSuffix(" km"))
+        #expect(BodyFactFormat.km(1_000_000).hasSuffix("M km"))
+    }
+
+    @Test func unscannedAtmosphereHasNoLabel() {
+        // An unscanned body must show NO atmosphere row, not the word "Unknown".
+        #expect(Atmosphere.unknown.label == nil)
+        #expect(Atmosphere.none.label == "None")
+        #expect(Atmosphere.crushing.label == "Crushing")
+    }
+}

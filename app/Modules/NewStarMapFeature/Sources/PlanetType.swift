@@ -85,4 +85,17 @@ enum Atmosphere: Equatable, Sendable {
         default:         self = .unknown
         }
     }
+
+    /// Display name for the dossier. `.unknown` has none — an unscanned body should
+    /// show no atmosphere row at all rather than the word "Unknown".
+    var label: String? {
+        switch self {
+        case .none:     "None"
+        case .thin:     "Thin"
+        case .standard: "Standard"
+        case .dense:    "Dense"
+        case .crushing: "Crushing"
+        case .unknown:  nil
+        }
+    }
 }
