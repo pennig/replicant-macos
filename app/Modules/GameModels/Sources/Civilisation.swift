@@ -115,29 +115,26 @@ extension SpeciesReputation {
 // MARK: - Schema
 
 extension Civilisation {
-    /// Registers the `civilisations` table migration. Kept beside the model so
-    /// the schema and the type never drift. Composed into the app's
-    /// `bootstrapDatabase` alongside other features' tables.
-    public static func registerMigrations(_ migrator: inout DatabaseMigrator) {
-        migrator.registerMigration("Create 'civilisations' table") { db in
-            try #sql(
-                """
-                CREATE TABLE "civilisations" (
-                  "speciesKey" TEXT PRIMARY KEY NOT NULL,
-                  "name" TEXT NOT NULL DEFAULT '',
-                  "speciesDescription" TEXT NOT NULL DEFAULT '',
-                  "government" TEXT NOT NULL DEFAULT '',
-                  "greeting" TEXT NOT NULL DEFAULT '',
-                  "homeworldType" TEXT NOT NULL DEFAULT '',
-                  "techAffinity" TEXT NOT NULL DEFAULT '',
-                  "trait" TEXT NOT NULL DEFAULT '',
-                  "starRegions" TEXT NOT NULL DEFAULT '[]',
-                  "totalReputation" INTEGER
-                ) STRICT
-                """
-            )
-            .execute(db)
-        }
+    /// Creates the `civilisations` table. Kept beside the model so the schema
+    /// and the type never drift.
+    public static let createCivilisations = SchemaMigration("Create 'civilisations' table") { db in
+        try #sql(
+            """
+            CREATE TABLE "civilisations" (
+              "speciesKey" TEXT PRIMARY KEY NOT NULL,
+              "name" TEXT NOT NULL DEFAULT '',
+              "speciesDescription" TEXT NOT NULL DEFAULT '',
+              "government" TEXT NOT NULL DEFAULT '',
+              "greeting" TEXT NOT NULL DEFAULT '',
+              "homeworldType" TEXT NOT NULL DEFAULT '',
+              "techAffinity" TEXT NOT NULL DEFAULT '',
+              "trait" TEXT NOT NULL DEFAULT '',
+              "starRegions" TEXT NOT NULL DEFAULT '[]',
+              "totalReputation" INTEGER
+            ) STRICT
+            """
+        )
+        .execute(db)
     }
 }
 

@@ -146,32 +146,30 @@ extension EventLog {
 // MARK: - Schema
 
 extension EventLog {
-    /// Registers the `eventLogs` table migration. Kept beside the model so the
-    /// schema and the type never drift. Composed into `bootstrapDatabase`.
-    public static func registerMigrations(_ migrator: inout DatabaseMigrator) {
-        migrator.registerMigration("Create 'eventLogs' table") { db in
-            try #sql(
-                """
-                CREATE TABLE "eventLogs" (
-                  "id" TEXT PRIMARY KEY NOT NULL,
-                  "event" TEXT NOT NULL DEFAULT '',
-                  "category" TEXT NOT NULL DEFAULT '',
-                  "replicantCode" TEXT,
-                  "deviceCode" TEXT,
-                  "deviceType" TEXT,
-                  "star" TEXT,
-                  "location" TEXT,
-                  "version" INTEGER,
-                  "createdAt" TEXT,
-                  "receivedAt" TEXT NOT NULL,
-                  "provenance" TEXT NOT NULL DEFAULT 'stream',
-                  "isHandled" INTEGER NOT NULL DEFAULT 0,
-                  "matchedRoutes" TEXT,
-                  "payload" TEXT NOT NULL DEFAULT '{}'
-                ) STRICT
-                """
-            )
-            .execute(db)
-        }
+    /// Creates the `eventLogs` table. Kept beside the model so the schema and
+    /// the type never drift.
+    public static let createEventLogs = SchemaMigration("Create 'eventLogs' table") { db in
+        try #sql(
+            """
+            CREATE TABLE "eventLogs" (
+              "id" TEXT PRIMARY KEY NOT NULL,
+              "event" TEXT NOT NULL DEFAULT '',
+              "category" TEXT NOT NULL DEFAULT '',
+              "replicantCode" TEXT,
+              "deviceCode" TEXT,
+              "deviceType" TEXT,
+              "star" TEXT,
+              "location" TEXT,
+              "version" INTEGER,
+              "createdAt" TEXT,
+              "receivedAt" TEXT NOT NULL,
+              "provenance" TEXT NOT NULL DEFAULT 'stream',
+              "isHandled" INTEGER NOT NULL DEFAULT 0,
+              "matchedRoutes" TEXT,
+              "payload" TEXT NOT NULL DEFAULT '{}'
+            ) STRICT
+            """
+        )
+        .execute(db)
     }
 }

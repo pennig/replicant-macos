@@ -94,28 +94,25 @@ extension Replicant {
 // MARK: - Schema
 
 extension Replicant {
-    /// Registers the `replicants` table migration. Kept beside the model so the
-    /// schema and the type never drift. Composed into the app's
-    /// `bootstrapDatabase` alongside other features' tables.
-    public static func registerMigrations(_ migrator: inout DatabaseMigrator) {
-        migrator.registerMigration("Create 'replicants' table") { db in
-            try #sql(
-                """
-                CREATE TABLE "replicants" (
-                  "replicantCode" TEXT PRIMARY KEY NOT NULL,
-                  "name" TEXT NOT NULL DEFAULT '',
-                  "createdAt" TEXT NOT NULL,
-                  "currentStar" TEXT,
-                  "currentStarName" TEXT,
-                  "currentLocation" TEXT,
-                  "currentLocationName" TEXT,
-                  "hostedDeviceCode" TEXT,
-                  "experiencePoints" INTEGER NOT NULL DEFAULT 0,
-                  "deviceCount" INTEGER NOT NULL DEFAULT 0
-                ) STRICT
-                """
-            )
-            .execute(db)
-        }
+    /// Creates the `replicants` table. Kept beside the model so the schema
+    /// and the type never drift.
+    public static let createReplicants = SchemaMigration("Create 'replicants' table") { db in
+        try #sql(
+            """
+            CREATE TABLE "replicants" (
+              "replicantCode" TEXT PRIMARY KEY NOT NULL,
+              "name" TEXT NOT NULL DEFAULT '',
+              "createdAt" TEXT NOT NULL,
+              "currentStar" TEXT,
+              "currentStarName" TEXT,
+              "currentLocation" TEXT,
+              "currentLocationName" TEXT,
+              "hostedDeviceCode" TEXT,
+              "experiencePoints" INTEGER NOT NULL DEFAULT 0,
+              "deviceCount" INTEGER NOT NULL DEFAULT 0
+            ) STRICT
+            """
+        )
+        .execute(db)
     }
 }

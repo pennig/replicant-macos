@@ -22,6 +22,9 @@ import SwiftUI
 import UI
 import UniverseModels
 import Utils
+import os
+
+private let logger = Logger(subsystem: "name.pennig.replicould", category: "ReplicantApp")
 
 @main
 struct ReplicantApp: App {
@@ -29,6 +32,20 @@ struct ReplicantApp: App {
     @Environment(\.openWindow) private var openWindow
 
     init() {
+        // A reset armed by the Tools menu relaunches a second instance before
+        // this one has quit (NSWorkspace has no "replace running instance"
+        // option, and the sandbox blocks exec-ing a shell to wait on the old
+        // PID). If this instance bootstraps while the old one is still alive,
+        // two processes hold the same SQLite file open: GRDB's default
+        // `.immediateError` busy mode makes `erase()` throw the instant the
+        // old process holds any lock (ingestion, the directive engine, a
+        // `@FetchAll` observer), and if erase wins the race instead, the old
+        // process's still-running ingestion can write rows back afterward —
+        // resurrecting exactly the data being deleted. So: wait here, before
+        // any dependency (let alone the database) is touched.
+        #if DEBUG
+        Self.awaitSoleInstanceIfResetPending()
+        #endif
         // A failed schema bootstrap is a silently broken app (every @FetchAll
         // reads an empty void) — report it loudly instead of `try?`-ing it
         // away (V3.6-T3). The app still launches; the report names the cause.
@@ -241,6 +258,151 @@ struct ReplicantApp: App {
         // and keeping it across sessions is part of its taxonomy-discovery job.
     }
 
+    #if DEBUG
+    /// Blocks until every other running instance of this app has quit, when
+    /// (and only when) a reset is pending. Called at the very top of `init()`,
+    /// before any dependency — let alone the database — is touched, so the
+    /// new instance never bootstraps (and therefore never erases) while an
+    /// old instance might still hold the SQLite file open.
+    ///
+    /// Uses `pendingTrigger` rather than `consumeRequest`: consuming here
+    /// would burn the flag before `bootstrapDatabase()` gets a chance to act
+    /// on it.
+    ///
+    /// Bounded at 10 seconds rather than waited on indefinitely — a stuck old
+    /// instance (e.g. hung in a modal) must not make the app unlaunchable.
+    /// Falling through after the deadline reintroduces the original race for
+    /// that one launch, which is still strictly better than never launching.
+    ///
+    /// The env var trigger gets an extra gate the armed flag doesn't need:
+    /// the flag was already confirmed once, at the Tools menu, and clears
+    /// itself after one launch. The env var is unconfirmed and sticky — set
+    /// it in an Xcode scheme, forget to untick it, and it erases the
+    /// catalogue on every subsequent launch with no further prompt. So a
+    /// pending env var gets a blocking confirmation here, before anything
+    /// else touches the database, with Cancel as the safe (default) button.
+    /// Declining withdraws the trigger for this process (`unsetenv`) rather
+    /// than leaving `bootstrap()` to re-read the same "1" moments later and
+    /// erase anyway.
+    private static func awaitSoleInstanceIfResetPending() {
+        guard let trigger = DatabaseReset.pendingTrigger(
+            defaults: .standard,
+            environment: ProcessInfo.processInfo.environment
+        ) else { return }
+
+        if trigger == .environmentVariable, !confirmEnvironmentVariableReset() {
+            logger.notice("\(DatabaseReset.environmentKey) is set but the erase was declined — launching without resetting.")
+            DatabaseReset.declineEnvironmentVariableRequest()
+            return
+        }
+
+        guard let bundleID = Bundle.main.bundleIdentifier else { return }
+
+        let me = ProcessInfo.processInfo.processIdentifier
+        let deadline = Date().addingTimeInterval(10)
+        logger.notice("Reset pending — waiting for other \(bundleID) instances to quit before bootstrapping.")
+        while Date() < deadline {
+            let others = NSRunningApplication
+                .runningApplications(withBundleIdentifier: bundleID)
+                .filter { $0.processIdentifier != me }
+            if others.isEmpty {
+                logger.notice("Sole instance confirmed — proceeding to bootstrap.")
+                return
+            }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        // Fall through after the deadline rather than hanging forever — a
+        // stuck old instance shouldn't make the app unlaunchable.
+        logger.error("Timed out after 10s waiting for other \(bundleID) instances to quit — bootstrapping anyway.")
+    }
+
+    /// Blocking confirmation for the env var rescue path, shown before
+    /// anything else in `init()` touches the database. `Cancel` is added
+    /// first, which makes it the default (Return-key) button — the erase is
+    /// the button someone has to deliberately reach for.
+    private static func confirmEnvironmentVariableReset() -> Bool {
+        let alert = NSAlert()
+        alert.alertStyle = .critical
+        alert.messageText = "Erase the local database?"
+        alert.informativeText = """
+            \(DatabaseReset.environmentKey) is set in this launch's \
+            environment. Continuing erases every locally cached table, \
+            including the stars catalogue (rate limited to roughly one call \
+            a minute) and surveyed locations.
+
+            Cancel launches normally without erasing. If you didn't mean to \
+            set this, remove \(DatabaseReset.environmentKey) from the \
+            scheme now — it stays set for every future launch otherwise.
+            """
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Erase and Continue")
+        return alert.runModal() == .alertSecondButtonReturn
+    }
+
+    /// Arms a database reset and relaunches. The wipe itself happens at the
+    /// next bootstrap, before ingestion or any observer is running — see
+    /// `DatabaseReset`. The Keychain session is untouched, so the app comes
+    /// back signed in and the catalogue can be reloaded straight away.
+    private func confirmDatabaseReset() {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Reset the local database?"
+        alert.informativeText = """
+            Every locally cached table is erased and rebuilt on relaunch, \
+            including the stars catalogue and surveyed locations. The stars \
+            catalogue endpoint is rate limited to roughly one call a minute, \
+            and locations rehydrate only when selected.
+
+            You stay signed in.
+            """
+        alert.addButton(withTitle: "Reset and Relaunch")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        DatabaseReset.requestOnNextLaunch()
+
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.createsNewApplicationInstance = true
+        NSWorkspace.shared.openApplication(
+            at: Bundle.main.bundleURL,
+            configuration: configuration
+        ) { _, error in
+            if let error {
+                // The flag is already armed and durably written, so leaving
+                // this instance running (instead of vanishing with no
+                // explanation) means the user can just try again — or the
+                // next ordinary launch still picks up the reset. But a silent
+                // failure here is exactly the landmine this whole feature
+                // exists to defuse: the user shrugs, reloads the catalogue
+                // over the next hour, and quits — arming a wipe for whatever
+                // build happens to launch next, DEBUG confirmation or not.
+                // Surface it and offer to disarm.
+                logger.error("Failed to relaunch for database reset: \(error.localizedDescription). App remains running; reset stays armed for next launch.")
+                DispatchQueue.main.async {
+                    let alert = NSAlert()
+                    alert.alertStyle = .critical
+                    alert.messageText = "Couldn't relaunch to reset the database"
+                    alert.informativeText = """
+                        \(error.localizedDescription)
+
+                        The reset is still armed and will erase the database \
+                        the next time the app launches — including a future \
+                        Release build, where this confirmation and the Tools \
+                        menu don't exist.
+                        """
+                    alert.addButton(withTitle: "OK")
+                    alert.addButton(withTitle: "Cancel the Reset")
+                    if alert.runModal() == .alertSecondButtonReturn {
+                        DatabaseReset.cancelPendingRequest()
+                    }
+                }
+                return
+            }
+            DispatchQueue.main.async { NSApp.terminate(nil) }
+        }
+    }
+    #endif
+
     var body: some Scene {
         // The first-launch / sign-in window. It lives in its own window so the
         // login ⇄ main transition is a clean window hand-off, and so it can pin
@@ -277,6 +439,14 @@ struct ReplicantApp: App {
                 }
                 .keyboardShortcut("e", modifiers: [.command, .option])
                 .disabled(store.isLoggedOut)
+
+                #if DEBUG
+                Divider()
+
+                Button("Reset Local Database…") {
+                    confirmDatabaseReset()
+                }
+                #endif
             }
         }
 

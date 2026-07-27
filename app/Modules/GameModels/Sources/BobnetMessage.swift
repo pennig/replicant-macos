@@ -91,24 +91,21 @@ extension BobnetMessage {
 // MARK: - Schema
 
 extension BobnetMessage {
-    /// Registers the `bobnetMessages` table migration. Composed into the app's
-    /// `bootstrapDatabase` alongside other tables.
-    public static func registerMigrations(_ migrator: inout DatabaseMigrator) {
-        migrator.registerMigration("Create 'bobnetMessages' table") { db in
-            try #sql(
-                """
-                CREATE TABLE "bobnetMessages" (
-                  "id" INTEGER PRIMARY KEY NOT NULL,
-                  "replicantName" TEXT NOT NULL DEFAULT '',
-                  "replicantCode" TEXT NOT NULL DEFAULT '',
-                  "currentStar" TEXT,
-                  "channel" TEXT NOT NULL DEFAULT '',
-                  "message" TEXT NOT NULL DEFAULT '',
-                  "time" TEXT NOT NULL
-                ) STRICT
-                """
-            )
-            .execute(db)
-        }
+    /// Creates the `bobnetMessages` table.
+    public static let createBobnetMessages = SchemaMigration("Create 'bobnetMessages' table") { db in
+        try #sql(
+            """
+            CREATE TABLE "bobnetMessages" (
+              "id" INTEGER PRIMARY KEY NOT NULL,
+              "replicantName" TEXT NOT NULL DEFAULT '',
+              "replicantCode" TEXT NOT NULL DEFAULT '',
+              "currentStar" TEXT,
+              "channel" TEXT NOT NULL DEFAULT '',
+              "message" TEXT NOT NULL DEFAULT '',
+              "time" TEXT NOT NULL
+            ) STRICT
+            """
+        )
+        .execute(db)
     }
 }

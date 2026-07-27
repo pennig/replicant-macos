@@ -92,21 +92,19 @@ extension FTLLinkRecord {
 // MARK: - Schema
 
 extension FTLLinkRecord {
-    /// Registers the `ftlLinks` table migration. Kept beside the model so the
-    /// schema and the type never drift; composed into `bootstrapDatabase`.
-    public static func registerMigrations(_ migrator: inout DatabaseMigrator) {
-        migrator.registerMigration("Create 'ftlLinks' table") { db in
-            try #sql(
-                """
-                CREATE TABLE "ftlLinks" (
-                  "id" TEXT PRIMARY KEY NOT NULL,
-                  "a" TEXT NOT NULL,
-                  "b" TEXT NOT NULL,
-                  "updatedAt" TEXT NOT NULL
-                ) STRICT
-                """
-            )
-            .execute(db)
-        }
+    /// Creates the `ftlLinks` table. Kept beside the model so the schema and
+    /// the type never drift.
+    public static let createFTLLinks = SchemaMigration("Create 'ftlLinks' table") { db in
+        try #sql(
+            """
+            CREATE TABLE "ftlLinks" (
+              "id" TEXT PRIMARY KEY NOT NULL,
+              "a" TEXT NOT NULL,
+              "b" TEXT NOT NULL,
+              "updatedAt" TEXT NOT NULL
+            ) STRICT
+            """
+        )
+        .execute(db)
     }
 }

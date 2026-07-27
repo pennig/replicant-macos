@@ -16,7 +16,7 @@ import SwiftUI
 private func seededDatabase() -> any DatabaseWriter {
     let database = try! SQLiteData.defaultDatabase()
     var migrator = DatabaseMigrator()
-    EventLog.registerMigrations(&migrator)
+    EventLog.createEventLogs.register(in: &migrator)
     try! migrator.migrate(database)
     try! database.write { db in
         try EventLog.insert { EventLog.previewRows }.execute(db)
