@@ -22,6 +22,9 @@ import SwiftUI
 import UI
 import UniverseModels
 import Utils
+import os
+
+private let logger = Logger(subsystem: "name.pennig.replicould", category: "ReplicantApp")
 
 @main
 struct ReplicantApp: App {
@@ -29,6 +32,20 @@ struct ReplicantApp: App {
     @Environment(\.openWindow) private var openWindow
 
     init() {
+        // A reset armed by the Tools menu relaunches a second instance before
+        // this one has quit (NSWorkspace has no "replace running instance"
+        // option, and the sandbox blocks exec-ing a shell to wait on the old
+        // PID). If this instance bootstraps while the old one is still alive,
+        // two processes hold the same SQLite file open: GRDB's default
+        // `.immediateError` busy mode makes `erase()` throw the instant the
+        // old process holds any lock (ingestion, the directive engine, a
+        // `@FetchAll` observer), and if erase wins the race instead, the old
+        // process's still-running ingestion can write rows back afterward —
+        // resurrecting exactly the data being deleted. So: wait here, before
+        // any dependency (let alone the database) is touched.
+        #if DEBUG
+        Self.awaitSoleInstanceIfResetPending()
+        #endif
         // A failed schema bootstrap is a silently broken app (every @FetchAll
         // reads an empty void) — report it loudly instead of `try?`-ing it
         // away (V3.6-T3). The app still launches; the report names the cause.
@@ -242,6 +259,44 @@ struct ReplicantApp: App {
     }
 
     #if DEBUG
+    /// Blocks until every other running instance of this app has quit, when
+    /// (and only when) a reset is pending. Called at the very top of `init()`,
+    /// before any dependency — let alone the database — is touched, so the
+    /// new instance never bootstraps (and therefore never erases) while an
+    /// old instance might still hold the SQLite file open.
+    ///
+    /// Uses `isPending` rather than `consumeRequest`: consuming here would
+    /// burn the flag before `bootstrapDatabase()` gets a chance to act on it.
+    ///
+    /// Bounded at 10 seconds rather than waited on indefinitely — a stuck old
+    /// instance (e.g. hung in a modal) must not make the app unlaunchable.
+    /// Falling through after the deadline reintroduces the original race for
+    /// that one launch, which is still strictly better than never launching.
+    private static func awaitSoleInstanceIfResetPending() {
+        guard DatabaseReset.isPending(
+            defaults: .standard,
+            environment: ProcessInfo.processInfo.environment
+        ) else { return }
+        guard let bundleID = Bundle.main.bundleIdentifier else { return }
+
+        let me = ProcessInfo.processInfo.processIdentifier
+        let deadline = Date().addingTimeInterval(10)
+        logger.notice("Reset pending — waiting for other \(bundleID) instances to quit before bootstrapping.")
+        while Date() < deadline {
+            let others = NSRunningApplication
+                .runningApplications(withBundleIdentifier: bundleID)
+                .filter { $0.processIdentifier != me }
+            if others.isEmpty {
+                logger.notice("Sole instance confirmed — proceeding to bootstrap.")
+                return
+            }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        // Fall through after the deadline rather than hanging forever — a
+        // stuck old instance shouldn't make the app unlaunchable.
+        logger.error("Timed out after 10s waiting for other \(bundleID) instances to quit — bootstrapping anyway.")
+    }
+
     /// Arms a database reset and relaunches. The wipe itself happens at the
     /// next bootstrap, before ingestion or any observer is running — see
     /// `DatabaseReset`. The Keychain session is untouched, so the app comes
@@ -269,7 +324,15 @@ struct ReplicantApp: App {
         NSWorkspace.shared.openApplication(
             at: Bundle.main.bundleURL,
             configuration: configuration
-        ) { _, _ in
+        ) { _, error in
+            if let error {
+                // The flag is already armed and durably written, so leaving
+                // this instance running (instead of vanishing with no
+                // explanation) means the user can just try again — or the
+                // next ordinary launch still picks up the reset.
+                logger.error("Failed to relaunch for database reset: \(error.localizedDescription). App remains running; reset stays armed for next launch.")
+                return
+            }
             DispatchQueue.main.async { NSApp.terminate(nil) }
         }
     }

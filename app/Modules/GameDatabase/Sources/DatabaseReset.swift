@@ -20,6 +20,16 @@ public enum DatabaseReset {
     /// unreachable.
     public static let environmentKey = "RC_RESET_DATABASE"
 
+    /// Whether a reset is pending, WITHOUT clearing the flag. Lets the app
+    /// decide to wait for other instances to exit before bootstrapping,
+    /// which must happen before `consumeRequest` burns the flag.
+    public static func isPending(
+        defaults: UserDefaults,
+        environment: [String: String]
+    ) -> Bool {
+        defaults.bool(forKey: userDefaultsKey) || environment[environmentKey] == "1"
+    }
+
     /// Whether a reset was requested, clearing the persistent flag as a side
     /// effect. Cleared BEFORE the caller erases, so a crash mid-erase cannot
     /// leave the flag set and wipe the database on every subsequent launch.

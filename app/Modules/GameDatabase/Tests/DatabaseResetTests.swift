@@ -36,4 +36,18 @@ import Testing
         // reset loop that wipes the database on every launch.
         #expect(DatabaseReset.consumeRequest(defaults: defaults, environment: [:]) == false)
     }
+
+    @Test func isPendingDoesNotConsumeTheFlag() {
+        let defaults = makeDefaults("rc.reset.peek")
+        DatabaseReset.requestOnNextLaunch(defaults: defaults)
+
+        // Asking twice must report the same answer both times — a peek, not a
+        // consume — so the caller can poll it in a wait loop.
+        #expect(DatabaseReset.isPending(defaults: defaults, environment: [:]))
+        #expect(DatabaseReset.isPending(defaults: defaults, environment: [:]))
+
+        // The flag is still there for the real consumer to burn.
+        #expect(DatabaseReset.consumeRequest(defaults: defaults, environment: [:]))
+        #expect(DatabaseReset.isPending(defaults: defaults, environment: [:]) == false)
+    }
 }
