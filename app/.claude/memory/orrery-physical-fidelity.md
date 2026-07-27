@@ -32,8 +32,16 @@ double-count and cancel a retrograde world back to prograde. `isRetrograde`
 exists only for the dossier label; the renderer never consults it.
 
 Rotation periods span 9.92h…5832.5h (588×), so `BodySpin.spinRate` compresses
-against the fastest rotator in the layer (`OrreryLayout.fastestRotationHours`) —
-a linear map either blurs the fast end or freezes the slow one.
+against a **global 24-hour reference** (`BodySpin.referenceHours`) and clamps into a
+perceptible band (`minRate`/`maxRate`).
+
+It first shipped anchored on the fastest rotator *in the current layer*, which was
+wrong twice over: only that one body got the base rate, so every other planet came
+out slower than the flat speed they all span at before rotation was wired in (the
+orrery read sluggish); and since the anchor counts only *scanned* bodies, surveying
+one fast world silently slowed every other planet in that system. **Never anchor a
+per-body visual on an aggregate of its neighbours** — it makes a body's appearance
+depend on survey progress. Fixed 2026-07-27.
 
 ## The longitude beach-ball trap
 
@@ -52,6 +60,19 @@ Bodies are also textured in **body space** now (a frame whose +Y is the tilted
 pole), which is what makes axial tilt work for every style at once — they all read
 latitude as `dir.y`, so one transform tilts bands, polar hoods and ice caps
 together.
+
+### That frame MUST be right-handed
+
+Building it as `bz = cross(pole, bx)` gives determinant **−1** — a reflection, not a
+rotation. It mirrors the sphere and makes **every** planet appear to spin backwards,
+tilted or not. It must be `cross(bx, pole)`.
+
+This shipped and had to be fixed the same day. `BodySpin.frame(seed:)` now mirrors
+the shader's construction on the CPU purely so `BodySpinTests.bodyFrameIsRightHanded`
+can assert `det == +1`; the shader carries a SYNC POINT comment pointing at it. The
+general lesson: an orthonormal basis assembled by hand from two cross products has a
+50% chance of being a reflection, and a reflection is invisible in a static frame —
+it only shows up as motion running the wrong way.
 
 ## `orbital_period_hours` was silently dropped
 
@@ -102,5 +123,7 @@ mid-cross-fade and reintroduces the exact seam this removes.
 See [[planet-texturing]] for the surface/style pipeline this extends and
 [[orrery-layout-tuning]] for the sizing/spacing model the moon orbits now reuse.
 
-**Not yet visually verified** — all shader work is compile-verified only, because a
-background job can build the app but cannot launch it past the Keychain wall.
+**Shader work is compile-verified only** — a background job can build the app but
+cannot launch it past the Keychain wall. Two defects (backwards rotation, sluggish
+spin) got through that gap and were caught by the user on first look, which is the
+honest cost of shipping renderer changes without a visual pass.
