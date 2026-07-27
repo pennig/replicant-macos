@@ -1051,3 +1051,112 @@ struct RingDrawListTests {
         #expect(r.outerFrac * bodyRadius > r.innerFrac * bodyRadius)
     }
 }
+
+// MARK: - Moon orbit fidelity
+
+struct MoonOrbitFidelityTests {
+    /// Modelled on the live SOL-5 and two of its moons.
+    private func jupiterLike() -> Planet {
+        Planet(
+            designation: "SOL-5", type: "Gas Giant", orbitalDistanceAu: 5.203,
+            recon: .scanned,
+            physical: BodyPhysical(rings: false, rotationPeriodHours: 9.92,
+                                   orbitalPeriodDays: 4331, axialTiltDeg: 3.13),
+            moons: [
+                // Io: nearest and fastest.
+                Moon(designation: "SOL-5-1", type: "Volcanic", recon: .scanned,
+                     physical: BodyPhysical(radiusEarth: 0.286, orbitalPeriodHours: 42.46,
+                                            tidallyLocked: true, orbitalDistanceKm: 421700,
+                                            hasSubsurfaceOcean: false, hasAtmosphere: false)),
+                // Europa: farther and slower.
+                Moon(designation: "SOL-5-2", type: "Icy", recon: .scanned,
+                     physical: BodyPhysical(radiusEarth: 0.245, orbitalPeriodHours: 85.23,
+                                            tidallyLocked: true, orbitalDistanceKm: 671100,
+                                            hasSubsurfaceOcean: true, hasAtmosphere: false)),
+            ])
+    }
+
+    @Test func moonPeriodComesFromHours() throws {
+        let model = OrreryMapping.bodyModel(planet: jupiterLike())
+        let io = try #require(model.planets.first { $0.designation == "SOL-5-1" })
+        let europa = try #require(model.planets.first { $0.designation == "SOL-5-2" })
+        #expect(abs(io.periodDays - 42.46 / 24) < 1e-9)
+        #expect(abs(europa.periodDays - 85.23 / 24) < 1e-9)
+        #expect(io.periodDays < europa.periodDays)     // the nearer moon is faster
+    }
+
+    @Test func moonOrbitsOrderByRealDistanceAndNeverOverlap() throws {
+        let model = OrreryMapping.bodyModel(planet: jupiterLike())
+        let io = try #require(model.planets.first { $0.designation == "SOL-5-1" })
+        let europa = try #require(model.planets.first { $0.designation == "SOL-5-2" })
+        #expect(io.semiMajorScene < europa.semiMajorScene)
+        // Both clear the central body, and each other.
+        let central = try #require(model.centralBody).displayRadius
+        #expect(io.semiMajorScene - io.displayRadius > central)
+        #expect(europa.semiMajorScene - europa.displayRadius
+                > io.semiMajorScene + io.displayRadius)
+    }
+
+    @Test func moonsWithoutDistanceKeepTheIndexFallback() throws {
+        var planet = jupiterLike()
+        planet.moons[0].physical?.orbitalDistanceKm = nil
+        planet.moons[1].physical?.orbitalDistanceKm = nil
+        let model = OrreryMapping.bodyModel(planet: planet)
+        let radii = model.planets.map(\.semiMajorScene)
+        #expect(radii.count == 2)
+        #expect(radii[0] < radii[1])       // still ordered, still non-overlapping
+    }
+
+    @Test func moonSceneRadiusIsMonotonicAndCompressed() {
+        let near = OrreryMapping.moonSceneRadius(km: 421_700)
+        let far = OrreryMapping.moonSceneRadius(km: 1_221_870)
+        #expect(near < far)
+        // sqrt compression: tripling the distance must not triple the radius.
+        #expect(far / near < 3)
+    }
+
+    @Test func moonAtmosphereComesFromTheBoolean() throws {
+        // SOL-6-1 (Titan): has_atmosphere true plus a thick_atmosphere tag.
+        let planet = Planet(
+            designation: "SOL-6", type: "Gas Giant", orbitalDistanceAu: 9.537,
+            recon: .scanned,
+            physical: BodyPhysical(rings: true, axialTiltDeg: 26.73),
+            moons: [
+                Moon(designation: "SOL-6-1", type: "Icy", recon: .scanned,
+                     physical: BodyPhysical(orbitalPeriodHours: 382.69,
+                                            tags: ["thick_atmosphere"], tidallyLocked: true,
+                                            orbitalDistanceKm: 1221870,
+                                            hasSubsurfaceOcean: false, hasAtmosphere: true)),
+                Moon(designation: "SOL-6-9", type: "Rocky", recon: .scanned,
+                     physical: BodyPhysical(orbitalPeriodHours: 1000, tidallyLocked: true,
+                                            orbitalDistanceKm: 12952000,
+                                            hasSubsurfaceOcean: false, hasAtmosphere: false)),
+            ])
+        let model = OrreryMapping.bodyModel(planet: planet)
+        let titan = try #require(model.planets.first { $0.designation == "SOL-6-1" })
+        let airless = try #require(model.planets.first { $0.designation == "SOL-6-9" })
+        #expect(titan.atmosphere != .unknown)
+        #expect(titan.atmosphere != .none)
+        // A scanned moon that reports no air is airless, not merely unknown — the
+        // difference decides whether a halo is drawn at all.
+        #expect(airless.atmosphere == .none)
+    }
+
+    @Test func unscannedMoonAtmosphereStaysUnknown() throws {
+        let planet = Planet(
+            designation: "SOL-4", type: "Desert World", orbitalDistanceAu: 1.52,
+            recon: .scanned,
+            moons: [Moon(designation: "SOL-4-1", type: "Rocky", recon: .visited)])
+        let model = OrreryMapping.bodyModel(planet: planet)
+        let moon = try #require(model.planets.first)
+        #expect(moon.atmosphere == .unknown)
+    }
+
+    @Test func subsurfaceOceanBecomesASurfaceModifier() {
+        let plain = PlanetMaterial.surface(for: .frozen, lifeStage: nil, estimated: false)
+        #expect(plain.mods.ocean == 0)
+        let ocean = PlanetMaterial.surface(for: .frozen, lifeStage: nil, estimated: false,
+                                           hasSubsurfaceOcean: true)
+        #expect(ocean.mods.ocean > 0)
+    }
+}

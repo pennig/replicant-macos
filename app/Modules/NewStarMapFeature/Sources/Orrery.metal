@@ -46,7 +46,8 @@ constant float kHaloIntensity  = 1.609;   // overall halo brightness scale
 // `sd` is the stable per-planet appearance seed — everything derived from it (band
 // count, swirliness, hue jitter, feature placement) is identical every time viewed.
 static OrrerySurface orrerySurface(float3 dir, float3 cloudDir, int style, float3 base, float3 detail,
-                                   float life, float4 mods, float polarIce, float greenVibrancy, float sd, float t) {
+                                   float life, float4 mods, float polarIce, float greenVibrancy,
+                                   float ocean, float sd, float t) {
     OrrerySurface s;
     s.emissive = float3(0.0);
     float lat = dir.y;                           // -1 (south) … 1 (north)
@@ -175,6 +176,18 @@ static OrrerySurface orrerySurface(float3 dir, float3 cloudDir, int style, float
     if (mods.w > 0.0) {
         float frostMask = smoothstep(0.45, 0.75, nHi);
         s.albedo = mix(s.albedo, float3(0.90, 0.95, 1.0), saturate(frostMask * mods.w));
+    }
+
+    // Subsurface-ocean cryo-fracture lineae — long, cool cracks in the crust where a
+    // buried ocean stresses the ice (Europa-like; live on SOL-5-2 and SOL-6-2).
+    // Deliberately distinct from the molten style's lava: bluish, barely emissive, and
+    // NOT pulsing, so an icy ocean moon never reads as a volcanic one.
+    if (ocean > 0.0) {
+        float3 warp = dir + (fbm6(dir * 2.0 + sd * 13.0) - 0.5) * 0.35;
+        float lineae = smoothstep(0.74, 0.94, ridge(warp * float3(3.0, 9.0, 3.0) + sd * 6.0));
+        float3 crackTint = float3(0.42, 0.62, 0.78);
+        s.albedo = mix(s.albedo, crackTint, saturate(lineae * ocean * 0.75));
+        s.emissive += crackTint * lineae * ocean * 0.05;    // the barest inner glow
     }
 
     // Animated cloud cover — terrestrial styles only (giants convey their skies in the
@@ -316,7 +329,8 @@ fragment OrreryBodyOut orrery_body_fragment(OrreryBodyVaryings in [[stage_in]],
     cloudDir = float3(cloudDir.x * ccs - cloudDir.z * csn, cloudDir.y, cloudDir.x * csn + cloudDir.z * ccs);
 
     OrrerySurface surf = orrerySurface(dir, cloudDir, int(in.style + 0.5), in.color, in.detail,
-                                       in.life, in.mods, in.polarIce, in.greenVibrancy, in.vseed, u.time);
+                                       in.life, in.mods, in.polarIce, in.greenVibrancy,
+                                       in.ocean, in.vseed, u.time);
 
     float3 fragView = in.viewCenter + nView * in.radius;
     float3 L = normalize(in.viewSun - fragView);

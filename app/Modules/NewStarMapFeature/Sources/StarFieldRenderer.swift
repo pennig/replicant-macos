@@ -1803,7 +1803,8 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         let s = PlanetMaterial.surface(for: p.type, lifeStage: p.lifeStage, estimated: p.estimated,
                                        tags: p.tags, surfaceTempC: p.surfaceTempC,
                                        atmosphere: p.atmosphere,
-                                       inHabitableZone: p.inHabitableZone)
+                                       inHabitableZone: p.inHabitableZone,
+                                       hasSubsurfaceOcean: p.ocean > 0)
         return OrreryBodyUniform(
             centerRadius: SIMD4(p.center, p.radius),
             color: SIMD4(s.base, s.polarIce),
