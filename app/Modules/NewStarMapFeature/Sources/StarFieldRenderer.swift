@@ -141,9 +141,34 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     /// where a one-frame rebuild on a static camera is imperceptible.
     private var pendingOrreryModel: SystemModel?
 
-    private struct DepartingOrrery {
+    /// The system a body-level orrery is drilled into, retained for the WHOLE visit
+    /// (not just the cross-fade, which is all `departing` covers). The body centre is
+    /// recomputed from this every frame so the drilled planet keeps orbiting its star
+    /// — see `trackBodyCentre`.
+    private struct ParentSystem {
         var model: SystemModel
         var center: SIMD3<Float>
+        var scale: Float
+        var starIndex: Int
+    }
+    private var parentSystem: ParentSystem?
+    /// The centre the live scaffold/belt buffers were generated around. The shaders
+    /// rebase onto the live `orreryCenter` from here, so a tracking body centre never
+    /// forces a per-frame buffer rebuild (which would stall the render thread).
+    private var orreryBuildCenter = SIMD3<Float>(repeating: 0)
+    /// Distance from the drilled planet to its lighting sun, held constant across a
+    /// body visit so the sun neither drifts in nor recedes as the planet travels.
+    private var bodySunDistance: Float = 0
+
+    private struct DepartingOrrery {
+        var model: SystemModel
+        /// Live centre. For a departing BODY layer this tracks its planet each frame
+        /// (see `trackBodyCentre`) so it stays registered with the arriving system's
+        /// copy of that same planet.
+        var center: SIMD3<Float>
+        /// The centre this layer's scaffold buffers were baked around — fixed, even
+        /// while `center` tracks, so the shaders can rebase without a rebuild.
+        var buildCenter: SIMD3<Float>
         var sunWorldPos: SIMD3<Float>
         var scale: Float
         var isBody: Bool
@@ -178,6 +203,38 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         let toStar = starPos - planet
         let dir = simd_length(toStar) > 1e-6 ? simd_normalize(toStar) : SIMD3<Float>(1, 0, 0)
         return planet + dir * distance
+    }
+
+    /// Ride the body-level orrery along with the planet it is centred on. The planet
+    /// keeps orbiting its star, so its world position moves every frame; the orrery
+    /// centre, its lighting sun, and the camera all shift by the SAME delta, which
+    /// means nothing on screen appears to move.
+    ///
+    /// The point of this is the zoom-out. Because the body centre *is* the planet's
+    /// live system position, the arriving system layer already draws that planet
+    /// exactly there — registration is by construction, with nothing to reconcile and
+    /// no seam to animate away. That is why the orbit clock no longer has to freeze.
+    private func trackBodyCentre() {
+        guard orreryIsBody, let parent = parentSystem, let planetID = bodyPlanetID else { return }
+        let layout = orreryLayout(model: parent.model, center: parent.center,
+                                  scale: parent.scale, reveal: 1, time: orbitClock)
+        guard let live = layout.orbiterPosition(id: planetID) else { return }
+        let delta = live - orreryCenter
+        guard delta != .zero else { return }
+        orreryCenter = live
+        // Re-derive the distant lighting sun from the moved planet, holding its
+        // distance fixed, so the sunlit face shifts as the planet rounds its star
+        // without the sun creeping closer over a long visit.
+        orrerySunWorldPos = bodySunPosition(planet: live, starIndex: parent.starIndex,
+                                            distance: bodySunDistance)
+        camera.translate(by: delta)
+        // A departing BODY layer (mid zoom-out) is centred on this same planet, so it
+        // must ride along too — otherwise it separates from the arriving system's copy
+        // and reintroduces exactly the seam this design removes.
+        if var d = departing, d.isBody {
+            d.center += delta
+            departing = d
+        }
     }
 
     /// A cross-fading orrery layer's opacity at the current `bodyProgress`: a
@@ -217,7 +274,8 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     private func snapshotActiveOrrery(isBody: Bool) -> DepartingOrrery? {
         guard let model = orreryModel else { return nil }
         return DepartingOrrery(
-            model: model, center: orreryCenter, sunWorldPos: orrerySunWorldPos,
+            model: model, center: orreryCenter, buildCenter: orreryBuildCenter,
+            sunWorldPos: orrerySunWorldPos,
             scale: orreryScale, isBody: isBody,
             lineBuffer: orreryLineBuffer, lineCount: orreryLineVertexCount,
             hzBuffer: orreryHZBuffer, hzCount: orreryHZVertexCount,
@@ -662,10 +720,14 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         advanceAutoRotate(now: now, dt: dt)
         let relevanceMoving = relevance.step()   // advance eased relevance transitions
         updateFramePacing(view, now: now, relevanceAnimating: relevanceMoving)
-        // Freeze orbital motion while focused on / transitioning to a body, so the
-        // drilled planet holds still (no camera-follow needed) and its siblings stay
-        // put; it resumes seamlessly from the same phase on the way back out.
-        if !(orreryIsBody || departing != nil) { orbitClock += dt }
+        // The orrery NEVER pauses. Body level used to freeze this clock so the drilled
+        // planet held still beneath a fixed centre — which also froze its moons, the
+        // thing that most read as "paused". The centre now tracks the planet instead
+        // (`trackBodyCentre`), so the whole system keeps running at every level.
+        orbitClock += dt
+        // Ride the body centre along with the drilled planet BEFORE the camera steps,
+        // so an in-flight dive and the follow are applied in one consistent order.
+        trackBodyCentre()
         camera.step(now: now)                // advance eased camera framing
 
         // Advance the shared transition progress (time-based smoothstep — a real
@@ -827,7 +889,8 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
             // the lit sun/planets (over-blend, depth-write) so bodies occlude
             // correctly. During a system↔body drill/zoom two layers render in one
             // frame: the DEPARTING layer (behind, no depth write) and the ARRIVING/
-            // active layer on top. Orbits use the frozen `orbitClock`, not wall time.
+            // active layer on top. Orbits use the shared `orbitClock`, which now runs
+            // at every level — a body layer's centre tracks its planet instead.
             if orreryReveal > 0.001 {
                 let t = orbitClock
                 let viewportPx = SIMD2<Float>(Float(size.width), Float(size.height))
@@ -837,7 +900,8 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
                     // opacity. A SYSTEM layer skips the drilled planet (drawn as the
                     // continuous central body); a body layer draws it as its central.
                     encodeOrreryLayer(
-                        enc, model: dep.model, center: dep.center, sun: dep.sunWorldPos,
+                        enc, model: dep.model, center: dep.center, buildCenter: dep.buildCenter,
+                        sun: dep.sunWorldPos,
                         scale: dep.scale, emergeReveal: dep.isBody ? bodyProgress : orreryReveal,
                         alphaReveal: orreryReveal * layerOpacity(isBody: dep.isBody),
                         writesDepth: false, excludeID: dep.isBody ? nil : bodyPlanetID,
@@ -848,7 +912,8 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
                 }
                 if let model = orreryModel {
                     encodeOrreryLayer(
-                        enc, model: model, center: orreryCenter, sun: orrerySunWorldPos,
+                        enc, model: model, center: orreryCenter, buildCenter: orreryBuildCenter,
+                        sun: orrerySunWorldPos,
                         scale: orreryScale, emergeReveal: orreryIsBody ? bodyProgress : orreryReveal,
                         alphaReveal: orreryReveal * layerOpacity(isBody: orreryIsBody),
                         writesDepth: true, excludeID: orreryIsBody ? nil : bodyPlanetID,
@@ -1282,6 +1347,13 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         departing = nil
         bodyPlanetID = viewpoint.bodyPlanetID
         bodyCentralStartRadius = viewpoint.bodyCentralStartRadius
+        // Restore the parent system too, or a restored body view would stop tracking
+        // its planet — the modern equivalent of the old freeze.
+        parentSystem = viewpoint.parentModel.map {
+            ParentSystem(model: $0, center: viewpoint.parentCenter,
+                         scale: viewpoint.parentScale, starIndex: viewpoint.parentStarIndex)
+        }
+        bodySunDistance = viewpoint.bodySunDistance
         settleBodyProgress(orreryIsBody ? 1 : 0)
         focusedStarIndex = viewpoint.focusedStarIndex
         selectedStarIndex = viewpoint.selectedStarIndex
@@ -1311,6 +1383,11 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         viewpoint.orreryIsBody = orreryIsBody
         viewpoint.bodyPlanetID = bodyPlanetID
         viewpoint.bodyCentralStartRadius = bodyCentralStartRadius
+        viewpoint.parentModel = parentSystem?.model
+        viewpoint.parentCenter = parentSystem?.center ?? .zero
+        viewpoint.parentScale = parentSystem?.scale ?? 1
+        viewpoint.parentStarIndex = parentSystem?.starIndex ?? 0
+        viewpoint.bodySunDistance = bodySunDistance
         viewpoint.focusedStarIndex = focusedStarIndex
         viewpoint.selectedStarIndex = selectedStarIndex
     }
@@ -1389,6 +1466,12 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         // fading) over the fly-in. Orbits are frozen, so its focused planet stays put
         // and registered with the arriving body centre.
         departing = snapshotActiveOrrery(isBody: orreryIsBody)
+        // Retain the system for the whole visit (not just the cross-fade), so the body
+        // centre can be recomputed from it every frame as the planet orbits. Captured
+        // BEFORE orreryCenter/orreryScale are reassigned to the body's values.
+        parentSystem = orreryModel.map {
+            ParentSystem(model: $0, center: orreryCenter, scale: orreryScale, starIndex: starIndex)
+        }
         focusedStarIndex = starIndex             // the system star stays the light source
         orreryCenter = planetCenter
         orreryIsBody = true
@@ -1407,8 +1490,9 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         // Light from a DISTANT sun along the true star direction (kept far outside the
         // frame so it never falls inside the planet — which would unlight it and light
         // its moons as if the planet were the sun). Frozen with the orrery.
+        bodySunDistance = frameWorldRadius * 40   // held constant while tracking
         orrerySunWorldPos = bodySunPosition(planet: planetCenter, starIndex: starIndex,
-                                            distance: frameWorldRadius * 40)
+                                            distance: bodySunDistance)
         setOrreryModel(model)
 
         cameraStack.append(camera)               // restore this system pose (incl. near) on zoom-out
@@ -1442,6 +1526,10 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         orreryCenter = stars[starIndex].position
         orrerySunWorldPos = orreryCenter
         orreryIsBody = false
+        // Back at system level the centre is the (static) star, so nothing tracks.
+        // The departing body layer keeps its own centre, already registered with the
+        // planet's live position — hence no seam to reconcile here.
+        parentSystem = nil
         let dFinal = stars[starIndex].worldRadius / maxAngularSize
         orreryScale = orreryScaleToFit(frameScene: model.frameScene, atDistance: dFinal)
         setOrreryModel(model)
@@ -1471,6 +1559,10 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     /// and again when the hydrate lands with the real roster — no camera change.
     private func setOrreryModel(_ model: SystemModel) {
         orreryModel = model
+        // The scaffold/belt vertices below are baked around THIS centre. The shaders
+        // rebase them onto the live `orreryCenter`, which lets a body-level centre
+        // track its planet without regenerating any geometry.
+        orreryBuildCenter = orreryCenter
         let lines = OrreryGeometry.scaffoldLines(model: model, center: orreryCenter, scale: orreryScale)
         orreryLineVertexCount = lines.count
         orreryLineBuffer = lines.isEmpty ? nil : device.makeBuffer(
@@ -1527,6 +1619,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         systemFocused = false
         orreryIsBody = false        // back to the galaxy — no body layer in play
         departing = nil
+        parentSystem = nil
         bodyCentralStartRadius = 0
         bodyPlanetID = nil
         settleBodyProgress(0)
@@ -1581,7 +1674,8 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     /// `excludeID` drops the drilled planet from a SYSTEM layer (it's drawn once as the
     /// continuous central body, not blended against a second copy).
     private func encodeOrreryLayer(_ enc: MTLRenderCommandEncoder,
-                                   model: SystemModel, center: SIMD3<Float>, sun: SIMD3<Float>,
+                                   model: SystemModel, center: SIMD3<Float>,
+                                   buildCenter: SIMD3<Float>, sun: SIMD3<Float>,
                                    scale: Float, emergeReveal: Float, alphaReveal: Float,
                                    writesDepth: Bool, excludeID: String?,
                                    lineBuffer: MTLBuffer?, lineCount: Int,
@@ -1596,6 +1690,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         guard alphaReveal > 0.001 || model.centralBody != nil else { return }
         var u = baseUniforms
         u.orreryCenter = SIMD4(center, 0)     // the scaffold grows out of THIS layer's centre
+        u.orreryBuildCenter = SIMD4(buildCenter, 0)   // …rebased from where it was baked
         u.orreryReveal = emergeReveal         // orbits/scaffold emerge from the centre by this
         u.orreryAlpha = alphaReveal           // fade this layer independently of the grow-out
 
@@ -2711,7 +2806,11 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
             systemPush: systemPush,
             fieldShrink: fieldShrink,
             focusedStar: Int32(focusedStarIndex ?? -1),
-            orreryCenter: SIMD4(orreryCenter, 0)
+            orreryCenter: SIMD4(orreryCenter, 0),
+            orreryBuildCenter: SIMD4(orreryBuildCenter, 0),
+            // The field recedes from the focused STAR, which never moves — not from
+            // `orreryCenter`, which tracks the drilled planet at body level.
+            fieldCenter: SIMD4(focusedStarIndex.map { stars[$0].position } ?? orreryCenter, 0)
         )
     }
 

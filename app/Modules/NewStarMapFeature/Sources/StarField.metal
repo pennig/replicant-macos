@@ -35,9 +35,12 @@ vertex StarVaryings star_vertex(uint vid                    [[vertex_id]],
     // background field radially away from the focused star. Combined with the
     // camera diving inward, the amplified parallax sells "flying in" rather than
     // the field simply fading out. The focused star (the orrery sun) stays put.
+    // Pivots on `fieldCenter` (the focused star), NOT `orreryCenter`: at body level
+    // the orrery centre tracks the drilled planet around its star, and pivoting the
+    // field on a moving point would slide the whole background sky with it.
     if (!isFocused && u.orreryReveal > 0.0) {
-        float3 toStar = worldPos - u.orreryCenter.xyz;
-        worldPos = u.orreryCenter.xyz + toStar * (1.0 + u.systemPush * u.orreryReveal);
+        float3 toStar = worldPos - u.fieldCenter.xyz;
+        worldPos = u.fieldCenter.xyz + toStar * (1.0 + u.systemPush * u.orreryReveal);
     }
 
     // Billboard in view space so the quad always faces the camera.

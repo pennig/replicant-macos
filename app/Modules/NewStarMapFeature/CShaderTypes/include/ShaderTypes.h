@@ -120,9 +120,19 @@ typedef struct {
     // ceiling is lifted so it keeps growing as you zoom in — no separate sun body,
     // so the star→sun transition is the same object throughout.
     int focusedStar;
-    // Orrery centre (the focused star, world space) — the scaffold rings/belt scale
-    // out from it by `orreryReveal` so they grow in step with the planets.
+    // Orrery centre (world space) — the LIVE centre of the layer being drawn: the
+    // focused star at system level, or the drilled planet at body level, where it
+    // tracks that planet around its star every frame.
     simd_float4 orreryCenter;
+    // The centre the orrery scaffold/belt buffers were GENERATED around. Scaffold
+    // vertices are rebased by (orreryCenter − orreryBuildCenter) at draw time, so a
+    // moving body-level centre never forces a per-frame buffer rebuild.
+    simd_float4 orreryBuildCenter;
+    // The pivot the background field recedes from — the FOCUSED STAR, always. Kept
+    // separate from `orreryCenter` because at body level that centre tracks the
+    // drilled planet as it orbits, and the star field must NOT be dragged along
+    // with it (the recession pivot has to stay put or the whole sky slides).
+    simd_float4 fieldCenter;
 } Uniforms;
 
 // One vertex of a lit orrery body mesh (sun / planet). The shared unit sphere,

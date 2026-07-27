@@ -517,8 +517,10 @@ vertex OrreryLineVaryings orrery_line_vertex(uint vid                      [[ver
                                              constant Uniforms&              u     [[buffer(1)]])
 {
     OrreryLineVaryings out;
-    // Grow out of the star in step with the planets (same `orreryReveal`).
-    float3 local = verts[vid].position.xyz - u.orreryCenter.xyz;
+    // Grow out of the centre in step with the planets (same `orreryReveal`), and
+    // rebase onto the LIVE centre: at body level the orrery centre tracks the drilled
+    // planet around its star, while these vertices were baked around a fixed origin.
+    float3 local = verts[vid].position.xyz - u.orreryBuildCenter.xyz;
     float3 world = u.orreryCenter.xyz + local * u.orreryReveal;
     out.position = u.projection * (u.view * float4(world, 1.0));
     out.color = verts[vid].color;
@@ -547,7 +549,7 @@ vertex OrreryPointVaryings orrery_point_vertex(uint vid                    [[ver
     // Grow out of the star in step with the planets/rings (same `orreryReveal`), and
     // rotate the whole belt rigidly about the star (fixed 150 s period, CCW like the
     // planets and the sun's spin) so it drifts as one ring rather than sitting frozen.
-    float3 local = m.positionSize.xyz - u.orreryCenter.xyz;
+    float3 local = m.positionSize.xyz - u.orreryBuildCenter.xyz;
     float  ang   = -u.time * (2.0 * M_PI_F / 150.0);
     float  c = cos(ang), s = sin(ang);
     local = float3(local.x * c - local.z * s, local.y, local.x * s + local.z * c);

@@ -1160,3 +1160,38 @@ struct MoonOrbitFidelityTests {
         #expect(ocean.mods.ocean > 0)
     }
 }
+
+// MARK: - Camera translation (body-level orbit tracking)
+
+struct CameraTranslationTests {
+    @Test func translateMovesTargetAndEyeTogether() {
+        var cam = TurntableCamera()
+        cam.target = SIMD3(1, 2, 3)
+        let eyeBefore = cam.eye
+        let delta = SIMD3<Float>(0.5, 0, -0.25)
+        cam.translate(by: delta)
+        #expect(simd_length(cam.target - SIMD3<Float>(1.5, 2, 2.75)) < 1e-6)
+        // The eye rides along, so the view does not swing.
+        #expect(simd_length((cam.eye - eyeBefore) - delta) < 1e-4)
+    }
+
+    @Test func translateCarriesAnInFlightFraming() {
+        var cam = TurntableCamera()
+        cam.target = .zero
+        cam.dive(on: SIMD3(10, 0, 0), radius: 5, now: 0, duration: 1)
+        cam.translate(by: SIMD3(0, 0, 2))
+        // Once the dive lands, it must sit on the MOVED body — otherwise a drill-in
+        // toward an orbiting planet would arrive where the planet used to be.
+        _ = cam.step(now: 1.0)
+        #expect(simd_length(cam.target - SIMD3<Float>(10, 0, 2)) < 1e-4)
+    }
+
+    @Test func translateByZeroIsInert() {
+        var cam = TurntableCamera()
+        cam.target = SIMD3(4, 5, 6)
+        let before = cam.eye
+        cam.translate(by: .zero)
+        #expect(simd_length(cam.eye - before) < 1e-6)
+        #expect(simd_length(cam.target - SIMD3<Float>(4, 5, 6)) < 1e-6)
+    }
+}

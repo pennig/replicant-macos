@@ -49,6 +49,16 @@ final class StarMapViewpoint {
     /// shrinks the central body back to its system size.
     var bodyPlanetID: String?
     var bodyCentralStartRadius: Float = 0
+    /// The parent SYSTEM of a restored body view, so the drilled planet keeps orbiting
+    /// after a teardown instead of silently re-freezing: the renderer recomputes the
+    /// body centre from this every frame. Nil at system/galaxy level.
+    var parentModel: SystemModel?
+    var parentCenter = SIMD3<Float>(repeating: 0)
+    var parentScale: Float = 1
+    var parentStarIndex: Int = 0
+    /// Distance from the drilled planet to its lighting sun, held constant while the
+    /// body centre tracks (see `StarFieldRenderer.trackBodyCentre`).
+    var bodySunDistance: Float = 0
     var focusedStarIndex: Int?
     /// The picked star (drives the persistent label + relevance glow), so the
     /// selection highlight is restored alongside the camera, not just the dossier.

@@ -62,11 +62,15 @@ static inline float pr(float seed, float i) {
 
 // Mirror star_vertex's system-focus recession so overlays anchored to stars track
 // them as the field pushes radially away from the focused star during a drill. A
-// point at the focused star (which sits exactly at orreryCenter) has zero offset,
+// point at the focused star (which sits exactly at fieldCenter) has zero offset,
 // so it stays put — matching the sun's exemption in star_vertex without needing a
 // per-vertex index check.
+//
+// This pivots on `fieldCenter`, NOT `orreryCenter`: at body level the orrery centre
+// tracks the drilled planet around its star, and pivoting the field on a moving
+// point would slide the entire background sky.
 static inline float3 overlayPushed(float3 worldPos, constant Uniforms& u) {
     if (u.orreryReveal <= 0.0) return worldPos;
-    float3 toStar = worldPos - u.orreryCenter.xyz;
-    return u.orreryCenter.xyz + toStar * (1.0 + u.systemPush * u.orreryReveal);
+    float3 toStar = worldPos - u.fieldCenter.xyz;
+    return u.fieldCenter.xyz + toStar * (1.0 + u.systemPush * u.orreryReveal);
 }

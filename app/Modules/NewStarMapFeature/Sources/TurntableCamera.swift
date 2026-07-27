@@ -182,6 +182,25 @@ struct TurntableCamera {
     /// to the clamp boundary rather than settling past it (where the first gesture
     /// would snap it back). `now` is the current time (seconds, monotonic) —
     /// injected so the camera is a pure, testable value.
+    /// Rigidly shift the whole pose by `delta` — the pivot, and therefore the derived
+    /// eye, move together so the view does not swing. Used to ride a body-level orrery
+    /// along with the planet it is centred on: the planet keeps orbiting its star, and
+    /// the camera follows it, so nothing on screen appears to move.
+    ///
+    /// An in-flight framing move is carried too, so a dive that started toward a body
+    /// still lands on that body after it has travelled.
+    mutating func translate(by delta: SIMD3<Float>) {
+        guard delta != .zero else { return }
+        target += delta
+        if var f = framing {
+            f.startEye += delta
+            f.goalEye += delta
+            f.startTarget += delta
+            f.goalTarget += delta
+            framing = f
+        }
+    }
+
     mutating func focus(on point: SIMD3<Float>, now: Double) {
         let v = eye - point
         let dist = length(v)
