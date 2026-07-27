@@ -116,6 +116,36 @@ extension LocationsClient {
 }
 
 extension LocationsClient {
+    /// Fetch the `GET /v1/locations` holdings overlay, persist it, and mark every
+    /// system it names as explored.
+    ///
+    /// That second write is the point. `stars.explored` is otherwise only ever set
+    /// by the star map survey's walk of the *distance-sorted* per-replicant census,
+    /// so a system explored long ago sits as many pages deep as it is now far away
+    /// — SOL landed on census page 13 for a probe that had moved 39.5 ly off. The
+    /// Locations catalog gates both its "Explored" filter and its hydrate-on-select
+    /// on that flag, so a missed row is a system you cannot open. Anything you hold
+    /// at a location proves you reached its system, which repairs those rows from a
+    /// single request.
+    ///
+    /// Strictly additive: it never clears `explored`, since the footprint is a
+    /// holdings overlay rather than a knowledge index and a system you hold nothing
+    /// in is simply absent from it.
+    public func refreshFootprint() async throws {
+        @Dependency(\.defaultDatabase) var database
+        @Dependency(\.date.now) var now
+        let footprint = try await footprint()
+        let rows = footprint.map { LocationFootprint(location: $0.key, counts: $0.value, fetchedAt: now) }
+        let systems = LocationFootprint.systems(in: footprint.keys).sorted()
+        try await database.write { db in
+            try LocationFootprint.upsert { rows }.execute(db)
+            guard !systems.isEmpty else { return }
+            try Star.where { $0.designation.in(systems) }
+                .update { $0.explored = #bind(true) }
+                .execute(db)
+        }
+    }
+
     /// Scan the replicant's current system and persist the result, overlaying it
     /// onto any already-hydrated `SystemDetail` (preserving per-body scan detail).
     /// Shared by the explicit Scan action and the passive GameSync capture.

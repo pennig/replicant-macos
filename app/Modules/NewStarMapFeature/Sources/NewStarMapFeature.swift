@@ -544,28 +544,40 @@ public struct NewStarMapFeature {
             }
             await send(.catalogueLoaded(count: catalogue.count))
 
-            // 2. Best-effort per-replicant exploration overlay. The listing is
-            // distance-sorted and explored systems are the nearest, so they cluster
-            // in the first pages; stop at the first page carrying none rather than
-            // walking the whole ~140-page catalogue.
+            // 2. Best-effort per-replicant exploration overlay, over *every* page.
+            //
+            // This used to stop at the first page carrying no explored systems, on
+            // the theory that the listing is distance-sorted so explored systems
+            // cluster at the front. That theory is wrong: the sort is by *current*
+            // distance while exploration is *history*, so every system the probe has
+            // since travelled away from sinks to wherever its distance now puts it.
+            // Measured against the live account, explored systems sat on pages
+            // 1–3, 12, 13, and 28 of 141 — page 4 was already empty, so the walk
+            // stopped there and silently lost 4 systems including SOL (page 13,
+            // 39.5 ly out). A missed row leaves that system uncharted in the
+            // Locations catalog, which then refuses to hydrate it.
+            //
+            // There is no cheaper complete source: `GET /v1/stars` carries no
+            // per-replicant knowledge, the endpoint has no `explored` filter, and
+            // `per_page` is clamped at 100. So the walk is now exhaustive — ~141
+            // requests against a 120/min read budget the governor already paces,
+            // which is why this runs only on the deliberate, rate-limited Survey.
             do {
                 for try await result in starsClient.survey(code, overlayPageSize) {
                     let explored = result.stars.filter(\.explored)
-                    if !explored.isEmpty {
-                        let records = explored.map { UniverseModels.Star(item: $0, createdAt: stamp) }
-                        try await database.write { db in
-                            try UniverseModels.Star.insert {
-                                records
-                            } onConflict: {
-                                $0.designation
-                            } doUpdate: { row, excluded in
-                                row.explored = excluded.explored
-                                row.hasLife = excluded.hasLife
-                            }
-                            .execute(db)
+                    guard !explored.isEmpty else { continue }
+                    let records = explored.map { UniverseModels.Star(item: $0, createdAt: stamp) }
+                    try await database.write { db in
+                        try UniverseModels.Star.insert {
+                            records
+                        } onConflict: {
+                            $0.designation
+                        } doUpdate: { row, excluded in
+                            row.explored = excluded.explored
+                            row.hasLife = excluded.hasLife
                         }
+                        .execute(db)
                     }
-                    if explored.isEmpty { break }
                 }
             } catch {
                 // Enrichment is best-effort; the catalogue already loaded.

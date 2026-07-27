@@ -570,10 +570,13 @@ let package = Package(
         .testTarget(
             name: "NewStarMapFeatureTests",
             dependencies: [
+                "GameDatabase",
                 "GameModels",
                 "GameServices",
                 "NewStarMapFeature",
+                "UniverseModels",
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "SQLiteData", package: "sqlite-data"),
             ],
             path: "NewStarMapFeature/Tests"
         ),
