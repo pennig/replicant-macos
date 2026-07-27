@@ -419,12 +419,14 @@ extension Device {
             }
         }
         // Travel reports both the active leg's arrival (`arrives_at`) and the
-        // whole route's arrival (`final_arrives_at`). The op completes when the
-        // *route* does, so prefer `final_arrives_at` — taking the soonest (as the
-        // table above does) would pick the first leg on a multi-leg route and end
-        // the trip early.
+        // whole route's arrival (`final_arrives_at`). Resolved by
+        // `travelDeadline` rather than the `min()` table above, which would pick
+        // the first leg of a multi-leg route and end the trip early.
         if case .object = detail["travel"],
-           let date = detailDate("travel", "final_arrives_at") ?? detailDate("travel", "arrives_at") {
+           let date = Self.travelDeadline(
+               routeEnd: detailDate("travel", "final_arrives_at"),
+               legEnd: detailDate("travel", "arrives_at")
+           ) {
             soonest = soonest.map { Swift.min($0, date) } ?? date
         }
         // The survey `scan`/search block now reports an absolute `completes_at`
@@ -438,6 +440,30 @@ extension Device {
             soonest = soonest.map { Swift.min($0, date) } ?? date
         }
         return soonest
+    }
+
+    /// The deadline a `travel` block describes, given the whole route's end
+    /// (`final_arrives_at`) and the active leg's arrival (`arrives_at`).
+    ///
+    /// The route's end wins when it is genuinely later — a multi-leg trip ends
+    /// when the ROUTE does, and keying off the leg ends the op a waypoint
+    /// early. But it only wins *then*. A surge plate mid-hop reports a
+    /// `final_arrives_at` left over from a route it already finished (observed
+    /// three days stale, next to `route_eta_seconds: 0`, `route_progress_percent:
+    /// 100` and a live leg at 45%), and a deadline in the past makes every op it
+    /// stamps instantly overdue: `DeadlineScheduler` measures its give-up window
+    /// from `completesAt`, so such an op is marked `unknown` on its very first
+    /// pass. That produced 215 bogus `unknown` travel ops across five plates in
+    /// two days, each costing a `.high` confirm-read.
+    ///
+    /// A leg cannot outlast the route that contains it, so "the later of the
+    /// two" is the entire rule — it keeps the multi-leg behaviour and discards
+    /// only values that are impossible.
+    public static func travelDeadline(routeEnd: Date?, legEnd: Date?) -> Date? {
+        switch (routeEnd, legEnd) {
+        case let (route?, leg?): Swift.max(route, leg)
+        default: routeEnd ?? legEnd
+        }
     }
 
     private static func parseActivityDate(_ string: String) -> Date? {
@@ -479,10 +505,13 @@ extension Device {
             return DerivedActivity(
                 kind: .travel,
                 startedAt: detailDate("travel", "started_at") ?? detailDate("travel", "departed_at"),
-                // Prefer the route's end (`final_arrives_at`); `arrives_at` is only
-                // the active leg, so a multi-leg trip would otherwise be adopted
-                // with a deadline at the first waypoint.
-                completesAt: detailDate("travel", "final_arrives_at") ?? detailDate("travel", "arrives_at")
+                // The route's end when it is really the end, else the active leg
+                // — see `travelDeadline`. Adopting a stale route end here stamps
+                // the op overdue at birth.
+                completesAt: Self.travelDeadline(
+                    routeEnd: detailDate("travel", "final_arrives_at"),
+                    legEnd: detailDate("travel", "arrives_at")
+                )
             )
         }
         if case .object = detail["mining"] {

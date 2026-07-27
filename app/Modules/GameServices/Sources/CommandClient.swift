@@ -349,19 +349,22 @@ extension CommandClient: DependencyKey {
 
     // MARK: Response plumbing (shared across families)
 
-    /// The deadline a self-describing command reports, trying the known
-    /// completion-time fields of the shared response in priority order. For
-    /// travel, `final_arrives_at` is the *whole route's* end while `arrives_at`
-    /// is only the current/first leg — so it must come first, or a multi-leg
-    /// trip's deadline lands at the first waypoint and the op completes a leg
-    /// early.
+    /// The deadline a self-describing command reports, from the known
+    /// completion-time fields of the shared response.
+    ///
+    /// The travel pair goes through `Device.travelDeadline`, which knows that
+    /// `final_arrives_at` is the *whole route's* end (so it outranks the
+    /// current leg's `arrives_at`, or a multi-leg trip completes a leg early)
+    /// but only while it is actually later — a stale route end left over from a
+    /// previous journey must not stamp a deadline already in the past.
     private static func parseDeadline(
         from response: Components.Schemas.AppSchemasDevicesDeviceCommandResponseSchema
     ) -> Date? {
-        for field in [response.finalArrivesAt, response.arrivesAt, response.completesAt] {
-            if let field, let date = parseTimestamp(field) { return date }
-        }
-        return nil
+        let travel = Device.travelDeadline(
+            routeEnd: response.finalArrivesAt.flatMap(parseTimestamp),
+            legEnd: response.arrivesAt.flatMap(parseTimestamp)
+        )
+        return travel ?? response.completesAt.flatMap(parseTimestamp)
     }
 
     /// A user-facing message for a body-construction failure.
