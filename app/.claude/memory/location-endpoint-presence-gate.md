@@ -1,16 +1,23 @@
 ---
 name: location-endpoint-presence-gate
-description: "GET locations/{designation} is gated on replicant PRESENCE, not exploration; 403 = \"No replicant in system\"."
+description: "CORRECTED 2026-07-27: GET locations/{designation} is gated on EXPLORATION, not presence — its 403 \"No replicant in system\" message lies."
 metadata: 
   node_type: memory
   type: reference
   originSessionId: ec7b3f36-b374-4ce1-bea7-72549c0edf22
 ---
 
-`GET locations/{designation}` returns 200 (full scanned/estimated detail) **only while one of your replicants is currently in that system**. Otherwise it returns **HTTP 403 with `{"error":"No replicant in system"}`** — even for systems you have previously explored and fully scanned.
+`GET locations/{designation}` returns 200 (full scanned/estimated detail) for **any system the census marks `explored: true`**, whether or not a replicant is currently there. It returns **HTTP 403 `{"error":"No replicant in system"}`** for systems you have never explored.
 
-Verified live 2026-07-04: `locations/KRIOS` (current system, replicant 99380EDF present) → 200 with planets_scanned 3/3; `locations/SANSUNU` and `locations/TENEGSHE` (unexplored, no replicant) → 403 "No replicant in system".
+**The 403's message is misleading — it names presence but the server is testing exploration.** That wording is what produced the earlier reading of this note (2026-07-04), which concluded the gate was presence. The evidence then was consistent with both rules by accident: the one 200 happened to be the replicant's *current* system, and the two 403s (`SANSUNU`, `TENEGSHE`) were unexplored at the time. `TENEGSHE` is explored now and serves 200 with no replicant in it.
 
-`LocationsClient` (GameServices; moved out of UniverseModels 2026-07-21, M1) maps this 403 → `LocationsError.noReplicantInSystem` (renamed 2026-07-04 from the misleading `.notExplored`, which implied an exploration gate). Consequence to keep in mind: selecting a previously-scanned system the replicant has since left (with no cached `SystemDetail` blob) still returns no live detail — it falls back to the cached blob, or stays a census leaf.
+Re-verified live 2026-07-27, both replicants parked at AINALRAM / ASTELLIO:
 
-Because a detail blob can only be fetched while present, and reaching a system marks it explored (census `explored: true`), **a persisted `SystemDetail` blob implies the system is explored** — this invariant backs the Locations "Explored" filter fix in [[locations-catalog-feature]] (`LocationTree.forest`: `star.explored || details[designation] != nil`), which covers stale local census flags. See [[location-sites-endpoint]].
+- explored, **no replicant present** → 200 full detail: `SOL` (8 planets / 28 moons scanned), `UNALEDI`, `MENKENTAR`, `URCALIS`, `ABSOLETNO`
+- census `explored: false` → 403: `DABAH`, `MORIVA`, `CANOPUS`, `SADACHIBIA`
+
+So a previously-scanned system the replicant has since left **can** be rehydrated from scratch — there is no need for a cached `SystemDetail` blob and no need to travel back. That is what makes the Locations catalog's hydrate-on-select work for a distant system, and it is why `stars.explored` being wrong was fatal rather than cosmetic: the flag, not the endpoint, was the thing standing in the way (see [[census-explored-is-not-distance-sorted]]).
+
+`LocationsClient` maps the 403 → `LocationsError.noReplicantInSystem`. The name now mirrors the server's wording rather than its behaviour; treat it as "detail unavailable — system not explored". Renaming it is safe but untaken, since every call site already treats it as best-effort.
+
+The old derived invariant still holds and is still useful: a persisted `SystemDetail` blob implies the system is explored (you could only ever have fetched one for an explored system), which backs `LocationTree.forest`'s `star.explored || details[designation] != nil` in [[locations-catalog-feature]]. See [[location-sites-endpoint]].
