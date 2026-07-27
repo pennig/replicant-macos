@@ -767,3 +767,128 @@ struct BareSystemRouteAnchorTests {
         #expect(anchor != .zero)
     }
 }
+
+// MARK: - Body spin (axial tilt, rotation, tidal lock)
+
+// Values below are real, probed from `locations/SOL-{2,5,6,7}` — the live account's
+// own data — so these tests pin behaviour against the game rather than an invention.
+
+struct BodySpinTests {
+    @Test func obliquityAndSignMatchRealBodies() {
+        // Venus: nearly upside-down AND an explicitly negative period.
+        let venus = BodySpin(tiltDeg: 177.4, rotationHours: -5832.5)
+        #expect(abs(venus.obliquityDeg - 177.4) < 1e-9)
+        #expect(venus.sign == -1)
+
+        // Uranus: rolled onto its side, also an explicit negative period.
+        let uranus = BodySpin(tiltDeg: 97.77, rotationHours: -17.24)
+        #expect(abs(uranus.obliquityDeg - 97.77) < 1e-9)
+        #expect(uranus.sign == -1)
+
+        // Jupiter / Saturn: upright and prograde.
+        #expect(BodySpin(tiltDeg: 3.13, rotationHours: 9.92).sign == 1)
+        #expect(BodySpin(tiltDeg: 26.73, rotationHours: 10.66).sign == 1)
+    }
+
+    @Test func obliquityPastNinetyIsRetrogradeGeometrically() {
+        // The convention is "obliquity > 90 means retrograde", and that is the
+        // GEOMETRY, not a branch: past 90 the pole tips below the orbital plane, so
+        // a body spinning right-handed about it reads backwards from above.
+        #expect(BodySpin(tiltDeg: 97.77).isRetrograde)
+        #expect(BodySpin(tiltDeg: 177.4).isRetrograde)
+        #expect(!BodySpin(tiltDeg: 26.73).isRetrograde)
+
+        // The pole tipping below the plane is what produces it — no sign flip needed.
+        #expect(BodySpin(tiltDeg: 97.77).pole(seed: 0.3).y < 0)
+        #expect(BodySpin(tiltDeg: 26.73).pole(seed: 0.3).y > 0)
+
+        // So `sign` must stay +1 for a high obliquity: flipping it too would
+        // double-count and cancel the geometry back to prograde.
+        #expect(BodySpin(tiltDeg: 97.77).sign == 1)
+        #expect(BodySpin(tiltDeg: 177.4).sign == 1)
+    }
+
+    @Test func outOfRangeTiltNormalizes() {
+        // Defensive only — the backend reports 0…180. A stray value must still land
+        // on a sane obliquity rather than aiming the pole somewhere absurd.
+        #expect(abs(BodySpin(tiltDeg: 200).obliquityDeg - 160) < 1e-9)
+        #expect(abs(BodySpin(tiltDeg: 380).obliquityDeg - 20) < 1e-9)
+        #expect(abs(BodySpin(tiltDeg: -30).obliquityDeg - 30) < 1e-9)
+    }
+
+    @Test func unknownTiltIsUpright() {
+        #expect(BodySpin.unknown.obliquityDeg == 0)
+        #expect(BodySpin.unknown.sign == 1)
+        #expect(!BodySpin.unknown.isRetrograde)
+        let p = BodySpin.unknown.pole(seed: 0.4)
+        #expect(abs(p.y - 1) < 1e-6)
+    }
+
+    @Test func poleTiltsByObliquityAndStaysUnit() {
+        let upright = BodySpin(tiltDeg: 0).pole(seed: 0.3)
+        #expect(abs(upright.y - 1) < 1e-6)
+
+        // 90 degrees lays the pole into the orbital plane.
+        let sideways = BodySpin(tiltDeg: 90).pole(seed: 0.3)
+        #expect(abs(sideways.y) < 1e-6)
+        #expect(abs(simd_length(sideways) - 1) < 1e-6)
+
+        // Same tilt, different seed => different lean direction, so two worlds
+        // sharing an obliquity don't all lean the same way.
+        let a = BodySpin(tiltDeg: 45).pole(seed: 0.1)
+        let b = BodySpin(tiltDeg: 45).pole(seed: 0.8)
+        #expect(simd_length(a - b) > 1e-3)
+        #expect(abs(a.y - b.y) < 1e-6)   // same obliquity => same height
+    }
+
+    @Test func spinRateAnchorsFastestAndCompressesTheSpread() {
+        // The fastest rotator in the layer turns at the base rate.
+        let fast = BodySpin(tiltDeg: 3.13, rotationHours: 9.92)
+        #expect(abs(fast.spinRate(fastestHours: 9.92) - 0.06) < 1e-6)
+
+        // Four times slower => half the rate at falloff 0.5, not a quarter.
+        let slow = BodySpin(rotationHours: 39.68)
+        #expect(abs(slow.spinRate(fastestHours: 9.92) - 0.03) < 1e-6)
+
+        // Venus is 588x slower than Jupiter but must not be visually frozen.
+        let venus = BodySpin(tiltDeg: 177.4, rotationHours: -5832.5)
+        let rate = venus.spinRate(fastestHours: 9.92)
+        #expect(rate < 0)                       // explicit retrograde
+        #expect(abs(rate) > 0.06 / 100)         // compressed, not crushed
+
+        // No reading => the historical fixed rate, prograde.
+        #expect(BodySpin.unknown.spinRate(fastestHours: 9.92) == 0.06)
+    }
+
+    @Test func tidallyLockedIsCarriedThrough() {
+        #expect(BodySpin(tidallyLocked: true).tidallyLocked)
+        #expect(!BodySpin.unknown.tidallyLocked)
+    }
+}
+
+struct RingSystemTests {
+    @Test func onlyRingedBodiesGetARing() {
+        #expect(PlanetMaterial.ringSystem(hasRings: false, type: .gasGiant, seed: 0.5) == nil)
+        #expect(PlanetMaterial.ringSystem(hasRings: true, type: .gasGiant, seed: 0.5) != nil)
+    }
+
+    @Test func ringBandClearsTheBodyAndIsOrdered() throws {
+        for type in [PlanetType.gasGiant, .iceGiant, .barren, .terrestrial] {
+            let r = try #require(PlanetMaterial.ringSystem(hasRings: true, type: type, seed: 0.5))
+            #expect(r.innerFrac > 1)              // never inside the body
+            #expect(r.outerFrac > r.innerFrac)
+            #expect(r.outerFrac <= 3)             // stays inside the pip/label budget
+        }
+    }
+
+    @Test func ringSeedIsCarriedSoGapsAreStable() throws {
+        let r = try #require(PlanetMaterial.ringSystem(hasRings: true, type: .gasGiant, seed: 0.375))
+        #expect(r.seed == 0.375)
+    }
+
+    @Test func giantsGetBroaderRingsThanRockyWorlds() throws {
+        let giant = try #require(PlanetMaterial.ringSystem(hasRings: true, type: .gasGiant, seed: 0.5))
+        let rocky = try #require(PlanetMaterial.ringSystem(hasRings: true, type: .barren, seed: 0.5))
+        #expect(giant.outerFrac - giant.innerFrac > rocky.outerFrac - rocky.innerFrac)
+    }
+}

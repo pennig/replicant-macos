@@ -69,6 +69,18 @@ struct AtmosphereShell: Equatable, Sendable {
     var density: Float
 }
 
+/// A ring system, drawn as a flat annulus in the body's equatorial plane (see
+/// `orrery_ring_fragment`). `innerFrac`/`outerFrac` are multiples of the body's
+/// rendered radius; `seed` places the gaps so a body's rings look identical every
+/// time it is viewed. Only bodies whose scan reports `rings == true` get one —
+/// SOL-6 and SOL-7 are the live examples.
+struct RingSystem: Equatable, Sendable {
+    var innerFrac: Float
+    var outerFrac: Float
+    var seed: Float
+    var tint: SIMD3<Float>
+}
+
 enum PlanetMaterial {
 
     /// Primary albedo hex per type. Shared with `OrreryMapping.planetColor` for the
@@ -185,6 +197,21 @@ enum PlanetMaterial {
         let methane = tags.contains { $0.lowercased() == "methane_atmosphere" }
         let tint = OrreryGeometry.rgb(hex: methane ? "#e0a15a" : hex)
         return AtmosphereShell(tint: tint, extent: extent, density: density)
+    }
+
+    // MARK: - Rings
+
+    /// Resolve a body's ring system, or nil for a body that reports no rings. Giants
+    /// carry broad, bright ice rings; a rocky world's are narrower and dustier. The
+    /// band always starts clear of the body's own limb.
+    static func ringSystem(hasRings: Bool, type: PlanetType, seed: Float) -> RingSystem? {
+        guard hasRings else { return nil }
+        let giant = type.isGiant
+        return RingSystem(
+            innerFrac: giant ? 1.35 : 1.25,
+            outerFrac: giant ? 2.30 : 1.85,
+            seed: seed,
+            tint: OrreryGeometry.rgb(hex: giant ? "#d8cfb4" : "#9c9186"))
     }
 
     // MARK: - Saturation
