@@ -66,13 +66,48 @@ struct BodySpin: Equatable, Sendable {
         return SIMD3(sin(obl) * cos(az), cos(obl), sin(obl) * sin(az))
     }
 
-    /// Signed spin rate (rad/s), anchored so the FASTEST rotator in the layer turns at
-    /// `baseRate` and the spread is compressed by `falloff`. Real periods run
-    /// 9.92h…5832.5h — a 588× spread that a linear map either blurs at one end or
-    /// freezes at the other. A body with no reading keeps the historical fixed rate.
-    func spinRate(fastestHours: Double, baseRate: Float = 0.06, falloff: Float = 0.5) -> Float {
-        guard let h = rotationHours, h != 0, h.isFinite, fastestHours > 0 else { return baseRate }
-        let ratio = Float(fastestHours / abs(h))
-        return sign * baseRate * pow(max(ratio, 1e-6), falloff)
+    /// The reference rotation period (hours) every body's spin scales against — one
+    /// Earth day. GLOBAL and constant, deliberately.
+    ///
+    /// This previously anchored on the fastest rotator in the *current layer*, which
+    /// had two problems. A body's speed depended on which of its neighbours happened
+    /// to be scanned, so surveying one fast world silently slowed every other planet
+    /// in that system; and because only the single fastest body got `baseRate`, every
+    /// other planet ended up slower than the flat rate they all span at before
+    /// rotation periods were wired in — the whole orrery read sluggish. A fixed
+    /// reference means a given planet always turns at the same rate, in any system,
+    /// however much of it you have surveyed.
+    static let referenceHours: Double = 24
+
+    /// Perceptible-speed band (rad/s). Real periods span 9.92h…5832.5h — a 588× spread
+    /// no single curve keeps legible at both ends — so the extremes clamp. Without the
+    /// floor SOL-1 would take ~13 minutes per turn and SOL-2 ~27, both reading as
+    /// frozen; without the ceiling a very fast rotator would strobe.
+    static let minRate: Float = 0.022     // ≈ 286 s per rotation
+    static let maxRate: Float = 0.16      // ≈ 39 s per rotation
+
+    /// Signed spin rate (rad/s), scaled off the global `referenceHours` and compressed
+    /// by `falloff`, then clamped into the perceptible band. A body with no reading
+    /// keeps the historical fixed rate (identical to a 24-hour world).
+    func spinRate(baseRate: Float = 0.06, falloff: Float = 0.5) -> Float {
+        guard let h = rotationHours, h != 0, h.isFinite else { return baseRate }
+        let ratio = Float(Self.referenceHours / abs(h))
+        let rate = baseRate * pow(max(ratio, 1e-6), falloff)
+        return sign * min(max(rate, Self.minRate), Self.maxRate)
+    }
+
+    /// The body's orthonormal texturing frame as (x, pole, z) columns — the frame the
+    /// surface shader transforms into so every latitude feature tilts with the body.
+    ///
+    /// SYNC POINT: `orrery_body_fragment` builds this exact basis on the GPU. It MUST
+    /// be right-handed (determinant +1): building `z` as `cross(pole, x)` instead of
+    /// `cross(x, pole)` yields a reflection, which mirrors the sphere and makes every
+    /// planet appear to spin backwards. That shipped once; `bodyFrameIsRightHanded`
+    /// exists so it cannot ship again unnoticed.
+    func frame(seed: Float) -> (x: SIMD3<Float>, pole: SIMD3<Float>, z: SIMD3<Float>) {
+        let p = pole(seed: seed)
+        let ref: SIMD3<Float> = abs(p.y) > 0.99 ? SIMD3(1, 0, 0) : SIMD3(0, 1, 0)
+        let x = simd_normalize(simd_cross(ref, p))
+        return (x, p, simd_cross(x, p))
     }
 }

@@ -841,23 +841,76 @@ struct BodySpinTests {
         #expect(abs(a.y - b.y) < 1e-6)   // same obliquity => same height
     }
 
-    @Test func spinRateAnchorsFastestAndCompressesTheSpread() {
-        // The fastest rotator in the layer turns at the base rate.
-        let fast = BodySpin(tiltDeg: 3.13, rotationHours: 9.92)
-        #expect(abs(fast.spinRate(fastestHours: 9.92) - 0.06) < 1e-6)
-
-        // Four times slower => half the rate at falloff 0.5, not a quarter.
-        let slow = BodySpin(rotationHours: 39.68)
-        #expect(abs(slow.spinRate(fastestHours: 9.92) - 0.03) < 1e-6)
-
-        // Venus is 588x slower than Jupiter but must not be visually frozen.
-        let venus = BodySpin(tiltDeg: 177.4, rotationHours: -5832.5)
-        let rate = venus.spinRate(fastestHours: 9.92)
-        #expect(rate < 0)                       // explicit retrograde
-        #expect(abs(rate) > 0.06 / 100)         // compressed, not crushed
-
+    @Test func spinRateAnchorsOnAGlobalReferenceDay() {
+        // A 24-hour world turns at the base rate — the flat speed EVERY planet span
+        // at before rotation periods were wired in, so a typical world keeps its
+        // familiar pace instead of being dragged below it.
+        #expect(abs(BodySpin(rotationHours: 24).spinRate() - 0.06) < 1e-6)
+        // Four times slower than the reference => half rate at falloff 0.5.
+        #expect(abs(BodySpin(rotationHours: 96).spinRate() - 0.03) < 1e-6)
+        // Faster than a day reads faster on screen. SOL-5 (9.92 h) now OUTPACES the
+        // old flat rate rather than being pinned to it.
+        #expect(BodySpin(rotationHours: 9.92).spinRate() > 0.06)
         // No reading => the historical fixed rate, prograde.
-        #expect(BodySpin.unknown.spinRate(fastestHours: 9.92) == 0.06)
+        #expect(BodySpin.unknown.spinRate() == 0.06)
+    }
+
+    @Test func spinRateNeverDependsOnNeighbouringBodies() {
+        // The anchor is a global constant, so scanning a fast rotator can no longer
+        // silently slow every other planet in its system. A body's rate is a pure
+        // function of its OWN period — the whole point of dropping the per-layer
+        // "fastest rotator" anchor.
+        let earth = BodySpin(rotationHours: 24).spinRate()
+        for _ in 0..<3 { #expect(BodySpin(rotationHours: 24).spinRate() == earth) }
+        #expect(abs(earth - 0.06) < 1e-6)
+    }
+
+    @Test func everySolPeriodLandsInThePerceptibleBand() {
+        // The real SOL spread, 9.92 h … 5832.5 h (588x).
+        for h in [9.92, 10.66, 16.11, -17.24, 24, 24.6, 1407.6, -5832.5] {
+            let r = abs(BodySpin(rotationHours: h).spinRate())
+            #expect(r >= BodySpin.minRate)
+            #expect(r <= BodySpin.maxRate)
+        }
+        // SOL-1 and SOL-2 are so slow they clamp to the floor: uncompressed they
+        // would take ~13 and ~27 minutes per turn and read as frozen.
+        #expect(abs(BodySpin(rotationHours: 1407.6).spinRate()) == BodySpin.minRate)
+        #expect(abs(BodySpin(rotationHours: -5832.5).spinRate()) == BodySpin.minRate)
+        // …and the clamp preserves the retrograde sign.
+        #expect(BodySpin(rotationHours: -5832.5).spinRate() < 0)
+    }
+
+    @Test func fasterRotatorsOutpaceSlowerOnesWithinTheBand() {
+        let jupiter = abs(BodySpin(rotationHours: 9.92).spinRate())   // SOL-5
+        let neptune = abs(BodySpin(rotationHours: 16.11).spinRate())  // SOL-8
+        let earth = abs(BodySpin(rotationHours: 24).spinRate())       // SOL-3
+        #expect(jupiter > neptune)
+        #expect(neptune > earth)
+    }
+
+    @Test func bodyFrameIsRightHanded() {
+        // The texturing basis MUST be a rotation, not a reflection. Building z as
+        // cross(pole, x) instead of cross(x, pole) gives determinant -1, which mirrors
+        // the sphere and makes every planet appear to spin BACKWARDS. That shipped
+        // once; this test is why it cannot ship again unnoticed.
+        // SYNC POINT: orrery_body_fragment builds the same basis on the GPU.
+        for spin in [BodySpin.unknown,
+                     BodySpin(tiltDeg: 26.73),      // SOL-6
+                     BodySpin(tiltDeg: 97.77),      // SOL-7, past 90
+                     BodySpin(tiltDeg: 177.4),      // SOL-2, near-inverted
+                     BodySpin(tiltDeg: 90)] {       // pole in the orbital plane
+            for seed in [Float(0), 0.37, 0.81] {
+                let f = spin.frame(seed: seed)
+                let det = simd_dot(f.x, simd_cross(f.pole, f.z))
+                #expect(abs(det - 1) < 1e-4)
+                // Orthonormal, too.
+                #expect(abs(simd_length(f.x) - 1) < 1e-5)
+                #expect(abs(simd_length(f.z) - 1) < 1e-5)
+                #expect(abs(simd_dot(f.x, f.pole)) < 1e-5)
+                #expect(abs(simd_dot(f.x, f.z)) < 1e-5)
+                #expect(abs(simd_dot(f.pole, f.z)) < 1e-5)
+            }
+        }
     }
 
     @Test func tidallyLockedIsCarriedThrough() {
@@ -983,44 +1036,6 @@ struct VolcanismScaleTests {
         let mods = PlanetMaterial.modifiers(tags: ["hellworld", "volcanic"])
         let combined = mods.lava * PlanetMaterial.lavaAmount(tempC: 1400)
         #expect(combined <= 2.8)
-    }
-}
-
-// MARK: - Layer rotation anchor
-
-struct LayerRotationAnchorTests {
-    private func layer(hours: [Double?]) -> OrreryLayout {
-        let planets = hours.enumerated().map { i, h in
-            OrreryPlanet(
-                designation: "SOL-\(i + 1)", name: nil, type: "Gas Giant",
-                planetType: .gasGiant, estimated: false, tags: [],
-                surfaceTempC: nil, atmosphere: Atmosphere(apiValue: nil), appearanceSeed: 0.5,
-                orbitalDistanceAu: 1, inHabitableZone: false, scanned: true,
-                moonCount: 0, lifeStage: nil, inventory: [],
-                semiMajorScene: 10, periodDays: 100, phase0Deg: 0,
-                displayRadius: 1, colorHex: "#ffffff", rings: nil,
-                spin: BodySpin(rotationHours: h),
-                indicators: [], hasInterestingMoon: false, moons: [])
-        }
-        var model = OrreryMapping.minimal(
-            designation: "SOL", position: Position(x: 0, y: 0, z: 0),
-            spectralType: "G2", color: "Yellow", name: "Sol")
-        model.planets = planets
-        return OrreryLayout(model: model, center: .zero, scale: 1, reveal: 1, time: 0)
-    }
-
-    @Test func anchorIsTheFastestRotator() {
-        #expect(layer(hours: [9.92, 10.66, -5832.5]).fastestRotationHours == 9.92)
-    }
-
-    @Test func anchorIgnoresSignAndMissingReadings() {
-        // A negative period is retrograde, not "faster than zero" — magnitude wins.
-        #expect(layer(hours: [-17.24, 998.5]).fastestRotationHours == 17.24)
-        #expect(layer(hours: [nil, 42.0, nil]).fastestRotationHours == 42.0)
-    }
-
-    @Test func anchorFallsBackWhenNothingReportsRotation() {
-        #expect(layer(hours: [nil, nil]).fastestRotationHours == 1)
     }
 }
 

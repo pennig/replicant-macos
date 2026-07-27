@@ -70,16 +70,6 @@ struct OrreryLayout {
     /// orbit the on-screen timing is anchored to. 1 for an empty model.
     var minPeriodDays: Double { model.planets.map(\.periodDays).min() ?? 1 }
 
-    /// The smallest |rotation period| (hours) among this layer's bodies — the anchor
-    /// every body's spin rate scales off, so the fastest rotator in view turns at the
-    /// base rate and the rest compress below it. 1 when nothing reports a period.
-    /// Magnitude, not signed value: a negative period means retrograde, not fast.
-    var fastestRotationHours: Double {
-        let known = model.planets.compactMap(\.spin.rotationHours)
-            .map(abs).filter { $0 > 0 && $0.isFinite }
-        return known.min() ?? 1
-    }
-
     // MARK: Orbiters (planets at system level, moons at body level)
 
     /// A layer orbiter's orbit angle (radians) at the layer's `time`.
