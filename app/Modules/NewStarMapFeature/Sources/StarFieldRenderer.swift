@@ -1862,7 +1862,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
                 spinPhase: Float(OrreryMapping.phaseDeg(model.star.designation)) * .pi / 180,
                 spinAxis: central.spin.pole(seed: central.appearanceSeed),
                 // A central body is not an orbiter of its own layer, so it never locks here.
-                spinRate: central.spin.spinRate(fastestHours: layout.fastestRotationHours),
+                spinRate: central.spin.spinRate(),
                 ocean: 0,
                 rings: central.rings))
         }
@@ -1882,8 +1882,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
                 spinPhase: locked ? layout.orbiterAngle(planet)
                                   : Float(planet.phase0Deg) * .pi / 180,
                 spinAxis: planet.spin.pole(seed: planet.appearanceSeed),
-                spinRate: locked ? 0
-                                 : planet.spin.spinRate(fastestHours: layout.fastestRotationHours),
+                spinRate: locked ? 0 : planet.spin.spinRate(),
                 ocean: planet.hasSubsurfaceOcean ? 1 : 0,
                 rings: planet.rings))
         }

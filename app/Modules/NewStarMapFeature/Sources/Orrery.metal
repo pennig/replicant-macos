@@ -301,7 +301,12 @@ fragment OrreryBodyOut orrery_body_fragment(OrreryBodyVaryings in [[stage_in]],
     float3 pole = normalize(in.pole);
     float3 ref = fabs(pole.y) > 0.99 ? float3(1.0, 0.0, 0.0) : float3(0.0, 1.0, 0.0);
     float3 bx = normalize(cross(ref, pole));
-    float3 bz = cross(pole, bx);
+    // `cross(bx, pole)`, NOT `cross(pole, bx)`. The latter builds a LEFT-handed basis
+    // (determinant −1): a reflection rather than a rotation, which mirrors the sphere
+    // and makes every planet appear to spin backwards. Right-handedness here is an
+    // invariant — `BodySpinTests.bodyFrameIsRightHanded` pins the same construction
+    // on the CPU side. SYNC POINT: mirrors `BodySpin.frame(seed:)`.
+    float3 bz = cross(bx, pole);
     float3x3 bodyFrame = float3x3(bx, pole, bz);          // columns
     float3 dir = transpose(bodyFrame) * dirWorld;         // world -> body
 
@@ -450,11 +455,13 @@ vertex OrreryRingVaryings orrery_ring_vertex(uint vid                        [[v
     bool outerRim = (vid & 1u) == 1u;
     float a = float(seg) / float(kRingSegments) * 2.0 * M_PI_F;
 
-    // Basis for the equatorial plane: two axes perpendicular to the pole.
+    // Basis for the equatorial plane: two axes perpendicular to the pole. Built
+    // right-handed to match the body frame in orrery_body_fragment — here it only sets
+    // which way the strip sweeps, but the two must not disagree about the body's frame.
     float3 pole = normalize(r.poleInner.xyz);
     float3 ref = fabs(pole.y) > 0.99 ? float3(1.0, 0.0, 0.0) : float3(0.0, 1.0, 0.0);
     float3 bx = normalize(cross(ref, pole));
-    float3 bz = cross(pole, bx);
+    float3 bz = cross(bx, pole);
 
     float frac = outerRim ? r.sunOuter.w : r.poleInner.w;
     float radius = r.centerRadius.w * frac;
