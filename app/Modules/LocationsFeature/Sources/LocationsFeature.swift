@@ -243,19 +243,17 @@ public struct LocationsFeature {
                 // from the @Fetch's seed) and refresh the footprint overlay in the
                 // background. The @Fetch re-runs itself when the tables change, so
                 // the footprint write flows back without an explicit reload.
-                let database = self.database
                 let locationsClient = self.locationsClient
-                let now = self.now
                 return .merge(
                     .run { [fetch = state.$forest, request = state.forestRequest] _ in
                         _ = try? await fetch.load(request)
                     },
                     .run { _ in
-                        let footprint = try await locationsClient.footprint()
-                        let rows = footprint.map { LocationFootprint(location: $0.key, counts: $0.value, fetchedAt: now) }
-                        try await database.write { db in
-                            try LocationFootprint.upsert { rows }.execute(db)
-                        }
+                        // Also marks every system the footprint names as explored,
+                        // repairing the rows the census walk missed — without it a
+                        // long-since-departed system (SOL) reads as uncharted here
+                        // and refuses to hydrate. See `refreshFootprint`.
+                        try await locationsClient.refreshFootprint()
                     } catch: { error, send in
                         await send(.loadFailed(error.localizedDescription))
                     }

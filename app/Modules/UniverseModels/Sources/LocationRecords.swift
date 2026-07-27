@@ -115,6 +115,21 @@ public struct LocationFootprint: Identifiable, Equatable, Sendable {
             resources: resources, replicants: replicants
         )
     }
+
+    /// The star systems named by a set of `GET /v1/locations` keys.
+    ///
+    /// A footprint key is a location designation — `SOL-BELT-1`, `SOL-3-1`, or a
+    /// bare `SOL` — and its system is everything before the first hyphen (the
+    /// same rule as `SiteAssay.system(of:)`).
+    ///
+    /// Holding devices, resources, sites, or events at a location is independent
+    /// proof we have *been* to its system, which makes this a second source of
+    /// `Star.explored` alongside the census. It only ever adds: the footprint is
+    /// a holdings overlay, not a knowledge index, so a system we explored but
+    /// hold nothing in is simply absent and stays the census's business.
+    public static func systems(in locations: some Sequence<String>) -> Set<String> {
+        Set(locations.map(SiteAssay.system(of:)).filter { !$0.isEmpty })
+    }
 }
 
 // MARK: - SiteAssay
