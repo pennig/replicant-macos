@@ -203,7 +203,7 @@ actor DirectiveEngineCore {
     /// user on this same tick.
     private func resolveRefresh(
         deviceCodes: [String],
-        thenStall reason: DirectiveAttentionReason,
+        thenStall reason: DirectiveAttentionReason?,
         directive: Directive,
         machine: any MissionStepMachine
     ) async -> MissionAction {
@@ -226,7 +226,7 @@ actor DirectiveEngineCore {
                 _ = await deviceRefresher.refresh(stowed, .high)
             }
         }
-        logger.info("directive \(directive.id, privacy: .public): refreshed \(seen.count) device(s) before \(reason.rawValue, privacy: .public)")
+        logger.info("directive \(directive.id, privacy: .public): refreshed \(seen.count) device(s) before \(reason?.rawValue ?? "wait", privacy: .public)")
 
         let fresh: WorldSnapshot
         do {
@@ -235,11 +235,18 @@ actor DirectiveEngineCore {
             // The reads may well have landed; we just can't see them. Surfacing
             // the stall is the honest outcome — the user's Retry now re-reads.
             logger.error("world snapshot after refresh failed: \(error)")
-            return .stall(reason)
+            return reason.map { .stall($0) } ?? .wait
         }
 
         let action = machine.nextAction(directive: directive, world: fresh)
         if case .refreshDevices = action {
+            guard let reason else {
+                // The mission asked for a wait fallback: the state it is
+                // watching is expected to still be unresolved, so another
+                // evaluation is the answer, not a human.
+                logger.debug("directive \(directive.id, privacy: .public): fresh reads still unresolved — waiting")
+                return .wait
+            }
             logger.notice("directive \(directive.id, privacy: .public): fresh reads confirm \(reason.rawValue, privacy: .public)")
             return .stall(reason)
         }

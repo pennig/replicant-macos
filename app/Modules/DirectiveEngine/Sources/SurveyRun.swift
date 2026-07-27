@@ -45,18 +45,21 @@ public struct SurveyRun: MissionStepMachine {
         public static let returning = "returning"
     }
 
-    /// How long to let the AMI's post-survey recall run before demanding an
-    /// authoritative read of who is actually aboard.
-    ///
-    /// A plain wait rather than a poll, deliberately: survey drones emit no
-    /// per-device events at all (verified over a full day of live traffic —
-    /// every one of their movements is rolled up into the controller's
-    /// `ami.survey.digest`), so their stow columns only change when something
-    /// reads them. Polling that on the engine's 5s tick would be a read storm
-    /// for a fact that cannot change faster than the drones can fly. Waiting
-    /// out the recall and then paying for ONE read round costs a handful of
-    /// reads per target instead of hundreds.
-    public static let recallGrace: TimeInterval = 5 * 60
+    /// How long to let the AMI's post-survey recall get going before the first
+    /// probe. Short: the point is only to avoid reading state that cannot
+    /// possibly have changed yet.
+    public static let recallProbeDelay: TimeInterval = 10
+
+    /// Floor between recall probes when the drones offer no arrival time to
+    /// wait on (an arrived-but-unstowed drone reports no travel block at all).
+    /// Without it, a missing ETA would mean a read round on every 5s tick.
+    public static let recallProbeInterval: TimeInterval = 30
+
+    /// The hard cap on a recall before the run surfaces `dronesNotRecovered`.
+    /// Generous, because it is now a genuine backstop rather than the primary
+    /// timer: the ETA-driven wait below handles the honest cases, so reaching
+    /// this means the recall really is not happening.
+    public static let recallDeadline: TimeInterval = 20 * 60
 
     /// How old a row backing a POSITIVE staging finding may be and still be
     /// believed without an authoritative re-read.
@@ -276,8 +279,15 @@ public struct SurveyRun: MissionStepMachine {
         // themselves could not be had, which `.unreachableDevice` names
         // honestly.
         if Self.stagingIsStale([vessel, controller] + drones, world) {
+            // Name every row the check covers, drones included. The engine's
+            // carrier expansion reads the VESSEL's `stowed_devices` blob, which
+            // is not a reliable inverse of the drones' own `stowedInDeviceCode`
+            // columns — a live vessel listed one unrelated matrix while six
+            // drones claimed to be aboard it. Naming only the vessel left the
+            // drone rows exactly as stale as before, so the check could never
+            // be satisfied and the run stalled for five and a half hours.
             return .refreshDevices(
-                deviceCodes: [vessel.deviceCode, controller.deviceCode],
+                deviceCodes: [vessel.deviceCode, controller.deviceCode] + drones.map(\.deviceCode),
                 thenStall: .unreachableDevice
             )
         }
@@ -348,21 +358,42 @@ public struct SurveyRun: MissionStepMachine {
         let adopted = Self.adoptedDrones(of: controller, in: world)
         let stranded = adopted.filter { $0.stowedInDeviceCode != vessel.deviceCode }
         if stranded.isEmpty { return .advanceTarget }
-        // Inside the grace window this is expected, not a fault: the drones are
-        // simply still flying. Wait without spending a read — they emit no
-        // events, so their rows can't move on their own, and polling a fact
-        // that changes on a multi-minute scale at the 5s tick rate would burn
-        // the read budget for nothing (see `recallGrace`).
-        guard world.now.timeIntervalSince(directive.stepStartedAt) > Self.recallGrace else {
-            return .wait
-        }
-        // Window expired. The rows saying "still out" are exactly the rows only
-        // a read can refresh, so buy one authoritative look before conceding —
-        // and if it holds, surface rather than depart without them.
+
+        let elapsed = world.now.timeIntervalSince(directive.stepStartedAt)
+        // The recall was ordered moments ago; nothing can have changed yet.
+        if elapsed < Self.recallProbeDelay { return .wait }
+        // The backstop, measured from the step's start — which neither `.wait`
+        // nor a probe re-stamps, so it really is a cap on the whole recall.
+        if elapsed > Self.recallDeadline { return .stall(.dronesNotRecovered) }
+        // Wait out the FARTHEST traveller's own arrival time rather than a
+        // hardcoded guess: a recall crosses whatever distances the survey
+        // scattered the drones over, and those differ by an order of magnitude
+        // between systems. Free — the ETA is already in rows we hold.
+        if let arrival = Self.recallArrival(stranded), arrival > world.now { return .wait }
+        // No usable ETA, or it has passed. Look again — but not more often than
+        // `recallProbeInterval`, using the rows' own `updatedAt` as the "when
+        // did we last look" clock, since a drone that arrived without stowing
+        // reports no travel block and would otherwise be re-probed every tick.
+        let lastLook = stranded.map(\.updatedAt).min() ?? .distantPast
+        if world.now.timeIntervalSince(lastLook) < Self.recallProbeInterval { return .wait }
+        // Name the drones explicitly. The engine expands a named device via
+        // that carrier's `stowed_devices` blob, and a real vessel's blob listed
+        // only an unrelated matrix while six drones claimed to be aboard it —
+        // so relying on the expansion would never refresh the rows judged here.
+        // `thenStall: nil`: drones still flying is the expected answer, not a
+        // fault, so an unresolved probe waits rather than demanding a human.
         return .refreshDevices(
-            deviceCodes: [vessel.deviceCode, controller.deviceCode],
-            thenStall: .dronesNotRecovered
+            deviceCodes: [vessel.deviceCode, controller.deviceCode] + stranded.map(\.deviceCode),
+            thenStall: nil
         )
+    }
+
+    /// When the last of the drones still out is due back, if any of them is
+    /// reporting a trip. `activityDeadline` resolves the travel block's
+    /// leg-vs-route pair (and discards a stale route end), so a recall hop
+    /// yields its real arrival.
+    static func recallArrival(_ stranded: [Device]) -> Date? {
+        stranded.compactMap(\.activityDeadline).max()
     }
 
     private func returnHome(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {

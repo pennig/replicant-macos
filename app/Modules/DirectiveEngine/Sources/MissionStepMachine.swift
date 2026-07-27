@@ -57,7 +57,20 @@ public enum MissionAction: Equatable, Sendable {
     /// The reads are `.high`, so they bypass the TTL and the budget floor: this
     /// is issued only where the alternative is a dead stop that needs a human.
     /// Exactly ONE refresh-and-re-ask per evaluation — never a loop.
-    case refreshDevices(deviceCodes: [String], thenStall: DirectiveAttentionReason)
+    ///
+    /// **Name every device the answer depends on.** The engine expands each
+    /// named device into whatever that CARRIER reports stowed aboard it, but a
+    /// carrier's `stowed_devices` blob is not a reliable inverse of the
+    /// children's own `stowedInDeviceCode` columns — a real vessel's blob listed
+    /// one unrelated device while six drones claimed to be aboard it. Relying on
+    /// the expansion to reach a row you are judging is how a check ends up
+    /// permanently unsatisfiable.
+    ///
+    /// `thenStall: nil` means "if the re-ask still wants a refresh, just wait".
+    /// That is the right fallback whenever the unresolved state is *expected*
+    /// rather than wrong — a recall genuinely still in flight is not a fault,
+    /// and stalling on it would demand a human for something that fixes itself.
+    case refreshDevices(deviceCodes: [String], thenStall: DirectiveAttentionReason?)
     /// Pause and surface. The engine sets `needsAttention` plus the typed reason
     /// and stops evaluating until the user resolves it. Never auto-retried at
     /// the mission layer (spec §8).

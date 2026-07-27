@@ -35,9 +35,18 @@ private func device(
     controlledBy: String? = nil,
     controlled: [String] = [],
     directives: [String] = [],
-    updatedAt: Date = fixtureNow
+    updatedAt: Date = fixtureNow,
+    arrivesAt: Date? = nil
 ) -> Device {
     var detail: [String: JSONValue] = [:]
+    if let arrivesAt {
+        // A drone flying home under recall. Both timing fields agree: a recall
+        // is a single hop within the system.
+        detail["travel"] = .object([
+            "arrives_at": .string(arrivesAt.ISO8601Format()),
+            "final_arrives_at": .string(arrivesAt.ISO8601Format()),
+        ])
+    }
     if !controlled.isEmpty {
         detail["controlled_devices"] = .array(controlled.map { drone in
             .object(["device_code": .string(drone), "device_type": .string("survey_drone")])
@@ -47,7 +56,8 @@ private func device(
         detail["available_directives"] = .array(directives.map(JSONValue.string))
     }
     return Device(
-        deviceCode: code, deviceType: type, replicantCode: "R1", status: "idle",
+        deviceCode: code, deviceType: type, replicantCode: "R1",
+        status: arrivesAt == nil ? "idle" : "travelling",
         location: location, locationName: nil, operationalCapacity: 100, queueSize: 0,
         stowedInDeviceCode: stowedIn, controllerDeviceCode: controlledBy,
         attachedToDeviceCode: nil, createdAt: Date(timeIntervalSince1970: 0),
@@ -95,22 +105,35 @@ private func listSyncedFleet(vesselAt location: String = "SOL-3") -> [Device] {
 /// controller's `device.stowed` landed in the same second, while the digest
 /// showed all six drones had only just departed for the rendezvous.
 private func recallingFleet(
-    aboard: Int, adopted: Int = 3, vesselAt location: String = "TAU-2"
+    aboard: Int,
+    adopted: Int = 3,
+    vesselAt location: String = "TAU-2",
+    updatedAt: Date = fixtureNow,
+    arrivals: [Date?] = []
 ) -> [Device] {
     var fleet = [
-        device("VES1", type: "transport_hauler", location: location),
+        device("VES1", type: "transport_hauler", location: location, updatedAt: updatedAt),
         device("AMI1", type: "ami_survey_controller", location: location,
-               stowedIn: "VES1", directives: ["survey_system"]),
+               stowedIn: "VES1", directives: ["survey_system"], updatedAt: updatedAt),
     ]
     for index in 0..<adopted {
         let home = index < aboard
         fleet.append(device(
             "DRONE\(index)", type: "survey_drone",
             location: home ? location : "TAU-\(index + 3)",
-            stowedIn: home ? "VES1" : nil, controlledBy: "AMI1"
+            stowedIn: home ? "VES1" : nil, controlledBy: "AMI1",
+            updatedAt: updatedAt,
+            arrivesAt: home ? nil : (arrivals.indices.contains(index) ? arrivals[index] : nil)
         ))
     }
     return fleet
+}
+
+/// Every code a recovery probe should ask for: the vessel, the controller, and
+/// each drone still out. The drones must be named EXPLICITLY — see
+/// `SurveyRunRecoveryTests.probeNamesTheDronesItself`.
+private func recoveryProbe(stranded: [Int]) -> [String] {
+    ["VES1", "AMI1"] + stranded.map { "DRONE\($0)" }
 }
 
 private func withDirective(_ device: Device, name: String, config: [String: JSONValue]) -> Device {
@@ -298,11 +321,20 @@ struct SurveyRunStagingFreshnessTests {
     /// nothing had corrected their stow columns, and the `.refreshDevices` net
     /// guarded only the *negative* branch. A stale "still aboard" sailed
     /// straight through unverified.
+    ///
+    /// The request must name the DRONES too, not just the vessel and controller.
+    /// The engine expands a named device via that carrier's `stowed_devices`
+    /// blob, and a real vessel's blob listed only an unrelated replicant matrix
+    /// — so a request naming the vessel alone never refreshed the drone rows the
+    /// check judges, the check stayed unsatisfied, and the run stalled
+    /// `unreachableDevice` for five and a half hours. A freshness check must
+    /// always ask for exactly the rows it covers.
     @Test func staleStagingRowsEarnAReadBeforeTheyAreBelieved() {
         let stale = fixtureNow.addingTimeInterval(-SurveyRun.stagingFreshness - 1)
         #expect(SurveyRun().nextAction(
             directive: run(), world: world(stagedFleet(updatedAt: stale))
-        ) == .refreshDevices(deviceCodes: ["VES1", "AMI1"], thenStall: .unreachableDevice))
+        ) == .refreshDevices(deviceCodes: ["VES1", "AMI1", "DRONE1"],
+                             thenStall: .unreachableDevice))
     }
 
     /// Freshly synced rows are believed as they always were — the demand is
@@ -721,32 +753,153 @@ struct SurveyRunRecoveryTests {
                 == .advanceTarget)
     }
 
-    /// Drones still out, inside the grace window: wait, and spend NO read. The
-    /// drones emit no events of their own, so a poll is the only way to see them
-    /// — which is exactly why it must not happen on every 5s tick.
-    @Test func waitsWhileTheRecallIsInFlight() {
-        let directive = run(step: SurveyRun.Step.recovering, controllerCode: "AMI1")
-        #expect(SurveyRun().nextAction(directive: directive, world: world(recallingFleet(aboard: 0)))
-                == .wait)
+    /// The recall has only just been ordered — give it a beat before spending a
+    /// read on drones that cannot possibly be home yet.
+    @Test func waitsBrieflyBeforeTheFirstProbe() {
+        let start = Date(timeIntervalSince1970: 900)
+        let directive = run(step: SurveyRun.Step.recovering, controllerCode: "AMI1",
+                            stepStartedAt: start)
+        let justAfter = start.addingTimeInterval(SurveyRun.recallProbeDelay - 1)
+        #expect(SurveyRun().nextAction(
+            directive: directive,
+            world: world(recallingFleet(aboard: 0, updatedAt: start), now: justAfter)
+        ) == .wait)
+    }
+
+    /// Past the probe delay with no ETA on file: go and look. The probe names
+    /// the vessel, the controller AND every drone still out.
+    ///
+    /// Naming the drones is the load-bearing part. The engine expands a named
+    /// device via the CARRIER's `stowed_devices` blob, and a real vessel's blob
+    /// did not list its controller or drones at all — so a probe that named only
+    /// the vessel never refreshed the very rows being judged, and the run
+    /// stalled `unreachableDevice` for five and a half hours.
+    @Test func probeNamesTheDronesItself() {
+        let start = Date(timeIntervalSince1970: 900)
+        let directive = run(step: SurveyRun.Step.recovering, controllerCode: "AMI1",
+                            stepStartedAt: start)
+        let due = start.addingTimeInterval(SurveyRun.recallProbeDelay + 1)
+        // Rows last read before the probe interval, so the "don't re-read fresh
+        // rows" floor is not what decides this.
+        let lastSync = due.addingTimeInterval(-SurveyRun.recallProbeInterval - 1)
+        #expect(SurveyRun().nextAction(
+            directive: directive,
+            world: world(recallingFleet(aboard: 1, updatedAt: lastSync), now: due)
+        ) == .refreshDevices(deviceCodes: recoveryProbe(stranded: [1, 2]), thenStall: nil))
+    }
+
+    /// A probe that comes back "still flying" must NOT stall — the drones are
+    /// doing exactly what was asked of them. Waiting is the correct fallback.
+    @Test func aProbeThatFindsThemStillFlyingWaitsRatherThanStalls() {
+        let start = Date(timeIntervalSince1970: 900)
+        let directive = run(step: SurveyRun.Step.recovering, controllerCode: "AMI1",
+                            stepStartedAt: start)
+        let due = start.addingTimeInterval(SurveyRun.recallProbeDelay + 1)
+        let lastSync = due.addingTimeInterval(-SurveyRun.recallProbeInterval - 1)
+        let action = SurveyRun().nextAction(
+            directive: directive,
+            world: world(recallingFleet(aboard: 0, updatedAt: lastSync), now: due)
+        )
+        guard case let .refreshDevices(_, thenStall) = action else {
+            Issue.record("expected a probe, got \(action)"); return
+        }
+        #expect(thenStall == nil)
+    }
+
+    /// The point of the probe: wait for the FARTHEST traveller's own arrival
+    /// time rather than a hardcoded guess. Planets are not equidistant.
+    @Test func waitsForTheFarthestTravellersArrival() {
+        let now = Date(timeIntervalSince1970: 1_000)
+        let directive = run(step: SurveyRun.Step.recovering, controllerCode: "AMI1",
+                            stepStartedAt: Date(timeIntervalSince1970: 900))
+        let near = now.addingTimeInterval(30)
+        let far = now.addingTimeInterval(12 * 60)
+        #expect(SurveyRun().nextAction(
+            directive: directive,
+            world: world(
+                recallingFleet(aboard: 0, adopted: 2, updatedAt: now, arrivals: [near, far]),
+                now: now
+            )
+        ) == .wait)
+    }
+
+    /// A known ETA still in the future costs nothing to honour — no repeat
+    /// probe while the drones are demonstrably still on their way.
+    @Test func doesNotReprobeWhileAKnownArrivalIsStillAhead() {
+        let now = Date(timeIntervalSince1970: 1_000)
+        let directive = run(step: SurveyRun.Step.recovering, controllerCode: "AMI1",
+                            stepStartedAt: Date(timeIntervalSince1970: 900))
+        let ahead = now.addingTimeInterval(5)
+        // Rows are ancient, so only the live ETA can be what suppresses the probe.
+        let stale = now.addingTimeInterval(-SurveyRun.recallProbeInterval * 10)
+        #expect(SurveyRun().nextAction(
+            directive: directive,
+            world: world(
+                recallingFleet(aboard: 0, adopted: 1, updatedAt: stale, arrivals: [ahead]),
+                now: now
+            )
+        ) == .wait)
+    }
+
+    /// Once the farthest arrival has passed, look again — that is when the
+    /// answer can actually have changed.
+    @Test func reprobesOnceTheFarthestArrivalHasPassed() {
+        let now = Date(timeIntervalSince1970: 1_000)
+        let directive = run(step: SurveyRun.Step.recovering, controllerCode: "AMI1",
+                            stepStartedAt: Date(timeIntervalSince1970: 900))
+        let passed = now.addingTimeInterval(-1)
+        let stale = now.addingTimeInterval(-SurveyRun.recallProbeInterval - 1)
+        #expect(SurveyRun().nextAction(
+            directive: directive,
+            world: world(
+                recallingFleet(aboard: 0, adopted: 1, updatedAt: stale, arrivals: [passed]),
+                now: now
+            )
+        ) == .refreshDevices(deviceCodes: recoveryProbe(stranded: [0]), thenStall: nil))
+    }
+
+    /// A drone that arrived but has not stowed reports no ETA at all. Without a
+    /// floor that would re-probe on every 5s tick; the rows' own `updatedAt` is
+    /// the "when did we last look" clock that prevents it.
+    @Test func doesNotProbeMoreOftenThanTheProbeInterval() {
+        let now = Date(timeIntervalSince1970: 1_000)
+        let directive = run(step: SurveyRun.Step.recovering, controllerCode: "AMI1",
+                            stepStartedAt: Date(timeIntervalSince1970: 900))
+        let justLooked = now.addingTimeInterval(-SurveyRun.recallProbeInterval + 1)
+        #expect(SurveyRun().nextAction(
+            directive: directive,
+            world: world(recallingFleet(aboard: 0, adopted: 1, updatedAt: justLooked), now: now)
+        ) == .wait)
+    }
+
+    /// A recall that never completes must still surface. The cap is measured
+    /// from the step's start, which `.wait` and a probe both leave untouched.
+    @Test func stallsOnceTheRecallDeadlinePasses() {
+        let start = Date(timeIntervalSince1970: 900)
+        let directive = run(step: SurveyRun.Step.recovering, controllerCode: "AMI1",
+                            stepStartedAt: start)
+        let tooLate = start.addingTimeInterval(SurveyRun.recallDeadline + 1)
+        #expect(SurveyRun().nextAction(
+            directive: directive,
+            world: world(recallingFleet(aboard: 0, updatedAt: start), now: tooLate)
+        ) == .stall(.dronesNotRecovered))
     }
 
     /// A PARTIAL recall is not a recall — leaving one drone behind is the whole
     /// failure this step exists to prevent.
-    @Test func waitsWhenOnlySomeDronesAreAboard() {
-        let directive = run(step: SurveyRun.Step.recovering, controllerCode: "AMI1")
-        #expect(SurveyRun().nextAction(directive: directive, world: world(recallingFleet(aboard: 2)))
-                == .wait)
-    }
-
-    /// Once the grace window expires, take one authoritative read round before
-    /// believing rows that only a read can refresh.
-    @Test func demandsAReadOnceTheGraceWindowExpires() {
+    @Test func doesNotAdvanceWhenOnlySomeDronesAreAboard() {
+        let now = Date(timeIntervalSince1970: 1_000)
         let directive = run(step: SurveyRun.Step.recovering, controllerCode: "AMI1",
                             stepStartedAt: Date(timeIntervalSince1970: 900))
-        let late = Date(timeIntervalSince1970: 900 + SurveyRun.recallGrace + 1)
-        #expect(SurveyRun().nextAction(
-            directive: directive, world: world(recallingFleet(aboard: 0), now: late)
-        ) == .refreshDevices(deviceCodes: ["VES1", "AMI1"], thenStall: .dronesNotRecovered))
+        let ahead = now.addingTimeInterval(60)
+        let action = SurveyRun().nextAction(
+            directive: directive,
+            world: world(
+                recallingFleet(aboard: 2, adopted: 3, updatedAt: now, arrivals: [nil, nil, ahead]),
+                now: now
+            )
+        )
+        #expect(action != .advanceTarget)
     }
 
     /// A controller that adopted nothing has nothing to wait for — don't hold a

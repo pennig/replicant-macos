@@ -26,12 +26,31 @@ read at all.
 
 Two things follow, both now built:
 
-- **Never wait on a drone row to change by itself.** `SurveyRun.recover` waits
-  out `recallGrace` doing nothing and *then* pays for one `.high` read round.
-  Polling on the engine's 5s tick would be a read storm for a fact that cannot
-  change without a read anyway.
+- **Never wait on a drone row to change by itself.** `SurveyRun.recover` probes
+  after `recallProbeDelay`, then waits out the farthest traveller's OWN
+  `arrives_at` (`recallArrival`), re-probing only once that passes and never more
+  often than `recallProbeInterval`. Polling on the engine's 5s tick would be a
+  read storm for a fact that cannot change without a read anyway.
 - **Never trust a positive containment claim from an unread row.** `preflight`'s
   `stagingFreshness` check exists for exactly this.
+
+**A drone's ETA is readable from the LIST payload** (probed 2026-07-27):
+`GET devices?device_type=survey_drone&location=<STAR>&limit=50` works, the
+`location` filter matches sub-locations (`location=ASTELLIO` returns drones at
+`ASTELLIO-1-L4`), and unlike `controlled_devices` the **`travel` block IS
+present in list entries** — full `arrives_at` / `final_arrives_at` / `route`. So
+one read can price a whole recall. The engine currently gets the same data via
+per-device `.high` reads of codes it already knows; the filtered list is the
+cheaper option if probe volume ever matters.
+
+**The trap that cost 5.5 hours of stall (2026-07-27):** `MissionAction.refreshDevices`
+expands each named device into *that carrier's* `stowed_devices` blob — and that
+blob is **not** a reliable inverse of the children's `stowedInDeviceCode`
+columns. Live vessel `F2908E6E` reported `stowed_devices:
+[{"device_code":"60160672","device_type":"replicant_matrix"}], stow_used: 1`
+while six drones and a controller all claimed to be stowed aboard it. A check
+that judges rows the request does not NAME can therefore never be satisfied.
+**Always name every device a freshness check covers.**
 
 The one free signal about a launch is **`ami.launched`**, which carries
 `devices_deployed` — the server saying plainly whether the launch did anything.
