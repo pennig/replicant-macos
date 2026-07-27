@@ -98,6 +98,11 @@ struct ReplicantApp: App {
         // `DirectiveLogEntry`; the engine observes that row rather than the
         // event, which is what keeps observe-reconciled-state intact.
         gameSync.registerRoute(DirectiveIngestion.eventRoute)
+        // `ami.launched` carries `devices_deployed` — the server saying whether
+        // a launch actually did anything. Matched by exact event name rather
+        // than the `ami` category, which is otherwise activity digests by the
+        // hundred.
+        gameSync.registerRoute(DirectiveIngestion.amiLaunchRoute)
 
         // Start consuming the stream on login, stop on logout. Registered FIRST
         // (init calls `registerGameSync()` before `registerSessionCleanup()`)

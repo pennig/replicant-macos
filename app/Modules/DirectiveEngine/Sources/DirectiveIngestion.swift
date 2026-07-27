@@ -52,60 +52,111 @@ public enum DirectiveIngestion {
             let system = event.star ?? event.location
             let summary = system.map { "\(BlueprintPresentation.displayName(directiveName)) completed at \($0)" }
                 ?? "\(BlueprintPresentation.displayName(directiveName)) completed"
-            let eventID = event.id
-            // A malformed/absent timestamp falls back to now: a live event with
-            // no `created_at` is almost certainly current, and dropping it would
-            // lose real history.
-            let eventDate = event.date ?? date.now
-            let entryID = uuid().uuidString
+            await record(
+                event, deviceCode: deviceCode, kind: .directiveCompleted, summary: summary
+            )
+        }
+    }
 
-            do {
-                try await database.write { db in
-                    // Idempotent: catch-up replay and reconnects re-deliver the
-                    // same event. The `directive_log_unique_event` partial index
-                    // is the backstop; this check keeps a re-delivery from
-                    // being an error path at all.
-                    let existing = try DirectiveLogEntry
-                        .where { $0.eventID.eq(eventID) }
-                        .fetchCount(db)
-                    guard existing == 0 else { return }
-
-                    // Attribute to a live mission only when it is driving this
-                    // controller AND the completion is not older than the
-                    // current step. Issue-time relative, not wall-clock: a
-                    // completion delivered by catch-up after the app was closed
-                    // still lands, while a replayed pre-step event does not
-                    // close a step it never belonged to (design spec §5).
-                    let owner = try Directive
-                        .where {
-                            $0.controllerCode.eq(deviceCode)
-                                && $0.status.eq(DirectiveStatus.running)
-                        }
-                        .fetchAll(db)
-                        .first { directive in
-                            eventDate >= directive.stepStartedAt
-                                .addingTimeInterval(-eventTimeSkewTolerance)
-                        }
-
-                    try DirectiveLogEntry.insert {
-                        DirectiveLogEntry(
-                            id: entryID,
-                            directiveID: owner?.id,
-                            deviceCode: deviceCode,
-                            kind: .directiveCompleted,
-                            summary: summary,
-                            step: owner?.step,
-                            operationID: nil,
-                            eventID: eventID,
-                            occurredAt: eventDate
-                        )
-                    }
-                    .execute(db)
-                }
-                logger.info("directive.completed on \(deviceCode, privacy: .public) recorded")
-            } catch {
-                logger.error("directive.completed write failed: \(error)")
+    /// The `ami.launched` route: the ONE piece of AMI telemetry a mission needs
+    /// to hear, kept off the `ami` category (which is otherwise a firehose of
+    /// per-device activity digests — hundreds an hour) by matching the exact
+    /// event name.
+    ///
+    /// `ami.launched` carries `devices_deployed`, the server saying plainly
+    /// whether the launch did anything. A zero means the controller had nothing
+    /// aboard to deploy, so the survey the mission is now waiting on can never
+    /// start. Recording that is what lets `SurveyRun` cut the wait short instead
+    /// of cycling its backstop forever — which is exactly what happened on
+    /// 2026-07-26, for ten hours, because nothing read this number.
+    public static var amiLaunchRoute: EventRoute {
+        EventRoute(id: "ami-launch", match: .event("ami.launched")) { event in
+            guard let deviceCode = event.deviceCode, !deviceCode.isEmpty else {
+                logger.notice("ami.launched without a device code — skipped")
+                return
             }
+            // Only an EXPLICIT zero is evidence. A missing key proves nothing,
+            // and inferring failure from its absence would stall healthy runs
+            // the moment the payload grew a variant.
+            guard let deployed = event.payload?["devices_deployed"]?.numberValue else { return }
+            guard deployed == 0 else {
+                logger.debug("ami.launched on \(deviceCode, privacy: .public) deployed \(Int(deployed)) device(s)")
+                return
+            }
+            await record(
+                event, deviceCode: deviceCode, kind: .launchDeployedNothing,
+                summary: "Launch deployed no devices"
+            )
+        }
+    }
+
+    /// Write one entry for an event, deduped and attributed. Shared by both
+    /// routes so the two guards that are easy to get subtly wrong — replay
+    /// idempotency and issue-time-relative ownership — have exactly one
+    /// implementation.
+    private static func record(
+        _ event: GameEventEnvelope,
+        deviceCode: String,
+        kind: DirectiveLogKind,
+        summary: String
+    ) async {
+        @Dependency(\.defaultDatabase) var database
+        @Dependency(\.date) var date
+        @Dependency(\.uuid) var uuid
+
+        let eventID = event.id
+        // A malformed/absent timestamp falls back to now: a live event with
+        // no `created_at` is almost certainly current, and dropping it would
+        // lose real history.
+        let eventDate = event.date ?? date.now
+        let entryID = uuid().uuidString
+
+        do {
+            try await database.write { db in
+                // Idempotent: catch-up replay and reconnects re-deliver the
+                // same event. The `directive_log_unique_event` partial index
+                // is the backstop; this check keeps a re-delivery from
+                // being an error path at all.
+                let existing = try DirectiveLogEntry
+                    .where { $0.eventID.eq(eventID) }
+                    .fetchCount(db)
+                guard existing == 0 else { return }
+
+                // Attribute to a live mission only when it is driving this
+                // controller AND the event is not older than the current step.
+                // Issue-time relative, not wall-clock: an event delivered by
+                // catch-up after the app was closed still lands, while a
+                // replayed pre-step event does not close (or stall) a step it
+                // never belonged to (design spec §5).
+                let owner = try Directive
+                    .where {
+                        $0.controllerCode.eq(deviceCode)
+                            && $0.status.eq(DirectiveStatus.running)
+                    }
+                    .fetchAll(db)
+                    .first { directive in
+                        eventDate >= directive.stepStartedAt
+                            .addingTimeInterval(-eventTimeSkewTolerance)
+                    }
+
+                try DirectiveLogEntry.insert {
+                    DirectiveLogEntry(
+                        id: entryID,
+                        directiveID: owner?.id,
+                        deviceCode: deviceCode,
+                        kind: kind,
+                        summary: summary,
+                        step: owner?.step,
+                        operationID: nil,
+                        eventID: eventID,
+                        occurredAt: eventDate
+                    )
+                }
+                .execute(db)
+            }
+            logger.info("\(event.event, privacy: .public) on \(deviceCode, privacy: .public) recorded")
+        } catch {
+            logger.error("\(event.event, privacy: .public) write failed: \(error)")
         }
     }
 }

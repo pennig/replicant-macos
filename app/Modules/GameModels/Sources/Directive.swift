@@ -69,6 +69,14 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
     case unreachableDevice
     /// The `locations/{star}` backstop read disagrees with a completion event.
     case surveyIncomplete
+    /// The AMI's post-survey recall did not put every adopted drone back aboard
+    /// the vessel within the grace window. Departing anyway strands them in the
+    /// system just surveyed — which is exactly how six drones were lost at
+    /// POLARISUM on 2026-07-26.
+    case dronesNotRecovered
+    /// The AMI controller accepted `launch` but deployed no devices — the
+    /// survey it was supposed to start can never begin.
+    case launchDeployedNothing
     /// The server rejected the step's command.
     case commandRejected
 
@@ -80,6 +88,8 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
         case .noSurveyControllerAboard: "No survey controller aboard"
         case .unreachableDevice: "Device unreachable"
         case .surveyIncomplete: "Survey incomplete"
+        case .dronesNotRecovered: "Drones not recovered"
+        case .launchDeployedNothing: "Launch deployed nothing"
         case .commandRejected: "Command rejected"
         }
     }
@@ -99,6 +109,10 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
             "The mission's device is missing from the fleet. Cancel the run, or retry once it's back."
         case .surveyIncomplete:
             "The controller reported finishing, but the system isn't fully scanned. Retry to keep waiting, or skip this target."
+        case .dronesNotRecovered:
+            "Some survey drones are still out after the recall. Retry once they're stowed aboard, or the vessel will leave without them."
+        case .launchDeployedNothing:
+            "The controller launched but deployed no drones — check that its adopted drones are stowed aboard the vessel, then retry."
         case .commandRejected:
             "The server refused the last command. Check the device, then retry or skip this target."
         }
@@ -199,6 +213,10 @@ public enum DirectiveLogKind: String, Codable, Equatable, Sendable, CaseIterable
     case commandDispatched
     case opCompleted
     case directiveCompleted
+    /// An `ami.launched` that reported deploying nothing. Recorded only for the
+    /// explicit-zero case: a launch with nothing aboard cannot ever produce the
+    /// completion the mission is waiting for, so the wait must be cut short.
+    case launchDeployedNothing
     case stalled
     case resolved
 }

@@ -41,8 +41,22 @@ public struct SurveyRun: MissionStepMachine {
         public static let launching = "launching"
         public static let awaiting = "awaiting"
         public static let confirming = "confirming"
+        public static let recovering = "recovering"
         public static let returning = "returning"
     }
+
+    /// How long to let the AMI's post-survey recall run before demanding an
+    /// authoritative read of who is actually aboard.
+    ///
+    /// A plain wait rather than a poll, deliberately: survey drones emit no
+    /// per-device events at all (verified over a full day of live traffic —
+    /// every one of their movements is rolled up into the controller's
+    /// `ami.survey.digest`), so their stow columns only change when something
+    /// reads them. Polling that on the engine's 5s tick would be a read storm
+    /// for a fact that cannot change faster than the drones can fly. Waiting
+    /// out the recall and then paying for ONE read round costs a handful of
+    /// reads per target instead of hundreds.
+    public static let recallGrace: TimeInterval = 5 * 60
 
     /// The survey configuration this mission insists on: a FULL survey with the
     /// drones recalled when done, so the vessel can move on to the next target
@@ -65,6 +79,7 @@ public struct SurveyRun: MissionStepMachine {
         case Step.launching: return launch(directive, vessel, world)
         case Step.awaiting: return awaitCompletion(directive, world)
         case Step.confirming: return confirm(directive, world)
+        case Step.recovering: return recover(directive, vessel, world)
         case Step.returning: return returnHome(directive, vessel, world)
         default:
             // An unrecognised step must never dispatch. Waiting is inert and
@@ -108,9 +123,18 @@ public struct SurveyRun: MissionStepMachine {
     public static func adoptedDrones(
         of controller: Device, aboard vessel: Device, in world: WorldSnapshot
     ) -> [Device] {
+        adoptedDrones(of: controller, in: world)
+            .filter { $0.stowedInDeviceCode == vessel.deviceCode }
+    }
+
+    /// Every device this controller has adopted, wherever it currently is —
+    /// including the ones still deployed. The recall gate needs the whole set
+    /// (the `aboard:` variant above answers a different question: who came
+    /// along), because "some drones are home" is precisely the state that loses
+    /// the others.
+    public static func adoptedDrones(of controller: Device, in world: WorldSnapshot) -> [Device] {
         let claimed = Set(controller.controlledDeviceCodes)
         return world.devices.values
-            .filter { $0.stowedInDeviceCode == vessel.deviceCode }
             .filter { $0.controllerDeviceCode == controller.deviceCode || claimed.contains($0.deviceCode) }
             .sorted { $0.deviceCode < $1.deviceCode }
     }
@@ -159,8 +183,25 @@ public struct SurveyRun: MissionStepMachine {
     /// replay and does not. Same guard shape as
     /// `Reconciler.completeOpenOperation` and the `directive.*` route.
     public static func completionSeen(_ directive: Directive, _ world: WorldSnapshot) -> Bool {
+        saw(.directiveCompleted, directive, world)
+    }
+
+    /// Whether a launch reporting zero deployed devices landed in THIS step.
+    ///
+    /// A launch that deployed nothing cannot produce the completion `awaiting`
+    /// is waiting for, so this turns a permanent wait into a named stall. Same
+    /// issue-time guard as completions, and for the same reason in reverse: a
+    /// Retry must not re-stall on the very launch it was retrying.
+    public static func emptyLaunchSeen(_ directive: Directive, _ world: WorldSnapshot) -> Bool {
+        saw(.launchDeployedNothing, directive, world)
+    }
+
+    /// Whether an entry of `kind` belongs to the directive's current step.
+    private static func saw(
+        _ kind: DirectiveLogKind, _ directive: Directive, _ world: WorldSnapshot
+    ) -> Bool {
         world.log.contains { entry in
-            entry.kind == .directiveCompleted
+            entry.kind == kind
                 && entry.occurredAt >= directive.stepStartedAt
                     .addingTimeInterval(-eventTimeSkewTolerance)
         }
@@ -217,6 +258,10 @@ public struct SurveyRun: MissionStepMachine {
         if Self.completionSeen(directive, world) {
             return .refreshSystem(designation: target, nextStep: Step.confirming)
         }
+        // The controller told us this launch deployed nothing. No drones are
+        // out, so no completion is coming and the backstop would poll an empty
+        // system every ten minutes until someone noticed. Surface it now.
+        if Self.emptyLaunchSeen(directive, world) { return .stall(.launchDeployedNothing) }
         if world.now.timeIntervalSince(directive.stepStartedAt) > Self.backstopInterval {
             return .refreshSystem(designation: target, nextStep: Step.confirming)
         }
@@ -227,13 +272,60 @@ public struct SurveyRun: MissionStepMachine {
         guard let target = directive.currentTarget else {
             return .advanceStep(nextStep: Step.preflight)
         }
-        if Self.isFullyScanned(world.system(target)) { return .advanceTarget }
+        // Confirmed done — but NOT free to leave. `recall: true` means the AMI
+        // is only now flying its drones home, so departing on this evidence
+        // strands them (see `recover`).
+        if Self.isFullyScanned(world.system(target)) {
+            return .advanceStep(nextStep: Step.recovering)
+        }
         // The server SAID it finished and the counts disagree — surface that
         // rather than advancing over a half-surveyed system.
         if Self.completionSeen(directive, world) { return .stall(.surveyIncomplete) }
         // A backstop poll that found it unfinished: nothing ever claimed
         // completion, so there is nothing to disbelieve. Keep waiting.
         return .advanceStep(nextStep: Step.awaiting)
+    }
+
+    /// Hold the vessel until the AMI's recall has actually landed every adopted
+    /// drone back aboard.
+    ///
+    /// This gate is the whole reason the step exists. `directive.completed`
+    /// means *the survey* finished, NOT *the recall* — verified live on
+    /// 2026-07-26, where the completion event and the controller's own
+    /// `device.stowed` arrived in the same second while the digest showed all
+    /// six drones had only just departed for the rendezvous. The run read that
+    /// as clearance and dispatched the vessel 16 seconds later; the drones were
+    /// left in POLARISUM, and the next launch deployed nothing.
+    ///
+    /// Placed BEFORE `.advanceTarget` on purpose, so it covers both ways a
+    /// vessel leaves: the next target's travel leg, and the queue-exhausted leg
+    /// home. The latter is where the drones were actually lost, and preflight's
+    /// staging checks never run on it.
+    private func recover(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
+        guard let controller = claimedController(directive, vessel, world) else {
+            // Nothing to recall, and a vanished controller is preflight's
+            // diagnosis to make — holding the run here would stall on a reason
+            // that doesn't name the real problem.
+            return .advanceTarget
+        }
+        let adopted = Self.adoptedDrones(of: controller, in: world)
+        let stranded = adopted.filter { $0.stowedInDeviceCode != vessel.deviceCode }
+        if stranded.isEmpty { return .advanceTarget }
+        // Inside the grace window this is expected, not a fault: the drones are
+        // simply still flying. Wait without spending a read — they emit no
+        // events, so their rows can't move on their own, and polling a fact
+        // that changes on a multi-minute scale at the 5s tick rate would burn
+        // the read budget for nothing (see `recallGrace`).
+        guard world.now.timeIntervalSince(directive.stepStartedAt) > Self.recallGrace else {
+            return .wait
+        }
+        // Window expired. The rows saying "still out" are exactly the rows only
+        // a read can refresh, so buy one authoritative look before conceding —
+        // and if it holds, surface rather than depart without them.
+        return .refreshDevices(
+            deviceCodes: [vessel.deviceCode, controller.deviceCode],
+            thenStall: .dronesNotRecovered
+        )
     }
 
     private func returnHome(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {

@@ -78,6 +78,32 @@ private func listSyncedFleet(vesselAt location: String = "SOL-3") -> [Device] {
     ]
 }
 
+/// The fleet the moment a survey finishes: the controller has already stowed
+/// itself back aboard, but only `aboard` of its `adopted` drones have made it
+/// home — the rest are still flying in from all over the system.
+///
+/// This is the real shape observed on 2026-07-26: `directive.completed` and the
+/// controller's `device.stowed` landed in the same second, while the digest
+/// showed all six drones had only just departed for the rendezvous.
+private func recallingFleet(
+    aboard: Int, adopted: Int = 3, vesselAt location: String = "TAU-2"
+) -> [Device] {
+    var fleet = [
+        device("VES1", type: "transport_hauler", location: location),
+        device("AMI1", type: "ami_survey_controller", location: location,
+               stowedIn: "VES1", directives: ["survey_system"]),
+    ]
+    for index in 0..<adopted {
+        let home = index < aboard
+        fleet.append(device(
+            "DRONE\(index)", type: "survey_drone",
+            location: home ? location : "TAU-\(index + 3)",
+            stowedIn: home ? "VES1" : nil, controlledBy: "AMI1"
+        ))
+    }
+    return fleet
+}
+
 private func withDirective(_ device: Device, name: String, config: [String: JSONValue]) -> Device {
     var updated = device
     var detail: [String: JSONValue] = {
@@ -457,6 +483,14 @@ private func completionEntry(at occurredAt: Date) -> DirectiveLogEntry {
     )
 }
 
+private func emptyLaunchEntry(at occurredAt: Date) -> DirectiveLogEntry {
+    DirectiveLogEntry(
+        id: "L9", directiveID: "D1", deviceCode: "AMI1", kind: .launchDeployedNothing,
+        summary: "Launch deployed no devices", step: "awaiting",
+        operationID: nil, eventID: "E9", occurredAt: occurredAt
+    )
+}
+
 @Suite("Survey Run — completion detection")
 struct SurveyRunCompletionTests {
     /// No completion yet, inside the backstop window: just wait. Cheap, and the
@@ -525,6 +559,37 @@ struct SurveyRunCompletionTests {
         #expect(SurveyRun().nextAction(directive: directive, world: snapshot) == .wait)
     }
 
+    /// A launch that deployed nothing can never produce a completion, so the
+    /// wait is pointless — surface it instead of holding the run forever.
+    ///
+    /// This is the second half of the POLARISUM loss: with the drones left
+    /// behind, `launch` reported `devices_deployed: 0` and the run sat in
+    /// awaiting/confirming for ten hours because nothing read that number.
+    @Test func stallsWhenTheLaunchDeployedNothing() {
+        let directive = run(step: SurveyRun.Step.awaiting, controllerCode: "AMI1",
+                            stepStartedAt: Date(timeIntervalSince1970: 900))
+        let snapshot = world(
+            stagedFleet(vesselAt: "TAU-2"),
+            log: [emptyLaunchEntry(at: Date(timeIntervalSince1970: 950))],
+            now: Date(timeIntervalSince1970: 1_000)
+        )
+        #expect(SurveyRun().nextAction(directive: directive, world: snapshot)
+                == .stall(.launchDeployedNothing))
+    }
+
+    /// An empty launch belonging to an EARLIER step is not this step's evidence
+    /// — a Retry must not re-stall on the launch it was retrying.
+    @Test func ignoresAnEmptyLaunchFromAnEarlierStep() {
+        let directive = run(step: SurveyRun.Step.awaiting, controllerCode: "AMI1",
+                            stepStartedAt: Date(timeIntervalSince1970: 900))
+        let snapshot = world(
+            stagedFleet(vesselAt: "TAU-2"),
+            log: [emptyLaunchEntry(at: Date(timeIntervalSince1970: 500))],
+            now: Date(timeIntervalSince1970: 1_000)
+        )
+        #expect(SurveyRun().nextAction(directive: directive, world: snapshot) == .wait)
+    }
+
     /// The lost-event backstop: after the interval, poll the counts even with no
     /// completion event. A dropped SSE frame must not strand the run forever.
     @Test func backstopPollsAfterTheInterval() {
@@ -537,8 +602,9 @@ struct SurveyRunCompletionTests {
         ) == .refreshSystem(designation: "TAU", nextStep: SurveyRun.Step.confirming))
     }
 
-    /// Counts agree: the target is done, move on.
-    @Test func confirmingAdvancesWhenFullyScanned() {
+    /// Counts agree: the target is done — but the run goes to `recovering`
+    /// first, never straight to the next target. See `SurveyRunRecoveryTests`.
+    @Test func confirmingHandsOffToRecoveryWhenFullyScanned() {
         let scanned = StarSystem(designation: "TAU", planetsScanned: 4, planetsTotal: 4)
         let directive = run(step: SurveyRun.Step.confirming, controllerCode: "AMI1")
         let snapshot = world(
@@ -546,7 +612,8 @@ struct SurveyRunCompletionTests {
             log: [completionEntry(at: Date(timeIntervalSince1970: 950))],
             systems: ["TAU": scanned], now: Date(timeIntervalSince1970: 1_000)
         )
-        #expect(SurveyRun().nextAction(directive: directive, world: snapshot) == .advanceTarget)
+        #expect(SurveyRun().nextAction(directive: directive, world: snapshot)
+                == .advanceStep(nextStep: SurveyRun.Step.recovering))
     }
 
     /// A completion event whose counts DISAGREE stalls `surveyIncomplete` rather
@@ -572,6 +639,101 @@ struct SurveyRunCompletionTests {
                              now: Date(timeIntervalSince1970: 1_000))
         #expect(SurveyRun().nextAction(directive: directive, world: snapshot)
                 == .advanceStep(nextStep: SurveyRun.Step.awaiting))
+    }
+}
+
+// MARK: - Drone recovery
+
+/// The vessel must not leave until the recall has actually landed its drones.
+///
+/// The bug this pins (live, 2026-07-26 16:31:58): the POLARISUM survey finished,
+/// `directive.completed` fired, the controller stowed itself in the same second
+/// — and the run dispatched the vessel home 16 seconds later while all six
+/// drones were still in flight to the rendezvous. They were left in POLARISUM.
+/// The next run then launched a controller with nothing aboard
+/// (`ami.launched devices_deployed: 0`) and waited forever on a survey that
+/// could never start.
+@Suite("Survey Run — drone recovery")
+struct SurveyRunRecoveryTests {
+    /// A confirmed survey no longer departs on the spot: the run enters
+    /// `recovering` and lets the recall finish first.
+    @Test func confirmingEntersRecoveryRatherThanDepartingImmediately() {
+        let scanned = StarSystem(designation: "TAU", planetsScanned: 4, planetsTotal: 4)
+        let directive = run(step: SurveyRun.Step.confirming, controllerCode: "AMI1")
+        let snapshot = world(
+            recallingFleet(aboard: 0),
+            log: [completionEntry(at: Date(timeIntervalSince1970: 950))],
+            systems: ["TAU": scanned], now: Date(timeIntervalSince1970: 1_000)
+        )
+        #expect(SurveyRun().nextAction(directive: directive, world: snapshot)
+                == .advanceStep(nextStep: SurveyRun.Step.recovering))
+    }
+
+    /// Every adopted drone back aboard: the vessel is free to move on.
+    @Test func advancesOnceEveryDroneIsAboard() {
+        let directive = run(step: SurveyRun.Step.recovering, controllerCode: "AMI1")
+        #expect(SurveyRun().nextAction(directive: directive, world: world(recallingFleet(aboard: 3)))
+                == .advanceTarget)
+    }
+
+    /// Drones still out, inside the grace window: wait, and spend NO read. The
+    /// drones emit no events of their own, so a poll is the only way to see them
+    /// — which is exactly why it must not happen on every 5s tick.
+    @Test func waitsWhileTheRecallIsInFlight() {
+        let directive = run(step: SurveyRun.Step.recovering, controllerCode: "AMI1")
+        #expect(SurveyRun().nextAction(directive: directive, world: world(recallingFleet(aboard: 0)))
+                == .wait)
+    }
+
+    /// A PARTIAL recall is not a recall — leaving one drone behind is the whole
+    /// failure this step exists to prevent.
+    @Test func waitsWhenOnlySomeDronesAreAboard() {
+        let directive = run(step: SurveyRun.Step.recovering, controllerCode: "AMI1")
+        #expect(SurveyRun().nextAction(directive: directive, world: world(recallingFleet(aboard: 2)))
+                == .wait)
+    }
+
+    /// Once the grace window expires, take one authoritative read round before
+    /// believing rows that only a read can refresh.
+    @Test func demandsAReadOnceTheGraceWindowExpires() {
+        let directive = run(step: SurveyRun.Step.recovering, controllerCode: "AMI1",
+                            stepStartedAt: Date(timeIntervalSince1970: 900))
+        let late = Date(timeIntervalSince1970: 900 + SurveyRun.recallGrace + 1)
+        #expect(SurveyRun().nextAction(
+            directive: directive, world: world(recallingFleet(aboard: 0), now: late)
+        ) == .refreshDevices(deviceCodes: ["VES1", "AMI1"], thenStall: .dronesNotRecovered))
+    }
+
+    /// A controller that adopted nothing has nothing to wait for — don't hold a
+    /// run for a recall that will never report.
+    @Test func advancesImmediatelyWhenNothingWasAdopted() {
+        let directive = run(step: SurveyRun.Step.recovering, controllerCode: "AMI1")
+        #expect(SurveyRun().nextAction(directive: directive,
+                                       world: world(recallingFleet(aboard: 0, adopted: 0)))
+                == .advanceTarget)
+    }
+
+    /// A drone adopted by a DIFFERENT controller is not this run's to wait for.
+    @Test func ignoresDronesAdoptedElsewhere() {
+        var fleet = recallingFleet(aboard: 0, adopted: 0)
+        fleet.append(device("OTHER", type: "survey_drone", location: "TAU-9", controlledBy: "AMI9"))
+        let directive = run(step: SurveyRun.Step.recovering, controllerCode: "AMI1")
+        #expect(SurveyRun().nextAction(directive: directive, world: world(fleet)) == .advanceTarget)
+    }
+
+    /// The recovery gate covers the LAST target too — the leg home is where the
+    /// drones were actually lost, and preflight's staging checks never run on it.
+    @Test func recoveryGatesTheFinalTargetBeforeTheLegHome() {
+        let scanned = StarSystem(designation: "TAU", planetsScanned: 4, planetsTotal: 4)
+        let directive = run(step: SurveyRun.Step.confirming, targets: ["TAU"], targetIndex: 0,
+                            controllerCode: "AMI1", returnToOrigin: true, origin: "SOL")
+        let snapshot = world(
+            recallingFleet(aboard: 0),
+            log: [completionEntry(at: Date(timeIntervalSince1970: 950))],
+            systems: ["TAU": scanned], now: Date(timeIntervalSince1970: 1_000)
+        )
+        #expect(SurveyRun().nextAction(directive: directive, world: snapshot)
+                == .advanceStep(nextStep: SurveyRun.Step.recovering))
     }
 }
 
