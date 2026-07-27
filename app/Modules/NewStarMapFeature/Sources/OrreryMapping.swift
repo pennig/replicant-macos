@@ -22,6 +22,14 @@ enum OrreryMapping {
         7.0 * (max(au, 0) as Double).squareRoot()
     }
 
+    /// Compressed km → scene units for moon orbits. Real moon distances span roughly
+    /// 1.7e5 … 2.6e7 km within a single system, so the same sqrt compression the
+    /// planets get keeps the inner moons legible while the outer ones still frame.
+    /// Tuned so a Luna-like 3.8e5 km lands near the old index-stepped first orbit.
+    static func moonSceneRadius(km: Double) -> Double {
+        0.0068 * (max(km, 0) as Double).squareRoot()
+    }
+
     /// Kepler-ish fallback orbital period (days) from AU, for bodies not yet
     /// scanned (period ∝ a^1.5), tuned so inner planets sweep visibly.
     static func fallbackPeriodDays(au: Double) -> Double {
@@ -155,7 +163,14 @@ enum OrreryMapping {
                 phase0Deg: phaseDeg(p.designation),
                 displayRadius: radii[i],
                 colorHex: planetColor(type: p.type),
-                hasRing: p.physical?.rings ?? false,
+                rings: PlanetMaterial.ringSystem(
+                    hasRings: p.physical?.rings ?? false,
+                    type: PlanetType(apiType: p.type),
+                    seed: appearanceSeed(designation: p.designation,
+                                         rotationPeriodHours: p.physical?.rotationPeriodHours)),
+                spin: BodySpin(tiltDeg: p.physical?.axialTiltDeg,
+                               rotationHours: p.physical?.rotationPeriodHours,
+                               tidallyLocked: p.physical?.tidallyLocked ?? false),
                 indicators: indicators, hasInterestingMoon: interestingMoon, moons: [],
                 lagrange: lagrange)
         }
@@ -324,6 +339,23 @@ enum OrreryMapping {
         return 0.14
     }
 
+    /// A moon's atmosphere thickness. Moons report a `has_atmosphere` BOOLEAN, never
+    /// the ordinal string planets get — so reading `physical.atmosphere` alone left
+    /// every moon `.unknown`, i.e. permanently airless-looking with no halo. A moon
+    /// with air gets a thin sky, upgraded to dense when its tags call the atmosphere
+    /// thick (SOL-6-1 / Titan is the live example). An UNSCANNED moon (no physical
+    /// block at all) stays `.unknown` rather than being asserted airless.
+    static func moonAtmosphere(_ m: Moon) -> Atmosphere {
+        guard let physical = m.physical else { return .unknown }
+        let explicit = Atmosphere(apiValue: physical.atmosphere)
+        if explicit != .unknown { return explicit }         // a real reading always wins
+        guard physical.hasAtmosphere == true else { return .none }
+        let tags = physical.tags.map { $0.lowercased() }
+        if tags.contains("thick_atmosphere") { return .dense }
+        if tags.contains("thin_atmosphere") { return .thin }
+        return .thin
+    }
+
     /// Moon schematic colour by type — icy/rocky/lava/ocean, else a neutral grey.
     static func moonColor(type: String?) -> String {
         let t = (type ?? "").lowercased()
@@ -347,7 +379,14 @@ enum OrreryMapping {
         let central = CentralBody(
             displayRadius: centralScene,
             colorHex: planetColor(type: planet.type),
-            hasRing: planet.physical?.rings ?? false,
+            rings: PlanetMaterial.ringSystem(
+                hasRings: planet.physical?.rings ?? false,
+                type: PlanetType(apiType: planet.type),
+                seed: appearanceSeed(designation: planet.designation,
+                                     rotationPeriodHours: planet.physical?.rotationPeriodHours)),
+            spin: BodySpin(tiltDeg: planet.physical?.axialTiltDeg,
+                           rotationHours: planet.physical?.rotationPeriodHours,
+                           tidallyLocked: planet.physical?.tidallyLocked ?? false),
             planetType: PlanetType(apiType: planet.type),
             lifeStage: planet.lifeStage, estimated: planet.typeEstimated,
             tags: planet.physical?.tags ?? [],
@@ -373,6 +412,23 @@ enum OrreryMapping {
         let shown = interesting + boring.prefix(max(0, maxMoons - interesting.count))
         let base = centralScene * 1.7          // first moon clears the planet + a gap
         let step = centralScene * 0.5
+        // Real orbit radii where the scan gives them (compressed like the planets' AU),
+        // else the historical index step for an unscanned roster. `shown` is ordered
+        // interest-first so the cap keeps the moons that matter, but `spacedLayout`
+        // sorts occupants by raw radius itself and returns them in INPUT order — so it
+        // can take these as-is and still walk outward correctly.
+        let rawMoonOrbits = shown.enumerated().map { i, m -> Double in
+            if let km = m.physical?.orbitalDistanceKm, km > 0 {
+                return max(moonSceneRadius(km: km), base)
+            }
+            return base + Double(i) * step
+        }
+        let moonRadii = shown.map { centralScene * moonSizeFraction($0) }
+        // The SAME non-overlap pass the planets get, with the central planet standing in
+        // for the sun — so no moon orbit ever falls inside the planet or another moon.
+        let moonOrbits = spacedLayout(
+            planetOrbits: rawMoonOrbits, planetRadii: moonRadii,
+            beltInner: [], beltOuter: [], sunScene: centralScene).orbits
         let moons: [OrreryPlanet] = shown.enumerated().map { i, m in
             var indicators: BodyIndicators = []
             if !m.devices.isEmpty { indicators.insert(.device) }
@@ -384,18 +440,28 @@ enum OrreryMapping {
                 planetType: PlanetType(apiType: m.type), estimated: m.recon != .scanned,
                 tags: m.physical?.tags ?? [],
                 surfaceTempC: m.physical?.surfaceTempC,
-                atmosphere: Atmosphere(apiValue: m.physical?.atmosphere),
+                atmosphere: moonAtmosphere(m),
                 appearanceSeed: appearanceSeed(designation: m.designation,
                                                rotationPeriodHours: m.physical?.rotationPeriodHours),
                 orbitalDistanceAu: 0, inHabitableZone: false,
                 scanned: m.recon == .scanned, moonCount: 0, lifeStage: nil,
                 inventory: m.inventory,
-                semiMajorScene: base + Double(i) * step,
-                periodDays: m.physical?.orbitalPeriodDays ?? (8 + Double(i) * 3),
+                semiMajorScene: moonOrbits[i],
+                // A moon's real speed is `orbital_period_hours`; it never reports days.
+                // The index ladder is only a last resort for an unscanned roster.
+                periodDays: m.physical?.orbitalPeriodHours.map { $0 / 24 }
+                    ?? m.physical?.orbitalPeriodDays
+                    ?? (8 + Double(i) * 3),
                 phase0Deg: phaseDeg(m.designation),
                 displayRadius: centralScene * moonSizeFraction(m),
                 colorHex: moonColor(type: m.type),
-                hasRing: false, indicators: indicators,
+                rings: nil,
+                spin: BodySpin(tiltDeg: m.physical?.axialTiltDeg,
+                               rotationHours: m.physical?.rotationPeriodHours,
+                               tidallyLocked: m.physical?.tidallyLocked ?? false),
+                hasSubsurfaceOcean: m.physical?.hasSubsurfaceOcean ?? false,
+                orbitalDistanceKm: m.physical?.orbitalDistanceKm,
+                indicators: indicators,
                 hasInterestingMoon: false, moons: [])
         }
         let frame = (moons.map(\.semiMajorScene).max() ?? (centralScene + 2)) * 1.12

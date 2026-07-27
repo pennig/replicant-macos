@@ -452,7 +452,7 @@ struct OrreryMappingTests {
             ])
         let m = OrreryMapping.bodyModel(planet: planet)
         #expect(m.centralBody != nil)
-        #expect(m.centralBody?.hasRing == true)
+        #expect(m.centralBody?.rings != nil)
         #expect(m.planets.count == 2)                       // moons became orbiters
         // The interesting moon (a live salvage site) sorts to the front.
         #expect(m.planets.first?.designation == "SHERATANON-6-b")
@@ -529,7 +529,7 @@ struct OrreryLayoutTests {
             tags: [], surfaceTempC: nil, atmosphere: Atmosphere(apiValue: nil), appearanceSeed: 0,
             orbitalDistanceAu: 1, inHabitableZone: false, scanned: true, moonCount: 0, lifeStage: nil,
             inventory: [], semiMajorScene: semi, periodDays: period, phase0Deg: phase,
-            displayRadius: radius, colorHex: "#ffffff", hasRing: false, indicators: [],
+            displayRadius: radius, colorHex: "#ffffff", rings: nil, indicators: [],
             hasInterestingMoon: false, moons: [], lagrange: lagrange)
     }
 
@@ -688,7 +688,7 @@ struct BareSystemRouteAnchorTests {
             tags: [], surfaceTempC: nil, atmosphere: Atmosphere(apiValue: nil), appearanceSeed: 0,
             orbitalDistanceAu: 1, inHabitableZone: false, scanned: true, moonCount: 0, lifeStage: nil,
             inventory: [], semiMajorScene: semi, periodDays: 100, phase0Deg: 0,
-            displayRadius: 1, colorHex: "#ffffff", hasRing: false, indicators: [],
+            displayRadius: 1, colorHex: "#ffffff", rings: nil, indicators: [],
             hasInterestingMoon: false, moons: [], lagrange: lagrange)
     }
 
@@ -765,5 +765,468 @@ struct BareSystemRouteAnchorTests {
         let anchor = layout.position(ofLocation: "ASTELLIO-1-L4")
         #expect(anchor != nil)
         #expect(anchor != .zero)
+    }
+}
+
+// MARK: - Body spin (axial tilt, rotation, tidal lock)
+
+// Values below are real, probed from `locations/SOL-{2,5,6,7}` — the live account's
+// own data — so these tests pin behaviour against the game rather than an invention.
+
+struct BodySpinTests {
+    @Test func obliquityAndSignMatchRealBodies() {
+        // Venus: nearly upside-down AND an explicitly negative period.
+        let venus = BodySpin(tiltDeg: 177.4, rotationHours: -5832.5)
+        #expect(abs(venus.obliquityDeg - 177.4) < 1e-9)
+        #expect(venus.sign == -1)
+
+        // Uranus: rolled onto its side, also an explicit negative period.
+        let uranus = BodySpin(tiltDeg: 97.77, rotationHours: -17.24)
+        #expect(abs(uranus.obliquityDeg - 97.77) < 1e-9)
+        #expect(uranus.sign == -1)
+
+        // Jupiter / Saturn: upright and prograde.
+        #expect(BodySpin(tiltDeg: 3.13, rotationHours: 9.92).sign == 1)
+        #expect(BodySpin(tiltDeg: 26.73, rotationHours: 10.66).sign == 1)
+    }
+
+    @Test func obliquityPastNinetyIsRetrogradeGeometrically() {
+        // The convention is "obliquity > 90 means retrograde", and that is the
+        // GEOMETRY, not a branch: past 90 the pole tips below the orbital plane, so
+        // a body spinning right-handed about it reads backwards from above.
+        #expect(BodySpin(tiltDeg: 97.77).isRetrograde)
+        #expect(BodySpin(tiltDeg: 177.4).isRetrograde)
+        #expect(!BodySpin(tiltDeg: 26.73).isRetrograde)
+
+        // The pole tipping below the plane is what produces it — no sign flip needed.
+        #expect(BodySpin(tiltDeg: 97.77).pole(seed: 0.3).y < 0)
+        #expect(BodySpin(tiltDeg: 26.73).pole(seed: 0.3).y > 0)
+
+        // So `sign` must stay +1 for a high obliquity: flipping it too would
+        // double-count and cancel the geometry back to prograde.
+        #expect(BodySpin(tiltDeg: 97.77).sign == 1)
+        #expect(BodySpin(tiltDeg: 177.4).sign == 1)
+    }
+
+    @Test func outOfRangeTiltNormalizes() {
+        // Defensive only — the backend reports 0…180. A stray value must still land
+        // on a sane obliquity rather than aiming the pole somewhere absurd.
+        #expect(abs(BodySpin(tiltDeg: 200).obliquityDeg - 160) < 1e-9)
+        #expect(abs(BodySpin(tiltDeg: 380).obliquityDeg - 20) < 1e-9)
+        #expect(abs(BodySpin(tiltDeg: -30).obliquityDeg - 30) < 1e-9)
+    }
+
+    @Test func unknownTiltIsUpright() {
+        #expect(BodySpin.unknown.obliquityDeg == 0)
+        #expect(BodySpin.unknown.sign == 1)
+        #expect(!BodySpin.unknown.isRetrograde)
+        let p = BodySpin.unknown.pole(seed: 0.4)
+        #expect(abs(p.y - 1) < 1e-6)
+    }
+
+    @Test func poleTiltsByObliquityAndStaysUnit() {
+        let upright = BodySpin(tiltDeg: 0).pole(seed: 0.3)
+        #expect(abs(upright.y - 1) < 1e-6)
+
+        // 90 degrees lays the pole into the orbital plane.
+        let sideways = BodySpin(tiltDeg: 90).pole(seed: 0.3)
+        #expect(abs(sideways.y) < 1e-6)
+        #expect(abs(simd_length(sideways) - 1) < 1e-6)
+
+        // Same tilt, different seed => different lean direction, so two worlds
+        // sharing an obliquity don't all lean the same way.
+        let a = BodySpin(tiltDeg: 45).pole(seed: 0.1)
+        let b = BodySpin(tiltDeg: 45).pole(seed: 0.8)
+        #expect(simd_length(a - b) > 1e-3)
+        #expect(abs(a.y - b.y) < 1e-6)   // same obliquity => same height
+    }
+
+    @Test func spinRateAnchorsFastestAndCompressesTheSpread() {
+        // The fastest rotator in the layer turns at the base rate.
+        let fast = BodySpin(tiltDeg: 3.13, rotationHours: 9.92)
+        #expect(abs(fast.spinRate(fastestHours: 9.92) - 0.06) < 1e-6)
+
+        // Four times slower => half the rate at falloff 0.5, not a quarter.
+        let slow = BodySpin(rotationHours: 39.68)
+        #expect(abs(slow.spinRate(fastestHours: 9.92) - 0.03) < 1e-6)
+
+        // Venus is 588x slower than Jupiter but must not be visually frozen.
+        let venus = BodySpin(tiltDeg: 177.4, rotationHours: -5832.5)
+        let rate = venus.spinRate(fastestHours: 9.92)
+        #expect(rate < 0)                       // explicit retrograde
+        #expect(abs(rate) > 0.06 / 100)         // compressed, not crushed
+
+        // No reading => the historical fixed rate, prograde.
+        #expect(BodySpin.unknown.spinRate(fastestHours: 9.92) == 0.06)
+    }
+
+    @Test func tidallyLockedIsCarriedThrough() {
+        #expect(BodySpin(tidallyLocked: true).tidallyLocked)
+        #expect(!BodySpin.unknown.tidallyLocked)
+    }
+}
+
+struct RingSystemTests {
+    @Test func onlyRingedBodiesGetARing() {
+        #expect(PlanetMaterial.ringSystem(hasRings: false, type: .gasGiant, seed: 0.5) == nil)
+        #expect(PlanetMaterial.ringSystem(hasRings: true, type: .gasGiant, seed: 0.5) != nil)
+    }
+
+    @Test func ringBandClearsTheBodyAndIsOrdered() throws {
+        for type in [PlanetType.gasGiant, .iceGiant, .barren, .terrestrial] {
+            let r = try #require(PlanetMaterial.ringSystem(hasRings: true, type: type, seed: 0.5))
+            #expect(r.innerFrac > 1)              // never inside the body
+            #expect(r.outerFrac > r.innerFrac)
+            #expect(r.outerFrac <= 3)             // stays inside the pip/label budget
+        }
+    }
+
+    @Test func ringSeedIsCarriedSoGapsAreStable() throws {
+        let r = try #require(PlanetMaterial.ringSystem(hasRings: true, type: .gasGiant, seed: 0.375))
+        #expect(r.seed == 0.375)
+    }
+
+    @Test func giantsGetBroaderRingsThanRockyWorlds() throws {
+        let giant = try #require(PlanetMaterial.ringSystem(hasRings: true, type: .gasGiant, seed: 0.5))
+        let rocky = try #require(PlanetMaterial.ringSystem(hasRings: true, type: .barren, seed: 0.5))
+        #expect(giant.outerFrac - giant.innerFrac > rocky.outerFrac - rocky.innerFrac)
+    }
+}
+
+// MARK: - Physical facts on the orrery model
+
+struct OrreryPhysicalFactsTests {
+    /// A scanned, ringed, tilted gas giant modelled on the live SOL-6.
+    private func saturnLikeSystem() -> StarSystem {
+        StarSystem(
+            designation: "SOL",
+            planets: [Planet(
+                designation: "SOL-6", type: "Gas Giant", orbitalDistanceAu: 9.537,
+                recon: .scanned,
+                physical: BodyPhysical(
+                    radiusEarth: 9.45, surfaceTempC: -139, rings: true,
+                    rotationPeriodHours: 10.66, orbitalPeriodDays: 10747,
+                    axialTiltDeg: 26.73))])
+    }
+
+    @Test func planetCarriesSpinAndRings() throws {
+        let model = OrreryMapping.systemModel(from: saturnLikeSystem())
+        let p = try #require(model.planets.first)
+        #expect(p.spin.tiltDeg == 26.73)
+        #expect(p.spin.rotationHours == 10.66)
+        #expect(!p.spin.tidallyLocked)
+        #expect(p.rings != nil)
+        #expect(p.periodDays == 10747)
+    }
+
+    @Test func unringedPlanetHasNoRingSystem() throws {
+        var system = saturnLikeSystem()
+        system.planets[0].physical?.rings = false
+        let model = OrreryMapping.systemModel(from: system)
+        #expect(try #require(model.planets.first).rings == nil)
+    }
+
+    @Test func unscannedPlanetSpinsUpright() throws {
+        var system = saturnLikeSystem()
+        system.planets[0].physical = nil
+        let model = OrreryMapping.systemModel(from: system)
+        let p = try #require(model.planets.first)
+        #expect(p.spin.obliquityDeg == 0)
+        #expect(p.spin.rotationHours == nil)
+        #expect(p.rings == nil)
+    }
+
+    @Test func moonCarriesTidalLockOceanAndDistance() throws {
+        // Modelled on the live SOL-5-2 (Europa): locked, subsurface ocean, airless.
+        let planet = Planet(
+            designation: "SOL-5", type: "Gas Giant", orbitalDistanceAu: 5.203,
+            recon: .scanned,
+            physical: BodyPhysical(rings: false, rotationPeriodHours: 9.92,
+                                   orbitalPeriodDays: 4331, axialTiltDeg: 3.13),
+            moons: [Moon(
+                designation: "SOL-5-2", type: "Icy", recon: .scanned,
+                physical: BodyPhysical(
+                    radiusEarth: 0.245, surfaceTempC: -160,
+                    orbitalPeriodHours: 85.23, tidallyLocked: true,
+                    orbitalDistanceKm: 671100,
+                    hasSubsurfaceOcean: true, hasAtmosphere: false))])
+        let model = OrreryMapping.bodyModel(planet: planet)
+        let moon = try #require(model.planets.first)
+        #expect(moon.spin.tidallyLocked)
+        #expect(moon.hasSubsurfaceOcean)
+        #expect(moon.orbitalDistanceKm == 671100)
+        #expect(model.centralBody?.spin.tiltDeg == 3.13)
+    }
+}
+
+// MARK: - Volcanism scale
+
+struct VolcanismScaleTests {
+    @Test func lavaAmountStaysBelowTheOldCeiling() {
+        // Old range was 0.6 … 1.7; scaled down so a tag-stacked hellworld can't push
+        // coverage past a crust-with-seams read.
+        #expect(PlanetMaterial.lavaAmount(tempC: 400) <= 0.6)
+        #expect(PlanetMaterial.lavaAmount(tempC: 2000) <= 1.5)
+    }
+
+    @Test func lavaAmountStillRisesWithTemperature() {
+        let cool = PlanetMaterial.lavaAmount(tempC: 600)
+        let mid = PlanetMaterial.lavaAmount(tempC: 1000)
+        let hot = PlanetMaterial.lavaAmount(tempC: 1400)
+        #expect(cool < mid)
+        #expect(mid < hot)
+    }
+
+    @Test func hottestTaggedWorldStaysWithinTheShaderClamp() {
+        // `hellworld` multiplies by 1.8 and the shader clamps lavaAmt to 1.8, so the
+        // product must not sail so far past the clamp that temperature stops mattering.
+        let mods = PlanetMaterial.modifiers(tags: ["hellworld", "volcanic"])
+        let combined = mods.lava * PlanetMaterial.lavaAmount(tempC: 1400)
+        #expect(combined <= 2.8)
+    }
+}
+
+// MARK: - Layer rotation anchor
+
+struct LayerRotationAnchorTests {
+    private func layer(hours: [Double?]) -> OrreryLayout {
+        let planets = hours.enumerated().map { i, h in
+            OrreryPlanet(
+                designation: "SOL-\(i + 1)", name: nil, type: "Gas Giant",
+                planetType: .gasGiant, estimated: false, tags: [],
+                surfaceTempC: nil, atmosphere: Atmosphere(apiValue: nil), appearanceSeed: 0.5,
+                orbitalDistanceAu: 1, inHabitableZone: false, scanned: true,
+                moonCount: 0, lifeStage: nil, inventory: [],
+                semiMajorScene: 10, periodDays: 100, phase0Deg: 0,
+                displayRadius: 1, colorHex: "#ffffff", rings: nil,
+                spin: BodySpin(rotationHours: h),
+                indicators: [], hasInterestingMoon: false, moons: [])
+        }
+        var model = OrreryMapping.minimal(
+            designation: "SOL", position: Position(x: 0, y: 0, z: 0),
+            spectralType: "G2", color: "Yellow", name: "Sol")
+        model.planets = planets
+        return OrreryLayout(model: model, center: .zero, scale: 1, reveal: 1, time: 0)
+    }
+
+    @Test func anchorIsTheFastestRotator() {
+        #expect(layer(hours: [9.92, 10.66, -5832.5]).fastestRotationHours == 9.92)
+    }
+
+    @Test func anchorIgnoresSignAndMissingReadings() {
+        // A negative period is retrograde, not "faster than zero" — magnitude wins.
+        #expect(layer(hours: [-17.24, 998.5]).fastestRotationHours == 17.24)
+        #expect(layer(hours: [nil, 42.0, nil]).fastestRotationHours == 42.0)
+    }
+
+    @Test func anchorFallsBackWhenNothingReportsRotation() {
+        #expect(layer(hours: [nil, nil]).fastestRotationHours == 1)
+    }
+}
+
+// MARK: - Ring draw list
+
+struct RingDrawListTests {
+    @Test func onlyRingedBodiesEnterTheDrawList() {
+        // SOL-5 reports rings: false, SOL-6 reports true — both live values.
+        let system = StarSystem(
+            designation: "SOL",
+            planets: [
+                Planet(designation: "SOL-5", type: "Gas Giant", orbitalDistanceAu: 5.203,
+                       recon: .scanned,
+                       physical: BodyPhysical(rings: false, axialTiltDeg: 3.13)),
+                Planet(designation: "SOL-6", type: "Gas Giant", orbitalDistanceAu: 9.537,
+                       recon: .scanned,
+                       physical: BodyPhysical(rings: true, axialTiltDeg: 26.73)),
+            ])
+        let model = OrreryMapping.systemModel(from: system)
+        let ringed = model.planets.filter { $0.rings != nil }.map(\.designation)
+        #expect(ringed == ["SOL-6"])
+    }
+
+    @Test func ringWorldRadiiScaleWithTheBody() throws {
+        let r = try #require(PlanetMaterial.ringSystem(hasRings: true, type: .gasGiant, seed: 0.5))
+        let bodyRadius: Float = 2.0
+        #expect(r.innerFrac * bodyRadius > bodyRadius)          // clears the limb
+        #expect(r.outerFrac * bodyRadius > r.innerFrac * bodyRadius)
+    }
+}
+
+// MARK: - Moon orbit fidelity
+
+struct MoonOrbitFidelityTests {
+    /// Modelled on the live SOL-5 and two of its moons.
+    private func jupiterLike() -> Planet {
+        Planet(
+            designation: "SOL-5", type: "Gas Giant", orbitalDistanceAu: 5.203,
+            recon: .scanned,
+            physical: BodyPhysical(rings: false, rotationPeriodHours: 9.92,
+                                   orbitalPeriodDays: 4331, axialTiltDeg: 3.13),
+            moons: [
+                // Io: nearest and fastest.
+                Moon(designation: "SOL-5-1", type: "Volcanic", recon: .scanned,
+                     physical: BodyPhysical(radiusEarth: 0.286, orbitalPeriodHours: 42.46,
+                                            tidallyLocked: true, orbitalDistanceKm: 421700,
+                                            hasSubsurfaceOcean: false, hasAtmosphere: false)),
+                // Europa: farther and slower.
+                Moon(designation: "SOL-5-2", type: "Icy", recon: .scanned,
+                     physical: BodyPhysical(radiusEarth: 0.245, orbitalPeriodHours: 85.23,
+                                            tidallyLocked: true, orbitalDistanceKm: 671100,
+                                            hasSubsurfaceOcean: true, hasAtmosphere: false)),
+            ])
+    }
+
+    @Test func moonPeriodComesFromHours() throws {
+        let model = OrreryMapping.bodyModel(planet: jupiterLike())
+        let io = try #require(model.planets.first { $0.designation == "SOL-5-1" })
+        let europa = try #require(model.planets.first { $0.designation == "SOL-5-2" })
+        #expect(abs(io.periodDays - 42.46 / 24) < 1e-9)
+        #expect(abs(europa.periodDays - 85.23 / 24) < 1e-9)
+        #expect(io.periodDays < europa.periodDays)     // the nearer moon is faster
+    }
+
+    @Test func moonOrbitsOrderByRealDistanceAndNeverOverlap() throws {
+        let model = OrreryMapping.bodyModel(planet: jupiterLike())
+        let io = try #require(model.planets.first { $0.designation == "SOL-5-1" })
+        let europa = try #require(model.planets.first { $0.designation == "SOL-5-2" })
+        #expect(io.semiMajorScene < europa.semiMajorScene)
+        // Both clear the central body, and each other.
+        let central = try #require(model.centralBody).displayRadius
+        #expect(io.semiMajorScene - io.displayRadius > central)
+        #expect(europa.semiMajorScene - europa.displayRadius
+                > io.semiMajorScene + io.displayRadius)
+    }
+
+    @Test func moonsWithoutDistanceKeepTheIndexFallback() throws {
+        var planet = jupiterLike()
+        planet.moons[0].physical?.orbitalDistanceKm = nil
+        planet.moons[1].physical?.orbitalDistanceKm = nil
+        let model = OrreryMapping.bodyModel(planet: planet)
+        let radii = model.planets.map(\.semiMajorScene)
+        #expect(radii.count == 2)
+        #expect(radii[0] < radii[1])       // still ordered, still non-overlapping
+    }
+
+    @Test func moonSceneRadiusIsMonotonicAndCompressed() {
+        let near = OrreryMapping.moonSceneRadius(km: 421_700)
+        let far = OrreryMapping.moonSceneRadius(km: 1_221_870)
+        #expect(near < far)
+        // sqrt compression: tripling the distance must not triple the radius.
+        #expect(far / near < 3)
+    }
+
+    @Test func moonAtmosphereComesFromTheBoolean() throws {
+        // SOL-6-1 (Titan): has_atmosphere true plus a thick_atmosphere tag.
+        let planet = Planet(
+            designation: "SOL-6", type: "Gas Giant", orbitalDistanceAu: 9.537,
+            recon: .scanned,
+            physical: BodyPhysical(rings: true, axialTiltDeg: 26.73),
+            moons: [
+                Moon(designation: "SOL-6-1", type: "Icy", recon: .scanned,
+                     physical: BodyPhysical(orbitalPeriodHours: 382.69,
+                                            tags: ["thick_atmosphere"], tidallyLocked: true,
+                                            orbitalDistanceKm: 1221870,
+                                            hasSubsurfaceOcean: false, hasAtmosphere: true)),
+                Moon(designation: "SOL-6-9", type: "Rocky", recon: .scanned,
+                     physical: BodyPhysical(orbitalPeriodHours: 1000, tidallyLocked: true,
+                                            orbitalDistanceKm: 12952000,
+                                            hasSubsurfaceOcean: false, hasAtmosphere: false)),
+            ])
+        let model = OrreryMapping.bodyModel(planet: planet)
+        let titan = try #require(model.planets.first { $0.designation == "SOL-6-1" })
+        let airless = try #require(model.planets.first { $0.designation == "SOL-6-9" })
+        #expect(titan.atmosphere != .unknown)
+        #expect(titan.atmosphere != .none)
+        // A scanned moon that reports no air is airless, not merely unknown — the
+        // difference decides whether a halo is drawn at all.
+        #expect(airless.atmosphere == .none)
+    }
+
+    @Test func unscannedMoonAtmosphereStaysUnknown() throws {
+        let planet = Planet(
+            designation: "SOL-4", type: "Desert World", orbitalDistanceAu: 1.52,
+            recon: .scanned,
+            moons: [Moon(designation: "SOL-4-1", type: "Rocky", recon: .visited)])
+        let model = OrreryMapping.bodyModel(planet: planet)
+        let moon = try #require(model.planets.first)
+        #expect(moon.atmosphere == .unknown)
+    }
+
+    @Test func subsurfaceOceanBecomesASurfaceModifier() {
+        let plain = PlanetMaterial.surface(for: .frozen, lifeStage: nil, estimated: false)
+        #expect(plain.mods.ocean == 0)
+        let ocean = PlanetMaterial.surface(for: .frozen, lifeStage: nil, estimated: false,
+                                           hasSubsurfaceOcean: true)
+        #expect(ocean.mods.ocean > 0)
+    }
+}
+
+// MARK: - Camera translation (body-level orbit tracking)
+
+struct CameraTranslationTests {
+    @Test func translateMovesTargetAndEyeTogether() {
+        var cam = TurntableCamera()
+        cam.target = SIMD3(1, 2, 3)
+        let eyeBefore = cam.eye
+        let delta = SIMD3<Float>(0.5, 0, -0.25)
+        cam.translate(by: delta)
+        #expect(simd_length(cam.target - SIMD3<Float>(1.5, 2, 2.75)) < 1e-6)
+        // The eye rides along, so the view does not swing.
+        #expect(simd_length((cam.eye - eyeBefore) - delta) < 1e-4)
+    }
+
+    @Test func translateCarriesAnInFlightFraming() {
+        var cam = TurntableCamera()
+        cam.target = .zero
+        cam.dive(on: SIMD3(10, 0, 0), radius: 5, now: 0, duration: 1)
+        cam.translate(by: SIMD3(0, 0, 2))
+        // Once the dive lands, it must sit on the MOVED body — otherwise a drill-in
+        // toward an orbiting planet would arrive where the planet used to be.
+        _ = cam.step(now: 1.0)
+        #expect(simd_length(cam.target - SIMD3<Float>(10, 0, 2)) < 1e-4)
+    }
+
+    @Test func translateByZeroIsInert() {
+        var cam = TurntableCamera()
+        cam.target = SIMD3(4, 5, 6)
+        let before = cam.eye
+        cam.translate(by: .zero)
+        #expect(simd_length(cam.eye - before) < 1e-6)
+        #expect(simd_length(cam.target - SIMD3<Float>(4, 5, 6)) < 1e-6)
+    }
+}
+
+// MARK: - Dossier fact formatting
+
+struct BodyFactFormatTests {
+    @Test func rotationSwitchesFromHoursToDays() {
+        // SOL-6 turns in 10.66 h — hours read naturally.
+        #expect(BodyFactFormat.hours(10.66) == "10.7 h")
+        // SOL-2 takes 5832.5 h; "5832 h" is unreadable, "243 d" is not.
+        #expect(BodyFactFormat.hours(5832.5) == "243 d")
+        #expect(BodyFactFormat.hours(47.9).hasSuffix(" h"))
+        #expect(BodyFactFormat.hours(48).hasSuffix(" d"))
+    }
+
+    @Test func orbitalPeriodSwitchesFromDaysToYears() {
+        #expect(BodyFactFormat.days(224.7) == "224.7 d")       // SOL-2
+        #expect(BodyFactFormat.days(10747).hasSuffix(" y"))     // SOL-6
+        #expect(BodyFactFormat.days(30589).hasSuffix(" y"))     // SOL-7
+        #expect(BodyFactFormat.days(899.9).hasSuffix(" d"))
+        #expect(BodyFactFormat.days(900).hasSuffix(" y"))
+    }
+
+    @Test func moonDistanceSwitchesToMillions() {
+        #expect(BodyFactFormat.km(384_400) == "384400 km")      // SOL-3-1
+        #expect(BodyFactFormat.km(1_221_870) == "1.22 M km")    // SOL-6-1
+        #expect(BodyFactFormat.km(999_999).hasSuffix(" km"))
+        #expect(BodyFactFormat.km(1_000_000).hasSuffix("M km"))
+    }
+
+    @Test func unscannedAtmosphereHasNoLabel() {
+        // An unscanned body must show NO atmosphere row, not the word "Unknown".
+        #expect(Atmosphere.unknown.label == nil)
+        #expect(Atmosphere.none.label == "None")
+        #expect(Atmosphere.crushing.label == "Crushing")
     }
 }

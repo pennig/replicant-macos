@@ -120,9 +120,19 @@ typedef struct {
     // ceiling is lifted so it keeps growing as you zoom in — no separate sun body,
     // so the star→sun transition is the same object throughout.
     int focusedStar;
-    // Orrery centre (the focused star, world space) — the scaffold rings/belt scale
-    // out from it by `orreryReveal` so they grow in step with the planets.
+    // Orrery centre (world space) — the LIVE centre of the layer being drawn: the
+    // focused star at system level, or the drilled planet at body level, where it
+    // tracks that planet around its star every frame.
     simd_float4 orreryCenter;
+    // The centre the orrery scaffold/belt buffers were GENERATED around. Scaffold
+    // vertices are rebased by (orreryCenter − orreryBuildCenter) at draw time, so a
+    // moving body-level centre never forces a per-frame buffer rebuild.
+    simd_float4 orreryBuildCenter;
+    // The pivot the background field recedes from — the FOCUSED STAR, always. Kept
+    // separate from `orreryCenter` because at body level that centre tracks the
+    // drilled planet as it orbits, and the star field must NOT be dragged along
+    // with it (the recession pivot has to stay put or the whole sky slides).
+    simd_float4 fieldCenter;
 } Uniforms;
 
 // One vertex of a lit orrery body mesh (sun / planet). The shared unit sphere,
@@ -146,6 +156,14 @@ typedef struct {
     // Tag-driven surface modifiers (see PlanetMaterial.SurfaceModifiers): x = crater
     // relief ×, y = cloud/atmosphere ×, z = lava emissive ×, w = frost overlay (0…1).
     simd_float4 surfaceMods;
+    // Body orientation: xyz = the body's north pole as a unit vector in world space
+    // (from its axial tilt), w = signed spin rate in rad/s (negative = retrograde;
+    // 0 = tidally locked, which carries its orbit angle in surfaceParams.z instead).
+    // The fragment textures in the frame this defines, so every latitude feature —
+    // gas bands, polar hoods, ice caps — tilts with the body for free.
+    simd_float4 spinAxis;
+    // x = subsurface-ocean cryo-fracture amount (0…1), yzw reserved.
+    simd_float4 surfaceExtras;
 } OrreryBodyUniform;
 
 // Per-body params for one orrery atmosphere halo — a soft glow shell drawn in a
@@ -157,6 +175,17 @@ typedef struct {
     simd_float4 sunExtent;      // xyz = sun world position (light), w = shell outer radius (× body radius)
     simd_float4 tintDensity;    // rgb = glow tint, w = density (opacity/intensity 0…1)
 } OrreryAtmosphereUniform;
+
+// Per-body params for one ring annulus, drawn in the body's EQUATORIAL plane (the
+// plane perpendicular to its axial-tilt pole). Alpha-blended and depth-READ after
+// the opaque bodies, so the near hemisphere occludes the far half of the ring and
+// the ring itself occludes nothing. See orrery_ring_{vertex,fragment}.
+typedef struct {
+    simd_float4 centerRadius;   // xyz = body world centre, w = body radius
+    simd_float4 poleInner;      // xyz = body pole (unit), w = inner radius (× body radius)
+    simd_float4 sunOuter;       // xyz = sun world position, w = outer radius (× body radius)
+    simd_float4 tintSeed;       // rgb = ring tint, w = band seed
+} OrreryRingUniform;
 
 // One vertex of the orrery scaffold: orbit rings, HZ band, kuiper — colored line
 // segments in world space, drawn additively.

@@ -46,11 +46,15 @@ constant float kHaloIntensity  = 1.609;   // overall halo brightness scale
 // `sd` is the stable per-planet appearance seed — everything derived from it (band
 // count, swirliness, hue jitter, feature placement) is identical every time viewed.
 static OrrerySurface orrerySurface(float3 dir, float3 cloudDir, int style, float3 base, float3 detail,
-                                   float life, float4 mods, float polarIce, float greenVibrancy, float sd, float t) {
+                                   float life, float4 mods, float polarIce, float greenVibrancy,
+                                   float ocean, float sd, float t) {
     OrrerySurface s;
     s.emissive = float3(0.0);
     float lat = dir.y;                           // -1 (south) … 1 (north)
-    float lon = atan2(dir.z, dir.x);             // -pi … pi
+    // NOTE: deliberately no `lon = atan2(dir.z, dir.x)` here. Longitude is undefined
+    // at both poles and discontinuous at the antimeridian, so ANY feature driven by
+    // it converges into a beach-ball pinch at the poles and seams down one meridian.
+    // Every style below uses 3D noise over `dir` instead. Don't reintroduce it.
 
     // Decorrelated per-planet look parameters + a small stable hue jitter so two
     // planets of the same type never look identical.
@@ -113,9 +117,18 @@ static OrrerySurface orrerySurface(float3 dir, float3 cloudDir, int style, float
         // the black-body lava hue the CPU chose from the surface temperature.
         s.albedo = mix(base * 0.55, base, fbm6(dir * 5.0 + sd * 7.0));
         float lavaAmt = mods.z;
-        float lo = mix(0.80, 0.60, saturate((lavaAmt - 0.5) / 1.3));            // more lava when hotter
-        float cracks = smoothstep(lo, lo + 0.17, ridge(dir * 8.0 + sd * 3.0));
-        float pulse  = 0.7 + 0.3 * sin(t * 1.5 + lon * 3.0 + sd * 6.283);
+        // Coverage threshold. The hot floor is 0.72 (was 0.60) and the ramp is
+        // narrower, so even a hellworld reads as seams in basalt rather than the
+        // >50% flood the old band produced.
+        float lo = mix(0.88, 0.72, saturate((lavaAmt - 0.5) / 1.3));            // more lava when hotter
+        float cracks = smoothstep(lo, lo + 0.13, ridge(dir * 8.0 + sd * 3.0));
+        // Breathe the glow from 3D NOISE, never longitude. The old
+        // `sin(t + lon * 3.0)` drew three meridian wedges that converged at both
+        // poles (the beach-ball artifact the banded / iceGiant / desert styles each
+        // fix separately) and seamed at the antimeridian. Noise over the sphere
+        // direction has neither a pole nor a seam, and it makes separate hot regions
+        // pulse independently instead of as one rotating grille.
+        float pulse  = 0.7 + 0.3 * sin(t * 1.5 + fbm6(dir * 2.3 + sd * 11.0) * 6.283);
         s.emissive = detail * cracks * pulse * 1.4 * clamp(lavaAmt, 0.5, 1.8);
     } else if (style == 4) {                     // ocean / terrestrial — continents (clouds below)
         float land = smoothstep(0.46, 0.6, fbm6(dir * 2.5 + sd * 10.0));
@@ -165,6 +178,18 @@ static OrrerySurface orrerySurface(float3 dir, float3 cloudDir, int style, float
         s.albedo = mix(s.albedo, float3(0.90, 0.95, 1.0), saturate(frostMask * mods.w));
     }
 
+    // Subsurface-ocean cryo-fracture lineae — long, cool cracks in the crust where a
+    // buried ocean stresses the ice (Europa-like; live on SOL-5-2 and SOL-6-2).
+    // Deliberately distinct from the molten style's lava: bluish, barely emissive, and
+    // NOT pulsing, so an icy ocean moon never reads as a volcanic one.
+    if (ocean > 0.0) {
+        float3 warp = dir + (fbm6(dir * 2.0 + sd * 13.0) - 0.5) * 0.35;
+        float lineae = smoothstep(0.74, 0.94, ridge(warp * float3(3.0, 9.0, 3.0) + sd * 6.0));
+        float3 crackTint = float3(0.42, 0.62, 0.78);
+        s.albedo = mix(s.albedo, crackTint, saturate(lineae * ocean * 0.75));
+        s.emissive += crackTint * lineae * ocean * 0.05;    // the barest inner glow
+    }
+
     // Animated cloud cover — terrestrial styles only (giants convey their skies in the
     // band texture, styles 1/6). Sampled along `cloudDir` (an elevated, faster-rotating
     // deck computed in the fragment), with two noise octaves boiling at different rates
@@ -207,6 +232,9 @@ struct OrreryBodyVaryings {
     float  polarIce;     // temperature-driven polar ice caps (0…1)
     float  greenVibrancy; // saturation × for the world's green (land+vegetation); 1 = off
     float4 mods;         // tag-driven surface modifiers (crater×, cloud×, lava×, frost)
+    float3 pole;         // body north pole (unit, world space) — the texturing frame
+    float  spinRate;     // signed spin rate (rad/s); negative = retrograde, 0 = locked
+    float  ocean;        // subsurface-ocean cryo-fracture amount (0…1)
 };
 
 vertex OrreryBodyVaryings orrery_body_vertex(uint vid                       [[vertex_id]],
@@ -235,11 +263,24 @@ vertex OrreryBodyVaryings orrery_body_vertex(uint vid                       [[ve
     out.polarIce = b.color.a;
     out.greenVibrancy = b.sunEmissive.w;
     out.mods = b.surfaceMods;
+    out.pole = b.spinAxis.xyz;
+    out.spinRate = b.spinAxis.w;
+    out.ocean = b.surfaceExtras.x;
     return out;
 }
 
-fragment float4 orrery_body_fragment(OrreryBodyVaryings in [[stage_in]],
-                                     constant Uniforms&    u    [[buffer(1)]])
+// The body writes TRUE sphere depth, not the billboard quad's flat plane, so
+// geometry that intersects the body — the ring annulus above all — is occluded at
+// the real silhouette rather than at a disc through the body's centre. The
+// reconstructed surface always bulges toward the camera relative to the quad plane,
+// so `less` is the correct conservative qualifier.
+struct OrreryBodyOut {
+    float4 color [[color(0)]];
+    float  depth [[depth(less)]];
+};
+
+fragment OrreryBodyOut orrery_body_fragment(OrreryBodyVaryings in [[stage_in]],
+                                            constant Uniforms&    u    [[buffer(1)]])
 {
     float d = length(in.uv);
     if (d > 1.0) discard_fragment();
@@ -248,12 +289,26 @@ fragment float4 orrery_body_fragment(OrreryBodyVaryings in [[stage_in]],
     float coverage = smoothstep(1.0, 1.0 - fwidth(d) - 0.01, d);   // soft AA limb
 
     // Reconstruct the real surface direction from the billboard: back-transform the
-    // view-space hemisphere by the inverse (transpose) view rotation, then spin it
-    // slowly about the pole so the texture rotates rather than being pinned to the
-    // camera (mirrors star_body_fragment's granulation parallax).
+    // view-space hemisphere by the inverse (transpose) view rotation.
     float3x3 viewRot = float3x3(u.view[0].xyz, u.view[1].xyz, u.view[2].xyz);
-    float3 dir = normalize(transpose(viewRot) * nView);
-    float spin = u.time * 0.06 + in.seed;
+    float3 dirWorld = normalize(transpose(viewRot) * nView);
+
+    // Then move into the BODY's own frame, whose +Y is its (tilted) north pole.
+    // Everything downstream reads latitude as dir.y, so doing this once here is what
+    // makes axial tilt work for every surface style at once — including retrograde
+    // worlds, whose pole simply aims below the orbital plane (SOL-2 at 177.4°, SOL-7
+    // at 97.77°), reversing the apparent spin with no special case.
+    float3 pole = normalize(in.pole);
+    float3 ref = fabs(pole.y) > 0.99 ? float3(1.0, 0.0, 0.0) : float3(0.0, 1.0, 0.0);
+    float3 bx = normalize(cross(ref, pole));
+    float3 bz = cross(pole, bx);
+    float3x3 bodyFrame = float3x3(bx, pole, bz);          // columns
+    float3 dir = transpose(bodyFrame) * dirWorld;         // world -> body
+
+    // Spin about the body's own pole, at the rate its rotation period earned. A
+    // tidally locked body arrives with spinRate 0 and its ORBIT angle baked into
+    // `seed`, so its near face stays toward its parent as it goes round.
+    float spin = u.time * in.spinRate + in.seed;
     float cs = cos(spin), sn = sin(spin);
     dir = float3(dir.x * cs - dir.z * sn, dir.y, dir.x * sn + dir.z * cs);
 
@@ -265,13 +320,17 @@ fragment float4 orrery_body_fragment(OrreryBodyVaryings in [[stage_in]],
     float3 toCam = float3(0.0, 0.0, 1.0);                      // distant-camera view dir (view space)
     float3 tang = toCam - dot(toCam, nView) * nView;           // tangential to the sphere here
     float3 nViewCloud = normalize(nView - tang * kCloudHeight);
-    float3 cloudDir = normalize(transpose(viewRot) * nViewCloud);
+    // Same body frame as the surface, so the weather deck stays aligned with the
+    // terrain it floats over on a tilted world.
+    float3 cloudWorld = normalize(transpose(viewRot) * nViewCloud);
+    float3 cloudDir = transpose(bodyFrame) * cloudWorld;
     float cspin = spin + u.time * kCloudDrift;
     float ccs = cos(cspin), csn = sin(cspin);
     cloudDir = float3(cloudDir.x * ccs - cloudDir.z * csn, cloudDir.y, cloudDir.x * csn + cloudDir.z * ccs);
 
     OrrerySurface surf = orrerySurface(dir, cloudDir, int(in.style + 0.5), in.color, in.detail,
-                                       in.life, in.mods, in.polarIce, in.greenVibrancy, in.vseed, u.time);
+                                       in.life, in.mods, in.polarIce, in.greenVibrancy,
+                                       in.ocean, in.vseed, u.time);
 
     float3 fragView = in.viewCenter + nView * in.radius;
     float3 L = normalize(in.viewSun - fragView);
@@ -289,7 +348,12 @@ fragment float4 orrery_body_fragment(OrreryBodyVaryings in [[stage_in]],
         float scan = 0.5 + 0.5 * sin(in.position.y * 0.6 + u.time * 6.0);
         lit *= mix(0.7, 1.08, stat) * mix(0.9, 1.0, scan);
     }
-    return float4(lit, coverage * u.orreryAlpha);
+
+    OrreryBodyOut out;
+    out.color = float4(lit, coverage * u.orreryAlpha);
+    float4 clip = u.projection * float4(fragView, 1.0);
+    out.depth = clip.z / clip.w;
+    return out;
 }
 
 // Atmosphere halo — a soft glow shell that bleeds beyond a terrestrial body's limb
@@ -358,6 +422,90 @@ fragment float4 orrery_atmosphere_fragment(OrreryAtmoVaryings in   [[stage_in]],
     return float4(in.tint * (glow * kHaloIntensity), 1.0);
 }
 
+// Ring system — a flat annulus in the body's EQUATORIAL plane (perpendicular to its
+// axial-tilt pole), so a tilted world's rings lean with it. The geometry is generated
+// from the vertex id with no buffer: `kRingSegments` quads as one triangle strip,
+// alternating inner and outer rim vertices. Alpha-blended and depth-READ after the
+// opaque bodies (which now write true sphere depth), so the near hemisphere occludes
+// the far half of the ring at the real silhouette and the ring occludes nothing.
+constant uint kRingSegments = 192;   // SYNC POINT: matches `ringSegments` in StarFieldRenderer
+
+struct OrreryRingVaryings {
+    float4 position [[position]];
+    float3 world;      // world position of this ring point (for the shadow test)
+    float  t;          // 0 at the inner rim, 1 at the outer rim
+    float3 tint;
+    float  seed;
+    float3 center;     // body centre
+    float  bodyRadius;
+    float3 sun;
+    float3 pole;       // ring-plane normal == the body's pole
+};
+
+vertex OrreryRingVaryings orrery_ring_vertex(uint vid                        [[vertex_id]],
+                                             constant Uniforms&              u   [[buffer(1)]],
+                                             constant OrreryRingUniform&     r   [[buffer(2)]])
+{
+    uint seg = vid / 2;
+    bool outerRim = (vid & 1u) == 1u;
+    float a = float(seg) / float(kRingSegments) * 2.0 * M_PI_F;
+
+    // Basis for the equatorial plane: two axes perpendicular to the pole.
+    float3 pole = normalize(r.poleInner.xyz);
+    float3 ref = fabs(pole.y) > 0.99 ? float3(1.0, 0.0, 0.0) : float3(0.0, 1.0, 0.0);
+    float3 bx = normalize(cross(ref, pole));
+    float3 bz = cross(pole, bx);
+
+    float frac = outerRim ? r.sunOuter.w : r.poleInner.w;
+    float radius = r.centerRadius.w * frac;
+    float3 world = r.centerRadius.xyz + (bx * cos(a) + bz * sin(a)) * radius;
+
+    OrreryRingVaryings out;
+    out.position = u.projection * (u.view * float4(world, 1.0));
+    out.world = world;
+    out.t = outerRim ? 1.0 : 0.0;
+    out.tint = r.tintSeed.rgb;
+    out.seed = r.tintSeed.w;
+    out.center = r.centerRadius.xyz;
+    out.bodyRadius = r.centerRadius.w;
+    out.sun = r.sunOuter.xyz;
+    out.pole = pole;
+    return out;
+}
+
+fragment float4 orrery_ring_fragment(OrreryRingVaryings in [[stage_in]],
+                                     constant Uniforms&   u [[buffer(1)]])
+{
+    // Banding: seeded ridged noise across the radius gives stable Cassini-like gaps,
+    // identical every time the body is viewed (same appearance seed as its surface).
+    float band = ridge(float3(in.t * 9.0 + in.seed * 17.0, in.seed * 3.0, 0.0));
+    float density = smoothstep(0.30, 0.75, band);
+    // Fade both rims so the annulus has no hard cut-off edge.
+    density *= smoothstep(0.0, 0.12, in.t) * smoothstep(1.0, 0.88, in.t);
+
+    // Openness: how far the ring plane is turned toward the sun. Edge-on (dot ~ 0)
+    // the ring is lit only across its thickness and nearly vanishes; face-on it reads
+    // bright — which is why a steeply tilted world's rings change character.
+    float3 toSun = normalize(in.sun - in.center);
+    float open = saturate(fabs(dot(toSun, normalize(in.pole))));
+    float lit = mix(0.30, 1.0, open);
+
+    // Planet shadow on the ring: march from this ring point toward the sun and test
+    // whether the ray passes within the body. Analytic, cheap, and the single detail
+    // that sells the whole effect.
+    float3 L = normalize(in.sun - in.world);
+    float3 toCenter = in.center - in.world;
+    float s = dot(toCenter, L);
+    float shadow = 1.0;
+    if (s > 0.0) {
+        float miss = length(toCenter - L * s);
+        shadow = smoothstep(in.bodyRadius * 0.92, in.bodyRadius * 1.12, miss);
+    }
+    shadow = mix(0.18, 1.0, shadow);
+
+    return float4(in.tint * (lit * shadow), density * u.orreryAlpha);
+}
+
 // Scaffold lines — orbit rings, HZ band, kuiper — additive, faded by reveal.
 struct OrreryLineVaryings {
     float4 position [[position]];
@@ -369,8 +517,10 @@ vertex OrreryLineVaryings orrery_line_vertex(uint vid                      [[ver
                                              constant Uniforms&              u     [[buffer(1)]])
 {
     OrreryLineVaryings out;
-    // Grow out of the star in step with the planets (same `orreryReveal`).
-    float3 local = verts[vid].position.xyz - u.orreryCenter.xyz;
+    // Grow out of the centre in step with the planets (same `orreryReveal`), and
+    // rebase onto the LIVE centre: at body level the orrery centre tracks the drilled
+    // planet around its star, while these vertices were baked around a fixed origin.
+    float3 local = verts[vid].position.xyz - u.orreryBuildCenter.xyz;
     float3 world = u.orreryCenter.xyz + local * u.orreryReveal;
     out.position = u.projection * (u.view * float4(world, 1.0));
     out.color = verts[vid].color;
@@ -399,7 +549,7 @@ vertex OrreryPointVaryings orrery_point_vertex(uint vid                    [[ver
     // Grow out of the star in step with the planets/rings (same `orreryReveal`), and
     // rotate the whole belt rigidly about the star (fixed 150 s period, CCW like the
     // planets and the sun's spin) so it drifts as one ring rather than sitting frozen.
-    float3 local = m.positionSize.xyz - u.orreryCenter.xyz;
+    float3 local = m.positionSize.xyz - u.orreryBuildCenter.xyz;
     float  ang   = -u.time * (2.0 * M_PI_F / 150.0);
     float  c = cos(ang), s = sin(ang);
     local = float3(local.x * c - local.z * s, local.y, local.x * s + local.z * c);

@@ -1085,9 +1085,22 @@ private struct SystemHUD: View {
                     Text(sub).font(.rcMonoSmall).foregroundStyle(.rcTextTertiary)
                 }
                 if !info.facts.isEmpty {
-                    HStack(alignment: .top, spacing: Space.l) {
-                        ForEach(Array(info.facts.enumerated()), id: \.offset) { _, f in
-                            fact(f.label, f.value)
+                    // A scanned planet or moon now carries up to six facts, which one
+                    // HStack would run straight off the 280pt card. Two columns wrap
+                    // instead, left-aligned so the labels line up down the card.
+                    let rows = Array(stride(from: 0, to: info.facts.count, by: 2))
+                    VStack(alignment: .leading, spacing: Space.s) {
+                        ForEach(rows, id: \.self) { start in
+                            HStack(alignment: .top, spacing: Space.l) {
+                                ForEach(start..<min(start + 2, info.facts.count), id: \.self) { i in
+                                    fact(info.facts[i].label, info.facts[i].value)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                                // Keep a lone trailing fact in the left column.
+                                if start + 2 > info.facts.count {
+                                    Spacer(minLength: 0).frame(maxWidth: .infinity)
+                                }
+                            }
                         }
                     }
                 }
@@ -1230,6 +1243,24 @@ private struct SystemHUD: View {
             if let t = p.type { facts.append(("Type", t)) }
             if !isBody { facts.append(("Orbit", String(format: "%.2f AU", p.orbitalDistanceAu))) }
             if !isBody, p.moonCount > 0 { facts.append(("Moons", "\(p.moonCount)")) }
+            if !isBody {
+                // System level: the body is a planet. Each fact appears only when the
+                // scan actually reported it, so an unscanned world shows none of them.
+                if p.rings != nil { facts.append(("Rings", "Yes")) }
+                if let h = p.spin.rotationHours { facts.append(("Day", BodyFactFormat.hours(abs(h)))) }
+                facts.append(("Year", BodyFactFormat.days(p.periodDays)))
+                if let t = p.spin.tiltDeg {
+                    facts.append(("Tilt", String(format: "%.1f°", t)
+                        + (p.spin.isRetrograde ? " · retrograde" : "")))
+                }
+            } else {
+                // Body level: the body is a moon.
+                if let km = p.orbitalDistanceKm { facts.append(("Orbit", BodyFactFormat.km(km))) }
+                facts.append(("Period", BodyFactFormat.hours(p.periodDays * 24)))
+                if p.spin.tidallyLocked { facts.append(("Rotation", "Tidally locked")) }
+                if let air = p.atmosphere.label { facts.append(("Atmosphere", air)) }
+                if p.hasSubsurfaceOcean { facts.append(("Ocean", "Subsurface")) }
+            }
             return LocationDossierInfo(
                 kind: isBody ? "Moon" : "Planet",
                 title: p.name.map { "\(p.designation) · \($0)" } ?? p.designation,

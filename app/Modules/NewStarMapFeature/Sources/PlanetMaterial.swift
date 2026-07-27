@@ -36,6 +36,9 @@ struct SurfaceModifiers: Equatable, Sendable {
     var atmosphere: Float = 1   // × cloud/haze amount (ocean style); 0 = airless
     var lava: Float = 1         // × molten crack emissive (molten style)
     var frost: Float = 0        // additive frost/ice overlay on any style (0…1)
+    /// Cryo-fracture lineae from a subsurface ocean (0 = none). Moon-only — the
+    /// backend reports `has_subsurface_ocean` on moons, not planets.
+    var ocean: Float = 0
 }
 
 /// Everything the body shader needs to texture one planet. `base`/`detail` are 0…1
@@ -67,6 +70,18 @@ struct AtmosphereShell: Equatable, Sendable {
     var tint: SIMD3<Float>
     var extent: Float
     var density: Float
+}
+
+/// A ring system, drawn as a flat annulus in the body's equatorial plane (see
+/// `orrery_ring_fragment`). `innerFrac`/`outerFrac` are multiples of the body's
+/// rendered radius; `seed` places the gaps so a body's rings look identical every
+/// time it is viewed. Only bodies whose scan reports `rings == true` get one —
+/// SOL-6 and SOL-7 are the live examples.
+struct RingSystem: Equatable, Sendable {
+    var innerFrac: Float
+    var outerFrac: Float
+    var seed: Float
+    var tint: SIMD3<Float>
 }
 
 enum PlanetMaterial {
@@ -187,6 +202,21 @@ enum PlanetMaterial {
         return AtmosphereShell(tint: tint, extent: extent, density: density)
     }
 
+    // MARK: - Rings
+
+    /// Resolve a body's ring system, or nil for a body that reports no rings. Giants
+    /// carry broad, bright ice rings; a rocky world's are narrower and dustier. The
+    /// band always starts clear of the body's own limb.
+    static func ringSystem(hasRings: Bool, type: PlanetType, seed: Float) -> RingSystem? {
+        guard hasRings else { return nil }
+        let giant = type.isGiant
+        return RingSystem(
+            innerFrac: giant ? 1.35 : 1.25,
+            outerFrac: giant ? 2.30 : 1.85,
+            seed: seed,
+            tint: OrreryGeometry.rgb(hex: giant ? "#d8cfb4" : "#9c9186"))
+    }
+
     // MARK: - Saturation
 
     /// Push an RGB colour away from its own grey (luma-preserving), boosting saturation.
@@ -239,10 +269,12 @@ enum PlanetMaterial {
     }
 
     /// Temperature multiplier on a molten world's `lava` modifier: cooler volcanic
-    /// worlds show thin, dim seams; hotter ones crack wide and glow bright. ~1× at
-    /// mid-range (≈950 °C) so it composes with the tag-driven intensity.
+    /// worlds show thin, dim seams; hotter ones crack wider and glow brighter.
+    /// Scaled down from the original 0.6…1.7 band — stacked with a `hellworld` tag
+    /// that ceiling drove coverage past half the surface, which read as a lava world
+    /// with basalt islands rather than a basalt world with lava seams.
     static func lavaAmount(tempC: Double) -> Float {
-        0.6 + 1.1 * smooth01((tempC - 600) / 800)   // 0.6× at ≤600°C → 1.7× at ≥1400°C
+        0.5 + 0.95 * smooth01((tempC - 600) / 800)   // 0.5× at ≤600°C → 1.45× at ≥1400°C
     }
 
     /// Polar ice-cap *extent* on a cold world (0 = none … 1 = caps reach farthest
@@ -279,7 +311,8 @@ enum PlanetMaterial {
     static func surface(for type: PlanetType, lifeStage: String?, estimated: Bool,
                         tags: [String] = [], surfaceTempC: Double? = nil,
                         atmosphere: Atmosphere = .unknown,
-                        inHabitableZone: Bool = false) -> PlanetSurface {
+                        inHabitableZone: Bool = false,
+                        hasSubsurfaceOcean: Bool = false) -> PlanetSurface {
         var base = OrreryGeometry.rgb(hex: baseHex(type))
         var detail = OrreryGeometry.rgb(hex: detailHex(type))
         var mods = modifiers(tags: tags)
@@ -319,6 +352,10 @@ enum PlanetMaterial {
                 break
             }
         }
+
+        // A subsurface ocean stresses the crust into long cryo-fracture lineae
+        // (Europa-like). Deliberately unlike lava: cool tint, no pulsing.
+        if hasSubsurfaceOcean { mods.ocean = 1 }
 
         return PlanetSurface(
             base: base,

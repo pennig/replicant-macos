@@ -224,6 +224,7 @@ struct RawBodyPhysical: Decodable {
     var rings: Bool?
     var rotationPeriodHours: Double?
     var orbitalPeriodDays: Double?
+    var orbitalPeriodHours: Double?
     var orbitalDistanceAu: Double?
     var axialTiltDeg: Double?
     var inHabitableZone: Bool?
@@ -436,6 +437,7 @@ extension RawBodyPhysical {
             surfaceGravity: surfaceGravity, surfaceTempC: surfaceTempC, surfaceTempK: surfaceTempK,
             atmosphere: atmosphere, magneticField: magneticField, rings: rings,
             rotationPeriodHours: rotationPeriodHours, orbitalPeriodDays: orbitalPeriodDays,
+            orbitalPeriodHours: orbitalPeriodHours,
             axialTiltDeg: axialTiltDeg, tags: tags ?? [], tidallyLocked: tidallyLocked,
             orbitalDistanceKm: orbitalDistanceKm, hasSubsurfaceOcean: hasSubsurfaceOcean,
             hasAtmosphere: hasAtmosphere
