@@ -1288,3 +1288,106 @@ struct BodyFactFormatTests {
         #expect(Atmosphere.crushing.label == "Crushing")
     }
 }
+
+// MARK: - Ring clearance (rings claim space from neighbours and moons)
+
+struct RingClearanceTests {
+    private func giant(_ id: String, au: Double, rings: Bool, radiusEarth: Double = 9.45) -> Planet {
+        Planet(designation: id, type: "Gas Giant", orbitalDistanceAu: au, recon: .scanned,
+               physical: BodyPhysical(radiusEarth: radiusEarth, rings: rings, axialTiltDeg: 26.73))
+    }
+
+    @Test func aRingedPlanetPushesItsNeighbourClearOfTheRings() throws {
+        // Two identical adjacent giants; only the inner one is ringed. Its rings must
+        // not reach the outer planet's orbit.
+        func gapAfterInner(ringed: Bool) throws -> (gap: Double, ringOuter: Double) {
+            let m = OrreryMapping.systemModel(from: StarSystem(
+                designation: "RNG",
+                planets: [giant("RNG-1", au: 5.0, rings: ringed),
+                          giant("RNG-2", au: 6.0, rings: false)]))
+            let inner = try #require(m.planets.first { $0.id == "RNG-1" })
+            let outer = try #require(m.planets.first { $0.id == "RNG-2" })
+            let ringOuter = inner.displayRadius * Double(inner.rings?.outerFrac ?? 1)
+            return (outer.semiMajorScene - outer.displayRadius - inner.semiMajorScene, ringOuter)
+        }
+
+        let ringed = try gapAfterInner(ringed: true)
+        // The outer planet's inner edge must sit beyond the inner planet's ring edge.
+        #expect(ringed.gap > ringed.ringOuter)
+        // And a ringed planet genuinely claims MORE room than the same planet unringed.
+        let plain = try gapAfterInner(ringed: false)
+        #expect(ringed.gap > plain.gap)
+    }
+
+    @Test func unringedSystemLayoutIsUnchanged() throws {
+        // Regression guard: clearance == displayRadius when there are no rings, so an
+        // ordinary system must space exactly as it did before rings existed.
+        let system = StarSystem(
+            designation: "PLAIN",
+            planets: [giant("PLAIN-1", au: 0.4, rings: false),
+                      giant("PLAIN-2", au: 0.5, rings: false),
+                      giant("PLAIN-3", au: 0.6, rings: false)])
+        let m = OrreryMapping.systemModel(from: system)
+        // Still strictly ordered and non-overlapping.
+        for (a, b) in zip(m.planets, m.planets.dropFirst()) {
+            #expect(b.semiMajorScene - b.displayRadius > a.semiMajorScene + a.displayRadius)
+        }
+        #expect(m.planets.allSatisfy { $0.rings == nil })
+    }
+
+    @Test func moonsClearTheCentralPlanetsRings() throws {
+        func innerMoonGap(rings: Bool) throws -> (clearance: Double, ringOuter: Double) {
+            var p = giant("RNG-1", au: 9.5, rings: rings)
+            p.moons = [Moon(designation: "RNG-1-1", type: "Rocky", recon: .scanned,
+                            physical: BodyPhysical(radiusEarth: 0.27, orbitalPeriodHours: 40,
+                                                   tidallyLocked: true, orbitalDistanceKm: 180_000))]
+            let m = OrreryMapping.bodyModel(planet: p)
+            let central = try #require(m.centralBody)
+            let moon = try #require(m.planets.first)
+            let ringOuter = central.displayRadius * Double(central.rings?.outerFrac ?? 1)
+            return (moon.semiMajorScene - moon.displayRadius, ringOuter)
+        }
+
+        // Ringed: the innermost moon's inner edge clears the ring's outer edge.
+        let ringed = try innerMoonGap(rings: true)
+        #expect(ringed.clearance > ringed.ringOuter)
+        // And it is pushed further out than it would be around an unringed planet.
+        let plain = try innerMoonGap(rings: false)
+        #expect(ringed.clearance > plain.clearance)
+    }
+
+    @Test func unringedMoonBaseOrbitIsUnchanged() throws {
+        // The gap beyond the limb stays proportional to the BODY, so an unringed
+        // planet keeps its historical centralScene * 1.7 first-moon distance.
+        var p = giant("PLAIN-1", au: 5.2, rings: false)
+        p.moons = [Moon(designation: "PLAIN-1-1", type: "Rocky", recon: .visited)]
+        let m = OrreryMapping.bodyModel(planet: p)
+        let central = try #require(m.centralBody).displayRadius
+        let moon = try #require(m.planets.first)
+        #expect(abs(moon.semiMajorScene - central * 1.7) < 1e-9)
+    }
+
+    @Test func frameNeverClipsARingedPlanetsRings() throws {
+        // A ringed planet with no moons at all must still be framed outside its rings.
+        let m = OrreryMapping.bodyModel(planet: giant("RNG-1", au: 9.5, rings: true))
+        let central = try #require(m.centralBody)
+        let ringOuter = central.displayRadius * Double(central.rings?.outerFrac ?? 1)
+        #expect(m.frameScene > ringOuter)
+    }
+
+    @Test func systemFrameEnclosesAnOutermostRingedPlanet() throws {
+        let m = OrreryMapping.systemModel(from: StarSystem(
+            designation: "RNG", planets: [giant("RNG-1", au: 9.5, rings: true)]))
+        let p = try #require(m.planets.first)
+        let ringOuter = p.semiMajorScene + p.displayRadius * Double(p.rings?.outerFrac ?? 1)
+        #expect(m.frameScene >= ringOuter)
+    }
+
+    @Test func clearanceRadiusIsTheRingOuterEdge() {
+        #expect(OrreryMapping.clearanceRadius(3, nil) == 3)
+        let ring = RingSystem(innerFrac: 1.35, outerFrac: 2.3, seed: 0.5, tint: .zero)
+        // Tolerance is Float-sized: outerFrac is a Float (2.3 stores as 2.29999995),
+        // so the widened product lands ~1.4e-7 off the decimal value.
+        #expect(abs(OrreryMapping.clearanceRadius(3, ring) - 6.9) < 1e-6)
+    }
+}
