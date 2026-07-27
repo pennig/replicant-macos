@@ -143,7 +143,7 @@ flowchart BT
 | `DevicesFeature` (**new SPM module**, later phase) | Devices list + device detail (active-task card, command grid). Observes `Device`/`Operation`; calls `CommandClient`. | The first real consumer of the action layer. |
 | `macOS` app target | Register `GameSync` start/stop via `accountManager.registerHandler`; register each feature's relay route; add new tables to `bootstrapDatabase()`. | Composition root stays the only place that knows the full feature set. |
 
-> The `macOS/ReplicantApp.swift:122 bootstrapDatabase()` already composes `Message.registerMigrations` / `Star.registerMigrations` / `Replicant.registerMigrations`. New tables slot in the same way. `eraseDatabaseOnSchemaChange = true` is already set, so schema iteration during development is cheap.
+> The `macOS/ReplicantApp.swift:122 bootstrapDatabase()` already composes `Message.registerMigrations` / `Star.registerMigrations` / `Replicant.registerMigrations`. New tables slot in the same way. Migrations are append-only (`GameDatabase.manifest`); there is no `eraseDatabaseOnSchemaChange` escape hatch anymore — it used to wipe the local database on every out-of-order schema change, which is exactly the bug this now prevents. Wipe deliberately via Tools ▸ "Reset Local Database…" or `RC_RESET_DATABASE=1` when iterating on schema.
 
 ---
 

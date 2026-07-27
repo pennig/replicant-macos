@@ -344,7 +344,13 @@ let package = Package(
                 "UniverseModels",
                 .product(name: "SQLiteData", package: "sqlite-data"),
             ],
-            path: "GameDatabase/Tests"
+            path: "GameDatabase/Tests",
+            // The golden schema fixture isn't Swift source; SPM otherwise
+            // warns "found N files that are unhandled" for it. Resolved via
+            // `#filePath` at the call site (see `SchemaDump.swift`), which
+            // reads the fixture straight from source control rather than a
+            // bundled resource, so excluding it here doesn't affect the test.
+            exclude: ["Fixtures"]
         ),
         .target(
             name: "GameModels",

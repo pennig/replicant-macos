@@ -16,6 +16,13 @@ import Testing
 @Suite struct SchemaManifestTests {
     /// Every shipped migration identifier, in order. ONLY ever append to this
     /// list — never reorder, rename, or delete an entry.
+    ///
+    /// The one sanctioned exception is a baseline squash: replace a run of
+    /// entries with a single `SchemaMigration(_:merging:migrate:)` whose
+    /// `mergedIdentifiers` set equals exactly the identifiers it deletes from
+    /// this list. That keeps `grdb_migrations` bookkeeping correct for
+    /// databases that already applied the originals, without requiring every
+    /// one of them to still be replayed individually forever.
     static let frozenIdentifiers = [
         "Create 'messages' table",
         "Add category/subcategory to 'messages'",

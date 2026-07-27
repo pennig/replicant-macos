@@ -258,7 +258,7 @@ live database is in sync with the source definitions.
 |---|---|
 | An edit to a shipped migration now silently no-ops instead of wiping | Golden schema test, run in the normal suite |
 | A failed migration leaves a partially-migrated database | Loud `withErrorReporting` failure naming the migration; `RC_RESET_DATABASE=1` as the escape |
-| A new migration is added to a model but forgotten in the manifest | It simply never runs; the golden schema test fails, because the fresh-bootstrap schema will not match |
+| A new migration is added to a model but forgotten in the manifest | Not caught by the golden schema test — an unregistered migration never runs, so the fresh-bootstrap schema is unchanged and the fixture still matches. `bootstrapComposesEverySchema`'s full-column `.all.fetchAll` per table is what catches this in practice: a model gains a property with no matching `ALTER TABLE`/manifest entry, and the generated `SELECT` fails to prepare against the real (unchanged) schema |
 | The reset menu item is triggered by accident | DEBUG-only, behind a confirmation, and requires a relaunch |
 
 ## Scope

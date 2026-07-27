@@ -75,8 +75,8 @@ public enum GameDatabase {
     /// `eraseDatabaseOnSchemaChange` is deliberately NOT set. It wiped the
     /// database whenever a migration landed anywhere but the end of the list,
     /// which cost the stars catalogue repeatedly. A migration that throws now
-    /// propagates out of this call instead — the caller (`bootstrapDatabase`,
-    /// invoked from `ReplicantApp`) wraps it in `withErrorReporting`.
+    /// propagates out of this call instead — `ReplicantApp`'s `init()` wraps
+    /// its call to `bootstrapDatabase()` in `withErrorReporting`.
     public static func migrator(_ entries: [SchemaMigration] = manifest) -> DatabaseMigrator {
         var migrator = DatabaseMigrator()
         for entry in entries {
@@ -98,16 +98,43 @@ public enum GameDatabase {
         let database = try SQLiteData.defaultDatabase(configuration: configuration)
         @Dependency(\.context) var context
         if context == .live,
-           DatabaseReset.consumeRequest(
+           let trigger = DatabaseReset.consumeRequest(
                defaults: .standard,
                environment: ProcessInfo.processInfo.environment
            )
         {
-            logger.warning("Reset requested — erasing the local database before migrating.")
-            try database.erase()
+            // `.fault`, not `.warning`: this line is the only record of an
+            // erase that just cost the stars catalogue (rate limited to
+            // roughly one call a minute) and every rehydrated location. Name
+            // the trigger explicitly — the env var is the dangerous one,
+            // because unlike the Tools-menu flag it doesn't clear itself and
+            // will erase again on every subsequent launch until unset.
+            logger.fault("Reset requested via \(trigger.loggingDescription) — erasing the local database before migrating.")
+            try reset(database)
+            return database
         }
         try migrator().migrate(database)
         return database
+    }
+
+    /// Erases every table, then replays the full migration history from
+    /// scratch — exactly what `bootstrap()`'s reset branch does, extracted so
+    /// it's independently testable.
+    ///
+    /// `bootstrap()`'s erase branch is unreachable from tests as written: it's
+    /// guarded by `context == .live`, and forcing `\.context` to `.live` isn't
+    /// a usable workaround, because `SQLiteData.defaultDatabase()` would then
+    /// open the real Application Support database instead of a disposable
+    /// one. Tests call this directly on a bootstrapped test database instead.
+    ///
+    /// Order matters and is pinned by `DatabaseEraseResetTests`: erase, then
+    /// migrate. Reversed, `migrate` on an already-current database is a
+    /// no-op, and the subsequent `erase()` would drop `grdb_migrations` too,
+    /// leaving a connection with no schema at all rather than a freshly
+    /// migrated one.
+    static func reset(_ database: any DatabaseWriter) throws {
+        try database.erase()
+        try migrator().migrate(database)
     }
 
     /// Shared connection configuration. In DEBUG it traces executed SQL, routing

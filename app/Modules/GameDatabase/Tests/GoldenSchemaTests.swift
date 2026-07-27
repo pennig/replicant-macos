@@ -19,51 +19,20 @@ import Testing
 @testable import GameDatabase
 
 @Suite struct GoldenSchemaTests {
-    static var fixtureURL: URL {
-        URL(filePath: #filePath)
-            .deletingLastPathComponent()
-            .appending(path: "Fixtures/schema.sql")
-    }
-
-    /// `grdb_migrations` is excluded — it is GRDB-owned, and including it
-    /// would couple this fixture to a library upgrade.
-    ///
-    /// GRDB's `Row` type isn't re-exported through `SQLiteData` (only a
-    /// handful of GRDB symbols are, via `@_exported import`), so this reads
-    /// the raw SQL the same way `Star.createStars` and friends write it:
-    /// `#sql(…, as:)` decoded straight to `String`, via StructuredQueries'
-    /// `Statement.fetchAll(_:)`.
-    static func dumpSchema(_ database: any DatabaseWriter) throws -> String {
-        try database.read { db in
-            let sqlStatements = try #sql(
-                """
-                SELECT sql FROM sqlite_master
-                WHERE sql IS NOT NULL
-                  AND name NOT LIKE 'sqlite_%'
-                  AND name <> 'grdb_migrations'
-                ORDER BY type, name
-                """,
-                as: String.self
-            )
-            .fetchAll(db)
-            return sqlStatements.map { $0 + ";" }.joined(separator: "\n\n") + "\n"
-        }
-    }
-
     @Test func freshSchemaMatchesTheGoldenFixture() throws {
-        let actual = try Self.dumpSchema(try GameDatabase.bootstrap())
+        let actual = try SchemaDump.dump(try GameDatabase.bootstrap())
 
         if ProcessInfo.processInfo.environment["RC_REGENERATE_SCHEMA_FIXTURE"] == "1" {
             try FileManager.default.createDirectory(
-                at: Self.fixtureURL.deletingLastPathComponent(),
+                at: SchemaDump.goldenFixtureURL.deletingLastPathComponent(),
                 withIntermediateDirectories: true
             )
-            try actual.write(to: Self.fixtureURL, atomically: true, encoding: .utf8)
-            Issue.record("Regenerated \(Self.fixtureURL.lastPathComponent) — review the diff and re-run without the flag.")
+            try actual.write(to: SchemaDump.goldenFixtureURL, atomically: true, encoding: .utf8)
+            Issue.record("Regenerated \(SchemaDump.goldenFixtureURL.lastPathComponent) — review the diff and re-run without the flag.")
             return
         }
 
-        let expected = try String(contentsOf: Self.fixtureURL, encoding: .utf8)
+        let expected = try String(contentsOf: SchemaDump.goldenFixtureURL, encoding: .utf8)
         #expect(actual == expected)
     }
 }
