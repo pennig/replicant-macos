@@ -985,3 +985,41 @@ struct VolcanismScaleTests {
         #expect(combined <= 2.8)
     }
 }
+
+// MARK: - Layer rotation anchor
+
+struct LayerRotationAnchorTests {
+    private func layer(hours: [Double?]) -> OrreryLayout {
+        let planets = hours.enumerated().map { i, h in
+            OrreryPlanet(
+                designation: "SOL-\(i + 1)", name: nil, type: "Gas Giant",
+                planetType: .gasGiant, estimated: false, tags: [],
+                surfaceTempC: nil, atmosphere: Atmosphere(apiValue: nil), appearanceSeed: 0.5,
+                orbitalDistanceAu: 1, inHabitableZone: false, scanned: true,
+                moonCount: 0, lifeStage: nil, inventory: [],
+                semiMajorScene: 10, periodDays: 100, phase0Deg: 0,
+                displayRadius: 1, colorHex: "#ffffff", rings: nil,
+                spin: BodySpin(rotationHours: h),
+                indicators: [], hasInterestingMoon: false, moons: [])
+        }
+        var model = OrreryMapping.minimal(
+            designation: "SOL", position: Position(x: 0, y: 0, z: 0),
+            spectralType: "G2", color: "Yellow", name: "Sol")
+        model.planets = planets
+        return OrreryLayout(model: model, center: .zero, scale: 1, reveal: 1, time: 0)
+    }
+
+    @Test func anchorIsTheFastestRotator() {
+        #expect(layer(hours: [9.92, 10.66, -5832.5]).fastestRotationHours == 9.92)
+    }
+
+    @Test func anchorIgnoresSignAndMissingReadings() {
+        // A negative period is retrograde, not "faster than zero" — magnitude wins.
+        #expect(layer(hours: [-17.24, 998.5]).fastestRotationHours == 17.24)
+        #expect(layer(hours: [nil, 42.0, nil]).fastestRotationHours == 42.0)
+    }
+
+    @Test func anchorFallsBackWhenNothingReportsRotation() {
+        #expect(layer(hours: [nil, nil]).fastestRotationHours == 1)
+    }
+}

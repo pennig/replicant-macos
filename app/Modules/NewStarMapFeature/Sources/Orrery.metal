@@ -219,6 +219,9 @@ struct OrreryBodyVaryings {
     float  polarIce;     // temperature-driven polar ice caps (0…1)
     float  greenVibrancy; // saturation × for the world's green (land+vegetation); 1 = off
     float4 mods;         // tag-driven surface modifiers (crater×, cloud×, lava×, frost)
+    float3 pole;         // body north pole (unit, world space) — the texturing frame
+    float  spinRate;     // signed spin rate (rad/s); negative = retrograde, 0 = locked
+    float  ocean;        // subsurface-ocean cryo-fracture amount (0…1)
 };
 
 vertex OrreryBodyVaryings orrery_body_vertex(uint vid                       [[vertex_id]],
@@ -247,11 +250,24 @@ vertex OrreryBodyVaryings orrery_body_vertex(uint vid                       [[ve
     out.polarIce = b.color.a;
     out.greenVibrancy = b.sunEmissive.w;
     out.mods = b.surfaceMods;
+    out.pole = b.spinAxis.xyz;
+    out.spinRate = b.spinAxis.w;
+    out.ocean = b.surfaceExtras.x;
     return out;
 }
 
-fragment float4 orrery_body_fragment(OrreryBodyVaryings in [[stage_in]],
-                                     constant Uniforms&    u    [[buffer(1)]])
+// The body writes TRUE sphere depth, not the billboard quad's flat plane, so
+// geometry that intersects the body — the ring annulus above all — is occluded at
+// the real silhouette rather than at a disc through the body's centre. The
+// reconstructed surface always bulges toward the camera relative to the quad plane,
+// so `less` is the correct conservative qualifier.
+struct OrreryBodyOut {
+    float4 color [[color(0)]];
+    float  depth [[depth(less)]];
+};
+
+fragment OrreryBodyOut orrery_body_fragment(OrreryBodyVaryings in [[stage_in]],
+                                            constant Uniforms&    u    [[buffer(1)]])
 {
     float d = length(in.uv);
     if (d > 1.0) discard_fragment();
@@ -260,12 +276,26 @@ fragment float4 orrery_body_fragment(OrreryBodyVaryings in [[stage_in]],
     float coverage = smoothstep(1.0, 1.0 - fwidth(d) - 0.01, d);   // soft AA limb
 
     // Reconstruct the real surface direction from the billboard: back-transform the
-    // view-space hemisphere by the inverse (transpose) view rotation, then spin it
-    // slowly about the pole so the texture rotates rather than being pinned to the
-    // camera (mirrors star_body_fragment's granulation parallax).
+    // view-space hemisphere by the inverse (transpose) view rotation.
     float3x3 viewRot = float3x3(u.view[0].xyz, u.view[1].xyz, u.view[2].xyz);
-    float3 dir = normalize(transpose(viewRot) * nView);
-    float spin = u.time * 0.06 + in.seed;
+    float3 dirWorld = normalize(transpose(viewRot) * nView);
+
+    // Then move into the BODY's own frame, whose +Y is its (tilted) north pole.
+    // Everything downstream reads latitude as dir.y, so doing this once here is what
+    // makes axial tilt work for every surface style at once — including retrograde
+    // worlds, whose pole simply aims below the orbital plane (SOL-2 at 177.4°, SOL-7
+    // at 97.77°), reversing the apparent spin with no special case.
+    float3 pole = normalize(in.pole);
+    float3 ref = fabs(pole.y) > 0.99 ? float3(1.0, 0.0, 0.0) : float3(0.0, 1.0, 0.0);
+    float3 bx = normalize(cross(ref, pole));
+    float3 bz = cross(pole, bx);
+    float3x3 bodyFrame = float3x3(bx, pole, bz);          // columns
+    float3 dir = transpose(bodyFrame) * dirWorld;         // world -> body
+
+    // Spin about the body's own pole, at the rate its rotation period earned. A
+    // tidally locked body arrives with spinRate 0 and its ORBIT angle baked into
+    // `seed`, so its near face stays toward its parent as it goes round.
+    float spin = u.time * in.spinRate + in.seed;
     float cs = cos(spin), sn = sin(spin);
     dir = float3(dir.x * cs - dir.z * sn, dir.y, dir.x * sn + dir.z * cs);
 
@@ -277,7 +307,10 @@ fragment float4 orrery_body_fragment(OrreryBodyVaryings in [[stage_in]],
     float3 toCam = float3(0.0, 0.0, 1.0);                      // distant-camera view dir (view space)
     float3 tang = toCam - dot(toCam, nView) * nView;           // tangential to the sphere here
     float3 nViewCloud = normalize(nView - tang * kCloudHeight);
-    float3 cloudDir = normalize(transpose(viewRot) * nViewCloud);
+    // Same body frame as the surface, so the weather deck stays aligned with the
+    // terrain it floats over on a tilted world.
+    float3 cloudWorld = normalize(transpose(viewRot) * nViewCloud);
+    float3 cloudDir = transpose(bodyFrame) * cloudWorld;
     float cspin = spin + u.time * kCloudDrift;
     float ccs = cos(cspin), csn = sin(cspin);
     cloudDir = float3(cloudDir.x * ccs - cloudDir.z * csn, cloudDir.y, cloudDir.x * csn + cloudDir.z * ccs);
@@ -301,7 +334,12 @@ fragment float4 orrery_body_fragment(OrreryBodyVaryings in [[stage_in]],
         float scan = 0.5 + 0.5 * sin(in.position.y * 0.6 + u.time * 6.0);
         lit *= mix(0.7, 1.08, stat) * mix(0.9, 1.0, scan);
     }
-    return float4(lit, coverage * u.orreryAlpha);
+
+    OrreryBodyOut out;
+    out.color = float4(lit, coverage * u.orreryAlpha);
+    float4 clip = u.projection * float4(fragView, 1.0);
+    out.depth = clip.z / clip.w;
+    return out;
 }
 
 // Atmosphere halo — a soft glow shell that bleeds beyond a terrestrial body's limb

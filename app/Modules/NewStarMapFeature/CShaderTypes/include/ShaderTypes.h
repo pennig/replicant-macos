@@ -146,6 +146,14 @@ typedef struct {
     // Tag-driven surface modifiers (see PlanetMaterial.SurfaceModifiers): x = crater
     // relief ×, y = cloud/atmosphere ×, z = lava emissive ×, w = frost overlay (0…1).
     simd_float4 surfaceMods;
+    // Body orientation: xyz = the body's north pole as a unit vector in world space
+    // (from its axial tilt), w = signed spin rate in rad/s (negative = retrograde;
+    // 0 = tidally locked, which carries its orbit angle in surfaceParams.z instead).
+    // The fragment textures in the frame this defines, so every latitude feature —
+    // gas bands, polar hoods, ice caps — tilts with the body for free.
+    simd_float4 spinAxis;
+    // x = subsurface-ocean cryo-fracture amount (0…1), yzw reserved.
+    simd_float4 surfaceExtras;
 } OrreryBodyUniform;
 
 // Per-body params for one orrery atmosphere halo — a soft glow shell drawn in a

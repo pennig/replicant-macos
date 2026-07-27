@@ -1671,7 +1671,19 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         var surfaceTempC: Double?
         var atmosphere: Atmosphere
         var appearanceSeed: Float
-        var seedDeg: Double
+        /// Spin phase in radians at t = 0. For a free-rotating body this is its stable
+        /// per-body offset (so two planets of a type aren't rotated identically); for a
+        /// TIDALLY LOCKED body it is the body's orbit angle, which — paired with
+        /// `spinRate == 0` — keeps its near face toward its parent as it goes round.
+        var spinPhase: Float
+        /// The body's north pole (unit, world space) — the frame it is textured in.
+        var spinAxis: SIMD3<Float>
+        /// Signed spin rate (rad/s); negative is retrograde, 0 is tidally locked.
+        var spinRate: Float
+        /// Subsurface-ocean cryo-fracture amount (0…1).
+        var ocean: Float
+        /// The body's ring system, if it has one — drives the ring pass.
+        var rings: RingSystem?
     }
 
     /// Place every body of one orrery layer for this frame: the drilled central body
@@ -1707,11 +1719,19 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
                 inHabitableZone: central.inHabitableZone,
                 surfaceTempC: central.surfaceTempC, atmosphere: central.atmosphere,
                 appearanceSeed: central.appearanceSeed,
-                seedDeg: OrreryMapping.phaseDeg(model.star.designation)))
+                spinPhase: Float(OrreryMapping.phaseDeg(model.star.designation)) * .pi / 180,
+                spinAxis: central.spin.pole(seed: central.appearanceSeed),
+                // A central body is not an orbiter of its own layer, so it never locks here.
+                spinRate: central.spin.spinRate(fastestHours: layout.fastestRotationHours),
+                ocean: 0,
+                rings: central.rings))
         }
 
         for planet in model.planets where planet.id != excludeID {
             let pos = layout.orbiterPosition(planet)   // emerge from the centre (reveal applied)
+            // A tidally locked body does not spin freely: its near face tracks its
+            // parent, so the rate is zero and its ORBIT angle becomes the spin phase.
+            let locked = planet.spin.tidallyLocked
             placed.append(PlacedBody(
                 isCentral: false, center: pos, radius: Float(planet.displayRadius) * scale,
                 sun: sun, type: planet.planetType, lifeStage: planet.lifeStage,
@@ -1719,7 +1739,13 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
                 inHabitableZone: planet.inHabitableZone,
                 surfaceTempC: planet.surfaceTempC, atmosphere: planet.atmosphere,
                 appearanceSeed: planet.appearanceSeed,
-                seedDeg: planet.phase0Deg))
+                spinPhase: locked ? layout.orbiterAngle(planet)
+                                  : Float(planet.phase0Deg) * .pi / 180,
+                spinAxis: planet.spin.pole(seed: planet.appearanceSeed),
+                spinRate: locked ? 0
+                                 : planet.spin.spinRate(fastestHours: layout.fastestRotationHours),
+                ocean: planet.hasSubsurfaceOcean ? 1 : 0,
+                rings: planet.rings))
         }
         return placed
     }
@@ -1733,14 +1759,15 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
                                        tags: p.tags, surfaceTempC: p.surfaceTempC,
                                        atmosphere: p.atmosphere,
                                        inHabitableZone: p.inHabitableZone)
-        let spin = Float(p.seedDeg) * .pi / 180
         return OrreryBodyUniform(
             centerRadius: SIMD4(p.center, p.radius),
             color: SIMD4(s.base, s.polarIce),
             sunEmissive: SIMD4(p.sun, s.greenVibrancy),
             detailColor: SIMD4(s.detail, Float(s.style.rawValue)),
-            surfaceParams: SIMD4(s.estimated ? 1 : 0, s.life, spin, p.appearanceSeed),
-            surfaceMods: SIMD4(s.mods.craters, s.mods.atmosphere, s.mods.lava, s.mods.frost))
+            surfaceParams: SIMD4(s.estimated ? 1 : 0, s.life, p.spinPhase, p.appearanceSeed),
+            surfaceMods: SIMD4(s.mods.craters, s.mods.atmosphere, s.mods.lava, s.mods.frost),
+            spinAxis: SIMD4(p.spinAxis, p.spinRate),
+            surfaceExtras: SIMD4(p.ocean, 0, 0, 0))
     }
 
     /// The atmosphere-halo uniform for a placed body, or `nil` if it gets no shell (a
