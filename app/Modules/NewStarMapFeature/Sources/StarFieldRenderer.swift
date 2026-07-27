@@ -2309,11 +2309,23 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
                     direction: boundary.direction == .inbound ? .inbound : .outbound,
                     endpointCode: boundary.endpointCode,
                     viaCode: boundary.viaCode,
-                    arrivesAt: ship.arrivesAt,
+                    eventAt: eventDate(for: boundary, on: ship),
                     point: snapToPixelGrid(point, scale: pixelScale), opacity: op))
             }
         }
         emit(out)
+    }
+
+    /// When `ship` is at a boundary's anchor — the instant the callout counts down
+    /// to. `orderedCodes[i]` is the route origin at `i == 0` and leg `i - 1`'s
+    /// destination otherwise, so the anchor's time is that leg's end (or the
+    /// departure at the origin). Legs are contiguous with no dwell, so arriving at
+    /// a waypoint and leaving it are the same instant — inbound and outbound share
+    /// this, and only the card's verb differs.
+    private func eventDate(for boundary: TransitBoundary, on ship: Ship) -> Date {
+        let i = boundary.anchorIndex - 1
+        guard i >= 0, i < ship.legs.count else { return ship.departedAt }
+        return ship.legs[i].endsAt
     }
 
     /// The screen-pixel length of one dash+gap cycle for a ship's trajectory. Each

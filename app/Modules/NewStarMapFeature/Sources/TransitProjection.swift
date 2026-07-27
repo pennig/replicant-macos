@@ -13,8 +13,9 @@ import SwiftUI
 // observation boundary is load-bearing for performance.
 
 /// One transit callout's on-screen placement: the device it represents, whether the route
-/// is inbound/outbound here, the far endpoint + immediate external waypoint it names, its
-/// screen point (view POINTS, top-left origin), and an opacity tracking the orrery reveal.
+/// is inbound/outbound here, the far endpoint + immediate external waypoint it names, when
+/// it crosses this view's boundary, its screen point (view POINTS, top-left origin), and an
+/// opacity tracking the orrery reveal.
 struct ProjectedTransit: Equatable, Identifiable {
     enum Direction: Equatable { case inbound, outbound }
 
@@ -24,8 +25,11 @@ struct ProjectedTransit: Equatable, Identifiable {
     let endpointCode: String
     /// The immediate external waypoint, if distinct from `endpointCode`.
     let viaCode: String?
-    /// The trip's final-arrival time, for a live "arrives in …" countdown on the card.
-    let arrivesAt: Date
+    /// When the device crosses THIS view's boundary — arrives at the anchor
+    /// (inbound) or departs it (outbound). Drives the card's live countdown.
+    /// Legs are contiguous with no dwell, so both directions read the same
+    /// instant; only the verb differs.
+    let eventAt: Date
     let point: CGPoint
     let opacity: Double
 

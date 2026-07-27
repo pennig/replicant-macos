@@ -34,7 +34,7 @@ struct TransitCalloutLayer: View {
                     direction: callout.direction,
                     endpointCode: callout.endpointCode,
                     viaCode: callout.viaCode,
-                    arrivesAt: callout.arrivesAt,
+                    eventAt: callout.eventAt,
                     isSelected: callout.deviceCode == selectedDeviceCode,
                     action: { onSelect(callout.deviceCode) }
                 )
@@ -63,13 +63,19 @@ private struct TransitCard: View {
     let direction: ProjectedTransit.Direction
     let endpointCode: String
     let viaCode: String?
-    let arrivesAt: Date
+    let eventAt: Date
     let isSelected: Bool
     let action: () -> Void
 
     @State private var hovered = false
 
     private var verb: String { direction == .inbound ? "Traveling from" : "Traveling to" }
+
+    /// What the countdown measures, relative to the view you're looking at: when
+    /// the device shows up here, or when it leaves. Deliberately NOT the trip's
+    /// final arrival — that's on the device detail's Active Task card and the
+    /// sidebar progress bar, and it isn't what this riser marks.
+    private var countdownLabel: String { direction == .inbound ? "enters in" : "leaves in" }
 
     var body: some View {
         Button(action: action) {
@@ -98,14 +104,15 @@ private struct TransitCard: View {
                                 .foregroundStyle(.rcTextPrimary)
                         }
                     }
-                    // Live countdown to final arrival — self-updating, so it ticks without
-                    // the renderer re-pushing the projection each second.
-                    if arrivesAt > .now {
+                    // Live countdown to this view's boundary crossing — self-updating,
+                    // so it ticks without the renderer re-pushing the projection each
+                    // second.
+                    if eventAt > .now {
                         HStack(spacing: Space.xs) {
-                            Text("arrives in")
+                            Text(countdownLabel)
                                 .font(.rcCaption)
                                 .foregroundStyle(.rcTextSecondary)
-                            Text(timerInterval: .now...arrivesAt, countsDown: true)
+                            Text(timerInterval: .now...eventAt, countsDown: true)
                                 .font(.rcMonoSmall)
                                 .monospacedDigit()
                                 .foregroundStyle(.rcAccent)
