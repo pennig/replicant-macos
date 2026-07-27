@@ -553,3 +553,75 @@ struct StowChangeTests {
         #expect(GameSync.stowChange(for: event(name)) == nil)
     }
 }
+
+// MARK: - Regression: the stall of 2026-07-26
+
+/// Replays the EXACT event that a live Survey Run stalled twelve seconds after
+/// ignoring, captured verbatim from the app's own `eventLogs` ledger:
+///
+///     receivedAt  2026-07-26 20:46:38.055Z   (15:46:38 local)
+///     event       device.stowed
+///     deviceCode  B2CBDEC6                   (the AMI survey controller)
+///     payload     {"location": "ALASII-5-L4",
+///                  "stowed_in_device_code": "F2908E6E"}
+///
+/// The run's audit trail then reads: `Target: POLARISUM → preflight` at
+/// 15:46:44.9, `stalled noSurveyControllerAboard` at 15:46:50.1, and a Retry
+/// that re-stalled 1.6s later — because Retry re-runs a pure function over an
+/// unchanged snapshot. The controller was aboard the whole time and the payload
+/// above said so; the row was only repaired by a `.low` confirm-read that the
+/// reads budget had been deferring for minutes.
+@Suite("GameSync — device.stowed regression (2026-07-26)")
+struct StowedControllerRegressionTests {
+    @Test func theCapturedStowEventStagesTheControllerWithNoRead() async throws {
+        let database = try GameDatabase.bootstrap()
+        let staged = Date(timeIntervalSince1970: 1_000)
+        let reads = LockIsolated<[String]>([])
+
+        let controller = Device(
+            deviceCode: "B2CBDEC6", deviceType: "ami_survey_controller", replicantCode: "R1",
+            status: "deployed", location: "ALASII-5-L4", locationName: nil,
+            operationalCapacity: 100, queueSize: 0,
+            stowedInDeviceCode: nil,            // the stale row: NOT aboard
+            controllerDeviceCode: nil, attachedToDeviceCode: nil,
+            createdAt: Date(timeIntervalSince1970: 0), availableCommands: [], features: [],
+            tags: [], detail: .object(["available_directives": .array([.string("survey_system")])]),
+            updatedAt: staged, firstSeenAt: staged
+        )
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 10_000))
+            $0.uuid = .incrementing
+            // The condition that caused the bug: every confirm-read is refused,
+            // exactly as the budget floor was refusing them that afternoon.
+            $0.deviceRefresher = DeviceRefreshClient { code, _ in
+                reads.withValue { $0.append(code) }
+                return nil
+            }
+            $0.deviceStaleness.markStale = { _, _ in }
+        } operation: {
+            await Reconciler().ingest(controller)
+
+            await GameSync.deviceRoute(reconciler: Reconciler()).apply(GameEventEnvelope(
+                id: "1785098798055-0", category: "device", event: "device.stowed",
+                deviceCode: "B2CBDEC6",
+                payload: [
+                    "location": .string("ALASII-5-L4"),
+                    "stowed_in_device_code": .string("F2908E6E"),
+                ],
+                createdAt: "2026-07-26T15:46:38-05:00"
+            ))
+
+            let row = try await database.read { db in
+                try Device.where { $0.deviceCode.eq("B2CBDEC6") }.fetchOne(db)
+            }
+            #expect(
+                row?.stowedInDeviceCode == "F2908E6E",
+                "the payload named the carrier — preflight must see the controller aboard"
+            )
+            // The whole point: this repair costs nothing and cannot be deferred.
+            #expect(reads.value.isEmpty, "settled from the event alone, with no confirm-read")
+        }
+    }
+}
