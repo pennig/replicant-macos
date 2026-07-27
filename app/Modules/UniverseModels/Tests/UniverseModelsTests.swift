@@ -140,6 +140,20 @@ import Testing
         #expect(moon.physical?.massEarth == 0.003169)   // physical block preserved
     }
 
+    @Test func scannedMoonDecodesItsOrbit() throws {
+        // A moon's orbit comes as `orbital_period_hours` — moons never report
+        // `orbital_period_days` the way planets do, so this is the ONLY real orbit
+        // speed a moon has. It had no DTO field and was silently dropped, which left
+        // every moon in the orrery orbiting on a synthetic ladder.
+        let raw = try decode(Self.scannedMoonNoFlagJSON)
+        let detail = try #require(raw.bodyDetail())
+        guard case .moon(let moon) = detail else { Issue.record("expected moon"); return }
+        #expect(moon.physical?.orbitalPeriodHours == 165.19)
+        // The sibling moon-only fields must keep decoding alongside it.
+        #expect(moon.physical?.orbitalDistanceKm == 174286.7)
+        #expect(moon.physical?.tidallyLocked == true)
+    }
+
     @Test func planetRefetchKeepsPreviouslyScannedMoonDetail() {
         // A moon fetched individually carries salvage (a `-SAL-` site) + physical.
         // The planet-level response lists that moon as a bare stub — merging the

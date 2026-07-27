@@ -223,6 +223,10 @@ public struct BodyPhysical: Equatable, Sendable, Codable {
     public var rings: Bool?
     public var rotationPeriodHours: Double?
     public var orbitalPeriodDays: Double?
+    /// Moon orbital period. Moons never report `orbitalPeriodDays` the way planets do —
+    /// the backend gives them hours instead (SOL-3-1 = 655.7, SOL-5-1 = 42.46) — so this
+    /// is the only real orbit speed a moon has. Nil until the moon is scanned.
+    public var orbitalPeriodHours: Double?
     public var axialTiltDeg: Double?
     public var tags: [String]
     // Moon-specific
@@ -235,7 +239,8 @@ public struct BodyPhysical: Equatable, Sendable, Codable {
         massEarth: Double? = nil, radiusEarth: Double? = nil, densityGcc: Double? = nil,
         surfaceGravity: Double? = nil, surfaceTempC: Double? = nil, surfaceTempK: Double? = nil,
         atmosphere: String? = nil, magneticField: Bool? = nil, rings: Bool? = nil,
-        rotationPeriodHours: Double? = nil, orbitalPeriodDays: Double? = nil, axialTiltDeg: Double? = nil,
+        rotationPeriodHours: Double? = nil, orbitalPeriodDays: Double? = nil,
+        orbitalPeriodHours: Double? = nil, axialTiltDeg: Double? = nil,
         tags: [String] = [], tidallyLocked: Bool? = nil, orbitalDistanceKm: Double? = nil,
         hasSubsurfaceOcean: Bool? = nil, hasAtmosphere: Bool? = nil
     ) {
@@ -250,6 +255,7 @@ public struct BodyPhysical: Equatable, Sendable, Codable {
         self.rings = rings
         self.rotationPeriodHours = rotationPeriodHours
         self.orbitalPeriodDays = orbitalPeriodDays
+        self.orbitalPeriodHours = orbitalPeriodHours
         self.axialTiltDeg = axialTiltDeg
         self.tags = tags
         self.tidallyLocked = tidallyLocked
