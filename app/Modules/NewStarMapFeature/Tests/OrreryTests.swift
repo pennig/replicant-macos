@@ -917,6 +917,49 @@ struct BodySpinTests {
         #expect(BodySpin(tidallyLocked: true).tidallyLocked)
         #expect(!BodySpin.unknown.tidallyLocked)
     }
+
+    @Test func tidallyLockedBodyKeepsOneFaceTowardItsParent() {
+        // A faithful mirror of the two conventions that compose here.
+        //
+        // `orrery_body_fragment` rotates the texture LOOKUP direction by
+        //   S(spin) = (x·cos − z·sin, y, x·sin + z·cos)
+        // so a FIXED surface feature appears at S(−spin) applied to that feature.
+        func featureWorldDirection(spin: Float) -> SIMD3<Float> {
+            let s = -spin
+            let f = SIMD3<Float>(1, 0, 0)          // an arbitrary fixed surface feature
+            return SIMD3(f.x * cos(s) - f.z * sin(s), f.y, f.x * sin(s) + f.z * cos(s))
+        }
+        // `OrreryLayout` places the body at (cos a, 0, sin a); the parent sits at the
+        // centre, so the direction from body back to parent is the negation.
+        func parentDirection(orbitAngle a: Float) -> SIMD3<Float> {
+            -SIMD3<Float>(cos(a), 0, sin(a))
+        }
+
+        // Orbit angle DECREASES with time (see OrbitTiming.angle).
+        let orbitAngles: [Float] = (0..<8).map { 0.9 - Float($0) * 0.31 }
+
+        for a in orbitAngles {
+            let spin = BodySpin.lockedSpinPhase(orbitAngle: a)
+            let alignment = simd_dot(featureWorldDirection(spin: spin), parentDirection(orbitAngle: a))
+            // −1 means that face points EXACTLY at the parent, at every point of the
+            // orbit. That is what tidal lock means.
+            #expect(abs(alignment - (-1)) < 1e-4)
+        }
+
+        // Negative control: feeding the orbit angle UNNEGATED — the bug that made
+        // SOL-3-1 read as retrograde — sweeps the face right around instead.
+        let unnegated = orbitAngles.map {
+            simd_dot(featureWorldDirection(spin: $0), parentDirection(orbitAngle: $0))
+        }
+        #expect(unnegated.contains { abs($0 - unnegated[0]) > 0.5 })
+    }
+
+    @Test func lockedSpinPhaseOpposesTheOrbitAngle() {
+        #expect(BodySpin.lockedSpinPhase(orbitAngle: 1.2) == -1.2)
+        // As the orbit angle decreases with time, the locked spin phase must increase.
+        #expect(BodySpin.lockedSpinPhase(orbitAngle: 0.2)
+                > BodySpin.lockedSpinPhase(orbitAngle: 0.5))
+    }
 }
 
 struct RingSystemTests {

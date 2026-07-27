@@ -96,6 +96,25 @@ struct BodySpin: Equatable, Sendable {
         return sign * min(max(rate, Self.minRate), Self.maxRate)
     }
 
+    /// The spin phase that keeps a tidally locked body's near face toward its parent,
+    /// given its current orbit angle. Paired with `spinRate == 0`, since the orbital
+    /// motion alone supplies the body's one rotation per orbit.
+    ///
+    /// It is the **negated** orbit angle, and the sign is not arbitrary — two
+    /// conventions compose to require it:
+    ///
+    /// - `OrreryLayout` places a body at `(cos a, 0, sin a)` with `a` DECREASING over
+    ///   time (orbits run counter-clockwise about the pole), so the body's position
+    ///   advances as `−a`.
+    /// - `orrery_body_fragment` rotates the texture LOOKUP direction by `spin`, so a
+    ///   fixed surface feature appears to advance by `−spin`.
+    ///
+    /// For the same face to hold on the parent, the feature must advance exactly as
+    /// the position does: `−spin == −a` … i.e. `spin == −a`. Feeding `a` unnegated
+    /// turns the moon relative to its parent at twice the orbital rate, which reads as
+    /// retrograde — see `tidallyLockedBodyKeepsOneFaceTowardItsParent`.
+    static func lockedSpinPhase(orbitAngle: Float) -> Float { -orbitAngle }
+
     /// The body's orthonormal texturing frame as (x, pole, z) columns — the frame the
     /// surface shader transforms into so every latitude feature tilts with the body.
     ///

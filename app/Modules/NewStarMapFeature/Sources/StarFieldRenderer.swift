@@ -1879,8 +1879,9 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
                 inHabitableZone: planet.inHabitableZone,
                 surfaceTempC: planet.surfaceTempC, atmosphere: planet.atmosphere,
                 appearanceSeed: planet.appearanceSeed,
-                spinPhase: locked ? layout.orbiterAngle(planet)
-                                  : Float(planet.phase0Deg) * .pi / 180,
+                spinPhase: locked
+                    ? BodySpin.lockedSpinPhase(orbitAngle: layout.orbiterAngle(planet))
+                    : Float(planet.phase0Deg) * .pi / 180,
                 spinAxis: planet.spin.pole(seed: planet.appearanceSeed),
                 spinRate: locked ? 0 : planet.spin.spinRate(),
                 ocean: planet.hasSubsurfaceOcean ? 1 : 0,
