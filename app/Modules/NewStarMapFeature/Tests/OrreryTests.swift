@@ -958,3 +958,30 @@ struct OrreryPhysicalFactsTests {
         #expect(model.centralBody?.spin.tiltDeg == 3.13)
     }
 }
+
+// MARK: - Volcanism scale
+
+struct VolcanismScaleTests {
+    @Test func lavaAmountStaysBelowTheOldCeiling() {
+        // Old range was 0.6 … 1.7; scaled down so a tag-stacked hellworld can't push
+        // coverage past a crust-with-seams read.
+        #expect(PlanetMaterial.lavaAmount(tempC: 400) <= 0.6)
+        #expect(PlanetMaterial.lavaAmount(tempC: 2000) <= 1.5)
+    }
+
+    @Test func lavaAmountStillRisesWithTemperature() {
+        let cool = PlanetMaterial.lavaAmount(tempC: 600)
+        let mid = PlanetMaterial.lavaAmount(tempC: 1000)
+        let hot = PlanetMaterial.lavaAmount(tempC: 1400)
+        #expect(cool < mid)
+        #expect(mid < hot)
+    }
+
+    @Test func hottestTaggedWorldStaysWithinTheShaderClamp() {
+        // `hellworld` multiplies by 1.8 and the shader clamps lavaAmt to 1.8, so the
+        // product must not sail so far past the clamp that temperature stops mattering.
+        let mods = PlanetMaterial.modifiers(tags: ["hellworld", "volcanic"])
+        let combined = mods.lava * PlanetMaterial.lavaAmount(tempC: 1400)
+        #expect(combined <= 2.8)
+    }
+}

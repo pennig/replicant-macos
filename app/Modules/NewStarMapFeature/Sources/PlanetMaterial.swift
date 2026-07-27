@@ -266,10 +266,12 @@ enum PlanetMaterial {
     }
 
     /// Temperature multiplier on a molten world's `lava` modifier: cooler volcanic
-    /// worlds show thin, dim seams; hotter ones crack wide and glow bright. ~1× at
-    /// mid-range (≈950 °C) so it composes with the tag-driven intensity.
+    /// worlds show thin, dim seams; hotter ones crack wider and glow brighter.
+    /// Scaled down from the original 0.6…1.7 band — stacked with a `hellworld` tag
+    /// that ceiling drove coverage past half the surface, which read as a lava world
+    /// with basalt islands rather than a basalt world with lava seams.
     static func lavaAmount(tempC: Double) -> Float {
-        0.6 + 1.1 * smooth01((tempC - 600) / 800)   // 0.6× at ≤600°C → 1.7× at ≥1400°C
+        0.5 + 0.95 * smooth01((tempC - 600) / 800)   // 0.5× at ≤600°C → 1.45× at ≥1400°C
     }
 
     /// Polar ice-cap *extent* on a cold world (0 = none … 1 = caps reach farthest

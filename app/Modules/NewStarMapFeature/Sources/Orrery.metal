@@ -50,7 +50,10 @@ static OrrerySurface orrerySurface(float3 dir, float3 cloudDir, int style, float
     OrrerySurface s;
     s.emissive = float3(0.0);
     float lat = dir.y;                           // -1 (south) … 1 (north)
-    float lon = atan2(dir.z, dir.x);             // -pi … pi
+    // NOTE: deliberately no `lon = atan2(dir.z, dir.x)` here. Longitude is undefined
+    // at both poles and discontinuous at the antimeridian, so ANY feature driven by
+    // it converges into a beach-ball pinch at the poles and seams down one meridian.
+    // Every style below uses 3D noise over `dir` instead. Don't reintroduce it.
 
     // Decorrelated per-planet look parameters + a small stable hue jitter so two
     // planets of the same type never look identical.
@@ -113,9 +116,18 @@ static OrrerySurface orrerySurface(float3 dir, float3 cloudDir, int style, float
         // the black-body lava hue the CPU chose from the surface temperature.
         s.albedo = mix(base * 0.55, base, fbm6(dir * 5.0 + sd * 7.0));
         float lavaAmt = mods.z;
-        float lo = mix(0.80, 0.60, saturate((lavaAmt - 0.5) / 1.3));            // more lava when hotter
-        float cracks = smoothstep(lo, lo + 0.17, ridge(dir * 8.0 + sd * 3.0));
-        float pulse  = 0.7 + 0.3 * sin(t * 1.5 + lon * 3.0 + sd * 6.283);
+        // Coverage threshold. The hot floor is 0.72 (was 0.60) and the ramp is
+        // narrower, so even a hellworld reads as seams in basalt rather than the
+        // >50% flood the old band produced.
+        float lo = mix(0.88, 0.72, saturate((lavaAmt - 0.5) / 1.3));            // more lava when hotter
+        float cracks = smoothstep(lo, lo + 0.13, ridge(dir * 8.0 + sd * 3.0));
+        // Breathe the glow from 3D NOISE, never longitude. The old
+        // `sin(t + lon * 3.0)` drew three meridian wedges that converged at both
+        // poles (the beach-ball artifact the banded / iceGiant / desert styles each
+        // fix separately) and seamed at the antimeridian. Noise over the sphere
+        // direction has neither a pole nor a seam, and it makes separate hot regions
+        // pulse independently instead of as one rotating grille.
+        float pulse  = 0.7 + 0.3 * sin(t * 1.5 + fbm6(dir * 2.3 + sd * 11.0) * 6.283);
         s.emissive = detail * cracks * pulse * 1.4 * clamp(lavaAmt, 0.5, 1.8);
     } else if (style == 4) {                     // ocean / terrestrial — continents (clouds below)
         float land = smoothstep(0.46, 0.6, fbm6(dir * 2.5 + sd * 10.0));
