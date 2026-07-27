@@ -32,6 +32,11 @@ struct Ship {
     /// transit callout can show a live "arrives in …" countdown (media-time is monotonic,
     /// not a date). Defaults to `.distantFuture` for callers that don't need it (tests).
     var arrivesAt: Date = .distantFuture
+    /// The real wall-clock departure, carried straight from the route. A transit
+    /// callout whose anchor is the route's ORIGIN counts down to this (the ship
+    /// leaves the view the instant the first leg starts). Defaults to
+    /// `.distantPast` for callers that don't need it (tests).
+    var departedAt: Date = .distantPast
     /// The route's legs, each resolved to its endpoint SYSTEM stars + its media-time
     /// window. Empty ⇒ a single straight `fromStar`→`toStar` segment over the window.
     let legs: [Leg]
@@ -46,6 +51,10 @@ struct Ship {
         let toCode: String
         let startMedia: Double
         let endMedia: Double
+        /// This leg's real wall-clock end. The media-time window drives per-frame
+        /// placement; this drives the callout's live countdown, which needs a date.
+        /// Defaults for callers that only exercise placement (tests).
+        var endsAt: Date = .distantFuture
     }
 
     /// The distinct SYSTEM stars the route passes through, in order — the galaxy ribbon's
@@ -127,5 +136,24 @@ struct Ship {
         let span = leg.endMedia - leg.startMedia
         guard span > 1e-4 else { return 1 }
         return Float(min(max((time - leg.startMedia) / span, 0), 1))
+    }
+
+    /// Wall-clock end times for a route's legs: the LAST leg ends at `arrivesAt`
+    /// and each earlier end is found by walking backwards through the durations
+    /// after it — the date-domain twin of the renderer's media-time walk, so the
+    /// two never disagree about where a leg boundary falls.
+    ///
+    /// Nil when the route has no legs or any leg lacks a duration; the renderer
+    /// already treats that case as "no resolved legs" and draws a straight segment.
+    static func legEndDates(seconds: [Double?], arrivesAt: Date) -> [Date]? {
+        guard !seconds.isEmpty else { return nil }
+        var out = [Date](repeating: arrivesAt, count: seconds.count)
+        var end = arrivesAt
+        for i in stride(from: seconds.count - 1, through: 0, by: -1) {
+            guard let s = seconds[i] else { return nil }
+            out[i] = end
+            end = end.addingTimeInterval(-s)
+        }
+        return out
     }
 }

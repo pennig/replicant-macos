@@ -2034,15 +2034,22 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
             // leg ends at arrival (the live `travel` block lists only the remaining legs).
             // Needs every leg to carry a duration; otherwise a single straight segment.
             var shipLegs: [Ship.Leg] = []
-            if !route.legs.isEmpty, route.legs.allSatisfy({ $0.seconds != nil }) {
+            // `legEndDates` is the same backwards walk in the DATE domain, and it
+            // returns nil on exactly the condition this build used to test inline
+            // (every leg must carry a duration) — so one call both gates the loop
+            // and supplies the per-leg wall-clock ends the callout counts down to.
+            if let endDates = Ship.legEndDates(seconds: route.legs.map(\.seconds),
+                                               arrivesAt: route.arrivesAt) {
                 var end = arrives
-                for leg in route.legs.reversed() {
+                for i in route.legs.indices.reversed() {
+                    let leg = route.legs[i]
                     let start = end - (leg.seconds ?? 0)
                     let fs = indexByName[systemName(leg.from)] ?? from
                     let ts = indexByName[systemName(leg.to)] ?? to
                     shipLegs.append(Ship.Leg(fromStar: fs, toStar: ts,
                                              fromCode: leg.from, toCode: leg.to,
-                                             startMedia: start, endMedia: end))
+                                             startMedia: start, endMedia: end,
+                                             endsAt: endDates[i]))
                     end = start
                 }
                 shipLegs.reverse()
@@ -2050,7 +2057,8 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
             return Ship(deviceCode: route.deviceCode, deviceType: route.deviceType,
                         fromStar: from, toStar: to,
                         departedMedia: departed, arrivesMedia: arrives,
-                        arrivesAt: route.arrivesAt, legs: shipLegs)
+                        arrivesAt: route.arrivesAt, departedAt: route.departedAt,
+                        legs: shipLegs)
         }
         ships = fleet
         // Ribbon as a polyline through each ship's distinct system nodes (one segment for

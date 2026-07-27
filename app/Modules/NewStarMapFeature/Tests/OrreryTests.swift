@@ -640,3 +640,34 @@ struct OrreryLayoutTests {
         #expect(c.primaryType == "mining_drone")    // first own device's glyph
     }
 }
+
+/// The date-domain twin of the renderer's media-time walk: the LAST leg ends at
+/// the trip's arrival and each earlier leg's end is found by subtracting the
+/// durations after it. The callout counts down to one of these.
+struct ShipLegDateTests {
+    private let arrival = Date(timeIntervalSince1970: 1_000)
+
+    @Test func lastLegEndsAtArrivalAndEarlierLegsWalkBackwards() {
+        let dates = Ship.legEndDates(seconds: [45, 388, 35], arrivesAt: arrival)
+
+        #expect(dates == [
+            Date(timeIntervalSince1970: 1_000 - 388 - 35),
+            Date(timeIntervalSince1970: 1_000 - 35),
+            Date(timeIntervalSince1970: 1_000),
+        ])
+    }
+
+    @Test func singleLegEndsAtArrival() {
+        #expect(Ship.legEndDates(seconds: [265], arrivesAt: arrival) == [arrival])
+    }
+
+    /// A leg with no duration makes the whole walk meaningless — the renderer
+    /// already falls back to a straight segment in exactly this case.
+    @Test func anyMissingDurationYieldsNoDates() {
+        #expect(Ship.legEndDates(seconds: [45, nil, 35], arrivesAt: arrival) == nil)
+    }
+
+    @Test func noLegsYieldsNoDates() {
+        #expect(Ship.legEndDates(seconds: [], arrivesAt: arrival) == nil)
+    }
+}
