@@ -58,6 +58,18 @@ public struct SurveyRun: MissionStepMachine {
     /// reads per target instead of hundreds.
     public static let recallGrace: TimeInterval = 5 * 60
 
+    /// How old a row backing a POSITIVE staging finding may be and still be
+    /// believed without an authoritative re-read.
+    ///
+    /// Staging is judged from `stowedInDeviceCode` columns, and survey drones
+    /// emit no events at all — so a drone abandoned in another system keeps
+    /// claiming it is aboard until something reads it. The existing
+    /// `.refreshDevices` net guards only the *negative* direction ("we see
+    /// nothing, but have we been allowed to look?"); this is the same doubt
+    /// applied to a positive, which is the direction that actually loses a
+    /// fleet. Costs at most one read round per target.
+    public static let stagingFreshness: TimeInterval = 5 * 60
+
     /// The survey configuration this mission insists on: a FULL survey with the
     /// drones recalled when done, so the vessel can move on to the next target
     /// (spec §4 step 4). Deliberately different from the composer's manual
@@ -137,6 +149,14 @@ public struct SurveyRun: MissionStepMachine {
         return world.devices.values
             .filter { $0.controllerDeviceCode == controller.deviceCode || claimed.contains($0.deviceCode) }
             .sorted { $0.deviceCode < $1.deviceCode }
+    }
+
+    /// Whether any row backing a staging finding is too old to act on.
+    ///
+    /// One stale row is enough: the claim "everything needed is aboard" is a
+    /// conjunction, so its weakest member decides how much it is worth.
+    static func stagingIsStale(_ devices: [Device], _ world: WorldSnapshot) -> Bool {
+        devices.contains { world.now.timeIntervalSince($0.updatedAt) > stagingFreshness }
     }
 
     /// Whether a system's scan counts say it is completely surveyed.
@@ -231,7 +251,8 @@ public struct SurveyRun: MissionStepMachine {
                 deviceCodes: [vessel.deviceCode], thenStall: .noSurveyControllerAboard
             )
         }
-        guard !Self.adoptedDrones(of: controller, aboard: vessel, in: world).isEmpty else {
+        let drones = Self.adoptedDrones(of: controller, aboard: vessel, in: world)
+        guard !drones.isEmpty else {
             // The controller too: `controlled_devices` is detail-only, so a
             // list-synced controller under-reports adoption and the drones' own
             // `controller_device_code` is the half that survives — reading both
@@ -242,8 +263,24 @@ public struct SurveyRun: MissionStepMachine {
             )
         }
         // Cached-only skip check: `GET locations/{star}` is presence-gated, so a
-        // target we haven't reached can only be judged from what we already hold.
+        // target we haven't reached can only be judged from what we already
+        // hold. Deliberately BEFORE the freshness demand below: a target being
+        // skipped is never departed for, so its staging cannot strand anything
+        // and must not cost a read round.
         if Self.isFullyScanned(world.system(target)) { return .advanceTarget }
+        // The staging answer is positive — but it rests on rows that only a
+        // read can correct, and believing a stale one is how six drones were
+        // left in POLARISUM. Demand an authoritative look before committing the
+        // vessel to a departure. After a successful refresh these rows are
+        // fresh and this is inert; the engine only stalls here if the reads
+        // themselves could not be had, which `.unreachableDevice` names
+        // honestly.
+        if Self.stagingIsStale([vessel, controller] + drones, world) {
+            return .refreshDevices(
+                deviceCodes: [vessel.deviceCode, controller.deviceCode],
+                thenStall: .unreachableDevice
+            )
+        }
         return .assignController(deviceCode: controller.deviceCode, nextStep: Step.travelling)
     }
 

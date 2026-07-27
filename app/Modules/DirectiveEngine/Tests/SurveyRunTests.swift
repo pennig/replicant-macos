@@ -21,6 +21,12 @@ import Utils
 
 // MARK: - Fixtures
 
+/// `updatedAt` defaults to the same instant `world(now:)` defaults to, so a
+/// fixture fleet reads as freshly synced unless a test deliberately ages it.
+/// Preflight now cares: a staging row old enough to be untrustworthy earns a
+/// read before it is believed.
+private let fixtureNow = Date(timeIntervalSince1970: 1_000)
+
 private func device(
     _ code: String,
     type: String,
@@ -28,7 +34,8 @@ private func device(
     stowedIn: String? = nil,
     controlledBy: String? = nil,
     controlled: [String] = [],
-    directives: [String] = []
+    directives: [String] = [],
+    updatedAt: Date = fixtureNow
 ) -> Device {
     var detail: [String: JSONValue] = [:]
     if !controlled.isEmpty {
@@ -45,20 +52,22 @@ private func device(
         stowedInDeviceCode: stowedIn, controllerDeviceCode: controlledBy,
         attachedToDeviceCode: nil, createdAt: Date(timeIntervalSince1970: 0),
         availableCommands: [], features: [], tags: [], detail: .object(detail),
-        updatedAt: Date(timeIntervalSince1970: 0), firstSeenAt: Date(timeIntervalSince1970: 0)
+        updatedAt: updatedAt, firstSeenAt: Date(timeIntervalSince1970: 0)
     )
 }
 
 /// A vessel with a survey controller and one adopted drone stowed aboard — the
 /// staged state a Survey Run REQUIRES.
-private func stagedFleet(vesselAt location: String = "SOL-3") -> [Device] {
+private func stagedFleet(
+    vesselAt location: String = "SOL-3", updatedAt: Date = fixtureNow
+) -> [Device] {
     [
-        device("VES1", type: "transport_hauler", location: location),
+        device("VES1", type: "transport_hauler", location: location, updatedAt: updatedAt),
         device("AMI1", type: "ami_survey_controller", location: location,
                stowedIn: "VES1", controlled: ["DRONE1"],
-               directives: ["survey_system", "belt_search"]),
+               directives: ["survey_system", "belt_search"], updatedAt: updatedAt),
         device("DRONE1", type: "survey_drone", location: location,
-               stowedIn: "VES1", controlledBy: "AMI1"),
+               stowedIn: "VES1", controlledBy: "AMI1", updatedAt: updatedAt),
     ]
 }
 
@@ -279,6 +288,42 @@ struct SurveyRunStagingFreshnessTests {
         #expect(SurveyRun().nextAction(directive: run(), world: world(fleet))
                 == .refreshDevices(deviceCodes: ["VES1", "AMI1"],
                                    thenStall: .noSurveyDroneAboard))
+    }
+
+    /// A POSITIVE staging finding is only as trustworthy as the rows under it.
+    ///
+    /// The bug this pins: at 21:09:43 on 2026-07-26 preflight read six drones
+    /// as stowed aboard and departed for WATTL. They had been sitting in
+    /// POLARISUM for four and a half hours — survey drones emit no events, so
+    /// nothing had corrected their stow columns, and the `.refreshDevices` net
+    /// guarded only the *negative* branch. A stale "still aboard" sailed
+    /// straight through unverified.
+    @Test func staleStagingRowsEarnAReadBeforeTheyAreBelieved() {
+        let stale = fixtureNow.addingTimeInterval(-SurveyRun.stagingFreshness - 1)
+        #expect(SurveyRun().nextAction(
+            directive: run(), world: world(stagedFleet(updatedAt: stale))
+        ) == .refreshDevices(deviceCodes: ["VES1", "AMI1"], thenStall: .unreachableDevice))
+    }
+
+    /// Freshly synced rows are believed as they always were — the demand is
+    /// paid once per target at most, not on every evaluation.
+    @Test func freshStagingRowsAreTrustedWithoutARead() {
+        #expect(SurveyRun().nextAction(directive: run(), world: world(stagedFleet()))
+                == .assignController(deviceCode: "AMI1", nextStep: SurveyRun.Step.travelling))
+    }
+
+    /// A target that is being SKIPPED never departs, so its staging doesn't
+    /// matter and must not cost a read round.
+    @Test func aSkippedTargetDoesNotPayForFreshness() {
+        let stale = fixtureNow.addingTimeInterval(-SurveyRun.stagingFreshness - 1)
+        let scanned = StarSystem(
+            designation: "TAU", planetsScanned: 4, planetsTotal: 4,
+            moonsScanned: 7, moonsTotal: 7
+        )
+        #expect(SurveyRun().nextAction(
+            directive: run(),
+            world: world(stagedFleet(updatedAt: stale), systems: ["TAU": scanned])
+        ) == .advanceTarget)
     }
 
     /// A properly staged vessel never asks for a read: the freshness demand is
