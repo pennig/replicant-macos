@@ -67,6 +67,13 @@ actor DeadlineScheduler {
     private let continuousSweepInterval: TimeInterval
     /// When the last continuous-op sweep ran, so `run()` throttles them.
     private var lastContinuousSweepAt: Date?
+    /// Minimum spacing between retention sweeps over the `operations` table.
+    /// Housekeeping rides this loop because it is the only periodic one in
+    /// GameSync and retention needs no timeliness whatsoever — hourly is
+    /// already far more often than a 7-day window requires.
+    private let retentionSweepInterval: TimeInterval
+    /// When the last retention sweep ran, so `run()` throttles them.
+    private var lastRetentionSweepAt: Date?
 
     init(
         reconciler: Reconciler,
@@ -74,7 +81,8 @@ actor DeadlineScheduler {
         confirmGrace: TimeInterval = 1,
         rearmBackoff: TimeInterval = 4,
         giveUpAfter: TimeInterval = 5 * 60,
-        continuousSweepInterval: TimeInterval = 2 * 60
+        continuousSweepInterval: TimeInterval = 2 * 60,
+        retentionSweepInterval: TimeInterval = 60 * 60
     ) {
         self.reconciler = reconciler
         self.cap = cap
@@ -82,6 +90,7 @@ actor DeadlineScheduler {
         self.rearmBackoff = rearmBackoff
         self.giveUpAfter = giveUpAfter
         self.continuousSweepInterval = continuousSweepInterval
+        self.retentionSweepInterval = retentionSweepInterval
     }
 
     func start() {
@@ -109,6 +118,13 @@ actor DeadlineScheduler {
             if lastContinuousSweepAt.map({ now.timeIntervalSince($0) >= continuousSweepInterval }) ?? true {
                 lastContinuousSweepAt = now
                 await sweepContinuousOps(now: now)
+            }
+
+            // Housekeeping: age finished ops out of a table nothing else prunes.
+            if lastRetentionSweepAt.map({ now.timeIntervalSince($0) >= retentionSweepInterval }) ?? true {
+                lastRetentionSweepAt = now
+                @Dependency(\.defaultDatabase) var database
+                await OperationRetention.sweep(database, now: now)
             }
 
             let upcoming = await openDatedOps()
