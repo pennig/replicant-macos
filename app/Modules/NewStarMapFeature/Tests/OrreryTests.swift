@@ -452,7 +452,7 @@ struct OrreryMappingTests {
             ])
         let m = OrreryMapping.bodyModel(planet: planet)
         #expect(m.centralBody != nil)
-        #expect(m.centralBody?.hasRing == true)
+        #expect(m.centralBody?.rings != nil)
         #expect(m.planets.count == 2)                       // moons became orbiters
         // The interesting moon (a live salvage site) sorts to the front.
         #expect(m.planets.first?.designation == "SHERATANON-6-b")
@@ -529,7 +529,7 @@ struct OrreryLayoutTests {
             tags: [], surfaceTempC: nil, atmosphere: Atmosphere(apiValue: nil), appearanceSeed: 0,
             orbitalDistanceAu: 1, inHabitableZone: false, scanned: true, moonCount: 0, lifeStage: nil,
             inventory: [], semiMajorScene: semi, periodDays: period, phase0Deg: phase,
-            displayRadius: radius, colorHex: "#ffffff", hasRing: false, indicators: [],
+            displayRadius: radius, colorHex: "#ffffff", rings: nil, indicators: [],
             hasInterestingMoon: false, moons: [], lagrange: lagrange)
     }
 
@@ -688,7 +688,7 @@ struct BareSystemRouteAnchorTests {
             tags: [], surfaceTempC: nil, atmosphere: Atmosphere(apiValue: nil), appearanceSeed: 0,
             orbitalDistanceAu: 1, inHabitableZone: false, scanned: true, moonCount: 0, lifeStage: nil,
             inventory: [], semiMajorScene: semi, periodDays: 100, phase0Deg: 0,
-            displayRadius: 1, colorHex: "#ffffff", hasRing: false, indicators: [],
+            displayRadius: 1, colorHex: "#ffffff", rings: nil, indicators: [],
             hasInterestingMoon: false, moons: [], lagrange: lagrange)
     }
 
@@ -890,5 +890,71 @@ struct RingSystemTests {
         let giant = try #require(PlanetMaterial.ringSystem(hasRings: true, type: .gasGiant, seed: 0.5))
         let rocky = try #require(PlanetMaterial.ringSystem(hasRings: true, type: .barren, seed: 0.5))
         #expect(giant.outerFrac - giant.innerFrac > rocky.outerFrac - rocky.innerFrac)
+    }
+}
+
+// MARK: - Physical facts on the orrery model
+
+struct OrreryPhysicalFactsTests {
+    /// A scanned, ringed, tilted gas giant modelled on the live SOL-6.
+    private func saturnLikeSystem() -> StarSystem {
+        StarSystem(
+            designation: "SOL",
+            planets: [Planet(
+                designation: "SOL-6", type: "Gas Giant", orbitalDistanceAu: 9.537,
+                recon: .scanned,
+                physical: BodyPhysical(
+                    radiusEarth: 9.45, surfaceTempC: -139, rings: true,
+                    rotationPeriodHours: 10.66, orbitalPeriodDays: 10747,
+                    axialTiltDeg: 26.73))])
+    }
+
+    @Test func planetCarriesSpinAndRings() throws {
+        let model = OrreryMapping.systemModel(from: saturnLikeSystem())
+        let p = try #require(model.planets.first)
+        #expect(p.spin.tiltDeg == 26.73)
+        #expect(p.spin.rotationHours == 10.66)
+        #expect(!p.spin.tidallyLocked)
+        #expect(p.rings != nil)
+        #expect(p.periodDays == 10747)
+    }
+
+    @Test func unringedPlanetHasNoRingSystem() throws {
+        var system = saturnLikeSystem()
+        system.planets[0].physical?.rings = false
+        let model = OrreryMapping.systemModel(from: system)
+        #expect(try #require(model.planets.first).rings == nil)
+    }
+
+    @Test func unscannedPlanetSpinsUpright() throws {
+        var system = saturnLikeSystem()
+        system.planets[0].physical = nil
+        let model = OrreryMapping.systemModel(from: system)
+        let p = try #require(model.planets.first)
+        #expect(p.spin.obliquityDeg == 0)
+        #expect(p.spin.rotationHours == nil)
+        #expect(p.rings == nil)
+    }
+
+    @Test func moonCarriesTidalLockOceanAndDistance() throws {
+        // Modelled on the live SOL-5-2 (Europa): locked, subsurface ocean, airless.
+        let planet = Planet(
+            designation: "SOL-5", type: "Gas Giant", orbitalDistanceAu: 5.203,
+            recon: .scanned,
+            physical: BodyPhysical(rings: false, rotationPeriodHours: 9.92,
+                                   orbitalPeriodDays: 4331, axialTiltDeg: 3.13),
+            moons: [Moon(
+                designation: "SOL-5-2", type: "Icy", recon: .scanned,
+                physical: BodyPhysical(
+                    radiusEarth: 0.245, surfaceTempC: -160,
+                    orbitalPeriodHours: 85.23, tidallyLocked: true,
+                    orbitalDistanceKm: 671100,
+                    hasSubsurfaceOcean: true, hasAtmosphere: false))])
+        let model = OrreryMapping.bodyModel(planet: planet)
+        let moon = try #require(model.planets.first)
+        #expect(moon.spin.tidallyLocked)
+        #expect(moon.hasSubsurfaceOcean)
+        #expect(moon.orbitalDistanceKm == 671100)
+        #expect(model.centralBody?.spin.tiltDeg == 3.13)
     }
 }

@@ -108,7 +108,16 @@ struct OrreryPlanet: Identifiable, Equatable, Sendable {
     var phase0Deg: Double
     var displayRadius: Double
     var colorHex: String
-    var hasRing: Bool
+    /// The body's ring system, or nil when the scan reports none. Replaces the old
+    /// bare `hasRing` flag, which nothing ever rendered.
+    var rings: RingSystem?
+    /// How the body turns — obliquity, rotation period, tidal lock. `.unknown` until
+    /// scanned, which renders upright at the default rate.
+    var spin: BodySpin = .unknown
+    /// Moon-only: a subsurface ocean, which draws cryo-fracture lineae.
+    var hasSubsurfaceOcean: Bool = false
+    /// Moon-only: real orbital distance, which sets the orbit radius at body level.
+    var orbitalDistanceKm: Double?
     var indicators: BodyIndicators
     /// A moon worth a look (life / salvage / your device / inventory). Refined
     /// once the planet is hydrated; a hint (`moonCount > 0`) before that.
@@ -152,7 +161,10 @@ struct OrreryHazard: Identifiable, Equatable, Sendable {
 struct CentralBody: Equatable, Sendable {
     var displayRadius: Double     // scene units
     var colorHex: String
-    var hasRing: Bool
+    /// The drilled planet's ring system, or nil when it reports none.
+    var rings: RingSystem?
+    /// How the drilled planet turns — see `OrreryPlanet.spin`.
+    var spin: BodySpin = .unknown
     /// Classified kind + biosphere, so the drilled planet is textured like it was
     /// when orbiting at system level. `estimated` = its type is an unconfirmed guess.
     var planetType: PlanetType

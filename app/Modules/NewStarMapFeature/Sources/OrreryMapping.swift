@@ -155,7 +155,14 @@ enum OrreryMapping {
                 phase0Deg: phaseDeg(p.designation),
                 displayRadius: radii[i],
                 colorHex: planetColor(type: p.type),
-                hasRing: p.physical?.rings ?? false,
+                rings: PlanetMaterial.ringSystem(
+                    hasRings: p.physical?.rings ?? false,
+                    type: PlanetType(apiType: p.type),
+                    seed: appearanceSeed(designation: p.designation,
+                                         rotationPeriodHours: p.physical?.rotationPeriodHours)),
+                spin: BodySpin(tiltDeg: p.physical?.axialTiltDeg,
+                               rotationHours: p.physical?.rotationPeriodHours,
+                               tidallyLocked: p.physical?.tidallyLocked ?? false),
                 indicators: indicators, hasInterestingMoon: interestingMoon, moons: [],
                 lagrange: lagrange)
         }
@@ -347,7 +354,14 @@ enum OrreryMapping {
         let central = CentralBody(
             displayRadius: centralScene,
             colorHex: planetColor(type: planet.type),
-            hasRing: planet.physical?.rings ?? false,
+            rings: PlanetMaterial.ringSystem(
+                hasRings: planet.physical?.rings ?? false,
+                type: PlanetType(apiType: planet.type),
+                seed: appearanceSeed(designation: planet.designation,
+                                     rotationPeriodHours: planet.physical?.rotationPeriodHours)),
+            spin: BodySpin(tiltDeg: planet.physical?.axialTiltDeg,
+                           rotationHours: planet.physical?.rotationPeriodHours,
+                           tidallyLocked: planet.physical?.tidallyLocked ?? false),
             planetType: PlanetType(apiType: planet.type),
             lifeStage: planet.lifeStage, estimated: planet.typeEstimated,
             tags: planet.physical?.tags ?? [],
@@ -395,7 +409,13 @@ enum OrreryMapping {
                 phase0Deg: phaseDeg(m.designation),
                 displayRadius: centralScene * moonSizeFraction(m),
                 colorHex: moonColor(type: m.type),
-                hasRing: false, indicators: indicators,
+                rings: nil,
+                spin: BodySpin(tiltDeg: m.physical?.axialTiltDeg,
+                               rotationHours: m.physical?.rotationPeriodHours,
+                               tidallyLocked: m.physical?.tidallyLocked ?? false),
+                hasSubsurfaceOcean: m.physical?.hasSubsurfaceOcean ?? false,
+                orbitalDistanceKm: m.physical?.orbitalDistanceKm,
+                indicators: indicators,
                 hasInterestingMoon: false, moons: [])
         }
         let frame = (moons.map(\.semiMajorScene).max() ?? (centralScene + 2)) * 1.12
