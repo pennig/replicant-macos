@@ -36,6 +36,16 @@ enum OrreryMapping {
         max(6, 40 * pow(max(au, 0.03), 1.5))
     }
 
+    /// The radius a body actually *occupies* for spacing purposes: its own rendered
+    /// radius, or — when it has rings — its ring's outer edge, which reaches well past
+    /// the limb (2.3× the body radius for a giant). Everything that keeps bodies from
+    /// intersecting reads this rather than `displayRadius`, so a ringed planet claims
+    /// proportionally more room from its neighbours and from its own moons. The body is
+    /// still *drawn* at `displayRadius`.
+    static func clearanceRadius(_ displayRadius: Double, _ rings: RingSystem?) -> Double {
+        displayRadius * Double(rings?.outerFrac ?? 1)
+    }
+
     /// A stable 0…360° orbit phase from a designation (FNV-1a), so the layout is
     /// deterministic across launches.
     static func phaseDeg(_ designation: String) -> Double {
@@ -118,13 +128,25 @@ enum OrreryMapping {
         // pushed outward just enough to clear the previous body — so no two orbits (or a
         // planet and the star) ever intersect.
         let radii = s.planets.map { sunScene * sizeFraction(planet: $0) }
+        // Ring systems are resolved BEFORE spacing, because a ringed planet occupies
+        // space out to its ring's outer edge — not just its own limb — and the spacing
+        // pass has to know that or a neighbour's orbit cuts straight through the rings.
+        let ringSystems = s.planets.map { p in
+            PlanetMaterial.ringSystem(
+                hasRings: p.physical?.rings ?? false,
+                type: PlanetType(apiType: p.type),
+                seed: appearanceSeed(designation: p.designation,
+                                     rotationPeriodHours: p.physical?.rotationPeriodHours))
+        }
+        let clearances = zip(radii, ringSystems).map(clearanceRadius)
         let rawBeltInner = s.belts.map { sceneRadius(au: $0.innerRadiusAu ?? 0) }
         let rawBeltOuter = s.belts.map { sceneRadius(au: $0.outerRadiusAu ?? 0) }
         // Interleave planets and belts and space them all outward from the star, so no
         // planet orbit ever falls inside an asteroid belt's band (and no two planets, or
-        // a planet and the star, ever intersect).
+        // a planet and the star, ever intersect). Ringed planets are spaced by their
+        // ring extent, so they claim proportionally more of the system.
         let layout = spacedLayout(
-            planetOrbits: rawScenes, planetRadii: radii,
+            planetOrbits: rawScenes, planetRadii: clearances,
             beltInner: rawBeltInner, beltOuter: rawBeltOuter, sunScene: sunScene)
         let orbits = layout.orbits
 
@@ -163,11 +185,7 @@ enum OrreryMapping {
                 phase0Deg: phaseDeg(p.designation),
                 displayRadius: radii[i],
                 colorHex: planetColor(type: p.type),
-                rings: PlanetMaterial.ringSystem(
-                    hasRings: p.physical?.rings ?? false,
-                    type: PlanetType(apiType: p.type),
-                    seed: appearanceSeed(designation: p.designation,
-                                         rotationPeriodHours: p.physical?.rotationPeriodHours)),
+                rings: ringSystems[i],
                 spin: BodySpin(tiltDeg: p.physical?.axialTiltDeg,
                                rotationHours: p.physical?.rotationPeriodHours,
                                tidallyLocked: p.physical?.tidallyLocked ?? false),
@@ -212,7 +230,10 @@ enum OrreryMapping {
 
         // The spacing pass can push a very crowded inner system — or a wide belt — past
         // the raw outer edge; frame to whichever body/belt now sits farthest out.
-        let outerMost = (orbits + layout.belts.map(\.outer)).max() ?? 0
+        // Frame to each occupant's OUTER edge, not just its orbit radius — otherwise a
+        // planet's own disc (and, for a ringed world, its whole ring system) spills past
+        // the framed radius on the outermost orbit.
+        let outerMost = (zip(orbits, clearances).map(+) + layout.belts.map(\.outer)).max() ?? 0
 
         let hz: HabitableZone? = zip2(star?.habitableZoneInnerAu, star?.habitableZoneOuterAu)
             .map { HabitableZone(innerAu: $0, outerAu: $1) }
@@ -376,14 +397,19 @@ enum OrreryMapping {
         // The drilled planet is the body-level "sun": a consistent, prominent centre
         // (like the field star at system level), with its moons proportional to it.
         let centralScene = 2.6
+        let centralRings = PlanetMaterial.ringSystem(
+            hasRings: planet.physical?.rings ?? false,
+            type: PlanetType(apiType: planet.type),
+            seed: appearanceSeed(designation: planet.designation,
+                                 rotationPeriodHours: planet.physical?.rotationPeriodHours))
+        // A ringed planet occupies space out to its ring's outer edge, so its moons must
+        // clear THAT, not merely its limb — otherwise the innermost moons orbit straight
+        // through the rings.
+        let centralClearance = clearanceRadius(centralScene, centralRings)
         let central = CentralBody(
             displayRadius: centralScene,
             colorHex: planetColor(type: planet.type),
-            rings: PlanetMaterial.ringSystem(
-                hasRings: planet.physical?.rings ?? false,
-                type: PlanetType(apiType: planet.type),
-                seed: appearanceSeed(designation: planet.designation,
-                                     rotationPeriodHours: planet.physical?.rotationPeriodHours)),
+            rings: centralRings,
             spin: BodySpin(tiltDeg: planet.physical?.axialTiltDeg,
                            rotationHours: planet.physical?.rotationPeriodHours,
                            tidallyLocked: planet.physical?.tidallyLocked ?? false),
@@ -410,7 +436,10 @@ enum OrreryMapping {
         let interesting = ordered.filter(moonIsInteresting)
         let boring = ordered.filter { !moonIsInteresting($0) }
         let shown = interesting + boring.prefix(max(0, maxMoons - interesting.count))
-        let base = centralScene * 1.7          // first moon clears the planet + a gap
+        // First moon clears the planet — and its rings — plus a gap. The gap stays
+        // proportional to the BODY, not the ring extent, so an unringed planet keeps
+        // exactly its historical `centralScene * 1.7`.
+        let base = centralClearance + centralScene * 0.7
         let step = centralScene * 0.5
         // Real orbit radii where the scan gives them (compressed like the planets' AU),
         // else the historical index step for an unscanned roster. `shown` is ordered
@@ -428,7 +457,7 @@ enum OrreryMapping {
         // for the sun — so no moon orbit ever falls inside the planet or another moon.
         let moonOrbits = spacedLayout(
             planetOrbits: rawMoonOrbits, planetRadii: moonRadii,
-            beltInner: [], beltOuter: [], sunScene: centralScene).orbits
+            beltInner: [], beltOuter: [], sunScene: centralClearance).orbits
         let moons: [OrreryPlanet] = shown.enumerated().map { i, m in
             var indicators: BodyIndicators = []
             if !m.devices.isEmpty { indicators.insert(.device) }
@@ -464,7 +493,11 @@ enum OrreryMapping {
                 indicators: indicators,
                 hasInterestingMoon: false, moons: [])
         }
-        let frame = (moons.map(\.semiMajorScene).max() ?? (centralScene + 2)) * 1.12
+        // Frame to each moon's OUTER edge, and never inside the central body's own ring
+        // system — a ringed planet with no moons (or only close ones) would otherwise be
+        // framed tighter than its rings and have them clipped at the view edge.
+        let moonReach = moons.map { $0.semiMajorScene + $0.displayRadius }.max()
+        let frame = max(moonReach ?? (centralScene + 2), centralClearance) * 1.12
         let deviceCount = planet.devices.count + planet.moons.reduce(0) { $0 + $1.devices.count }
 
         return SystemModel(
