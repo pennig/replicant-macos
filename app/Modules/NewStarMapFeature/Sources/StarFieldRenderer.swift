@@ -180,11 +180,11 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         var beltCount: Int
     }
 
-    /// Orbit-animation clock (seconds). Advances with real time EXCEPT while focused
-    /// on / transitioning to a body, when it FREEZES — so a drilled planet (and its
-    /// siblings) hold their positions rather than orbiting out from under the camera,
-    /// and resume exactly where they paused on the way back (an accumulator, so
-    /// freezing/unfreezing never jumps). Surface spin/flares use `time` (never frozen).
+    /// Orbit-animation clock (seconds). Advances with real time at EVERY level — it
+    /// used to freeze at body level so the drilled planet wouldn't orbit out from under
+    /// a fixed centre, but the centre now tracks the planet instead (`trackBodyCentre`),
+    /// so the orrery never pauses and a drilled planet's moons keep orbiting. Surface
+    /// spin / flares use `time`, which was never frozen either way.
     private var orbitClock: Float = 0
     /// The drilled planet's rendered radius in the SYSTEM view (world units). The
     /// body-level central body grows from this to its full body radius across
@@ -1447,24 +1447,24 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
 
     /// Drill from a system into one of its planets — the same seamless move as
     /// galaxy→system, one level deeper. The clicked planet IS the body-view centre,
-    /// at the SAME world position it orbited; the orrery freezes (`orbitClock` holds)
-    /// so the planet sits still and the camera dives straight in — no per-frame
-    /// tracking. The central body starts at its system rendered size and GROWS to a
+    /// at the SAME world position it orbited. The planet keeps orbiting throughout, and
+    /// the body centre + camera ride along with it (`trackBodyCentre`), so the dive
+    /// stays locked on. The central body starts at its system rendered size and GROWS to a
     /// comfortable, sun-sized body radius across the drill (so it's continuous at the
     /// start yet legible at the end, and world units never get clipping-small). Moons
     /// emerge from it (orbit × `bodyProgress`) as planets do from the star; siblings +
     /// sun fade out.
     func enterBody(starIndex: Int, planetID: String, model: SystemModel) {
         guard stars.indices.contains(starIndex) else { return }
-        // The planet's frozen position + its rendered radius in the system we're leaving.
+        // The planet's CURRENT position + its rendered radius in the system we're leaving.
         let systemPlanet = orreryModel?.planets.first(where: { $0.id == planetID })
         let planetCenter = currentOrbiterWorldPosition(id: planetID) ?? orreryCenter
         let systemPlanetRadius = systemPlanet.map { Float($0.displayRadius) * orreryScale }
             ?? (stars[starIndex].worldRadius * 0.3)
 
         // Snapshot the system we're leaving so its siblings + sun keep drawing (and
-        // fading) over the fly-in. Orbits are frozen, so its focused planet stays put
-        // and registered with the arriving body centre.
+        // fading) over the fly-in. Its copy of the focused planet keeps orbiting in step
+        // with the arriving body centre, so the two stay registered.
         departing = snapshotActiveOrrery(isBody: orreryIsBody)
         // Retain the system for the whole visit (not just the cross-fade), so the body
         // centre can be recomputed from it every frame as the planet orbits. Captured
@@ -2038,8 +2038,8 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     /// planet's live position when drilling from the system into it.
     private func currentOrbiterWorldPosition(id: String) -> SIMD3<Float>? {
         guard let model = orreryModel else { return nil }
-        // Use the (possibly frozen) orbit clock so the captured position matches what
-        // the system layer is actually rendering this frame.
+        // Read the shared orbit clock so the captured position matches exactly what the
+        // system layer is rendering this frame.
         return orreryLayout(model: model, center: orreryCenter, scale: orreryScale,
                             reveal: orreryReveal, time: orbitClock).orbiterPosition(id: id)
     }

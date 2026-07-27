@@ -50,7 +50,9 @@ struct OrreryLayout {
     /// Orbit-radius / emerge scale (0 = collapsed to the centre, 1 = full orbits). Applied
     /// to every anchor so devices/ships/pips emerge from the centre exactly as bodies do.
     let reveal: Float
-    /// Orbit clock (seconds) — frozen at body level, matching the renderer.
+    /// Orbit clock (seconds). It runs at EVERY level — body level used to freeze it so
+    /// the drilled planet held still, but the renderer now tracks that planet's live
+    /// position instead (`StarFieldRenderer.trackBodyCentre`), so nothing pauses.
     let time: Float
     let timing: OrbitTiming
 
