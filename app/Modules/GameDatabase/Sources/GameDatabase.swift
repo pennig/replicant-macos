@@ -15,6 +15,15 @@ import UniverseModels
 import os
 
 /// The single composition point for the app's database schema.
+///
+/// Migrations are **append-only**. `manifest` is the ordered list; its index is
+/// the order. A shipped migration's identifier is already recorded in real
+/// databases, so editing or reordering one changes what those databases do —
+/// `SchemaManifestTests` and `GoldenSchemaTests` enforce this.
+///
+/// There are no foreign keys in this schema, so manifest order carries no
+/// referential constraint; it exists so that new migrations are always an
+/// append, which is what stops a schema change from wiping the database.
 public enum GameDatabase {
     /// Every migration, in order. **The array index is the order** — there is
     /// deliberately no sequence number, so there is no ordering key that can
@@ -66,7 +75,8 @@ public enum GameDatabase {
     /// `eraseDatabaseOnSchemaChange` is deliberately NOT set. It wiped the
     /// database whenever a migration landed anywhere but the end of the list,
     /// which cost the stars catalogue repeatedly. A migration that throws now
-    /// surfaces through `bootstrapDatabase`'s `withErrorReporting` instead.
+    /// propagates out of this call instead — the caller (`bootstrapDatabase`,
+    /// invoked from `ReplicantApp`) wraps it in `withErrorReporting`.
     public static func migrator(_ entries: [SchemaMigration] = manifest) -> DatabaseMigrator {
         var migrator = DatabaseMigrator()
         for entry in entries {

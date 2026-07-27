@@ -50,6 +50,7 @@
 - [Location endpoint presence gate](location-endpoint-presence-gate.md) — GET locations/{designation} gated on replicant PRESENCE not exploration; 403="No replicant in system"; LocationsClient mislabels it .notExplored.
 - [Location Events feature](location-events-feature.md) — Missions/quest-log; accounts/events is the account-wide list w/ full detail; LocationEvent table in GameModels; Event Log renamed Operations Log.
 - [GameDatabase module](gamedatabase-module.md) — single schema-composition point; previews/tests call `GameDatabase.bootstrap()` instead of hand-rolling migrators.
+- [Erase-on-schema-change](erase-on-schema-change.md) — why adding a table used to wipe the DB (GRDB compares against the last APPLIED identifier, so mid-list migrations erased); replaced 2026-07-26 by the append-only `GameDatabase.manifest` + `DatabaseReset`.
 - [Locations list flatten perf](locations-list-flatten-perf.md) — big macOS hierarchical list: flatten to visible rows + flat List beats children:/DisclosureGroup (generic-metadata/ARC storm at 5,770 nodes).
 - [SQLite DB location](sqlite-db-location.md) — path to the running app DB for direct sqlite3 inspection; census `stars` lags `systemDetails`
 - [Location response schema drift](location-response-schema-drift.md) — openapi.json patch so GET locations/{designation} decodes (asteroid_belt); re-apply after re-fetch
