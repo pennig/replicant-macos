@@ -22,6 +22,11 @@ struct TransitBoundary: Equatable {
     var deviceCode: String
     /// The route location where the riser sits (resolves at the current layer).
     var anchorCode: String
+    /// WHERE that anchor sits in `orderedCodes`. `orderedCodes[i]` is the route's
+    /// origin at `i == 0` and leg `i - 1`'s destination otherwise, so this is what
+    /// lets a caller name the leg whose boundary the callout marks — and it stays
+    /// unambiguous when a route names the same code twice.
+    var anchorIndex: Int
     /// Inbound = the route arrives into this view from elsewhere; outbound = it leaves.
     var direction: Direction
     /// The far end the callout names: the route's origin (inbound) or final dest (outbound).
@@ -70,6 +75,7 @@ enum SystemTransit {
             boundaries.append(TransitBoundary(
                 deviceCode: deviceCode,
                 anchorCode: orderedCodes[firstR],
+                anchorIndex: firstR,
                 direction: .inbound,
                 endpointCode: origin,
                 viaCode: via == origin ? nil : via))
@@ -82,6 +88,7 @@ enum SystemTransit {
             boundaries.append(TransitBoundary(
                 deviceCode: deviceCode,
                 anchorCode: orderedCodes[lastR],
+                anchorIndex: lastR,
                 direction: .outbound,
                 endpointCode: dest,
                 viaCode: via == dest ? nil : via))
