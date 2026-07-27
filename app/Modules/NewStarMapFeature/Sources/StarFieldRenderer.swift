@@ -27,6 +27,11 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     private let orreryPointPipeline: MTLRenderPipelineState // asteroid belt (additive points)
     private let orreryPipPipeline: MTLRenderPipelineState   // body indicator + hazard pips (additive)
     private let orreryAtmoPipeline: MTLRenderPipelineState  // terrestrial atmosphere halos (additive, depth-read)
+    private let orreryRingPipeline: MTLRenderPipelineState  // ring annuli (alpha-blended, depth-read)
+    /// Segment count of the generated ring annulus.
+    /// SYNC POINT: must match `kRingSegments` in Orrery.metal, which derives the ring
+    /// geometry from `vertex_id` alone. If they drift, the ring grows a wedge gap.
+    private let ringSegments = 192
 
     // Depth: only the resolved bodies write it; the dense additive field never
     // does (Invariant 8). Overlays test against it to occlude behind bodies.
@@ -522,6 +527,25 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         Self.configureAdditiveHDR(orreryAtmoDesc.colorAttachments[0]!)
         orreryAtmoDesc.depthAttachmentPixelFormat = depthPF
 
+        // Orrery rings: a flat annulus in the body's equatorial plane. ALPHA-blended,
+        // not additive — a ring is an opaque band of debris that hides what's behind
+        // it, and an additive ring would glow rather than occlude. Depth-READ so the
+        // body's near hemisphere covers the far half of the ring (which needs the
+        // body's true sphere depth), never depth-write so the ring occludes nothing.
+        let orreryRingDesc = MTLRenderPipelineDescriptor()
+        orreryRingDesc.vertexFunction = library.makeFunction(name: "orrery_ring_vertex")
+        orreryRingDesc.fragmentFunction = library.makeFunction(name: "orrery_ring_fragment")
+        let ora = orreryRingDesc.colorAttachments[0]!
+        ora.pixelFormat = .rgba16Float
+        ora.isBlendingEnabled = true
+        ora.rgbBlendOperation = .add
+        ora.alphaBlendOperation = .add
+        ora.sourceRGBBlendFactor = .sourceAlpha
+        ora.destinationRGBBlendFactor = .oneMinusSourceAlpha
+        ora.sourceAlphaBlendFactor = .one
+        ora.destinationAlphaBlendFactor = .oneMinusSourceAlpha
+        orreryRingDesc.depthAttachmentPixelFormat = depthPF
+
         // Mesh links (additive, depth-tested so a body in front occludes them).
         let meshDesc = MTLRenderPipelineDescriptor()
         meshDesc.vertexFunction = library.makeFunction(name: "mesh_vertex")
@@ -579,6 +603,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
             orreryPointPipeline = try device.makeRenderPipelineState(descriptor: orreryPointDesc)
             orreryPipPipeline = try device.makeRenderPipelineState(descriptor: orreryPipDesc)
             orreryAtmoPipeline = try device.makeRenderPipelineState(descriptor: orreryAtmoDesc)
+            orreryRingPipeline = try device.makeRenderPipelineState(descriptor: orreryRingDesc)
         } catch {
             assertionFailure("Pipeline creation failed: \(error)")
             return nil
@@ -1621,6 +1646,26 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
         }
 
+        // Rings: a flat annulus in each ringed body's equatorial plane. Drawn AFTER the
+        // opaque bodies and depth-read, so the near hemisphere covers the ring's far
+        // half at the real silhouette (which is why the body writes true sphere depth).
+        // Alpha-blended, not additive — a ring band hides what's behind it.
+        let hasRings = placed.contains { $0.rings != nil }
+        if hasRings {
+            enc.setRenderPipelineState(orreryRingPipeline)
+            enc.setDepthStencilState(readDepthState)
+            for placedBody in placed {
+                guard var r = ringUniform(placedBody) else { continue }
+                var pu = placedBody.isCentral ? uCentral : u
+                enc.setVertexBytes(&pu, length: MemoryLayout<Uniforms>.stride, index: 1)
+                enc.setFragmentBytes(&pu, length: MemoryLayout<Uniforms>.stride, index: 1)
+                enc.setVertexBytes(&r, length: MemoryLayout<OrreryRingUniform>.stride, index: 2)
+                enc.setFragmentBytes(&r, length: MemoryLayout<OrreryRingUniform>.stride, index: 2)
+                enc.drawPrimitives(type: .triangleStrip, vertexStart: 0,
+                                   vertexCount: (ringSegments + 1) * 2)
+            }
+        }
+
         // Atmosphere halos: additive glow shells beyond the limb, depth-read (a nearer
         // body occludes them without their writing depth). The central's halo tracks
         // its full opacity; the moons' fade with the layer.
@@ -1768,6 +1813,18 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
             surfaceMods: SIMD4(s.mods.craters, s.mods.atmosphere, s.mods.lava, s.mods.frost),
             spinAxis: SIMD4(p.spinAxis, p.spinRate),
             surfaceExtras: SIMD4(p.ocean, 0, 0, 0))
+    }
+
+    /// The ring uniform for a placed body, or `nil` if it has no rings. Same
+    /// centre/radius/sun as the body draw so the annulus registers exactly with the
+    /// limb, and the same pole so it lies in the body's true equatorial plane.
+    private func ringUniform(_ p: PlacedBody) -> OrreryRingUniform? {
+        guard let r = p.rings else { return nil }
+        return OrreryRingUniform(
+            centerRadius: SIMD4(p.center, p.radius),
+            poleInner: SIMD4(p.spinAxis, r.innerFrac),
+            sunOuter: SIMD4(p.sun, r.outerFrac),
+            tintSeed: SIMD4(r.tint, r.seed))
     }
 
     /// The atmosphere-halo uniform for a placed body, or `nil` if it gets no shell (a

@@ -1023,3 +1023,31 @@ struct LayerRotationAnchorTests {
         #expect(layer(hours: [nil, nil]).fastestRotationHours == 1)
     }
 }
+
+// MARK: - Ring draw list
+
+struct RingDrawListTests {
+    @Test func onlyRingedBodiesEnterTheDrawList() {
+        // SOL-5 reports rings: false, SOL-6 reports true — both live values.
+        let system = StarSystem(
+            designation: "SOL",
+            planets: [
+                Planet(designation: "SOL-5", type: "Gas Giant", orbitalDistanceAu: 5.203,
+                       recon: .scanned,
+                       physical: BodyPhysical(rings: false, axialTiltDeg: 3.13)),
+                Planet(designation: "SOL-6", type: "Gas Giant", orbitalDistanceAu: 9.537,
+                       recon: .scanned,
+                       physical: BodyPhysical(rings: true, axialTiltDeg: 26.73)),
+            ])
+        let model = OrreryMapping.systemModel(from: system)
+        let ringed = model.planets.filter { $0.rings != nil }.map(\.designation)
+        #expect(ringed == ["SOL-6"])
+    }
+
+    @Test func ringWorldRadiiScaleWithTheBody() throws {
+        let r = try #require(PlanetMaterial.ringSystem(hasRings: true, type: .gasGiant, seed: 0.5))
+        let bodyRadius: Float = 2.0
+        #expect(r.innerFrac * bodyRadius > bodyRadius)          // clears the limb
+        #expect(r.outerFrac * bodyRadius > r.innerFrac * bodyRadius)
+    }
+}

@@ -408,6 +408,90 @@ fragment float4 orrery_atmosphere_fragment(OrreryAtmoVaryings in   [[stage_in]],
     return float4(in.tint * (glow * kHaloIntensity), 1.0);
 }
 
+// Ring system — a flat annulus in the body's EQUATORIAL plane (perpendicular to its
+// axial-tilt pole), so a tilted world's rings lean with it. The geometry is generated
+// from the vertex id with no buffer: `kRingSegments` quads as one triangle strip,
+// alternating inner and outer rim vertices. Alpha-blended and depth-READ after the
+// opaque bodies (which now write true sphere depth), so the near hemisphere occludes
+// the far half of the ring at the real silhouette and the ring occludes nothing.
+constant uint kRingSegments = 192;   // SYNC POINT: matches `ringSegments` in StarFieldRenderer
+
+struct OrreryRingVaryings {
+    float4 position [[position]];
+    float3 world;      // world position of this ring point (for the shadow test)
+    float  t;          // 0 at the inner rim, 1 at the outer rim
+    float3 tint;
+    float  seed;
+    float3 center;     // body centre
+    float  bodyRadius;
+    float3 sun;
+    float3 pole;       // ring-plane normal == the body's pole
+};
+
+vertex OrreryRingVaryings orrery_ring_vertex(uint vid                        [[vertex_id]],
+                                             constant Uniforms&              u   [[buffer(1)]],
+                                             constant OrreryRingUniform&     r   [[buffer(2)]])
+{
+    uint seg = vid / 2;
+    bool outerRim = (vid & 1u) == 1u;
+    float a = float(seg) / float(kRingSegments) * 2.0 * M_PI_F;
+
+    // Basis for the equatorial plane: two axes perpendicular to the pole.
+    float3 pole = normalize(r.poleInner.xyz);
+    float3 ref = fabs(pole.y) > 0.99 ? float3(1.0, 0.0, 0.0) : float3(0.0, 1.0, 0.0);
+    float3 bx = normalize(cross(ref, pole));
+    float3 bz = cross(pole, bx);
+
+    float frac = outerRim ? r.sunOuter.w : r.poleInner.w;
+    float radius = r.centerRadius.w * frac;
+    float3 world = r.centerRadius.xyz + (bx * cos(a) + bz * sin(a)) * radius;
+
+    OrreryRingVaryings out;
+    out.position = u.projection * (u.view * float4(world, 1.0));
+    out.world = world;
+    out.t = outerRim ? 1.0 : 0.0;
+    out.tint = r.tintSeed.rgb;
+    out.seed = r.tintSeed.w;
+    out.center = r.centerRadius.xyz;
+    out.bodyRadius = r.centerRadius.w;
+    out.sun = r.sunOuter.xyz;
+    out.pole = pole;
+    return out;
+}
+
+fragment float4 orrery_ring_fragment(OrreryRingVaryings in [[stage_in]],
+                                     constant Uniforms&   u [[buffer(1)]])
+{
+    // Banding: seeded ridged noise across the radius gives stable Cassini-like gaps,
+    // identical every time the body is viewed (same appearance seed as its surface).
+    float band = ridge(float3(in.t * 9.0 + in.seed * 17.0, in.seed * 3.0, 0.0));
+    float density = smoothstep(0.30, 0.75, band);
+    // Fade both rims so the annulus has no hard cut-off edge.
+    density *= smoothstep(0.0, 0.12, in.t) * smoothstep(1.0, 0.88, in.t);
+
+    // Openness: how far the ring plane is turned toward the sun. Edge-on (dot ~ 0)
+    // the ring is lit only across its thickness and nearly vanishes; face-on it reads
+    // bright — which is why a steeply tilted world's rings change character.
+    float3 toSun = normalize(in.sun - in.center);
+    float open = saturate(fabs(dot(toSun, normalize(in.pole))));
+    float lit = mix(0.30, 1.0, open);
+
+    // Planet shadow on the ring: march from this ring point toward the sun and test
+    // whether the ray passes within the body. Analytic, cheap, and the single detail
+    // that sells the whole effect.
+    float3 L = normalize(in.sun - in.world);
+    float3 toCenter = in.center - in.world;
+    float s = dot(toCenter, L);
+    float shadow = 1.0;
+    if (s > 0.0) {
+        float miss = length(toCenter - L * s);
+        shadow = smoothstep(in.bodyRadius * 0.92, in.bodyRadius * 1.12, miss);
+    }
+    shadow = mix(0.18, 1.0, shadow);
+
+    return float4(in.tint * (lit * shadow), density * u.orreryAlpha);
+}
+
 // Scaffold lines — orbit rings, HZ band, kuiper — additive, faded by reveal.
 struct OrreryLineVaryings {
     float4 position [[position]];

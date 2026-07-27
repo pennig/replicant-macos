@@ -166,6 +166,17 @@ typedef struct {
     simd_float4 tintDensity;    // rgb = glow tint, w = density (opacity/intensity 0…1)
 } OrreryAtmosphereUniform;
 
+// Per-body params for one ring annulus, drawn in the body's EQUATORIAL plane (the
+// plane perpendicular to its axial-tilt pole). Alpha-blended and depth-READ after
+// the opaque bodies, so the near hemisphere occludes the far half of the ring and
+// the ring itself occludes nothing. See orrery_ring_{vertex,fragment}.
+typedef struct {
+    simd_float4 centerRadius;   // xyz = body world centre, w = body radius
+    simd_float4 poleInner;      // xyz = body pole (unit), w = inner radius (× body radius)
+    simd_float4 sunOuter;       // xyz = sun world position, w = outer radius (× body radius)
+    simd_float4 tintSeed;       // rgb = ring tint, w = band seed
+} OrreryRingUniform;
+
 // One vertex of the orrery scaffold: orbit rings, HZ band, kuiper — colored line
 // segments in world space, drawn additively.
 typedef struct {
