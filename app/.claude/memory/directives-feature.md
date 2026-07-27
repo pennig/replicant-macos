@@ -237,6 +237,42 @@ and resolutions, so a long travel reads as a quiet gap until the next step start
 readout covers. Writing them is engine work (the executor would have to notice a dispatched op
 closing) and remains the one gap in the audit trail.
 
+## Drone-abandonment fixes SHIPPED 2026-07-27
+
+The first live multi-target run lost its whole drone complement and then hung for ten hours. Three
+independent holes, all now closed (commits `7fc338a`, `b5afef7`; the fourth fix, `9784c9a`, is
+unrelated — see [[travel-block-leg-vs-route]]). Full suite at ship: **815 tests over 26 products,
+0 failing.**
+
+**`directive.completed` means the SURVEY finished, NOT the RECALL.** At 16:31:58 on 2026-07-26 the
+POLARISUM completion event and the controller's own `device.stowed` arrived in the *same second*,
+while the digest showed all six drones had only just departed for the rendezvous
+(`{"counts": {"travel.departed": 6}}`). 16 seconds later `preflight` hit its queue-exhausted branch —
+which ran **no staging check at all** — and dispatched the vessel to AMEDIOHA. This is the single
+most important fact in this section: never treat a completion as clearance to move.
+
+- **New `recovering` step**, entered from `confirming` instead of going straight to `.advanceTarget`.
+  Placed there deliberately so it gates BOTH ways a vessel departs: the next target's travel leg and
+  the leg home. The leg home is where the loss actually happened, and preflight never runs on it.
+- It **waits out `recallGrace` (5 min) spending nothing**, then buys ONE `.high` read round and
+  stalls `dronesNotRecovered` rather than departing. The wait is not a poll on purpose — see
+  [[ami-drones-are-event-silent]] for why polling would be a read storm over a fact that can't
+  change without a read.
+- **`preflight` now also verifies POSITIVE staging findings** (`stagingFreshness`, 5 min). The old
+  `.refreshDevices` net guarded only the negative direction; a row staling into a false "still
+  aboard" is the direction that loses a fleet. Sits AFTER the already-scanned skip check so a
+  skipped target costs no reads. Stalls `.unreachableDevice` only when the reads themselves fail.
+- **`ami.launched` is now consumed** (`DirectiveIngestion.amiLaunchRoute`). It carries
+  `devices_deployed`; the second run's launch returned `0` and nothing in the app read it, so
+  `awaiting` cycled its 10-minute backstop for ten hours on a survey that could never start.
+  Matched by **exact event name**, not `.category("ami")` — that category is otherwise hundreds of
+  activity digests an hour. Only an **explicit zero** is recorded: a missing key proves nothing, and
+  inferring failure from its absence would stall healthy runs. Both directive routes now share one
+  `record` helper so replay idempotency and the issue-time-relative ownership guard have a single
+  implementation.
+- New reasons `dronesNotRecovered` / `launchDeployedNothing`, new log kind `launchDeployedNothing`
+  (prominent in the timeline — it marks the moment a run silently stopped being able to progress).
+
 Verified API facts backing the step sequences live in §3 of the spec (stow co-location, `deploy`
 doesn't activate, `launch` auto-deploys adopted stowed devices, `directive.completed` payload).
 
