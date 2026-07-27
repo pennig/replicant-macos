@@ -376,16 +376,19 @@ public struct SurveyRun: MissionStepMachine {
         // reports no travel block and would otherwise be re-probed every tick.
         let lastLook = stranded.map(\.updatedAt).min() ?? .distantPast
         if world.now.timeIntervalSince(lastLook) < Self.recallProbeInterval { return .wait }
-        // Name the drones explicitly. The engine expands a named device via
-        // that carrier's `stowed_devices` blob, and a real vessel's blob listed
-        // only an unrelated matrix while six drones claimed to be aboard it —
-        // so relying on the expansion would never refresh the rows judged here.
+        // ONE scoped request for the whole system rather than a read per device:
+        // the answer depends on the vessel, the controller and every drone still
+        // out, and `location=<star>` returns all of them together — in-transit
+        // ones included, which are precisely the drones worth waiting for. It
+        // also cannot miss a row the way a device list can, since nothing has to
+        // be named. Falls back to the vessel's system when the target is somehow
+        // unset, since that is where the recall is happening.
+        //
         // `thenStall: nil`: drones still flying is the expected answer, not a
         // fault, so an unresolved probe waits rather than demanding a human.
-        return .refreshDevices(
-            deviceCodes: [vessel.deviceCode, controller.deviceCode] + stranded.map(\.deviceCode),
-            thenStall: nil
-        )
+        let system = directive.currentTarget ?? Self.system(of: vessel)
+        guard let system else { return .wait }
+        return .refreshDevicesInSystem(designation: system, thenStall: nil)
     }
 
     /// When the last of the drones still out is due back, if any of them is

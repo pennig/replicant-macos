@@ -171,11 +171,19 @@ actor DirectiveEngineCore {
         }
 
         var action = machine.nextAction(directive: directive, world: world)
-        if case let .refreshDevices(deviceCodes, thenStall) = action {
+        switch action {
+        case let .refreshDevices(deviceCodes, thenStall):
             action = await resolveRefresh(
                 deviceCodes: deviceCodes, thenStall: thenStall,
                 directive: directive, machine: machine
             )
+        case let .refreshDevicesInSystem(designation, thenStall):
+            action = await resolveSystemRefresh(
+                designation: designation, thenStall: thenStall,
+                directive: directive, machine: machine
+            )
+        default:
+            break
         }
         let stillRunnable = await DirectiveExecutor.apply(action, to: directive, machine: machine)
         if !stillRunnable {
@@ -238,8 +246,66 @@ actor DirectiveEngineCore {
             return reason.map { .stall($0) } ?? .wait
         }
 
+        return reAsk(machine, directive, fresh, thenStall: reason)
+    }
+
+    /// The same contract as `resolveRefresh`, paid for with ONE scoped list
+    /// request instead of a read per device.
+    ///
+    /// Rate limit is the whole point: a recall probe cares about a vessel, a
+    /// controller and every drone still out — one request here, versus one each
+    /// through `deviceRefresher`, and this one does not grow with the fleet.
+    /// It also cannot miss a row the way a device list can, since nothing has to
+    /// be named.
+    ///
+    /// Reconciled rather than upserted, exactly like the cold-load path, so the
+    /// event-time guard and local provenance hold. **Deliberately does NOT
+    /// prune**: a scoped walk is not the authoritative full fleet, and treating
+    /// everything outside the scope as gone would delete it.
+    private func resolveSystemRefresh(
+        designation: String,
+        thenStall reason: DirectiveAttentionReason?,
+        directive: Directive,
+        machine: any MissionStepMachine
+    ) async -> MissionAction {
+        @Dependency(\.devicesClient) var devicesClient
+        @Dependency(\.defaultDatabase) var database
+        @Dependency(\.date) var date
+
+        do {
+            let devices = try await devicesClient.fetchAtLocation(designation)
+            let reconciler = Reconciler()
+            for device in devices { await reconciler.ingest(device) }
+            logger.info("directive \(directive.id, privacy: .public): reconciled \(devices.count) device(s) at \(designation, privacy: .public) in one request")
+        } catch {
+            // The run is no worse off than before the attempt; fall through and
+            // let the machine judge the rows it already has.
+            logger.error("directive \(directive.id, privacy: .public): system refresh of \(designation, privacy: .public) failed: \(error)")
+        }
+
+        let fresh: WorldSnapshot
+        do {
+            fresh = try await WorldSnapshot.read(from: database, now: date.now, directive: directive)
+        } catch {
+            logger.error("world snapshot after system refresh failed: \(error)")
+            return reason.map { .stall($0) } ?? .wait
+        }
+        return reAsk(machine, directive, fresh, thenStall: reason)
+    }
+
+    /// Ask the machine once more against freshly-read rows, collapsing a repeat
+    /// refresh request into the carried fallback. Shared by both refresh paths:
+    /// this is the one-round loop guard, and it must behave identically however
+    /// the reads were paid for.
+    private func reAsk(
+        _ machine: any MissionStepMachine,
+        _ directive: Directive,
+        _ fresh: WorldSnapshot,
+        thenStall reason: DirectiveAttentionReason?
+    ) -> MissionAction {
         let action = machine.nextAction(directive: directive, world: fresh)
-        if case .refreshDevices = action {
+        switch action {
+        case .refreshDevices, .refreshDevicesInSystem:
             guard let reason else {
                 // The mission asked for a wait fallback: the state it is
                 // watching is expected to still be unresolved, so another
@@ -249,8 +315,9 @@ actor DirectiveEngineCore {
             }
             logger.notice("directive \(directive.id, privacy: .public): fresh reads confirm \(reason.rawValue, privacy: .public)")
             return .stall(reason)
+        default:
+            return action
         }
-        return action
     }
 }
 

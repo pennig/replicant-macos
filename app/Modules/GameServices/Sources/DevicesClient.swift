@@ -34,6 +34,24 @@ public struct DevicesClient: Sendable {
     /// local provenance (`firstSeenAt`) is preserved.
     public var fetchAll: @Sendable () async throws -> [Device]
 
+    /// Every device the server considers present in a location scope
+    /// (`GET /v1/devices?location=`, paged). A star designation scopes to the
+    /// whole system, so one request returns a vessel, its controller and its
+    /// drones together — and **in-transit devices are included**: a travelling
+    /// device reports `location: null` yet is still matched by the filter
+    /// (verified live 2026-07-27), which is what makes this usable for watching
+    /// a recall.
+    ///
+    /// The point is rate limit, not convenience: reading a system costs one
+    /// request where the equivalent per-device reads cost one each, and it stops
+    /// scaling with the size of the fleet.
+    ///
+    /// **This is NOT the authoritative full fleet.** Callers reconcile what it
+    /// returns and must never follow it with `Reconciler.pruneDevices` — every
+    /// device outside the scope is absent by construction, and treating those
+    /// absences as "gone" would delete the fleet.
+    public var fetchAtLocation: @Sendable (_ designation: String) async throws -> [Device]
+
     /// Read the diversion defense state at a location (`GET /v1/locations/{code}`),
     /// mapping its `object` block to a `DiversionSnapshot`. A `diverting` device
     /// exposes no activity block of its own — the impact target, ETA, and
@@ -91,28 +109,13 @@ extension DevicesClient: DependencyKey {
             return Device(schema: schema, fetchedAt: issuedAt)
         },
         fetchAll: {
-            @Dependency(\.gameClient) var gameClient
-            @Dependency(\.date) var date
-            // Resolve the client once and reuse it across the paged walk (the
-            // governor is process-shared, but one client per walk is the clean
-            // shape — mirrors `StarsClient.survey`).
-            let client = gameClient()
-            var devices: [Device] = []
-            var cursor: Int?
-            var pages = 0
-            repeat {
-                // Issue-time per page (before the round-trip), matching `read`: a
-                // page's devices reconcile by when the page was requested, so a
-                // slow page can't regress a newer single-device read that landed
-                // in the meantime.
-                let issuedAt = date.now
-                let output = try await client.getV1Devices(query: .init(cursor: cursor, limit: Self.pageSize))
-                let body = try output.ok.body.json
-                devices.append(contentsOf: (body.devices ?? []).map { Device(schema: $0, fetchedAt: issuedAt) })
-                cursor = body.nextCursor
-                pages += 1
-            } while cursor != nil
-            logger.info("cold-load: fetched \(devices.count) devices across \(pages) page(s)")
+            let devices = try await Self.walk(location: nil)
+            logger.info("cold-load: fetched \(devices.count) devices")
+            return devices
+        },
+        fetchAtLocation: { designation in
+            let devices = try await Self.walk(location: designation)
+            logger.info("fetched \(devices.count) device(s) at \(designation, privacy: .public) in one scoped walk")
             return devices
         },
         diversion: { designation in
@@ -175,6 +178,34 @@ extension DevicesClient: DependencyKey {
         }
     )
 
+    /// One paged walk of `GET /v1/devices`, optionally scoped to a location.
+    /// Shared by `fetchAll` and `fetchAtLocation` so the cursor handling and the
+    /// per-page issue-time stamping have exactly one implementation.
+    private static func walk(location: String?) async throws -> [Device] {
+        @Dependency(\.gameClient) var gameClient
+        @Dependency(\.date) var date
+        // Resolve the client once and reuse it across the paged walk (the
+        // governor is process-shared, but one client per walk is the clean
+        // shape — mirrors `StarsClient.survey`).
+        let client = gameClient()
+        var devices: [Device] = []
+        var cursor: Int?
+        repeat {
+            // Issue-time per page (before the round-trip), matching `read`: a
+            // page's devices reconcile by when the page was requested, so a
+            // slow page can't regress a newer single-device read that landed
+            // in the meantime.
+            let issuedAt = date.now
+            let output = try await client.getV1Devices(
+                query: .init(location: location, cursor: cursor, limit: Self.pageSize)
+            )
+            let body = try output.ok.body.json
+            devices.append(contentsOf: (body.devices ?? []).map { Device(schema: $0, fetchedAt: issuedAt) })
+            cursor = body.nextCursor
+        } while cursor != nil
+        return devices
+    }
+
     private static let locationEncoder = JSONEncoder()
 }
 
@@ -184,6 +215,7 @@ extension DevicesClient: TestDependencyKey {
     public static let testValue = DevicesClient(
         read: unimplemented("DevicesClient.read"),
         fetchAll: unimplemented("DevicesClient.fetchAll", placeholder: []),
+        fetchAtLocation: unimplemented("DevicesClient.fetchAtLocation", placeholder: []),
         diversion: unimplemented("DevicesClient.diversion", placeholder: nil),
         relayLinks: unimplemented("DevicesClient.relayLinks", placeholder: []),
         updateTags: unimplemented("DevicesClient.updateTags")

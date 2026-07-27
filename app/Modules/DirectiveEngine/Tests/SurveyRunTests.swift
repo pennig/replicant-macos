@@ -129,13 +129,6 @@ private func recallingFleet(
     return fleet
 }
 
-/// Every code a recovery probe should ask for: the vessel, the controller, and
-/// each drone still out. The drones must be named EXPLICITLY — see
-/// `SurveyRunRecoveryTests.probeNamesTheDronesItself`.
-private func recoveryProbe(stranded: [Int]) -> [String] {
-    ["VES1", "AMI1"] + stranded.map { "DRONE\($0)" }
-}
-
 private func withDirective(_ device: Device, name: String, config: [String: JSONValue]) -> Device {
     var updated = device
     var detail: [String: JSONValue] = {
@@ -766,15 +759,17 @@ struct SurveyRunRecoveryTests {
         ) == .wait)
     }
 
-    /// Past the probe delay with no ETA on file: go and look. The probe names
-    /// the vessel, the controller AND every drone still out.
+    /// Past the probe delay with no ETA on file: go and look — with ONE scoped
+    /// request for the whole system, not a read per device.
     ///
-    /// Naming the drones is the load-bearing part. The engine expands a named
-    /// device via the CARRIER's `stowed_devices` blob, and a real vessel's blob
-    /// did not list its controller or drones at all — so a probe that named only
-    /// the vessel never refreshed the very rows being judged, and the run
-    /// stalled `unreachableDevice` for five and a half hours.
-    @Test func probeNamesTheDronesItself() {
+    /// Scoping to the system rather than naming devices is the load-bearing
+    /// part. The engine expands a NAMED device via that carrier's
+    /// `stowed_devices` blob, and a real vessel's blob did not list its
+    /// controller or drones at all, so a named probe could miss the very rows it
+    /// judges (that mismatch stalled a run for five and a half hours). A system
+    /// scope names nothing, so it can miss nothing — and costs one request
+    /// instead of eight.
+    @Test func probesTheWholeSystemInOneRequest() {
         let start = Date(timeIntervalSince1970: 900)
         let directive = run(step: SurveyRun.Step.recovering, controllerCode: "AMI1",
                             stepStartedAt: start)
@@ -785,7 +780,7 @@ struct SurveyRunRecoveryTests {
         #expect(SurveyRun().nextAction(
             directive: directive,
             world: world(recallingFleet(aboard: 1, updatedAt: lastSync), now: due)
-        ) == .refreshDevices(deviceCodes: recoveryProbe(stranded: [1, 2]), thenStall: nil))
+        ) == .refreshDevicesInSystem(designation: "TAU", thenStall: nil))
     }
 
     /// A probe that comes back "still flying" must NOT stall — the drones are
@@ -800,7 +795,7 @@ struct SurveyRunRecoveryTests {
             directive: directive,
             world: world(recallingFleet(aboard: 0, updatedAt: lastSync), now: due)
         )
-        guard case let .refreshDevices(_, thenStall) = action else {
+        guard case let .refreshDevicesInSystem(_, thenStall) = action else {
             Issue.record("expected a probe, got \(action)"); return
         }
         #expect(thenStall == nil)
@@ -855,7 +850,7 @@ struct SurveyRunRecoveryTests {
                 recallingFleet(aboard: 0, adopted: 1, updatedAt: stale, arrivals: [passed]),
                 now: now
             )
-        ) == .refreshDevices(deviceCodes: recoveryProbe(stranded: [0]), thenStall: nil))
+        ) == .refreshDevicesInSystem(designation: "TAU", thenStall: nil))
     }
 
     /// A drone that arrived but has not stowed reports no ETA at all. Without a

@@ -503,6 +503,153 @@ private func carrier(_ code: String, stowing: [String] = []) -> Device {
 /// `.refreshDevices` is the mission's way of saying "read this before I believe
 /// it" — the answer to a stalled Survey Run that was judging staging from rows
 /// the read budget had kept it from refreshing.
+/// Reading a whole system in one request instead of one request per device.
+///
+/// `GET devices?location=<STAR>` returns every device the server considers
+/// present in that system — vessel, controller and drones together, in-transit
+/// ones included (a travelling device reports `location: null` but is still
+/// matched by the filter; probed live 2026-07-27). One page replaces the eight
+/// detail reads a recall probe used to spend, and the cost stops scaling with
+/// the size of the fleet.
+@Suite("DirectiveEngine — system-scoped refresh")
+struct DirectiveRefreshInSystemTests {
+    /// One filtered request, and every device it returns is reconciled — so the
+    /// machine's second answer is computed against rows that now exist.
+    @Test func readsTheSystemOnceAndReconcilesEveryDevice() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { mission(step: "start") }.execute(db)
+        }
+        let queries = LockIsolated<[String]>([])
+        let core = DirectiveEngineCore(
+            machines: [ScriptedMachine([
+                .refreshDevicesInSystem(designation: "TAU", thenStall: .dronesNotRecovered),
+                .advanceStep(nextStep: "travelling"),
+            ])],
+            tick: .seconds(5)
+        )
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.devicesClient.fetchAtLocation = { designation in
+                queries.withValue { $0.append(designation) }
+                return [carrier("VES1"), carrier("AMI1"), carrier("DRONE0")]
+            }
+        } operation: {
+            await core.evaluateOnce(directiveID: "D1")
+            let directive = try await database.read { db in
+                try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+            }
+            #expect(directive?.step == "travelling")
+            #expect(directive?.attentionReason == nil)
+            let stored = try await database.read { db in
+                try Device.all.fetchAll(db).map(\.deviceCode).sorted()
+            }
+            #expect(stored == ["AMI1", "DRONE0", "VES1"])
+        }
+        // Exactly one request for the whole system, not one per device.
+        #expect(queries.value == ["TAU"])
+    }
+
+    /// Still unresolved after an authoritative system read: the carried reason
+    /// surfaces. Same one-round loop guard as `.refreshDevices`.
+    @Test func stillUnresolvedAfterTheReadSurfacesTheReason() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { mission(step: "start") }.execute(db)
+        }
+        let core = DirectiveEngineCore(
+            machines: [ScriptedMachine([
+                .refreshDevicesInSystem(designation: "TAU", thenStall: .dronesNotRecovered),
+                .refreshDevicesInSystem(designation: "TAU", thenStall: .dronesNotRecovered),
+            ])],
+            tick: .seconds(5)
+        )
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.devicesClient.fetchAtLocation = { _ in [] }
+        } operation: {
+            await core.evaluateOnce(directiveID: "D1")
+            let directive = try await database.read { db in
+                try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+            }
+            #expect(directive?.status == .needsAttention)
+            #expect(directive?.attentionReason == .dronesNotRecovered)
+        }
+    }
+
+    /// A nil fallback waits instead of stalling — drones still in flight are the
+    /// expected answer, not a fault.
+    @Test func aNilFallbackWaitsInsteadOfStalling() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { mission(step: "start") }.execute(db)
+        }
+        let core = DirectiveEngineCore(
+            machines: [ScriptedMachine([
+                .refreshDevicesInSystem(designation: "TAU", thenStall: nil),
+                .refreshDevicesInSystem(designation: "TAU", thenStall: nil),
+            ])],
+            tick: .seconds(5)
+        )
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.devicesClient.fetchAtLocation = { _ in [] }
+        } operation: {
+            await core.evaluateOnce(directiveID: "D1")
+            let directive = try await database.read { db in
+                try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+            }
+            #expect(directive?.status == .running)
+            #expect(directive?.attentionReason == nil)
+        }
+    }
+
+    /// A failed read must not strand the run: the carried fallback applies, and
+    /// nothing is pruned. A filtered walk is NOT the authoritative full fleet,
+    /// so treating its absences as "device gone" would delete the fleet.
+    @Test func aFailedReadHonoursTheFallbackAndPrunesNothing() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { mission(step: "start") }.execute(db)
+            try Device.insert { carrier("ELSEWHERE") }.execute(db)
+        }
+        struct ReadFailure: Error {}
+        let core = DirectiveEngineCore(
+            machines: [ScriptedMachine([
+                .refreshDevicesInSystem(designation: "TAU", thenStall: .dronesNotRecovered),
+                .refreshDevicesInSystem(designation: "TAU", thenStall: .dronesNotRecovered),
+            ])],
+            tick: .seconds(5)
+        )
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.devicesClient.fetchAtLocation = { _ in throw ReadFailure() }
+        } operation: {
+            await core.evaluateOnce(directiveID: "D1")
+            let directive = try await database.read { db in
+                try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+            }
+            #expect(directive?.attentionReason == .dronesNotRecovered)
+            let stored = try await database.read { db in
+                try Device.all.fetchAll(db).map(\.deviceCode)
+            }
+            #expect(stored == ["ELSEWHERE"])
+        }
+    }
+}
+
 @Suite("DirectiveEngine — staging freshness")
 struct DirectiveRefreshDevicesTests {
     /// Fresh reads that repair the rows let the run continue: the machine's

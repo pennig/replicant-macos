@@ -71,6 +71,21 @@ public enum MissionAction: Equatable, Sendable {
     /// rather than wrong — a recall genuinely still in flight is not a fault,
     /// and stalling on it would demand a human for something that fixes itself.
     case refreshDevices(deviceCodes: [String], thenStall: DirectiveAttentionReason?)
+    /// The same demand, scoped to a whole system instead of a device list:
+    /// `GET devices?location=<designation>` in ONE request, reconciled, then the
+    /// machine is asked again exactly as `.refreshDevices` does.
+    ///
+    /// Prefer this whenever the answer depends on several devices in one place.
+    /// A recall probe needs the vessel, the controller and every drone still
+    /// out — eight per-device reads, where this is one, and one that does not
+    /// grow with the fleet. It also sidesteps the carrier-expansion trap
+    /// entirely: nothing has to be named, so nothing can be missed.
+    ///
+    /// In-transit devices ARE included. A travelling device reports
+    /// `location: null` yet the server still matches it to the system (probed
+    /// live 2026-07-27), which is exactly the case that matters here — the
+    /// drones worth waiting for are the ones in flight.
+    case refreshDevicesInSystem(designation: String, thenStall: DirectiveAttentionReason?)
     /// Pause and surface. The engine sets `needsAttention` plus the typed reason
     /// and stops evaluating until the user resolves it. Never auto-retried at
     /// the mission layer (spec §8).

@@ -34,14 +34,31 @@ Two things follow, both now built:
 - **Never trust a positive containment claim from an unread row.** `preflight`'s
   `stagingFreshness` check exists for exactly this.
 
-**A drone's ETA is readable from the LIST payload** (probed 2026-07-27):
-`GET devices?device_type=survey_drone&location=<STAR>&limit=50` works, the
-`location` filter matches sub-locations (`location=ASTELLIO` returns drones at
-`ASTELLIO-1-L4`), and unlike `controlled_devices` the **`travel` block IS
-present in list entries** — full `arrives_at` / `final_arrives_at` / `route`. So
-one read can price a whole recall. The engine currently gets the same data via
-per-device `.high` reads of codes it already knows; the filtered list is the
-cheaper option if probe volume ever matters.
+**A drone's ETA is readable from the LIST payload** (probed 2026-07-27), and the
+engine now uses exactly this via `MissionAction.refreshDevicesInSystem` →
+`DevicesClient.fetchAtLocation`:
+
+- `GET devices?location=<STAR>` scopes to a whole system, and the filter matches
+  **sub-locations** (`location=ASTELLIO` returns devices at `ASTELLIO-1-L4`), so
+  one request returns a vessel, its controller and its drones together.
+- **In-transit devices are included.** A travelling device reports
+  `location: null` yet is still matched to the system — verified with `1A403F86`
+  (cruising, `location: null`) appearing under `location=ATIANFU`. This is the
+  fact the whole approach rests on: the drones worth waiting for are the ones in
+  flight.
+- Unlike `controlled_devices`, the **`travel` block IS present in list entries** —
+  full `arrives_at` / `final_arrives_at` / `route`.
+- `limit` caps at 50 ([[paged-endpoint-maxima]]), so a system read is one request
+  until a system holds 50+ devices.
+
+Cost: one request per probe instead of one per device (8 → 1 for a six-drone
+recall), and it does not scale with fleet size. A whole-fleet walk would too,
+but only until ~350 devices; a scoped one never degrades.
+
+**Never follow `fetchAtLocation` with `Reconciler.pruneDevices`.** A scoped walk
+is not the authoritative full fleet — every device outside the scope is absent by
+construction, so pruning on it would delete the fleet. `fetchAll` is a pure read
+and callers prune explicitly, which is what keeps this safe.
 
 **The trap that cost 5.5 hours of stall (2026-07-27):** `MissionAction.refreshDevices`
 expands each named device into *that carrier's* `stowed_devices` blob — and that
