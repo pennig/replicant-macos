@@ -98,16 +98,24 @@ originally prompted it — rings at Saturn's tilt with the moons flat around it.
 
 ## 7. The tilt cap
 
-Sweep `orreryMoonPlaneTiltCapDeg`, relaunching each time:
+**Rendering is fully physical by default** (`orreryMoonPlaneTiltCapDeg = 90`). A planet leans at its
+real obliquity: `SOL-7` (Uranus, 97.77°) renders nearly on its side, and its rings and moon plane
+follow, because all three share one pole.
 
-- **38** (default) — Saturn's 26.73° passes through essentially untouched.
+The cap remains as an opt-in knob for anyone who finds a high-obliquity system unreadable. At
+Uranus's tilt the shared plane sits near-perpendicular to the orbital plane, so from some camera
+angles the moon orbits collapse toward a line — that is the tradeoff the compression exists to
+soften, and it is now yours to invoke rather than imposed. Sweep it, relaunching each time:
+
+- **90** (default) — fully physical.
+- **38** — the old default. Uranus renders at ~142° instead of 97.77°; Saturn's 26.73° is untouched
+  either way, since it sits below the compression knee.
 - **0** — fully planar. Note this flattens rings too, since they share the pole.
-- **90** — fully physical. Try `SOL-7` (obliquity 97.77°): orbits should go near-perpendicular but
-  **must never reverse direction**. The compression provably never crosses 90°, which is what keeps
-  retrograde bodies retrograde, so a reversal here would mean something is wrong.
 
-At 90, also drill into a ringed planet and watch the transition — the cap now applies at both system
-and body level, so the same planet should not change tilt as you drill.
+At any setting, orbits **must never reverse direction**. The compression provably never crosses 90°
+at any cap, which is what keeps retrograde bodies retrograde, so a reversal would mean something is
+wrong. The cap applies at both system and body level, so a planet must not change tilt as you drill
+into it.
 
 ## 8. The escape hatch
 
