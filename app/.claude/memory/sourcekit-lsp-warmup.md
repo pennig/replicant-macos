@@ -16,9 +16,11 @@ metadata:
 
 This makes sourcekit-lsp launch `swift package experimental-build-server --build-system swiftbuild` and read the index store **your own `swift build` produces**, instead of maintaining a second 3.8 GB index build of its own. `swift build` has `--auto-index-store` on by default, so building keeps the index current — including code you just wrote.
 
-**One required local step, per checkout/worktree:** run `Modules/scripts/link-index-store.sh` after your first `swift build`.
+**Two required steps per checkout/worktree, in order:** `swift build --build-tests` (a fresh worktree's index is empty — the build fills it), then `Modules/scripts/link-index-store.sh`. Dispatching a subagent into a fresh worktree? Tell it to do both, or it will report LSP as broken — that is exactly what happened to every subagent on the salvage-amounts branch.
 
-Why it's needed: SwiftPM's BSP server advertises `indexStorePath: .build/index-store`, but the swiftbuild engine compiles with `-index-store-path .build/out` — so the advertised store is empty and every query returns nothing. (Confirmed by driving `build/initialize` against the BSP server directly; it also reports `indexDatabasePath: .build/out`, which looks like the two paths are crossed.) The script symlinks `.build/index-store -> out` so they agree. Re-run it after anything that wipes `.build`. **This looks like an upstream bug worth reporting** against swiftlang/swift-package-manager.
+Why it's needed: SwiftPM's BSP server advertises `indexStorePath: .build/index-store`, but the swiftbuild engine compiles with `-index-store-path .build/out` — so the advertised store is empty and every query returns nothing. (Confirmed by driving `build/initialize` against the BSP server directly; it also reports `indexDatabasePath: .build/out`, which looks like the two paths are crossed.) The script symlinks `.build/index-store -> out` so they agree. Re-run it after anything that wipes `.build`.
+
+**Reported upstream against swiftlang/swift-package-manager on 2026-07-25** (search the tracker for `experimental-build-server indexStorePath`). If it gets fixed, the symlink becomes unnecessary and `scripts/link-index-store.sh` plus its CLAUDE.md setup step can go — check before assuming the workaround is still needed on a newer toolchain.
 
 Measured before/after on the same symbols: `SiteAssay` (written that day, used in 6 files) went **0 → 45 references across 8 files**; `ResourceSite` 0 → 19. Both had returned 0 under the swiftbuild config until the symlink was added.
 
