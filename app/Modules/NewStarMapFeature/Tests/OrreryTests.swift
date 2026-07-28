@@ -1391,3 +1391,79 @@ struct RingClearanceTests {
         #expect(abs(OrreryMapping.clearanceRadius(3, ring) - 6.9) < 1e-6)
     }
 }
+
+struct MoonTieringTests {
+    /// A moon with no physical block and nothing interesting — the common case.
+    private func plain(_ n: Int) -> Moon { Moon(designation: "P-6-\(n)", recon: .visited) }
+
+    private func sized(_ n: Int, _ radiusEarth: Double) -> Moon {
+        Moon(designation: "P-6-\(n)", recon: .scanned,
+             physical: BodyPhysical(radiusEarth: radiusEarth))
+    }
+
+    @Test func smallRostersPromoteEveryMoon() {
+        for count in 0...8 {
+            let moons = (0..<count).map(plain)
+            let t = MoonTiering.split(moons)
+            #expect(t.promoted.count == count)
+            #expect(t.swarm.isEmpty)
+        }
+    }
+
+    @Test func largeRosterWithNoSizeDataPromotesNothingOnSize() {
+        // POLARISON-6: 59 moons, zero physical blocks. We do not know which are
+        // major, so none is promoted on size — asserting otherwise would be a guess.
+        let moons = (0..<59).map(plain)
+        let t = MoonTiering.split(moons)
+        #expect(t.promoted.isEmpty)
+        #expect(t.swarm.count == 59)
+    }
+
+    @Test func interestingMoonsAlwaysPromote() {
+        // 30 moons hosting a device, plus 30 dull ones. Every device-bearing moon must
+        // promote: a device must never lack an exact anchor.
+        let interesting = (0..<30).map { i in
+            Moon(designation: "P-6-i\(i)", recon: .scanned,
+                 devices: [LocatedDevice(deviceCode: "D\(i)", deviceType: "mining_drone")])
+        }
+        let dull = (0..<30).map { Moon(designation: "P-6-d\($0)", recon: .visited) }
+        let t = MoonTiering.split(interesting + dull)
+        #expect(t.promoted.count == 30)
+        #expect(t.promoted.allSatisfy { !$0.devices.isEmpty })
+        #expect(t.swarm.count == 30)
+        // The safety invariant the whole design rests on.
+        #expect(t.swarm.allSatisfy { !OrreryMapping.moonIsInteresting($0) })
+    }
+
+    @Test func sizePromotionTakesTopKAboveTheRelativeFloor() {
+        // Largest is 0.40 R⊕, floor is 0.5× that = 0.20. Only the three at/above 0.20
+        // qualify, even though topBySize allows four.
+        let moons = [sized(1, 0.40), sized(2, 0.30), sized(3, 0.22),
+                     sized(4, 0.12), sized(5, 0.05)] + (6..<40).map(plain)
+        let t = MoonTiering.split(moons)
+        #expect(t.promoted.count == 3)
+        #expect(Set(t.promoted.map(\.designation)) == ["P-6-1", "P-6-2", "P-6-3"])
+    }
+
+    @Test func uniformlySizedRosterPromotesNoMoreThanTopK() {
+        // 40 moons all the same radius: every one clears the relative floor, so the
+        // topBySize cap is what stops this promoting all 40.
+        let moons = (0..<40).map { sized($0, 0.25) }
+        let t = MoonTiering.split(moons)
+        #expect(t.promoted.count == 4)
+        #expect(t.swarm.count == 36)
+    }
+
+    @Test func splitIsAPartitionAndPreservesInputOrder() {
+        let moons = (0..<20).map(plain) + [sized(99, 0.5)]
+        let t = MoonTiering.split(moons)
+        #expect(t.promoted.count + t.swarm.count == moons.count)
+        let all = Set(t.promoted.map(\.designation)).union(t.swarm.map(\.designation))
+        #expect(all == Set(moons.map(\.designation)))
+        // Each side keeps the roster's relative order (callers rely on it for stable
+        // index-anchored placement).
+        #expect(t.swarm.map(\.designation) == moons.map(\.designation).filter { d in
+            t.swarm.contains { $0.designation == d }
+        })
+    }
+}
