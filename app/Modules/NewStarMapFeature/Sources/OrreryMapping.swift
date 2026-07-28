@@ -429,6 +429,22 @@ enum OrreryMapping {
         return "#b8b0a4"
     }
 
+    /// The user-facing plane knobs, passed in rather than read from storage so
+    /// `bodyModel` stays a pure function (and the compression stays unit-testable).
+    /// `NewStarMapFeature` supplies the live values from `@Shared(.appStorage(...))`.
+    struct OrreryPlaneOptions: Equatable, Sendable {
+        /// See `BodySpin.tiltCapDeg`. 90 = fully physical, 0 = fully planar.
+        var tiltCapDeg: Double = 38
+        /// Escape hatch: moons stay in the orbital plane regardless of the planet's
+        /// tilt, while its rings keep the tilt. Reproduces the pre-coupling look.
+        var decoupleMoonPlane: Bool = false
+
+        static let `default` = OrreryPlaneOptions()
+
+        static let tiltCapKey = "orreryMoonPlaneTiltCapDeg"
+        static let decoupleKey = "orreryDecoupleMoonPlane"
+    }
+
     /// A body-level orrery `SystemModel`: the drilled planet as the lit `centralBody`
     /// with its moons split by `MoonTiering.split` into `planets` and `swarm`. A moon
     /// promotes (own orbit ring, nearest-known-distance-first — real

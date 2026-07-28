@@ -29,6 +29,19 @@ struct BodySpin: Equatable, Sendable {
     /// Same face always toward the parent — true for essentially every scanned moon.
     var tidallyLocked: Bool = false
 
+    /// Cap (degrees) on how much of a body's obliquity the RENDERED plane expresses —
+    /// the plane its rings, its surface frame, and its moon orbits all share.
+    ///
+    /// A cap is needed because `TurntableCamera` frames at ~29° elevation and clamps at
+    /// ±80°: against SOL-7's 97.77° the shared plane sits near-perpendicular to the
+    /// orbital plane and every orbit collapses toward a line. Compressing the range is
+    /// the same move `spinRate` already makes for a 588× rotation-period spread.
+    ///
+    /// `90` disables compression (fully physical); `0` flattens every plane into the
+    /// orbital plane. Only extremes are affected at the default — Saturn's 26.73° is
+    /// untouched.
+    var tiltCapDeg: Double = 38
+
     /// An unscanned body: upright, default rate, free-rotating.
     static let unknown = BodySpin()
 
@@ -40,6 +53,36 @@ struct BodySpin: Equatable, Sendable {
         let wrapped = t.truncatingRemainder(dividingBy: 360)
         let positive = wrapped < 0 ? wrapped + 360 : wrapped
         return positive > 180 ? 360 - positive : positive
+    }
+
+    /// The obliquity the RENDERER uses — `obliquityDeg` with its plane tilt compressed
+    /// toward `tiltCapDeg`. Every visual consumer reads this (via `pole`), which is what
+    /// makes it structurally impossible for the ring plane, the surface bands, and the
+    /// moon orbits to disagree about where this body's equator is.
+    ///
+    /// `obliquityDeg` itself is left alone: `isRetrograde` and the dossier report what
+    /// the scan actually said.
+    var renderObliquityDeg: Double {
+        let theta = obliquityDeg
+        let planeTilt = min(theta, 180 - theta)          // a plane has no normal sign
+        let compressed = Self.compress(planeTilt, capDeg: tiltCapDeg)
+        // Preserve the HEMISPHERE. Mapping a past-90° obliquity down below 90 would put
+        // the pole back above the orbital plane and cancel the body's retrograde spin —
+        // the double-count `sign`'s doc comment warns about. This branch is why the
+        // compression can never introduce that bug.
+        return theta <= 90 ? compressed : 180 - compressed
+    }
+
+    /// Identity below a knee, then asymptotic to `capDeg`. `capDeg >= 90` is the
+    /// identity (nothing to compress); `capDeg == 0` flattens.
+    static func compress(_ planeTilt: Double, capDeg: Double) -> Double {
+        guard capDeg < 90 else { return planeTilt }
+        guard capDeg > 0 else { return 0 }
+        let knee = min(capDeg * 0.8, 30)
+        guard planeTilt > knee else { return planeTilt }
+        let room = capDeg - knee
+        guard room > 0 else { return capDeg }
+        return knee + room * (1 - exp(-(planeTilt - knee) / room))
     }
 
     /// Whether this body turns retrograde, by either signal — for the dossier's label.
@@ -57,11 +100,12 @@ struct BodySpin: Equatable, Sendable {
         (rotationHours ?? 0) < 0 ? -1 : 1
     }
 
-    /// The body's north pole as a unit vector: +Y tilted by `obliquityDeg` about an
-    /// azimuth taken from the body's stable appearance seed, so two worlds sharing a
-    /// tilt don't lean the same way.
+    /// The body's north pole as a unit vector: +Y tilted by `renderObliquityDeg` about
+    /// an azimuth taken from the body's stable appearance seed, so two worlds sharing a
+    /// tilt don't lean the same way. Reads the COMPRESSED obliquity — this is the single
+    /// pole the rings, the surface frame, and the moon orbits are all built from.
     func pole(seed: Float) -> SIMD3<Float> {
-        let obl = Float(obliquityDeg) * .pi / 180
+        let obl = Float(renderObliquityDeg) * .pi / 180
         let az = seed * 2 * .pi
         return SIMD3(sin(obl) * cos(az), cos(obl), sin(obl) * sin(az))
     }
@@ -115,18 +159,27 @@ struct BodySpin: Equatable, Sendable {
     /// retrograde — see `tidallyLockedBodyKeepsOneFaceTowardItsParent`.
     static func lockedSpinPhase(orbitAngle: Float) -> Float { -orbitAngle }
 
-    /// The body's orthonormal texturing frame as (x, pole, z) columns — the frame the
-    /// surface shader transforms into so every latitude feature tilts with the body.
+    /// The orthonormal basis around a pole, as (x, normal, z) columns.
     ///
-    /// SYNC POINT: `orrery_body_fragment` builds this exact basis on the GPU. It MUST
-    /// be right-handed (determinant +1): building `z` as `cross(pole, x)` instead of
-    /// `cross(x, pole)` yields a reflection, which mirrors the sphere and makes every
-    /// planet appear to spin backwards. That shipped once; `bodyFrameIsRightHanded`
-    /// exists so it cannot ship again unnoticed.
-    func frame(seed: Float) -> (x: SIMD3<Float>, pole: SIMD3<Float>, z: SIMD3<Float>) {
-        let p = pole(seed: seed)
+    /// SYNC POINT: `orrery_body_fragment` and `orrery_ring_vertex` build this exact
+    /// basis on the GPU. It MUST be right-handed (determinant +1): building `z` as
+    /// `cross(pole, x)` instead of `cross(x, pole)` yields a reflection, which mirrors
+    /// the sphere and makes every planet appear to spin backwards. That shipped once;
+    /// `planeBasisIsRightHanded` and `bodyFrameIsRightHanded` exist so it cannot ship
+    /// again unnoticed.
+    static func planeBasis(pole: SIMD3<Float>) -> (x: SIMD3<Float>, normal: SIMD3<Float>, z: SIMD3<Float>) {
+        let p = simd_normalize(pole)
         let ref: SIMD3<Float> = abs(p.y) > 0.99 ? SIMD3(1, 0, 0) : SIMD3(0, 1, 0)
         let x = simd_normalize(simd_cross(ref, p))
         return (x, p, simd_cross(x, p))
+    }
+
+    /// The body's orthonormal texturing frame as (x, pole, z) columns — the frame the
+    /// surface shader transforms into so every latitude feature tilts with the body.
+    /// Delegates to `planeBasis` so the moon orbit plane and the ring plane are built
+    /// from the identical construction.
+    func frame(seed: Float) -> (x: SIMD3<Float>, pole: SIMD3<Float>, z: SIMD3<Float>) {
+        let b = Self.planeBasis(pole: pole(seed: seed))
+        return (b.x, b.normal, b.z)
     }
 }

@@ -811,8 +811,10 @@ struct BodySpinTests {
         let upright = BodySpin(tiltDeg: 0).pole(seed: 0.3)
         #expect(abs(upright.y - 1) < 1e-6)
 
-        // 90 degrees lays the pole into the orbital plane.
-        let sideways = BodySpin(tiltDeg: 90).pole(seed: 0.3)
+        // 90 degrees lays the pole into the orbital plane — the RAW geometry, so
+        // disable the render compression (Task 7) with tiltCapDeg: 90 to exercise it
+        // directly rather than the compressed default.
+        let sideways = BodySpin(tiltDeg: 90, tiltCapDeg: 90).pole(seed: 0.3)
         #expect(abs(sideways.y) < 1e-6)
         #expect(abs(simd_length(sideways) - 1) < 1e-6)
 
@@ -942,6 +944,87 @@ struct BodySpinTests {
         // As the orbit angle decreases with time, the locked spin phase must increase.
         #expect(BodySpin.lockedSpinPhase(orbitAngle: 0.2)
                 > BodySpin.lockedSpinPhase(orbitAngle: 0.5))
+    }
+
+    @Test func reportedObliquityIsUnaffectedByTheRenderCap() {
+        // `obliquityDeg` is what the scan said; `renderObliquityDeg` is what we draw.
+        // Keeping them separate is what lets the dossier stay truthful.
+        let uranus = BodySpin(tiltDeg: 97.77)
+        #expect(abs(uranus.obliquityDeg - 97.77) < 1e-9)
+        #expect(uranus.renderObliquityDeg != uranus.obliquityDeg)
+    }
+}
+
+struct BodySpinPlaneTests {
+    /// The live SOL values, which are the whole justification for the curve.
+    @Test func compressionLeavesEverythingButExtremesAlone() {
+        #expect(abs(BodySpin(tiltDeg: 3.13).renderObliquityDeg - 3.13) < 1e-6)    // Jupiter
+        #expect(abs(BodySpin(tiltDeg: 26.73).renderObliquityDeg - 26.73) < 1e-6)  // Saturn
+        #expect(abs(BodySpin(tiltDeg: 177.4).renderObliquityDeg - 177.4) < 1e-6)  // Venus
+        #expect(abs(BodySpin(tiltDeg: 20.7).renderObliquityDeg - 20.7) < 1e-6)    // ALASII-4
+    }
+
+    @Test func extremeTiltsCompressToTheCap() {
+        // SOL-7 Uranus: a true plane tilt of 82.23° would sit near-perpendicular to the
+        // orbital plane and read edge-on at the camera's default 29° elevation.
+        let uranus = BodySpin(tiltDeg: 97.77).renderObliquityDeg
+        #expect(uranus > 90)                                   // still past 90 — see below
+        #expect(abs((180 - uranus) - 38) < 1.0)                // plane tilt ≈ the cap
+        // POLARISON-6: 66.1° with 59 moons, the worst combined case.
+        let polarison = BodySpin(tiltDeg: 66.1).renderObliquityDeg
+        #expect(polarison < 66.1 && polarison > 30)
+    }
+
+    /// The load-bearing invariant. `orrery-physical-fidelity` records that retrograde
+    /// falls out of the pole tipping BELOW the orbital plane and that `sign` must not
+    /// flip as well. Folding an obliquity past 90° down under it would put the pole back
+    /// above the plane and silently turn a retrograde world prograde.
+    @Test func compressionNeverCrossesNinetyDegrees() {
+        for t in stride(from: 0.0, through: 180.0, by: 0.5) {
+            let r = BodySpin(tiltDeg: t).renderObliquityDeg
+            if t <= 90 { #expect(r <= 90, "θ=\(t) → \(r) crossed above 90") }
+            else { #expect(r > 90, "θ=\(t) → \(r) crossed below 90") }
+        }
+    }
+
+    @Test func retrogradePolesStillPointBelowThePlane() {
+        #expect(BodySpin(tiltDeg: 97.77).pole(seed: 0.3).y < 0)
+        #expect(BodySpin(tiltDeg: 177.4).pole(seed: 0.3).y < 0)
+        #expect(BodySpin(tiltDeg: 26.73).pole(seed: 0.3).y > 0)
+        // And the reported values — which the dossier label reads — are untouched.
+        #expect(BodySpin(tiltDeg: 97.77).isRetrograde)
+        #expect(abs(BodySpin(tiltDeg: 97.77).obliquityDeg - 97.77) < 1e-9)
+    }
+
+    @Test func capOfNinetyDisablesCompressionAndZeroFlattens() {
+        let physical = BodySpin(tiltDeg: 97.77, tiltCapDeg: 90)
+        #expect(abs(physical.renderObliquityDeg - 97.77) < 1e-6)
+        let flat = BodySpin(tiltDeg: 97.77, tiltCapDeg: 0)
+        #expect(abs(flat.renderObliquityDeg - 180) < 1e-6)   // pole straight down: flat plane
+        #expect(abs(BodySpin(tiltDeg: 26.73, tiltCapDeg: 0).renderObliquityDeg) < 1e-6)
+    }
+
+    @Test func planeBasisIsRightHanded() {
+        // Same hazard as `bodyFrameIsRightHanded`: a basis assembled from two cross
+        // products has a 50% chance of being a reflection, which is invisible in a
+        // still frame and makes motion run backwards.
+        for tilt in [0.0, 26.73, 66.1, 97.77, 177.4] {
+            let pole = BodySpin(tiltDeg: tilt).pole(seed: 0.42)
+            let b = BodySpin.planeBasis(pole: pole)
+            let det = simd_determinant(simd_float3x3(b.x, b.normal, b.z))
+            #expect(abs(det - 1) < 1e-4, "tilt \(tilt) basis det = \(det)")
+        }
+    }
+
+    @Test func planeBasisAgreesWithTheTexturingFrame() {
+        // One construction, so the ring plane, the moon plane, and the surface frame
+        // cannot disagree. `frame(seed:)` must delegate to `planeBasis`.
+        let spin = BodySpin(tiltDeg: 66.1)
+        let f = spin.frame(seed: 0.42)
+        let b = BodySpin.planeBasis(pole: spin.pole(seed: 0.42))
+        #expect(simd_distance(f.x, b.x) < 1e-5)
+        #expect(simd_distance(f.pole, b.normal) < 1e-5)
+        #expect(simd_distance(f.z, b.z) < 1e-5)
     }
 }
 
