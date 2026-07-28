@@ -276,6 +276,13 @@ vertex OrreryBodyVaryings orrery_body_vertex(uint vid                       [[ve
 // the real silhouette rather than at a disc through the body's centre. The
 // reconstructed surface always bulges toward the camera relative to the quad plane,
 // so `less` is the correct conservative qualifier.
+//
+// That guarantee is why depth is reconstructed from the GEOMETRIC hemisphere normal
+// (`nViewGeom`) and never from a perturbed one. The irregular-body branch below tilts
+// its SHADING normal by up to ~50°, which near the limb (where `nz` is already tiny)
+// can drive z negative — a point on the FAR hemisphere, i.e. depth GREATER than the
+// quad's. Metal leaves the result undefined once a conservative qualifier is violated,
+// so the perturbed normal lights the fragment and nothing else.
 struct OrreryBodyOut {
     float4 color [[color(0)]];
     float  depth [[depth(less)]];
@@ -288,12 +295,48 @@ fragment OrreryBodyOut orrery_body_fragment(OrreryBodyVaryings in [[stage_in]],
     if (d > 1.0) discard_fragment();
     float nz = sqrt(saturate(1.0 - d * d));          // hemisphere z → sphere normal
     float3 nView = float3(in.uv, nz);
+    // The unperturbed geometric normal, kept aside: this is the one that reconstructs
+    // the depth sample, so `[[depth(less)]]` stays honest even when `nView` is later
+    // bumped for shading (see the note on `OrreryBodyOut`). For every non-irregular
+    // body the two stay identical.
+    const float3 nViewGeom = nView;
     float coverage = smoothstep(1.0, 1.0 - fwidth(d) - 0.01, d);   // soft AA limb
 
     // Reconstruct the real surface direction from the billboard: back-transform the
     // view-space hemisphere by the inverse (transpose) view rotation.
     float3x3 viewRot = float3x3(u.view[0].xyz, u.view[1].xyz, u.view[2].xyz);
     float3 dirWorld = normalize(transpose(viewRot) * nView);
+
+    // Move into the BODY's own frame, whose +Y is its (tilted) north pole.
+    // Everything downstream reads latitude as dir.y, so doing this once here is what
+    // makes axial tilt work for every surface style at once — including retrograde
+    // worlds, whose pole simply aims below the orbital plane (SOL-2 at 177.4°, SOL-7
+    // at 97.77°), reversing the apparent spin with no special case.
+    //
+    // Built BEFORE the irregular branch on purpose: that branch's carve field has to be
+    // sampled in this frame, not in world space, or the rock is not a rigid body — see
+    // the long note there.
+    float3 pole = normalize(in.pole);
+    float3 ref = fabs(pole.y) > 0.99 ? float3(1.0, 0.0, 0.0) : float3(0.0, 1.0, 0.0);
+    float3 bx = normalize(cross(ref, pole));
+    // `cross(bx, pole)`, NOT `cross(pole, bx)`. The latter builds a LEFT-handed basis
+    // (determinant −1): a reflection rather than a rotation, which mirrors the sphere
+    // and makes every planet appear to spin backwards. Right-handedness here is an
+    // invariant — `BodySpinTests.bodyFrameIsRightHanded` pins the same construction
+    // on the CPU side. SYNC POINT: mirrors `BodySpin.frame(seed:)`.
+    float3 bz = cross(bx, pole);
+    float3x3 bodyFrame = float3x3(bx, pole, bz);          // columns
+
+    // Spin about the body's own pole, at the rate its rotation period earned. A
+    // tidally locked body arrives with spinRate 0 and its ORBIT angle baked into
+    // `seed`, so its near face stays toward its parent as it goes round.
+    float spin = u.time * in.spinRate + in.seed;
+    float cs = cos(spin), sn = sin(spin);
+    // World → body → spun, as ONE rotation. Columns, so `spinRot * v` reproduces the
+    // Y-axis rotation this shader has always written by hand:
+    //   x' = x·cs − z·sn,  y' = y,  z' = x·sn + z·cs
+    float3x3 spinRot = float3x3(float3(cs, 0.0, sn), float3(0.0, 1.0, 0.0), float3(-sn, 0.0, cs));
+    float3x3 bodyRot = spinRot * transpose(bodyFrame);
 
     // --- Irregular bodies (captured asteroids) -----------------------------------
     // ONE 3D noise sample, used twice: it carves the surface radius (so the shading
@@ -311,12 +354,20 @@ fragment OrreryBodyOut orrery_body_fragment(OrreryBodyVaryings in [[stage_in]],
     // sphere at all. Carving chips and notches inward is what's actually renderable,
     // and it's still a clearly non-spherical silhouette at these sizes.
     //
-    // Deliberately sampled on `dirWorld` (a direction), NOT on a longitude — see the
-    // beach-ball note above: anything driven by `atan2(dir.z, dir.x)` pinches at both
-    // poles and seams down one meridian.
+    // Sampled in the BODY's own frame (`bodyRot * dir`), which is what makes the rock a
+    // RIGID BODY: the carve field is fixed to the asteroid, so orbiting the camera
+    // exposes the same lumps from a new angle instead of re-cutting the silhouette out
+    // of a field frozen in world space (that reads as a hole in space, not a rock), and
+    // the tumble in `bodyRot` reaches the OUTLINE — the dominant cue at the 3–20 px
+    // these bodies occupy — rather than only the surface lookup.
+    //
+    // Deliberately sampled on a DIRECTION, NOT on a longitude — see the beach-ball note
+    // above: anything driven by `atan2(dir.z, dir.x)` pinches at both poles and seams
+    // down one meridian.
     if (in.irregular > 0.001) {
         float amp = in.irregular;
-        float lump = fbm(dirWorld * 2.7 + in.vseed * 13.0) - 0.5;   // −0.5…0.5
+        float3 bodyDir = bodyRot * dirWorld;                        // rigid + tumbling
+        float lump = fbm(bodyDir * 2.7 + in.vseed * 13.0) - 0.5;    // −0.5…0.5
         float carve = min(lump, 0.0);                        // −0.5…0, never positive
         // Silhouette: only ever pull the limb IN (never past d = 1 — see above).
         float limb = 1.0 + amp * carve;
@@ -326,11 +377,16 @@ fragment OrreryBodyOut orrery_body_fragment(OrreryBodyVaryings in [[stage_in]],
         // differences on the sphere — cheap, and only needs to be approximately right
         // at this size), so an untouched (lump > 0) patch stays flat — matching its
         // untouched, uncarved silhouette — and only a notch's shading disagrees from flat.
+        // The tangents (and the perturbation they drive) stay in WORLD space, because
+        // what we are perturbing is `dirWorld`; only the FIELD LOOKUP moves into the body
+        // frame. `bodyRot` is a rotation, so a world-space step of length e is a
+        // body-space step of length e — the finite differences remain the gradient of the
+        // composed field along these axes.
         const float e = 0.06;
         float3 tx = normalize(cross(fabs(dirWorld.y) > 0.99 ? float3(1,0,0) : float3(0,1,0), dirWorld));
         float3 tz = cross(tx, dirWorld);        // right-handed, same rule as planeBasis
-        float gx = min(fbm(normalize(dirWorld + tx * e) * 2.7 + in.vseed * 13.0) - 0.5, 0.0) - carve;
-        float gz = min(fbm(normalize(dirWorld + tz * e) * 2.7 + in.vseed * 13.0) - 0.5, 0.0) - carve;
+        float gx = min(fbm(bodyRot * normalize(dirWorld + tx * e) * 2.7 + in.vseed * 13.0) - 0.5, 0.0) - carve;
+        float gz = min(fbm(bodyRot * normalize(dirWorld + tz * e) * 2.7 + in.vseed * 13.0) - 0.5, 0.0) - carve;
         float3 bumped = normalize(dirWorld - (tx * gx + tz * gz) * amp * 4.0);
         // Facet the result: snapping toward a coarse quantization reads as flat-shaded
         // chunks, which is the strongest "asteroid" cue at a few pixels across.
@@ -339,29 +395,9 @@ fragment OrreryBodyOut orrery_body_fragment(OrreryBodyVaryings in [[stage_in]],
         nView = normalize(viewRot * dirWorld);
     }
 
-    // Then move into the BODY's own frame, whose +Y is its (tilted) north pole.
-    // Everything downstream reads latitude as dir.y, so doing this once here is what
-    // makes axial tilt work for every surface style at once — including retrograde
-    // worlds, whose pole simply aims below the orbital plane (SOL-2 at 177.4°, SOL-7
-    // at 97.77°), reversing the apparent spin with no special case.
-    float3 pole = normalize(in.pole);
-    float3 ref = fabs(pole.y) > 0.99 ? float3(1.0, 0.0, 0.0) : float3(0.0, 1.0, 0.0);
-    float3 bx = normalize(cross(ref, pole));
-    // `cross(bx, pole)`, NOT `cross(pole, bx)`. The latter builds a LEFT-handed basis
-    // (determinant −1): a reflection rather than a rotation, which mirrors the sphere
-    // and makes every planet appear to spin backwards. Right-handedness here is an
-    // invariant — `BodySpinTests.bodyFrameIsRightHanded` pins the same construction
-    // on the CPU side. SYNC POINT: mirrors `BodySpin.frame(seed:)`.
-    float3 bz = cross(bx, pole);
-    float3x3 bodyFrame = float3x3(bx, pole, bz);          // columns
-    float3 dir = transpose(bodyFrame) * dirWorld;         // world -> body
-
-    // Spin about the body's own pole, at the rate its rotation period earned. A
-    // tidally locked body arrives with spinRate 0 and its ORBIT angle baked into
-    // `seed`, so its near face stays toward its parent as it goes round.
-    float spin = u.time * in.spinRate + in.seed;
-    float cs = cos(spin), sn = sin(spin);
-    dir = float3(dir.x * cs - dir.z * sn, dir.y, dir.x * sn + dir.z * cs);
+    // World → body → spun, in one shot. `dirWorld` may have been re-aimed by the
+    // irregular branch above; everything downstream reads latitude as `dir.y`.
+    float3 dir = bodyRot * dirWorld;
 
     // The cloud deck: an elevated layer that rotates FASTER than the surface, so the
     // weather visibly travels across the planet. `cloudHeight` shifts the sample toward
@@ -383,7 +419,9 @@ fragment OrreryBodyOut orrery_body_fragment(OrreryBodyVaryings in [[stage_in]],
                                        in.life, in.mods, in.polarIce, in.greenVibrancy,
                                        in.ocean, in.vseed, u.time);
 
-    float3 fragView = in.viewCenter + nView * in.radius;
+    // The surface POINT comes from the geometric hemisphere (this is what `out.depth` is
+    // reconstructed from — see `OrreryBodyOut`); the perturbed `nView` only lights it.
+    float3 fragView = in.viewCenter + nViewGeom * in.radius;
     float3 L = normalize(in.viewSun - fragView);
     float diff = max(dot(nView, L), 0.0);
     // Ambient + lambert on the albedo; emissive (lava / city lights) added on top,
