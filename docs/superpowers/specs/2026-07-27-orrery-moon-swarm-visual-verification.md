@@ -77,19 +77,32 @@ buffer). Confirm it does not visibly pop.
 ## 5. Captured asteroids
 
 Open a planet with captured-asteroid moons (e.g. `SOL-4`, `SOL-8` — both have small rosters, so all
-moons promote to impostors). Three things:
+moons promote to impostors).
 
+The body is a **triaxial ellipsoid** (`PlanetMaterial.irregularAxes`, aspect 1.4–2.3 : 1), solved
+analytically in the fragment shader, with the noise field adding surface relief and chipping the
+limb. The elongation is the load-bearing cue: an earlier version noise-carved a *sphere*, and it read
+as a sphere with bites out of it, because a clamped field leaves most of the outline a perfect circle.
+
+- **Is it a potato?** At rest it should read as clearly longer in one direction than another. If it
+  reads round, the axes are not reaching the shader — check `surfaceExtras.zw`.
 - **Orbit the camera and watch one asteroid's outline, not its shading.** The silhouette should keep
-  its shape as the camera moves. If the lumps slide or the outline re-cuts, the carve field is being
+  its shape as the camera moves. If the lumps slide or the outline re-cuts, the field is being
   sampled in the wrong frame.
-- **With the camera still**, the outline should slowly change as the rock tumbles. If the tumble now
-  reads as per-frame flicker at these sizes (3–20 px), the amplitude or spin rate wants tuning —
-  the shape is inward-only carving, so it should read as chipped rather than jittery.
-- **Watch the limb** as a ring annulus or another body passes behind it, for occlusion oddities.
-  Depth is written from the geometric normal, not the perturbed one, so this should be stable.
+- **With the camera still**, the outline should swing as the rock tumbles end-over-end.
+- **Look for a silhouette that folds back on itself** — a notch whose edge crosses itself, or a black
+  sliver *inside* the disc that doesn't connect to the outside. That was the original defect: the
+  carve was sampled at the front-surface point under each pixel, and near the limb that point slides
+  arbitrarily fast, so the cut threshold stopped being monotonic in screen radius. It is now sampled
+  on the rim direction, which depends on screen *angle* alone, and a fold is not representable.
+- **Watch the limb** as another body passes behind it, for occlusion oddities. Depth comes from the
+  solved intersection, not from the perturbed shading normal.
 
 Also confirm the faceted *shading* still looks right — the lighting normal is deliberately still
 perturbed, and that is the thing most easily broken by accident.
+
+Levers, cheapest first: `PlanetMaterial.irregularAxes` ratio ranges (how potato-shaped),
+`PlanetMaterial.irregularity` (0.45 — how deeply the limb chips and how hard the facets read).
 
 ## 6. The one-plane goal
 

@@ -2022,6 +2022,12 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
                                        atmosphere: p.atmosphere,
                                        inHabitableZone: p.inHabitableZone,
                                        hasSubsurfaceOcean: p.ocean > 0)
+        // Only the MID and SHORT semi-axes travel to the GPU: the axes are normalised to
+        // unit product, so the shader recovers the long one as 1/(mid·short) and two
+        // floats carry the whole shape. A regular body sends zeroes and never reads them.
+        let axes = p.irregularity > 0
+            ? PlanetMaterial.irregularAxes(seed: p.appearanceSeed)
+            : SIMD3<Float>(1, 0, 0)
         return OrreryBodyUniform(
             centerRadius: SIMD4(p.center, p.radius),
             color: SIMD4(s.base, s.polarIce),
@@ -2030,7 +2036,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
             surfaceParams: SIMD4(s.estimated ? 1 : 0, s.life, p.spinPhase, p.appearanceSeed),
             surfaceMods: SIMD4(s.mods.craters, s.mods.atmosphere, s.mods.lava, s.mods.frost),
             spinAxis: SIMD4(p.spinAxis, p.spinRate),
-            surfaceExtras: SIMD4(p.ocean, p.irregularity, 0, 0))
+            surfaceExtras: SIMD4(p.ocean, p.irregularity, axes.y, axes.z))
     }
 
     /// The ring uniform for a placed body, or `nil` if it has no rings. Same

@@ -2138,6 +2138,52 @@ struct IrregularBodyTests {
         }
     }
 
+    /// SYNC POINT with `orrery_body_vertex`, which reconstructs the long axis as
+    /// `1/(mid·short)` and sends only the other two across the bus. If the product ever
+    /// stopped being 1 the shader would silently rebuild a different body than the one
+    /// the CPU resolved.
+    @Test func irregularAxesHaveUnitProduct() {
+        for seed in stride(from: Float(0), through: 1, by: 0.05) {
+            let a = PlanetMaterial.irregularAxes(seed: seed)
+            #expect(abs(a.x * a.y * a.z - 1) < 1e-4)
+        }
+    }
+
+    /// The whole point of the ellipsoid: no seed may produce a body that is near enough
+    /// to a sphere to read as a small planet. Real small bodies run ≈1.4 : 1 (Phobos,
+    /// Mathilde) to ≈2.4 : 1 (Eros, Ida).
+    @Test func irregularAxesAreAlwaysVisiblyElongated() {
+        for seed in stride(from: Float(0), through: 1, by: 0.01) {
+            let a = PlanetMaterial.irregularAxes(seed: seed)
+            #expect(a.x >= a.y && a.y >= a.z)          // ordered long → short
+            let aspect = a.x / a.z
+            #expect(aspect > 1.4 && aspect < 2.6)
+        }
+    }
+
+    /// Unit product forces the long axis past the nominal radius, which is exactly why
+    /// the billboard has to be widened by `max(axes)` — a quad left at the old size would
+    /// crop the body's own silhouette.
+    @Test func irregularAxesOverflowTheNominalRadius() {
+        for seed in stride(from: Float(0), through: 1, by: 0.05) {
+            let a = PlanetMaterial.irregularAxes(seed: seed)
+            #expect(a.x > 1.0)
+            #expect(a.x < 1.6)      // the quad's growth stays bounded
+            #expect(a.z < 1.0)
+        }
+    }
+
+    @Test func irregularAxesAreStableAndSeedVaried() {
+        let a = PlanetMaterial.irregularAxes(seed: 0.31)
+        #expect(simd_distance(a, PlanetMaterial.irregularAxes(seed: 0.31)) < 1e-6)
+        var distinct = Set<String>()
+        for seed in stride(from: Float(0), through: 1, by: 0.1) {
+            let v = PlanetMaterial.irregularAxes(seed: seed)
+            distinct.insert(String(format: "%.3f/%.3f", v.y, v.z))
+        }
+        #expect(distinct.count > 8)   // seeds don't collapse onto one shape
+    }
+
     @Test func tumbleAxisIsUnitStableAndSeedVaried() {
         let a = BodySpin.tumbleAxis(seed: 0.2)
         #expect(abs(simd_length(a) - 1) < 1e-5)

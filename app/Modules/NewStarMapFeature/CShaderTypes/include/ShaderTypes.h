@@ -163,8 +163,11 @@ typedef struct {
     // gas bands, polar hoods, ice caps — tilts with the body for free.
     simd_float4 spinAxis;
     // x = subsurface-ocean cryo-fracture amount (0…1), y = silhouette irregularity
-    // (0 = smooth sphere; >0 lumps the limb AND the shading normal from ONE noise
-    // sample, so the outline and the terminator agree), zw reserved.
+    // (0 = smooth sphere; >0 chips the limb AND tilts the shading normal from ONE noise
+    // sample, so the outline and the terminator agree), zw = the MID and SHORT semi-axes
+    // of an irregular body's ellipsoid, as multiples of the radius. The three axes are
+    // normalised to unit product, so the shader recovers the long one as 1/(z·w) and the
+    // shape costs two floats. Meaningless — and never read — when y is 0.
     simd_float4 surfaceExtras;
 } OrreryBodyUniform;
 

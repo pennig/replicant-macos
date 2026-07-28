@@ -210,6 +210,41 @@ enum PlanetMaterial {
         (type ?? "").lowercased().contains("captured") ? 0.45 : 0
     }
 
+    /// The triaxial semi-axes of an irregular body's impostor, as multiples of its
+    /// nominal radius, ordered long → short.
+    ///
+    /// This is the cue that actually separates "asteroid" from "planet". Noise carved
+    /// into a sphere's outline only ever produces a sphere with chips in it: the outline
+    /// stays a circle everywhere the noise happens not to bite, which is most of it. A
+    /// real small body is non-spherical at the LOWEST frequency — it is a potato, and it
+    /// is that global elongation the eye reads first. Ratios here bracket the measured
+    /// ones: Eros and Ida are both ≈2.4 : 1, Mathilde and Phobos ≈1.4 : 1.
+    ///
+    /// The product is normalised to 1 so the ellipsoid keeps the volume — and so roughly
+    /// the apparent size — of the sphere it replaces. That means the long axis exceeds
+    /// 1, which is why the billboard has to be widened by `max` (see `orrery_body_vertex`)
+    /// rather than left at the nominal radius: the quad must still bound the body.
+    static func irregularAxes(seed: Float) -> SIMD3<Float> {
+        // Two ratios against the long axis, drawn independently and then ordered, so a
+        // body is never accidentally near-spherical on all three.
+        let r0 = 0.86 - 0.24 * hash01(seed, 5.13)       // 0.62…0.86
+        let r1 = 0.70 - 0.26 * hash01(seed, 11.79)      // 0.44…0.70
+        let mid = max(r0, r1), short = min(r0, r1)
+        // Scale so long·mid·short == 1 — volume-preserving, so an irregular body reads at
+        // the same SIZE as the sphere it replaces and only its SHAPE changes. Aspect
+        // ratios land in 1.43…2.27 : 1, and the long axis in 1.18…1.54.
+        let long = 1.0 / cbrtf(mid * short)
+        return SIMD3(long, long * mid, long * short)
+    }
+
+    /// A stable 0…1 hash of a seed, offset so one seed can drive several independent
+    /// draws. Deliberately not `Hasher` — that is randomly seeded per process, and these
+    /// values must be identical every launch or a body changes shape when you revisit it.
+    private static func hash01(_ seed: Float, _ salt: Float) -> Float {
+        let x = sinf(seed * 78.233 + salt * 43.758) * 43758.5453
+        return x - x.rounded(.down)
+    }
+
     // MARK: - Rings
 
     /// Resolve a body's ring system, or nil for a body that reports no rings. Giants

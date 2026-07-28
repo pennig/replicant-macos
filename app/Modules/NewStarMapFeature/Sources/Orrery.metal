@@ -236,6 +236,8 @@ struct OrreryBodyVaryings {
     float  spinRate;     // signed spin rate (rad/s); negative = retrograde, 0 = locked
     float  ocean;        // subsurface-ocean cryo-fracture amount (0…1)
     float  irregular;    // silhouette irregularity (0 = smooth sphere)
+    float3 axes;         // triaxial semi-axes (multiples of radius); (1,1,1) = sphere
+    float  bound;        // max(axes) — how far the quad was widened to bound the body
 };
 
 vertex OrreryBodyVaryings orrery_body_vertex(uint vid                       [[vertex_id]],
@@ -246,9 +248,23 @@ vertex OrreryBodyVaryings orrery_body_vertex(uint vid                       [[ve
     float4 viewC = u.view * float4(b.centerRadius.xyz, 1.0);
     float radius = b.centerRadius.w;
 
+    // An irregular body is a triaxial ellipsoid, not a sphere (see
+    // `PlanetMaterial.irregularAxes`). The axes are normalised to unit PRODUCT, so only
+    // two of them need to cross the bus — the long one is whatever makes the product 1.
+    float3 axes = float3(1.0);
+    if (b.surfaceExtras.y > 0.001) {
+        float aMid = b.surfaceExtras.z, aShort = b.surfaceExtras.w;
+        axes = float3(1.0 / (aMid * aShort), aMid, aShort);
+    }
+    out.axes  = axes;
+    // Unit product means the long axis EXCEEDS the nominal radius (up to ~1.54×), so the
+    // billboard has to grow with it or the quad would crop the body's own silhouette.
+    // A sphere leaves this at exactly 1 and the quad is untouched.
+    out.bound = max(max(axes.x, axes.y), axes.z);
+
     float2 corner = kCorners[vid];
     float4 viewPos = viewC;
-    viewPos.xy += corner * radius;
+    viewPos.xy += corner * radius * out.bound;
     out.position = u.projection * viewPos;
     out.uv = corner;
     out.viewCenter = viewC.xyz;
@@ -271,18 +287,18 @@ vertex OrreryBodyVaryings orrery_body_vertex(uint vid                       [[ve
     return out;
 }
 
-// The body writes TRUE sphere depth, not the billboard quad's flat plane, so
+// The body writes TRUE surface depth, not the billboard quad's flat plane, so
 // geometry that intersects the body — the ring annulus above all — is occluded at
-// the real silhouette rather than at a disc through the body's centre. The
-// reconstructed surface always bulges toward the camera relative to the quad plane,
-// so `less` is the correct conservative qualifier.
+// the real silhouette rather than at a disc through the body's centre. The surface is
+// held in front of the quad plane (see the clamp at the `fragView` reconstruction), so
+// `less` is the correct conservative qualifier.
 //
-// That guarantee is why depth is reconstructed from the GEOMETRIC hemisphere normal
-// (`nViewGeom`) and never from a perturbed one. The irregular-body branch below tilts
-// its SHADING normal by up to ~50°, which near the limb (where `nz` is already tiny)
-// can drive z negative — a point on the FAR hemisphere, i.e. depth GREATER than the
-// quad's. Metal leaves the result undefined once a conservative qualifier is violated,
-// so the perturbed normal lights the fragment and nothing else.
+// That guarantee is why depth is reconstructed from the SOLVED intersection point
+// (`surfOffset`) and never from a shading normal. The irregular-body branch below tilts
+// its SHADING normal by up to ~50°, which near the limb can drive z negative — a point
+// on the FAR side, i.e. depth GREATER than the quad's. Metal leaves the result undefined
+// once a conservative qualifier is violated, so the perturbed normal lights the fragment
+// and nothing else.
 struct OrreryBodyOut {
     float4 color [[color(0)]];
     float  depth [[depth(less)]];
@@ -291,21 +307,15 @@ struct OrreryBodyOut {
 fragment OrreryBodyOut orrery_body_fragment(OrreryBodyVaryings in [[stage_in]],
                                             constant Uniforms&    u    [[buffer(1)]])
 {
-    float d = length(in.uv);
-    if (d > 1.0) discard_fragment();
-    float nz = sqrt(saturate(1.0 - d * d));          // hemisphere z → sphere normal
-    float3 nView = float3(in.uv, nz);
-    // The unperturbed geometric normal, kept aside: this is the one that reconstructs
-    // the depth sample, so `[[depth(less)]]` stays honest even when `nView` is later
-    // bumped for shading (see the note on `OrreryBodyOut`). For every non-irregular
-    // body the two stay identical.
-    const float3 nViewGeom = nView;
-    float coverage = smoothstep(1.0, 1.0 - fwidth(d) - 0.01, d);   // soft AA limb
+    // Offset from the body's centre on the billboard, in units of `radius`. `bound` is
+    // exactly 1 for a sphere — so this is the same unit disc the impostor has always
+    // used — and up to ~1.54 for an irregular body, whose quad was widened to bound its
+    // long axis. The surface itself is intersected below, once the body frame exists.
+    float2 uvS = in.uv * in.bound;
+    float d = length(uvS);
+    if (d > in.bound) discard_fragment();            // cheap reject outside the quad's disc
 
-    // Reconstruct the real surface direction from the billboard: back-transform the
-    // view-space hemisphere by the inverse (transpose) view rotation.
     float3x3 viewRot = float3x3(u.view[0].xyz, u.view[1].xyz, u.view[2].xyz);
-    float3 dirWorld = normalize(transpose(viewRot) * nView);
 
     // Move into the BODY's own frame, whose +Y is its (tilted) north pole.
     // Everything downstream reads latitude as dir.y, so doing this once here is what
@@ -313,8 +323,9 @@ fragment OrreryBodyOut orrery_body_fragment(OrreryBodyVaryings in [[stage_in]],
     // worlds, whose pole simply aims below the orbital plane (SOL-2 at 177.4°, SOL-7
     // at 97.77°), reversing the apparent spin with no special case.
     //
-    // Built BEFORE the irregular branch on purpose: that branch's carve field has to be
-    // sampled in this frame, not in world space, or the rock is not a rigid body — see
+    // Built BEFORE the surface is intersected on purpose: an irregular body's ellipsoid
+    // is defined in this frame, and so is the carve field that chips its limb — sample
+    // either in world space instead and the rock stops being a rigid body. See
     // the long note there.
     float3 pole = normalize(in.pole);
     float3 ref = fabs(pole.y) > 0.99 ? float3(1.0, 0.0, 0.0) : float3(0.0, 1.0, 0.0);
@@ -338,28 +349,76 @@ fragment OrreryBodyOut orrery_body_fragment(OrreryBodyVaryings in [[stage_in]],
     float3x3 spinRot = float3x3(float3(cs, 0.0, sn), float3(0.0, 1.0, 0.0), float3(-sn, 0.0, cs));
     float3x3 bodyRot = spinRot * transpose(bodyFrame);
 
+    // --- Intersect the impostor ----------------------------------------------------
+    // The limb carve, evaluated on the RIM direction: the surface direction that faces
+    // exactly sideways at this fragment's screen ANGLE. Sampling it at the front-surface
+    // point under the fragment instead — which is what this shader used to do — is what
+    // produced silhouettes that folded back on themselves. Near the limb `dz/dd` diverges,
+    // so walking one pixel outward swings the sampled direction through a large angle;
+    // the threshold then oscillates as fast as the noise does and `d > limb(d)` stops
+    // being monotonic in `d`. A pixel could be cut at d = 0.95, kept at 0.97 and cut
+    // again at 0.99, which reads as a hole whose edge crosses itself. Evaluated on the
+    // rim the carve depends on the screen angle ALONE, so the kept set is a radial
+    // interval for every angle and a fold is not representable.
+    float limbScale = 1.0;
+    if (in.irregular > 0.001) {
+        float3 rimView = d > 1e-4 ? normalize(float3(uvS, 0.0)) : float3(1.0, 0.0, 0.0);
+        float3 rimBody = bodyRot * (transpose(viewRot) * rimView);
+        float lumpRim = fbm(rimBody * 2.7 + in.vseed * 13.0) - 0.5;   // −0.5…0.5
+        limbScale = 1.0 + in.irregular * min(lumpRim, 0.0);           // only ever pulls IN
+    }
+
+    // Ray/ellipsoid in closed form — no iteration, and exact. The impostor is
+    // reconstructed orthographically (the view ray is +z, as it always has been here), so
+    // with W = view→body and the surface defined by |p ⊘ axes| = limbScale for
+    // p = (uvS, z), solving for z is one quadratic. Silhouette, normal and depth then all
+    // come from the SAME surface by construction, which is the property the old
+    // carve-a-sphere approach could not have: it tested visibility against one field and
+    // shaded against another.
+    float3x3 W = bodyRot * transpose(viewRot);            // view → body (spun)
+    float3 invA = 1.0 / (in.axes * limbScale);
+    float3 fv = invA * (W * float3(uvS, 0.0));
+    float3 ev = invA * (W * float3(0.0, 0.0, 1.0));
+    float qa = dot(ev, ev), qb = dot(ev, fv), qc = dot(fv, fv) - 1.0;
+    float disc = qb * qb - qa * qc;
+    if (disc < 0.0) discard_fragment();                   // the ray misses the body
+    float zs = (-qb + sqrt(disc)) / qa;                   // NEAR root — +z is toward the eye
+
+    // `dEff` is the sphere-space radial coordinate: 0 at the centre, 1 exactly on the
+    // silhouette, for ANY axes. For a sphere it reduces to `d` identically, so the limb
+    // antialiasing below is the same filter it has always been — and, unlike the old
+    // `fwidth(d)` against a fast-varying threshold, its screen derivative is now the
+    // right width to feather by.
+    float dEff = sqrt(saturate(1.0 - disc / qa));
+    float coverage = smoothstep(1.0, 1.0 - fwidth(dEff) - 0.01, dEff);
+
+    // The surface point, in units of `radius`. Depth is reconstructed from this — never
+    // from a shading normal (see the note on `OrreryBodyOut`).
+    float3 surfOffset = float3(uvS, zs);
+    // Normal of the quadric: ∇|p ⊘ a|² = 2·Wᵀ·(W·p ⊘ a²).
+    float3 nView = normalize(transpose(W) * (invA * invA * (W * surfOffset)));
+    float3 dirWorld = normalize(transpose(viewRot) * nView);
+
     // --- Irregular bodies (captured asteroids) -----------------------------------
-    // ONE 3D noise sample, used twice: it carves the surface radius (so the shading
-    // normal tilts as if the rock were lumpy) and it cuts the silhouette (so the
-    // outline is lumpy too). Sharing the sample is what makes the two agree — an
-    // alpha-cut against a different field than the normals reads as a sphere behind a
-    // ragged hole. No iteration: at the 3–20 px these bodies occupy, displacing the
-    // bounding-sphere hit is indistinguishable from tracing the real surface.
+    // The SHAPE is carried by the ellipsoid solved above — that global elongation is what
+    // reads as "small body" rather than "planet", and no amount of noise on a sphere
+    // substitutes for it, because a sphere's outline stays a perfect circle everywhere
+    // the noise happens not to bite (which is most of it, the field being clamped to its
+    // negative half). What remains here is SURFACE relief: the same noise field, tilting
+    // the shading normal so the rock reads as chipped and faceted rather than polished.
     //
-    // INWARD ONLY, deliberately: the analytic sphere above has no solution past d = 1
-    // (`nz` goes imaginary there — see the `saturate` a few lines up), so a fragment
-    // with d > 1 is already discarded before this branch ever runs. Pushing the limb
-    // OUTWARD past 1 would be dead code — those fragments are unreachable — and would
-    // additionally have to shade/write depth for a point that isn't on the bounding
-    // sphere at all. Carving chips and notches inward is what's actually renderable,
-    // and it's still a clearly non-spherical silhouette at these sizes.
+    // It is the same field the limb carve above samples, so the two agree — an alpha cut
+    // against a different field than the normals reads as a sphere behind a ragged hole.
+    // The two evaluate it at different PLACES on purpose: the silhouette needs it at the
+    // rim (where the outline is), the shading needs it under the fragment (where the light
+    // is), and each of those is the geometrically correct point for its job.
     //
     // Sampled in the BODY's own frame (`bodyRot * dir`), which is what makes the rock a
-    // RIGID BODY: the carve field is fixed to the asteroid, so orbiting the camera
-    // exposes the same lumps from a new angle instead of re-cutting the silhouette out
-    // of a field frozen in world space (that reads as a hole in space, not a rock), and
-    // the tumble in `bodyRot` reaches the OUTLINE — the dominant cue at the 3–20 px
-    // these bodies occupy — rather than only the surface lookup.
+    // RIGID BODY: the field is fixed to the asteroid, so orbiting the camera exposes the
+    // same lumps from a new angle instead of re-cutting them out of a field frozen in
+    // world space (that reads as a hole in space, not a rock), and the tumble in
+    // `bodyRot` reaches the OUTLINE — the dominant cue at the sizes these occupy —
+    // rather than only the surface lookup.
     //
     // Deliberately sampled on a DIRECTION, NOT on a longitude — see the beach-ball note
     // above: anything driven by `atan2(dir.z, dir.x)` pinches at both poles and seams
@@ -369,10 +428,6 @@ fragment OrreryBodyOut orrery_body_fragment(OrreryBodyVaryings in [[stage_in]],
         float3 bodyDir = bodyRot * dirWorld;                        // rigid + tumbling
         float lump = fbm(bodyDir * 2.7 + in.vseed * 13.0) - 0.5;    // −0.5…0.5
         float carve = min(lump, 0.0);                        // −0.5…0, never positive
-        // Silhouette: only ever pull the limb IN (never past d = 1 — see above).
-        float limb = 1.0 + amp * carve;
-        if (d > limb) discard_fragment();
-        coverage = smoothstep(limb, limb - fwidth(d) - 0.01, d);
         // Shading: tilt the normal by the SAME carved field's gradient (finite
         // differences on the sphere — cheap, and only needs to be approximately right
         // at this size), so an untouched (lump > 0) patch stays flat — matching its
@@ -419,9 +474,17 @@ fragment OrreryBodyOut orrery_body_fragment(OrreryBodyVaryings in [[stage_in]],
                                        in.life, in.mods, in.polarIce, in.greenVibrancy,
                                        in.ocean, in.vseed, u.time);
 
-    // The surface POINT comes from the geometric hemisphere (this is what `out.depth` is
+    // The surface POINT comes from the solved intersection (this is what `out.depth` is
     // reconstructed from — see `OrreryBodyOut`); the perturbed `nView` only lights it.
-    float3 fragView = in.viewCenter + nViewGeom * in.radius;
+    //
+    // `zs` is clamped positive for the depth sample alone. On a sphere the near root is
+    // always in front of the centre plane, but a TILTED ellipsoid has chords that lie
+    // wholly behind it near the receding limb, and a depth greater than the quad's would
+    // break the `[[depth(less)]]` promise — which Metal answers with undefined results,
+    // not a wrong-looking pixel. Shading keeps the true `zs`, so only the depth of a thin
+    // sliver of far limb moves, by at most the body's own radius. Nothing an irregular
+    // body ever carries (they have no rings) reads depth at that precision.
+    float3 fragView = in.viewCenter + float3(surfOffset.xy, max(surfOffset.z, 0.002)) * in.radius;
     float3 L = normalize(in.viewSun - fragView);
     float diff = max(dot(nView, L), 0.0);
     // Ambient + lambert on the albedo; emissive (lava / city lights) added on top,
