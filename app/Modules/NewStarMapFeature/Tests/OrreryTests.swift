@@ -1742,11 +1742,12 @@ struct MoonSwarmLayoutTests {
 
     // MARK: - Swarm impostor sizing (Task: swarm-impostors)
 
-    @Test func swarmMembersRenderAtHalfTheirHonestSize() throws {
+    @Test func swarmMembersSizeRampsFromTheirOwnHonestSize() throws {
         // Swarm members now draw as real impostors, so their size must keep the same
         // relative-size CURVE a promoted moon would get (`moonSizeFraction`) — just
-        // scaled down by `swarmSizeScale` so the tier still reads as subordinate. Tier
-        // is communicated by the ring, not by flattening every swarm member to one size.
+        // scaled down by `swarmSizeScale(fraction:)` so the tier still reads as
+        // subordinate. Tier is communicated by the ring, not by flattening every swarm
+        // member to one size.
         var moons = roster(30)
         // Six measured moons: the top four (>= half the largest) promote on size,
         // leaving the smallest two of the six in the swarm with real, distinct radii.
@@ -1758,16 +1759,47 @@ struct MoonSwarmLayoutTests {
         let m = OrreryMapping.bodyModel(planet: planet(moons))
         for (i, id) in ["POLARISON-6-5", "POLARISON-6-6"].enumerated() {
             let swarmMoon = try #require(m.swarm.first { $0.designation == id })
-            let honestRadius = OrreryMapping.centralScene
-                * OrreryMapping.moonSizeFraction(moons[4 + i])
-            #expect(abs(swarmMoon.displayRadius - honestRadius * OrreryMapping.swarmSizeScale) < 1e-9)
-            #expect(abs(swarmMoon.displayRadius - honestRadius * 0.5) < 1e-9)
+            let fraction = OrreryMapping.moonSizeFraction(moons[4 + i])
+            let honestRadius = OrreryMapping.centralScene * fraction
+            let expected = honestRadius * OrreryMapping.swarmSizeScale(fraction: fraction)
+            #expect(abs(swarmMoon.displayRadius - expected) < 1e-9)
             // Still real size information, not a flattened dot: distinct known radii
             // must keep producing distinct drawn radii.
         }
         let bigger = try #require(m.swarm.first { $0.designation == "POLARISON-6-5" })
         let smaller = try #require(m.swarm.first { $0.designation == "POLARISON-6-6" })
         #expect(bigger.displayRadius > smaller.displayRadius)
+    }
+
+    @Test func swarmSizeScaleRampPinsItsEndpoints() {
+        // At the curve's own floor, a swarm member draws at the unchanged "asteroid-ish"
+        // scale; at the curve's own cap, it draws at the new, smaller "large moon" scale.
+        // Clamped beyond either end (defensive: `moonSizeFraction` itself never produces
+        // a fraction outside [floor, cap], but the ramp takes a bare `Double`).
+        #expect(OrreryMapping.swarmSizeScale(fraction: OrreryMapping.moonSizeFractionFloor)
+            == OrreryMapping.swarmSizeScaleSmall)
+        #expect(OrreryMapping.swarmSizeScale(fraction: OrreryMapping.moonSizeFractionCap)
+            == OrreryMapping.swarmSizeScaleLarge)
+        #expect(OrreryMapping.swarmSizeScale(fraction: OrreryMapping.moonSizeFractionFloor - 1)
+            == OrreryMapping.swarmSizeScaleSmall)
+        #expect(OrreryMapping.swarmSizeScale(fraction: OrreryMapping.moonSizeFractionCap + 1)
+            == OrreryMapping.swarmSizeScaleLarge)
+        // The unscaled Small anchor must still be exactly the original flat value the
+        // user explicitly asked to keep for asteroid-ish bodies.
+        #expect(OrreryMapping.swarmSizeScaleSmall == 0.5)
+        #expect(OrreryMapping.swarmSizeScaleLarge == 0.3)
+    }
+
+    @Test func swarmSizeScaleRampIsMonotonicallyNonIncreasing() {
+        // A larger body must never scale UP relative to a smaller one — the ramp only
+        // ever compresses further as the body's own honest size grows.
+        let floor = OrreryMapping.moonSizeFractionFloor
+        let cap = OrreryMapping.moonSizeFractionCap
+        let fractions = stride(from: floor, through: cap, by: (cap - floor) / 20).map { $0 }
+        let scales = fractions.map { OrreryMapping.swarmSizeScale(fraction: $0) }
+        for (a, b) in zip(scales, scales.dropFirst()) {
+            #expect(b <= a)
+        }
     }
 
     @Test func swarmReachAccountsForMemberRadiusSoNothingClipsTheFrame() {

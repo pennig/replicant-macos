@@ -408,12 +408,52 @@ enum OrreryMapping {
     /// Captured asteroids scatter this much wider than regular moons.
     static let capturedInclinationFactor: Double = 2.2
 
+    /// Floor of the moon size-fraction curve below (`moonSizeFraction`'s value as
+    /// `radiusEarth` → 0). Hoisted above that curve so `swarmSizeScale(fraction:)` can
+    /// anchor its ramp to the SAME floor the curve itself uses — two copies of `0.022`
+    /// that must agree is exactly the kind of drift that bites later.
+    static let moonSizeFractionFloor: Double = 0.022
+    /// Cap of the moon size-fraction curve below — no moon ever draws larger than this
+    /// fraction of the central body, no matter how large `radiusEarth` reports. Also
+    /// `swarmSizeScale(fraction:)`'s ramp anchor at the large end.
+    static let moonSizeFractionCap: Double = 0.30
+
     /// Swarm members are drawn at their honest relative size (so a large swarm moon
     /// reads large and a captured asteroid reads tiny) but scaled down, so the tier
     /// still reads as subordinate to the promoted moons that carry their own orbit
     /// ring. Tier is communicated by the ring, not by size — which is why this is a
     /// gentle subordination and not a flattening.
-    static let swarmSizeScale: Double = 0.5
+    ///
+    /// The scale RAMPS rather than sitting flat: at the user's request, an asteroid-ish
+    /// swarm member still draws at `swarmSizeScaleSmall` (unchanged from the original
+    /// flat scale), but the largest swarm moons compress further, toward
+    /// `swarmSizeScaleLarge`, so a big swarm moon reads closer to — but still smaller
+    /// than — a promoted moon of similar size. See `swarmSizeScale(fraction:)`.
+    static let swarmSizeScaleSmall: Double = 0.5
+    /// See `swarmSizeScaleSmall`.
+    static let swarmSizeScaleLarge: Double = 0.3
+
+    /// Interpolates between `swarmSizeScaleSmall` and `swarmSizeScaleLarge` over the
+    /// body's own UNSCALED `moonSizeFraction` — never over the roster. Placement (and
+    /// now size) must depend only on this moon's own data: normalizing against the
+    /// roster's largest member would resize the whole swarm band whenever any one moon
+    /// got scanned (see the swarm-placement build loop below for the identical rule
+    /// applied to orbit position).
+    ///
+    /// Linear in `moonSizeFraction` rather than in `radiusEarth` is deliberate: that
+    /// curve is already perceptually compressed (`pow(rₑ, 0.62)`), so a linear ramp over
+    /// it is linear in *apparent* size — the space a viewer actually judges "how much
+    /// smaller does this look" in. Anchored to `moonSizeFraction`'s own floor and cap
+    /// (not roster-derived bounds) and clamped, so a fraction outside
+    /// `[moonSizeFractionFloor, moonSizeFractionCap]` — which cannot happen from
+    /// `moonSizeFraction` itself, but this function takes a bare `Double` — still
+    /// resolves to a sane endpoint rather than extrapolating past it.
+    static func swarmSizeScale(fraction f: Double) -> Double {
+        let span = moonSizeFractionCap - moonSizeFractionFloor
+        let t = span > 0 ? (f - moonSizeFractionFloor) / span : 0
+        let clamped = min(max(t, 0), 1)
+        return swarmSizeScaleSmall + (swarmSizeScaleLarge - swarmSizeScaleSmall) * clamped
+    }
 
     // MARK: - Body level (a planet + its moons)
 
@@ -429,7 +469,7 @@ enum OrreryMapping {
     /// have a minimum screen size, and of the HUD roster.
     static func moonSizeFraction(_ m: Moon) -> Double {
         guard let re = m.physical?.radiusEarth, re > 0 else { return unscannedMoonSizeFraction }
-        return min(0.30, 0.022 + 0.42 * pow(re, 0.62))
+        return min(moonSizeFractionCap, moonSizeFractionFloor + 0.42 * pow(re, 0.62))
     }
 
     /// An unscanned moon's size. Near the FLOOR of the range, not the middle: the old
@@ -622,6 +662,9 @@ enum OrreryMapping {
             let incHash = phaseDeg(m.designation + "-INC") / 360 - 0.5
             let spread = swarmInclinationSpread * (captured ? capturedInclinationFactor : 1)
             let orbit = band.inner + fraction * bandWidth
+            // The ramp reads THIS moon's own unscaled size fraction only — never the
+            // roster's — so a scan landing on any other swarm member never resizes it.
+            let sizeFraction = moonSizeFraction(m)
             return SwarmMoon(
                 designation: m.designation, name: m.name, type: m.type,
                 orbitScene: orbit,
@@ -635,7 +678,7 @@ enum OrreryMapping {
                 reportedPeriodDays: reportedMoonPeriodDays(m),
                 orbitalDistanceKm: m.physical?.orbitalDistanceKm,
                 phase0Deg: phaseDeg(m.designation),
-                displayRadius: centralScene * moonSizeFraction(m) * swarmSizeScale,
+                displayRadius: centralScene * sizeFraction * swarmSizeScale(fraction: sizeFraction),
                 scanned: m.recon == .scanned,
                 isCapturedAsteroid: captured,
                 hasSubsurfaceOcean: m.physical?.hasSubsurfaceOcean ?? false,
