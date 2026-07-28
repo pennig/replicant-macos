@@ -22,9 +22,24 @@ small ones. The size range widened from 1.49× to ~10.5×, and the unscanned def
 
 ## 2. The headline case — a large roster
 
-Open a planet with 50+ moons (e.g. `POLARISON-6`, 59 moons). Expect a handful of lit moons plus a
-band of points, with the planet still substantial — computed at ~11% of frame radius, against 2.9%
-before this work.
+Open a planet with 50+ moons (`PETORA-6` has 67 and is the most demanding case in the game;
+`POLARISON-6` has 59). Expect a handful of moons carrying their own orbit ring, plus a band of
+smaller lit bodies sharing one ring-less band, with the planet still substantial — computed at
+~11% of frame radius against 2.9% before this work.
+
+**Swarm members are real sphere impostors, not points.** They are drawn at their honest relative
+size scaled down by `swarmSizeScale` (0.5), so a large swarm moon reads large and a captured
+asteroid reads tiny, and they grow when you zoom like any other body. Tier is communicated by
+*having an orbit ring or not*, not by size — so on PETORA-6 several swarm moons legitimately render
+larger than promoted `PETORA-6-22`, which promotes on prebiotic life rather than size.
+
+**Watch for crowding.** Making swarm members visible surfaced a crowding problem that dimensionless
+points hid. `swarmInclinationSpread` was raised 0.12 → 0.30 to push members off the shared plane
+(regular members reach ~7.2° inclination, captured ones ~15°), which on PETORA-6 takes members with
+an overlap-capable neighbour from 72% to 52% and the median nearest pair from deeply interpenetrating
+to just touching. If it still reads as a jumble, that constant is the lever — it costs only ~0.15%
+of frame radius, where widening the band instead would cost ~17%. Do not take it past ~0.40, where
+the band starts reading as a spherical shell rather than a band.
 
 **Watch the drill-in specifically.** The band should grow out of the planet in step with the moons
 and orbit rings. If it stays bunched near the planet while the moons are already halfway out and
@@ -35,9 +50,12 @@ it is invisible at rest and only shows during the transition, so it is worth con
 
 Now that survey-digest hydration has landed, this should be rarer — but where a roster reports no
 moon radii at all, promotion falls back to the innermost `topBySize` moons in roster order (index
-order is orbital order in generated systems). Confirm such a planet shows a few lit moons rather
-than nothing but dots. Note this fallback also changes those moons' period values, so the layer's
-animation speed may differ from before on that roster shape.
+order is orbital order in generated systems). Confirm such a planet shows a few ringed moons rather
+than an undifferentiated band. Note this fallback also changes those moons' period values, so the
+layer's animation speed may differ from before on that roster shape.
+
+Unmeasured swarm members fall back to a default size, so a roster with no radii will render a band
+of uniformly-sized bodies — that is the honest presentation of "we do not know", not a bug.
 
 ## 4. Zoom back out
 
@@ -93,8 +111,11 @@ orientation information is lost.
 
 ## 9. Picking and the roster
 
-Swarm members are deliberately not 3D-pickable — at ~2 px, clicking the right one of 57
-near-identical bodies is frustrating even when it works. The HUD roster is the interaction surface.
+Swarm members are deliberately not 3D-pickable — clicking the right one of 60 near-identical bodies
+sharing a band is frustrating even when it works. The HUD roster is the interaction surface. Note
+that now they render as real bodies at real sizes, this is worth re-judging: a large, clearly
+visible swarm moon that cannot be clicked may read as broken rather than as a deliberate tier.
+Tell me if it does and I will make them pickable.
 
 - Click a "Minor bodies" roster row and confirm a dossier appears. It shows orbital distance and
   period only when the scan actually reported them, rather than showing a synthesized value as fact.
