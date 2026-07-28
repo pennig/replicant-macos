@@ -159,6 +159,20 @@ struct BodySpin: Equatable, Sendable {
     /// retrograde — see `tidallyLockedBodyKeepsOneFaceTowardItsParent`.
     static func lockedSpinPhase(orbitAngle: Float) -> Float { -orbitAngle }
 
+    /// A stable, non-axis-aligned tumble axis for a body with no reported pole.
+    ///
+    /// Irregular satellites are largely non-principal-axis rotators, and captured
+    /// asteroids report no `axial_tilt_deg` at all — so routing them through `pole` gives
+    /// every one of them an upright axis and they read as tiny planets. Spreading the
+    /// axis over the sphere is what makes them read as tumbling rock.
+    static func tumbleAxis(seed: Float) -> SIMD3<Float> {
+        // Two decorrelated angles from one seed: a full azimuth and a polar angle
+        // covering the sphere (not clustered at the poles).
+        let az = seed * 2 * .pi
+        let polar = acos(1 - 2 * fmod(seed * 7.331 + 0.137, 1))
+        return SIMD3(sin(polar) * cos(az), cos(polar), sin(polar) * sin(az))
+    }
+
     /// The orthonormal basis around a pole, as (x, normal, z) columns.
     ///
     /// SYNC POINT: `orrery_body_fragment` and `orrery_ring_vertex` build this exact

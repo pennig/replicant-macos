@@ -162,7 +162,9 @@ typedef struct {
     // The fragment textures in the frame this defines, so every latitude feature —
     // gas bands, polar hoods, ice caps — tilts with the body for free.
     simd_float4 spinAxis;
-    // x = subsurface-ocean cryo-fracture amount (0…1), yzw reserved.
+    // x = subsurface-ocean cryo-fracture amount (0…1), y = silhouette irregularity
+    // (0 = smooth sphere; >0 lumps the limb AND the shading normal from ONE noise
+    // sample, so the outline and the terminator agree), zw reserved.
     simd_float4 surfaceExtras;
 } OrreryBodyUniform;
 

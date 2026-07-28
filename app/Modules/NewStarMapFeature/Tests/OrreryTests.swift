@@ -1893,3 +1893,38 @@ struct OrreryPlaneOptionsTests {
         #expect(OrreryMapping.OrreryPlaneOptions.decoupleKey == "orreryDecoupleMoonPlane")
     }
 }
+
+// MARK: - Irregular impostor + tumble (Task 9)
+
+struct IrregularBodyTests {
+    @Test func capturedAsteroidsAreIrregularAndOtherMoonsAreNot() {
+        #expect(PlanetMaterial.irregularity(type: "Captured Asteroid") > 0.3)
+        #expect(PlanetMaterial.irregularity(type: "captured asteroid") > 0.3)
+        #expect(PlanetMaterial.irregularity(type: "Icy") == 0)
+        #expect(PlanetMaterial.irregularity(type: "Rocky") == 0)
+        #expect(PlanetMaterial.irregularity(type: "Gas Giant") == 0)
+        #expect(PlanetMaterial.irregularity(type: nil) == 0)
+    }
+
+    @Test func irregularityStaysInTheUnitRange() {
+        for t in ["Captured Asteroid", "Icy", "Rocky", "Subsurface Ocean", nil] {
+            let v = PlanetMaterial.irregularity(type: t)
+            #expect(v >= 0 && v <= 1)
+        }
+    }
+
+    @Test func tumbleAxisIsUnitStableAndSeedVaried() {
+        let a = BodySpin.tumbleAxis(seed: 0.2)
+        #expect(abs(simd_length(a) - 1) < 1e-5)
+        #expect(simd_distance(a, BodySpin.tumbleAxis(seed: 0.2)) < 1e-6)   // stable
+        #expect(simd_distance(a, BodySpin.tumbleAxis(seed: 0.8)) > 0.01)   // varied
+    }
+
+    @Test func tumbleAxisIgnoresTheOrbitalPlane() {
+        // An irregular satellite is a non-principal-axis rotator, and these moons
+        // report no pole at all. A tumble axis that always pointed near +Y would just
+        // look like a small upright planet.
+        let axes = (0..<12).map { BodySpin.tumbleAxis(seed: Float($0) / 12) }
+        #expect(axes.contains { abs($0.y) < 0.7 })
+    }
+}

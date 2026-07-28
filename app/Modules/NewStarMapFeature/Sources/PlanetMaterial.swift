@@ -202,6 +202,16 @@ enum PlanetMaterial {
         return AtmosphereShell(tint: tint, extent: extent, density: density)
     }
 
+    // MARK: - Irregular impostor
+
+    /// How lumpy a body's silhouette and shading should be (0 = a smooth sphere).
+    /// Driven off the raw API type rather than `PlanetType` because "Captured Asteroid"
+    /// is a MOON type with no `PlanetType` case, and it is 18% of every moon in the
+    /// live census — the single population that most needs to stop reading as a world.
+    static func irregularity(type: String?) -> Float {
+        (type ?? "").lowercased().contains("captured") ? 0.45 : 0
+    }
+
     // MARK: - Rings
 
     /// Resolve a body's ring system, or nil for a body that reports no rings. Giants

@@ -1883,6 +1883,8 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         var spinRate: Float
         /// Subsurface-ocean cryo-fracture amount (0…1).
         var ocean: Float
+        /// Silhouette irregularity (0 = smooth sphere). See `PlanetMaterial.irregularity`.
+        var irregularity: Float
         /// The body's ring system, if it has one — drives the ring pass.
         var rings: RingSystem?
     }
@@ -1925,6 +1927,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
                 // A central body is not an orbiter of its own layer, so it never locks here.
                 spinRate: central.spin.spinRate(),
                 ocean: 0,
+                irregularity: 0,   // a drilled planet is never an asteroid
                 rings: central.rings))
         }
 
@@ -1943,9 +1946,12 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
                 spinPhase: locked
                     ? BodySpin.lockedSpinPhase(orbitAngle: layout.orbiterAngle(planet))
                     : Float(planet.phase0Deg) * .pi / 180,
-                spinAxis: planet.spin.pole(seed: planet.appearanceSeed),
+                spinAxis: PlanetMaterial.irregularity(type: planet.type) > 0
+                    ? BodySpin.tumbleAxis(seed: planet.appearanceSeed)
+                    : planet.spin.pole(seed: planet.appearanceSeed),
                 spinRate: locked ? 0 : planet.spin.spinRate(),
                 ocean: planet.hasSubsurfaceOcean ? 1 : 0,
+                irregularity: PlanetMaterial.irregularity(type: planet.type),
                 rings: planet.rings))
         }
         return placed
@@ -1969,7 +1975,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
             surfaceParams: SIMD4(s.estimated ? 1 : 0, s.life, p.spinPhase, p.appearanceSeed),
             surfaceMods: SIMD4(s.mods.craters, s.mods.atmosphere, s.mods.lava, s.mods.frost),
             spinAxis: SIMD4(p.spinAxis, p.spinRate),
-            surfaceExtras: SIMD4(p.ocean, 0, 0, 0))
+            surfaceExtras: SIMD4(p.ocean, p.irregularity, 0, 0))
     }
 
     /// The ring uniform for a placed body, or `nil` if it has no rings. Same

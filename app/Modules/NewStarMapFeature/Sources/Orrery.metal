@@ -235,6 +235,7 @@ struct OrreryBodyVaryings {
     float3 pole;         // body north pole (unit, world space) — the texturing frame
     float  spinRate;     // signed spin rate (rad/s); negative = retrograde, 0 = locked
     float  ocean;        // subsurface-ocean cryo-fracture amount (0…1)
+    float  irregular;    // silhouette irregularity (0 = smooth sphere)
 };
 
 vertex OrreryBodyVaryings orrery_body_vertex(uint vid                       [[vertex_id]],
@@ -266,6 +267,7 @@ vertex OrreryBodyVaryings orrery_body_vertex(uint vid                       [[ve
     out.pole = b.spinAxis.xyz;
     out.spinRate = b.spinAxis.w;
     out.ocean = b.surfaceExtras.x;
+    out.irregular = b.surfaceExtras.y;
     return out;
 }
 
@@ -292,6 +294,39 @@ fragment OrreryBodyOut orrery_body_fragment(OrreryBodyVaryings in [[stage_in]],
     // view-space hemisphere by the inverse (transpose) view rotation.
     float3x3 viewRot = float3x3(u.view[0].xyz, u.view[1].xyz, u.view[2].xyz);
     float3 dirWorld = normalize(transpose(viewRot) * nView);
+
+    // --- Irregular bodies (captured asteroids) -----------------------------------
+    // ONE 3D noise sample, used twice: it displaces the surface radius (so the shading
+    // normal tilts as if the rock were lumpy) and it cuts the silhouette (so the
+    // outline is lumpy too). Sharing the sample is what makes the two agree — an
+    // alpha-cut against a different field than the normals reads as a sphere behind a
+    // ragged hole. No iteration: at the 3–20 px these bodies occupy, displacing the
+    // bounding-sphere hit is indistinguishable from tracing the real surface.
+    //
+    // Deliberately sampled on `dirWorld` (a direction), NOT on a longitude — see the
+    // beach-ball note above: anything driven by `atan2(dir.z, dir.x)` pinches at both
+    // poles and seams down one meridian.
+    if (in.irregular > 0.001) {
+        float amp = in.irregular;
+        float lump = fbm(dirWorld * 2.7 + in.vseed * 13.0) - 0.5;   // −0.5…0.5
+        // Silhouette: push the effective limb in or out with the same field.
+        float limb = 1.0 + amp * lump;
+        if (d > limb) discard_fragment();
+        coverage = smoothstep(limb, limb - fwidth(d) - 0.01, d);
+        // Shading: tilt the normal by the field's gradient (finite differences on the
+        // sphere — cheap, and only needs to be approximately right at this size).
+        const float e = 0.06;
+        float3 tx = normalize(cross(fabs(dirWorld.y) > 0.99 ? float3(1,0,0) : float3(0,1,0), dirWorld));
+        float3 tz = cross(tx, dirWorld);        // right-handed, same rule as planeBasis
+        float gx = fbm(normalize(dirWorld + tx * e) * 2.7 + in.vseed * 13.0) - 0.5 - lump;
+        float gz = fbm(normalize(dirWorld + tz * e) * 2.7 + in.vseed * 13.0) - 0.5 - lump;
+        float3 bumped = normalize(dirWorld - (tx * gx + tz * gz) * amp * 4.0);
+        // Facet the result: snapping toward a coarse quantization reads as flat-shaded
+        // chunks, which is the strongest "asteroid" cue at a few pixels across.
+        float3 faceted = normalize(round(bumped * 3.0) / 3.0 + bumped * 0.35);
+        dirWorld = normalize(mix(bumped, faceted, 0.55));
+        nView = normalize(viewRot * dirWorld);
+    }
 
     // Then move into the BODY's own frame, whose +Y is its (tilted) north pole.
     // Everything downstream reads latitude as dir.y, so doing this once here is what
