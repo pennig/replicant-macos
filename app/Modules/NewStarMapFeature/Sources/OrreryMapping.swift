@@ -498,8 +498,9 @@ enum OrreryMapping {
     /// `bodyModel` stays a pure function (and the compression stays unit-testable).
     /// `NewStarMapFeature` supplies the live values from `@Shared(.appStorage(...))`.
     struct OrreryPlaneOptions: Equatable, Sendable {
-        /// See `BodySpin.tiltCapDeg`. 90 = fully physical, 0 = fully planar.
-        var tiltCapDeg: Double = 38
+        /// See `BodySpin.tiltCapDeg`. 90 = fully physical (the default), 0 = fully
+        /// planar. Lower it if a high-obliquity system's shared plane reads edge-on.
+        var tiltCapDeg: Double = 90
         /// Escape hatch: moons stay in the orbital plane regardless of the planet's
         /// tilt, while its rings keep the tilt. Reproduces the pre-coupling look.
         var decoupleMoonPlane: Bool = false

@@ -942,10 +942,15 @@ struct BodySpinTests {
 
     @Test func reportedObliquityIsUnaffectedByTheRenderCap() {
         // `obliquityDeg` is what the scan said; `renderObliquityDeg` is what we draw.
-        // Keeping them separate is what lets the dossier stay truthful.
-        let uranus = BodySpin(tiltDeg: 97.77)
-        #expect(abs(uranus.obliquityDeg - 97.77) < 1e-9)
-        #expect(uranus.renderObliquityDeg != uranus.obliquityDeg)
+        // Keeping them separate is what lets the dossier stay truthful no matter what
+        // cap is in effect — at the default (fully physical) the two happen to agree,
+        // so compare against an explicitly compressed cap to prove they're actually
+        // independent properties, not the same value in disguise.
+        let physical = BodySpin(tiltDeg: 97.77, tiltCapDeg: 90)
+        let capped = BodySpin(tiltDeg: 97.77, tiltCapDeg: 38)
+        #expect(abs(physical.obliquityDeg - 97.77) < 1e-9)
+        #expect(abs(capped.obliquityDeg - 97.77) < 1e-9)
+        #expect(physical.renderObliquityDeg != capped.renderObliquityDeg)
     }
 }
 
@@ -958,14 +963,23 @@ struct BodySpinPlaneTests {
         #expect(abs(BodySpin(tiltDeg: 20.7).renderObliquityDeg - 20.7) < 1e-6)    // ALASII-4
     }
 
-    @Test func extremeTiltsCompressToTheCap() {
-        // SOL-7 Uranus: a true plane tilt of 82.23° would sit near-perpendicular to the
-        // orbital plane and read edge-on at the camera's default 29° elevation.
+    @Test func extremeTiltsRenderPhysicalByDefaultAndCompressWhenCapped() {
+        // SOL-7 Uranus: rendering is fully physical by default, so the true obliquity
+        // passes straight through — this is the direct regression test for the user's
+        // complaint that Uranus rendered upright at ~38° instead of on its side.
         let uranus = BodySpin(tiltDeg: 97.77).renderObliquityDeg
-        #expect(uranus > 90)                                   // still past 90 — see below
-        #expect(abs((180 - uranus) - 38) < 1.0)                // plane tilt ≈ the cap
-        // POLARISON-6: 66.1° with 59 moons, the worst combined case.
-        let polarison = BodySpin(tiltDeg: 66.1).renderObliquityDeg
+        #expect(abs(uranus - 97.77) < 1e-6)
+
+        // The compression knob still works when a user dials it in: a true plane tilt
+        // of 82.23° would sit near-perpendicular to the orbital plane and read edge-on
+        // at the camera's default 29° elevation, so an explicit cap pulls it back.
+        let uranusCapped = BodySpin(tiltDeg: 97.77, tiltCapDeg: 38).renderObliquityDeg
+        #expect(uranusCapped > 90)                                   // still past 90 — see below
+        #expect(abs((180 - uranusCapped) - 38) < 1.0)                // plane tilt ≈ the cap
+
+        // POLARISON-6: 66.1° with 59 moons, the worst combined case — also compresses
+        // under an explicit cap.
+        let polarison = BodySpin(tiltDeg: 66.1, tiltCapDeg: 38).renderObliquityDeg
         #expect(polarison < 66.1 && polarison > 30)
     }
 
@@ -973,11 +987,19 @@ struct BodySpinPlaneTests {
     /// falls out of the pole tipping BELOW the orbital plane and that `sign` must not
     /// flip as well. Folding an obliquity past 90° down under it would put the pole back
     /// above the plane and silently turn a retrograde world prograde.
+    ///
+    /// Rendering defaults to fully physical (`tiltCapDeg == 90`, identity), so this
+    /// sweep exercises every cap a user can actually dial in — a compressing cap
+    /// (`38`, the old default), a fully flattening cap (`0`), and the identity cap
+    /// (`90`) — rather than only the default. Anything short of that would stop
+    /// guarding the knob the moment the default stopped compressing.
     @Test func compressionNeverCrossesNinetyDegrees() {
-        for t in stride(from: 0.0, through: 180.0, by: 0.5) {
-            let r = BodySpin(tiltDeg: t).renderObliquityDeg
-            if t <= 90 { #expect(r <= 90, "θ=\(t) → \(r) crossed above 90") }
-            else { #expect(r > 90, "θ=\(t) → \(r) crossed below 90") }
+        for cap in [0.0, 38.0, 90.0] {
+            for t in stride(from: 0.0, through: 180.0, by: 0.5) {
+                let r = BodySpin(tiltDeg: t, tiltCapDeg: cap).renderObliquityDeg
+                if t <= 90 { #expect(r <= 90, "cap=\(cap) θ=\(t) → \(r) crossed above 90") }
+                else { #expect(r > 90, "cap=\(cap) θ=\(t) → \(r) crossed below 90") }
+            }
         }
     }
 
@@ -2031,17 +2053,21 @@ struct OrbitPlaneTests {
     @Test func theTiltCapKnobReachesTheSystemLevelToo() throws {
         // Both layers are encoded in the SAME frame during a drill transition, so a
         // planet built at two different tilt caps pops as the crossfade runs. The knob
-        // used to reach `bodyModel` only, leaving `systemModel` pinned at the default.
+        // used to reach `bodyModel` only, leaving `systemModel` pinned at a fixed cap.
+        // Rendering defaults to fully physical now, so compare two EXPLICIT caps
+        // instead of default-vs-explicit — otherwise they'd agree by accident.
         let system = StarSystem(designation: "SOL", planets: [tiltedPlanet(97.77)])
+        let compressedOpts = OrreryMapping.OrreryPlaneOptions(tiltCapDeg: 38)
         let physicalOpts = OrreryMapping.OrreryPlaneOptions(tiltCapDeg: 90)
 
-        let defaulted = try #require(OrreryMapping.systemModel(from: system).planets.first)
+        let compressed = try #require(
+            OrreryMapping.systemModel(from: system, options: compressedOpts).planets.first)
         let swept = try #require(
             OrreryMapping.systemModel(from: system, options: physicalOpts).planets.first)
-        #expect(defaulted.spin.tiltCapDeg == 38)
+        #expect(compressed.spin.tiltCapDeg == 38)
         #expect(swept.spin.tiltCapDeg == 90)
         // The knob has to actually move the rendered plane, or the two agree by accident.
-        #expect(defaulted.spin.renderObliquityDeg != swept.spin.renderObliquityDeg)
+        #expect(compressed.spin.renderObliquityDeg != swept.spin.renderObliquityDeg)
 
         // …and the drilled copy of the same planet must land on the same rendered pole.
         let drilled = try #require(
@@ -2083,7 +2109,7 @@ struct OrbitPlaneTests {
 struct OrreryPlaneOptionsTests {
     @Test func defaultsMatchTheDocumentedValues() {
         let opts = OrreryMapping.OrreryPlaneOptions.default
-        #expect(opts.tiltCapDeg == 38)
+        #expect(opts.tiltCapDeg == 90)   // fully physical — see BodySpin.tiltCapDeg
         #expect(opts.decoupleMoonPlane == false)
     }
 

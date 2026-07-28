@@ -70,7 +70,7 @@ public struct NewStarMapFeature {
         /// the look is being dialled in; promote `decoupleMoonPlane` into the
         /// AccountFeature Settings sheet only if it turns out to be toggled in practice.
         @Shared(.appStorage(OrreryMapping.OrreryPlaneOptions.tiltCapKey))
-        var moonPlaneTiltCapDeg: Double = 38
+        var moonPlaneTiltCapDeg: Double = 90
         @Shared(.appStorage(OrreryMapping.OrreryPlaneOptions.decoupleKey))
         var decoupleMoonPlane: Bool = false
 

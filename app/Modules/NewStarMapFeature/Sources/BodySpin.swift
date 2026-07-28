@@ -32,15 +32,19 @@ struct BodySpin: Equatable, Sendable {
     /// Cap (degrees) on how much of a body's obliquity the RENDERED plane expresses —
     /// the plane its rings, its surface frame, and its moon orbits all share.
     ///
-    /// A cap is needed because `TurntableCamera` frames at ~29° elevation and clamps at
-    /// ±80°: against SOL-7's 97.77° the shared plane sits near-perpendicular to the
-    /// orbital plane and every orbit collapses toward a line. Compressing the range is
-    /// the same move `spinRate` already makes for a 588× rotation-period spread.
+    /// Rendering is fully physical by default (`90`, which `compress` treats as
+    /// identity) — a body renders at its true obliquity, so SOL-7's 97.77° actually
+    /// leans onto its side rather than being pulled upright.
     ///
-    /// `90` disables compression (fully physical); `0` flattens every plane into the
-    /// orbital plane. Only extremes are affected at the default — Saturn's 26.73° is
-    /// untouched.
-    var tiltCapDeg: Double = 38
+    /// The compression machinery stays as an opt-in knob: `TurntableCamera` frames at
+    /// ~29° elevation and clamps at ±80°, so against a near-90° obliquity the shared
+    /// plane sits near-perpendicular to the orbital plane and every orbit collapses
+    /// toward a line from some camera angles. Anyone who finds a high-obliquity system
+    /// unreadable can dial `tiltCapDeg` down (`38` is a reasonable compromise; `0`
+    /// flattens every plane into the orbital plane) — the same move `spinRate` already
+    /// makes for a 588× rotation-period spread. Saturn's 26.73° is unaffected either
+    /// way; only the extremes ever reach a cap set below `90`.
+    var tiltCapDeg: Double = 90
 
     /// An unscanned body: upright, default rate, free-rotating.
     static let unknown = BodySpin()
