@@ -296,12 +296,20 @@ fragment OrreryBodyOut orrery_body_fragment(OrreryBodyVaryings in [[stage_in]],
     float3 dirWorld = normalize(transpose(viewRot) * nView);
 
     // --- Irregular bodies (captured asteroids) -----------------------------------
-    // ONE 3D noise sample, used twice: it displaces the surface radius (so the shading
+    // ONE 3D noise sample, used twice: it carves the surface radius (so the shading
     // normal tilts as if the rock were lumpy) and it cuts the silhouette (so the
     // outline is lumpy too). Sharing the sample is what makes the two agree — an
     // alpha-cut against a different field than the normals reads as a sphere behind a
     // ragged hole. No iteration: at the 3–20 px these bodies occupy, displacing the
     // bounding-sphere hit is indistinguishable from tracing the real surface.
+    //
+    // INWARD ONLY, deliberately: the analytic sphere above has no solution past d = 1
+    // (`nz` goes imaginary there — see the `saturate` a few lines up), so a fragment
+    // with d > 1 is already discarded before this branch ever runs. Pushing the limb
+    // OUTWARD past 1 would be dead code — those fragments are unreachable — and would
+    // additionally have to shade/write depth for a point that isn't on the bounding
+    // sphere at all. Carving chips and notches inward is what's actually renderable,
+    // and it's still a clearly non-spherical silhouette at these sizes.
     //
     // Deliberately sampled on `dirWorld` (a direction), NOT on a longitude — see the
     // beach-ball note above: anything driven by `atan2(dir.z, dir.x)` pinches at both
@@ -309,17 +317,20 @@ fragment OrreryBodyOut orrery_body_fragment(OrreryBodyVaryings in [[stage_in]],
     if (in.irregular > 0.001) {
         float amp = in.irregular;
         float lump = fbm(dirWorld * 2.7 + in.vseed * 13.0) - 0.5;   // −0.5…0.5
-        // Silhouette: push the effective limb in or out with the same field.
-        float limb = 1.0 + amp * lump;
+        float carve = min(lump, 0.0);                        // −0.5…0, never positive
+        // Silhouette: only ever pull the limb IN (never past d = 1 — see above).
+        float limb = 1.0 + amp * carve;
         if (d > limb) discard_fragment();
         coverage = smoothstep(limb, limb - fwidth(d) - 0.01, d);
-        // Shading: tilt the normal by the field's gradient (finite differences on the
-        // sphere — cheap, and only needs to be approximately right at this size).
+        // Shading: tilt the normal by the SAME carved field's gradient (finite
+        // differences on the sphere — cheap, and only needs to be approximately right
+        // at this size), so an untouched (lump > 0) patch stays flat — matching its
+        // untouched, uncarved silhouette — and only a notch's shading disagrees from flat.
         const float e = 0.06;
         float3 tx = normalize(cross(fabs(dirWorld.y) > 0.99 ? float3(1,0,0) : float3(0,1,0), dirWorld));
         float3 tz = cross(tx, dirWorld);        // right-handed, same rule as planeBasis
-        float gx = fbm(normalize(dirWorld + tx * e) * 2.7 + in.vseed * 13.0) - 0.5 - lump;
-        float gz = fbm(normalize(dirWorld + tz * e) * 2.7 + in.vseed * 13.0) - 0.5 - lump;
+        float gx = min(fbm(normalize(dirWorld + tx * e) * 2.7 + in.vseed * 13.0) - 0.5, 0.0) - carve;
+        float gz = min(fbm(normalize(dirWorld + tz * e) * 2.7 + in.vseed * 13.0) - 0.5, 0.0) - carve;
         float3 bumped = normalize(dirWorld - (tx * gx + tz * gz) * amp * 4.0);
         // Facet the result: snapping toward a coarse quantization reads as flat-shaded
         // chunks, which is the strongest "asteroid" cue at a few pixels across.

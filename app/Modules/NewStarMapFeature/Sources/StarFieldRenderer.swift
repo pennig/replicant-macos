@@ -1946,9 +1946,11 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
                 spinPhase: locked
                     ? BodySpin.lockedSpinPhase(orbitAngle: layout.orbiterAngle(planet))
                     : Float(planet.phase0Deg) * .pi / 180,
-                spinAxis: PlanetMaterial.irregularity(type: planet.type) > 0
-                    ? BodySpin.tumbleAxis(seed: planet.appearanceSeed)
-                    : planet.spin.pole(seed: planet.appearanceSeed),
+                spinAxis: BodySpin.renderSpinAxis(
+                    irregularity: PlanetMaterial.irregularity(type: planet.type),
+                    locked: locked,
+                    pole: planet.spin.pole(seed: planet.appearanceSeed),
+                    tumbleSeed: planet.appearanceSeed),
                 spinRate: locked ? 0 : planet.spin.spinRate(),
                 ocean: planet.hasSubsurfaceOcean ? 1 : 0,
                 irregularity: PlanetMaterial.irregularity(type: planet.type),

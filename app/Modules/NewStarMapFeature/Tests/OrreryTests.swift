@@ -1927,4 +1927,36 @@ struct IrregularBodyTests {
         let axes = (0..<12).map { BodySpin.tumbleAxis(seed: Float($0) / 12) }
         #expect(axes.contains { abs($0.y) < 0.7 })
     }
+
+    // The renderer's actual spin-axis selection (an irregular, free-tumbling body gets
+    // the tumble axis; everything else keeps its pole) factored out to a pure function
+    // so this exact rule — including the tidal-lock exception — is unit-testable
+    // without a live StarFieldRenderer/Metal device.
+    @Test func renderSpinAxisUsesTheTumbleAxisForAnIrregularFreeBody() {
+        let pole = SIMD3<Float>(0, 1, 0)
+        let axis = BodySpin.renderSpinAxis(irregularity: 0.45, locked: false,
+                                           pole: pole, tumbleSeed: 0.3)
+        #expect(axis == BodySpin.tumbleAxis(seed: 0.3))
+        #expect(axis != pole)
+    }
+
+    @Test func renderSpinAxisKeepsThePoleForATidallyLockedIrregularBody() {
+        // A tidally locked body is by definition no longer a chaotic non-principal-axis
+        // rotator, AND `lockedSpinPhase` assumes the spin axis tracks the orbital
+        // normal (the pole) — substituting the tumble axis here would visibly break the
+        // "one face toward the parent" lock. Captured asteroids are ~18% of moons and
+        // `tidallyLocked` is read independently of type, so this combination is real
+        // (Triton is the textbook example), not a corner case.
+        let pole = SIMD3<Float>(0.3, 0.9, 0.1)
+        let axis = BodySpin.renderSpinAxis(irregularity: 0.45, locked: true,
+                                           pole: pole, tumbleSeed: 0.3)
+        #expect(axis == pole)
+    }
+
+    @Test func renderSpinAxisKeepsThePoleForARegularBody() {
+        let pole = SIMD3<Float>(0, 1, 0)
+        let axis = BodySpin.renderSpinAxis(irregularity: 0, locked: false,
+                                           pole: pole, tumbleSeed: 0.3)
+        #expect(axis == pole)
+    }
 }

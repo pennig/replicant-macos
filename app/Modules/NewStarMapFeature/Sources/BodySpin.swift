@@ -173,6 +173,25 @@ struct BodySpin: Equatable, Sendable {
         return SIMD3(sin(polar) * cos(az), cos(polar), sin(polar) * sin(az))
     }
 
+    /// The spin axis a placed body should actually render with: `tumbleAxis(seed:)` for
+    /// an irregular, freely-tumbling body, or its own reported `pole` otherwise —
+    /// including for an irregular body that is ALSO tidally locked.
+    ///
+    /// That exception matters: a tidally locked body is by definition no longer a
+    /// chaotic non-principal-axis rotator, AND `lockedSpinPhase` assumes the spin axis
+    /// tracks the orbital normal (the pole) to keep one face toward the parent —
+    /// substituting an unrelated tumble axis there would visibly break the lock. This
+    /// combination is not a corner case: `tidallyLocked` (see the type's doc comment,
+    /// "true for essentially every scanned moon") is read from the scan independently
+    /// of `type`, and captured asteroids are ~18% of the live moon census.
+    ///
+    /// Factored out of the renderer's placement loop so this exact selection rule is
+    /// unit-testable without a live `StarFieldRenderer`/Metal device.
+    static func renderSpinAxis(irregularity: Float, locked: Bool, pole: SIMD3<Float>,
+                               tumbleSeed: Float) -> SIMD3<Float> {
+        irregularity > 0 && !locked ? tumbleAxis(seed: tumbleSeed) : pole
+    }
+
     /// The orthonormal basis around a pole, as (x, normal, z) columns.
     ///
     /// SYNC POINT: `orrery_body_fragment` and `orrery_ring_vertex` build this exact
