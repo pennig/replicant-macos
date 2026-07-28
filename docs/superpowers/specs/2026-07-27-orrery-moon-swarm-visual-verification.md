@@ -46,10 +46,11 @@ ones ~15°). The size ramp then shrank the largest members by about a third, whi
 again on its own: members with an overlap-capable neighbour are now ~39% and the median nearest pair
 sits at 1.22× the radius sum — comfortably clear rather than touching.
 
-That means 0.30 is probably more off-plane spread than the band now needs. If it reads as too
-puffy or diffuse — more shell than band — try 0.20–0.25. If it still reads as a jumble, go the
-other way. Scatter costs ~0.15% of frame radius per step, where widening the band instead would
-cost ~17%, so this is the cheap lever. Do not exceed ~0.40.
+0.30 turned out to be more off-plane spread than the band needed once the ramp landed, and the
+value was tuned down to **0.22** on inspection. If it ever reads as too puffy or diffuse — more
+shell than band — go lower; if it reads as a jumble, go higher. Scatter costs ~0.15% of frame
+radius per step, where widening the band instead would cost ~17%, so this is the cheap lever. Do
+not exceed ~0.40.
 
 **Watch the drill-in specifically.** The band should grow out of the planet in step with the moons
 and orbit rings. If it stays bunched near the planet while the moons are already halfway out and

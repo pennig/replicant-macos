@@ -404,7 +404,7 @@ enum OrreryMapping {
     /// not a cosmetic fudge. Set to 0 for a strictly planar band; do not exceed ~0.40,
     /// where the off-plane extent approaches half the band's radial width and the torus
     /// starts reading as a shell rather than a band.
-    static let swarmInclinationSpread: Double = 0.30
+    static let swarmInclinationSpread: Double = 0.22
     /// Captured asteroids scatter this much wider than regular moons.
     static let capturedInclinationFactor: Double = 2.2
 
