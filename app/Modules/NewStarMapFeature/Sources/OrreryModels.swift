@@ -195,6 +195,11 @@ struct CentralBody: Equatable, Sendable {
     var rings: RingSystem?
     /// How the drilled planet turns — see `OrreryPlanet.spin`.
     var spin: BodySpin = .unknown
+    /// The pole the drilled planet's MOON ORBITS are built around — the same compressed
+    /// pole its rings and surface use, so all three agree about where its equator is.
+    /// `nil` means the moon plane is decoupled and stays in the orbital plane (the
+    /// `decoupleMoonPlane` escape hatch), which is also what a system-level layer has.
+    var orbitPole: SIMD3<Float>? = nil
     /// Classified kind + biosphere, so the drilled planet is textured like it was
     /// when orbiting at system level. `estimated` = its type is an unconfirmed guess.
     var planetType: PlanetType

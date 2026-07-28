@@ -1791,3 +1791,105 @@ struct MoonSizeHonestyTests {
         #expect(OrreryMapping.moonSizeFraction(moon(50)) <= 0.30)
     }
 }
+
+// MARK: - Moon orbits follow the shared plane (Task 8)
+
+struct OrbitPlaneTests {
+    private func tiltedPlanet(_ tilt: Double, moons: Int = 3) -> Planet {
+        Planet(designation: "SOL-7", type: "Ice Giant", orbitalDistanceAu: 19,
+               recon: .scanned, physical: BodyPhysical(radiusEarth: 4, rings: true,
+                                                       axialTiltDeg: tilt),
+               moons: (0..<moons).map { Moon(designation: "SOL-7-\($0 + 1)", recon: .scanned) })
+    }
+
+    @Test func moonsLeaveTheOrbitalPlaneOnATiltedPlanet() {
+        let m = OrreryMapping.bodyModel(planet: tiltedPlanet(97.77))
+        let layout = OrreryLayout(model: m, center: .zero, scale: 1, reveal: 1, time: 0)
+        // At a strong tilt at least one moon must sit measurably off y = 0 at some
+        // point in its orbit, or the plane is not being applied at all.
+        let offPlane = (0..<8).contains { step in
+            let l = OrreryLayout(model: m, center: .zero, scale: 1, reveal: 1,
+                                 time: Float(step) * 12)
+            return m.planets.contains { abs(l.orbiterPosition($0).y) > 0.2 }
+        }
+        #expect(offPlane)
+        #expect(layout.plane != .flat)
+    }
+
+    @Test func nearlyUprightPlanetsStayEffectivelyPlanar() {
+        // ASTELLIO-1 is 1.7° and carries 55 moons — the big-roster case must not be
+        // gratuitously tipped.
+        let m = OrreryMapping.bodyModel(planet: tiltedPlanet(1.7))
+        let layout = OrreryLayout(model: m, center: .zero, scale: 1, reveal: 1, time: 5)
+        #expect(m.planets.allSatisfy { abs(layout.orbiterPosition($0).y) < 0.5 })
+    }
+
+    @Test func decoupleKnobKeepsMoonsPlanar() {
+        let opts = OrreryMapping.OrreryPlaneOptions(tiltCapDeg: 38, decoupleMoonPlane: true)
+        let m = OrreryMapping.bodyModel(planet: tiltedPlanet(97.77), options: opts)
+        #expect(m.centralBody?.orbitPole == nil)
+        let layout = OrreryLayout(model: m, center: .zero, scale: 1, reveal: 1, time: 5)
+        #expect(layout.plane == .flat)
+        #expect(m.planets.allSatisfy { abs(layout.orbiterPosition($0).y) < 1e-5 })
+        // The RINGS still tilt — that is the accepted mismatch this knob buys.
+        #expect(m.centralBody?.rings != nil)
+    }
+
+    @Test func systemLevelStaysFlat() {
+        // A system layer has no central body, so its plane is the orbital plane and
+        // planets, belts, Lagrange points and structures are unaffected.
+        let system = StarSystem(
+            designation: "SOL",
+            star: SystemStar(designation: "SOL", stellarClass: "G2", color: "Yellow"),
+            recon: .scanned, systemScanned: true,
+            planets: [Planet(designation: "SOL-3", type: "Terran", orbitalDistanceAu: 1,
+                             recon: .scanned)])
+        let m = OrreryMapping.systemModel(from: system)
+        let layout = OrreryLayout(model: m, center: .zero, scale: 1, reveal: 1, time: 7)
+        #expect(layout.plane == .flat)
+        #expect(m.planets.allSatisfy { abs(layout.orbiterPosition($0).y) < 1e-5 })
+    }
+
+    @Test func orbitRingsTiltWithTheirMoons() {
+        // A moon leaving its ring behind would be worse than either plane alone.
+        let m = OrreryMapping.bodyModel(planet: tiltedPlanet(97.77))
+        let layout = OrreryLayout(model: m, center: .zero, scale: 1, reveal: 1, time: 0)
+        let verts = OrreryGeometry.scaffoldLines(model: m, center: .zero, scale: 1,
+                                                plane: layout.plane)
+        #expect(verts.contains { abs($0.position.y) > 0.2 })
+    }
+
+    @Test func swarmScatterIsRelativeToTheTiltedPlane() {
+        let moons = (0..<40).map { Moon(designation: "SOL-7-\($0 + 1)", recon: .visited) }
+        let planet = Planet(designation: "SOL-7", type: "Ice Giant", orbitalDistanceAu: 19,
+                            recon: .scanned,
+                            physical: BodyPhysical(radiusEarth: 4, axialTiltDeg: 97.77),
+                            moons: moons)
+        let m = OrreryMapping.bodyModel(planet: planet)
+        let layout = OrreryLayout(model: m, center: .zero, scale: 1, reveal: 1, time: 3)
+        // Distance from the tilted plane must stay bounded by the scatter — the band is
+        // a disc around the equator, not a sphere.
+        let n = layout.plane.normal
+        let maxOffset = Float(m.swarm.map { abs($0.offsetScene) }.max() ?? 0)
+        for s in m.swarm {
+            let d = abs(simd_dot(layout.swarmPosition(s), n))
+            #expect(d <= maxOffset + 1e-3, "\(s.designation) sits \(d) off the plane")
+        }
+    }
+}
+
+// MARK: - OrreryPlaneOptions defaults + appStorage keys (pinned so a typo silently
+// disabling a knob would fail a test rather than ship unnoticed)
+
+struct OrreryPlaneOptionsTests {
+    @Test func defaultsMatchTheDocumentedValues() {
+        let opts = OrreryMapping.OrreryPlaneOptions.default
+        #expect(opts.tiltCapDeg == 38)
+        #expect(opts.decoupleMoonPlane == false)
+    }
+
+    @Test func appStorageKeysArePinned() {
+        #expect(OrreryMapping.OrreryPlaneOptions.tiltCapKey == "orreryMoonPlaneTiltCapDeg")
+        #expect(OrreryMapping.OrreryPlaneOptions.decoupleKey == "orreryDecoupleMoonPlane")
+    }
+}

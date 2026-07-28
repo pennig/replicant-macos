@@ -268,7 +268,7 @@ public struct NewStarMapView: View {
                   let system = persistedSystem(sys),
                   let planet = system.planets.first(where: { $0.designation == bodyID })
             else { return nil }
-            return OrreryMapping.bodyModel(planet: planet)
+            return OrreryMapping.bodyModel(planet: planet, options: store.planeOptions)
         }
     }
 

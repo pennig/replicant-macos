@@ -40,6 +40,37 @@ struct OrbitTiming: Equatable, Sendable {
     }
 }
 
+/// The plane a layer's orbits lie in. At system level this is the flat orbital plane;
+/// at body level it is the drilled planet's equatorial plane, so its moons are coplanar
+/// with its rings and its surface banding instead of contradicting them.
+struct OrbitPlane: Equatable, Sendable {
+    var x: SIMD3<Float>
+    var normal: SIMD3<Float>
+    var z: SIMD3<Float>
+
+    /// The orbital plane (world XZ), normal +Y.
+    static let flat = OrbitPlane(x: SIMD3(1, 0, 0), normal: SIMD3(0, 1, 0), z: SIMD3(0, 0, 1))
+
+    /// The plane perpendicular to `pole`. Built through `BodySpin.planeBasis` — the one
+    /// construction the surface frame and the ring pass also use — so the three cannot
+    /// drift apart, and so its right-handedness is covered by one test.
+    init(pole: SIMD3<Float>) {
+        let b = BodySpin.planeBasis(pole: pole)
+        self.init(x: b.x, normal: b.normal, z: b.z)
+    }
+
+    init(x: SIMD3<Float>, normal: SIMD3<Float>, z: SIMD3<Float>) {
+        self.x = x
+        self.normal = normal
+        self.z = z
+    }
+
+    /// A point at `angle` and `radius` in this plane, `offset` along its normal.
+    func point(angle: Float, radius: Float, offset: Float = 0) -> SIMD3<Float> {
+        x * (cos(angle) * radius) + z * (sin(angle) * radius) + normal * offset
+    }
+}
+
 /// Resolves orrery locations to world positions for one rendered layer at one instant.
 struct OrreryLayout {
     let model: SystemModel
@@ -55,6 +86,14 @@ struct OrreryLayout {
     /// position instead (`StarFieldRenderer.trackBodyCentre`), so nothing pauses.
     let time: Float
     let timing: OrbitTiming
+
+    /// The plane this layer's orbits lie in — the drilled planet's equatorial plane at
+    /// body level, the flat orbital plane otherwise. Derived from the model so no caller
+    /// has to thread it through.
+    var plane: OrbitPlane {
+        guard let pole = model.centralBody?.orbitPole else { return .flat }
+        return OrbitPlane(pole: pole)
+    }
 
     init(model: SystemModel, center: SIMD3<Float>, scale: Float, reveal: Float,
          time: Float, timing: OrbitTiming = .default) {
@@ -114,8 +153,8 @@ struct OrreryLayout {
     func swarmPosition(_ m: SwarmMoon) -> SIMD3<Float> {
         let a = swarmAngle(m)
         let r = Float(m.orbitScene) * scale * reveal
-        let y = Float(m.offsetScene) * scale * reveal
-        return center + SIMD3<Float>(cos(a) * r, y, sin(a) * r)
+        let off = Float(m.offsetScene) * scale * reveal
+        return center + plane.point(angle: a, radius: r, offset: off)
     }
 
     // MARK: Lagrange points
@@ -209,7 +248,7 @@ struct OrreryLayout {
     // MARK: Helpers
 
     private func radial(_ angle: Float, _ radius: Float) -> SIMD3<Float> {
-        center + SIMD3<Float>(cos(angle) * radius, 0, sin(angle) * radius)
+        center + plane.point(angle: angle, radius: radius)
     }
 
     /// The parent of a code — its designation minus the last segment (`SOL-5-L4` → `SOL-5`).

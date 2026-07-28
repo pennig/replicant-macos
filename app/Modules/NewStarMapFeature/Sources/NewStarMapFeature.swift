@@ -66,6 +66,17 @@ public struct NewStarMapFeature {
         /// The active replicant whose nearby stars we survey, from the signed-in
         /// session's local selection. Nil until an account with a replicant signs in.
         @Shared(.appStorage(Account.activeReplicantCodeKey)) var activeReplicantCode: String?
+        /// Orrery plane knobs. No Preferences UI yet — set via `defaults write` while
+        /// the look is being dialled in; promote `decoupleMoonPlane` into the
+        /// AccountFeature Settings sheet only if it turns out to be toggled in practice.
+        @Shared(.appStorage(OrreryMapping.OrreryPlaneOptions.tiltCapKey))
+        var moonPlaneTiltCapDeg: Double = 38
+        @Shared(.appStorage(OrreryMapping.OrreryPlaneOptions.decoupleKey))
+        var decoupleMoonPlane: Bool = false
+
+        var planeOptions: OrreryMapping.OrreryPlaneOptions {
+            .init(tiltCapDeg: moonPlaneTiltCapDeg, decoupleMoonPlane: decoupleMoonPlane)
+        }
         var isSurveying: Bool
         var surveyStarCount: Int
         var surveyError: String?

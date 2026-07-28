@@ -1590,7 +1590,10 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         // rebase them onto the live `orreryCenter`, which lets a body-level centre
         // track its planet without regenerating any geometry.
         orreryBuildCenter = orreryCenter
-        let lines = OrreryGeometry.scaffoldLines(model: model, center: orreryCenter, scale: orreryScale)
+        let plane = OrreryLayout(model: model, center: orreryCenter, scale: orreryScale,
+                                 reveal: 1, time: 0).plane
+        let lines = OrreryGeometry.scaffoldLines(model: model, center: orreryCenter,
+                                                scale: orreryScale, plane: plane)
         orreryLineVertexCount = lines.count
         orreryLineBuffer = lines.isEmpty ? nil : device.makeBuffer(
             bytes: lines, length: lines.count * MemoryLayout<OrreryLineVertex>.stride,

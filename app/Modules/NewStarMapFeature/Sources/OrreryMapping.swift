@@ -456,7 +456,7 @@ enum OrreryMapping {
     /// every moon, just not every moon on its own ring. Empty moons → just the central
     /// planet (shown before the `hydrateBody` roster lands, like the star-only system
     /// fallback).
-    static func bodyModel(planet: Planet) -> SystemModel {
+    static func bodyModel(planet: Planet, options: OrreryPlaneOptions = .default) -> SystemModel {
         let centralRings = PlanetMaterial.ringSystem(
             hasRings: planet.physical?.rings ?? false,
             type: PlanetType(apiType: planet.type),
@@ -466,21 +466,27 @@ enum OrreryMapping {
         // clear THAT, not merely its limb — otherwise the innermost moons orbit straight
         // through the rings.
         let centralClearance = clearanceRadius(centralScene, centralRings)
+        let centralSpin = BodySpin(tiltDeg: planet.physical?.axialTiltDeg,
+                                   rotationHours: planet.physical?.rotationPeriodHours,
+                                   tidallyLocked: planet.physical?.tidallyLocked ?? false,
+                                   tiltCapDeg: options.tiltCapDeg)
+        let centralSeed = appearanceSeed(designation: planet.designation,
+                                        rotationPeriodHours: planet.physical?.rotationPeriodHours)
         let central = CentralBody(
             displayRadius: centralScene,
             colorHex: planetColor(type: planet.type),
             rings: centralRings,
-            spin: BodySpin(tiltDeg: planet.physical?.axialTiltDeg,
-                           rotationHours: planet.physical?.rotationPeriodHours,
-                           tidallyLocked: planet.physical?.tidallyLocked ?? false),
+            spin: centralSpin,
+            // One pole for rings, surface, and moon orbits — unless the escape hatch
+            // says keep the moons planar.
+            orbitPole: options.decoupleMoonPlane ? nil : centralSpin.pole(seed: centralSeed),
             planetType: PlanetType(apiType: planet.type),
             lifeStage: planet.lifeStage, estimated: planet.typeEstimated,
             tags: planet.physical?.tags ?? [],
             inHabitableZone: planet.inHabitableZone,
             surfaceTempC: planet.physical?.surfaceTempC,
             atmosphere: Atmosphere(apiValue: planet.physical?.atmosphere),
-            appearanceSeed: appearanceSeed(designation: planet.designation,
-                                           rotationPeriodHours: planet.physical?.rotationPeriodHours))
+            appearanceSeed: centralSeed)
 
         // Split the roster: moons that earn a ring, and the rest. See `MoonTiering` for
         // why interest always wins and why a roster with no radii promotes nothing.
@@ -540,7 +546,8 @@ enum OrreryMapping {
                 rings: nil,
                 spin: BodySpin(tiltDeg: m.physical?.axialTiltDeg,
                                rotationHours: m.physical?.rotationPeriodHours,
-                               tidallyLocked: m.physical?.tidallyLocked ?? false),
+                               tidallyLocked: m.physical?.tidallyLocked ?? false,
+                               tiltCapDeg: options.tiltCapDeg),
                 hasSubsurfaceOcean: m.physical?.hasSubsurfaceOcean ?? false,
                 orbitalDistanceKm: m.physical?.orbitalDistanceKm,
                 indicators: indicators,

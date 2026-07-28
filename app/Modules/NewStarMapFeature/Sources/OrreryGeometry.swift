@@ -88,15 +88,18 @@ enum OrreryGeometry {
     /// Orbit rings (one per planet), the kuiper ring, and the habitable-zone band
     /// (inner + outer edge) as world-space colored line-segment pairs. `scale`
     /// converts orrery scene units to world (light-year) units around `center`.
-    static func scaffoldLines(model: SystemModel, center: SIMD3<Float>, scale: Float, segments: Int = 128) -> [OrreryLineVertex] {
+    static func scaffoldLines(model: SystemModel, center: SIMD3<Float>, scale: Float,
+                              plane: OrbitPlane = .flat, segments: Int = 128) -> [OrreryLineVertex] {
         var verts: [OrreryLineVertex] = []
 
         func addRing(radius sceneRadius: Double, color: SIMD4<Float>) {
             let radius = Float(sceneRadius) * scale
-            var prev = center + SIMD3<Float>(radius, 0, 0)
+            // Rings lie in the LAYER's plane, so a tilted planet's moons never leave the
+            // rings they orbit on.
+            var prev = center + plane.point(angle: 0, radius: radius)
             for i in 1...segments {
                 let a = 2 * Float.pi * Float(i) / Float(segments)
-                let p = center + SIMD3<Float>(cos(a) * radius, 0, sin(a) * radius)
+                let p = center + plane.point(angle: a, radius: radius)
                 verts.append(OrreryLineVertex(position: SIMD4(prev, 1), color: color))
                 verts.append(OrreryLineVertex(position: SIMD4(p, 1), color: color))
                 prev = p
