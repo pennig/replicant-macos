@@ -416,6 +416,7 @@ public struct NewStarMapView: View {
                         onBack: { store.send(.zoomOutRequested) },
                         onScan: { store.send(.scanCurrentSystemTapped) },
                         onDrillBody: { store.send(.drillIntoBodyRequested($0)) },
+                        onSelectLocation: { store.send(.locationSelected($0)) },
                         onDismissLocation: { store.send(.selectionCleared) },
                         onViewDevice: { store.send(.viewDeviceRequested($0)) }
                     )
@@ -1030,6 +1031,10 @@ private struct SystemHUD: View {
     let onBack: () -> Void
     let onScan: () -> Void
     let onDrillBody: (String) -> Void
+    /// Select a location from the roster list. This is the ONLY way to reach a swarm
+    /// moon: swarm members are not pickable in the 3D view, so the list is their
+    /// interaction surface (see the many-moon spec).
+    let onSelectLocation: (String) -> Void
     let onDismissLocation: () -> Void
     let onViewDevice: (String) -> Void
 
@@ -1230,7 +1235,8 @@ private struct SystemHUD: View {
 
     /// Resolve a picked location code against the current orrery `model` into its
     /// dossier fields. Level-aware: an orbiter is a planet at system level, a moon at
-    /// body level; the centre is the star (system) or the drilled body (body level).
+    /// body level (promoted, in `model.planets`, or a swarm member, in `model.swarm`);
+    /// the centre is the star (system) or the drilled body (body level).
     private func resolveLocation(_ code: String) -> LocationDossierInfo? {
         if code == model.star.designation {
             return LocationDossierInfo(
@@ -1266,6 +1272,20 @@ private struct SystemHUD: View {
                 title: p.name.map { "\(p.designation) · \($0)" } ?? p.designation,
                 subtitle: p.inHabitableZone ? "In habitable zone" : nil,
                 facts: facts, indicators: p.indicators)
+        }
+        // Swarm moons only exist at body level and carry a smaller field set than a
+        // promoted moon (no rings/tilt/atmosphere) — the roster is their only entry
+        // point, so they must still resolve here or picking one from the list would
+        // select a code the dossier can't show.
+        if let m = model.swarm.first(where: { $0.id == code }) {
+            var facts: [(String, String)] = []
+            if let t = m.type { facts.append(("Type", t)) }
+            facts.append(("Period", BodyFactFormat.hours(m.periodDays * 24)))
+            return LocationDossierInfo(
+                kind: "Moon",
+                title: m.name.map { "\(m.designation) · \($0)" } ?? m.designation,
+                subtitle: nil,
+                facts: facts, indicators: [])
         }
         if let b = model.belts.first(where: { $0.id == code }) {
             var facts: [(String, String)] = []
@@ -1339,12 +1359,34 @@ private struct SystemHUD: View {
         .hudGlass()
     }
 
+    /// Max height for the roster list before it scrolls. A 59-moon roster would
+    /// otherwise grow the card past the window.
+    private static let rosterMaxHeight: CGFloat = 280
+
     private var bodiesCard: some View {
         VStack(alignment: .leading, spacing: Space.s) {
             RCSectionHeader(isBody ? "Moons" : "Bodies")
-            ForEach(model.planets) { planet in
-                bodyRow(planet)
+            ScrollView {
+                VStack(alignment: .leading, spacing: Space.s) {
+                    ForEach(model.planets) { planet in
+                        bodyRow(planet)
+                    }
+                    if !model.swarm.isEmpty {
+                        Divider().overlay(.rcSeparator)
+                        HStack {
+                            Text("Minor bodies")
+                                .font(.rcCaption).foregroundStyle(.rcTextSecondary)
+                            Spacer()
+                            Text("\(model.swarm.count)")
+                                .font(.rcMonoSmall).foregroundStyle(.rcTextTertiary)
+                        }
+                        ForEach(model.swarm) { moon in
+                            swarmRow(moon)
+                        }
+                    }
+                }
             }
+            .frame(maxHeight: Self.rosterMaxHeight)
             if let hazard = model.hazards.first {
                 Divider().overlay(.rcSeparator)
                 HStack(spacing: Space.s) {
@@ -1367,8 +1409,28 @@ private struct SystemHUD: View {
         .hudGlass()
     }
 
+    /// One swarm-moon row. Selecting it drives the shared location dossier (and, via
+    /// `selectedLocation`, the renderer's highlight) — the swarm's only entry point.
+    @ViewBuilder private func swarmRow(_ moon: SwarmMoon) -> some View {
+        let selected = selectedLocation == moon.designation
+        Button { onSelectLocation(moon.designation) } label: {
+            HStack(spacing: Space.s) {
+                Circle()
+                    .fill(selected ? .rcAccent : .rcTextTertiary)
+                    .frame(width: 5, height: 5)
+                Text(moon.name.map { "\(moon.designation) · \($0)" } ?? moon.designation)
+                    .font(.rcMonoSmall)
+                    .foregroundStyle(selected ? .rcTextPrimary : .rcTextSecondary)
+                Spacer()
+                Text(moon.type ?? "—").font(.rcCaption).foregroundStyle(.rcTextTertiary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
     /// One satellite row. At system level the row drills into the planet (chevron +
-    /// tap → `onDrillBody`); at body level it's a static moon entry.
+    /// tap → `onDrillBody`); at body level it selects the moon (tap → `onSelectLocation`).
     @ViewBuilder private func bodyRow(_ planet: OrreryPlanet) -> some View {
         let content = HStack(spacing: Space.s) {
             Circle()
@@ -1390,7 +1452,10 @@ private struct SystemHUD: View {
         .contentShape(Rectangle())
 
         if isBody {
-            content
+            // At body level a row selects the moon (there is nothing deeper to drill
+            // into), driving the same dossier a 3D pick would.
+            Button { onSelectLocation(planet.designation) } label: { content }
+                .buttonStyle(.plain)
         } else {
             Button { onDrillBody(planet.designation) } label: { content }
                 .buttonStyle(.plain)
