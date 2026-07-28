@@ -1,12 +1,30 @@
 # Orrery Many-Moon Rendering — Visual Verification Checklist
 
-Everything in this feature that can be verified without a GPU has been: 220 tests pass and
-`xcodebuild` compiles the app target and all five `.metal` shaders. Nothing GPU-side could be
-verified in the environment the work was done in (a Keychain login wall blocks running the app),
-so the items below are the ones that need eyes before this branch merges to `main`.
+**CLOSED 2026-07-28 — every item below was walked through on a real GPU and signed off.** The work
+is on `main`; the checklist is kept as reference, not as an open gate. It is worth reading before
+touching the orrery body shader, the moon tiering, or the swarm band: each section says what the
+thing should look like AND what a specific failure looks like, which is faster than rediscovering
+them.
 
-Branch: `worktree-orrery-moon-swarm`. Preference knobs are read via `@Shared(.appStorage(...))`,
-so set them with `defaults write` and relaunch:
+What the visual pass caught that no test could, in the order it was found:
+
+1. **The swarm was invisible.** Members were drawn as point sprites inheriting the asteroid belt's
+   2-pixel screen-space size, so zooming did nothing. They became real impostors at honest relative
+   sizes, ramped 0.5× → 0.3× so the largest swarm moons don't rival promoted ones.
+2. **The axial tilt was clamped** at 38°, which flattened SOL-7 (97.77°). The cap now defaults to
+   90° — fully physical — and survives as a knob rather than a default.
+3. **Captured asteroids read as spheres with bites out of them,** and one silhouette folded back on
+   itself. They are now triaxial ellipsoids solved in closed form, with the limb carve sampled on
+   the rim. See §5.
+4. **A spinning asteroid appeared to change shape.** Three separate non-rigid motions, all listed
+   under the rigidity bullet in §5 — the last of them introduced by the fix for (3).
+
+The lesson worth carrying: (1) and (4) were both *conformant to spec and wrong on screen*. Nine
+code reviews passed the invisible swarm because it matched a specification that was itself wrong.
+Nothing here substitutes for looking at it.
+
+Preference knobs are read via `@Shared(.appStorage(...))`, so set them with `defaults write` and
+relaunch:
 
 ```
 defaults write name.pennig.replicould orreryMoonPlaneTiltCapDeg -int 38     # default
@@ -97,9 +115,11 @@ as a sphere with bites out of it, because a clamped field leaves most of the out
   on the rim direction, which depends on screen *angle* alone, and a fold is not representable.
 - **Watch the limb** as another body passes behind it, for occlusion oddities. Depth comes from the
   solved intersection, not from the perturbed shading normal.
-- **Rigidity under spin — the sharpest test, easiest in the playground** (Tools ▸ Asteroid
-  Playground). Let one rotate and watch a single surface feature travel across the face. It must
-  ride the rock like paint. Three specific failures, all of which have happened:
+- **Rigidity under spin — the sharpest test.** Let one rotate and watch a single surface feature
+  travel across the face: it must ride the rock like paint. The outline itself *will* keep changing,
+  and that is correct — a real potato shows a different silhouette as new material reaches the rim.
+  What must not happen is the body pulsing in size, the facets sliding, or surface features swimming
+  relative to each other. Three specific failures, all of which have happened:
   - *The body breathes* — its outline inflates and deflates as it turns. That means the limb carve
     has been folded back into the ellipsoid's axes, which scales the WHOLE body per screen angle
     and stops the render being a fixed solid at all. The carve belongs on the outline cut

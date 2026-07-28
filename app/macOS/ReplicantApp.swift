@@ -17,7 +17,6 @@ import GameServices
 import GameSync
 import LocationEventsFeature
 import MessagesFeature
-import NewStarMapFeature
 import SQLiteData
 import SwiftUI
 import UI
@@ -452,10 +451,6 @@ struct ReplicantApp: App {
                 Button("Reset Local Database…") {
                     confirmDatabaseReset()
                 }
-
-                Button("Asteroid Playground") {
-                    openWindow(id: WindowID.asteroidPlayground)
-                }
                 #endif
             }
         }
@@ -474,16 +469,6 @@ struct ReplicantApp: App {
         }
         .defaultLaunchBehavior(.suppressed)
 
-        #if DEBUG
-        // A standalone inspection surface for the irregular-body impostor (Tools menu).
-        // Debug-only: it is a development tool, not a game feature, and it needs no
-        // session — it renders a synthetic body through the production shaders.
-        Window("Asteroid Playground", id: WindowID.asteroidPlayground) {
-            AsteroidPlaygroundView()
-        }
-        .defaultLaunchBehavior(.suppressed)
-        #endif
-
         // The Preferences window (⌘,), which follows the same appearance
         // preference as the main window.
         Settings {
@@ -499,5 +484,4 @@ enum WindowID {
     static let main = "main"
     static let rawAPI = "rawAPI"
     static let eventLog = "eventLog"
-    static let asteroidPlayground = "asteroidPlayground"
 }
