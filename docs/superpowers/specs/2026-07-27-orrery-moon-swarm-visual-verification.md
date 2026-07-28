@@ -1,0 +1,110 @@
+# Orrery Many-Moon Rendering — Visual Verification Checklist
+
+Everything in this feature that can be verified without a GPU has been: 220 tests pass and
+`xcodebuild` compiles the app target and all five `.metal` shaders. Nothing GPU-side could be
+verified in the environment the work was done in (a Keychain login wall blocks running the app),
+so the items below are the ones that need eyes before this branch merges to `main`.
+
+Branch: `worktree-orrery-moon-swarm`. Preference knobs are read via `@Shared(.appStorage(...))`,
+so set them with `defaults write` and relaunch:
+
+```
+defaults write name.pennig.replicould orreryMoonPlaneTiltCapDeg -int 38     # default
+defaults write name.pennig.replicould orreryDecoupleMoonPlane -bool NO      # default
+```
+
+## 1. Regression baseline — a small roster
+
+Open a planet with ≤8 moons (e.g. `SOL-6`). All moons promote, no swarm band. Layout should look
+as it did before **except** moon sizes: the largest moon should now read clearly bigger than the
+small ones. The size range widened from 1.49× to ~10.5×, and the unscanned default dropped from
+0.14 to 0.045 so an unsurveyed rock no longer out-sizes known moons.
+
+## 2. The headline case — a large roster
+
+Open a planet with 50+ moons (e.g. `POLARISON-6`, 59 moons). Expect a handful of lit moons plus a
+band of points, with the planet still substantial — computed at ~11% of frame radius, against 2.9%
+before this work.
+
+**Watch the drill-in specifically.** The band should grow out of the planet in step with the moons
+and orbit rings. If it stays bunched near the planet while the moons are already halfway out and
+then snaps outward at the end, the reveal is being applied twice. That bug was found and fixed, but
+it is invisible at rest and only shows during the transition, so it is worth confirming.
+
+## 3. Rosters with little or no scanned physical data
+
+Now that survey-digest hydration has landed, this should be rarer — but where a roster reports no
+moon radii at all, promotion falls back to the innermost `topBySize` moons in roster order (index
+order is orbital order in generated systems). Confirm such a planet shows a few lit moons rather
+than nothing but dots. Note this fallback also changes those moons' period values, so the layer's
+animation speed may differ from before on that roster shape.
+
+## 4. Zoom back out
+
+The departing orrery layer deliberately draws no swarm, so the band disappears while the moons fade.
+This is a documented tradeoff (two layers in one frame would each need their own per-frame-rewritten
+buffer). Confirm it does not visibly pop.
+
+## 5. Captured asteroids
+
+Open a planet with captured-asteroid moons (e.g. `SOL-4`, `SOL-8` — both have small rosters, so all
+moons promote to impostors). Three things:
+
+- **Orbit the camera and watch one asteroid's outline, not its shading.** The silhouette should keep
+  its shape as the camera moves. If the lumps slide or the outline re-cuts, the carve field is being
+  sampled in the wrong frame.
+- **With the camera still**, the outline should slowly change as the rock tumbles. If the tumble now
+  reads as per-frame flicker at these sizes (3–20 px), the amplitude or spin rate wants tuning —
+  the shape is inward-only carving, so it should read as chipped rather than jittery.
+- **Watch the limb** as a ring annulus or another body passes behind it, for occlusion oddities.
+  Depth is written from the geometric normal, not the perturbed one, so this should be stable.
+
+Also confirm the faceted *shading* still looks right — the lighting normal is deliberately still
+perturbed, and that is the thing most easily broken by accident.
+
+## 6. The one-plane goal
+
+Open a ringed, tilted planet (e.g. `SOL-6`). Rings, surface banding, and moon orbits should all sit
+in **one** plane at the same tilt. This is the change's most visible win and the thing that
+originally prompted it — rings at Saturn's tilt with the moons flat around it.
+
+## 7. The tilt cap
+
+Sweep `orreryMoonPlaneTiltCapDeg`, relaunching each time:
+
+- **38** (default) — Saturn's 26.73° passes through essentially untouched.
+- **0** — fully planar. Note this flattens rings too, since they share the pole.
+- **90** — fully physical. Try `SOL-7` (obliquity 97.77°): orbits should go near-perpendicular but
+  **must never reverse direction**. The compression provably never crosses 90°, which is what keeps
+  retrograde bodies retrograde, so a reversal here would mean something is wrong.
+
+At 90, also drill into a ringed planet and watch the transition — the cap now applies at both system
+and body level, so the same planet should not change tilt as you drill.
+
+## 8. The escape hatch
+
+`defaults write name.pennig.replicould orreryDecoupleMoonPlane -bool YES`, then open a tilted ringed
+planet: rings stay tilted, moon orbits go flat. This is the hatch for keeping moons planar
+regardless of planet tilt.
+
+On a planet with near-zero tilt, toggling this rotates the whole moon system 90° in phase rather
+than doing nothing. That is expected and harmless — `phase0Deg` is an arbitrary seed, so no real
+orientation information is lost.
+
+## 9. Picking and the roster
+
+Swarm members are deliberately not 3D-pickable — at ~2 px, clicking the right one of 57
+near-identical bodies is frustrating even when it works. The HUD roster is the interaction surface.
+
+- Click a "Minor bodies" roster row and confirm a dossier appears. It shows orbital distance and
+  period only when the scan actually reported them, rather than showing a synthesized value as fact.
+- Try clicking a *small promoted* moon while it crosses in front of the planet's disc. Widened sizes
+  make the smallest promoted moons ~1–2 px, and disc-hit picking resolves frontmost-first, so it may
+  not be selectable in 3D. The roster row is the designed fallback — confirm it works.
+
+## 10. Life-bearing moons
+
+A moon with a life stage always promotes out of the swarm, so its `.life` pip can render. The
+promotion gate and the pip share one predicate (`OrreryMapping.hasDetectedLife`) specifically so
+they cannot disagree. If you can find or arrange a life-bearing moon on a large roster, confirm it
+appears as a lit moon with a life pip rather than as an anonymous dot.
