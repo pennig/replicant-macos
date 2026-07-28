@@ -1745,6 +1745,59 @@ struct MoonSwarmLayoutTests {
         #expect(b.swarm.allSatisfy { $0.isCapturedAsteroid })
         #expect(a.swarm.allSatisfy { !$0.isCapturedAsteroid })
     }
+
+    // MARK: - Swarm impostor sizing (Task: swarm-impostors)
+
+    @Test func swarmMembersRenderAtHalfTheirHonestSize() throws {
+        // Swarm members now draw as real impostors, so their size must keep the same
+        // relative-size CURVE a promoted moon would get (`moonSizeFraction`) — just
+        // scaled down by `swarmSizeScale` so the tier still reads as subordinate. Tier
+        // is communicated by the ring, not by flattening every swarm member to one size.
+        var moons = roster(30)
+        // Six measured moons: the top four (>= half the largest) promote on size,
+        // leaving the smallest two of the six in the swarm with real, distinct radii.
+        let sizes: [Double] = [1.0, 0.9, 0.8, 0.7, 0.6, 0.5]
+        for i in 0..<6 {
+            moons[i] = Moon(designation: "POLARISON-6-\(i + 1)", recon: .scanned,
+                            physical: BodyPhysical(radiusEarth: sizes[i]))
+        }
+        let m = OrreryMapping.bodyModel(planet: planet(moons))
+        for (i, id) in ["POLARISON-6-5", "POLARISON-6-6"].enumerated() {
+            let swarmMoon = try #require(m.swarm.first { $0.designation == id })
+            let honestRadius = OrreryMapping.centralScene
+                * OrreryMapping.moonSizeFraction(moons[4 + i])
+            #expect(abs(swarmMoon.displayRadius - honestRadius * OrreryMapping.swarmSizeScale) < 1e-9)
+            #expect(abs(swarmMoon.displayRadius - honestRadius * 0.5) < 1e-9)
+            // Still real size information, not a flattened dot: distinct known radii
+            // must keep producing distinct drawn radii.
+        }
+        let bigger = try #require(m.swarm.first { $0.designation == "POLARISON-6-5" })
+        let smaller = try #require(m.swarm.first { $0.designation == "POLARISON-6-6" })
+        #expect(bigger.displayRadius > smaller.displayRadius)
+    }
+
+    @Test func swarmReachAccountsForMemberRadiusSoNothingClipsTheFrame() {
+        // Before this fix `swarmReach` was just `band.outer`, which was correct for
+        // dimensionless points but ignores a member's own drawn radius and its
+        // off-plane `offsetScene` scatter — both real now that members are sphere
+        // impostors. Every swarm member's farthest point from the centre (its distance
+        // from the centre plus its own radius) must land inside the frame, or a large
+        // swarm body clips at the frame edge on drill-in.
+        var moons = roster(30)
+        let sizes: [Double] = [1.0, 0.9, 0.8, 0.7, 0.6, 0.5]
+        for i in 0..<6 {
+            moons[i] = Moon(designation: "POLARISON-6-\(i + 1)", recon: .scanned,
+                            physical: BodyPhysical(radiusEarth: sizes[i]))
+        }
+        let m = OrreryMapping.bodyModel(planet: planet(moons))
+        #expect(!m.swarm.isEmpty)
+        for member in m.swarm {
+            let reach = (member.orbitScene * member.orbitScene
+                + member.offsetScene * member.offsetScene).squareRoot() + member.displayRadius
+            #expect(reach <= m.frameScene,
+                    "\(member.designation) reach \(reach) exceeds frame \(m.frameScene)")
+        }
+    }
 }
 
 struct SwarmLayoutTests {
@@ -1779,11 +1832,11 @@ struct SwarmLayoutTests {
     @Test func swarmRevealIsAppliedExactlyOnceAndLinearly() {
         // Reveal must scale the band LINEARLY, because that is what keeps it in lockstep
         // with the promoted moons and their orbit rings (`orbiterPosition` is likewise
-        // `semiMajorScene * scale * reveal`). Squaring it — which happens if a caller
-        // bakes reveal in here AND lets `orrery_swarm_vertex` apply it again — parks the
-        // band at 25% of its radius while the rings sit at 50%, so the cloud stays
-        // bunched against the planet and then snaps outward. Invisible at rest (1² = 1),
-        // which is exactly why this needs pinning.
+        // `semiMajorScene * scale * reveal`). Squaring it — which used to happen when a
+        // caller baked reveal in here AND the (now-removed) point shader applied it a
+        // second time — parks the band at 25% of its radius while the rings sit at 50%,
+        // so the cloud stays bunched against the planet and then snaps outward. Invisible
+        // at rest (1² = 1), which is exactly why this needs pinning.
         let m = swarmMoon("SOL-5-9", orbit: 10, offset: 2, period: 8, phase: 0)
         func at(_ reveal: Float) -> SIMD3<Float> {
             OrreryLayout(model: model(swarm: [m]), center: .zero, scale: 1,
@@ -1832,49 +1885,6 @@ struct SwarmLayoutTests {
         let layout = OrreryLayout(model: model(swarm: [fast], planets: [slowPlanet]),
                                   center: .zero, scale: 1, reveal: 1, time: 0)
         #expect(layout.minPeriodDays == 1)
-    }
-}
-
-struct SwarmGeometryTests {
-    private func bodyModelWithSwarm() -> SystemModel {
-        let moons = (0..<40).map { Moon(designation: "POLARISON-6-\($0 + 1)", recon: .visited) }
-        return OrreryMapping.bodyModel(planet:
-            Planet(designation: "POLARISON-6", type: "Gas Giant", orbitalDistanceAu: 6,
-                   recon: .scanned, moons: moons))
-    }
-
-    @Test func swarmPointsAreOnePerMemberAndTinted() {
-        let model = bodyModelWithSwarm()
-        let layout = OrreryLayout(model: model, center: .zero, scale: 1, reveal: 1, time: 0)
-        let pts = OrreryGeometry.swarmPoints(layout: layout)
-        #expect(pts.count == model.swarm.count)
-        #expect(pts.allSatisfy { $0.positionSize.w > 0 })
-        #expect(pts.allSatisfy { simd_length($0.color.xyz) > 0 })
-    }
-
-    @Test func swarmPointsTrackTheLayoutCentreAndScale() {
-        let model = bodyModelWithSwarm()
-        let here = OrreryGeometry.swarmPoints(
-            layout: OrreryLayout(model: model, center: .zero, scale: 1, reveal: 1, time: 0))
-        let there = OrreryGeometry.swarmPoints(
-            layout: OrreryLayout(model: model, center: SIMD3(100, 0, 0), scale: 1,
-                                 reveal: 1, time: 0))
-        for (a, b) in zip(here, there) {
-            #expect(abs((b.positionSize.x - a.positionSize.x) - 100) < 1e-3)
-        }
-    }
-
-    @Test func swarmPointsAreEmptyWithoutASwarm() {
-        // A system-level model has no swarm, so the pass costs nothing there.
-        let model = SystemModel(
-            star: StarDetail(designation: "SOL", name: nil, spectralType: nil, color: nil,
-                             position: Position(x: 0, y: 0, z: 0), temperatureK: nil,
-                             massSolar: nil, luminositySolar: nil, ageMy: nil,
-                             habitableZone: nil, miningBonusPct: nil),
-            hzInnerScene: nil, hzOuterScene: nil, planets: [], belts: [], hazards: [],
-            kuiperScene: nil, frameScene: 20, deviceCount: 0, vesselCount: 0)
-        let layout = OrreryLayout(model: model, center: .zero, scale: 1, reveal: 1, time: 0)
-        #expect(OrreryGeometry.swarmPoints(layout: layout).isEmpty)
     }
 }
 

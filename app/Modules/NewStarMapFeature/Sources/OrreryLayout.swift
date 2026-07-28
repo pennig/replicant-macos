@@ -151,14 +151,13 @@ struct OrreryLayout {
     /// the radius and the offset are scaled by `reveal`, so a caller that wants the
     /// collapsing-toward-the-centre emerge gets it from one place.
     ///
-    /// REVEAL OWNERSHIP: a caller rendering the band through the *point pipeline*
-    /// (`OrreryGeometry.swarmPoints` → `orrery_swarm_vertex`) passes `reveal: 1` here,
-    /// because that shader applies reveal itself — the same convention `beltPoints`
-    /// follows by taking no reveal parameter at all. Passing a partial reveal on that
-    /// path would square it, leaving the band bunched near the planet while the promoted
-    /// moons and orbit rings sit at the correct radius. The parameter stays because
-    /// non-shader consumers (picking, tests, any future CPU-side anchor) need the real
-    /// mid-transition position.
+    /// REVEAL OWNERSHIP: swarm members are drawn as sphere impostors through the same
+    /// `placedOrreryBodies` CPU placement every other body goes through, and
+    /// `orrery_body_vertex` never reads `orreryReveal` — it trusts the CPU-supplied
+    /// centre outright. So every caller, shader-bound or not, passes the layer's real
+    /// `reveal` (`emergeReveal`) here, exactly like `orbiterPosition`. (The old point
+    /// pipeline applied reveal a second time in the shader, which is why this used to
+    /// warn callers to pass `1` — that pipeline is gone.)
     func swarmPosition(_ m: SwarmMoon) -> SIMD3<Float> {
         let a = swarmAngle(m)
         let r = Float(m.orbitScene) * scale * reveal

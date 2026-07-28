@@ -174,44 +174,6 @@ enum OrreryGeometry {
         return pts
     }
 
-    /// Swarm-moon tint: the moon's own schematic colour, dimmed. A swarm member is
-    /// scenery, so it must not compete with the promoted moons' lit impostors.
-    private static let swarmBrightness: Float = 0.55
-    /// Screen-space point size (px). Deliberately small — legibility for these bodies
-    /// comes from the HUD roster, not from inflating them (see the spec's size-honesty
-    /// section), and a swarm member is never individually picked.
-    private static let swarmPointSize: Float = 2.0
-
-    /// The moon swarm as additive world-space points, one per member, at their live
-    /// orbital positions. Reuses `AmbientVertex` and the same point pipeline the
-    /// asteroid belt draws through.
-    ///
-    /// Takes the whole `OrreryLayout` rather than loose parameters so the swarm is
-    /// positioned by the SAME resolver that places bodies, pips, and picking — there is
-    /// no second copy of the orbit math to drift out of sync.
-    ///
-    /// IMPORTANT: build the layout around the centre the other orrery buffers were baked
-    /// at (`orreryBuildCenter`), NOT the live `orreryCenter`. The point vertex shader
-    /// rebases every vertex by `orreryCenter − orreryBuildCenter`, so positions generated
-    /// around the live centre would be offset twice and the swarm would slide off the
-    /// planet as it orbits.
-    static func swarmPoints(layout: OrreryLayout) -> [AmbientVertex] {
-        let swarm = layout.model.swarm
-        guard !swarm.isEmpty else { return [] }
-        var pts: [AmbientVertex] = []
-        pts.reserveCapacity(swarm.count)
-        for m in swarm {
-            let p = layout.swarmPosition(m)
-            let tint = rgb(hex: m.colorHex)
-            // An unscanned member reads dimmer: the band should look partly charted
-            // rather than assert detail the scan has not delivered.
-            let brightness = swarmBrightness * (m.scanned ? 1.0 : 0.75)
-            pts.append(AmbientVertex(positionSize: SIMD4(p, swarmPointSize),
-                                     color: SIMD4(tint, brightness)))
-        }
-        return pts
-    }
-
     /// Parse "#rrggbb" → 0…1 rgb (gamma handling left to the tone-map).
     static func rgb(hex: String) -> SIMD3<Float> {
         var s = Substring(hex)

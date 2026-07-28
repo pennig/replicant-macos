@@ -415,6 +415,13 @@ enum OrreryMapping {
     /// Captured asteroids scatter this much wider than regular moons.
     static let capturedInclinationFactor: Double = 2.2
 
+    /// Swarm members are drawn at their honest relative size (so a large swarm moon
+    /// reads large and a captured asteroid reads tiny) but scaled down, so the tier
+    /// still reads as subordinate to the promoted moons that carry their own orbit
+    /// ring. Tier is communicated by the ring, not by size — which is why this is a
+    /// gentle subordination and not a flattening.
+    static let swarmSizeScale: Double = 0.5
+
     // MARK: - Body level (a planet + its moons)
 
     /// Moon display radius as a *fraction of the central planet's* rendered radius —
@@ -647,7 +654,7 @@ enum OrreryMapping {
                 reportedPeriodDays: reportedMoonPeriodDays(m),
                 orbitalDistanceKm: m.physical?.orbitalDistanceKm,
                 phase0Deg: phaseDeg(m.designation),
-                displayRadius: centralScene * moonSizeFraction(m),
+                displayRadius: centralScene * moonSizeFraction(m) * swarmSizeScale,
                 colorHex: moonColor(type: m.type),
                 scanned: m.recon == .scanned,
                 isCapturedAsteroid: captured)
@@ -657,7 +664,15 @@ enum OrreryMapping {
         // and never inside the central body's own ring system (a ringed planet with no
         // moons would otherwise be framed tighter than its rings and clip them).
         let moonReach = moons.map { $0.semiMajorScene + $0.displayRadius }.max()
-        let swarmReach = swarm.isEmpty ? 0 : band.outer
+        // The swarm reach must account for each member's own drawn radius AND its
+        // off-plane `offsetScene` (now that members are real impostors, not
+        // dimensionless points) — `band.outer` alone ignores both and a large swarm
+        // body would clip at the frame edge. Per-member true distance from the centre
+        // (hypot of the in-plane radius and the vertical offset) plus its own radius
+        // is a conservative bound on how far its sphere actually reaches.
+        let swarmReach = swarm.map { m -> Double in
+            (m.orbitScene * m.orbitScene + m.offsetScene * m.offsetScene).squareRoot() + m.displayRadius
+        }.max() ?? 0
         let frame = max(moonReach ?? (centralScene + 2), swarmReach, centralClearance) * 1.12
         let deviceCount = planet.devices.count + planet.moons.reduce(0) { $0 + $1.devices.count }
 
