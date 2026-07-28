@@ -86,6 +86,14 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     private var orreryHZVertexCount = 0
     private var orreryBeltBuffer: MTLBuffer?
     private var orreryBeltCount = 0
+    /// Swarm-moon points. Unlike the belt (baked once), these are rewritten every frame
+    /// from `OrreryGeometry.swarmPoints` because the swarm ORBITS. The buffer is
+    /// allocated once per model at the roster's capacity, so the per-frame cost is a
+    /// memcpy of at most a few KB — no allocation on the render thread (which is what
+    /// the drill-in fly hitch was about).
+    private var orrerySwarmBuffer: MTLBuffer?
+    private var orrerySwarmCapacity = 0
+    private var orrerySwarmCount = 0
     // One time-based transition progress (0 = galaxy, 1 = system focus). The
     // crossfade, orrery reveal + emerge, and camera fly are ALL driven from this
     // over ONE shared duration, so they start and land together in both directions.
@@ -908,6 +916,12 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
                         lineBuffer: dep.lineBuffer, lineCount: dep.lineCount,
                         hzBuffer: dep.hzBuffer, hzCount: dep.hzCount,
                         beltBuffer: dep.beltBuffer, beltCount: dep.beltCount,
+                        // A departing layer draws no swarm: the two layers would need
+                        // separate buffers (each rewritten per frame at its own centre)
+                        // to avoid clobbering one another, and the band is faint scenery
+                        // that is fading out over well under a second. Revisit only if
+                        // the swarm visibly pops on zoom-out.
+                        swarmBuffer: nil, swarmCount: 0,
                         baseUniforms: uniforms, time: t, viewportPx: viewportPx)
                 }
                 if let model = orreryModel {
@@ -920,6 +934,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
                         lineBuffer: orreryLineBuffer, lineCount: orreryLineVertexCount,
                         hzBuffer: orreryHZBuffer, hzCount: orreryHZVertexCount,
                         beltBuffer: orreryBeltBuffer, beltCount: orreryBeltCount,
+                        swarmBuffer: orrerySwarmBuffer, swarmCount: orrerySwarmCount,
                         baseUniforms: uniforms, time: t, viewportPx: viewportPx)
                 }
 
@@ -1580,6 +1595,16 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         orreryBeltBuffer = belt.isEmpty ? nil : device.makeBuffer(
             bytes: belt, length: belt.count * MemoryLayout<AmbientVertex>.stride,
             options: .storageModeShared)
+
+        // Allocate (not fill) the swarm buffer at this roster's capacity. `draw`
+        // rewrites the contents each frame at the layer's live orbit time.
+        orrerySwarmCount = model.swarm.count
+        if orrerySwarmCount > orrerySwarmCapacity {
+            orrerySwarmCapacity = orrerySwarmCount
+            orrerySwarmBuffer = device.makeBuffer(
+                length: max(orrerySwarmCapacity, 1) * MemoryLayout<AmbientVertex>.stride,
+                options: .storageModeShared)
+        }
     }
 
     /// Refresh the orrery in place when the persisted detail updates while focused
@@ -1681,6 +1706,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
                                    lineBuffer: MTLBuffer?, lineCount: Int,
                                    hzBuffer: MTLBuffer?, hzCount: Int,
                                    beltBuffer: MTLBuffer?, beltCount: Int,
+                                   swarmBuffer: MTLBuffer?, swarmCount: Int,
                                    baseUniforms: Uniforms, time: Float, viewportPx: SIMD2<Float>) {
         // Skip a fully-faded layer — UNLESS it carries the drilled planet (central),
         // which draws at full opacity independent of `alphaReveal`. Otherwise, in the
@@ -1717,6 +1743,26 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
             enc.setVertexBuffer(beltBuf, offset: 0, index: 0)
             enc.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 1)
             enc.drawPrimitives(type: .point, vertexStart: 0, vertexCount: beltCount)
+        }
+
+        // Swarm moons: the same additive point pass as the belt, but refilled here
+        // because they orbit. Positions are generated around `buildCenter` so the
+        // shader's `orreryCenter − orreryBuildCenter` rebase lands them correctly on a
+        // body-level centre that tracks its planet.
+        if let swarmBuf = swarmBuffer, swarmCount > 0 {
+            let layout = orreryLayout(model: model, center: buildCenter, scale: scale,
+                                      reveal: emergeReveal, time: time)
+            let pts = OrreryGeometry.swarmPoints(layout: layout)
+            if !pts.isEmpty {
+                pts.withUnsafeBytes { src in
+                    swarmBuf.contents().copyMemory(from: src.baseAddress!, byteCount: src.count)
+                }
+                enc.setRenderPipelineState(orreryPointPipeline)
+                enc.setDepthStencilState(readDepthState)
+                enc.setVertexBuffer(swarmBuf, offset: 0, index: 0)
+                enc.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 1)
+                enc.drawPrimitives(type: .point, vertexStart: 0, vertexCount: pts.count)
+            }
         }
 
         // Bodies: billboard sphere-impostors, depth-tested so they occlude one another

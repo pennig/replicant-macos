@@ -1628,3 +1628,46 @@ struct SwarmLayoutTests {
         #expect(layout.minPeriodDays == 1)
     }
 }
+
+struct SwarmGeometryTests {
+    private func bodyModelWithSwarm() -> SystemModel {
+        let moons = (0..<40).map { Moon(designation: "POLARISON-6-\($0 + 1)", recon: .visited) }
+        return OrreryMapping.bodyModel(planet:
+            Planet(designation: "POLARISON-6", type: "Gas Giant", orbitalDistanceAu: 6,
+                   recon: .scanned, moons: moons))
+    }
+
+    @Test func swarmPointsAreOnePerMemberAndTinted() {
+        let model = bodyModelWithSwarm()
+        let layout = OrreryLayout(model: model, center: .zero, scale: 1, reveal: 1, time: 0)
+        let pts = OrreryGeometry.swarmPoints(layout: layout)
+        #expect(pts.count == model.swarm.count)
+        #expect(pts.allSatisfy { $0.positionSize.w > 0 })
+        #expect(pts.allSatisfy { simd_length($0.color.xyz) > 0 })
+    }
+
+    @Test func swarmPointsTrackTheLayoutCentreAndScale() {
+        let model = bodyModelWithSwarm()
+        let here = OrreryGeometry.swarmPoints(
+            layout: OrreryLayout(model: model, center: .zero, scale: 1, reveal: 1, time: 0))
+        let there = OrreryGeometry.swarmPoints(
+            layout: OrreryLayout(model: model, center: SIMD3(100, 0, 0), scale: 1,
+                                 reveal: 1, time: 0))
+        for (a, b) in zip(here, there) {
+            #expect(abs((b.positionSize.x - a.positionSize.x) - 100) < 1e-3)
+        }
+    }
+
+    @Test func swarmPointsAreEmptyWithoutASwarm() {
+        // A system-level model has no swarm, so the pass costs nothing there.
+        let model = SystemModel(
+            star: StarDetail(designation: "SOL", name: nil, spectralType: nil, color: nil,
+                             position: Position(x: 0, y: 0, z: 0), temperatureK: nil,
+                             massSolar: nil, luminositySolar: nil, ageMy: nil,
+                             habitableZone: nil, miningBonusPct: nil),
+            hzInnerScene: nil, hzOuterScene: nil, planets: [], belts: [], hazards: [],
+            kuiperScene: nil, frameScene: 20, deviceCount: 0, vesselCount: 0)
+        let layout = OrreryLayout(model: model, center: .zero, scale: 1, reveal: 1, time: 0)
+        #expect(OrreryGeometry.swarmPoints(layout: layout).isEmpty)
+    }
+}
