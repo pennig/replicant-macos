@@ -25,6 +25,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     private let orreryBodyPipeline: MTLRenderPipelineState  // lit sun/planets (over-blend, depth-write)
     private let orreryLinePipeline: MTLRenderPipelineState  // orbit rings / HZ / kuiper (additive)
     private let orreryPointPipeline: MTLRenderPipelineState // asteroid belt (additive points)
+    private let orrerySwarmPointPipeline: MTLRenderPipelineState // moon swarm (additive points, no belt-style rotation — positions are rewritten per frame already at their true angle)
     private let orreryPipPipeline: MTLRenderPipelineState   // body indicator + hazard pips (additive)
     private let orreryAtmoPipeline: MTLRenderPipelineState  // terrestrial atmosphere halos (additive, depth-read)
     private let orreryRingPipeline: MTLRenderPipelineState  // ring annuli (alpha-blended, depth-read)
@@ -577,6 +578,16 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         Self.configureAdditiveHDR(orreryPointDesc.colorAttachments[0]!)
         orreryPointDesc.depthAttachmentPixelFormat = depthPF
 
+        // Swarm moons: identical shape to the belt pipeline above (same fragment,
+        // same additive/depth setup) but a different vertex function — see the
+        // comment on `orrery_swarm_vertex` in Orrery.metal for why it must NOT share
+        // the belt's rigid rotation.
+        let orrerySwarmDesc = MTLRenderPipelineDescriptor()
+        orrerySwarmDesc.vertexFunction = library.makeFunction(name: "orrery_swarm_vertex")
+        orrerySwarmDesc.fragmentFunction = library.makeFunction(name: "orrery_point_fragment")
+        Self.configureAdditiveHDR(orrerySwarmDesc.colorAttachments[0]!)
+        orrerySwarmDesc.depthAttachmentPixelFormat = depthPF
+
         // Orrery pips: small billboard indicator dots + hazard markers, additive.
         let orreryPipDesc = MTLRenderPipelineDescriptor()
         orreryPipDesc.vertexFunction = library.makeFunction(name: "orrery_pip_vertex")
@@ -667,6 +678,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
             orreryBodyPipeline = try device.makeRenderPipelineState(descriptor: orreryBodyDesc)
             orreryLinePipeline = try device.makeRenderPipelineState(descriptor: orreryLineDesc)
             orreryPointPipeline = try device.makeRenderPipelineState(descriptor: orreryPointDesc)
+            orrerySwarmPointPipeline = try device.makeRenderPipelineState(descriptor: orrerySwarmDesc)
             orreryPipPipeline = try device.makeRenderPipelineState(descriptor: orreryPipDesc)
             orreryAtmoPipeline = try device.makeRenderPipelineState(descriptor: orreryAtmoDesc)
             orreryRingPipeline = try device.makeRenderPipelineState(descriptor: orreryRingDesc)
@@ -1757,7 +1769,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
                 pts.withUnsafeBytes { src in
                     swarmBuf.contents().copyMemory(from: src.baseAddress!, byteCount: src.count)
                 }
-                enc.setRenderPipelineState(orreryPointPipeline)
+                enc.setRenderPipelineState(orrerySwarmPointPipeline)
                 enc.setDepthStencilState(readDepthState)
                 enc.setVertexBuffer(swarmBuf, offset: 0, index: 0)
                 enc.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 1)

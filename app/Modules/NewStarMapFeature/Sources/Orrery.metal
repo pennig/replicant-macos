@@ -547,6 +547,14 @@ struct OrreryPointVaryings {
     float4 color;
 };
 
+// NOTE the rigid rotation below is BELT-ONLY. The belt buffer is baked once (its
+// positions never change), so the shader spins it about the star every frame or it
+// would sit visibly frozen. `orrery_swarm_vertex`, right below, is the same pipeline
+// minus that rotation: the swarm buffer is rewritten every frame from
+// `OrreryLayout.swarmPosition`, which already bakes in each member's true live orbit
+// angle, so rotating it again here would double-apply the motion (a common-mode drift
+// on top of the correct per-member angle). Do NOT merge these two functions back
+// together — they intentionally diverge on this one line.
 vertex OrreryPointVaryings orrery_point_vertex(uint vid                    [[vertex_id]],
                                                const device AmbientVertex*   pts [[buffer(0)]],
                                                constant Uniforms&            u   [[buffer(1)]])
@@ -560,6 +568,28 @@ vertex OrreryPointVaryings orrery_point_vertex(uint vid                    [[ver
     float  ang   = -u.time * (2.0 * M_PI_F / 150.0);
     float  c = cos(ang), s = sin(ang);
     local = float3(local.x * c - local.z * s, local.y, local.x * s + local.z * c);
+    float3 world = u.orreryCenter.xyz + local * u.orreryReveal;
+    out.position = u.projection * (u.view * float4(world, 1.0));
+    out.pointSize = clamp(m.positionSize.w, 1.0, 5.0);
+    out.color = float4(m.color.rgb, m.color.a * u.orreryAlpha);
+    return out;
+}
+
+// Moon swarm — additive points, SAME pipeline shape as the belt above (rebase,
+// reveal-scale, point-size clamp, alpha modulation) but WITHOUT the belt's rigid
+// rotation. Swarm positions are rewritten into the buffer every frame by
+// `OrreryGeometry.swarmPoints`/`OrreryLayout.swarmPosition`, each already at its true
+// per-member orbital angle for this instant — spinning them again here would
+// double-count that motion as a common-mode drift on top of the correct position. Do
+// NOT merge this back into `orrery_point_vertex` — they intentionally diverge on the
+// rotation step only.
+vertex OrreryPointVaryings orrery_swarm_vertex(uint vid                    [[vertex_id]],
+                                               const device AmbientVertex*   pts [[buffer(0)]],
+                                               constant Uniforms&            u   [[buffer(1)]])
+{
+    OrreryPointVaryings out;
+    AmbientVertex m = pts[vid];
+    float3 local = m.positionSize.xyz - u.orreryBuildCenter.xyz;
     float3 world = u.orreryCenter.xyz + local * u.orreryReveal;
     out.position = u.projection * (u.view * float4(world, 1.0));
     out.pointSize = clamp(m.positionSize.w, 1.0, 5.0);
