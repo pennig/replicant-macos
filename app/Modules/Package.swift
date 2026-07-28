@@ -44,6 +44,10 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-openapi-runtime", from: "1.0.0"),
         .package(url: "https://github.com/apple/swift-openapi-urlsession", from: "1.0.0"),
         .package(url: "https://github.com/pointfreeco/swift-composable-architecture", from: "1.26.0"),
+        // Already in the graph transitively (TCA depends on it); declared here so
+        // TEST targets may `import CustomDump` for `expectNoDifference` — a failed
+        // equality then prints a structural diff instead of two dumped values.
+        .package(url: "https://github.com/pointfreeco/swift-custom-dump", from: "1.3.0"),
         .package(url: "https://github.com/pointfreeco/swift-dependencies", from: "1.9.0"),
         .package(url: "https://github.com/pointfreeco/sqlite-data", from: "1.6.0"),
         .package(url: "https://github.com/pointfreeco/swift-sharing", from: "2.8.2"),
@@ -213,6 +217,7 @@ let package = Package(
                 "GameServices",
                 "Utils",
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "CustomDump", package: "swift-custom-dump"),
                 .product(name: "SQLiteData", package: "sqlite-data"),
             ],
             path: "DevicesFeature/Tests"

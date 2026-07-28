@@ -39,6 +39,11 @@ Non-obvious decisions (the why, beyond the spec text):
 - V3.9 blockers 3–5 ship **inside** this feature (CommandGovernor in GameServices, DirectiveLogEntry
   audit). The FTL-mesh incremental-add optimization is also in scope: Relay Run turns
   `FTLMeshRefresher`'s full O(relays) rebuild from rare into per-target.
+  **All three verified CLOSED 2026-07-28** ([[architecture-review-v3]]): 3 = `CommandGovernor`
+  (actions budget + per-device in-flight claim), 4 = *obviated* by the clock-driven engine rather
+  than implemented as a suppression window, 5 = `DirectiveLogEntry`'s `eventID → operationID`.
+  **No V3.9 blocker gates Stage 5 or any further directives work.** The only residual is
+  `.opCompleted` (below).
 - Recorded follow-up: **device-list organization at scale** (fleet will grow to hundreds; flat 3-pane
   list won't hold) — deliberately deferred, deliberately written down.
 

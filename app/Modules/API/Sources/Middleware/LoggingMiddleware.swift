@@ -25,9 +25,15 @@ public struct LoggingMiddleware: ClientMiddleware {
     /// placeholder rather than collected into memory.
     private let maxBodyBytes: Int
 
+    /// One subsystem for the whole app, category = the module — the house logging
+    /// rule (V3.8 D5). This was the last holdout on the old
+    /// `name.pennig.replicould.api` / `http` pair, which split the HTTP log out of
+    /// the app's stream and made `log stream --subsystem name.pennig.replicould`
+    /// silently miss every request. Matches `RateLimitMiddleware`, so the two
+    /// halves of one request now land under the same category.
     public init(
-        subsystem: String = "name.pennig.replicould.api",
-        category: String = "http",
+        subsystem: String = "name.pennig.replicould",
+        category: String = "API",
         maxBodyBytes: Int = 4 * 1024 * 1024
     ) {
         self.logger = Logger(subsystem: subsystem, category: category)

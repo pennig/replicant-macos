@@ -35,6 +35,29 @@ public struct NewStarMapView: View {
     /// Memoizes the focused system's blob decode across body evaluations (see
     /// `SystemDecodeCache`). Reference type: reading through it never invalidates.
     @State private var decodeCache = SystemDecodeCache()
+    // MARK: The view-local query block — a DOCUMENTED exception to the house rule
+    //
+    // The project standard is that a feature's domain queries live in
+    // `@ObservableState` and the view is a pure renderer (see the
+    // list-query-in-state memory note). The six `@FetchAll`s below deliberately
+    // break it, and V3.6 T6 asked for the reason to be written down rather than
+    // left as apparent drift:
+    //
+    //   • None of this data reaches the reducer. It is converted straight to
+    //     render-domain values (`LiveStar`, `SystemModel`, ship/cluster models)
+    //     and handed to the Metal renderer through `MetalStarView`. State the
+    //     reducer never reads is state it should not own.
+    //   • The renderer diffs its own inputs (`loadedStars`, `loadedOverlays`,
+    //     `lastOrreryModel`, …) and rebuilds GPU buffers in place. Routing these
+    //     tables through reducer actions would add a store round-trip per change
+    //     on the path that already has a documented main-thread budget problem
+    //     (see the star-map main-thread-load note) and buy nothing.
+    //   • They are read-only. No action mutates them, so there is no equivalence
+    //     class of "intent" for the reducer to hold.
+    //
+    // The rule still binds anything the reducer acts on: `focus`, selection, and
+    // the transition clock are reducer state and must stay there.
+
     /// The charted galaxy, straight from SQLite — the same table the SceneKit map
     /// reads. Sorted by insertion order so new survey rows append deterministically.
     @FetchAll(UniverseModels.Star.order(by: \.createdAt)) private var surveyed

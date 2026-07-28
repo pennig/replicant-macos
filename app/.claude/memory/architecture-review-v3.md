@@ -1,6 +1,6 @@
 ---
 name: architecture-review-v3
-description: "ARCHITECTURE_REVIEW.md V3 (2026-07-20): post-SSE-migration five-axis review; ALL FOUR tranches (P0 correctness, P1 budget, P2 modularity, P3 docs/design-system) done 2026-07-20/21; only V3.9 automation blockers 3-5 + S9 + T6-optionals remain."
+description: "ARCHITECTURE_REVIEW.md V3 (2026-07-20): post-SSE-migration five-axis review. FULLY CLOSED 2026-07-28 — all four tranches plus the last stragglers (V3.9 automation blockers 3-5, S9 print key, T6 optionals, LoggingMiddleware subsystem). Nothing from V3 is open."
 metadata:
   type: project
 ---
@@ -56,9 +56,40 @@ the relay→native-SSE migration. Read it before touching the sync engine.
   effects; Reconciler writes + schema bootstrap report failures via IssueReporting. CLAUDE.md
   carries the presentation-dialect, row-file, logging, loud-testValue rules and the
   UI-name↔type-name map.
-- **Remaining**: V3.9 automation blockers 3–5 (budget-aware command governor, loop protection,
-  RuleFiring audit trail — 1–2 are fixed), S9 print-key verification (loud notice armed), T6's
-  deliberately-optional niceties, and the user's in-flight LoggingMiddleware edit (its logger
-  still on the old `.api` subsystem).
+- **CLOSED OUT 2026-07-28 — nothing from V3 remains open.** The last four stragglers:
+  - **V3.9 automation blockers 3–5**: all answered *by the Directives feature itself*, verified in
+    code rather than taken from the plan. (3) `CommandGovernor` reads the actions budget and defers
+    below a floor of 6, with a per-device in-flight claim released on every path. (4) loop
+    protection was **obviated, not implemented** — the engine ticks on a 5s `continuousClock` over
+    reconciled SQLite and never subscribes to events, so its own command echo has no trigger path
+    to re-enter; there is no suppression window to tune *or* to leak. Do not "optimize" this into
+    an event-kicked executor. (5) `DirectiveLogEntry` is the audit trail, carrying exactly the
+    asked-for `eventID → operationID` pair. **Consequence: no blocker gates further directives
+    work** — Stage 5 Relay Run is unblocked. One residual: `.opCompleted` entries are still
+    unwritten (see [[directives-feature]]).
+  - **S9 CLOSED — `new_device_code` is CONFIRMED**, not assumed. Four real `print.completed` events
+    in the local `eventLogs` ledger (2026-07-26/27) all carry it, over three device types and both
+    print modes. The ledger stores the wire payload **verbatim** — snake_case keys are the proof it
+    wasn't normalized by our decoder. The reusable lesson: the server's retained event window had
+    already rolled past those prints, so **the local ledger is the only place this was answerable**,
+    which is the concrete payoff of exempting `EventLog` from the logout wipe. Keep it exempt. The
+    loud notice stays armed, now as a rename tripwire.
+  - **T6 optionals**: NewStarMap's view-local `@FetchAll` exception is written down; the duplicate
+    `Blueprint` query in `BlueprintDetailView` is gone; `PreferencesFeature`'s never-sent
+    `BindingReducer`/`BindableAction` deleted; `CommandGrid`'s policy extracted to
+    **`CommandAvailability`** (SwiftUI-free namespace) with `CommandAvailabilityTests` covering the
+    gates. `swift-custom-dump` is now a declared dependency so tests can use `expectNoDifference`.
+    Two items were **already true** via later work (zero XCTest files; zero raw `Task.sleep`
+    debounces — `DomainFreshness` subsumed them).
+  - **DECIDED: no Tagged types, and `CommandParams` stays a flat bag.** The codes are wire values
+    crossing the generated-OpenAPI and `QueryBindable` boundaries as `String` both ways, so Tagged
+    would cost every module to buy safety only in the middle. `CommandParams` is a *serialization*
+    boundary mirroring one JSON body; the sum type already exists upstream as `DeviceCommand`,
+    mapped in by `DeviceCommand.params(_:)`. Don't re-litigate without a new command family that
+    can't be expressed this way.
+  - **LoggingMiddleware**: was the last logger off the house subsystem
+    (`name.pennig.replicould.api`/`http`), which made `log stream --subsystem name.pennig.replicould`
+    silently miss every HTTP request. Now `name.pennig.replicould`/`API`, matching
+    `RateLimitMiddleware`.
 
 Full prioritized punch list: V3.10. See [[event-stream-migration]].

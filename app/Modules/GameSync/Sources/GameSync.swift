@@ -326,21 +326,32 @@ extension GameSync {
             // surface a device the fleet has never seen, so a replayed print
             // completion still costs its one clone read — the only way the clone
             // enters the fleet short of a full walk.
-            // NOTE (S9): `new_device_code` is the pre-migration payload key and
-            // remains UNVERIFIED against the native stream — the docs' event
-            // catalogue documents only `print.started` (checked 2026-07-21) and
-            // no print event has appeared in retained live traffic. The event
-            // counts as "handled" (it carries a device code), so the generic
-            // unhandled-event log can NOT catch a rename; the notice below
-            // announces it the first time a real completion arrives without the
-            // expected key, at which point this becomes a one-line edit.
+            // S9 RESOLVED (2026-07-28): `new_device_code` is VERIFIED against the
+            // native stream. Four real `print.completed` events in the local
+            // `eventLogs` ledger (2026-07-26/27) all carry it, across three device
+            // types (`transport_drone`, `ftl_beacon`, `ftl_relay`) and both print
+            // modes (`autofactory`, `vessel`); the payload sits beside
+            // `device_type` and `print_mode`. The ledger stores the wire payload
+            // verbatim — the snake_case keys are the proof it was not normalized
+            // by our own decoder — so this is server evidence, not an echo of the
+            // assumption. The docs' event catalogue still documents only
+            // `print.started`; the catalogue is incomplete, not the key wrong.
+            //
+            // The ledger is what made this checkable at all: the server's
+            // retained event window no longer reaches back to those prints, so
+            // the live `GET events` walk cannot see them. That is exactly why P0
+            // item 6 exempts `EventLog` from the logout wipe — keep it exempt.
+            //
+            // The notice below stays armed as a rename tripwire: the event counts
+            // as "handled" (it carries a device code), so the generic
+            // unhandled-event log could never catch a key rename on its own.
             if event.event == "print.completed" {
                 if let newCode = event.payload?["new_device_code"]?.stringValue,
                    !newCode.isEmpty {
                     _ = await deviceRefresher.refresh(newCode, .high)
                 } else {
                     let keys = event.payload?.keys.sorted().joined(separator: ", ") ?? "none"
-                    logger.notice("⚠️ print.completed WITHOUT new_device_code — clone read skipped; payload keys: [\(keys, privacy: .public)] (S9: update the key)")
+                    logger.notice("⚠️ print.completed WITHOUT new_device_code — clone read skipped; payload keys: [\(keys, privacy: .public)] (the key was verified 2026-07-28, so this means the server RENAMED it)")
                 }
             }
             guard let code = event.deviceCode, !code.isEmpty else { return }

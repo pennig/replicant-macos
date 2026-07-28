@@ -40,169 +40,51 @@ struct CommandGrid: View {
     /// checkbox). Off means "let the server stow it in the owner's vessel".
     @State private var targetEnabled: Bool = false
 
-    /// The devices this controller can adopt: fleet members of the type it
-    /// shepherds (mining drones for a mining controller, etc.) that it doesn't
-    /// already control. Empty for a non-controller.
+    /// The candidate lists the inline panels pick from. Each delegates to
+    /// `CommandAvailability` — the rules themselves are pure and tested there
+    /// (the V3.6 T6 extraction); these are only the view's bindings from the
+    /// observed fleet/roster tables into those rules.
     private var adoptCandidates: [DeviceOption] {
-        guard let type = DeviceCommand.controllableType(for: device.deviceType) else { return [] }
-        let controlled = Set(device.controlledDeviceCodes)
-        return fleet
-            .filter { $0.deviceType == type && !controlled.contains($0.deviceCode) }
-            .map { DeviceOption(id: $0.deviceCode, subtitle: adoptSubtitle($0)) }
+        CommandAvailability.adoptCandidates(device: device, fleet: fleet)
     }
 
-    /// "Idle · ATIANFU-1" — a candidate's status and where it is, for the row.
-    private func adoptSubtitle(_ device: Device) -> String {
-        let status = device.statusBase.capitalized
-        if let place = device.locationName ?? device.location { return "\(status) · \(place)" }
-        return status
-    }
-
-    /// The devices this controller already controls, for the release checkbox list.
     private var releaseCandidates: [DeviceOption] {
-        device.controlledDevices.map {
-            DeviceOption(id: $0.deviceCode, subtitle: controlledSubtitle($0))
-        }
+        CommandAvailability.releaseCandidates(device: device)
     }
 
-    /// "Tracking · ATIANFU-BELT-1" — a controlled device's status and location.
-    private func controlledSubtitle(_ device: Device.ControlledDevice) -> String {
-        let status = (device.status?.isEmpty == false ? device.status! : device.deviceType).capitalized
-        if let place = device.location, !place.isEmpty { return "\(status) · \(place)" }
-        return status
-    }
-
-    /// The devices this carrier could attach: fleet members sharing its location
-    /// that aren't already attached to something. Empty when the device can't
-    /// attach or reports no location of its own. Capacity is *not* filtered here —
-    /// a full carrier still lists candidates so the command surfaces its "full"
-    /// notice rather than vanishing. The subtitle is the device's display type, so
-    /// an entry reads "Mining Drone · 32658E70".
     private var attachCandidates: [DeviceOption] {
-        guard device.features.contains("attach"), device.attachCapacity > 0 else { return [] }
-        guard let location = device.location, !location.isEmpty else { return [] }
-        let attached = Set(device.attachedDeviceCodes)
-        return fleet
-            .filter {
-                $0.deviceCode != device.deviceCode
-                    && $0.location == location
-                    && $0.attachedToDeviceCode == nil
-                    && !attached.contains($0.deviceCode)
-            }
-            .map { DeviceOption(id: $0.deviceCode, subtitle: DevicePresentation.displayName($0.deviceType)) }
+        CommandAvailability.attachCandidates(device: device, fleet: fleet)
     }
 
-    /// The devices currently attached to this carrier, for the detach dropdown. The
-    /// codes come from the carrier's `attached_devices` tail; the display type is
-    /// looked up in the fleet so the entry reads "Autofactory · 43C9B54A". Empty
-    /// when nothing is attached.
     private var detachCandidates: [DeviceOption] {
-        device.attachedDeviceCodes.map { code in
-            let type = fleet.first { $0.deviceCode == code }?.deviceType
-            return DeviceOption(id: code, subtitle: type.map(DevicePresentation.displayName) ?? "Attached")
-        }
+        CommandAvailability.detachCandidates(device: device, fleet: fleet)
     }
 
-    /// The vessels this device could be stowed into: fleet members sharing its
-    /// location that report free stow capacity, excluding the device itself.
-    /// Empty when the device reports no location — the stow command then just
-    /// confirms and the server stows it in the replicant owner's vessel. The
-    /// subtitle pairs the vessel's display type with its free slots, so an entry
-    /// reads "Heaven Vessel · 2 free" (the picker appends the device code).
     private var stowTargets: [DeviceOption] {
-        guard let location = device.location, !location.isEmpty else { return [] }
-        return fleet
-            .filter {
-                $0.deviceCode != device.deviceCode
-                    && $0.location == location
-                    && $0.stowRemaining > 0
-            }
-            .map { DeviceOption(id: $0.deviceCode, subtitle: "\(DevicePresentation.displayName($0.deviceType)) · \($0.stowRemaining) free") }
+        CommandAvailability.stowTargets(device: device, fleet: fleet)
     }
 
-    /// The other replicants this device could be reassigned to. Empty on a
-    /// one-replicant account, which hides Change Owner entirely (the same
-    /// candidate-gating pattern as adopt/release).
     private var ownerCandidates: [DeviceOption] {
-        replicants
-            .filter { $0.replicantCode != device.replicantCode }
-            .map { DeviceOption(id: $0.replicantCode, subtitle: $0.name.isEmpty ? "Replicant" : $0.name) }
+        CommandAvailability.ownerCandidates(device: device, replicants: replicants)
     }
 
-    /// Fleet members needing repair — anything under full operational capacity
-    /// except the bot itself. The server arbitrates range/eligibility; the gate
-    /// here just keeps the picker meaningful ("Mining Drone · 62%").
     private var repairCandidates: [DeviceOption] {
-        fleet
-            .filter { $0.deviceCode != device.deviceCode && $0.operationalCapacity < 100 }
-            .map { DeviceOption(id: $0.deviceCode, subtitle: "\(DevicePresentation.displayName($0.deviceType)) · \(Int($0.operationalCapacity))%") }
+        CommandAvailability.repairCandidates(device: device, fleet: fleet)
     }
 
-    /// Empty replicant matrices sharing this matrix's location — the vessels a
-    /// replication can spawn into (the server requires one at the current
-    /// location). Empty hides Replicate.
     private var replicateTargets: [DeviceOption] {
-        guard let location = device.location, !location.isEmpty else { return [] }
-        return fleet
-            .filter { $0.deviceType == "empty_replicant_matrix" && $0.location == location }
-            .map { DeviceOption(id: $0.deviceCode, subtitle: DevicePresentation.displayName($0.deviceType)) }
+        CommandAvailability.replicateTargets(device: device, fleet: fleet)
     }
 
-    /// The dispatchable subset of the device's available commands. `retarget` is
-    /// gated on the device actually mining (the server rejects it otherwise);
-    /// `set_directive` only surfaces when the device offers directives, and
-    /// `adopt`/`release` only when there are devices to act on — empty pickers
-    /// otherwise.
+    /// The dispatchable subset of the device's available commands, including every
+    /// availability gate. Pure policy — see `CommandAvailability.commands`.
     private var commands: [DeviceCommand] {
-        let adopt = adoptCandidates
-        let release = releaseCandidates
-        let attach = attachCandidates
-        let detach = detachCandidates
-        let owners = ownerCandidates
-        let attachedNow = device.attachedDeviceCodes.count
-        let capacity = device.attachCapacity
-        let repairable = repairCandidates
-        let channelNames = channels.map(\.name)
-        let replicateCandidates = replicateTargets
-        let stowInto = stowTargets
-        return device.availableCommands
-            .compactMap {
-                DeviceCommand(
-                    command: $0,
-                    availableDirectives: device.availableDirectives,
-                    adoptCandidates: adopt,
-                    releaseCandidates: release,
-                    attachCandidates: attach,
-                    attachedCount: attachedNow,
-                    attachCapacity: capacity,
-                    detachCandidates: detach,
-                    currentMode: device.taxiMode,
-                    ownerCandidates: owners,
-                    channels: channelNames,
-                    repairCandidates: repairable,
-                    replicateTargets: replicateCandidates,
-                    stowTargets: stowInto
-                )
-            }
-            .filter { command in
-                switch command {
-                case .retarget:               return device.status.lowercased().contains("mining")
-                case let .setDirective(opts):  return !opts.isEmpty
-                case let .adopt(candidates):   return !candidates.isEmpty
-                case let .release(controlled): return !controlled.isEmpty
-                case let .attach(candidates, _, _): return !candidates.isEmpty
-                case let .detach(attached):    return !attached.isEmpty
-                case let .changeOwner(owners):  return !owners.isEmpty
-                case let .message(channels):    return !channels.isEmpty
-                case let .repair(candidates):   return !candidates.isEmpty
-                case let .replicate(targets):   return !targets.isEmpty
-                // Cargo commands only make sense while the transport is stationed at
-                // a location: Load needs free hold space, Unload needs cargo aboard.
-                case .loadCargo:   return device.cargoRemaining > 0 && device.location?.isEmpty == false
-                case .unloadCargo: return !device.cargoItems.isEmpty && device.location?.isEmpty == false
-                default:                      return true
-                }
-            }
+        CommandAvailability.commands(
+            device: device,
+            fleet: fleet,
+            replicants: replicants,
+            channels: channels.map(\.name)
+        )
     }
 
     var body: some View {

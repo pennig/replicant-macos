@@ -16,17 +16,23 @@ import SwiftUI
 struct PreferencesFeature {
     @ObservableState
     struct State: Equatable {
-        // Persisted in user defaults and shared across every scene. Binding it
-        // through `BindingReducer` writes straight back to the shared store.
+        // Persisted in user defaults and shared across every scene. The picker
+        // binds the `@Shared` projection directly (`Binding(store.state.$appearance)`),
+        // so the write goes straight to the shared store — no action is ever
+        // sent, which is why this feature has none.
         @Shared(.appStorage("appearance")) var appearance: Appearance = .system
     }
 
-    enum Action: BindableAction {
-        case binding(BindingAction<State>)
-    }
+    /// Deliberately empty. This feature exists only to give the Preferences scene
+    /// a store over the shared appearance value; every mutation flows through the
+    /// `@Shared` binding, not through the reducer. It previously declared a
+    /// `BindableAction` + `BindingReducer` that nothing ever sent (V3.6 T6) —
+    /// carrying a binding path that isn't wired invites the assumption that
+    /// setting `appearance` through the store works, which it did not.
+    enum Action: Equatable {}
 
     var body: some Reducer<State, Action> {
-        BindingReducer()
+        EmptyReducer()
     }
 }
 
@@ -80,7 +86,9 @@ extension View {
 }
 
 struct PreferencesView: View {
-    @Bindable var store: StoreOf<PreferencesFeature>
+    // Not `@Bindable`: the picker binds the shared value's own projection, not a
+    // store binding — the feature has no binding action to drive.
+    let store: StoreOf<PreferencesFeature>
 
     var body: some View {
         Form {

@@ -18,7 +18,6 @@ import UI
 
 public struct BlueprintDetailView: View {
     let store: StoreOf<BlueprintsFeature>
-    @FetchAll(Blueprint.all) private var blueprints
     /// The measured Print Cost lockup height, mirrored onto the Print Time lockup
     /// so it renders as a square that matches the cost lockup's height.
     @State private var costHeight: CGFloat = 0
@@ -27,9 +26,14 @@ public struct BlueprintDetailView: View {
         self.store = store
     }
 
+    /// Resolved from the store's own `@FetchAll`, NOT a second view-local query
+    /// over the same table: the state already observes `Blueprint`, so a private
+    /// copy here would be a redundant observation that can render a different
+    /// row than the list for one frame after a refresh (V3.6 T6). The view stays
+    /// a pure renderer — see the list-query-in-state house rule.
     private var blueprint: Blueprint? {
         guard let deviceType = store.selectedDeviceType else { return nil }
-        return blueprints.first { $0.deviceType == deviceType }
+        return store.blueprints.first { $0.deviceType == deviceType }
     }
 
     public var body: some View {
@@ -105,7 +109,7 @@ public struct BlueprintDetailView: View {
                 // A single scale across every resource of every blueprint, so a
                 // 1,500 cost always plots smaller than a 3,000 one regardless of
                 // which resource each happens to be.
-                scaleMax: ResourceCost.overallMaximum(across: blueprints.map(\.resources))
+                scaleMax: ResourceCost.overallMaximum(across: store.blueprints.map(\.resources))
             )
             .frame(maxWidth: .infinity, alignment: .leading)
             .onGeometryChange(for: CGFloat.self) { proxy in
@@ -116,7 +120,7 @@ public struct BlueprintDetailView: View {
 
             PrintTimeLockup(
                 printTime: blueprint.printTime,
-                maxPrintTime: blueprints.map(\.printTime).max() ?? 0
+                maxPrintTime: store.blueprints.map(\.printTime).max() ?? 0
             )
             .frame(width: costHeight, height: costHeight)
         }
