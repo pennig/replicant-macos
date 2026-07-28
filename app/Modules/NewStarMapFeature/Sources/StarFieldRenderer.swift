@@ -1731,15 +1731,23 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         let placed = placedOrreryBodies(model: model, center: center, scale: scale, sun: sun,
                                         reveal: emergeReveal, time: time, excludeID: excludeID)
         enc.setRenderPipelineState(orreryBodyPipeline)
+        // `pu` only ever takes one of two values for this whole layer — `uCentral` for
+        // the (at most one, always-first-if-present) central body, `u` for every other
+        // body — so upload buffer 1 only when that flag actually changes, not once per
+        // body. That used to be a difference of one; now a swarm can make it ~60+.
+        var uploadedIsCentral: Bool?
         for placedBody in placed {
-            var pu = placedBody.isCentral ? uCentral : u
+            if uploadedIsCentral != placedBody.isCentral {
+                var pu = placedBody.isCentral ? uCentral : u
+                enc.setVertexBytes(&pu, length: MemoryLayout<Uniforms>.stride, index: 1)
+                enc.setFragmentBytes(&pu, length: MemoryLayout<Uniforms>.stride, index: 1)
+                uploadedIsCentral = placedBody.isCentral
+            }
             // The opaque central ALWAYS writes depth (even on a departing layer), so
             // the other layer's additive rings / HZ band can't composite THROUGH the
             // planet; the fading moons follow the layer policy (no holes when transparent).
             enc.setDepthStencilState((placedBody.isCentral || writesDepth) ? bodyDepthState : readDepthState)
             var body = bodyUniform(placedBody)
-            enc.setVertexBytes(&pu, length: MemoryLayout<Uniforms>.stride, index: 1)
-            enc.setFragmentBytes(&pu, length: MemoryLayout<Uniforms>.stride, index: 1)
             enc.setVertexBytes(&body, length: MemoryLayout<OrreryBodyUniform>.stride, index: 2)
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
         }
@@ -1907,11 +1915,12 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         // `m.type` — the identical "type contains captured" signal it was computed from
         // — through the exact same two functions a promoted asteroid's irregularity and
         // tumble go through, so a captured swarm member reads as a tumbling rock exactly
-        // like a promoted one.
+        // like a promoted one. `appearanceSeed` is precomputed on `SwarmMoon` (like
+        // `displayRadius`'s `swarmSizeScale`), not re-hashed here every frame.
         for m in model.swarm {
             let pos = layout.swarmPosition(m)   // emerge from the centre (reveal applied)
             let irregularity = PlanetMaterial.irregularity(type: m.type)
-            let seed = OrreryMapping.appearanceSeed(designation: m.designation, rotationPeriodHours: nil)
+            let seed = m.appearanceSeed
             placed.append(PlacedBody(
                 isCentral: false, center: pos, radius: Float(m.displayRadius) * scale,
                 sun: sun, type: PlanetType(apiType: m.type), lifeStage: nil,
@@ -1930,7 +1939,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
                     pole: BodySpin.unknown.pole(seed: seed),
                     tumbleSeed: seed),
                 spinRate: BodySpin.unknown.spinRate(),
-                ocean: 0,
+                ocean: m.hasSubsurfaceOcean ? 1 : 0,
                 irregularity: irregularity,
                 rings: nil))
         }

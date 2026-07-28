@@ -9,8 +9,7 @@
 //
 //  Like the scaffold/pip tints in `OrreryGeometry`, these colours live here (the
 //  orrery renders in Metal and can't read the asset catalog) as the single source,
-//  approximating the design tokens. The base hexes deliberately match the schematic
-//  `OrreryMapping.planetColor` values for the types they share.
+//  approximating the design tokens.
 //
 
 import simd
@@ -86,8 +85,7 @@ struct RingSystem: Equatable, Sendable {
 
 enum PlanetMaterial {
 
-    /// Primary albedo hex per type. Shared with `OrreryMapping.planetColor` for the
-    /// overlapping types (schematic HUD colour == texture base colour).
+    /// Primary albedo hex per type.
     static func baseHex(_ type: PlanetType) -> String {
         switch type {
         case .oceanWorld:  "#3f7fd0"

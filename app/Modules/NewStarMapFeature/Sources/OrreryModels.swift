@@ -73,7 +73,6 @@ struct OrreryMoon: Equatable, Sendable {
     var periodDays: Double
     var phase0Deg: Double
     var displayRadius: Double
-    var colorHex: String
     var indicators: BodyIndicators = []
 }
 
@@ -81,7 +80,7 @@ struct OrreryMoon: Equatable, Sendable {
 /// around a planet with a large roster. Deliberately much lighter than `OrreryPlanet`:
 /// a swarm member is never picked in 3D, never labelled, never carries indicators, and
 /// never hosts a device (`MoonTiering` promotes anything interesting), so it needs only
-/// enough to be positioned, tinted, and listed in the HUD roster.
+/// enough to be positioned, typed, and listed in the HUD roster.
 ///
 /// It is a SEPARATE collection from `SystemModel.planets` rather than a flag on
 /// `OrreryPlanet` so the exclusions are structural: `OrreryGeometry.scaffoldLines`
@@ -111,11 +110,22 @@ struct SwarmMoon: Identifiable, Equatable, Sendable {
     var orbitalDistanceKm: Double? = nil
     var phase0Deg: Double
     var displayRadius: Double
-    var colorHex: String
     var scanned: Bool
-    /// An irregular satellite (`type` contains "captured"). Scatters wider, and later
-    /// drives the irregular impostor.
+    /// An irregular satellite (`type` contains "captured"). Scatters wider (see
+    /// `capturedInclinationFactor`) and drives the irregular impostor — the render reads
+    /// this indirectly via the identical `type` check in `PlanetMaterial.irregularity`,
+    /// the same function a promoted asteroid's irregularity/tumble go through. Retained
+    /// as the model-level predicate (the swarm-placement math above reads it directly)
+    /// even though the renderer re-derives the equivalent signal from `type`.
     var isCapturedAsteroid: Bool
+    /// Moon-only: a subsurface ocean, which draws cryo-fracture lineae. Defaulted so
+    /// existing call sites (tests) are unaffected.
+    var hasSubsurfaceOcean: Bool = false
+    /// Stable per-body surface-variability seed (hash of designation + rotation period),
+    /// precomputed at construction like `displayRadius`'s `swarmSizeScale` — so the
+    /// renderer doesn't re-hash every member's designation every frame the way a promoted
+    /// moon's `OrreryPlanet.appearanceSeed` never has to.
+    var appearanceSeed: Float
     var id: String { designation }
 }
 
@@ -149,7 +159,6 @@ struct OrreryPlanet: Identifiable, Equatable, Sendable {
     var periodDays: Double
     var phase0Deg: Double
     var displayRadius: Double
-    var colorHex: String
     /// The body's ring system, or nil when the scan reports none. Replaces the old
     /// bare `hasRing` flag, which nothing ever rendered.
     var rings: RingSystem?
@@ -207,7 +216,6 @@ struct OrreryHazard: Identifiable, Equatable, Sendable {
 /// the focused field-star sun (a real star instance, not an orrery body).
 struct CentralBody: Equatable, Sendable {
     var displayRadius: Double     // scene units
-    var colorHex: String
     /// The drilled planet's ring system, or nil when it reports none.
     var rings: RingSystem?
     /// How the drilled planet turns — see `OrreryPlanet.spin`.

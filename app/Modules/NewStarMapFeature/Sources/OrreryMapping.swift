@@ -70,21 +70,6 @@ enum OrreryMapping {
 
     // MARK: - Appearance
 
-    /// Planet-type → schematic color hex. (The sun keeps its temperature-real color;
-    /// this is only for the small orbiting bodies.)
-    static func planetColor(type: String?) -> String {
-        let t = (type ?? "").lowercased()
-        if t.contains("ocean") { return "#3f7fd0" }
-        if t.contains("desert") || t.contains("arid") { return "#c98b5a" }
-        if t.contains("super earth") || t.contains("terran") || t.contains("terrestrial") { return "#5fb07a" }
-        if t.contains("ice giant") { return "#9fd0e0" }
-        if t.contains("gas giant") { return "#caa06a" }
-        if t.contains("frozen") || t.contains("icy") { return "#cdd6e6" }
-        if t.contains("lava") || t.contains("molten") { return "#d8613a" }
-        if t.contains("barren") { return "#8f857a" }
-        return "#a89a86"
-    }
-
     /// The system star renders at the renderer's fixed angular size (`maxAngularSize`);
     /// expressed in orrery scene units that is this fraction of `frameScene`. Anchoring
     /// planet sizes and the inner-orbit floor to it keeps every body proportional to
@@ -194,7 +179,6 @@ enum OrreryMapping {
                 periodDays: p.physical?.orbitalPeriodDays ?? fallbackPeriodDays(au: au),
                 phase0Deg: phaseDeg(p.designation),
                 displayRadius: radii[i],
-                colorHex: planetColor(type: p.type),
                 rings: ringSystems[i],
                 spin: BodySpin(tiltDeg: p.physical?.axialTiltDeg,
                                rotationHours: p.physical?.rotationPeriodHours,
@@ -410,8 +394,17 @@ enum OrreryMapping {
 
     /// How far swarm members scatter off the orbital plane, as a fraction of the band
     /// width. Irregular satellites really do carry high inclinations, and the scatter
-    /// doubles as visual de-overlap. Set to 0 for a strictly planar band.
-    static let swarmInclinationSpread: Double = 0.12
+    /// doubles as visual de-overlap — and on the live PETORA-6 roster (67 moons) it is
+    /// nearly free de-overlap: `offsetScene` enters `swarmReach` through
+    /// `hypot(orbitScene, offsetScene)`, so widening it barely grows the frame (+0.15%
+    /// measured) while taking the median nearest-neighbour pair from deeply
+    /// interpenetrating (0.60× the two radii's sum) to just touching (0.96×). 0.30 gives
+    /// a regular member ~7.2° of inclination (a captured one ~15°, with
+    /// `capturedInclinationFactor` below) — squarely real irregular-satellite territory,
+    /// not a cosmetic fudge. Set to 0 for a strictly planar band; do not exceed ~0.40,
+    /// where the off-plane extent approaches half the band's radial width and the torus
+    /// starts reading as a shell rather than a band.
+    static let swarmInclinationSpread: Double = 0.30
     /// Captured asteroids scatter this much wider than regular moons.
     static let capturedInclinationFactor: Double = 2.2
 
@@ -461,16 +454,6 @@ enum OrreryMapping {
         return .thin
     }
 
-    /// Moon schematic colour by type — icy/rocky/lava/ocean, else a neutral grey.
-    static func moonColor(type: String?) -> String {
-        let t = (type ?? "").lowercased()
-        if t.contains("ice") || t.contains("frozen") { return "#cdd6e6" }
-        if t.contains("lava") || t.contains("volcanic") { return "#d8613a" }
-        if t.contains("ocean") { return "#5f8fc0" }
-        if t.contains("rock") || t.contains("barren") { return "#9a9086" }
-        return "#b8b0a4"
-    }
-
     /// The user-facing plane knobs, passed in rather than read from storage so
     /// `bodyModel` stays a pure function (and the compression stays unit-testable).
     /// `NewStarMapFeature` supplies the live values from `@Shared(.appStorage(...))`.
@@ -516,7 +499,6 @@ enum OrreryMapping {
                                         rotationPeriodHours: planet.physical?.rotationPeriodHours)
         let central = CentralBody(
             displayRadius: centralScene,
-            colorHex: planetColor(type: planet.type),
             rings: centralRings,
             spin: centralSpin,
             // One pole for rings, surface, and moon orbits — unless the escape hatch
@@ -585,7 +567,6 @@ enum OrreryMapping {
                 periodDays: reportedMoonPeriodDays(m) ?? (8 + Double(i) * 3),
                 phase0Deg: phaseDeg(m.designation),
                 displayRadius: centralScene * moonSizeFraction(m),
-                colorHex: moonColor(type: m.type),
                 rings: nil,
                 spin: BodySpin(tiltDeg: m.physical?.axialTiltDeg,
                                rotationHours: m.physical?.rotationPeriodHours,
@@ -655,9 +636,11 @@ enum OrreryMapping {
                 orbitalDistanceKm: m.physical?.orbitalDistanceKm,
                 phase0Deg: phaseDeg(m.designation),
                 displayRadius: centralScene * moonSizeFraction(m) * swarmSizeScale,
-                colorHex: moonColor(type: m.type),
                 scanned: m.recon == .scanned,
-                isCapturedAsteroid: captured)
+                isCapturedAsteroid: captured,
+                hasSubsurfaceOcean: m.physical?.hasSubsurfaceOcean ?? false,
+                appearanceSeed: appearanceSeed(designation: m.designation,
+                                              rotationPeriodHours: m.physical?.rotationPeriodHours))
         }
 
         // Frame to the outer edge of everything drawn: promoted moons, the swarm band,

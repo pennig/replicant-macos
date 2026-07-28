@@ -245,12 +245,6 @@ struct OrreryMappingTests {
         #expect(OrreryMapping.phaseDeg("SHERATANON-6") != OrreryMapping.phaseDeg("SHERATANON-7"))
     }
 
-    @Test func planetColorByType() {
-        #expect(OrreryMapping.planetColor(type: "Ocean World") == "#3f7fd0")
-        #expect(OrreryMapping.planetColor(type: "Ice Giant") == "#9fd0e0")
-        #expect(OrreryMapping.planetColor(type: nil) == OrreryMapping.planetColor(type: "unknown"))
-    }
-
     @Test func planetTypeClassification() {
         #expect(PlanetType(apiType: "Ocean World") == .oceanWorld)
         #expect(PlanetType(apiType: "Ice Giant") == .iceGiant)     // "giant" wins over bare "ice"
@@ -512,7 +506,7 @@ struct OrreryLayoutTests {
             tags: [], surfaceTempC: nil, atmosphere: Atmosphere(apiValue: nil), appearanceSeed: 0,
             orbitalDistanceAu: 1, inHabitableZone: false, scanned: true, moonCount: 0, lifeStage: nil,
             inventory: [], semiMajorScene: semi, periodDays: period, phase0Deg: phase,
-            displayRadius: radius, colorHex: "#ffffff", rings: nil, indicators: [],
+            displayRadius: radius, rings: nil, indicators: [],
             hasInterestingMoon: false, moons: [], lagrange: lagrange)
     }
 
@@ -671,7 +665,7 @@ struct BareSystemRouteAnchorTests {
             tags: [], surfaceTempC: nil, atmosphere: Atmosphere(apiValue: nil), appearanceSeed: 0,
             orbitalDistanceAu: 1, inHabitableZone: false, scanned: true, moonCount: 0, lifeStage: nil,
             inventory: [], semiMajorScene: semi, periodDays: 100, phase0Deg: 0,
-            displayRadius: 1, colorHex: "#ffffff", rings: nil, indicators: [],
+            displayRadius: 1, rings: nil, indicators: [],
             hasInterestingMoon: false, moons: [], lagrange: lagrange)
     }
 
@@ -1798,6 +1792,25 @@ struct MoonSwarmLayoutTests {
                     "\(member.designation) reach \(reach) exceeds frame \(m.frameScene)")
         }
     }
+
+    @Test func swarmMembersCarryOceanAndAPrecomputedAppearanceSeed() throws {
+        // A subsurface-ocean swarm member must keep the cryo-fracture treatment its
+        // promoted counterparts get — the renderer reads `SwarmMoon.hasSubsurfaceOcean`
+        // the same way it reads `OrreryPlanet.hasSubsurfaceOcean`. And its appearance
+        // seed must be precomputed here (like `displayRadius`'s `swarmSizeScale`) rather
+        // than left for the renderer to re-hash every member every frame.
+        var moons = roster(20)
+        moons[10] = Moon(designation: "POLARISON-6-11", recon: .scanned,
+                         physical: BodyPhysical(hasSubsurfaceOcean: true))
+        let m = OrreryMapping.bodyModel(planet: planet(moons))
+        let ocean = try #require(m.swarm.first { $0.designation == "POLARISON-6-11" })
+        #expect(ocean.hasSubsurfaceOcean == true)
+        #expect(ocean.appearanceSeed
+            == OrreryMapping.appearanceSeed(designation: "POLARISON-6-11", rotationPeriodHours: nil))
+        // Every other (unset) swarm member stays non-ocean — the field isn't a blanket
+        // default-true that would mask a wiring bug.
+        #expect(m.swarm.filter { $0.designation != "POLARISON-6-11" }.allSatisfy { !$0.hasSubsurfaceOcean })
+    }
 }
 
 struct SwarmLayoutTests {
@@ -1805,8 +1818,8 @@ struct SwarmLayoutTests {
                            period: Double, phase: Double) -> SwarmMoon {
         SwarmMoon(designation: id, name: nil, type: "Icy", orbitScene: orbit,
                   offsetScene: offset, periodDays: period, phase0Deg: phase,
-                  displayRadius: 0.2, colorHex: "#cdd6e6", scanned: false,
-                  isCapturedAsteroid: false)
+                  displayRadius: 0.2, scanned: false,
+                  isCapturedAsteroid: false, appearanceSeed: 0)
     }
 
     private func model(swarm: [SwarmMoon], planets: [OrreryPlanet] = []) -> SystemModel {
@@ -1881,7 +1894,7 @@ struct SwarmLayoutTests {
             appearanceSeed: 0.5, orbitalDistanceAu: 0, inHabitableZone: false,
             scanned: true, moonCount: 0, lifeStage: nil, inventory: [],
             semiMajorScene: 5, periodDays: 40, phase0Deg: 0, displayRadius: 0.3,
-            colorHex: "#cdd6e6", indicators: [], hasInterestingMoon: false, moons: [])
+            indicators: [], hasInterestingMoon: false, moons: [])
         let layout = OrreryLayout(model: model(swarm: [fast], planets: [slowPlanet]),
                                   center: .zero, scale: 1, reveal: 1, time: 0)
         #expect(layout.minPeriodDays == 1)
