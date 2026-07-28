@@ -258,6 +258,9 @@ struct MetalStarView: NSViewRepresentable {
         var lastResetToken = 0
         /// The last search-focus token applied, so a bump fires exactly one re-aim.
         var lastStarFocusToken = 0
+        /// The last selected-star name mirrored into the renderer, so an unchanged
+        /// selection doesn't re-scan the terrain on every unrelated store update.
+        var lastSelectedStarName: String?
         /// The last focus applied, so a drill-in / zoom-out fires exactly once.
         var lastFocus: StarMapFocus = .galaxy
         /// The last orrery model applied, so a hydrate refresh rebuilds in place.
@@ -302,6 +305,9 @@ struct MetalStarView: NSViewRepresentable {
             } else if stars != loadedStars {
                 loadedStars = stars
                 loadedOverlays = overlays
+                // The terrain rebuild can reindex the selected star; force the next
+                // `applySelectedStar` to re-resolve it against the new terrain.
+                lastSelectedStarName = nil
                 renderer?.updateTerrain(stars, overlays: overlays)
             } else if overlays != loadedOverlays {
                 loadedOverlays = overlays
@@ -317,9 +323,19 @@ struct MetalStarView: NSViewRepresentable {
         }
 
         /// Mirrors the reducer's selected location into the renderer so it can reveal that
-        /// planet's Lagrange points (drawn/pickable only when selected or occupied).
+        /// planet's Lagrange points (drawn/pickable only when selected or occupied) and
+        /// draw the accent selection ring / belt annulus.
         @MainActor func applySelectedLocation(_ code: String?) {
             renderer?.selectedLocationCode = code
+        }
+
+        /// Mirrors the reducer's selected star into the renderer, which draws the accent
+        /// selection ring on it. Clears when the dossier's X clears the store. Guarded so
+        /// an unchanged selection doesn't re-scan the terrain on unrelated updates.
+        @MainActor func applySelectedStar(_ name: String?) {
+            guard name != lastSelectedStarName else { return }
+            lastSelectedStarName = name
+            renderer?.setSelectedStar(designation: name)
         }
 
         /// Mirrors the reducer's selected ship into the renderer, which draws the
@@ -418,6 +434,7 @@ struct MetalStarView: NSViewRepresentable {
                                         transitProjection: transitProjection, into: view)
         context.coordinator.applyClusters(deviceClusters)
         context.coordinator.applySelectedLocation(store.selectedLocation)
+        context.coordinator.applySelectedStar(store.selectedStar?.name)
         context.coordinator.applySelectedShip(store.selectedShipDeviceCode)
         context.coordinator.applyControls(autoRotate: store.autoRotate,
                                           recenterToken: store.cameraResetToken)
@@ -433,6 +450,7 @@ struct MetalStarView: NSViewRepresentable {
                                         transitProjection: transitProjection, into: nsView)
         context.coordinator.applyClusters(deviceClusters)
         context.coordinator.applySelectedLocation(store.selectedLocation)
+        context.coordinator.applySelectedStar(store.selectedStar?.name)
         context.coordinator.applySelectedShip(store.selectedShipDeviceCode)
         context.coordinator.applyControls(autoRotate: store.autoRotate,
                                           recenterToken: store.cameraResetToken)

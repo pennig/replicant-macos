@@ -16,6 +16,11 @@ enum OrreryGeometry {
     // not two edge rings — so the fill is deliberately low-intensity (it's additive and
     // covers a large area) while keeping the same green as the old HZ edges.
     private static let hzFillColor = SIMD4<Float>(0.34, 0.80, 0.48, 0.005)
+    // A selected belt is filled with a translucent accent annulus — the belt-scale
+    // counterpart of the star-map selection ring, mirroring `rcAccent` (AccentPrimary).
+    // Additive over the belt's own point ring, so a low alpha reads as a clear accent
+    // glow across the band without washing it out.
+    static let selectionFillColor = SIMD4<Float>(1.0, 0.70, 0.24, 0.10)
     private static let beltColor = SIMD3<Float>(0.90, 0.72, 0.42)
     private static let hazardLineColor = SIMD4<Float>(0.95, 0.36, 0.30, 0.55)
 
@@ -130,7 +135,18 @@ enum OrreryGeometry {
     /// everything else. Empty until the star's HZ is known (i.e. the system is scanned).
     static func habitableZoneFill(model: SystemModel, center: SIMD3<Float>, scale: Float, segments: Int = 128) -> [OrreryLineVertex] {
         guard let inner = model.hzInnerScene, let outer = model.hzOuterScene, outer > inner else { return [] }
-        let ri = Float(inner) * scale, ro = Float(outer) * scale
+        return annulusFill(innerScene: inner, outerScene: outer, center: center, scale: scale,
+                           color: hzFillColor, segments: segments)
+    }
+
+    /// A filled translucent annulus (triangle list) lying in the flat orbital plane,
+    /// spanning `innerScene`…`outerScene`. The habitable-zone band and a selected belt's
+    /// accent fill are both built from this — same `OrreryLineVertex` buffer, same additive
+    /// scaffold pass, so the shader's `orreryReveal` grows either out of the star for free.
+    static func annulusFill(innerScene: Double, outerScene: Double, center: SIMD3<Float>,
+                            scale: Float, color: SIMD4<Float>, segments: Int = 128) -> [OrreryLineVertex] {
+        guard outerScene > innerScene else { return [] }
+        let ri = Float(innerScene) * scale, ro = Float(outerScene) * scale
         var verts: [OrreryLineVertex] = []
         verts.reserveCapacity(segments * 6)
         func point(_ angle: Float, _ radius: Float) -> SIMD4<Float> {
@@ -142,7 +158,7 @@ enum OrreryGeometry {
             let inner0 = point(a0, ri), outer0 = point(a0, ro)
             let inner1 = point(a1, ri), outer1 = point(a1, ro)
             for p in [inner0, outer0, inner1, inner1, outer0, outer1] {
-                verts.append(OrreryLineVertex(position: p, color: hzFillColor))
+                verts.append(OrreryLineVertex(position: p, color: color))
             }
         }
         return verts

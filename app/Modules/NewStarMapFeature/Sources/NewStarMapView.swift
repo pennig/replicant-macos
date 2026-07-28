@@ -1380,6 +1380,14 @@ private struct SystemHUD: View {
                     ForEach(model.planets) { planet in
                         bodyRow(planet)
                     }
+                    // Belts are selectable from the roster too (system level only) — a
+                    // picked belt drives the same dossier + accent annulus a 3D pick does.
+                    if !isBody && !model.belts.isEmpty {
+                        Divider().overlay(.rcSeparator)
+                        ForEach(model.belts) { belt in
+                            beltRow(belt)
+                        }
+                    }
                     if !model.swarm.isEmpty {
                         Divider().overlay(.rcSeparator)
                         HStack {
@@ -1427,11 +1435,42 @@ private struct SystemHUD: View {
                 Circle()
                     .fill(selected ? .rcAccent : .rcTextTertiary)
                     .frame(width: 5, height: 5)
-                Text(moon.name.map { "\(moon.designation) · \($0)" } ?? moon.designation)
-                    .font(.rcMonoSmall)
-                    .foregroundStyle(selected ? .rcTextPrimary : .rcTextSecondary)
-                Spacer()
-                Text(moon.type ?? "—").font(.rcCaption).foregroundStyle(.rcTextTertiary)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(moon.name.map { "\(moon.designation) · \($0)" } ?? moon.designation)
+                        .font(.rcMonoSmall)
+                        .foregroundStyle(selected ? .rcTextPrimary : .rcTextSecondary)
+                        .lineLimit(1)
+                    Text(moon.type ?? "—")
+                        .font(.rcCaption).foregroundStyle(.rcTextTertiary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: Space.xs)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// One asteroid-belt row. Selecting it drives the shared location dossier and the
+    /// renderer's accent belt annulus (via `selectedLocation`).
+    @ViewBuilder private func beltRow(_ belt: BeltModel) -> some View {
+        let selected = selectedLocation == belt.designation
+        Button { onSelectLocation(belt.designation) } label: {
+            HStack(spacing: Space.s) {
+                Circle()
+                    .fill(selected ? .rcAccent : .rcTextSecondary)
+                    .frame(width: 7, height: 7)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(belt.designation)
+                        .font(.rcMono)
+                        .foregroundStyle(selected ? .rcTextPrimary : .rcTextSecondary)
+                        .lineLimit(1)
+                    Text(belt.density.map { "\($0.capitalized) belt" } ?? "Asteroid belt")
+                        .font(.rcCaption).foregroundStyle(.rcTextTertiary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: Space.xs)
+                indicatorGlyphs(belt.indicators)
             }
             .contentShape(Rectangle())
         }
@@ -1441,18 +1480,24 @@ private struct SystemHUD: View {
     /// One satellite row. At system level the row drills into the planet (chevron +
     /// tap → `onDrillBody`); at body level it selects the moon (tap → `onSelectLocation`).
     @ViewBuilder private func bodyRow(_ planet: OrreryPlanet) -> some View {
+        let selected = selectedLocation == planet.designation
         let content = HStack(spacing: Space.s) {
             Circle()
-                .fill(planet.inHabitableZone ? .rcStatusReady : .rcTextSecondary)
+                .fill(selected ? .rcAccent : (planet.inHabitableZone ? .rcStatusReady : .rcTextSecondary))
                 .frame(width: 7, height: 7)
-            Text(planet.name.map { "\(planet.designation) · \($0)" } ?? planet.designation)
-                .font(.rcMono).foregroundStyle(.rcTextPrimary)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(planet.name.map { "\(planet.designation) · \($0)" } ?? planet.designation)
+                    .font(.rcMono).foregroundStyle(.rcTextPrimary)
+                    .lineLimit(1)
+                Text(planet.type ?? "—")
+                    .font(.rcCaption).foregroundStyle(.rcTextTertiary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: Space.xs)
             indicatorGlyphs(planet.indicators)
             if planet.moonCount > 0 {
                 Text("\(planet.moonCount)☾").font(.rcCaption).foregroundStyle(.rcTextTertiary)
             }
-            Spacer()
-            Text(planet.type ?? "—").font(.rcCaption).foregroundStyle(.rcTextTertiary)
             if !isBody {
                 Image(systemName: "chevron.right")
                     .font(.system(size: IconSize.s)).foregroundStyle(.rcTextTertiary)

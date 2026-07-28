@@ -29,6 +29,11 @@ public struct NewStarMapFeature {
         /// The star surfaced by the last pick (single-click re-aim or double-click
         /// dive); nil after a clear/home. Drives the dossier.
         var selectedStar: Star?
+        /// The galaxy star drilled into, held while inside its orrery so it can be
+        /// re-selected on the way back out — picking a location in the orrery clears
+        /// `selectedStar`, but the drilled system should read as selected again in the
+        /// galaxy once you zoom out. Nil in the galaxy.
+        var stashedStar: Star?
         /// The in-transit device whose ship icon was tapped; nil when none. Drives
         /// the ship dossier, and is mutually exclusive with `selectedStar` (picking
         /// one clears the other) so only one HUD dossier shows at a time.
@@ -90,6 +95,7 @@ public struct NewStarMapFeature {
 
         public init() {
             self.selectedStar = nil
+            self.stashedStar = nil
             self.selectedShipDeviceCode = nil
             self.selectedLocation = nil
             self.activeFilterName = nil
@@ -245,6 +251,7 @@ public struct NewStarMapFeature {
 
             case .selectionCleared, .homeRequested:
                 state.selectedStar = nil
+                state.stashedStar = nil
                 state.selectedShipDeviceCode = nil
                 state.selectedLocation = nil
                 return .none
@@ -288,6 +295,9 @@ public struct NewStarMapFeature {
                 // control for explored systems, so the reducer trusts it.
                 guard !state.isTransitioning, state.focus == .galaxy else { return .none }
                 state.focus = .system(id)
+                // Hold the drilled system's star so it can be re-selected on zoom-out —
+                // an orrery location pick will clear `selectedStar` while inside.
+                state.stashedStar = state.selectedStar
                 state.selectedLocation = nil   // anchors are level-specific
                 state.isTransitioning = true
                 let clock = self.clock
@@ -334,6 +344,9 @@ public struct NewStarMapFeature {
                     return .none
                 case .system:
                     state.focus = .galaxy
+                    // Back in the galaxy: restore the star we drilled into as selected.
+                    state.selectedStar = state.stashedStar
+                    state.stashedStar = nil
                 case .body:
                     guard let parent = state.focus.systemDesignation else { return .none }
                     state.focus = .system(parent)

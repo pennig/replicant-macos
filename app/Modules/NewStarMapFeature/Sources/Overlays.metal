@@ -169,8 +169,10 @@ vertex StateMarkerVaryings state_marker_vertex(uint vid                        [
         float starPixels = ys * rv / w * (p.viewportPixels.y * 0.5);
         // Ring clearance past the star disc. The player reticle (style 2) rides a
         // wider multiple so it forms a bold ring OUTSIDE a relay ring on the same
-        // star (additive can't occlude); the relay/standard ring hugs the disc.
-        float clearance = (m.style > 1.5) ? 1.85 : 1.3;
+        // star (additive can't occlude); the selection ring (style 3) rides wider
+        // still, so a selected current-location star reads as an accent ring OUTSIDE
+        // the green reticle; the relay/standard ring hugs the disc.
+        float clearance = (m.style > 2.5) ? 2.2 : (m.style > 1.5) ? 1.85 : 1.3;
         radiusPixels = max(radiusPixels, starPixels * clearance);
     }
 
@@ -202,10 +204,11 @@ fragment float4 state_marker_fragment(StateMarkerVaryings in [[stage_in]])
     // relay ring; style 2 is the player's current-location reticle, drawn thicker
     // (and, via the vertex clearance, larger) so it stays unmistakable even when it
     // rides over a relay ring on the same star — additive blending can't occlude,
-    // so it has to read by weight and radius.
+    // so it has to read by weight and radius; style 3 is the accent selection ring,
+    // a standard-weight ring at a wider clearance (set in the vertex).
     float pd = length(in.uv) * in.radiusPixels;   // distance from centre, in pixels
     float outer = in.radiusPixels;                 // outer edge at the quad edge
-    float thickness = (in.style > 1.5) ? 9.0 : 6.0;   // player reticle rides heavier
+    float thickness = (in.style > 1.5 && in.style < 2.5) ? 9.0 : 6.0;   // player reticle rides heavier
     // Keep a visible hole even at the minimum marker size: never let the ring
     // eat past 60% of the radius, so it always reads as a ring, not a disc.
     float inner = max(outer - thickness, outer * 0.8);

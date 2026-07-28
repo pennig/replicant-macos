@@ -86,6 +86,10 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     private var orreryHZVertexCount = 0
     private var orreryBeltBuffer: MTLBuffer?
     private var orreryBeltCount = 0
+    // Accent fill for a selected belt (a triangle annulus, like the HZ band). Rebuilt
+    // whenever the selection or roster changes; nil unless a belt is currently selected.
+    private var orreryBeltSelectBuffer: MTLBuffer?
+    private var orreryBeltSelectCount = 0
     // One time-based transition progress (0 = galaxy, 1 = system focus). The
     // crossfade, orrery reveal + emerge, and camera fly are ALL driven from this
     // over ONE shared duration, so they start and land together in both directions.
@@ -353,8 +357,13 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     // The inbound/outbound transit riser height, as a fraction of the framed system
     // radius (`SystemModel.frameScene`) so it stays proportional at system and body level.
     private var transitRiserFraction: Float = 0.32
-    private let playerColor = SIMD3<Float>(1.0, 0.82, 0.35)   // gold
-    private let shipColor   = SIMD3<Float>(0.55, 0.95, 1.0)   // bright cyan-white
+    // Current-location reticle green (mirrors `Success` / `rcStatusReady`, dark) and
+    // the accent selection ring (mirrors `AccentPrimary`, dark). The map renders in
+    // Metal and can't read the asset catalog, so — like the orrery pip tints in
+    // `OrreryGeometry` — these live here as the single source, matching those tokens.
+    private let playerColor    = SIMD3<Float>(0.38, 0.83, 0.60)   // rcStatusReady / Success
+    private let selectionColor = SIMD3<Float>(1.0, 0.70, 0.24)    // rcAccent (AccentPrimary)
+    private let shipColor      = SIMD3<Float>(0.55, 0.95, 1.0)    // bright cyan-white
 
     // Ship icons are drawn IN the Metal frame (same command buffer + camera as the
     // trajectories, so they can never desync), from textures baked by
@@ -389,7 +398,33 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     /// The location the player has picked (mirrored from the reducer). A planet's Lagrange
     /// points are only drawn/pickable when that planet (or the point itself) is selected —
     /// otherwise only occupied points show, so an idle system isn't cluttered with ticks.
-    var selectedLocationCode: String?
+    /// Also drives the accent selection ring (bodies/Lagrange/objects) and the belt annulus.
+    var selectedLocationCode: String? {
+        didSet {
+            guard selectedLocationCode != oldValue else { return }
+            rebuildBeltSelection()
+        }
+    }
+
+    /// Rebuild the accent fill for the selected belt (if the current selection is a belt),
+    /// baked around the orrery's build centre + scale so the scaffold shader rebases it onto
+    /// the live centre exactly like the HZ band. Belts exist only at system level.
+    private func rebuildBeltSelection() {
+        orreryBeltSelectBuffer = nil
+        orreryBeltSelectCount = 0
+        guard let code = selectedLocationCode, let model = orreryModel,
+              let beltID = OrreryLayout.beltDesignation(in: code) ?? (code.hasSuffix("-BELT") ? code : nil),
+              let belt = model.belts.first(where: { $0.id == beltID }) else { return }
+        let verts = OrreryGeometry.annulusFill(
+            innerScene: belt.innerScene, outerScene: belt.outerScene,
+            center: orreryBuildCenter, scale: orreryScale,
+            color: OrreryGeometry.selectionFillColor)
+        guard !verts.isEmpty else { return }
+        orreryBeltSelectCount = verts.count
+        orreryBeltSelectBuffer = device.makeBuffer(
+            bytes: verts, length: verts.count * MemoryLayout<OrreryLineVertex>.stride,
+            options: .storageModeShared)
+    }
 
     /// Whether a planet's Lagrange point should be shown + pickable: a device sits on it,
     /// or the current selection belongs to this planet (the planet itself or any of its
@@ -920,8 +955,12 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
                         lineBuffer: orreryLineBuffer, lineCount: orreryLineVertexCount,
                         hzBuffer: orreryHZBuffer, hzCount: orreryHZVertexCount,
                         beltBuffer: orreryBeltBuffer, beltCount: orreryBeltCount,
+                        beltSelectBuffer: orreryBeltSelectBuffer, beltSelectCount: orreryBeltSelectCount,
                         baseUniforms: uniforms, time: t, viewportPx: viewportPx)
                 }
+
+                // Accent selection ring on the picked body / Lagrange point / object.
+                encodeOrrerySelection(enc, uniforms: uniforms, viewportPx: viewportPx)
 
                 // Ship comet heads for ships on an intra-system leg — the in-orrery
                 // counterpart of the galaxy heads (which fade out on drill-in). Always on
@@ -1291,6 +1330,18 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         relevance.clearFocus()
     }
 
+    /// Mirror the reducer's selected star into the renderer so it draws the accent
+    /// selection ring (and its relevance highlight) — and clears both when the dossier's
+    /// X clears the store. Resolves the star by designation in the current terrain.
+    /// Camera framing is driven separately (single/double-click re-aim, search dive);
+    /// this only tracks *which* star is ringed, so it never moves the camera.
+    func setSelectedStar(designation: String?) {
+        let index = designation.flatMap { name in stars.firstIndex { $0.name == name } }
+        guard index != selectedStarIndex else { return }
+        selectedStarIndex = index
+        if let index { relevance.focus(on: index) } else { relevance.clearFocus() }
+    }
+
     /// Home / overview: clear the highlight and ease back out, recentring on Sol
     /// (the origin). Orientation is preserved — a pull-back, not a reorient.
     func home() {
@@ -1583,6 +1634,10 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         orreryBeltBuffer = belt.isEmpty ? nil : device.makeBuffer(
             bytes: belt, length: belt.count * MemoryLayout<AmbientVertex>.stride,
             options: .storageModeShared)
+
+        // The selected-belt annulus is baked around the same centre/scale as the scaffold,
+        // so a roster refresh (or a re-enter) that moves either must rebake it too.
+        rebuildBeltSelection()
     }
 
     /// Refresh the orrery in place when the persisted detail updates while focused
@@ -1684,6 +1739,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
                                    lineBuffer: MTLBuffer?, lineCount: Int,
                                    hzBuffer: MTLBuffer?, hzCount: Int,
                                    beltBuffer: MTLBuffer?, beltCount: Int,
+                                   beltSelectBuffer: MTLBuffer? = nil, beltSelectCount: Int = 0,
                                    baseUniforms: Uniforms, time: Float, viewportPx: SIMD2<Float>) {
         // Skip a fully-faded layer — UNLESS it carries the drilled planet (central),
         // which draws at full opacity independent of `alphaReveal`. Otherwise, in the
@@ -1705,6 +1761,16 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
             enc.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 1)
             enc.setFragmentBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 1)
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: hzCount)
+        }
+        // Selected-belt accent fill — same additive scaffold pass as the HZ band, so it
+        // grows out of the star with everything else. Only the active layer supplies it.
+        if let selBuf = beltSelectBuffer, beltSelectCount > 0 {
+            enc.setRenderPipelineState(orreryLinePipeline)
+            enc.setDepthStencilState(readDepthState)
+            enc.setVertexBuffer(selBuf, offset: 0, index: 0)
+            enc.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 1)
+            enc.setFragmentBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 1)
+            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: beltSelectCount)
         }
         if let lineBuf = lineBuffer, lineCount > 0 {
             enc.setRenderPipelineState(orreryLinePipeline)
@@ -2401,6 +2467,20 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         enc.setVertexBytes(&playerMarker, length: MemoryLayout<StateMarker>.stride, index: 0)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6, instanceCount: 1)
 
+        // Selection ring — an accent ring on the star surfaced in the dossier (style 3:
+        // a wider clearance than the player reticle, so a star that is BOTH selected and
+        // the current location shows the accent ring outside the green reticle). Mirrored
+        // from the store, so the dossier's X clears it (see `setSelectedStar`). Depth-read
+        // like the reticle.
+        if let selected = selectedStarIndex, stars.indices.contains(selected) {
+            var selMarker = StateMarker(
+                position: stars[selected].position, color: selectionColor,
+                radiusPixels: playerMarkerRadius, style: 3,
+                worldRadius: stars[selected].worldRadius)
+            enc.setVertexBytes(&selMarker, length: MemoryLayout<StateMarker>.stride, index: 0)
+            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6, instanceCount: 1)
+        }
+
         // Ship comet heads — the ONE exception: always on top, never occluded
         // (never lose a ship behind a star). Rebuilt each frame as the heads move.
         let heads = ships.map { ship in
@@ -2442,6 +2522,74 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         enc.setVertexBytes(&params, length: MemoryLayout<MeshParams>.stride, index: 2)
         heads.withUnsafeBytes { enc.setVertexBytes($0.baseAddress!, length: $0.count, index: 0) }
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6, instanceCount: heads.count)
+    }
+
+    /// Accent selection ring on the currently-picked orrery location — a body/moon/swarm
+    /// gets a ring sized to its on-screen disc; a point anchor (Lagrange point, object)
+    /// gets a fixed-radius ring. A selected BELT is shown by its annulus fill instead (see
+    /// `rebuildBeltSelection`), so it's skipped here. Reuses the state-marker pipeline like
+    /// the ship heads — always on top, additive, tracking the body's live orbit position
+    /// each frame. The radius is projected on the CPU (not the shader's star-band clamp), so
+    /// it encircles even the large drilled central body correctly.
+    private func encodeOrrerySelection(_ enc: MTLRenderCommandEncoder,
+                                       uniforms: Uniforms, viewportPx: SIMD2<Float>) {
+        guard let code = selectedLocationCode, let model = orreryModel, let layout = frameOrreryLayout
+        else { return }
+        if code.contains("-BELT") { return }   // belts read via their accent annulus
+
+        // Resolve the selected location's live world position + world radius (0 for a point
+        // anchor like a Lagrange point or object). Swarm members aren't in the layout's exact
+        // resolver, so they're handled explicitly here.
+        let position: SIMD3<Float>
+        let worldRadius: Float
+        if let m = model.swarm.first(where: { $0.id == code }) {
+            position = layout.swarmPosition(m)
+            worldRadius = Float(m.displayRadius) * orreryScale
+        } else if let anchor = layout.anchor(ofLocation: code) {
+            position = anchor.position
+            worldRadius = anchorWorldRadius(anchor.code, model: model)
+        } else {
+            return
+        }
+
+        // Project the body centre and a point one world-radius to its side (in view space,
+        // matching `pickLocation`) to measure the on-screen disc radius in pixels.
+        let view = camera.viewMatrix()
+        let proj = camera.projectionMatrix(aspect: aspect)
+        func project(_ viewPos: SIMD4<Float>) -> SIMD2<Float>? {
+            var clip = proj * viewPos
+            if clip.w <= 0 { return nil }
+            clip /= clip.w
+            return SIMD2<Float>((clip.x * 0.5 + 0.5) * viewportPx.x,
+                                (1 - (clip.y * 0.5 + 0.5)) * viewportPx.y)
+        }
+        let viewPos = view * SIMD4<Float>(position, 1)
+        guard let center = project(viewPos) else { return }
+        var discPixels: Float = 0
+        if worldRadius > 0, let edge = project(viewPos + SIMD4<Float>(worldRadius, 0, 0, 0)) {
+            discPixels = length(edge - center)
+        }
+        // Ride just outside the disc (the style-3 ring is 6px thick), with a pixel floor so a
+        // point anchor / sub-pixel body still gets a legible ring.
+        let radiusPixels = max(discPixels + 8, 16)
+
+        // Two shader overrides, because `state_marker` is a GALAXY overlay by default:
+        // 1. `overlayDim` fades it to 0 on drill-in — override it with the reveal so the
+        //    ring is visible in-orrery (where it belongs) and fades in with the orrery.
+        // 2. Zero `orreryReveal` so the marker vertex's galaxy recession is an identity —
+        //    the position is already the true live orrery position (as the ship heads do).
+        var u = uniforms
+        u.overlayDim = orreryReveal
+        u.orreryReveal = 0
+        var params = MeshParams(viewportPixels: viewportPx, halfWidthPixels: 0, nodeRadiusPixels: 0)
+        var marker = StateMarker(position: position, color: selectionColor,
+                                 radiusPixels: radiusPixels, style: 3, worldRadius: 0)
+        enc.setRenderPipelineState(stateMarkerPipeline)
+        enc.setDepthStencilState(noDepthState)
+        enc.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 1)
+        enc.setVertexBytes(&params, length: MemoryLayout<MeshParams>.stride, index: 2)
+        enc.setVertexBytes(&marker, length: MemoryLayout<StateMarker>.stride, index: 0)
+        enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6, instanceCount: 1)
     }
 
     // MARK: Inbound / outbound transit affordance
