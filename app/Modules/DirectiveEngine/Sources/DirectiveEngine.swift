@@ -170,6 +170,14 @@ actor DirectiveEngineCore {
             return
         }
 
+        // Audit only, and deliberately BEFORE the machine runs: it appends
+        // `.opCompleted` timeline rows for dispatched ops that have since closed,
+        // and touches nothing the machine reads to decide. Running it first means a
+        // tick that also advances the step still records why the previous one
+        // ended. `world` is the pre-write snapshot, so these rows are invisible to
+        // `nextAction` on this tick — mission behaviour is unchanged by design.
+        await DirectiveExecutor.recordCompletedOps(for: directive, world: world)
+
         var action = machine.nextAction(directive: directive, world: world)
         switch action {
         case let .refreshDevices(deviceCodes, thenStall):

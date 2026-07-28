@@ -133,6 +133,111 @@ enum DirectiveExecutor {
         }
     }
 
+    // MARK: The `.opCompleted` audit pass
+
+    /// Write an `.opCompleted` entry for every op this directive dispatched that
+    /// has since reached a terminal state and doesn't already have one.
+    ///
+    /// **Audit only — this must never change a directive's status, step or target.**
+    /// It appends log rows and nothing else, which is what makes it safe to run on
+    /// every tick ahead of the machine. Mission progress continues to key off the
+    /// `directive.completed` entry and the machine's own conditions; if this pass
+    /// were deleted tomorrow, execution would be byte-identical and only the
+    /// timeline would go quiet again. Keep that property.
+    ///
+    /// Without it a long op reads as an unexplained gap: the timeline shows
+    /// "Dispatched travel to X" and then nothing until the next step starts, which
+    /// on a multi-hour leg is most of what the user is watching.
+    ///
+    /// Fires for ANY terminal status, not just `.completed`. The log kind is named
+    /// for the common case, but a `failed`/`rejected`/`superseded` op closing is
+    /// exactly as much of a gap-ender, and the summary names which it was. The
+    /// alternative — logging only clean completions — would leave a failed op as a
+    /// permanent silent hole, the very thing this closes.
+    ///
+    /// Idempotent through the log itself: an op id already carrying an
+    /// `.opCompleted` entry is skipped, and the engine runs one executor per
+    /// directive, so there is no second writer to race.
+    ///
+    /// Known gap, accepted: a directive that leaves `.running` before its last
+    /// dispatched op closes gets no entry for that op, because `evaluateOnce`
+    /// returns early for a non-running row. In practice a stall is resumed
+    /// (retry/skip/resume all return it to `.running`) and the entry lands late
+    /// rather than never; only a stall abandoned forever, or a mission whose final
+    /// op closes after `.done`, stays silent — and neither is being watched.
+    static func recordCompletedOps(for directive: Directive, world: WorldSnapshot) async {
+        @Dependency(\.date) var date
+        @Dependency(\.uuid) var uuid
+
+        // Op ids already accounted for, so a closed op is logged exactly once.
+        let alreadyLogged = Set(world.log.compactMap { entry in
+            entry.kind == .opCompleted ? entry.operationID : nil
+        })
+
+        var entries: [DirectiveLogEntry] = []
+        for dispatch in world.log where dispatch.kind == .commandDispatched {
+            guard let operationID = dispatch.operationID,
+                  !alreadyLogged.contains(operationID),
+                  let operation = world.dispatchedOperations[operationID],
+                  operation.status.isTerminal
+            else { continue }
+
+            // Sort the entry where the op actually closed, not where we noticed.
+            // `lastConfirmedAt` is the reconciler's stamp for the row's current
+            // state, so for a terminal op it is approximately the closing moment.
+            // Clamped into (dispatch, now] so the pair can never render out of
+            // order, however the stamps landed.
+            let closedAt = min(max(operation.lastConfirmedAt, dispatch.occurredAt), world.now)
+            entries.append(
+                DirectiveLogEntry(
+                    id: uuid().uuidString,
+                    directiveID: directive.id,
+                    deviceCode: nil,
+                    kind: .opCompleted,
+                    summary: summary(for: operation),
+                    step: dispatch.step,
+                    operationID: operationID,
+                    eventID: nil,
+                    occurredAt: closedAt
+                )
+            )
+        }
+
+        guard !entries.isEmpty else { return }
+        await appendEntries(entries, directiveID: directive.id)
+        logger.debug("directive \(directive.id, privacy: .public): logged \(entries.count) completed op(s)")
+    }
+
+    /// "travel completed" / "travel failed" — the op's kind plus how it ended, so a
+    /// terminal-but-unsuccessful op doesn't read as a clean finish.
+    private static func summary(for operation: GameModels.Operation) -> String {
+        switch operation.status {
+        case .completed:  return "\(operation.kind) completed"
+        case .failed:     return "\(operation.kind) failed"
+        case .rejected:   return "\(operation.kind) rejected"
+        case .superseded: return "\(operation.kind) superseded"
+        case .unknown:    return "\(operation.kind) ended (status unknown)"
+        case .optimistic, .enqueued, .active: return "\(operation.kind) closed"
+        }
+    }
+
+    /// Append timeline entries WITHOUT touching the directive row — the audit
+    /// pass's write path. Deliberately not `commit`: upserting the row here could
+    /// clobber a concurrent status change with this pass's older copy, and the
+    /// pass has no business moving the mission anyway.
+    private static func appendEntries(_ entries: [DirectiveLogEntry], directiveID: String) async {
+        @Dependency(\.defaultDatabase) var database
+        do {
+            try await database.write { db in
+                for entry in entries {
+                    try DirectiveLogEntry.insert { entry }.execute(db)
+                }
+            }
+        } catch {
+            logger.error("directive \(directiveID, privacy: .public) audit write failed: \(error)")
+        }
+    }
+
     /// Move to a step, optionally claiming a controller, with the matching
     /// timeline entry. `stepStartedAt` is re-stamped: it is the reference point
     /// for the issue-time-relative completion guard.

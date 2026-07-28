@@ -65,15 +65,18 @@ the relay→native-SSE migration. Read it before touching the sync engine.
     to re-enter; there is no suppression window to tune *or* to leak. Do not "optimize" this into
     an event-kicked executor. (5) `DirectiveLogEntry` is the audit trail, carrying exactly the
     asked-for `eventID → operationID` pair. **Consequence: no blocker gates further directives
-    work** — Stage 5 Relay Run is unblocked. One residual: `.opCompleted` entries are still
-    unwritten (see [[directives-feature]]).
+    work** — Stage 5 Relay Run is unblocked. Its one residual — unwritten `.opCompleted` entries —
+    was closed 2026-07-28 by an audit-only pass in the executor, so blocker 5 is fully done
+    (see [[directives-feature]]).
   - **S9 CLOSED — `new_device_code` is CONFIRMED**, not assumed. Four real `print.completed` events
     in the local `eventLogs` ledger (2026-07-26/27) all carry it, over three device types and both
     print modes. The ledger stores the wire payload **verbatim** — snake_case keys are the proof it
     wasn't normalized by our decoder. The reusable lesson: the server's retained event window had
     already rolled past those prints, so **the local ledger is the only place this was answerable**,
     which is the concrete payoff of exempting `EventLog` from the logout wipe. Keep it exempt. The
-    loud notice stays armed, now as a rename tripwire.
+    loud "WITHOUT new_device_code" notice was **removed** once the key was known — it was the only
+    handler carrying bespoke code for a hypothetical rename, no other handler defends against that,
+    and the Event Log window answers the question if it ever recurs.
   - **T6 optionals**: NewStarMap's view-local `@FetchAll` exception is written down; the duplicate
     `Blueprint` query in `BlueprintDetailView` is gone; `PreferencesFeature`'s never-sent
     `BindingReducer`/`BindableAction` deleted; `CommandGrid`'s policy extracted to

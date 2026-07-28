@@ -1,6 +1,6 @@
 ---
 name: directives-feature
-description: "Directives v2: Stages 1-4 + stall resolution + the §7 step timeline SHIPPED. Unified surface; CommandGovernor + DirectiveEngine; Survey Run + launcher; Retry/Skip/Cancel/Pause/Resume; live timeline serving both row kinds. Survey Run NEVER stows or adopts. Remaining: Stage 5 Relay Run, and .opCompleted entries are still unwritten."
+description: "Directives v2: Stages 1-4 + stall resolution + the §7 step timeline SHIPPED. Unified surface; CommandGovernor + DirectiveEngine; Survey Run + launcher; Retry/Skip/Cancel/Pause/Resume; live timeline serving both row kinds. Survey Run NEVER stows or adopts. Remaining: Stage 5 Relay Run. The .opCompleted audit pass shipped 2026-07-28, closing the audit trail."
 metadata:
   type: project
 ---
@@ -42,8 +42,8 @@ Non-obvious decisions (the why, beyond the spec text):
   **All three verified CLOSED 2026-07-28** ([[architecture-review-v3]]): 3 = `CommandGovernor`
   (actions budget + per-device in-flight claim), 4 = *obviated* by the clock-driven engine rather
   than implemented as a suppression window, 5 = `DirectiveLogEntry`'s `eventID → operationID`.
-  **No V3.9 blocker gates Stage 5 or any further directives work.** The only residual is
-  `.opCompleted` (below).
+  **No V3.9 blocker gates Stage 5 or any further directives work.** The one-time residual,
+  `.opCompleted`, shipped 2026-07-28 (below).
 - Recorded follow-up: **device-list organization at scale** (fleet will grow to hundreds; flat 3-pane
   list won't hold) — deliberately deferred, deliberately written down.
 
@@ -121,8 +121,8 @@ it (the directive is still in force server-side).
 is committed. See [[pbxproj-link-is-manual]] for why this half is always manual.
 
 Stage 4 (Survey Run) and Stage 5 (Relay Run + FTL-mesh incremental add) are now unblocked and
-independent of each other. `.opCompleted` log entries are unwritten until Stage 4 gives the engine an
-op to watch.
+independent of each other. (`.opCompleted` log entries stayed unwritten until 2026-07-28 — see the
+section at the end.)
 
 ## Stage 4 SHIPPED 2026-07-26 — Survey Run
 
@@ -237,10 +237,36 @@ nothing about mission execution changed. Full suite at ship: **863 tests over 26
   first presenting the sheet is an `ifLet` application-logic error, not a valid path. Send
   `.newDirectiveTapped` first.
 
-**Still not written: `.opCompleted` entries.** The timeline shows step transitions, dispatches, stalls
-and resolutions, so a long travel reads as a quiet gap until the next step starts — which the Now
-readout covers. Writing them is engine work (the executor would have to notice a dispatched op
-closing) and remains the one gap in the audit trail.
+## `.opCompleted` entries SHIPPED 2026-07-28
+
+The last gap in the audit trail (V3.9 blocker 5's residual). A long travel used to read as a quiet
+stretch between "Dispatched travel to X" and the next step starting; the timeline now says when
+that op closed and how.
+
+- **`DirectiveExecutor.recordCompletedOps(for:world:)`**, called from `evaluateOnce` **before** the
+  machine runs. It appends log rows and **nothing else** — it must never touch a directive's
+  status, step or target. Mission progress still keys off `directive.completed` and the machine's
+  own conditions; delete this pass tomorrow and execution is byte-identical, only the timeline goes
+  quiet. **Keep that property** — it is what makes it safe on a 5s loop.
+- Runs before the machine deliberately, over the *pre-write* snapshot, so the new rows are
+  invisible to `nextAction` on that tick. A tick that also advances the step still records why the
+  previous one ended.
+- **`WorldSnapshot.dispatchedOperations`** (by op id, **including closed ops**) is what makes it
+  possible — scoped to the ids named by this directive's own `.commandDispatched` entries and read
+  in the same transaction as the log. Kept separate from `openOperations` on purpose: a mission
+  asking "is this device busy?" must keep seeing only open work.
+- **Fires for ANY terminal status**, not just `.completed`; the summary names which
+  (`travel failed` / `rejected` / `superseded` / `ended (status unknown)`). Logging only clean
+  completions would leave a failed op as a permanent silent hole — the exact thing this closes.
+- Idempotent through the log (an op id already carrying an `.opCompleted` is skipped), and there is
+  one executor per directive, so no second writer races it.
+- `occurredAt` is the op's `lastConfirmedAt` **clamped into (dispatch, now]**, so the entry sorts
+  where the op closed rather than where we noticed, and the dispatch/completion pair can never
+  render out of order.
+- **Known gap, accepted:** a directive that leaves `.running` before its last dispatched op closes
+  gets no entry for it, since `evaluateOnce` returns early for a non-running row. A stall that is
+  later resumed lands the entry late rather than never; only an abandoned stall, or an op closing
+  after `.done`, stays silent — and neither is being watched.
 
 ## Drone-abandonment fixes SHIPPED 2026-07-27
 

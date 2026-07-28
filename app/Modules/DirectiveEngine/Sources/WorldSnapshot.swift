@@ -29,6 +29,17 @@ public struct WorldSnapshot: Equatable, Sendable {
     /// observes that ROW rather than the event — the observe-reconciled-state
     /// invariant is what keeps missions replay-immune.
     public let log: [DirectiveLogEntry]
+    /// The operations this directive dispatched, by operation id — **including
+    /// closed ones**, which `openOperations` deliberately excludes. Scoped to the
+    /// ids named by this directive's own `.commandDispatched` log entries, so it
+    /// stays a handful of rows rather than the whole table.
+    ///
+    /// This is what lets the audit pass notice a dispatched op reaching a terminal
+    /// state and write its `.opCompleted` entry. It is deliberately separate from
+    /// `openOperations`: a mission asking "is this device busy?" must keep seeing
+    /// only open work, and folding closed ops into that lookup would make a
+    /// finished op read as in-flight.
+    public let dispatchedOperations: [String: GameModels.Operation]
     /// Cached `StarSystem` blobs for the systems this directive cares about, by
     /// star designation. Only the directive's own targets (plus its origin and
     /// the vessel's current system) are decoded: decoding the whole catalogue
@@ -43,12 +54,14 @@ public struct WorldSnapshot: Equatable, Sendable {
         devices: [String: Device],
         openOperations: [String: GameModels.Operation],
         log: [DirectiveLogEntry] = [],
+        dispatchedOperations: [String: GameModels.Operation] = [:],
         systems: [String: StarSystem] = [:],
         now: Date
     ) {
         self.devices = devices
         self.openOperations = openOperations
         self.log = log
+        self.dispatchedOperations = dispatchedOperations
         self.systems = systems
         self.now = now
     }
@@ -81,6 +94,16 @@ public struct WorldSnapshot: Equatable, Sendable {
                 .order { $0.occurredAt }
                 .fetchAll(db)
 
+            // Every op this directive dispatched, by id — read in the SAME
+            // transaction as the log that names them, so the audit pass can never
+            // see a dispatch entry without being able to resolve its op.
+            let dispatchedIDs = Array(Set(log.compactMap { entry in
+                entry.kind == .commandDispatched ? entry.operationID : nil
+            }))
+            let dispatched = dispatchedIDs.isEmpty ? [] : try GameModels.Operation
+                .where { $0.id.in(dispatchedIDs) }
+                .fetchAll(db)
+
             var wanted = baseWanted
             if let vessel = devices.first(where: { $0.deviceCode == vesselCode }),
                let location = vessel.location {
@@ -100,6 +123,7 @@ public struct WorldSnapshot: Equatable, Sendable {
                 devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
                 openOperations: Dictionary(operations.map { ($0.entityCode, $0) }, uniquingKeysWith: { _, last in last }),
                 log: log,
+                dispatchedOperations: Dictionary(dispatched.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last }),
                 systems: systems,
                 now: now
             )
