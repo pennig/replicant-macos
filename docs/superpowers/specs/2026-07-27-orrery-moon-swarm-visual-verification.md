@@ -28,18 +28,28 @@ smaller lit bodies sharing one ring-less band, with the planet still substantial
 ~11% of frame radius against 2.9% before this work.
 
 **Swarm members are real sphere impostors, not points.** They are drawn at their honest relative
-size scaled down by `swarmSizeScale` (0.5), so a large swarm moon reads large and a captured
-asteroid reads tiny, and they grow when you zoom like any other body. Tier is communicated by
-*having an orbit ring or not*, not by size — so on PETORA-6 several swarm moons legitimately render
-larger than promoted `PETORA-6-22`, which promotes on prebiotic life rather than size.
+size scaled down, so a large swarm moon reads large and a captured asteroid reads tiny, and they
+grow when you zoom like any other body. Tier is communicated by *having an orbit ring or not*, not
+by size — so on PETORA-6 several swarm moons legitimately render larger than promoted
+`PETORA-6-22`, which promotes on prebiotic life rather than size.
 
-**Watch for crowding.** Making swarm members visible surfaced a crowding problem that dimensionless
-points hid. `swarmInclinationSpread` was raised 0.12 → 0.30 to push members off the shared plane
-(regular members reach ~7.2° inclination, captured ones ~15°), which on PETORA-6 takes members with
-an overlap-capable neighbour from 72% to 52% and the median nearest pair from deeply interpenetrating
-to just touching. If it still reads as a jumble, that constant is the lever — it costs only ~0.15%
-of frame radius, where widening the band instead would cost ~17%. Do not take it past ~0.40, where
-the band starts reading as a spherical shell rather than a band.
+The scale **ramps with size** rather than being flat: `swarmSizeScaleSmall` (0.5) for asteroid-ish
+bodies down to `swarmSizeScaleLarge` (0.3) for the largest, interpolated over the body's own size
+fraction. Small bodies were already reading correctly at 0.5, so the ramp leaves them nearly
+untouched and pulls the big ones in by roughly a third. The endpoints are absolute constants, never
+roster-relative — a moon's drawn size must not change because a *different* moon got scanned.
+
+**Watch for crowding, and note the scatter may now be over-corrected.** Making swarm members visible
+surfaced a crowding problem that dimensionless points hid, so `swarmInclinationSpread` was raised
+0.12 → 0.30 to push members off the shared plane (regular members reach ~7.2° inclination, captured
+ones ~15°). The size ramp then shrank the largest members by about a third, which improved crowding
+again on its own: members with an overlap-capable neighbour are now ~39% and the median nearest pair
+sits at 1.22× the radius sum — comfortably clear rather than touching.
+
+That means 0.30 is probably more off-plane spread than the band now needs. If it reads as too
+puffy or diffuse — more shell than band — try 0.20–0.25. If it still reads as a jumble, go the
+other way. Scatter costs ~0.15% of frame radius per step, where widening the band instead would
+cost ~17%, so this is the cheap lever. Do not exceed ~0.40.
 
 **Watch the drill-in specifically.** The band should grow out of the planet in step with the moons
 and orbit rings. If it stays bunched near the planet while the moons are already halfway out and
