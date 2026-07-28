@@ -68,7 +68,15 @@ struct OrreryLayout {
 
     /// The shortest orbital period (days) among this layer's orbiters — the "fastest"
     /// orbit the on-screen timing is anchored to. 1 for an empty model.
-    var minPeriodDays: Double { model.planets.map(\.periodDays).min() ?? 1 }
+    ///
+    /// The SWARM is folded in deliberately. Swarm members are not `planets`, but they
+    /// are timed by the same `OrbitTiming`, so leaving them out would anchor the two
+    /// populations on different values and the band would visibly run at a different
+    /// rate than the promoted moons beside it.
+    var minPeriodDays: Double {
+        let periods = model.planets.map(\.periodDays) + model.swarm.map(\.periodDays)
+        return periods.min() ?? 1
+    }
 
     // MARK: Orbiters (planets at system level, moons at body level)
 
@@ -86,6 +94,28 @@ struct OrreryLayout {
     /// The world position of the orbiter with `id` in this layer, if present.
     func orbiterPosition(id: String) -> SIMD3<Float>? {
         model.planets.first { $0.id == id }.map(orbiterPosition)
+    }
+
+    // MARK: Swarm
+
+    /// A swarm member's orbit angle (radians) at the layer's `time`. Timed by the same
+    /// `OrbitTiming` and anchor as the promoted moons, so the whole layer runs together.
+    func swarmAngle(_ m: SwarmMoon) -> Float {
+        timing.angle(phase0Deg: m.phase0Deg, periodDays: m.periodDays,
+                     minPeriodDays: minPeriodDays, time: time)
+    }
+
+    /// A swarm member's world position at the layer's `time`, with `reveal` applied.
+    ///
+    /// Unlike every other anchor this is NOT confined to the orbital plane: the signed
+    /// `offsetScene` lifts it off the plane so the band reads as a cloud of rocks. The
+    /// offset is scaled by `reveal` along with the radius, so the swarm emerges from the
+    /// centre on drill-in exactly as the orbiters do rather than popping into place.
+    func swarmPosition(_ m: SwarmMoon) -> SIMD3<Float> {
+        let a = swarmAngle(m)
+        let r = Float(m.orbitScene) * scale * reveal
+        let y = Float(m.offsetScene) * scale * reveal
+        return center + SIMD3<Float>(cos(a) * r, y, sin(a) * r)
     }
 
     // MARK: Lagrange points

@@ -1561,3 +1561,70 @@ struct MoonSwarmLayoutTests {
         #expect(a.swarm.allSatisfy { !$0.isCapturedAsteroid })
     }
 }
+
+struct SwarmLayoutTests {
+    private func swarmMoon(_ id: String, orbit: Double, offset: Double,
+                           period: Double, phase: Double) -> SwarmMoon {
+        SwarmMoon(designation: id, name: nil, type: "Icy", orbitScene: orbit,
+                  offsetScene: offset, periodDays: period, phase0Deg: phase,
+                  displayRadius: 0.2, colorHex: "#cdd6e6", scanned: false,
+                  isCapturedAsteroid: false)
+    }
+
+    private func model(swarm: [SwarmMoon], planets: [OrreryPlanet] = []) -> SystemModel {
+        SystemModel(
+            star: StarDetail(designation: "SOL-5", name: nil, spectralType: nil, color: nil,
+                             position: Position(x: 0, y: 0, z: 0), temperatureK: nil,
+                             massSolar: nil, luminositySolar: nil, ageMy: nil,
+                             habitableZone: nil, miningBonusPct: nil),
+            hzInnerScene: nil, hzOuterScene: nil, planets: planets, swarm: swarm,
+            belts: [], hazards: [], kuiperScene: nil, frameScene: 20,
+            deviceCount: 0, vesselCount: 0)
+    }
+
+    @Test func swarmMemberSitsAtItsRadiusAndVerticalOffset() {
+        let m = swarmMoon("SOL-5-9", orbit: 10, offset: 1.5, period: 8, phase: 0)
+        let layout = OrreryLayout(model: model(swarm: [m]), center: .zero, scale: 1,
+                                  reveal: 1, time: 0)
+        let p = layout.swarmPosition(m)
+        #expect(abs(p.y - 1.5) < 1e-5)
+        #expect(abs(simd_length(SIMD2(p.x, p.z)) - 10) < 1e-4)
+    }
+
+    @Test func swarmMemberOrbitsOverTime() {
+        let m = swarmMoon("SOL-5-9", orbit: 10, offset: 0, period: 8, phase: 0)
+        let at0 = OrreryLayout(model: model(swarm: [m]), center: .zero, scale: 1,
+                               reveal: 1, time: 0).swarmPosition(m)
+        let at30 = OrreryLayout(model: model(swarm: [m]), center: .zero, scale: 1,
+                                reveal: 1, time: 30).swarmPosition(m)
+        #expect(simd_distance(at0, at30) > 0.1)
+        // Radius is preserved — it orbits, it does not drift.
+        #expect(abs(simd_length(SIMD2(at0.x, at0.z)) - simd_length(SIMD2(at30.x, at30.z))) < 1e-4)
+    }
+
+    @Test func revealCollapsesTheSwarmIntoTheCentre() {
+        // The swarm must emerge from the centre on drill-in exactly as orbiters do,
+        // vertical offset included, or the band pops in instead of growing out.
+        let m = swarmMoon("SOL-5-9", orbit: 10, offset: 2, period: 8, phase: 0)
+        let layout = OrreryLayout(model: model(swarm: [m]), center: SIMD3(5, 0, 5),
+                                  scale: 1, reveal: 0, time: 0)
+        #expect(simd_distance(layout.swarmPosition(m), SIMD3(5, 0, 5)) < 1e-5)
+    }
+
+    @Test func timingAnchorFoldsInTheSwarm() {
+        // `minPeriodDays` anchors every on-screen period. If it ignored the swarm, a
+        // swarm faster than any promoted moon would be timed against a different
+        // anchor than its neighbours and the two populations would visibly disagree.
+        let fast = swarmMoon("SOL-5-9", orbit: 10, offset: 0, period: 1, phase: 0)
+        let slowPlanet = OrreryPlanet(
+            designation: "SOL-5-1", name: nil, type: "Icy", planetType: .frozen,
+            estimated: false, tags: [], surfaceTempC: nil, atmosphere: .unknown,
+            appearanceSeed: 0.5, orbitalDistanceAu: 0, inHabitableZone: false,
+            scanned: true, moonCount: 0, lifeStage: nil, inventory: [],
+            semiMajorScene: 5, periodDays: 40, phase0Deg: 0, displayRadius: 0.3,
+            colorHex: "#cdd6e6", indicators: [], hasInterestingMoon: false, moons: [])
+        let layout = OrreryLayout(model: model(swarm: [fast], planets: [slowPlanet]),
+                                  center: .zero, scale: 1, reveal: 1, time: 0)
+        #expect(layout.minPeriodDays == 1)
+    }
+}
