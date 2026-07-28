@@ -350,6 +350,36 @@ enum OrreryMapping {
             || !m.sites.isEmpty || !m.inventory.isEmpty
     }
 
+    /// The swarm band's radial extent (scene units) for a body-level layer.
+    ///
+    /// Deliberately a function of the ROSTER SIZE and the central body's scale only —
+    /// never of where the swarm's members happen to sit. That is what makes late
+    /// physical data harmless: when a scan finally reports a moon's real
+    /// `orbital_distance_km`, that moon settles into its true radius *within* a band
+    /// whose edges did not move, so nothing else on screen shifts. Deriving the edges
+    /// from member positions instead would make every arriving scan reshuffle the view.
+    static func swarmBand(promotedOuter: Double, centralClearance: Double,
+                          swarmCount: Int) -> (inner: Double, outer: Double) {
+        let pad = max(0.6, centralClearance * 0.15)
+        let inner = max(promotedOuter, centralClearance) + pad
+        // Widen a little with the roster so a 60-body cloud reads deeper than a 12-body
+        // one, but cap it: the band must stay O(1) in count or it reintroduces exactly
+        // the frame-budget blowout the swarm exists to fix.
+        let width = min(centralScene * 4.0, centralScene * (2.0 + 0.02 * Double(swarmCount)))
+        return (inner, inner + width)
+    }
+
+    /// The drilled planet's rendered radius at body level — a fixed, prominent centre
+    /// (the body-level analogue of the field star), with everything else proportional.
+    static let centralScene: Double = 2.6
+
+    /// How far swarm members scatter off the orbital plane, as a fraction of the band
+    /// width. Irregular satellites really do carry high inclinations, and the scatter
+    /// doubles as visual de-overlap. Set to 0 for a strictly planar band.
+    static let swarmInclinationSpread: Double = 0.12
+    /// Captured asteroids scatter this much wider than regular moons.
+    static let capturedInclinationFactor: Double = 2.2
+
     // MARK: - Body level (a planet + its moons)
 
     /// Moon display radius as a *fraction of the central planet's* rendered radius —
@@ -393,10 +423,7 @@ enum OrreryMapping {
     /// are index-stepped (real `orbitalDistanceKm` only orders them) so the roster
     /// stays legible. Empty moons → just the central planet (shown before the
     /// `hydrateBody` roster lands, like the star-only system fallback).
-    static func bodyModel(planet: Planet, maxMoons: Int = 24) -> SystemModel {
-        // The drilled planet is the body-level "sun": a consistent, prominent centre
-        // (like the field star at system level), with its moons proportional to it.
-        let centralScene = 2.6
+    static func bodyModel(planet: Planet) -> SystemModel {
         let centralRings = PlanetMaterial.ringSystem(
             hasRings: planet.physical?.rings ?? false,
             type: PlanetType(apiType: planet.type),
@@ -422,43 +449,36 @@ enum OrreryMapping {
             appearanceSeed: appearanceSeed(designation: planet.designation,
                                            rotationPeriodHours: planet.physical?.rotationPeriodHours))
 
-        let ordered = planet.moons.sorted { a, b in
-            let ai = moonIsInteresting(a), bi = moonIsInteresting(b)
-            if ai != bi { return ai }
+        // Split the roster: moons that earn a ring, and the rest. See `MoonTiering` for
+        // why interest always wins and why a roster with no radii promotes nothing.
+        let (promotedMoons, swarmMoons) = MoonTiering.split(planet.moons)
+
+        // Promoted moons keep the historical treatment exactly: nearest-first, real
+        // orbit radii where the scan gives them, and the same non-overlap pass the
+        // planets get. Interest-first ordering is gone — the cap it existed to serve
+        // is gone too, and `spacedLayout` sorts by raw radius internally anyway.
+        let ordered = promotedMoons.sorted { a, b in
             let ad = a.physical?.orbitalDistanceKm ?? .greatestFiniteMagnitude
             let bd = b.physical?.orbitalDistanceKm ?? .greatestFiniteMagnitude
             if ad != bd { return ad < bd }
             return a.designation < b.designation
         }
-        // Force-include EVERY interesting moon (hosts a device / site / salvage /
-        // inventory) even past the cap — a device must never lack an anchor. The cap only
-        // trims boring moons for legibility; a huge interesting roster is shown in full.
-        let interesting = ordered.filter(moonIsInteresting)
-        let boring = ordered.filter { !moonIsInteresting($0) }
-        let shown = interesting + boring.prefix(max(0, maxMoons - interesting.count))
         // First moon clears the planet — and its rings — plus a gap. The gap stays
         // proportional to the BODY, not the ring extent, so an unringed planet keeps
         // exactly its historical `centralScene * 1.7`.
         let base = centralClearance + centralScene * 0.7
         let step = centralScene * 0.5
-        // Real orbit radii where the scan gives them (compressed like the planets' AU),
-        // else the historical index step for an unscanned roster. `shown` is ordered
-        // interest-first so the cap keeps the moons that matter, but `spacedLayout`
-        // sorts occupants by raw radius itself and returns them in INPUT order — so it
-        // can take these as-is and still walk outward correctly.
-        let rawMoonOrbits = shown.enumerated().map { i, m -> Double in
+        let rawMoonOrbits = ordered.enumerated().map { i, m -> Double in
             if let km = m.physical?.orbitalDistanceKm, km > 0 {
                 return max(moonSceneRadius(km: km), base)
             }
             return base + Double(i) * step
         }
-        let moonRadii = shown.map { centralScene * moonSizeFraction($0) }
-        // The SAME non-overlap pass the planets get, with the central planet standing in
-        // for the sun — so no moon orbit ever falls inside the planet or another moon.
+        let moonRadii = ordered.map { centralScene * moonSizeFraction($0) }
         let moonOrbits = spacedLayout(
             planetOrbits: rawMoonOrbits, planetRadii: moonRadii,
             beltInner: [], beltOuter: [], sunScene: centralClearance).orbits
-        let moons: [OrreryPlanet] = shown.enumerated().map { i, m in
+        let moons: [OrreryPlanet] = ordered.enumerated().map { i, m in
             var indicators: BodyIndicators = []
             if !m.devices.isEmpty { indicators.insert(.device) }
             if m.salvage.contains(where: { !$0.depleted }) { indicators.insert(.salvage) }
@@ -493,11 +513,72 @@ enum OrreryMapping {
                 indicators: indicators,
                 hasInterestingMoon: false, moons: [])
         }
-        // Frame to each moon's OUTER edge, and never inside the central body's own ring
-        // system — a ringed planet with no moons (or only close ones) would otherwise be
-        // framed tighter than its rings and have them clipped at the view edge.
+
+        // The swarm: one band, members placed by real distance where known and by a
+        // stable designation hash anchored to their index otherwise.
+        let promotedOuter = moons.map { $0.semiMajorScene + $0.displayRadius }.max() ?? 0
+        let band = swarmBand(promotedOuter: promotedOuter,
+                            centralClearance: centralClearance,
+                            swarmCount: swarmMoons.count)
+        let bandWidth = band.outer - band.inner
+        // Map real km into the band by the same sqrt compression the planets get, then
+        // normalize against THIS roster's span so the band is filled edge to edge and
+        // genuine family gaps (SOL-5's inner moons vs its far irregulars) survive.
+        let knownKm = swarmMoons.compactMap { m -> Double? in
+            guard let km = m.physical?.orbitalDistanceKm, km > 0 else { return nil }
+            return moonSceneRadius(km: km)
+        }
+        let kmLo = knownKm.min() ?? 0, kmHi = knownKm.max() ?? 0
+        let swarm: [SwarmMoon] = swarmMoons.enumerated().map { i, m in
+            // Two placement sources, and which one applies must depend ONLY on this
+            // moon's own data — never on the roster's — or a scan landing anywhere
+            // would move everything.
+            let fraction: Double
+            if let km = m.physical?.orbitalDistanceKm, km > 0, kmHi > kmLo {
+                fraction = (moonSceneRadius(km: km) - kmLo) / (kmHi - kmLo)
+            } else if m.physical?.orbitalDistanceKm.map({ $0 > 0 }) == true {
+                // A real reading, but nothing to normalize it against (it's the only
+                // known distance in the swarm, or every known distance is identical).
+                // Sit at the band midpoint rather than falling into the guess formula
+                // below — a real reading must never land exactly where a guess would.
+                fraction = 0.5
+            } else if swarmMoons.count > 1 {
+                // No reading: sit at the index fraction, jittered by a stable hash so
+                // the band does not read as a regular ladder. Index order IS orbital
+                // order in generated systems (verified on ASTELLIO-1 and ABEEMIM-6).
+                let idx = Double(i) / Double(swarmMoons.count - 1)
+                let jitter = (phaseDeg(m.designation + "-R") / 360 - 0.5) * 0.06
+                fraction = min(max(idx + jitter, 0), 1)
+            } else {
+                fraction = 0.5
+            }
+            let captured = (m.type ?? "").lowercased().contains("captured")
+            // Inclination: a stable signed hash, widened for irregular satellites.
+            let incHash = phaseDeg(m.designation + "-INC") / 360 - 0.5
+            let spread = swarmInclinationSpread * (captured ? capturedInclinationFactor : 1)
+            let orbit = band.inner + fraction * bandWidth
+            return SwarmMoon(
+                designation: m.designation, name: m.name, type: m.type,
+                orbitScene: orbit,
+                offsetScene: incHash * 2 * spread * bandWidth,
+                // Real period where known, else Kepler-ish from the band radius so the
+                // cloud shows differential rotation instead of turning rigidly.
+                periodDays: m.physical?.orbitalPeriodHours.map { $0 / 24 }
+                    ?? m.physical?.orbitalPeriodDays
+                    ?? max(2, 6 * pow(orbit / max(centralClearance, 0.001), 1.5)),
+                phase0Deg: phaseDeg(m.designation),
+                displayRadius: centralScene * moonSizeFraction(m),
+                colorHex: moonColor(type: m.type),
+                scanned: m.recon == .scanned,
+                isCapturedAsteroid: captured)
+        }
+
+        // Frame to the outer edge of everything drawn: promoted moons, the swarm band,
+        // and never inside the central body's own ring system (a ringed planet with no
+        // moons would otherwise be framed tighter than its rings and clip them).
         let moonReach = moons.map { $0.semiMajorScene + $0.displayRadius }.max()
-        let frame = max(moonReach ?? (centralScene + 2), centralClearance) * 1.12
+        let swarmReach = swarm.isEmpty ? 0 : band.outer
+        let frame = max(moonReach ?? (centralScene + 2), swarmReach, centralClearance) * 1.12
         let deviceCount = planet.devices.count + planet.moons.reduce(0) { $0 + $1.devices.count }
 
         return SystemModel(
@@ -508,7 +589,7 @@ enum OrreryMapping {
                 temperatureK: nil, massSolar: nil, luminositySolar: nil, ageMy: nil,
                 habitableZone: nil, miningBonusPct: nil),
             centralBody: central, hzInnerScene: nil, hzOuterScene: nil,
-            planets: moons, belts: [], hazards: [], kuiperScene: nil,
+            planets: moons, swarm: swarm, belts: [], hazards: [], kuiperScene: nil,
             frameScene: frame, deviceCount: deviceCount, vesselCount: 0)
     }
 

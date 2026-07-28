@@ -389,26 +389,6 @@ struct OrreryMappingTests {
         #expect(b2?.indicators.isEmpty == true)
     }
 
-    @Test func moonCapForceIncludesEveryInterestingMoon() {
-        // 30 moons that each host a device — all must survive the cap (a device must never
-        // lack an anchor), even though the default cap trims boring moons at 24.
-        let moons = (0..<30).map { i in
-            Moon(designation: "SOL-5-\(i)", recon: .scanned,
-                 devices: [LocatedDevice(deviceCode: "D\(i)", deviceType: "mining_drone")])
-        }
-        let planet = Planet(designation: "SOL-5", type: "Gas Giant",
-                            orbitalDistanceAu: 5.2, recon: .scanned, moons: moons)
-        let m = OrreryMapping.bodyModel(planet: planet)
-        #expect(m.planets.count == 30)
-        #expect(m.planets.allSatisfy { $0.indicators.contains(.device) })
-
-        // Boring moons beyond the cap ARE trimmed.
-        let boring = (0..<30).map { Moon(designation: "SOL-6-\($0)", recon: .scanned) }
-        let m2 = OrreryMapping.bodyModel(planet:
-            Planet(designation: "SOL-6", type: "Gas Giant", orbitalDistanceAu: 6, recon: .scanned, moons: boring))
-        #expect(m2.planets.count == 24)
-    }
-
     @Test func mapsRealSystemToPlanetsBeltsHazards() {
         let system = StarSystem(
             designation: "AINALRAM",
@@ -454,9 +434,12 @@ struct OrreryMappingTests {
         #expect(m.centralBody != nil)
         #expect(m.centralBody?.rings != nil)
         #expect(m.planets.count == 2)                       // moons became orbiters
-        // The interesting moon (a live salvage site) sorts to the front.
-        #expect(m.planets.first?.designation == "SHERATANON-6-b")
-        #expect(m.planets.first?.indicators.contains(.salvage) == true)
+        // Both moons promote (the roster is well under the promote-all threshold).
+        // Ordering is nearest-known-distance-first now, not interest-first — the cap
+        // that ordering used to serve is gone, and MoonTiering already guarantees an
+        // interesting moon is never dropped regardless of where it sorts.
+        #expect(m.planets.first { $0.designation == "SHERATANON-6-b" }?
+            .indicators.contains(.salvage) == true)
         // Every moon orbits outside the central planet.
         let central = m.centralBody?.displayRadius ?? 0
         #expect(m.planets.allSatisfy { $0.semiMajorScene - $0.displayRadius > central })
@@ -1465,5 +1448,116 @@ struct MoonTieringTests {
         #expect(t.swarm.map(\.designation) == moons.map(\.designation).filter { d in
             t.swarm.contains { $0.designation == d }
         })
+    }
+}
+
+struct MoonSwarmLayoutTests {
+    private func roster(_ count: Int, prefix: String = "POLARISON-6") -> [Moon] {
+        (0..<count).map { Moon(designation: "\(prefix)-\($0 + 1)", recon: .visited) }
+    }
+
+    private func planet(_ moons: [Moon], designation: String = "POLARISON-6") -> Planet {
+        Planet(designation: designation, type: "Gas Giant", orbitalDistanceAu: 6,
+               recon: .scanned, moons: moons)
+    }
+
+    @Test func everyMoonIsRepresented() {
+        // The old `maxMoons` cap dropped 35 of 59 moons entirely. Nothing is dropped now.
+        let m = OrreryMapping.bodyModel(planet: planet(roster(59)))
+        #expect(m.planets.count + m.swarm.count == 59)
+        #expect(m.swarm.count == 59)          // none promoted: no size data, nothing interesting
+    }
+
+    @Test func frameSceneIsFlatInMoonCount() {
+        // The core regression. Before this work, 59 moons pushed `frameScene` to ~91
+        // scene units against ~15 for 8 moons, shrinking the drilled planet to a dot.
+        let small = OrreryMapping.bodyModel(planet: planet(roster(8), designation: "SOL-6"))
+        let huge = OrreryMapping.bodyModel(planet: planet(roster(59)))
+        #expect(huge.frameScene < small.frameScene * 2)
+        // And the central body keeps real presence at 59 moons.
+        let central = try! #require(huge.centralBody).displayRadius
+        #expect(central / huge.frameScene > 0.10)
+    }
+
+    @Test func smallRosterKeepsEveryMoonAsAnOrbiter() {
+        let m = OrreryMapping.bodyModel(planet: planet(roster(8), designation: "SOL-6"))
+        #expect(m.planets.count == 8)
+        #expect(m.swarm.isEmpty)
+    }
+
+    @Test func swarmClearsThePlanetAndThePromotedMoons() {
+        // One moon hosting a device promotes; the rest swarm outside it.
+        var moons = roster(40)
+        moons[0] = Moon(designation: "POLARISON-6-1", recon: .scanned,
+                        devices: [LocatedDevice(deviceCode: "D1", deviceType: "mining_drone")])
+        let m = OrreryMapping.bodyModel(planet: planet(moons))
+        let promoted = try! #require(m.planets.first)
+        let promotedOuter = promoted.semiMajorScene + promoted.displayRadius
+        let central = try! #require(m.centralBody).displayRadius
+        #expect(m.swarm.allSatisfy { $0.orbitScene > promotedOuter })
+        #expect(m.swarm.allSatisfy { $0.orbitScene > central })
+    }
+
+    @Test func bandEdgesIgnoreMemberPositions() {
+        // The stability rule: band extent comes from roster size + budget, never from
+        // where its members sit. So one moon gaining a real orbital distance must not
+        // move the band — only itself.
+        let before = OrreryMapping.bodyModel(planet: planet(roster(40)))
+        var moons = roster(40)
+        moons[7] = Moon(designation: "POLARISON-6-8", recon: .scanned,
+                        physical: BodyPhysical(orbitalDistanceKm: 2_000_000))
+        let after = OrreryMapping.bodyModel(planet: planet(moons))
+
+        #expect(before.swarm.count == after.swarm.count)
+        #expect(abs(before.frameScene - after.frameScene) < 1e-9)
+        let movedID = "POLARISON-6-8"
+        for (b, a) in zip(before.swarm, after.swarm) where b.designation != movedID {
+            #expect(abs(b.orbitScene - a.orbitScene) < 1e-9, "\(b.designation) moved")
+            #expect(abs(b.offsetScene - a.offsetScene) < 1e-9)
+        }
+        let moved = try! #require(after.swarm.first { $0.designation == movedID })
+        #expect(moved.orbitScene != before.swarm[7].orbitScene)
+    }
+
+    @Test func swarmPlacementIsDeterministic() {
+        let a = OrreryMapping.bodyModel(planet: planet(roster(30)))
+        let b = OrreryMapping.bodyModel(planet: planet(roster(30)))
+        #expect(a.swarm == b.swarm)
+    }
+
+    @Test func realDistancesOrderTheBandAndKeepFamilyGaps() {
+        // SOL-5's real roster: 4 Galileans, 3 inner moons, 5 far irregulars. The gap
+        // between the inner cluster (≤1.9e6 km) and the outer one (≥7.1e6 km) must
+        // survive into the band, with nothing clustering code.
+        let km: [Double] = [421_700, 671_100, 1_070_400, 1_882_700, 181_400, 128_000,
+                            221_900, 11_461_000, 11_741_000, 7_154_000, 7_284_000, 23_624_000]
+        let moons = km.enumerated().map { i, d in
+            Moon(designation: "SOL-5-\(i + 1)", recon: .scanned,
+                 physical: BodyPhysical(orbitalDistanceKm: d))
+        }
+        // Force everything into the swarm by exceeding the promote-all threshold with
+        // no radii and no interest.
+        let m = OrreryMapping.bodyModel(planet: planet(moons, designation: "SOL-5"))
+        #expect(m.swarm.count == 12)
+        func orbit(_ n: Int) -> Double {
+            m.swarm.first { $0.designation == "SOL-5-\(n)" }!.orbitScene
+        }
+        // Radial order follows real distance, not designation order.
+        #expect(orbit(6) < orbit(5))          // 128,000 km inside 181,400 km
+        #expect(orbit(4) < orbit(10))         // 1.88e6 km inside 7.15e6 km
+        // The family gap is wider than any gap inside the inner cluster.
+        let innerSpan = orbit(4) - orbit(6)
+        #expect(orbit(10) - orbit(4) > innerSpan)
+    }
+
+    @Test func capturedAsteroidsScatterWiderThanRegularMoons() {
+        let regular = (0..<30).map { Moon(designation: "R-1-\($0)", type: "Icy", recon: .visited) }
+        let captured = (0..<30).map { Moon(designation: "R-2-\($0)", type: "Captured Asteroid", recon: .visited) }
+        let a = OrreryMapping.bodyModel(planet: planet(regular, designation: "R-1"))
+        let b = OrreryMapping.bodyModel(planet: planet(captured, designation: "R-2"))
+        func spread(_ s: [SwarmMoon]) -> Double { s.map { abs($0.offsetScene) }.max() ?? 0 }
+        #expect(spread(b.swarm) > spread(a.swarm))
+        #expect(b.swarm.allSatisfy { $0.isCapturedAsteroid })
+        #expect(a.swarm.allSatisfy { !$0.isCapturedAsteroid })
     }
 }

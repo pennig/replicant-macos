@@ -77,6 +77,36 @@ struct OrreryMoon: Equatable, Sendable {
     var indicators: BodyIndicators = []
 }
 
+/// A moon that did not earn its own orbit ring — one member of the swarm band drawn
+/// around a planet with a large roster. Deliberately much lighter than `OrreryPlanet`:
+/// a swarm member is never picked in 3D, never labelled, never carries indicators, and
+/// never hosts a device (`MoonTiering` promotes anything interesting), so it needs only
+/// enough to be positioned, tinted, and listed in the HUD roster.
+///
+/// It is a SEPARATE collection from `SystemModel.planets` rather than a flag on
+/// `OrreryPlanet` so the exclusions are structural: `OrreryGeometry.scaffoldLines`
+/// iterates `planets` to emit orbit rings, and picking iterates `planets`, so a swarm
+/// member gets neither by construction instead of by every consumer remembering a check.
+struct SwarmMoon: Identifiable, Equatable, Sendable {
+    var designation: String
+    var name: String?
+    var type: String?
+    /// Orbit radius within the swarm band (scene units).
+    var orbitScene: Double
+    /// Signed offset off the orbital plane (scene units) — the inclination scatter that
+    /// makes the band read as a cloud of rocks rather than a ring of dots.
+    var offsetScene: Double
+    var periodDays: Double
+    var phase0Deg: Double
+    var displayRadius: Double
+    var colorHex: String
+    var scanned: Bool
+    /// An irregular satellite (`type` contains "captured"). Scatters wider, and later
+    /// drives the irregular impostor.
+    var isCapturedAsteroid: Bool
+    var id: String { designation }
+}
+
 struct OrreryPlanet: Identifiable, Equatable, Sendable {
     var designation: String
     var name: String?
@@ -191,6 +221,10 @@ struct SystemModel: Equatable, Sendable {
     var hzInnerScene: Double?
     var hzOuterScene: Double?
     var planets: [OrreryPlanet]
+    /// Moons that did not earn an orbit ring — drawn as an animated point band. Empty
+    /// at system level and for any planet whose roster is small enough that every moon
+    /// promotes. See `MoonTiering`.
+    var swarm: [SwarmMoon] = []
     var belts: [BeltModel]
     var hazards: [OrreryHazard]
     /// Positioned system objects (megastructures, objects, outer-system regions) for
