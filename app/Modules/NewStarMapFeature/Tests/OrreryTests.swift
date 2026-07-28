@@ -1526,6 +1526,43 @@ struct MoonTieringTests {
         #expect(t.swarm.allSatisfy { !OrreryMapping.moonIsInteresting($0) })
     }
 
+    @Test func lifeBearingMoonsAlwaysPromote() {
+        // A moon carrying a detected biosignature must never be relegated to the
+        // swarm: the swarm draws no pips at all, so a life-bearing moon there would
+        // lose its `.life` indicator along with its individual pickability. Mirrors
+        // `interestingMoonsAlwaysPromote` but for the `lifeStage` signal main added.
+        let alive = (0..<30).map { i in
+            Moon(designation: "P-6-a\(i)", lifeStage: "microbial", recon: .scanned)
+        }
+        let dull = (0..<30).map { Moon(designation: "P-6-d\($0)", recon: .visited) }
+        let t = MoonTiering.split(alive + dull)
+        #expect(t.promoted.count == 30)
+        #expect(t.promoted.allSatisfy { OrreryMapping.hasDetectedLife($0.lifeStage) })
+        #expect(t.swarm.count == 30)
+        #expect(t.swarm.allSatisfy { !OrreryMapping.moonIsInteresting($0) })
+    }
+
+    @Test func noneOrEmptyLifeStageDoesNotPromoteOnItsOwn() {
+        // "none" and empty both mean "no reading yet" (the exact test the `.life` pip
+        // itself uses), so a moon carrying either must not promote for that reason
+        // alone. Give the roster one real-sized anchor so the "no radii anywhere"
+        // roster-order fallback (which would promote by index, not by interest) can't
+        // confound the result — every `none`/empty moon here is deliberately too small
+        // to qualify by size either.
+        let anchor = sized(0, 0.9)
+        let none = (1..<21).map { i in
+            Moon(designation: "P-6-n\(i)", lifeStage: "none", recon: .scanned,
+                 physical: BodyPhysical(radiusEarth: 0.01))
+        }
+        let empty = (21..<41).map { i in
+            Moon(designation: "P-6-e\(i)", lifeStage: "", recon: .scanned,
+                 physical: BodyPhysical(radiusEarth: 0.01))
+        }
+        let t = MoonTiering.split([anchor] + none + empty)
+        #expect(t.promoted.map(\.designation) == ["P-6-0"])
+        #expect(t.swarm.count == 40)
+    }
+
     @Test func sizePromotionTakesTopKAboveTheRelativeFloor() {
         // Largest is 0.40 R⊕, floor is 0.5× that = 0.20. Only the three at/above 0.20
         // qualify, even though topBySize allows four.

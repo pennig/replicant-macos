@@ -36,10 +36,12 @@ enum MoonTiering {
     /// Split a roster into (promoted, swarm), each preserving the input order.
     ///
     /// A moon promotes when it is *interesting* (hosts a device, a live salvage site, a
-    /// mining site, or stored inventory) or when it is among the largest few by known
-    /// radius. Interest is checked first and is never overridden: everything that needs
-    /// an exact anchor from `OrreryLayout` must be a full orbiter, which is what makes
-    /// the swarm's coarser treatment safe.
+    /// mining site, stored inventory, or a detected biosignature) or when it is among
+    /// the largest few by known radius. Interest is checked first and is never
+    /// overridden: everything that needs an exact anchor from `OrreryLayout` must be a
+    /// full orbiter, which is what makes the swarm's coarser treatment safe. A
+    /// life-bearing moon in particular must never fall into the anonymous swarm — see
+    /// `OrreryMapping.moonIsInteresting`.
     ///
     /// When NO moon in the roster reports a `radiusEarth`, size cannot rank anything, so
     /// the first `topBySize` moons in ROSTER ORDER promote instead. This is not an

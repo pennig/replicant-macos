@@ -168,7 +168,7 @@ enum OrreryMapping {
             if p.salvage.contains(where: { !$0.depleted }) { indicators.insert(.salvage) }
             if !p.sites.isEmpty { indicators.insert(.miningSite) }
             if !p.inventory.isEmpty { indicators.insert(.inventory) }
-            if let ls = p.lifeStage, ls != "none", !ls.isEmpty { indicators.insert(.life) }
+            if hasDetectedLife(p.lifeStage) { indicators.insert(.life) }
 
             let interestingMoon = p.moons.contains { moonIsInteresting($0) }
                 || (p.moons.isEmpty && (p.moonCount ?? 0) > 0)   // hint before hydration
@@ -366,11 +366,23 @@ enum OrreryMapping {
         m.physical?.orbitalPeriodHours.map { $0 / 24 } ?? m.physical?.orbitalPeriodDays
     }
 
+    /// The one test for "does this `lifeStage` reading count" — shared by the `.life`
+    /// pip (both planet and moon) and by `moonIsInteresting` below, so a moon (or
+    /// planet) that lights the indicator and a moon that earns a promotion can never
+    /// disagree about what counts as detected life. `nil`/`"none"`/empty all mean "no
+    /// reading yet."
+    static func hasDetectedLife(_ lifeStage: String?) -> Bool {
+        guard let ls = lifeStage, ls != "none", !ls.isEmpty else { return false }
+        return true
+    }
+
     /// A moon worth flagging: has your device, a live salvage site, a mining site,
-    /// or stored inventory.
+    /// stored inventory, or a detected biosignature. Life is never merely a size
+    /// tiebreaker — a moon carrying it must be individually visible and pickable, so it
+    /// is always promoted out of the swarm regardless of roster size.
     static func moonIsInteresting(_ m: Moon) -> Bool {
         !m.devices.isEmpty || m.salvage.contains(where: { !$0.depleted })
-            || !m.sites.isEmpty || !m.inventory.isEmpty
+            || !m.sites.isEmpty || !m.inventory.isEmpty || hasDetectedLife(m.lifeStage)
     }
 
     /// The swarm band's radial extent (scene units) for a body-level layer.
@@ -546,7 +558,7 @@ enum OrreryMapping {
             if m.salvage.contains(where: { !$0.depleted }) { indicators.insert(.salvage) }
             if !m.sites.isEmpty { indicators.insert(.miningSite) }
             if !m.inventory.isEmpty { indicators.insert(.inventory) }
-            if let ls = m.lifeStage, ls != "none", !ls.isEmpty { indicators.insert(.life) }
+            if hasDetectedLife(m.lifeStage) { indicators.insert(.life) }
             return OrreryPlanet(
                 designation: m.designation, name: m.name, type: m.type,
                 planetType: PlanetType(apiType: m.type), estimated: m.recon != .scanned,
