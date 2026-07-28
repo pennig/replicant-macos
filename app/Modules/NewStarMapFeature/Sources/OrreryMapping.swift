@@ -418,11 +418,16 @@ enum OrreryMapping {
     }
 
     /// A body-level orrery `SystemModel`: the drilled planet as the lit `centralBody`
-    /// with its moons as the orbiting `planets`. Moons ring outward from the planet
-    /// (interesting moons + nearest first, capped for the 60+-moon systems); orbits
-    /// are index-stepped (real `orbitalDistanceKm` only orders them) so the roster
-    /// stays legible. Empty moons → just the central planet (shown before the
-    /// `hydrateBody` roster lands, like the star-only system fallback).
+    /// with its moons split by `MoonTiering.split` into `planets` and `swarm`. A moon
+    /// promotes (own orbit ring, nearest-known-distance-first — real
+    /// `orbitalDistanceKm` where the scan gives it, else an index step) when it's
+    /// interesting or among the roster's largest few; everything else — which for a
+    /// 60+-moon system is most of the roster — lands in the single swarm band from
+    /// `swarmBand`, so radial cost stays flat regardless of moon count. Nothing is ever
+    /// dropped: a small roster promotes wholly (`swarm` empty), a huge one still shows
+    /// every moon, just not every moon on its own ring. Empty moons → just the central
+    /// planet (shown before the `hydrateBody` roster lands, like the star-only system
+    /// fallback).
     static func bodyModel(planet: Planet) -> SystemModel {
         let centralRings = PlanetMaterial.ringSystem(
             hasRings: planet.physical?.rings ?? false,
