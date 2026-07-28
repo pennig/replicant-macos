@@ -41,9 +41,18 @@ enum MoonTiering {
     /// an exact anchor from `OrreryLayout` must be a full orbiter, which is what makes
     /// the swarm's coarser treatment safe.
     ///
-    /// A roster with no `radiusEarth` readings promotes nothing on size — with no data
-    /// we genuinely do not know which moons are major, and inventing an answer would
-    /// put arbitrary moons on rings.
+    /// When NO moon in the roster reports a `radiusEarth`, size cannot rank anything, so
+    /// the first `topBySize` moons in ROSTER ORDER promote instead. This is not an
+    /// arbitrary pick dressed up as one: index order IS orbital order in generated
+    /// systems (`OrreryMapping` verified this on ASTELLIO-1 and ABEEMIM-6), so while we
+    /// genuinely do not know which moons are biggest, we do know which are innermost —
+    /// and the innermost are the ones a player reads as "the moons" of the planet.
+    ///
+    /// Promoting nothing here was the alternative, and it fails on live data: SAFANA-7
+    /// carries 21 moons with zero `physical` blocks, so a size-only rule renders the
+    /// planet plus a 21-dot additive band and not one lit moon — strictly less legible
+    /// than the pre-swarm build, which drew every one of them as a sphere. ALASII-4
+    /// (48 moons, exactly one measured) degenerated the same way to a single impostor.
     static func split(_ moons: [Moon], rules: Rules = .default) -> (promoted: [Moon], swarm: [Moon]) {
         guard moons.count > rules.promoteAllAtOrBelow else { return (moons, []) }
 
@@ -60,6 +69,9 @@ enum MoonTiering {
                 .sorted { $0.r > $1.r }
                 .prefix(rules.topBySize)
             promotedIDs.formUnion(bySize.map(\.id))
+        } else {
+            // Nothing measured anywhere in the roster — fall back to orbital order.
+            promotedIDs.formUnion(moons.prefix(rules.topBySize).map(\.designation))
         }
 
         return (moons.filter { promotedIDs.contains($0.designation) },

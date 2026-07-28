@@ -110,7 +110,17 @@ enum OrreryMapping {
 
     // MARK: - Build
 
-    static func systemModel(from s: StarSystem) -> SystemModel {
+    /// The system-level orrery model.
+    ///
+    /// `options` carries the same plane knobs `bodyModel` takes, and for the same
+    /// reason: `tiltCapDeg` sets how much of a planet's real obliquity its rendered
+    /// pole keeps, and that pole drives its ring plane, its surface banding and its
+    /// axis marker here exactly as it does at body level. Both layers are encoded in
+    /// the SAME frame during a drill transition, so a planet built at two different
+    /// tilt caps would visibly pop as the crossfade ran. (`decoupleMoonPlane` has no
+    /// effect at this level — a system layer has no moon orbits to decouple.)
+    static func systemModel(from s: StarSystem,
+                            options: OrreryPlaneOptions = .default) -> SystemModel {
         let star = s.star
 
         // Frame the system from the raw (AU-mapped) orbits first, so we can derive the
@@ -188,7 +198,11 @@ enum OrreryMapping {
                 rings: ringSystems[i],
                 spin: BodySpin(tiltDeg: p.physical?.axialTiltDeg,
                                rotationHours: p.physical?.rotationPeriodHours,
-                               tidallyLocked: p.physical?.tidallyLocked ?? false),
+                               tidallyLocked: p.physical?.tidallyLocked ?? false,
+                               tiltCapDeg: options.tiltCapDeg),
+                // A planet reports its year in DAYS (a moon reports hours). Kept apart
+                // from `periodDays` above, which falls back to Kepler off the AU.
+                reportedPeriodDays: p.physical?.orbitalPeriodDays,
                 indicators: indicators, hasInterestingMoon: interestingMoon, moons: [],
                 lagrange: lagrange)
         }
@@ -341,6 +355,15 @@ enum OrreryMapping {
                 luminositySolar: nil, ageMy: nil, habitableZone: nil, miningBonusPct: nil),
             hzInnerScene: nil, hzOuterScene: nil, planets: [], belts: [], hazards: [],
             kuiperScene: nil, frameScene: 20, deviceCount: 0, vesselCount: 0)
+    }
+
+    /// A moon's orbital period in days *as the scan reported it* — from
+    /// `orbital_period_hours`, which is the only form a moon ever comes in; the days
+    /// field is accepted as a belt-and-braces fallback. `nil` means the scan did not say,
+    /// which is precisely what separates a fact the dossier may print from the render
+    /// fallback that stands in for it.
+    static func reportedMoonPeriodDays(_ m: Moon) -> Double? {
+        m.physical?.orbitalPeriodHours.map { $0 / 24 } ?? m.physical?.orbitalPeriodDays
     }
 
     /// A moon worth flagging: has your device, a live salvage site, a mining site,
@@ -536,10 +559,10 @@ enum OrreryMapping {
                 inventory: m.inventory,
                 semiMajorScene: moonOrbits[i],
                 // A moon's real speed is `orbital_period_hours`; it never reports days.
-                // The index ladder is only a last resort for an unscanned roster.
-                periodDays: m.physical?.orbitalPeriodHours.map { $0 / 24 }
-                    ?? m.physical?.orbitalPeriodDays
-                    ?? (8 + Double(i) * 3),
+                // The index ladder is only a last resort for an unscanned roster — and
+                // because it is indistinguishable from a real number once stored, the
+                // reported value is carried separately in `reportedPeriodDays` below.
+                periodDays: reportedMoonPeriodDays(m) ?? (8 + Double(i) * 3),
                 phase0Deg: phaseDeg(m.designation),
                 displayRadius: centralScene * moonSizeFraction(m),
                 colorHex: moonColor(type: m.type),
@@ -550,6 +573,7 @@ enum OrreryMapping {
                                tiltCapDeg: options.tiltCapDeg),
                 hasSubsurfaceOcean: m.physical?.hasSubsurfaceOcean ?? false,
                 orbitalDistanceKm: m.physical?.orbitalDistanceKm,
+                reportedPeriodDays: reportedMoonPeriodDays(m),
                 indicators: indicators,
                 hasInterestingMoon: false, moons: [])
         }
@@ -602,10 +626,13 @@ enum OrreryMapping {
                 orbitScene: orbit,
                 offsetScene: incHash * 2 * spread * bandWidth,
                 // Real period where known, else Kepler-ish from the band radius so the
-                // cloud shows differential rotation instead of turning rigidly.
-                periodDays: m.physical?.orbitalPeriodHours.map { $0 / 24 }
-                    ?? m.physical?.orbitalPeriodDays
+                // cloud shows differential rotation instead of turning rigidly. That
+                // fallback is derived from an already-synthesized radius, so it is a
+                // render value only — `reportedPeriodDays` is what the dossier reads.
+                periodDays: reportedMoonPeriodDays(m)
                     ?? max(2, 6 * pow(orbit / max(centralClearance, 0.001), 1.5)),
+                reportedPeriodDays: reportedMoonPeriodDays(m),
+                orbitalDistanceKm: m.physical?.orbitalDistanceKm,
                 phase0Deg: phaseDeg(m.designation),
                 displayRadius: centralScene * moonSizeFraction(m),
                 colorHex: moonColor(type: m.type),

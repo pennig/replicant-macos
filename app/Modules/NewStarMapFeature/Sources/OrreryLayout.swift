@@ -147,9 +147,18 @@ struct OrreryLayout {
     /// A swarm member's world position at the layer's `time`, with `reveal` applied.
     ///
     /// Unlike every other anchor this is NOT confined to the orbital plane: the signed
-    /// `offsetScene` lifts it off the plane so the band reads as a cloud of rocks. The
-    /// offset is scaled by `reveal` along with the radius, so the swarm emerges from the
-    /// centre on drill-in exactly as the orbiters do rather than popping into place.
+    /// `offsetScene` lifts it off the plane so the band reads as a cloud of rocks. Both
+    /// the radius and the offset are scaled by `reveal`, so a caller that wants the
+    /// collapsing-toward-the-centre emerge gets it from one place.
+    ///
+    /// REVEAL OWNERSHIP: a caller rendering the band through the *point pipeline*
+    /// (`OrreryGeometry.swarmPoints` → `orrery_swarm_vertex`) passes `reveal: 1` here,
+    /// because that shader applies reveal itself — the same convention `beltPoints`
+    /// follows by taking no reveal parameter at all. Passing a partial reveal on that
+    /// path would square it, leaving the band bunched near the planet while the promoted
+    /// moons and orbit rings sit at the correct radius. The parameter stays because
+    /// non-shader consumers (picking, tests, any future CPU-side anchor) need the real
+    /// mid-transition position.
     func swarmPosition(_ m: SwarmMoon) -> SIMD3<Float> {
         let a = swarmAngle(m)
         let r = Float(m.orbitScene) * scale * reveal

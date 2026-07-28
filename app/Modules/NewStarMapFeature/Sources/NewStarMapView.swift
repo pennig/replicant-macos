@@ -257,7 +257,7 @@ public struct NewStarMapView: View {
             return nil
         case let .system(id):
             if let system = persistedSystem(id) {
-                return OrreryMapping.systemModel(from: system)
+                return OrreryMapping.systemModel(from: system, options: store.planeOptions)
             }
             guard let row = surveyed.first(where: { $0.designation == id }) else { return nil }
             return OrreryMapping.minimal(
@@ -1260,9 +1260,12 @@ private struct SystemHUD: View {
                         + (p.spin.isRetrograde ? " · retrograde" : "")))
                 }
             } else {
-                // Body level: the body is a moon.
+                // Body level: the body is a moon. Same rule as the planet branch above:
+                // a fact appears only when the scan reported it. `periodDays` is never
+                // nil (an unscanned moon gets an index ladder), so the period is gated on
+                // `reportedPeriodDays` rather than printed unconditionally.
                 if let km = p.orbitalDistanceKm { facts.append(("Orbit", BodyFactFormat.km(km))) }
-                facts.append(("Period", BodyFactFormat.hours(p.periodDays * 24)))
+                if let d = p.reportedPeriodDays { facts.append(("Period", BodyFactFormat.hours(d * 24))) }
                 if p.spin.tidallyLocked { facts.append(("Rotation", "Tidally locked")) }
                 if let air = p.atmosphere.label { facts.append(("Atmosphere", air)) }
                 if p.hasSubsurfaceOcean { facts.append(("Ocean", "Subsurface")) }
@@ -1278,9 +1281,15 @@ private struct SystemHUD: View {
         // point, so they must still resolve here or picking one from the list would
         // select a code the dossier can't show.
         if let m = model.swarm.first(where: { $0.id == code }) {
+            // Same honesty rule as the two branches above, and it bites hardest here:
+            // a swarm member's `periodDays` falls back to Kepler off a SYNTHESIZED band
+            // radius, so showing it unconditionally printed a number derived from a
+            // number we invented — while a member with a real, scanned orbital distance
+            // showed no distance at all.
             var facts: [(String, String)] = []
             if let t = m.type { facts.append(("Type", t)) }
-            facts.append(("Period", BodyFactFormat.hours(m.periodDays * 24)))
+            if let km = m.orbitalDistanceKm { facts.append(("Orbit", BodyFactFormat.km(km))) }
+            if let d = m.reportedPeriodDays { facts.append(("Period", BodyFactFormat.hours(d * 24))) }
             return LocationDossierInfo(
                 kind: "Moon",
                 title: m.name.map { "\(m.designation) · \($0)" } ?? m.designation,

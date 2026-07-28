@@ -1476,13 +1476,38 @@ struct MoonTieringTests {
         }
     }
 
-    @Test func largeRosterWithNoSizeDataPromotesNothingOnSize() {
-        // POLARISON-6: 59 moons, zero physical blocks. We do not know which are
-        // major, so none is promoted on size — asserting otherwise would be a guess.
+    @Test func largeRosterWithNoSizeDataPromotesTheInnermostFew() {
+        // POLARISON-6: 59 moons, zero physical blocks. Promoting NOTHING here — the
+        // original rule — renders the planet plus a dot cloud with not one lit moon,
+        // which is what SAFANA-7 (21 moons, zero physical) actually did on live data.
+        // With no radii we cannot know which moons are biggest, but index order IS
+        // orbital order, so the innermost `topBySize` promote.
         let moons = (0..<59).map(plain)
         let t = MoonTiering.split(moons)
-        #expect(t.promoted.isEmpty)
-        #expect(t.swarm.count == 59)
+        #expect(t.promoted.map(\.designation) == ["P-6-0", "P-6-1", "P-6-2", "P-6-3"])
+        #expect(t.swarm.count == 55)
+        #expect(t.promoted.count + t.swarm.count == 59)
+    }
+
+    @Test func rosterJustOverTheThresholdWithNoSizeDataStillLightsSomeMoons() {
+        // The boundary: 9 moons is one past `promoteAllAtOrBelow`, so the swarm engages
+        // for the first time. It must not engage for the WHOLE roster — a planet does
+        // not go from nine sphere moons to nine dots because it gained a tenth.
+        let moons = (0..<9).map(plain)
+        let t = MoonTiering.split(moons)
+        #expect(t.promoted.map(\.designation) == ["P-6-0", "P-6-1", "P-6-2", "P-6-3"])
+        #expect(t.swarm.count == 5)
+        #expect(t.promoted.count + t.swarm.count == 9)
+    }
+
+    @Test func onePartlyMeasuredRosterStillRanksBySizeNotOrder() {
+        // ALASII-4's shape: 48 moons, exactly one measured. Size data existing at all
+        // means we DO know something, so the roster-order fallback must stay off — the
+        // one measured moon promotes and nothing else does on size.
+        let moons = [sized(0, 0.3)] + (1..<48).map(plain)
+        let t = MoonTiering.split(moons)
+        #expect(t.promoted.map(\.designation) == ["P-6-0"])
+        #expect(t.swarm.count == 47)
     }
 
     @Test func interestingMoonsAlwaysPromote() {
@@ -1548,7 +1573,10 @@ struct MoonSwarmLayoutTests {
         // The old `maxMoons` cap dropped 35 of 59 moons entirely. Nothing is dropped now.
         let m = OrreryMapping.bodyModel(planet: planet(roster(59)))
         #expect(m.planets.count + m.swarm.count == 59)
-        #expect(m.swarm.count == 59)          // none promoted: no size data, nothing interesting
+        // No size data anywhere, so the innermost four promote on roster order (which is
+        // orbital order) and the remaining 55 swarm. Every one is still represented.
+        #expect(m.planets.count == 4)
+        #expect(m.swarm.count == 55)
     }
 
     @Test func frameSceneIsFlatInMoonCount() {
@@ -1599,7 +1627,8 @@ struct MoonSwarmLayoutTests {
             #expect(abs(b.offsetScene - a.offsetScene) < 1e-9)
         }
         let moved = try! #require(after.swarm.first { $0.designation == movedID })
-        #expect(moved.orbitScene != before.swarm[7].orbitScene)
+        let wasAt = try! #require(before.swarm.first { $0.designation == movedID })
+        #expect(moved.orbitScene != wasAt.orbitScene)
     }
 
     @Test func swarmPlacementIsDeterministic() {
@@ -1618,19 +1647,55 @@ struct MoonSwarmLayoutTests {
             Moon(designation: "SOL-5-\(i + 1)", recon: .scanned,
                  physical: BodyPhysical(orbitalDistanceKm: d))
         }
-        // Force everything into the swarm by exceeding the promote-all threshold with
-        // no radii and no interest.
+        // Exceeding the promote-all threshold with no radii puts everything but the
+        // innermost four (by roster order) into the swarm.
         let m = OrreryMapping.bodyModel(planet: planet(moons, designation: "SOL-5"))
-        #expect(m.swarm.count == 12)
+        #expect(m.planets.count == 4)
+        #expect(m.swarm.count == 8)
         func orbit(_ n: Int) -> Double {
             m.swarm.first { $0.designation == "SOL-5-\(n)" }!.orbitScene
         }
         // Radial order follows real distance, not designation order.
         #expect(orbit(6) < orbit(5))          // 128,000 km inside 181,400 km
-        #expect(orbit(4) < orbit(10))         // 1.88e6 km inside 7.15e6 km
+        #expect(orbit(7) < orbit(10))         // 221,900 km inside 7.15e6 km
         // The family gap is wider than any gap inside the inner cluster.
-        let innerSpan = orbit(4) - orbit(6)
-        #expect(orbit(10) - orbit(4) > innerSpan)
+        let innerSpan = orbit(5) - orbit(6)
+        #expect(orbit(10) - orbit(5) > innerSpan)
+    }
+
+    @Test func swarmSeparatesMeasuredFactsFromRenderFallbacks() throws {
+        // A swarm member's `periodDays` is a Kepler-ish guess off a SYNTHESIZED band
+        // radius when nothing was reported, so the dossier cannot read it. The measured
+        // numbers travel separately, and are nil exactly when the scan stayed silent.
+        // (Index 6, so the roster-order promotion of the innermost four leaves it in
+        // the swarm.)
+        var moons = roster(12)
+        moons[6] = Moon(designation: "POLARISON-6-7", recon: .scanned,
+                        physical: BodyPhysical(orbitalPeriodHours: 96,
+                                               orbitalDistanceKm: 1_070_400))
+        let m = OrreryMapping.bodyModel(planet: planet(moons))
+
+        let measured = try #require(m.swarm.first { $0.designation == "POLARISON-6-7" })
+        #expect(measured.orbitalDistanceKm == 1_070_400)
+        #expect(measured.reportedPeriodDays == 96.0 / 24)
+        #expect(measured.periodDays == 96.0 / 24)          // render value tracks the fact
+
+        let silent = try #require(m.swarm.first { $0.designation == "POLARISON-6-9" })
+        #expect(silent.orbitalDistanceKm == nil)
+        #expect(silent.reportedPeriodDays == nil)
+        #expect(silent.periodDays > 0)                     // …but the band still animates
+    }
+
+    @Test func promotedMoonsSeparateReportedPeriodsFromTheIndexLadder() throws {
+        var moons = roster(12)
+        moons[0] = Moon(designation: "POLARISON-6-1", recon: .scanned,
+                        physical: BodyPhysical(orbitalPeriodHours: 42))
+        let m = OrreryMapping.bodyModel(planet: planet(moons))
+        let reported = try #require(m.planets.first { $0.designation == "POLARISON-6-1" })
+        #expect(reported.reportedPeriodDays == 42.0 / 24)
+        let ladder = try #require(m.planets.first { $0.designation == "POLARISON-6-2" })
+        #expect(ladder.reportedPeriodDays == nil)
+        #expect(ladder.periodDays > 0)
     }
 
     @Test func capturedAsteroidsScatterWiderThanRegularMoons() {
@@ -1672,6 +1737,27 @@ struct SwarmLayoutTests {
         let p = layout.swarmPosition(m)
         #expect(abs(p.y - 1.5) < 1e-5)
         #expect(abs(simd_length(SIMD2(p.x, p.z)) - 10) < 1e-4)
+    }
+
+    @Test func swarmRevealIsAppliedExactlyOnceAndLinearly() {
+        // Reveal must scale the band LINEARLY, because that is what keeps it in lockstep
+        // with the promoted moons and their orbit rings (`orbiterPosition` is likewise
+        // `semiMajorScene * scale * reveal`). Squaring it — which happens if a caller
+        // bakes reveal in here AND lets `orrery_swarm_vertex` apply it again — parks the
+        // band at 25% of its radius while the rings sit at 50%, so the cloud stays
+        // bunched against the planet and then snaps outward. Invisible at rest (1² = 1),
+        // which is exactly why this needs pinning.
+        let m = swarmMoon("SOL-5-9", orbit: 10, offset: 2, period: 8, phase: 0)
+        func at(_ reveal: Float) -> SIMD3<Float> {
+            OrreryLayout(model: model(swarm: [m]), center: .zero, scale: 1,
+                         reveal: reveal, time: 0).swarmPosition(m)
+        }
+        let half = at(0.5)
+        #expect(abs(simd_length(SIMD2(half.x, half.z)) - 5) < 1e-4)   // 5, never 2.5
+        #expect(abs(half.y - 1) < 1e-4)                               // 1, never 0.5
+        let full = at(1)
+        #expect(abs(simd_length(SIMD2(full.x, full.z)) - 10) < 1e-4)
+        #expect(abs(full.y - 2) < 1e-4)
     }
 
     @Test func swarmMemberOrbitsOverTime() {
@@ -1848,6 +1934,27 @@ struct OrbitPlaneTests {
         let layout = OrreryLayout(model: m, center: .zero, scale: 1, reveal: 1, time: 7)
         #expect(layout.plane == .flat)
         #expect(m.planets.allSatisfy { abs(layout.orbiterPosition($0).y) < 1e-5 })
+    }
+
+    @Test func theTiltCapKnobReachesTheSystemLevelToo() throws {
+        // Both layers are encoded in the SAME frame during a drill transition, so a
+        // planet built at two different tilt caps pops as the crossfade runs. The knob
+        // used to reach `bodyModel` only, leaving `systemModel` pinned at the default.
+        let system = StarSystem(designation: "SOL", planets: [tiltedPlanet(97.77)])
+        let physicalOpts = OrreryMapping.OrreryPlaneOptions(tiltCapDeg: 90)
+
+        let defaulted = try #require(OrreryMapping.systemModel(from: system).planets.first)
+        let swept = try #require(
+            OrreryMapping.systemModel(from: system, options: physicalOpts).planets.first)
+        #expect(defaulted.spin.tiltCapDeg == 38)
+        #expect(swept.spin.tiltCapDeg == 90)
+        // The knob has to actually move the rendered plane, or the two agree by accident.
+        #expect(defaulted.spin.renderObliquityDeg != swept.spin.renderObliquityDeg)
+
+        // …and the drilled copy of the same planet must land on the same rendered pole.
+        let drilled = try #require(
+            OrreryMapping.bodyModel(planet: tiltedPlanet(97.77), options: physicalOpts).centralBody)
+        #expect(abs(drilled.spin.renderObliquityDeg - swept.spin.renderObliquityDeg) < 1e-9)
     }
 
     @Test func orbitRingsTiltWithTheirMoons() {

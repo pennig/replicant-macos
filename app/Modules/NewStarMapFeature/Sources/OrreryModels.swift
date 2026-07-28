@@ -96,7 +96,19 @@ struct SwarmMoon: Identifiable, Equatable, Sendable {
     /// Signed offset off the orbital plane (scene units) — the inclination scatter that
     /// makes the band read as a cloud of rocks rather than a ring of dots.
     var offsetScene: Double
+    /// The period the band is ANIMATED at. Always carries a number: a Kepler-ish guess
+    /// off the synthesized band radius when the scan reported nothing, so the cloud
+    /// shows differential rotation instead of turning rigidly.
     var periodDays: Double
+    /// The orbital period the scan actually REPORTED, if it did. Distinct from
+    /// `periodDays` because that one is a render value and is never nil — a dossier
+    /// reading it would print an invention as a measurement.
+    var reportedPeriodDays: Double? = nil
+    /// Real orbital distance (km), where the scan gives one. Band placement goes through
+    /// `orbitScene`, so nothing renders from this — but it is the one *measured* number
+    /// a swarm member may carry, and hiding it while showing a synthesized period got
+    /// the honesty exactly backwards.
+    var orbitalDistanceKm: Double? = nil
     var phase0Deg: Double
     var displayRadius: Double
     var colorHex: String
@@ -148,6 +160,11 @@ struct OrreryPlanet: Identifiable, Equatable, Sendable {
     var hasSubsurfaceOcean: Bool = false
     /// Moon-only: real orbital distance, which sets the orbit radius at body level.
     var orbitalDistanceKm: Double?
+    /// The orbital period the scan actually REPORTED, if it did. `periodDays` above is
+    /// the render value and is never nil (an unscanned moon gets an index ladder, a
+    /// planet gets Kepler off its AU), so a dossier must read this one to keep from
+    /// presenting a fallback as a measurement.
+    var reportedPeriodDays: Double? = nil
     var indicators: BodyIndicators
     /// A moon worth a look (life / salvage / your device / inventory). Refined
     /// once the planet is hydrated; a hint (`moonCount > 0`) before that.

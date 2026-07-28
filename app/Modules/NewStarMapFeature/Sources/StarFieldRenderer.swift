@@ -1764,9 +1764,17 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         // because they orbit. Positions are generated around `buildCenter` so the
         // shader's `orreryCenter − orreryBuildCenter` rebase lands them correctly on a
         // body-level centre that tracks its planet.
+        //
+        // `reveal: 1` — NOT `emergeReveal`. In the point pipeline the SHADER owns reveal
+        // (`orrery_swarm_vertex` scales `local * u.orreryReveal`, exactly as
+        // `orrery_point_vertex` does for the belt, whose `beltPoints` likewise bakes at
+        // full radius). Baking `emergeReveal` in here too would apply it twice — at
+        // bodyProgress 0.5 the band would sit at 25% of its radius while the promoted
+        // moons and their orbit rings sit at 50%, so the cloud stays bunched against the
+        // planet and then snaps outward. Invisible at rest, because 1² = 1.
         if let swarmBuf = swarmBuffer, swarmCount > 0 {
             let layout = orreryLayout(model: model, center: buildCenter, scale: scale,
-                                      reveal: emergeReveal, time: time)
+                                      reveal: 1, time: time)
             let pts = OrreryGeometry.swarmPoints(layout: layout)
             if !pts.isEmpty {
                 pts.withUnsafeBytes { src in
