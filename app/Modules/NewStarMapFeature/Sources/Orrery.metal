@@ -350,33 +350,23 @@ fragment OrreryBodyOut orrery_body_fragment(OrreryBodyVaryings in [[stage_in]],
     float3x3 bodyRot = spinRot * transpose(bodyFrame);
 
     // --- Intersect the impostor ----------------------------------------------------
-    // The limb carve, evaluated on the RIM direction: the surface direction that faces
-    // exactly sideways at this fragment's screen ANGLE. Sampling it at the front-surface
-    // point under the fragment instead — which is what this shader used to do — is what
-    // produced silhouettes that folded back on themselves. Near the limb `dz/dd` diverges,
-    // so walking one pixel outward swings the sampled direction through a large angle;
-    // the threshold then oscillates as fast as the noise does and `d > limb(d)` stops
-    // being monotonic in `d`. A pixel could be cut at d = 0.95, kept at 0.97 and cut
-    // again at 0.99, which reads as a hole whose edge crosses itself. Evaluated on the
-    // rim the carve depends on the screen angle ALONE, so the kept set is a radial
-    // interval for every angle and a fold is not representable.
-    float limbScale = 1.0;
-    if (in.irregular > 0.001) {
-        float3 rimView = d > 1e-4 ? normalize(float3(uvS, 0.0)) : float3(1.0, 0.0, 0.0);
-        float3 rimBody = bodyRot * (transpose(viewRot) * rimView);
-        float lumpRim = fbm(rimBody * 2.7 + in.vseed * 13.0) - 0.5;   // −0.5…0.5
-        limbScale = 1.0 + in.irregular * min(lumpRim, 0.0);           // only ever pulls IN
-    }
-
     // Ray/ellipsoid in closed form — no iteration, and exact. The impostor is
     // reconstructed orthographically (the view ray is +z, as it always has been here), so
-    // with W = view→body and the surface defined by |p ⊘ axes| = limbScale for
-    // p = (uvS, z), solving for z is one quadratic. Silhouette, normal and depth then all
-    // come from the SAME surface by construction, which is the property the old
-    // carve-a-sphere approach could not have: it tested visibility against one field and
-    // shaded against another.
+    // with W = view→body and the surface defined by |p ⊘ axes| = 1 for p = (uvS, z),
+    // solving for z is one quadratic.
+    //
+    // `limbScale` is DELIBERATELY not folded into the axes here, though it reads as the
+    // natural place for it. Doing that scales the ENTIRE ellipsoid, and since the scale
+    // is a function of the fragment's screen angle, every radial line of the disc then
+    // solves against a differently-sized body — so the rendered object is a family of
+    // concentric ellipsoids indexed by screen angle, not a solid. Under spin the sampled
+    // rim value changes, the whole surface inflates and deflates with it, and because the
+    // normal is read off the moving intersection the texture slides over the rock: it
+    // reads as a body changing SHAPE as it turns, which is what it is doing. Keeping the
+    // solve on the true axes makes depth, normal and texture exactly rigid; the carve is
+    // applied below as what it actually is — a cut in the outline, not a resize.
     float3x3 W = bodyRot * transpose(viewRot);            // view → body (spun)
-    float3 invA = 1.0 / (in.axes * limbScale);
+    float3 invA = 1.0 / in.axes;
     float3 fv = invA * (W * float3(uvS, 0.0));
     float3 ev = invA * (W * float3(0.0, 0.0, 1.0));
     float qa = dot(ev, ev), qb = dot(ev, fv), qc = dot(fv, fv) - 1.0;
@@ -390,7 +380,35 @@ fragment OrreryBodyOut orrery_body_fragment(OrreryBodyVaryings in [[stage_in]],
     // `fwidth(d)` against a fast-varying threshold, its screen derivative is now the
     // right width to feather by.
     float dEff = sqrt(saturate(1.0 - disc / qa));
-    float coverage = smoothstep(1.0, 1.0 - fwidth(dEff) - 0.01, dEff);
+
+    // The limb carve, sampled on the RIM — the material point that faces exactly sideways
+    // at this fragment's screen ANGLE. Sampling it at the front-surface point under the
+    // fragment instead is what used to make silhouettes fold back on themselves: near the
+    // limb `dz/dd` diverges, so walking one pixel outward swings the sampled direction
+    // through a large angle, the threshold oscillates as fast as the noise does, and the
+    // cut stops being monotonic in screen radius — cut at 0.95, kept at 0.97, cut again at
+    // 0.99, which draws a hole whose edge crosses itself.
+    //
+    // The rim is the quadric's CONTOUR GENERATOR, not the sphere's. For xᵀMx = 1 viewed
+    // along ẑ it is the planar section (M·ẑ)·x = 0, so for screen direction û the rim
+    // point sits at (û, −(m.xy·û)/m.z). Using the sphere's answer — (û, 0) — instead is a
+    // body-orientation-dependent error, which means the carve samples a slightly different
+    // material point as the rock turns and the notches crawl. `m.z` works out to exactly
+    // `qa` (it is ẑᵀMẑ = |ev|²), which is why nothing extra needs computing. Still a
+    // function of screen ANGLE alone, so the kept set stays a radial interval per angle
+    // and a fold remains unrepresentable.
+    float limbScale = 1.0;
+    if (in.irregular > 0.001) {
+        float2 uhat = d > 1e-4 ? uvS / d : float2(1.0, 0.0);
+        float3 m = transpose(W) * (invA * ev);
+        float3 rimView = normalize(float3(uhat, -dot(m.xy, uhat) / qa));
+        float3 rimBody = bodyRot * (transpose(viewRot) * rimView);
+        float lumpRim = fbm(rimBody * 2.7 + in.vseed * 13.0) - 0.5;   // −0.5…0.5
+        limbScale = 1.0 + in.irregular * min(lumpRim, 0.0);           // only ever pulls IN
+    }
+    // Applied where it belongs: a cut in the OUTLINE, leaving everything inside untouched.
+    if (dEff > limbScale) discard_fragment();
+    float coverage = smoothstep(limbScale, limbScale - fwidth(dEff) - 0.01, dEff);
 
     // The surface point, in units of `radius`. Depth is reconstructed from this — never
     // from a shading normal (see the note on `OrreryBodyOut`).
@@ -445,7 +463,17 @@ fragment OrreryBodyOut orrery_body_fragment(OrreryBodyVaryings in [[stage_in]],
         float3 bumped = normalize(dirWorld - (tx * gx + tz * gz) * amp * 4.0);
         // Facet the result: snapping toward a coarse quantization reads as flat-shaded
         // chunks, which is the strongest "asteroid" cue at a few pixels across.
-        float3 faceted = normalize(round(bumped * 3.0) / 3.0 + bumped * 0.35);
+        //
+        // Quantised in the BODY frame, not the world frame. `round()` snaps to a lattice
+        // fixed in whatever space its argument lives in; applied to the world-space normal
+        // it pins the facets to the WORLD axes, and a spinning rock then sweeps its
+        // surface through a stationary lattice — the flat chunks crawl across the body
+        // instead of turning with it, which reads as the shape reforming as it rotates.
+        // Rotating in, snapping, and rotating back costs two matrix multiplies and makes
+        // the facets part of the rock.
+        float3 bodyBump = bodyRot * bumped;
+        float3 bodyFacet = normalize(round(bodyBump * 3.0) / 3.0 + bodyBump * 0.35);
+        float3 faceted = transpose(bodyRot) * bodyFacet;
         dirWorld = normalize(mix(bumped, faceted, 0.55));
         nView = normalize(viewRot * dirWorld);
     }

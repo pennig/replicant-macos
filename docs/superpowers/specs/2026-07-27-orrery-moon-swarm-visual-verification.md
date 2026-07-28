@@ -97,6 +97,19 @@ as a sphere with bites out of it, because a clamped field leaves most of the out
   on the rim direction, which depends on screen *angle* alone, and a fold is not representable.
 - **Watch the limb** as another body passes behind it, for occlusion oddities. Depth comes from the
   solved intersection, not from the perturbed shading normal.
+- **Rigidity under spin — the sharpest test, easiest in the playground** (Tools ▸ Asteroid
+  Playground). Let one rotate and watch a single surface feature travel across the face. It must
+  ride the rock like paint. Three specific failures, all of which have happened:
+  - *The body breathes* — its outline inflates and deflates as it turns. That means the limb carve
+    has been folded back into the ellipsoid's axes, which scales the WHOLE body per screen angle
+    and stops the render being a fixed solid at all. The carve belongs on the outline cut
+    (`dEff > limbScale`), never in `invA`.
+  - *Facets crawl* — flat-shaded chunks slide over the surface instead of turning with it. That
+    means the `round()` facet quantisation is being applied to a WORLD-space normal, pinning the
+    lattice to the world axes. It must be done in the body frame.
+  - *Notches drift along the limb* — chips slowly migrate rather than rotating out of view. That
+    means the rim sample is using the sphere's contour (û, 0) instead of the ellipsoid's true
+    contour generator, an error that varies with orientation.
 
 Also confirm the faceted *shading* still looks right — the lighting normal is deliberately still
 perturbed, and that is the thing most easily broken by accident.
