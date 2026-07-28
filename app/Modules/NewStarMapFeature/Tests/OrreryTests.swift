@@ -1671,3 +1671,40 @@ struct SwarmGeometryTests {
         #expect(OrreryGeometry.swarmPoints(layout: layout).isEmpty)
     }
 }
+
+// MARK: - Moon size honesty (size must carry real information)
+
+struct MoonSizeHonestyTests {
+    private func moon(_ radiusEarth: Double?) -> Moon {
+        Moon(designation: "SOL-5-1", recon: radiusEarth == nil ? .visited : .scanned,
+             physical: radiusEarth.map { BodyPhysical(radiusEarth: $0) })
+    }
+
+    @Test func sizeRangeIsWideEnoughToReadAsDifferentKindsOfBody() {
+        // SOL-5's real moons span 0.0004 → 0.413 R⊕ (a 1000× ratio). The old curve
+        // compressed that to 1.49× on screen, so every moon looked the same size.
+        let tiny = OrreryMapping.moonSizeFraction(moon(0.0004))
+        let large = OrreryMapping.moonSizeFraction(moon(0.413))
+        #expect(large / tiny > 4)
+        #expect(tiny < 0.06)
+        #expect(large <= 0.30)
+    }
+
+    @Test func unscannedMoonSitsAtTheLowEndNotTheMiddle() {
+        // The old default (0.14) out-sized most KNOWN moons, so an uncharted rock
+        // rendered larger than a real one. It must now sit near the floor.
+        let unknown = OrreryMapping.moonSizeFraction(moon(nil))
+        #expect(unknown < OrreryMapping.moonSizeFraction(moon(0.1)))
+        #expect(unknown <= 0.07)
+    }
+
+    @Test func sizeIsMonotonicInRadius() {
+        let radii: [Double] = [0.0004, 0.001, 0.01, 0.05, 0.1, 0.2, 0.3, 0.413, 2.0]
+        let sizes = radii.map { OrreryMapping.moonSizeFraction(moon($0)) }
+        for (a, b) in zip(sizes, sizes.dropFirst()) { #expect(b >= a) }
+    }
+
+    @Test func sizeIsCappedSoAMoonNeverRivalsItsPlanet() {
+        #expect(OrreryMapping.moonSizeFraction(moon(50)) <= 0.30)
+    }
+}

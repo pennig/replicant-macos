@@ -383,12 +383,24 @@ enum OrreryMapping {
     // MARK: - Body level (a planet + its moons)
 
     /// Moon display radius as a *fraction of the central planet's* rendered radius —
-    /// from real `radiusEarth` when scanned, else a small default. Moons read clearly
-    /// smaller than the planet they orbit. The scene radius is `centralScene · fraction`.
+    /// from real `radiusEarth` when scanned, else a small default. The scene radius is
+    /// `centralScene · fraction`.
+    ///
+    /// The span is deliberately wide. Real moon radii inside ONE system cover a 1000×
+    /// range (SOL-5: 0.0004 → 0.413 R⊕); the previous curve
+    /// (`min(0.30, 0.10 + 0.08·√rₑ)`) compressed that to 1.49× on screen, so a captured
+    /// rock rendered as a sphere barely smaller than a major moon. A body's SIZE now
+    /// carries real information; legibility is the job of the label/pip overlays, which
+    /// have a minimum screen size, and of the HUD roster.
     static func moonSizeFraction(_ m: Moon) -> Double {
-        if let re = m.physical?.radiusEarth, re > 0 { return min(0.30, 0.10 + 0.08 * re.squareRoot()) }
-        return 0.14
+        guard let re = m.physical?.radiusEarth, re > 0 else { return unscannedMoonSizeFraction }
+        return min(0.30, 0.022 + 0.42 * pow(re, 0.62))
     }
+
+    /// An unscanned moon's size. Near the FLOOR of the range, not the middle: the old
+    /// mid-range default out-sized most known moons, so an uncharted body looked more
+    /// substantial than a measured one — the exact inversion of what it should convey.
+    static let unscannedMoonSizeFraction: Double = 0.045
 
     /// A moon's atmosphere thickness. Moons report a `has_atmosphere` BOOLEAN, never
     /// the ordinal string planets get — so reading `physical.atmosphere` alone left
