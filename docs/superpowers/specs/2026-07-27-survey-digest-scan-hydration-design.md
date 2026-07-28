@@ -165,9 +165,13 @@ untouched.
 **Moon semantics.** Seed the parent planet when absent, by the same rule
 `seedingParent(of:)` uses (designation minus the trailing `-N`). Locate or append
 the moon; overwrite `type`, `lifeStage`, `physical`, `recon = .scanned`. Upsert
-salvage preserving each existing site's `remainingPct` and `depleted` — the
-digest carries neither, and clobbering them would destroy observed data. Leave
-`sites`, `devices`, and `inventory` untouched.
+salvage preserving each existing site's `remainingPct` — the digest carries no
+percentages, and clobbering them would destroy the only live figures we hold.
+`depleted` is taken *from* the scan rather than preserved: a scan is a fresh
+observation of the site's state, so it is the one path that can clear a stale
+local flag as well as set one (`salvage.depleted`'s payload key is still
+unconfirmed, so a wrong local flag is a real possibility). Leave `sites`,
+`devices`, and `inventory` untouched.
 
 Only fields the payload actually carries are written: a nil `type` or
 `lifeStage` in the observation leaves the cached value in place.

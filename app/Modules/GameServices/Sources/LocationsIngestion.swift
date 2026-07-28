@@ -164,6 +164,16 @@ public final class LocationsIngestion: Sendable {
             case "scan.completed":
                 // Full scanned body (physical, salvage, sites, inventory).
                 _ = try? await locationsClient.ingestScanResult(payload: payload)
+            case "ami.survey.digest":
+                // A Survey Run's per-body scan reports (API v2.3.3's
+                // `report.scans[]`) — physical block, moon roster, and salvage
+                // for every body the controller's drones scanned this tick.
+                // The one channel that carries them: adopted drones emit no
+                // events of their own (see the ami-drones-are-event-silent
+                // note). Digests arrive by the hundred per hour and only a
+                // handful carry scans, so `ingestSurveyScans` returns before
+                // touching the database when the array is absent or empty.
+                _ = try? await locationsClient.ingestSurveyScans(payload: payload)
             case "salvage.discovered":
                 // The only source of a site's absolute resource totals.
                 _ = try? await locationsClient.recordSalvageDiscovery(payload: payload)

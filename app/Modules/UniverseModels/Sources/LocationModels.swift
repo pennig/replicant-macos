@@ -229,6 +229,9 @@ public struct BodyPhysical: Equatable, Sendable, Codable {
     public var orbitalPeriodHours: Double?
     public var axialTiltDeg: Double?
     public var tags: [String]
+    /// The civilisation inhabiting the body, when a scan detects one. Reported on
+    /// both planet and moon blocks (null on every body observed so far).
+    public var speciesName: String?
     // Moon-specific
     public var tidallyLocked: Bool?
     public var orbitalDistanceKm: Double?
@@ -241,7 +244,8 @@ public struct BodyPhysical: Equatable, Sendable, Codable {
         atmosphere: String? = nil, magneticField: Bool? = nil, rings: Bool? = nil,
         rotationPeriodHours: Double? = nil, orbitalPeriodDays: Double? = nil,
         orbitalPeriodHours: Double? = nil, axialTiltDeg: Double? = nil,
-        tags: [String] = [], tidallyLocked: Bool? = nil, orbitalDistanceKm: Double? = nil,
+        tags: [String] = [], speciesName: String? = nil, tidallyLocked: Bool? = nil,
+        orbitalDistanceKm: Double? = nil,
         hasSubsurfaceOcean: Bool? = nil, hasAtmosphere: Bool? = nil
     ) {
         self.massEarth = massEarth
@@ -258,6 +262,7 @@ public struct BodyPhysical: Equatable, Sendable, Codable {
         self.orbitalPeriodHours = orbitalPeriodHours
         self.axialTiltDeg = axialTiltDeg
         self.tags = tags
+        self.speciesName = speciesName
         self.tidallyLocked = tidallyLocked
         self.orbitalDistanceKm = orbitalDistanceKm
         self.hasSubsurfaceOcean = hasSubsurfaceOcean
@@ -479,6 +484,10 @@ public struct Moon: Identifiable, Equatable, Sendable, Codable {
     public var designation: String
     public var name: String?
     public var type: String?
+    /// Detected biosignature stage, the moon's counterpart to `Planet.lifeStage`.
+    /// Optional, so a `StarSystem` blob persisted before this field decodes fine
+    /// (synthesized `Decodable` reads optionals with `decodeIfPresent`).
+    public var lifeStage: String?
     public var recon: Recon
     public var physical: BodyPhysical?
     public var sites: [ResourceSite]
@@ -488,13 +497,15 @@ public struct Moon: Identifiable, Equatable, Sendable, Codable {
     public var id: String { designation }
 
     public init(
-        designation: String, name: String? = nil, type: String? = nil, recon: Recon = .aware,
+        designation: String, name: String? = nil, type: String? = nil,
+        lifeStage: String? = nil, recon: Recon = .aware,
         physical: BodyPhysical? = nil, sites: [ResourceSite] = [], salvage: [SalvageSite] = [],
         devices: [LocatedDevice] = [], inventory: [InventoryItem] = []
     ) {
         self.designation = designation
         self.name = name
         self.type = type
+        self.lifeStage = lifeStage
         self.recon = recon
         self.physical = physical
         self.sites = sites
@@ -1032,8 +1043,10 @@ extension StarSystem {
     /// Merge a fresh moon roster over existing moons, keeping whichever copy of
     /// each moon carries more detail (physical / sites / salvage) so a per-moon
     /// scan isn't clobbered by a later planet-level fetch's stub. Existing moons
-    /// absent from the fresh roster are retained.
-    private static func mergingMoons(fresh: [Moon], into existing: [Moon]) -> [Moon] {
+    /// absent from the fresh roster are retained. Internal rather than private
+    /// so `observing(_:)` in `BodyObservation.swift` applies the same rule to a
+    /// survey scan's moon roster.
+    static func mergingMoons(fresh: [Moon], into existing: [Moon]) -> [Moon] {
         guard !existing.isEmpty else { return fresh }
         let existingByID = Dictionary(existing.map { ($0.designation, $0) }, uniquingKeysWith: { first, _ in first })
         var result = fresh.map { f -> Moon in

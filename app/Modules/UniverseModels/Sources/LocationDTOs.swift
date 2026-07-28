@@ -79,18 +79,53 @@ extension LocationDecoding {
             let raw = try? decoder.decode(RawScanResultSalvage.self, from: data)
         else { return [] }
         let blocks = [raw.planet?.salvage, raw.moon?.salvage, raw.salvage].compactMap { $0 }.flatMap { $0 }
-        return blocks.compactMap { entry -> SalvageObservation? in
-            guard
-                let designation = entry.designation,
-                let remaining = entry.resourcesRemaining, !remaining.isEmpty
-            else { return nil }
-            return SalvageObservation(
-                designation: designation,
-                body: entry.location ?? SalvageSite.bodyDesignation(ofSite: designation),
-                resourcesRemaining: remaining
-            )
-        }
+        return blocks.compactMap(\.observation)
     }
+
+    /// An `ami.survey.digest` payload's `report.scans[]` — every body the
+    /// survey's drones scanned this tick, each paired with the absolute salvage
+    /// amounts its block reported.
+    public static func surveyScans(from body: some Encodable) throws -> SurveyScans {
+        let entries = try reinterpret(body, as: RawSurveyDigestReport.self).report?.scans ?? []
+        var reports: [SurveyScanReport] = []
+        var unreadable: [String] = []
+        for scan in entries {
+            guard let observation = scan.observation() else {
+                unreadable.append(scan.scanType ?? "(no scan_type)")
+                continue
+            }
+            reports.append(SurveyScanReport(
+                deviceCode: scan.deviceCode, body: observation,
+                salvage: scan.salvageObservations()
+            ))
+        }
+        return SurveyScans(reports: reports, unreadable: unreadable)
+    }
+}
+
+/// The readable scans in one digest, plus the `scan_type` of each entry that
+/// wasn't readable. The types are carried rather than discarded so a kind this
+/// build doesn't handle (a belt or star scan, say) is *named* in the log
+/// instead of vanishing into a silently-shorter array — a bare count would say
+/// something was missed without saying what to implement.
+public struct SurveyScans: Equatable, Sendable {
+    public var reports: [SurveyScanReport]
+    public var unreadable: [String]
+
+    public init(reports: [SurveyScanReport] = [], unreadable: [String] = []) {
+        self.reports = reports
+        self.unreadable = unreadable
+    }
+
+    public var isEmpty: Bool { reports.isEmpty && unreadable.isEmpty }
+}
+
+/// Just enough of an `ami.survey.digest` payload to reach `report.scans[]`.
+/// The rest of the digest (progress, busy/idle counts, the belt_search block)
+/// is survey-queue telemetry, not location data, and is deliberately not read.
+struct RawSurveyDigestReport: Decodable {
+    struct Report: Decodable { var scans: [RawSurveyScan]? }
+    var report: Report?
 }
 
 /// Just enough of a `scan.completed` result to reach its salvage blocks.
@@ -229,6 +264,7 @@ struct RawBodyPhysical: Decodable {
     var axialTiltDeg: Double?
     var inHabitableZone: Bool?
     var lifeStage: String?
+    var speciesName: String?
     // moon extras
     var tidallyLocked: Bool?
     var orbitalDistanceKm: Double?
@@ -268,6 +304,20 @@ struct RawSalvage: Decodable {
     /// to its keys so either shape produces `resourcesAvailable`.
     var resourcesRemaining: [String: Double]?
     var depleted: Bool?
+
+    /// This entry's absolute remaining amounts, when it reports any. Nil when
+    /// the block carries only names (the `salvage[]` roster shape), since a
+    /// site with unknown units must never read as a site with zero.
+    var observation: SalvageObservation? {
+        guard let designation, let remaining = resourcesRemaining, !remaining.isEmpty else {
+            return nil
+        }
+        return SalvageObservation(
+            designation: designation,
+            body: location ?? SalvageSite.bodyDesignation(ofSite: designation),
+            resourcesRemaining: remaining
+        )
+    }
 }
 
 struct RawLagrange: Decodable {
@@ -438,7 +488,8 @@ extension RawBodyPhysical {
             atmosphere: atmosphere, magneticField: magneticField, rings: rings,
             rotationPeriodHours: rotationPeriodHours, orbitalPeriodDays: orbitalPeriodDays,
             orbitalPeriodHours: orbitalPeriodHours,
-            axialTiltDeg: axialTiltDeg, tags: tags ?? [], tidallyLocked: tidallyLocked,
+            axialTiltDeg: axialTiltDeg, tags: tags ?? [], speciesName: speciesName,
+            tidallyLocked: tidallyLocked,
             orbitalDistanceKm: orbitalDistanceKm, hasSubsurfaceOcean: hasSubsurfaceOcean,
             hasAtmosphere: hasAtmosphere
         )
@@ -583,7 +634,8 @@ extension RawLocation {
         case "moon":
             guard let m = moon, let designation = m.designation ?? location else { return nil }
             return .moon(Moon(
-                designation: designation, name: m.name, type: m.type, recon: bodyRecon,
+                designation: designation, name: m.name, type: m.type, lifeStage: m.lifeStage,
+                recon: bodyRecon,
                 physical: isScanned ? m.physical : nil, sites: sites, salvage: salvageSites,
                 devices: devs, inventory: inv
             ))
@@ -647,6 +699,7 @@ struct RawScanEventResult: Decodable {
         if let m = moon, let designation = m.physical.designation {
             return .moon(Moon(
                 designation: designation, name: m.physical.name, type: m.physical.type,
+                lifeStage: m.physical.lifeStage,
                 recon: .scanned, physical: m.physical.physical,
                 sites: m.sites, salvage: m.salvageSites, devices: m.located, inventory: m.stored
             ))
@@ -674,6 +727,77 @@ struct RawScanEventResult: Decodable {
             return .belt(Belt(designation: designation, sites: b.sites, inventory: b.stored))
         }
         return nil
+    }
+}
+
+// MARK: - ami.survey.digest report.scans[]
+
+/// One entry of an `ami.survey.digest` payload's `report.scans[]` (API v2.3.3).
+///
+/// This is the *only* channel through which an AMI-adopted survey drone's scan
+/// intel reaches the client — those drones emit no per-device events at all
+/// (see the `ami-drones-are-event-silent` note), so before this block existed a
+/// survey that scanned nine bodies produced nothing but counts.
+struct RawSurveyScan: Decodable {
+    var deviceCode: String?
+    var scanTarget: String?
+    var scanType: String?
+    var report: RawSurveyScanReport?
+}
+
+/// The body block inside one survey scan. Structurally *almost*
+/// `RawScanEventResult`, with one difference that matters: the digest hangs
+/// `moons` off the report as a sibling of `planet`, where a `scan.completed`
+/// result nests it inside the planet object. Hence the separate type rather
+/// than a reuse.
+struct RawSurveyScanReport: Decodable {
+    var planet: RawScannedBody?
+    var moon: RawScannedBody?
+    var moons: [RawMoon]?
+}
+
+extension RawSurveyScan {
+    /// The scanned body as a partial observation, or nil for an entry we can't
+    /// read — a missing report, a designation-less body, or a `scan_type` this
+    /// build doesn't know (the caller logs those so a new kind surfaces).
+    func observation() -> BodyObservation? {
+        guard let report else { return nil }
+        if let planet = report.planet, let designation = planet.physical.designation ?? scanTarget {
+            // Roster stubs: designation, name, type and a `scanned` flag. A stub
+            // is `.visited`, not `.scanned` — the survey saw that the moon is
+            // there, not what it is made of.
+            let moons = (report.moons ?? []).compactMap { raw -> Moon? in
+                guard let moonDesignation = raw.designation else { return nil }
+                return Moon(
+                    designation: moonDesignation, name: raw.name, type: raw.type,
+                    recon: (raw.scanned ?? false) ? .scanned : .visited,
+                    salvage: (raw.salvage ?? []).compactMap(\.domain),
+                    inventory: (raw.inventory ?? []).compactMap(\.domain)
+                )
+            }
+            return BodyObservation(
+                kind: .planet, designation: designation, name: planet.physical.name,
+                type: planet.physical.type, lifeStage: planet.physical.lifeStage,
+                inHabitableZone: planet.physical.inHabitableZone,
+                orbitalDistanceAu: planet.physical.orbitalDistanceAu,
+                physical: planet.physical.physical, salvage: planet.salvageSites, moons: moons
+            )
+        }
+        if let moon = report.moon, let designation = moon.physical.designation ?? scanTarget {
+            return BodyObservation(
+                kind: .moon, designation: designation, name: moon.physical.name,
+                type: moon.physical.type, lifeStage: moon.physical.lifeStage,
+                physical: moon.physical.physical, salvage: moon.salvageSites
+            )
+        }
+        return nil
+    }
+
+    /// Absolute salvage amounts reported inside this scan's body block — the
+    /// only source of a site's unit totals, bound for `SiteAssay`.
+    func salvageObservations() -> [SalvageObservation] {
+        let blocks = [report?.planet?.salvage, report?.moon?.salvage].compactMap { $0 }.flatMap { $0 }
+        return blocks.compactMap(\.observation)
     }
 }
 

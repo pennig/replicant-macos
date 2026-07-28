@@ -69,6 +69,14 @@ while six drones and a controller all claimed to be stowed aboard it. A check
 that judges rows the request does not NAME can therefore never be satisfied.
 **Always name every device a freshness check covers.**
 
+**Updated 2026-07-27 (API v2.3.3):** the digest is no longer *only* counts. Its
+`report.scans[]` block now carries the full physical report for every body the
+controller's drones scanned that tick, which the catalog ingests — see
+[[survey-digest-scans]]. The claim above still holds exactly as written: the
+drones themselves remain event-silent, and their stow/location columns still
+only move when something explicitly reads them. What changed is that a
+survey's *scan intel* now arrives for free; its *movement* still does not.
+
 The one free signal about a launch is **`ami.launched`**, which carries
 `devices_deployed` — the server saying plainly whether the launch did anything.
 `DirectiveIngestion.amiLaunchRoute` consumes it (matched by exact event name, not

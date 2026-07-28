@@ -464,6 +464,7 @@ enum OrreryMapping {
             if m.salvage.contains(where: { !$0.depleted }) { indicators.insert(.salvage) }
             if !m.sites.isEmpty { indicators.insert(.miningSite) }
             if !m.inventory.isEmpty { indicators.insert(.inventory) }
+            if let ls = m.lifeStage, ls != "none", !ls.isEmpty { indicators.insert(.life) }
             return OrreryPlanet(
                 designation: m.designation, name: m.name, type: m.type,
                 planetType: PlanetType(apiType: m.type), estimated: m.recon != .scanned,
@@ -473,7 +474,7 @@ enum OrreryMapping {
                 appearanceSeed: appearanceSeed(designation: m.designation,
                                                rotationPeriodHours: m.physical?.rotationPeriodHours),
                 orbitalDistanceAu: 0, inHabitableZone: false,
-                scanned: m.recon == .scanned, moonCount: 0, lifeStage: nil,
+                scanned: m.recon == .scanned, moonCount: 0, lifeStage: m.lifeStage,
                 inventory: m.inventory,
                 semiMajorScene: moonOrbits[i],
                 // A moon's real speed is `orbital_period_hours`; it never reports days.

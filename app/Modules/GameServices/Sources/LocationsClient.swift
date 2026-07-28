@@ -22,9 +22,12 @@ import Dependencies
 import Foundation
 import GameModels
 import GameSession
+import OSLog
 import SQLiteData
 import UniverseModels
 import Utils
+
+private let logger = Logger(subsystem: "name.pennig.replicould", category: "LocationsClient")
 
 public enum LocationsError: Error, Equatable, Sendable {
     /// No replicant is currently in the system, so live detail is unavailable
@@ -271,6 +274,85 @@ extension LocationsClient {
             }
         }
         return true
+    }
+
+    /// Fold an `ami.survey.digest`'s `report.scans[]` into the local catalog
+    /// (API v2.3.3). Returns how many bodies were persisted.
+    ///
+    /// This is the **only** channel carrying a Survey Run's scan intel. An
+    /// AMI-adopted survey drone emits no per-device events at all — every scan
+    /// it performs is rolled into its controller's digest (see the
+    /// `ami-drones-are-event-silent` note) — so without this, every body a
+    /// survey scans stays a roster stub until someone opens it and pays a
+    /// `GET locations/{designation}` per body.
+    ///
+    /// Grouped by system so a digest whose drones are spread across systems
+    /// costs one transaction each rather than one per body. Best-effort and
+    /// idempotent: replaying the same event writes the same rows.
+    @discardableResult
+    public func ingestSurveyScans(payload: [String: JSONValue]) async throws -> Int {
+        let scans = (try? LocationDecoding.surveyScans(from: payload)) ?? SurveyScans()
+        if !scans.unreadable.isEmpty {
+            // Deliberately `.notice` — the level unhandled events use — so a new
+            // `scan_type` the backend starts emitting is falsifiable from the
+            // log rather than silently dropped, and named so it's actionable.
+            logger.notice(
+                "⚠️ ami.survey.digest: unreadable scan_type(s) \(scans.unreadable.joined(separator: ", "), privacy: .public) — no planet/moon block this build understands"
+            )
+        }
+        guard !scans.reports.isEmpty else { return 0 }
+
+        @Dependency(\.defaultDatabase) var database
+        @Dependency(\.date.now) var now
+
+        let bySystem = Dictionary(grouping: scans.reports) { $0.body.systemDesignation }
+        var persisted = 0
+        for (system, reports) in bySystem where !system.isEmpty {
+            try await database.write { db in
+                let cached = try SystemDetail.where { $0.designation.eq(system) }.fetchOne(db)
+                var merged = (try? cached?.system()) ?? StarSystem(designation: system, recon: .visited)
+
+                // Percentages as they stood BEFORE the merge, for the same two
+                // reasons `ingestScanResult` needs them: to imply a site's
+                // original total from the scan's absolute remaining, and to put
+                // the percentages back afterwards. `observing` already preserves
+                // them per-site, but capturing here keeps the assay inference
+                // reading pre-merge state either way.
+                let knownPct = merged.knownSalvageSites.reduce(into: [String: [String: Double]]()) {
+                    $0[$1.designation] = $1.remainingPct
+                }
+
+                for report in reports {
+                    merged = merged.observing(report.body)
+                }
+                let row = try SystemDetail(system: merged, hydratedAt: now)
+                try SystemDetail.upsert { row }.execute(db)
+
+                for observation in reports.flatMap(\.salvage) {
+                    let stored = try SiteAssay.where { $0.id.eq(observation.designation) }.fetchOne(db)
+                    var observed: [String: Double] = [:]
+                    for (resource, remaining) in observation.resourcesRemaining {
+                        if let pct = knownPct[observation.designation]?[resource],
+                           let implied = SiteAssay.impliedTotal(remaining: remaining, percentRemaining: pct) {
+                            observed[resource] = implied
+                        } else {
+                            observed[resource] = remaining
+                        }
+                    }
+                    let assay = SiteAssay(
+                        id: observation.designation,
+                        body: observation.body,
+                        system: SiteAssay.system(of: observation.designation),
+                        siteType: "salvage",
+                        totals: SiteAssay.raising(stored?.totals ?? [:], with: observed),
+                        assayedAt: now
+                    )
+                    try SiteAssay.upsert { assay }.execute(db)
+                }
+            }
+            persisted += reports.count
+        }
+        return persisted
     }
 
     /// Record a `salvage.discovered` event.
