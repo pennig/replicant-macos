@@ -110,6 +110,20 @@ draws it exactly there. Two supporting pieces make it free:
 A departing body layer tracks too, or it separates from the arriving system's copy
 mid-cross-fade and reintroduces the exact seam this removes.
 
+**The zoom-out needs its OWN tracker (fixed 2026-07-28).** `trackBodyCentre` is
+guarded on `orreryIsBody` + `parentSystem`, and `exitToSystem` clears both *before*
+the cross-fade runs — so on the way back out the departing body's centre froze. That
+is not a cosmetic seam: the arriving system layer *excludes* the drilled planet
+(`excludeID: bodyPlanetID`, so the two copies can't blend), and the departing central
+draws at full opacity regardless of `alphaReveal`, so for the whole 0.95 s pull-back
+the frozen departing body is the **only** copy of that planet on screen. When the fade
+settled and the layers swapped, the planet reappeared one full `zoomDurationBase` of
+arc further along — a visible skip, worst on fast inner planets. `trackDepartingBodyCentre`
+now carries it, keyed off the **arriving** system's layout rather than the stale
+`parentSystem` (which is already nil, and whose scale can differ if the system
+rehydrated during the visit) — tracking what will actually draw the planet is what
+makes the hand-off exact rather than merely close.
+
 ## Also worth knowing
 
 - Bodies write **true sphere depth** (`[[depth(less)]]`) instead of the billboard

@@ -241,6 +241,35 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         }
     }
 
+    /// Ride a DEPARTING body layer along with its planet for the rest of the zoom-out —
+    /// the mirror of `trackBodyCentre` once the active layer is no longer the body.
+    ///
+    /// `exitToSystem` hands the centre back to the star and clears `parentSystem`, which
+    /// stops `trackBodyCentre` dead. But the departing body is still the ONLY copy of the
+    /// drilled planet on screen: the arriving system layer excludes it (`excludeID:
+    /// bodyPlanetID`) precisely so the two can't blend against each other. So without
+    /// this the planet hangs frozen at the position it held when the zoom-out began, and
+    /// the moment the cross-fade settles the system layer takes over drawing it a whole
+    /// transition's worth of arc further along — a visible skip, and worst on the fast
+    /// inner planets, which cover the most ground in `zoomDurationBase`.
+    ///
+    /// Tracking the ARRIVING system's own layout (not the departing layer's stale parent)
+    /// is what makes the hand-off exact: the departing central body is drawn at the very
+    /// position the system copy will be drawn at, every frame, so when the fade ends and
+    /// the layers swap there is nothing left to reconcile.
+    private func trackDepartingBodyCentre() {
+        guard !orreryIsBody, var d = departing, d.isBody, let planetID = bodyPlanetID,
+              let live = currentOrbiterWorldPosition(id: planetID), live != d.center
+        else { return }
+        d.center = live
+        // Re-derive the body's distant lighting sun from the moved planet, holding its
+        // distance fixed, exactly as `trackBodyCentre` does — otherwise the lit face
+        // drifts as the planet travels out from under a stationary sun.
+        d.sunWorldPos = bodySunPosition(planet: live, starIndex: focusedStarIndex,
+                                        distance: bodySunDistance)
+        departing = d
+    }
+
     /// A cross-fading orrery layer's opacity at the current `bodyProgress`: a
     /// body-level layer fades IN with it (0→1); a system-level layer fades OUT
     /// (1→0). At the settled ends one layer is fully shown and the other is gone.
@@ -779,6 +808,13 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
             departing = nil
             if !orreryIsBody { bodyCentralStartRadius = 0; bodyPlanetID = nil }   // back at system level
         }
+        // Keep a departing BODY layer riding its planet through the pull-back, so it
+        // lands exactly where the arriving system draws that planet. Deliberately AFTER
+        // the progress advance above: it reads `orreryReveal` (via
+        // `currentOrbiterWorldPosition`) to match the arriving layer's emerge scale, and
+        // once the fade has settled `departing` is already nil, so the final frame is a
+        // no-op and the system layer takes over with nothing to reconcile.
+        trackDepartingBodyCentre()
         // Apply an orrery update that arrived mid-fly now that both clocks have settled
         // and the camera is static — the rebuild's one-frame cost isn't perceptible here
         // (deferred in `updateOrrery` precisely to keep it off the fly).
@@ -1577,9 +1613,12 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         orreryCenter = stars[starIndex].position
         orrerySunWorldPos = orreryCenter
         orreryIsBody = false
-        // Back at system level the centre is the (static) star, so nothing tracks.
-        // The departing body layer keeps its own centre, already registered with the
-        // planet's live position — hence no seam to reconcile here.
+        // Back at system level the ACTIVE centre is the (static) star, so the camera and
+        // `orreryCenter` stop tracking. The departing body layer must NOT stop, though —
+        // its planet keeps orbiting for the whole pull-back and it is the only copy of
+        // that planet being drawn, so `trackDepartingBodyCentre` carries it the rest of
+        // the way from the arriving system's own layout. Dropping `parentSystem` here is
+        // what retires `trackBodyCentre`; the departing tracker needs nothing from it.
         parentSystem = nil
         let dFinal = stars[starIndex].worldRadius / maxAngularSize
         orreryScale = orreryScaleToFit(frameScene: model.frameScene, atDistance: dFinal)
