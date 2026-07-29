@@ -70,6 +70,37 @@ public struct NewDirectiveFeature {
 
         public var canLaunch: Bool { vesselCode != nil && !targets.isEmpty }
 
+        /// The system the chosen vessel is in — the point every suggested
+        /// distance is measured from.
+        ///
+        /// Nil covers both "no vessel picked yet" and "vessel in transit or
+        /// stowed" (`location == nil`), and the dialog offers no suggestions in
+        /// either case. That matches the row it would write: `originDesignation`
+        /// is already nil for a locationless vessel.
+        public var anchorSystem: String? {
+            guard let vesselCode,
+                  let vessel = devices.first(where: { $0.deviceCode == vesselCode }),
+                  let location = vessel.location
+            else { return nil }
+            return SiteAssay.system(of: location)
+        }
+
+        /// The five nearest systems still worth surveying, measured from the
+        /// vessel. Always anchored on the vessel and never re-based onto the
+        /// queue, so adding one removes it and pulls in the next-nearest instead
+        /// of reshuffling the list.
+        public var suggestedTargets: [SurveyTargetSuggestions.Suggestion] {
+            guard let anchorSystem,
+                  let anchor = stars.first(where: { $0.designation == anchorSystem })
+            else { return [] }
+            return SurveyTargetSuggestions.nearest(
+                to: anchor.position,
+                anchorDesignation: anchorSystem,
+                stars: stars,
+                excluding: Set(targets)
+            )
+        }
+
         /// Search hits, minus what is already queued. Capped because the census
         /// runs to thousands of stars and this is a picker, not a catalogue.
         public var searchResults: [Star] {

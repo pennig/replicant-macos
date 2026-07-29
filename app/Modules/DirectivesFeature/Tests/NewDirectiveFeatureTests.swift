@@ -227,6 +227,90 @@ struct NewDirectiveFeatureTests {
         return [bareVessel("VES1"), controller("AMI1", stowedIn: "VES1", controlling: ["DRONE1"]), drone]
     }
 
+    /// The launcher suggests the five nearest systems still worth surveying,
+    /// measured from the chosen vessel's own system. The anchor is `SOL` because
+    /// `bareVessel` sits at `SOL-3`, and a system designation is the part before
+    /// the first hyphen.
+    @Test func suggestsTheFiveNearestUnexploredSystems() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            for device in Self.stagedFleet() { try Device.insert { device }.execute(db) }
+            try Star.insert { Self.star("SOL", x: 0) }.execute(db)
+            for (index, name) in ["A", "B", "C", "D", "E", "F"].enumerated() {
+                try Star.insert { Self.star(name, x: Double(index + 1)) }.execute(db)
+            }
+        }
+        let store = TestStore(initialState: NewDirectiveFeature.State()) {
+            NewDirectiveFeature()
+        } withDependencies: { $0.defaultDatabase = database }
+        store.exhaustivity = .off
+
+        await store.send(\.binding.vesselCode, "VES1")
+        #expect(store.state.anchorSystem == "SOL")
+        #expect(store.state.suggestedTargets.map(\.designation) == ["A", "B", "C", "D", "E"])
+    }
+
+    /// Adding a suggestion removes it and pulls in the next-nearest — the list
+    /// stays anchored on the vessel rather than re-basing on the queue.
+    @Test func addingASuggestionPullsInTheNextNearest() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            for device in Self.stagedFleet() { try Device.insert { device }.execute(db) }
+            try Star.insert { Self.star("SOL", x: 0) }.execute(db)
+            for (index, name) in ["A", "B", "C", "D", "E", "F"].enumerated() {
+                try Star.insert { Self.star(name, x: Double(index + 1)) }.execute(db)
+            }
+        }
+        let store = TestStore(initialState: NewDirectiveFeature.State()) {
+            NewDirectiveFeature()
+        } withDependencies: { $0.defaultDatabase = database }
+        store.exhaustivity = .off
+
+        await store.send(\.binding.vesselCode, "VES1")
+        await store.send(.targetAdded("B"))
+        #expect(store.state.suggestedTargets.map(\.designation) == ["A", "C", "D", "E", "F"])
+    }
+
+    /// A fully-scanned system is done and must not be offered. This is what the
+    /// fullyScannedAt work exists for.
+    @Test func doesNotSuggestFullyScannedSystems() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            for device in Self.stagedFleet() { try Device.insert { device }.execute(db) }
+            try Star.insert { Self.star("SOL", x: 0) }.execute(db)
+            try Star.insert {
+                Self.star("DONE", x: 1, fullyScannedAt: Date(timeIntervalSince1970: 10))
+            }.execute(db)
+            try Star.insert { Self.star("UNDONE", x: 2) }.execute(db)
+        }
+        let store = TestStore(initialState: NewDirectiveFeature.State()) {
+            NewDirectiveFeature()
+        } withDependencies: { $0.defaultDatabase = database }
+        store.exhaustivity = .off
+
+        await store.send(\.binding.vesselCode, "VES1")
+        #expect(store.state.suggestedTargets.map(\.designation) == ["UNDONE"])
+    }
+
+    /// No vessel chosen means no anchor to measure from — and so no suggestions.
+    /// Consistent with the row this dialog writes, which already leaves
+    /// `originDesignation` nil for a vessel with no location.
+    @Test func offersNoSuggestionsWithoutAnAnchor() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            for device in Self.stagedFleet() { try Device.insert { device }.execute(db) }
+            try Star.insert { Self.star("SOL", x: 0) }.execute(db)
+            try Star.insert { Self.star("A", x: 1) }.execute(db)
+        }
+        let store = TestStore(initialState: NewDirectiveFeature.State()) {
+            NewDirectiveFeature()
+        } withDependencies: { $0.defaultDatabase = database }
+        store.exhaustivity = .off
+
+        #expect(store.state.anchorSystem == nil)
+        #expect(store.state.suggestedTargets.isEmpty)
+    }
+
     /// A survey drone stowed aboard `stowedIn` and adopted by `controlledBy`,
     /// with adoption recorded only here — the drone's side of the link.
     nonisolated static func drone(_ code: String, stowedIn: String, controlledBy: String) -> Device {
@@ -263,6 +347,20 @@ struct NewDirectiveFeatureTests {
             positionX: 0, positionY: 0, positionZ: 0, estimatedPlanets: 3,
             explored: false, hasLife: nil, entryPoint: nil,
             createdAt: Date(timeIntervalSince1970: 0), firstVisitedAt: nil, fullyScannedAt: nil
+        )
+    }
+
+    /// A census row at `x` light-years along the X axis, optionally stamped as
+    /// fully scanned.
+    nonisolated static func star(
+        _ designation: String, x: Double, fullyScannedAt: Date? = nil
+    ) -> Star {
+        Star(
+            designation: designation, spectralType: "G", color: "yellow",
+            positionX: x, positionY: 0, positionZ: 0, estimatedPlanets: 3,
+            explored: false, hasLife: nil, entryPoint: nil,
+            createdAt: Date(timeIntervalSince1970: 0),
+            firstVisitedAt: nil, fullyScannedAt: fullyScannedAt
         )
     }
 }

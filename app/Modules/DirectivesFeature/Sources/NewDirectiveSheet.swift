@@ -73,10 +73,31 @@ public struct NewDirectiveSheet: View {
         }
     }
 
+    /// The nearest unexplored systems, offered before any search is typed. Sits
+    /// in the same slot as `searchResults` and yields to it the moment the field
+    /// has text.
+    @ViewBuilder private var suggestions: some View {
+        if !store.suggestedTargets.isEmpty {
+            VStack(alignment: .leading, spacing: Space.xxs) {
+                Text("Nearest Unexplored")
+                    .font(.rcCaption)
+                    .foregroundStyle(.rcTextTertiary)
+                ForEach(store.suggestedTargets) { suggestion in
+                    SuggestedTargetRow(suggestion: suggestion) {
+                        store.send(.targetAdded(suggestion.designation))
+                    }
+                }
+            }
+        }
+    }
+
     private var targetPicker: some View {
         VStack(alignment: .leading, spacing: Space.xs) {
             RCSectionHeader("Targets")
             RCField("Search systems", text: $store.search)
+            if store.search.trimmingCharacters(in: .whitespaces).isEmpty {
+                suggestions
+            }
             if !store.searchResults.isEmpty {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
