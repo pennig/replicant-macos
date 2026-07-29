@@ -1,6 +1,6 @@
 ---
 name: directives-feature
-description: "Directives v2: Stages 1-4 + stall resolution + the §7 step timeline SHIPPED. Unified surface; CommandGovernor + DirectiveEngine; Survey Run + launcher; Retry/Skip/Cancel/Pause/Resume; live timeline serving both row kinds. Survey Run NEVER stows or adopts. Remaining: Stage 5 Relay Run. The .opCompleted audit pass shipped 2026-07-28, closing the audit trail."
+description: "Directives v2: Stages 1-4 + stall resolution + the §7 step timeline SHIPPED. Unified surface; CommandGovernor + DirectiveEngine; Survey Run + launcher; Retry/Skip/Cancel/Pause/Resume; live timeline serving both row kinds. Survey Run NEVER stows or adopts. Continuous survey roam (unbounded, self-targeting, 5-ly sliding bands) shipped 2026-07-29. Remaining: Stage 5 Relay Run. The .opCompleted audit pass shipped 2026-07-28, closing the audit trail."
 metadata:
   type: project
 ---
@@ -309,3 +309,59 @@ doesn't activate, `launch` auto-deploys adopted stowed devices, `directive.compl
 
 See [[architecture-review-v3]] for the V3.9 readiness analysis this design answers, and
 [[device-command-taxonomy]] for the AMI directive vocabulary.
+
+## Continuous survey roam SHIPPED 2026-07-29
+
+Spec: `docs/superpowers/specs/2026-07-29-continuous-survey-roam-design.md`. Survey Run stops being a
+*manual* automation: pick one starting star and it surveys outward indefinitely, choosing its own
+targets. One nullable column, `Directive.roamCentre`, is the whole switch.
+
+**Greedy nearest-neighbour is the wrong algorithm, and it was measured, not guessed.** Simulated over
+the real 14,122-row census from ATIANFU across 120 systems: greedy travels 483 ly and leaves the
+hole-free radius pinned at **3.9 ly** — it passed a system next door, took a cheaper hop, and never
+came back, opening gaps 22 ly deep behind the frontier. Sliding 5-ly bands (cheapest hop *inside* a
+band around the centre) reach a filled radius of **16.4 ly** for 650 ly. Strict radial order costs
+1940 ly. So the band buys ~94% of radial's completeness for ~34% of its travel. See
+[[travel-is-cheap-vs-survey]] for why the +35% is affordable.
+
+Invariants (don't undo these):
+- **Two distances from two different points.** Band *membership* is measured from the centre (that is
+  what bounds the holes); the *pick within the band* is measured from the vessel (that is what keeps
+  the hop cheap). Collapse them onto one point and you get greedy or strict radial — the two things
+  the band exists to sit between.
+- **The band SLIDES** (`shellTop = inner + shellWidth`), anchored on the innermost remaining
+  candidate, not on a fixed grid of annuli. A grid measured within ~8% on travel at the same hole
+  bound and lost on specification: a candidate landing exactly on a grid line opens a double-width
+  band, whereas a sliding band has no boundary case.
+- **The band is DERIVED from what is still unsurveyed, never stored.** No shell index to drift; if
+  anything else surveys a system the band recomputes from what is genuinely left.
+- **`Directive.targets` becomes append-only HISTORY for a roam run**, and the planner excludes all of
+  it. This is load-bearing, not bookkeeping — it fails two ways without it, both real:
+  `StarSystem.isFullyScanned` requires `planetsTotal > 0`, so a **planetless system can never report
+  itself complete** and would pin the innermost radius forever; and the user's **Skip would be a
+  no-op**, since the next extend re-picks the system just skipped.
+- **`MissionAction.extendQueue` is resolved by `DirectiveEngineCore`, and its re-asked action must be
+  applied to the FRESHLY-READ row.** This is the trap. `evaluateOnce` hands the pre-resolution
+  `directive` to `DirectiveExecutor.apply`, and every executor path builds its write as
+  `var updated = directive` — so a post-extend action applied to the pre-extend value writes `targets`
+  back and **rolls the append away**. It is the happy path, not an edge case: the action after a
+  successful extend is normally `.assignController`, which commits the whole row. Hence
+  `DirectiveEngineCore.Resolution` (action + row). The refresh resolvers are exempt only because a
+  device read cannot change the directive row. Verified by mutation — reverting the hand-off fails 3
+  of 4 roam tests.
+- **The stall matrix is UNCHANGED — every reason still halts the run.** An auto-skip policy was
+  considered and rejected: it buys unattended uptime at the price of an unstaged vessel touring dozens
+  of systems scanning nothing while the run still reads as healthy.
+- **No outer radius leash.** The bands already provide the density guarantee a radius was meant to,
+  and "survey forever" has no finish line. The run ends when the user cancels it.
+- The launcher defaults to **Continuous**; `returnToOrigin` is forced off for a roam run (a queue that
+  never empties has no return leg), and the row is written with an **empty** `targets` — the engine
+  plans the first target on its first evaluation.
+- `DirectiveRow.subtitle` gained a roam branch ("23 surveyed"): `targetIndex == targets.count` for the
+  whole window between systems, so the m/n readout said "n/n" — a finished run — for most of its life.
+  It moved off `DirectiveRowView` (a private computed property on a View, untestable) onto
+  `DirectiveRow`.
+
+**Known gap, deliberately open: no multi-vessel coordination.** Two roam runs with overlapping centres
+each pick the same nearest-in-band target, because neither sees the other's `targets`. Cheap to close
+by excluding other running directives' current targets; left until more than one vessel roams.
