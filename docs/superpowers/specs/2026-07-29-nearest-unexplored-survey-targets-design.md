@@ -65,18 +65,38 @@ the persistence layer to use it.
 
 ### A2. One choke point for persistence
 
-`LocationsClient` has **eight** `SystemDetail.upsert` sites, all the same three
-lines: build a row from a merged `StarSystem`, upsert it. They collapse into one
-helper declared beside `SystemDetail` in UniverseModels:
+There are **nine** production `SystemDetail.upsert` sites, all the same three
+lines: build a row from a merged `StarSystem`, upsert it.
+
+- **Seven in `LocationsClient`** — `scanAndPersist`, `hydrateSystem`,
+  `hydrateBody`, `ingestScanResult`, `ingestSurveyScans`,
+  `recordSalvageDiscovery`, `markSalvageDepleted`.
+- **`NewStarMapFeature.hydrateSystem`** (a near-exact duplicate of
+  `LocationsClient.hydrateSystem`).
+- **`LocationsFeature`'s hydrate-on-select**, which merges a system and
+  optionally one body before persisting.
+
+The two feature-level sites matter: opening the Locations catalog or drilling
+into a system on the map is a realistic moment for a system to become
+known-complete, and a choke point confined to `LocationsClient` would leave both
+as silent holes in the stamp. They collapse into one helper declared beside
+`SystemDetail` in UniverseModels — `public`, because two feature modules call it:
 
 ```swift
 extension SystemDetail {
     /// Persist a system's blob AND reconcile the census row's scan lifecycle
     /// stamp in the same transaction, so no path can update the catalog without
     /// `stars.fullyScannedAt` following.
-    static func persist(system: StarSystem, at now: Date, in db: Database) throws
+    public static func persist(system: StarSystem, at now: Date, in db: Database) throws
 }
 ```
+
+`NewStarMapFeature.hydrateSystem`'s body is functionally identical to
+`LocationsClient.hydrateSystem`, so rather than routing its upsert it is replaced
+by a call to the client — one duplicate removed, and the stamp comes with it.
+This changes only *how* it hydrates, not *when*: the deferral that fixed the
+drill-in fly hitch (see the `starmap-hydrate-fly-hitch` note) is about the call
+site's timing and is untouched.
 
 It upserts the blob, then stamps `Star.fullyScannedAt = now` when
 `system.isFullyScanned` holds **and the column is still null**.
@@ -251,7 +271,8 @@ never full; zero totals never full.
 **The choke point** — stamps on becoming complete; does **not** stamp when moons
 fall short (the case a `recon`-column shortcut gets wrong, since `recon` is
 computed from planets alone); does not overwrite an existing stamp; does not
-stamp a seeded minimal system from a single body's scan.
+stamp a seeded minimal system from a single body's scan; stamps nothing when the
+system has no census row (a `Star` row must exist to update).
 
 **The `directive.completed` route** — hydrates for `survey_system`; ignores other
 directive names.
