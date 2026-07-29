@@ -18,23 +18,43 @@ public struct NewDirectiveSheet: View {
         self.store = store
     }
 
+    /// Title and action row are PINNED; everything between them scrolls.
+    ///
+    /// The queue is variable-length and the sheet's height is fixed, so the
+    /// middle has to be the part that gives. It previously wasn't: a bare
+    /// `ForEach` of queued targets grew without bound, and since the action row
+    /// was the last child of a fixed-height `VStack`, a long enough queue
+    /// collapsed the spacer between them and pushed Cancel/Launch outside the
+    /// frame — where they render neither visibly nor hit-testably. Ten targets
+    /// was enough.
+    ///
+    /// The action row must therefore stay OUTSIDE the `ScrollView`: that is what
+    /// makes it unreachable-proof at any target count, rather than merely
+    /// reachable at the counts that happen to fit today.
+    ///
+    /// No `Spacer` is needed any more — the `ScrollView` is greedy vertically and
+    /// takes the slack itself when the content is short, which also removes the
+    /// collapsing-spacer mechanism that caused the overflow.
     public var body: some View {
         VStack(alignment: .leading, spacing: Space.l) {
             Text("New Survey Run")
                 .font(.rcTitle)
                 .foregroundStyle(.rcTextPrimary)
 
-            if store.eligibleVessels.isEmpty {
-                unstagedNotice
-            } else {
-                vesselPicker
-                targetPicker
-                Toggle("Return to origin when the queue empties", isOn: $store.returnToOrigin)
-                    .font(.rcBody)
-                    .foregroundStyle(.rcTextSecondary)
+            ScrollView {
+                VStack(alignment: .leading, spacing: Space.l) {
+                    if store.eligibleVessels.isEmpty {
+                        unstagedNotice
+                    } else {
+                        vesselPicker
+                        targetPicker
+                        Toggle("Return to origin when the queue empties", isOn: $store.returnToOrigin)
+                            .font(.rcBody)
+                            .foregroundStyle(.rcTextSecondary)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-
-            Spacer(minLength: 0)
 
             HStack(spacing: Space.s) {
                 Spacer()
@@ -46,7 +66,11 @@ public struct NewDirectiveSheet: View {
             }
         }
         .padding(Space.xl)
-        .frame(width: 520, height: 560)
+        // Height stays explicit rather than a `minHeight`: a `ScrollView` has no
+        // ideal height, so a min-only frame lets the sheet collapse to almost
+        // nothing. 620 rather than the original 560 gives back the room the
+        // "Nearest Unexplored" block now occupies.
+        .frame(width: 520, height: 620)
     }
 
     /// Staging is the player's job, so the empty state says exactly what to do
