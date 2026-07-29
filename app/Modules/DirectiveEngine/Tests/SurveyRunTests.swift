@@ -167,12 +167,14 @@ private func run(
     targetIndex: Int = 0,
     controllerCode: String? = nil,
     returnToOrigin: Bool = false,
+    roamCentre: String? = nil,
     origin: String? = "SOL",
     stepStartedAt: Date = Date(timeIntervalSince1970: 900)
 ) -> Directive {
     Directive(
         id: "D1", kind: .surveyRun, status: .running, deviceCode: "VES1",
-        controllerCode: controllerCode, targets: targets, targetIndex: targetIndex,
+        controllerCode: controllerCode, roamCentre: roamCentre,
+        targets: targets, targetIndex: targetIndex,
         step: step, stepStartedAt: stepStartedAt, returnToOrigin: returnToOrigin,
         originDesignation: origin, attentionReason: nil,
         createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0)
@@ -985,5 +987,73 @@ struct SurveyRunFinishTests {
         #expect(SurveyRun().nextAction(directive: directive,
                                        world: world(stagedFleet(vesselAt: "TAU-2"), travelling: true))
                 == .wait)
+    }
+}
+
+// MARK: - Continuous roam
+
+/// Preflight's roam branch. The engine-side resolution of `.extendQueue` — the
+/// census read, the append, and the re-ask — lives in `DirectiveEngineRoamTests`;
+/// these tests only pin what the pure machine decides.
+@Suite("Survey Run — continuous roam")
+struct SurveyRunRoamTests {
+    /// An exhausted queue is not the end of a continuous run — it is the cue to
+    /// extend it.
+    @Test func exhaustedQueueExtendsWhenARoamCentreIsSet() {
+        let action = SurveyRun().nextAction(
+            directive: run(targets: ["TAU"], targetIndex: 1, roamCentre: "ATIANFU"),
+            world: world(stagedFleet())
+        )
+        #expect(action == .extendQueue(centre: "ATIANFU"))
+    }
+
+    /// The fixed-queue regression. Without a centre an exhausted queue must
+    /// still finish exactly as it does today.
+    @Test func exhaustedQueueStillFinishesWithoutARoamCentre() {
+        let action = SurveyRun().nextAction(
+            directive: run(targets: ["TAU"], targetIndex: 1, roamCentre: nil),
+            world: world(stagedFleet())
+        )
+        #expect(action == .done)
+    }
+
+    /// The other fixed-queue regression: the return leg is untouched.
+    @Test func exhaustedQueueStillReturnsToOriginWhenAsked() {
+        let action = SurveyRun().nextAction(
+            directive: run(
+                targets: ["TAU"], targetIndex: 1,
+                returnToOrigin: true, roamCentre: nil, origin: "SOL"
+            ),
+            world: world(stagedFleet(vesselAt: "TAU-1"))
+        )
+        #expect(action == .advanceStep(nextStep: SurveyRun.Step.returning))
+    }
+
+    /// The roam branch is checked BEFORE the return leg, so a run carrying both
+    /// keeps surveying rather than going home. Nothing sets both today; this
+    /// pins the ordering so "roam, then come home" stays expressible later.
+    @Test func roamTakesPrecedenceOverTheReturnLeg() {
+        let action = SurveyRun().nextAction(
+            directive: run(
+                targets: ["TAU"], targetIndex: 1,
+                returnToOrigin: true, roamCentre: "ATIANFU", origin: "SOL"
+            ),
+            world: world(stagedFleet(vesselAt: "TAU-1"))
+        )
+        #expect(action == .extendQueue(centre: "ATIANFU"))
+    }
+
+    /// A roam run still skips a target the census already says is done, without
+    /// spending a trip on it — the existing preflight guard, unchanged.
+    @Test func roamStillSkipsAnAlreadyScannedTarget() {
+        let scanned = StarSystem(
+            designation: "TAU", planetsScanned: 4, planetsTotal: 4,
+            moonsScanned: 7, moonsTotal: 7
+        )
+        let action = SurveyRun().nextAction(
+            directive: run(targets: ["TAU"], targetIndex: 0, roamCentre: "ATIANFU"),
+            world: world(stagedFleet(), systems: ["TAU": scanned])
+        )
+        #expect(action == .advanceTarget)
     }
 }

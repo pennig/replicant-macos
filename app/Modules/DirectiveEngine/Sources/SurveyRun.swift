@@ -224,6 +224,13 @@ public struct SurveyRun: MissionStepMachine {
 
     private func preflight(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
         guard let target = directive.currentTarget else {
+            // A CONTINUOUS run never exhausts its queue — it extends it. Checked
+            // before the return leg so the two stay independently expressible:
+            // nothing sets both today, but "roam, then come home" should remain a
+            // matter of setting both flags rather than needing new code.
+            if let centre = directive.roamCentre {
+                return .extendQueue(centre: centre)
+            }
             // Queue exhausted. The vessel stays put unless the run was created
             // with `returnToOrigin` — an unwanted return leg costs fuel and time.
             guard directive.returnToOrigin,

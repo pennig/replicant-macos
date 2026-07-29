@@ -100,6 +100,17 @@ enum DirectiveExecutor {
             await stall(directive, reason: thenStall, detail: nil)
             return false
 
+        case .extendQueue:
+            // The engine resolves this before it ever reaches the executor (it
+            // needs a census read and a second call into the machine). Reaching
+            // here means that resolution was bypassed, which is a programming
+            // error rather than a world state — so say so loudly and leave the
+            // row alone. The next tick re-evaluates and will say the same thing,
+            // which is recoverable (the user can cancel) and visible in the log,
+            // where silently returning `.done` would look like a finished run.
+            logger.error("directive \(directive.id, privacy: .public): unresolved extendQueue reached the executor — leaving the row untouched")
+            return true
+
         case let .stall(reason):
             await stall(directive, reason: reason, detail: nil)
             return false

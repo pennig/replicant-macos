@@ -99,6 +99,24 @@ public enum MissionAction: Equatable, Sendable {
     /// and stops evaluating until the user resolves it. Never auto-retried at
     /// the mission layer (spec §8).
     case stall(DirectiveAttentionReason)
+    /// The queue is empty and this is a CONTINUOUS run: pick the next system
+    /// from the census, append it to `targets`, and carry on. The engine owns
+    /// the read and the write; the machine sees the extended queue when it is
+    /// re-asked.
+    ///
+    /// Resolved by `DirectiveEngineCore` rather than the executor, like
+    /// `.refreshDevices`, because it needs I/O plus a second call into the
+    /// machine.
+    ///
+    /// It differs from the refresh cases in one way that matters: they cannot
+    /// change the directive ROW, so they re-ask with the same `Directive` value.
+    /// This one appends to `targets`, so its re-asked action must be applied to
+    /// the freshly-read row — applying it to the pre-write value rolls the
+    /// append straight back (see `DirectiveEngineCore.Resolution`).
+    ///
+    /// Bounded to one round: a second `.extendQueue` from the re-ask means the
+    /// planner found nothing left, which resolves to `.done`.
+    case extendQueue(centre: String)
     /// This target is finished; move to the next one.
     case advanceTarget
     /// The whole run is finished.
