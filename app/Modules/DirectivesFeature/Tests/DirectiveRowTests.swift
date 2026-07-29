@@ -54,10 +54,12 @@ private func mission(
     id: String,
     kind: DirectiveKind = .surveyRun,
     targets: [String] = ["TAU", "SHERATANON"],
-    targetIndex: Int = 1
+    targetIndex: Int = 1,
+    roamCentre: String? = nil
 ) -> Directive {
     Directive(
         id: id, kind: kind, status: .running, deviceCode: "VESSEL1",
+        roamCentre: roamCentre,
         targets: targets, targetIndex: targetIndex, step: "surveying",
         stepStartedAt: Date(timeIntervalSince1970: 0),
         returnToOrigin: false, originDesignation: "SOL", attentionReason: nil,
@@ -238,5 +240,60 @@ struct DirectiveRowTests {
         ).first
         #expect(row?.headlineDesignation == nil)
         #expect(row?.headline == row?.title)
+    }
+}
+
+
+// MARK: - Subtitle
+
+/// The row's second line. Moved off `DirectiveRowView` onto `DirectiveRow` so it
+/// can be tested at all — it was a private computed property on a SwiftUI View.
+@Suite("Directive row subtitle")
+struct DirectiveRowSubtitleTests {
+    @Test func aFixedQueueRunCountsAgainstItsTotal() {
+        let row = DirectiveRow.custom(
+            mission(id: "D1", targets: ["A", "B", "C"], targetIndex: 1)
+        )
+        #expect(row.subtitle == "1/3")
+    }
+
+    /// The bug this branch exists for: a continuous run sits at
+    /// `targetIndex == targets.count` between systems, so "n/n" would read as a
+    /// finished run for most of its life.
+    @Test func aContinuousRunCountsWhatItHasSurveyed() {
+        let row = DirectiveRow.custom(
+            mission(id: "D1", targets: ["A", "B"], targetIndex: 2, roamCentre: "ATIANFU")
+        )
+        #expect(row.subtitle == "2 surveyed")
+    }
+
+    @Test func aContinuousRunThatHasSurveyedNothingSaysSo() {
+        let row = DirectiveRow.custom(
+            mission(id: "D1", targets: [], targetIndex: 0, roamCentre: "ATIANFU")
+        )
+        #expect(row.subtitle == "0 surveyed")
+    }
+
+    @Test func aBuiltInRowWithNoDronesHasNoSubtitle() {
+        let row = DirectiveRow.builtIn(
+            BuiltInDirective(
+                deviceCode: "AMI1", deviceType: "ami_survey_controller",
+                directive: "survey_system", config: nil,
+                controlledDevices: [], drivenBy: nil
+            )
+        )
+        #expect(row.subtitle == nil)
+    }
+
+    @Test func aDrivenBuiltInRowNamesTheMission() {
+        let row = DirectiveRow.builtIn(
+            BuiltInDirective(
+                deviceCode: "AMI1", deviceType: "ami_survey_controller",
+                directive: "survey_system", config: nil,
+                controlledDevices: [],
+                drivenBy: DirectiveOwner(directiveID: "D1", kindTitle: "Survey Run")
+            )
+        )
+        #expect(row.subtitle == "driven by Survey Run")
     }
 }

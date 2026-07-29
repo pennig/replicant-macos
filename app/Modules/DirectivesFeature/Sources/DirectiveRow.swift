@@ -112,6 +112,33 @@ public enum DirectiveRow: Equatable, Identifiable, Sendable {
         return "\(headline) → \(designation)"
     }
 
+    /// The row's second line: progress for a mission, the controlled-drone count
+    /// for a built-in — or, when the engine owns it, the mission driving it.
+    ///
+    /// Lives here rather than on `DirectiveRowView` because this type is the
+    /// list's SwiftUI-free logic (pure logic hanging off a View traps under
+    /// `swift test`), which is what makes the continuous-run branch below
+    /// testable at all.
+    public var subtitle: String? {
+        switch self {
+        case let .custom(directive):
+            // A continuous run EXTENDS its queue instead of completing it, so
+            // `targetIndex == targets.count` for the whole window between
+            // finishing one system and planning the next — and "n/n" reads as a
+            // finished run. Count what is done instead. The current target is
+            // not repeated here; `headlineDesignation` already renders it.
+            if directive.roamCentre != nil {
+                return "\(directive.targetIndex) surveyed"
+            }
+            let progress = directive.progress
+            return "\(progress.completed)/\(progress.total)"
+        case let .builtIn(builtIn):
+            if let owner = builtIn.drivenBy { return "driven by \(owner.kindTitle)" }
+            let count = builtIn.controlledDevices.count
+            return count > 0 ? "\(count) controlled" : nil
+        }
+    }
+
     /// Statuses that still hold a controller. `paused` and `needsAttention`
     /// KEEP ownership: the directive is still in force server-side, and a user
     /// resolving a stall expects to find it intact. Only a finished mission
