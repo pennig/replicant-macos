@@ -23,6 +23,7 @@ import GameModels
 import GameServices
 import OSLog
 import SQLiteData
+import UniverseModels
 
 private let logger = Logger(subsystem: "name.pennig.replicould", category: "DirectiveEngine")
 
@@ -179,6 +180,11 @@ actor DirectiveEngineCore {
         await DirectiveExecutor.recordCompletedOps(for: directive, world: world)
 
         var action = machine.nextAction(directive: directive, world: world)
+        // The row the action gets applied to. Only `.extendQueue` moves it off
+        // the value read at the top of this method — it is the one resolver that
+        // WRITES the row, so applying its result to the pre-write value would
+        // roll its append back (see `Resolution`).
+        var current = directive
         switch action {
         case let .refreshDevices(deviceCodes, thenStall):
             action = await resolveRefresh(
@@ -190,10 +196,16 @@ actor DirectiveEngineCore {
                 designation: designation, thenStall: thenStall,
                 directive: directive, machine: machine
             )
+        case let .extendQueue(centre):
+            let resolution = await resolveExtendQueue(
+                centre: centre, directive: directive, machine: machine
+            )
+            action = resolution.action
+            current = resolution.directive
         default:
             break
         }
-        let stillRunnable = await DirectiveExecutor.apply(action, to: directive, machine: machine)
+        let stillRunnable = await DirectiveExecutor.apply(action, to: current, machine: machine)
         if !stillRunnable {
             // The row is no longer `.running`, so the supervisor would retire
             // this executor within a tick anyway; dropping it here stops it
@@ -201,6 +213,122 @@ actor DirectiveEngineCore {
             executors[directiveID]?.cancel()
             executors[directiveID] = nil
         }
+    }
+
+    /// A resolved action plus the directive row it must be applied to.
+    ///
+    /// Only `.extendQueue` needs the second half. `resolveRefresh` and
+    /// `resolveSystemRefresh` re-ask with the SAME `Directive` value because a
+    /// device read cannot change the directive row — but an extend appends to
+    /// `targets`, and every executor path builds its write as
+    /// `var updated = directive`. Applying a post-extend action to the
+    /// pre-extend value therefore writes `targets` back and rolls the append
+    /// away. That is not an edge case: the action after a successful extend is
+    /// normally `.assignController`, which commits the whole row.
+    private struct Resolution {
+        let action: MissionAction
+        let directive: Directive
+    }
+
+    /// Pick the next target for a continuous run, append it, and ask the machine
+    /// again against the EXTENDED row.
+    ///
+    /// One census read per surveyed system — tens of minutes apart, not on the
+    /// 5 s tick — so reading the whole table is affordable and the candidate
+    /// filter stays in `SurveyRoamPlanner`, where it is unit-tested.
+    ///
+    /// A bounding box around the centre was considered and rejected: the band's
+    /// outer edge is `inner + shellWidth`, and `inner` is only known after
+    /// scanning the candidates, so bounding needs the very scan it would save.
+    private func resolveExtendQueue(
+        centre: String,
+        directive: Directive,
+        machine: any MissionStepMachine
+    ) async -> Resolution {
+        @Dependency(\.defaultDatabase) var database
+        @Dependency(\.date) var date
+
+        let vesselCode = directive.deviceCode
+        let attempted = Set(directive.targets)
+
+        let planned: String?
+        do {
+            planned = try await database.read { db -> String? in
+                // Bound to a `let` before the guard rather than chained inside
+                // it: a leading-dot chain broken across lines in a `guard let`
+                // condition ends the condition early, and the `$0` then resolves
+                // against this closure's own `db`.
+                let centreRow = try Star.where { $0.designation.eq(centre) }.fetchOne(db)
+                guard let centreStar = centreRow else { return nil }
+
+                let vessel = try Device.where { $0.deviceCode.eq(vesselCode) }.fetchOne(db)
+                let vesselSystem = vessel?.location.map { SiteAssay.system(of: $0) }
+                let vesselStar = try vesselSystem.flatMap { designation in
+                    try Star.where { $0.designation.eq(designation) }.fetchOne(db)
+                }
+
+                let candidates = try Star.all.fetchAll(db)
+                return SurveyRoamPlanner.nextTarget(
+                    centre: centreStar.position,
+                    // A stowed or in-transit vessel reports no location at all,
+                    // so measure the hop from the centre instead. Only WHICH
+                    // member of the band is cheapest changes — the band itself
+                    // is anchored on the centre either way, so the coverage
+                    // guarantee is unaffected.
+                    from: vesselStar?.position ?? centreStar.position,
+                    stars: candidates,
+                    attempted: attempted
+                )
+            }
+        } catch {
+            // The run is no worse off than before the attempt; wait and let the
+            // next tick try again.
+            logger.error("directive \(directive.id, privacy: .public): roam census read failed: \(error)")
+            return Resolution(action: .wait, directive: directive)
+        }
+
+        guard let planned else {
+            logger.info("directive \(directive.id, privacy: .public): nothing left to survey around \(centre, privacy: .public) — finishing")
+            return Resolution(action: .done, directive: directive)
+        }
+
+        // `targetIndex` already equals `targets.count` (that is what made the
+        // queue exhausted), so appending alone makes the new entry the current
+        // target. No index arithmetic.
+        var appended = directive
+        appended.targets.append(planned)
+        appended.updatedAt = date.now
+        // Immutable before the write closure captures it — a `var` crossing into
+        // concurrently-executing code is a Sendable violation.
+        let extended = appended
+        do {
+            try await database.write { db in
+                try Directive.upsert { extended }.execute(db)
+            }
+        } catch {
+            logger.error("directive \(directive.id, privacy: .public): roam append failed: \(error)")
+            return Resolution(action: .wait, directive: directive)
+        }
+        logger.info("directive \(directive.id, privacy: .public): roam picked \(planned, privacy: .public) (\(extended.targets.count) aimed at so far)")
+
+        let world: WorldSnapshot
+        do {
+            world = try await WorldSnapshot.read(from: database, now: date.now, directive: extended)
+        } catch {
+            logger.error("world snapshot after roam extend failed: \(error)")
+            return Resolution(action: .wait, directive: extended)
+        }
+
+        let action = machine.nextAction(directive: extended, world: world)
+        if case .extendQueue = action {
+            // A target was just appended and the machine still wants one. Not
+            // reachable through preflight (it would have to skip the brand-new
+            // target first, which is a fresh evaluation), so this is the
+            // one-round loop guard rather than an expected path.
+            logger.notice("directive \(directive.id, privacy: .public): roam extend did not settle — finishing")
+            return Resolution(action: .done, directive: extended)
+        }
+        return Resolution(action: action, directive: extended)
     }
 
     /// Spend authoritative reads on a mission's `.refreshDevices` request, then

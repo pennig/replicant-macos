@@ -794,3 +794,173 @@ struct DirectiveRefreshDevicesTests {
         }
     }
 }
+
+// MARK: - Continuous roam resolution
+
+/// The engine side of `.extendQueue`: the census read, the append, and the
+/// re-ask. Driven through `evaluateOnce` with the REAL `SurveyRun` machine
+/// rather than a `ScriptedMachine`, because the property most worth protecting
+/// here lives in the hand-off between the resolver and the executor and a
+/// scripted machine would not exercise it.
+///
+/// None of these stage a fleet, so after the append the machine asks for a
+/// device refresh and the run stalls. That is expected: every assertion below is
+/// about `targets` and `status`, never about the step reached.
+@Suite("DirectiveEngine roam resolution")
+struct DirectiveEngineRoamTests {
+    /// A census row `x` light-years out along the X axis.
+    private func star(_ designation: String, x: Double, scanned: Bool = false) -> Star {
+        Star(
+            designation: designation, spectralType: "G", color: "yellow",
+            positionX: x, positionY: 0, positionZ: 0, estimatedPlanets: 3,
+            explored: false, hasLife: nil, entryPoint: nil,
+            createdAt: Date(timeIntervalSince1970: 0),
+            firstVisitedAt: nil,
+            fullyScannedAt: scanned ? Date(timeIntervalSince1970: 1) : nil
+        )
+    }
+
+    /// A roam directive with an exhausted queue, ready to be extended.
+    private func roamDirective(targets: [String] = [], targetIndex: Int = 0) -> Directive {
+        Directive(
+            id: "D1", kind: .surveyRun, status: .running, deviceCode: "VES1",
+            controllerCode: nil, roamCentre: "CENTRE",
+            targets: targets, targetIndex: targetIndex,
+            step: SurveyRun().firstStep,
+            stepStartedAt: Date(timeIntervalSince1970: 0),
+            returnToOrigin: false, originDesignation: "CENTRE",
+            attentionReason: nil,
+            createdAt: Date(timeIntervalSince1970: 0),
+            updatedAt: Date(timeIntervalSince1970: 0)
+        )
+    }
+
+    /// The run's vessel. It MUST exist: `SurveyRun.nextAction` stalls with
+    /// `.unreachableDevice` before preflight runs at all if the directive's
+    /// device is missing, so without this row no test here reaches the roam
+    /// branch. Deliberately unstaged — no controller, no drones — because these
+    /// tests are about the queue, and preflight's staging verdict is
+    /// `SurveyRunTests`' business.
+    private var vessel: Device {
+        Device(
+            deviceCode: "VES1", deviceType: "transport_hauler", replicantCode: "R1",
+            status: "idle", location: "CENTRE-1", locationName: nil,
+            operationalCapacity: 100, queueSize: 0,
+            stowedInDeviceCode: nil, controllerDeviceCode: nil,
+            attachedToDeviceCode: nil, createdAt: Date(timeIntervalSince1970: 0),
+            availableCommands: [], features: [], tags: [], detail: .object([:]),
+            updatedAt: Date(timeIntervalSince1970: 0),
+            firstSeenAt: Date(timeIntervalSince1970: 0)
+        )
+    }
+
+    private func seed(
+        _ database: any DatabaseWriter, _ directive: Directive, _ stars: [Star]
+    ) async throws {
+        let vessel = self.vessel
+        try await database.write { db in
+            for star in stars { try Star.insert { star }.execute(db) }
+            try Device.insert { vessel }.execute(db)
+            try Directive.insert { directive }.execute(db)
+        }
+    }
+
+    private func row(_ database: any DatabaseReader) async throws -> Directive? {
+        try await database.read { db in
+            try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+        }
+    }
+
+    @Test func extendQueueAppendsThePlannersPick() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await seed(database, roamDirective(), [
+            star("CENTRE", x: 0, scanned: true),
+            star("NEAR", x: 2),
+            star("FAR", x: 40),
+        ])
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+        } operation: {
+            let core = DirectiveEngineCore(machines: [SurveyRun()], tick: .seconds(5))
+            await core.evaluateOnce(directiveID: "D1")
+            let updated = try await row(database)
+            #expect(updated?.targets == ["NEAR"])
+        }
+    }
+
+    /// The regression for the trap this resolver exists to avoid. The action the
+    /// machine returns AFTER the append gets applied to a directive row, and if
+    /// that row is the pre-append value the append is rolled straight back —
+    /// `targets` would come out `[]` and the run would extend forever without
+    /// ever going anywhere.
+    @Test func theAppendSurvivesTheActionAppliedAfterIt() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await seed(database, roamDirective(), [
+            star("CENTRE", x: 0, scanned: true),
+            star("NEAR", x: 2),
+        ])
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+        } operation: {
+            let core = DirectiveEngineCore(machines: [SurveyRun()], tick: .seconds(5))
+            await core.evaluateOnce(directiveID: "D1")
+
+            // Whatever the machine decided next, the queue must still hold the
+            // target that was just planned for it.
+            let updated = try await row(database)
+            #expect(updated?.targets == ["NEAR"])
+            #expect(updated?.currentTarget == "NEAR")
+        }
+    }
+
+    @Test func nothingLeftToSurveyCompletesTheRun() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await seed(database, roamDirective(), [
+            star("CENTRE", x: 0, scanned: true),
+            star("DONE", x: 2, scanned: true),
+        ])
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+        } operation: {
+            let core = DirectiveEngineCore(machines: [SurveyRun()], tick: .seconds(5))
+            await core.evaluateOnce(directiveID: "D1")
+            let updated = try await row(database)
+            #expect(updated?.status == .completed)
+        }
+    }
+
+    /// A system this run has already aimed at is never offered again — the
+    /// exclusion that stops an uncompletable system pinning the band and stops
+    /// the user's Skip being undone.
+    @Test func alreadyAttemptedSystemsAreNotOfferedAgain() async throws {
+        let database = try GameDatabase.bootstrap()
+        // The queue already holds NEAR and the index has moved past it: NEAR was
+        // aimed at and left behind, exactly as Skip leaves it. NEAR is still
+        // unscanned — an uncompletable system looks precisely like this.
+        try await seed(database, roamDirective(targets: ["NEAR"], targetIndex: 1), [
+            star("CENTRE", x: 0, scanned: true),
+            star("NEAR", x: 2),
+            star("NEXT", x: 4),
+        ])
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+        } operation: {
+            let core = DirectiveEngineCore(machines: [SurveyRun()], tick: .seconds(5))
+            await core.evaluateOnce(directiveID: "D1")
+            let updated = try await row(database)
+            #expect(updated?.targets == ["NEAR", "NEXT"])
+        }
+    }
+}
