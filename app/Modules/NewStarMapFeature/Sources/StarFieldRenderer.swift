@@ -539,7 +539,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     // depth comparable to the arriving moon system and can only slide and fade,
     // because the camera doesn't really dive on this move — see `OrreryPush`.
     // 5 → they end up 6× further out.
-    private var bodyPush: Float = 5
+    private var bodyPush: Float = 9
 
     /// Builds the renderer for a fixed terrain of `stars` plus the live `overlays`
     /// (FTL mesh links + ships in transit). The domain `[Star]` is the source of

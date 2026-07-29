@@ -735,10 +735,10 @@ vertex OrreryPointVaryings orrery_point_vertex(uint vid                    [[ver
     OrreryPointVaryings out;
     AmbientVertex m = pts[vid];
     // Grow out of the star in step with the planets/rings (same `orreryReveal`), and
-    // rotate the whole belt rigidly about the star (fixed 150 s period, CCW like the
+    // rotate the whole belt rigidly about the star (fixed 300 s period, CCW like the
     // planets and the sun's spin) so it drifts as one ring rather than sitting frozen.
     float3 local = m.positionSize.xyz - u.orreryBuildCenter.xyz;
-    float  ang   = -u.time * (2.0 * M_PI_F / 150.0);
+    float  ang   = -u.time * (2.0 * M_PI_F / 300.0);
     float  c = cos(ang), s = sin(ang);
     local = float3(local.x * c - local.z * s, local.y, local.x * s + local.z * c);
     float3 world = u.orreryCenter.xyz + local * u.orreryReveal;
