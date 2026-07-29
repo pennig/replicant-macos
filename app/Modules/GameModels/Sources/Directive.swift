@@ -138,7 +138,24 @@ public struct Directive: Identifiable, Equatable, Sendable {
     /// that is waiting on it. `deviceCode` cannot stand in for this — a Survey
     /// Run's vessel and its controller are two different devices.
     public var controllerCode: String?
+    /// The centre of a CONTINUOUS run, or nil for a fixed queue.
+    ///
+    /// Non-nil is the whole switch: `SurveyRun.preflight` extends the queue
+    /// instead of finishing when this is set, so the run surveys outward
+    /// indefinitely in bands around this system (see `SurveyRoamPlanner`).
+    ///
+    /// A designation rather than a coordinate, because the census row is the
+    /// authority on where a system is and copying its position here would let
+    /// the two drift.
+    public var roamCentre: String?
     /// The ordered queue of star-system designations still to visit.
+    ///
+    /// For a continuous run this is append-only HISTORY rather than a plan: the
+    /// engine appends each system as it picks it, and `SurveyRoamPlanner` treats
+    /// the whole array as "already attempted" so nothing is ever offered twice.
+    /// That is what stops a system which can never report itself complete (a
+    /// planetless one) from pinning the band forever, and what makes the user's
+    /// Skip stick.
     @Column(as: [String].JSONRepresentation.self) public var targets: [String]
     /// How far through `targets` the run is. Equal to `targets.count` when done.
     public var targetIndex: Int
@@ -170,6 +187,7 @@ public struct Directive: Identifiable, Equatable, Sendable {
         status: DirectiveStatus,
         deviceCode: String,
         controllerCode: String? = nil,
+        roamCentre: String? = nil,
         targets: [String],
         targetIndex: Int,
         step: String,
@@ -185,6 +203,7 @@ public struct Directive: Identifiable, Equatable, Sendable {
         self.status = status
         self.deviceCode = deviceCode
         self.controllerCode = controllerCode
+        self.roamCentre = roamCentre
         self.targets = targets
         self.targetIndex = targetIndex
         self.step = step
@@ -300,6 +319,18 @@ extension Directive {
         try #sql(
             """
             ALTER TABLE "directives" ADD COLUMN "controllerCode" TEXT
+            """
+        )
+        .execute(db)
+    }
+
+    /// A separate migration, not an edit to either above: both have shipped and
+    /// are already recorded in real databases, so editing one means it silently
+    /// never runs again.
+    public static let addRoamCentre = SchemaMigration("Add 'roamCentre' to 'directives'") { db in
+        try #sql(
+            """
+            ALTER TABLE "directives" ADD COLUMN "roamCentre" TEXT
             """
         )
         .execute(db)

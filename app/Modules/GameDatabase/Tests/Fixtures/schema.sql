@@ -103,7 +103,7 @@ CREATE TABLE "directives" (
   "attentionReason" TEXT,
   "createdAt" TEXT NOT NULL,
   "updatedAt" TEXT NOT NULL
-, "controllerCode" TEXT) STRICT;
+, "controllerCode" TEXT, "roamCentre" TEXT) STRICT;
 
 CREATE TABLE "eventLogs" (
   "id" TEXT PRIMARY KEY NOT NULL,

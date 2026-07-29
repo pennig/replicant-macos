@@ -68,6 +68,7 @@ public enum GameDatabase {
         GameModels.Operation.createOperations,
         EventLog.createEventLogs,
         Star.backfillFullyScannedAt,
+        Directive.addRoamCentre,
     ]
 
     /// Builds a migrator from `entries`. The parameter exists so tests can
