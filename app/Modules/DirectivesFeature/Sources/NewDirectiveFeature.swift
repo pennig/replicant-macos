@@ -47,6 +47,28 @@ public struct NewDirectiveFeature {
         public var search: String = ""
         public var returnToOrigin = false
 
+        /// Whether the run picks its own targets forever, or works a queue the
+        /// user built.
+        public enum Mode: String, CaseIterable, Equatable, Sendable {
+            case continuous
+            case fixedQueue
+
+            public var title: String {
+                switch self {
+                case .continuous: "Continuous"
+                case .fixedQueue: "Fixed queue"
+                }
+            }
+        }
+
+        /// Continuous by default: picking targets by hand is the thing this mode
+        /// exists to remove, and switching back is one click.
+        public var mode: Mode = .continuous
+
+        /// An explicitly chosen centre. Nil means "use the vessel's own system",
+        /// which is what `effectiveCentre` resolves.
+        public var roamCentre: String?
+
         public init(vesselCode: String? = nil) {
             self.vesselCode = vesselCode
         }
@@ -68,7 +90,14 @@ public struct NewDirectiveFeature {
             }
         }
 
-        public var canLaunch: Bool { vesselCode != nil && !targets.isEmpty }
+        public var canLaunch: Bool {
+            guard vesselCode != nil else { return false }
+            switch mode {
+            // A continuous run has nothing to queue — the centre IS the input.
+            case .continuous: return effectiveCentre != nil
+            case .fixedQueue: return !targets.isEmpty
+            }
+        }
 
         /// The system the chosen vessel is in — the point every suggested
         /// distance is measured from.
@@ -84,6 +113,12 @@ public struct NewDirectiveFeature {
             else { return nil }
             return SiteAssay.system(of: location)
         }
+
+        /// The centre a continuous run would actually use: an explicit pick, or
+        /// the vessel's current system. Nil only when no vessel is chosen or it
+        /// has no location — the same two cases `anchorSystem` covers, and the
+        /// reason Launch is disabled for them.
+        public var effectiveCentre: String? { roamCentre ?? anchorSystem }
 
         /// The five nearest systems still worth surveying, measured from the
         /// vessel. Always anchored on the vessel and never re-based onto the
@@ -118,6 +153,7 @@ public struct NewDirectiveFeature {
         case binding(BindingAction<State>)
         case targetAdded(String)
         case targetRemoved(Int)
+        case centrePicked(String)
         case launchTapped
         case cancelTapped
         case delegate(Delegate)
@@ -153,10 +189,16 @@ public struct NewDirectiveFeature {
                 state.targets.remove(at: index)
                 return .none
 
+            case let .centrePicked(designation):
+                state.roamCentre = designation
+                state.search = ""
+                return .none
+
             case .launchTapped:
-                guard let vesselCode = state.vesselCode, !state.targets.isEmpty,
+                guard let vesselCode = state.vesselCode, state.canLaunch,
                       let vessel = state.devices.first(where: { $0.deviceCode == vesselCode })
                 else { return .none }
+                let isContinuous = state.mode == .continuous
                 let directive = Directive(
                     id: uuid().uuidString,
                     kind: .surveyRun,
@@ -166,17 +208,25 @@ public struct NewDirectiveFeature {
                     // whatever is actually aboard when the run starts — recording
                     // it here would go stale if the fleet moved meanwhile.
                     controllerCode: nil,
-                    targets: state.targets,
+                    // Non-nil is what makes the engine extend the queue rather
+                    // than finish when it empties.
+                    roamCentre: isContinuous ? state.effectiveCentre : nil,
+                    // Empty on purpose: the engine plans the first target from
+                    // the census on its first evaluation.
+                    targets: isContinuous ? [] : state.targets,
                     targetIndex: 0,
                     step: SurveyRun().firstStep,
                     stepStartedAt: date.now,
-                    returnToOrigin: state.returnToOrigin,
+                    // A continuous run has no queue to empty, so a return leg
+                    // would never fire; keep the column honest rather than
+                    // recording an intent that cannot happen.
+                    returnToOrigin: isContinuous ? false : state.returnToOrigin,
                     originDesignation: vessel.location.map { SiteAssay.system(of: $0) },
                     attentionReason: nil,
                     createdAt: date.now,
                     updatedAt: date.now
                 )
-                logger.info("launching survey run \(directive.id, privacy: .public) on \(vesselCode, privacy: .public) over \(directive.targets.count) target(s)")
+                logger.info("launching \(isContinuous ? "continuous" : "fixed", privacy: .public) survey run \(directive.id, privacy: .public) on \(vesselCode, privacy: .public) over \(directive.targets.count) target(s)")
                 // Bound to locals: referencing the property wrappers inside the
                 // @Sendable closure would capture the non-Sendable reducer.
                 let database = self.database

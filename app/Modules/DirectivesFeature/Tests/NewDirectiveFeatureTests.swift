@@ -108,6 +108,10 @@ struct NewDirectiveFeatureTests {
 
     /// Launch writes a running directive seeded at the machine's first step,
     /// with the origin recorded so `returnToOrigin` has a destination.
+    ///
+    /// Explicitly `.fixedQueue`: the dialog now defaults to continuous mode, and
+    /// this test is about the hand-built queue. `NewDirectiveContinuousModeTests`
+    /// covers the default.
     @Test func launchCreatesARunningDirective() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in
@@ -122,6 +126,7 @@ struct NewDirectiveFeatureTests {
         }
         store.exhaustivity = .off
 
+        await store.send(.binding(.set(\.mode, .fixedQueue)))
         await store.send(.binding(.set(\.vesselCode, "VES1")))
         await store.send(.targetAdded("TAU"))
         await store.send(.launchTapped)
@@ -130,6 +135,7 @@ struct NewDirectiveFeatureTests {
         let created = try await database.read { db in try Directive.all.fetchAll(db) }
         #expect(created.count == 1)
         #expect(created[0].status == .running)
+        #expect(created[0].roamCentre == nil, "a fixed queue is not a roam")
         #expect(created[0].kind == .surveyRun)
         #expect(created[0].deviceCode == "VES1")
         #expect(created[0].targets == ["TAU"])
@@ -362,5 +368,136 @@ struct NewDirectiveFeatureTests {
             createdAt: Date(timeIntervalSince1970: 0),
             firstVisitedAt: nil, fullyScannedAt: fullyScannedAt
         )
+    }
+}
+
+// MARK: - Continuous mode
+
+/// The launcher's continuous mode: pick a vessel, press Launch. The row it
+/// writes is what `SurveyRun.preflight` reads to decide it should extend the
+/// queue rather than finish, so these assert on the ROW, not on state.
+@Suite("New directive — continuous mode")
+@MainActor
+struct NewDirectiveContinuousModeTests {
+    private func store(_ database: any DatabaseWriter) -> TestStoreOf<NewDirectiveFeature> {
+        let store = TestStore(initialState: NewDirectiveFeature.State()) {
+            NewDirectiveFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
+            $0.uuid = .incrementing
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+        }
+        store.exhaustivity = .off
+        return store
+    }
+
+    /// The default: a continuous run centred on the vessel's own system needs no
+    /// queue built at all, so Launch is live as soon as a vessel is chosen.
+    @Test func continuousModeLaunchesWithNoTargetsQueued() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            for device in NewDirectiveFeatureTests.stagedFleet() {
+                try Device.insert { device }.execute(db)
+            }
+        }
+        let store = store(database)
+
+        #expect(store.state.mode == .continuous)
+        await store.send(.binding(.set(\.vesselCode, "VES1")))
+        // `bareVessel` sits at SOL-3, and a system designation is the part
+        // before the first hyphen.
+        #expect(store.state.effectiveCentre == "SOL")
+        #expect(store.state.canLaunch)
+        #expect(store.state.targets.isEmpty)
+    }
+
+    @Test func continuousLaunchWritesARoamCentreAndAnEmptyQueue() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            for device in NewDirectiveFeatureTests.stagedFleet() {
+                try Device.insert { device }.execute(db)
+            }
+        }
+        let store = store(database)
+
+        await store.send(.binding(.set(\.vesselCode, "VES1")))
+        await store.send(.launchTapped)
+        await store.receive(\.delegate.created)
+
+        let created = try await database.read { db in try Directive.all.fetchAll(db) }
+        #expect(created.count == 1)
+        #expect(created[0].roamCentre == "SOL")
+        #expect(created[0].targets.isEmpty)
+        #expect(created[0].targetIndex == 0)
+        #expect(created[0].status == .running)
+        #expect(created[0].step == SurveyRun().firstStep)
+        #expect(created[0].returnToOrigin == false)
+    }
+
+    @Test func anExplicitCentreOverridesTheVesselsSystem() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            for device in NewDirectiveFeatureTests.stagedFleet() {
+                try Device.insert { device }.execute(db)
+            }
+        }
+        let store = store(database)
+
+        await store.send(.binding(.set(\.vesselCode, "VES1")))
+        await store.send(.centrePicked("KRIOS"))
+        #expect(store.state.effectiveCentre == "KRIOS")
+
+        await store.send(.launchTapped)
+        await store.receive(\.delegate.created)
+        let created = try await database.read { db in try Directive.all.fetchAll(db) }
+        #expect(created[0].roamCentre == "KRIOS")
+    }
+
+    /// A vessel with no location gives no centre to roam around, so Launch stays
+    /// disabled rather than writing a run the engine cannot plan for.
+    @Test func continuousModeCannotLaunchWithoutAKnownLocation() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            for var device in NewDirectiveFeatureTests.stagedFleet() {
+                // Stowed or in transit: the server reports no location at all.
+                if device.deviceCode == "VES1" { device.location = nil }
+                try Device.insert { device }.execute(db)
+            }
+        }
+        let store = store(database)
+
+        await store.send(.binding(.set(\.vesselCode, "VES1")))
+        #expect(store.state.effectiveCentre == nil)
+        #expect(store.state.canLaunch == false)
+
+        await store.send(.launchTapped)
+        let created = try await database.read { db in try Directive.all.fetchAll(db) }
+        #expect(created.isEmpty)
+    }
+
+    /// The fixed-queue regression: switching modes must leave the old path
+    /// writing exactly what it wrote before continuous mode existed.
+    @Test func fixedQueueModeStillWritesItsQueueAndNoRoamCentre() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            for device in NewDirectiveFeatureTests.stagedFleet() {
+                try Device.insert { device }.execute(db)
+            }
+        }
+        let store = store(database)
+
+        await store.send(.binding(.set(\.mode, .fixedQueue)))
+        await store.send(.binding(.set(\.vesselCode, "VES1")))
+        #expect(store.state.canLaunch == false, "a fixed run still needs a queue")
+        await store.send(.targetAdded("KRIOS"))
+        await store.send(.targetAdded("SAFANA"))
+        #expect(store.state.canLaunch)
+
+        await store.send(.launchTapped)
+        await store.receive(\.delegate.created)
+        let created = try await database.read { db in try Directive.all.fetchAll(db) }
+        #expect(created[0].roamCentre == nil)
+        #expect(created[0].targets == ["KRIOS", "SAFANA"])
+        #expect(created[0].originDesignation == "SOL")
     }
 }

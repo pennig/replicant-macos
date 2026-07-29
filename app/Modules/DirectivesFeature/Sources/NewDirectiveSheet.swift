@@ -7,6 +7,7 @@
 //
 
 import ComposableArchitecture
+import DirectiveEngine
 import GameModels
 import SwiftUI
 import UI
@@ -47,10 +48,16 @@ public struct NewDirectiveSheet: View {
                         unstagedNotice
                     } else {
                         vesselPicker
-                        targetPicker
-                        Toggle("Return to origin when the queue empties", isOn: $store.returnToOrigin)
-                            .font(.rcBody)
-                            .foregroundStyle(.rcTextSecondary)
+                        modePicker
+                        switch store.mode {
+                        case .continuous:
+                            centrePicker
+                        case .fixedQueue:
+                            targetPicker
+                            Toggle("Return to origin when the queue empties", isOn: $store.returnToOrigin)
+                                .font(.rcBody)
+                                .foregroundStyle(.rcTextSecondary)
+                        }
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -112,6 +119,67 @@ public struct NewDirectiveSheet: View {
                     }
                 }
             }
+        }
+    }
+
+    private var modePicker: some View {
+        Picker("Mode", selection: $store.mode) {
+            ForEach(NewDirectiveFeature.State.Mode.allCases, id: \.self) { mode in
+                Text(mode.title).tag(mode)
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+    }
+
+    /// A continuous run's only input. Defaults to the vessel's own system, so
+    /// the common case needs no interaction at all.
+    private var centrePicker: some View {
+        VStack(alignment: .leading, spacing: Space.xs) {
+            RCSectionHeader("Centre")
+            if let centre = store.effectiveCentre {
+                HStack(spacing: Space.xs) {
+                    Text(centre)
+                        .font(.rcMonoSmall)
+                        .foregroundStyle(.rcTextPrimary)
+                    if store.roamCentre == nil {
+                        Text("the vessel's system")
+                            .font(.rcCaption)
+                            .foregroundStyle(.rcTextTertiary)
+                    }
+                    Spacer(minLength: 0)
+                }
+            } else {
+                Text("Choose a vessel with a known location.")
+                    .font(.rcCaption)
+                    .foregroundStyle(.rcTextTertiary)
+            }
+            RCField("Search systems", text: $store.search)
+            if !store.searchResults.isEmpty {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(store.searchResults) { star in
+                            Button {
+                                store.send(.centrePicked(star.designation))
+                            } label: {
+                                HStack {
+                                    Text(star.designation)
+                                        .font(.rcMonoSmall)
+                                        .foregroundStyle(.rcTextPrimary)
+                                    Spacer()
+                                }
+                                .padding(.vertical, Space.xxs)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .frame(maxHeight: 120)
+            }
+            Text("Surveys outward in \(Int(SurveyRoamPlanner.shellWidthLY)) ly shells until you cancel it.")
+                .font(.rcCaption)
+                .foregroundStyle(.rcTextTertiary)
         }
     }
 
