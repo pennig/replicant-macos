@@ -246,10 +246,47 @@ the machine is handed a row whose `targets` still lack the target just appended
 and immediately asks to extend again.
 
 The census read happens only when the queue is exhausted, which is once per
-surveyed system — tens of minutes apart. It is not on the 5 s tick, so a read of
-the full `stars` table is affordable; it is nonetheless scoped by a bounding box
-around the centre for tidiness, since a shell can never contain a star outside
-one.
+surveyed system — tens of minutes apart. It is not on the 5 s tick, so reading
+the whole `stars` table is affordable, and the candidate filter stays in the
+planner where it is unit-tested rather than being pushed into SQL.
+
+A bounding box around the centre was considered and rejected: the band's outer
+edge is `inner + shellWidth`, and `inner` is only known once the candidate set
+has been scanned, so bounding it needs the very scan it was meant to avoid.
+
+### B5. The re-ask must apply to the freshly-read row
+
+This is the one genuine trap in the integration, and it is not merely a
+signature change. `evaluateOnce` currently hands the *pre-resolution*
+`directive` value to `DirectiveExecutor.apply`:
+
+```swift
+let stillRunnable = await DirectiveExecutor.apply(action, to: directive, machine: machine)
+```
+
+Every executor path builds its update as `var updated = directive`, so applying
+a post-extend action to the pre-extend value writes `targets` back to what it
+was and **rolls the append straight back**. This bites on the ordinary happy
+path, not an edge case: the action after a successful extend is normally
+`.assignController`, which goes through `move()` and commits the whole row.
+
+So `.extendQueue`'s resolver returns the action *and* the row it must be applied
+to, and `evaluateOnce` carries that row forward:
+
+```swift
+/// A resolved action plus the directive row it must be applied to. Only
+/// `.extendQueue` needs the second half: it is the one resolver that writes the
+/// row, so applying its result to the pre-write value would roll the append
+/// back.
+private struct Resolution {
+    let action: MissionAction
+    let directive: Directive
+}
+```
+
+`resolveRefresh` and `resolveSystemRefresh` are unaffected — a device read
+cannot change the directive row, which is exactly why they were able to re-ask
+with the same value.
 
 `Position` for a designation comes from the `stars` row. A centre with no census
 row yields no plan, which resolves to `.done` — the launcher cannot produce one
@@ -279,10 +316,17 @@ roam run is always "n/n" — `targetIndex` equals `targets.count` for the entire
 window between finishing one system and extending onto the next. Rendered as-is
 it reads as a finished run.
 
-`DirectiveRow` gains a roam branch: "23 surveyed · at KRIOS" rather than
-"23/23". The count is honest — `targets` is the history, so its length is the
-number of systems aimed at, and `targetIndex` distinguishes aimed-at from
-reached.
+A roam run reads "23 surveyed" instead. `targetIndex` is the honest count:
+`.advanceTarget` bumps it once per finished system, and `targets` is the history
+of everything aimed at. The current target is not repeated in the subtitle
+because `headlineDesignation` already renders it on the row's first line.
+
+The branch goes on `DirectiveRow`, not in the view. That logic currently sits in
+a `private var subtitle` on `DirectiveRowView`, where it cannot be tested at all;
+`DirectiveRow` is the list's deliberately SwiftUI-free logic type ("pure logic
+hanging off a SwiftUI View traps under `swift test`") and already holds
+`headline`, `headlineDesignation`, and `title`. Moving `subtitle` beside them is
+where it belonged, and it makes this branch testable.
 
 ## What deliberately does not change
 
