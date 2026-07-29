@@ -128,4 +128,47 @@ extension Star {
         )
         .execute(db)
     }
+
+    /// Backfills `fullyScannedAt` for systems already known to be fully
+    /// surveyed. Nothing ever wrote the column, so every system surveyed before
+    /// it started being stamped was left null — 31 of them on the live database,
+    /// which is why the star map showed none as fully scanned.
+    ///
+    /// Raw SQL against the stored blob rather than decoding through
+    /// `StarSystem`: a migration runs forever against databases whose Swift
+    /// model may have moved on, so it must not depend on today's model shape.
+    /// The predicate mirrors `StarSystem.isFullyScanned` exactly — every planet
+    /// scanned against a positive total, and every moon scanned whenever a
+    /// positive moon total is reported. A NULL count makes its comparison NULL,
+    /// which is falsy, matching that property's "unknown is never scanned" bias.
+    ///
+    /// The timestamp is the detail row's own `hydratedAt` — the best available
+    /// evidence of when we learned the system was complete — and both columns
+    /// are TEXT, so copying it across preserves the exact serialization.
+    public static let backfillFullyScannedAt = SchemaMigration(
+        "Backfill 'fullyScannedAt' from systemDetails"
+    ) { db in
+        try #sql(
+            """
+            UPDATE "stars" SET "fullyScannedAt" = (
+              SELECT "d"."hydratedAt" FROM "systemDetails" AS "d"
+              WHERE "d"."designation" = "stars"."designation"
+            )
+            WHERE "fullyScannedAt" IS NULL
+              AND "designation" IN (
+                SELECT "designation" FROM "systemDetails"
+                WHERE json_extract("systemJSON", '$.planetsTotal') > 0
+                  AND json_extract("systemJSON", '$.planetsScanned')
+                      >= json_extract("systemJSON", '$.planetsTotal')
+                  AND (
+                    json_extract("systemJSON", '$.moonsTotal') IS NULL
+                    OR json_extract("systemJSON", '$.moonsTotal') = 0
+                    OR json_extract("systemJSON", '$.moonsScanned')
+                       >= json_extract("systemJSON", '$.moonsTotal')
+                  )
+              )
+            """
+        )
+        .execute(db)
+    }
 }

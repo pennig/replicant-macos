@@ -45,6 +45,7 @@ import Testing
         "Create 'bobnetChannels' table",
         "Create 'operations' table",
         "Create 'eventLogs' table",
+        "Backfill 'fullyScannedAt' from systemDetails",
     ]
 
     @Test func manifestMatchesTheFrozenList() {

@@ -67,6 +67,7 @@ public enum GameDatabase {
         // Qualified: `Operation` would otherwise be ambiguous with Foundation's.
         GameModels.Operation.createOperations,
         EventLog.createEventLogs,
+        Star.backfillFullyScannedAt,
     ]
 
     /// Builds a migrator from `entries`. The parameter exists so tests can
