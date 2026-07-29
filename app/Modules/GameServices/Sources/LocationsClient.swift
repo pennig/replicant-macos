@@ -160,8 +160,7 @@ extension LocationsClient {
             let existing = try SystemDetail
                 .where { $0.designation.eq(scanned.designation) }.fetchOne(db)
             let merged = (try existing?.system())?.mergingScan(scanned) ?? scanned
-            let row = try SystemDetail(system: merged, hydratedAt: now)
-            try SystemDetail.upsert { row }.execute(db)
+            try SystemDetail.persist(system: merged, at: now, in: db)
         }
     }
 
@@ -173,23 +172,25 @@ extension LocationsClient {
     /// body simply leaves the catalog untouched rather than throwing.
     /// Re-read one star system and fold it into the cached blob.
     ///
-    /// Best-effort by contract: `GET locations/{star}` is **presence-gated**
-    /// (403 "No replicant in system" whenever no replicant is there — see the
-    /// location-endpoint-presence-gate memory note), and a caller away from the
-    /// system is the normal case, not a failure. A 403 leaves the cache exactly
-    /// as it was. Used by `DirectiveEngine`'s `refreshSystem` action to pull
-    /// fresh scan counts after a survey completes.
+    /// Best-effort by contract: `GET locations/{star}` is **exploration**-gated,
+    /// not presence-gated — its 403 says "No replicant in system", which is a
+    /// lie, and any *explored* system rehydrates from anywhere (see the
+    /// location-endpoint-presence-gate note). So a caller away from the system is
+    /// the normal case and succeeds; an unexplored system 403s and leaves the
+    /// cache exactly as it was. Used by `DirectiveEngine`'s `refreshSystem`
+    /// action to pull fresh scan counts after a survey completes, and by the
+    /// `directive.completed` catalog route for the same reason.
     public func hydrateSystem(designation: String) async throws {
         @Dependency(\.defaultDatabase) var database
         @Dependency(\.date.now) var now
         guard let fresh = try? await system(designation) else { return }
-        let cached = try? await database.read { db in
-            try SystemDetail.where { $0.designation.eq(designation) }.fetchOne(db)
-        }
-        let merged = (try? cached?.system()).flatMap { $0 }.map { $0.mergingSystemDetail(fresh) } ?? fresh
-        let row = try SystemDetail(system: merged, hydratedAt: now)
+        // Read, merge, and persist inside ONE transaction: `persist` also stamps
+        // the census row's `fullyScannedAt`, and splitting the read from the
+        // write would let the two disagree about what the merge concluded.
         try await database.write { db in
-            try SystemDetail.upsert { row }.execute(db)
+            let cached = try? SystemDetail.where { $0.designation.eq(designation) }.fetchOne(db)
+            let merged = (try? cached?.system()).flatMap { $0 }.map { $0.mergingSystemDetail(fresh) } ?? fresh
+            try SystemDetail.persist(system: merged, at: now, in: db)
         }
     }
 
@@ -205,9 +206,9 @@ extension LocationsClient {
         if base == nil { base = try? await system(systemDesignation) }
         guard var assembled = base, let detail = try? await body(bodyDesignation) else { return }
         assembled = assembled.applying(detail)
-        let row = try SystemDetail(system: assembled, hydratedAt: now)
+        let merged = assembled
         try await database.write { db in
-            try SystemDetail.upsert { row }.execute(db)
+            try SystemDetail.persist(system: merged, at: now, in: db)
         }
     }
 
@@ -245,8 +246,7 @@ extension LocationsClient {
             }
             let merged = base.seedingParent(of: detail).applying(detail)
                 .restoringSalvagePercentages(knownPct)
-            let row = try SystemDetail(system: merged, hydratedAt: now)
-            try SystemDetail.upsert { row }.execute(db)
+            try SystemDetail.persist(system: merged, at: now, in: db)
 
             // The scan's absolute remaining is a second source of capacity.
             // With a known percentage it implies the original total; without
@@ -325,8 +325,7 @@ extension LocationsClient {
                 for report in reports {
                     merged = merged.observing(report.body)
                 }
-                let row = try SystemDetail(system: merged, hydratedAt: now)
-                try SystemDetail.upsert { row }.execute(db)
+                try SystemDetail.persist(system: merged, at: now, in: db)
 
                 for observation in reports.flatMap(\.salvage) {
                     let stored = try SiteAssay.where { $0.id.eq(observation.designation) }.fetchOne(db)
@@ -400,8 +399,7 @@ extension LocationsClient {
                 depleted: false
             )
             guard let merged = base.insertingSalvage(site) else { return }
-            let row = try SystemDetail(system: merged, hydratedAt: now)
-            try SystemDetail.upsert { row }.execute(db)
+            try SystemDetail.persist(system: merged, at: now, in: db)
         }
         return true
     }
@@ -450,8 +448,7 @@ extension LocationsClient {
                 transform(&salvage)
             }
             guard updated != starSystem else { return false }
-            let row = try SystemDetail(system: updated, hydratedAt: now)
-            try SystemDetail.upsert { row }.execute(db)
+            try SystemDetail.persist(system: updated, at: now, in: db)
             return true
         }
     }

@@ -482,20 +482,16 @@ public struct NewStarMapFeature {
     /// existing (possibly scanned) `SystemDetail` and re-persisted — the orrery's
     /// `@Fetch` then re-renders. Preserves richer per-body/scan detail via
     /// `mergingSystemDetail`. Silently no-ops for systems the server won't serve.
+    ///
+    /// Delegates to `LocationsClient.hydrateSystem`, which does exactly this and
+    /// additionally stamps `stars.fullyScannedAt` when the merge completes the
+    /// system — the signal this view's own `.full` scan tier reads. Only *how* it
+    /// hydrates changed, not *when*: the deferral that fixed the drill-in fly
+    /// hitch lives at the call site and is untouched.
     private func hydrateSystem(_ designation: String) -> Effect<Action> {
         let client = locationsClient
-        let database = self.database
-        let date = self.date
         return .run { _ in
-            // Nothing to persist (and no clock/db touched) unless the fetch lands.
-            guard let fresh = try? await client.system(designation) else { return }
-            try? await database.write { db in
-                let existing = try SystemDetail
-                    .where { $0.designation.eq(designation) }.fetchOne(db)
-                let merged = (try existing?.system())?.mergingSystemDetail(fresh) ?? fresh
-                let row = try SystemDetail(system: merged, hydratedAt: date.now)
-                try SystemDetail.upsert { row }.execute(db)
-            }
+            try? await client.hydrateSystem(designation: designation)
         }
     }
 

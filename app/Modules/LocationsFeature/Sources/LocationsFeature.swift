@@ -296,9 +296,11 @@ public struct LocationsFeature {
                             assembled = assembled.applying(detail)
                         }
                     }
-                    let row = try SystemDetail(system: assembled, hydratedAt: now)
+                    // Bound to a `let` before the write: `assembled` is a `var`,
+                    // and a mutable capture can't cross into the sendable closure.
+                    let merged = assembled
                     try await database.write { db in
-                        try SystemDetail.upsert { row }.execute(db)
+                        try SystemDetail.persist(system: merged, at: now, in: db)
                     }
                     // Reload the forest explicitly (as `.task` does) rather than
                     // waiting on `@Fetch`'s implicit DB observation: the catalog list
