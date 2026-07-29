@@ -19,6 +19,8 @@
     --disable-xctest --event-stream-version 0 \
     --event-stream-output-path .build/events.jsonl
   ```
+  `--filter` is a regex over test *IDs* (`Module.TypeName/function()`), so it matches the suite's **type name** — never its `@Suite("display name")`. A display-name filter silently runs nothing and reports "No matching test cases were run".
+
   Failures:
   ```bash
   jq -r 'select(.kind=="event").payload
@@ -164,7 +166,7 @@ struct SystemScanStateTests {
 
 ```bash
 cd app/Modules && swift test --test-product UniverseModelsTests \
-  --filter 'System scan state' --disable-xctest \
+  --filter 'SystemScanStateTests' --disable-xctest \
   --event-stream-version 0 --event-stream-output-path .build/events.jsonl
 ```
 
@@ -216,7 +218,7 @@ extension StarSystem {
 
 ```bash
 cd app/Modules && swift test --test-product UniverseModelsTests \
-  --filter 'System scan state' --disable-xctest \
+  --filter 'SystemScanStateTests' --disable-xctest \
   --event-stream-version 0 --event-stream-output-path .build/events.jsonl
 ```
 
@@ -464,7 +466,7 @@ Do not reorder or touch any other target. No dependency cycle results: `GameData
 
 ```bash
 cd app/Modules && swift test --test-product UniverseModelsTests \
-  --filter 'System detail persistence' --disable-xctest \
+  --filter 'SystemDetailPersistenceTests' --disable-xctest \
   --event-stream-version 0 --event-stream-output-path .build/events.jsonl
 ```
 
@@ -517,7 +519,7 @@ extension SystemDetail {
 
 ```bash
 cd app/Modules && swift test --test-product UniverseModelsTests \
-  --filter 'System detail persistence' --disable-xctest \
+  --filter 'SystemDetailPersistenceTests' --disable-xctest \
   --event-stream-version 0 --event-stream-output-path .build/events.jsonl
 ```
 
@@ -838,7 +840,7 @@ struct FullyScannedBackfillTests {
 
 ```bash
 cd app/Modules && swift test --test-product GameDatabaseTests \
-  --filter 'Fully-scanned backfill' --disable-xctest \
+  --filter 'FullyScannedBackfillTests' --disable-xctest \
   --event-stream-version 0 --event-stream-output-path .build/events.jsonl
 ```
 
@@ -1053,7 +1055,7 @@ struct DirectiveCompletedCatalogRouteTests {
 
 ```bash
 cd app/Modules && swift test --test-product GameServicesTests \
-  --filter 'directive.completed catalog route' --disable-xctest \
+  --filter 'DirectiveCompletedCatalogRouteTests' --disable-xctest \
   --event-stream-version 0 --event-stream-output-path .build/events.jsonl
 ```
 
@@ -1254,7 +1256,7 @@ struct SurveyTargetSuggestionsTests {
 
 ```bash
 cd app/Modules && swift test --test-product DirectiveEngineTests \
-  --filter 'Survey target suggestions' --disable-xctest \
+  --filter 'SurveyTargetSuggestionsTests' --disable-xctest \
   --event-stream-version 0 --event-stream-output-path .build/events.jsonl
 ```
 
@@ -1532,7 +1534,7 @@ The anchor is `SOL` because `bareVessel` already sets `location: "SOL-3"`, and `
 
 ```bash
 cd app/Modules && swift test --test-product DirectivesFeatureTests \
-  --filter 'New directive' --disable-xctest \
+  --filter 'NewDirectiveFeatureTests' --disable-xctest \
   --event-stream-version 0 --event-stream-output-path .build/events.jsonl
 ```
 
