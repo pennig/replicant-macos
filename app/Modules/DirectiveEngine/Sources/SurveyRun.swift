@@ -366,19 +366,29 @@ public struct SurveyRun: MissionStepMachine {
         // reports no travel block and would otherwise be re-probed every tick.
         let lastLook = stranded.map(\.updatedAt).min() ?? .distantPast
         if world.now.timeIntervalSince(lastLook) < Self.recallProbeInterval { return .wait }
-        // ONE scoped request for the whole system rather than a read per device:
-        // the answer depends on the vessel, the controller and every drone still
-        // out, and `location=<star>` returns all of them together — in-transit
-        // ones included, which are precisely the drones worth waiting for. It
-        // also cannot miss a row the way a device list can, since nothing has to
-        // be named. Falls back to the vessel's system when the target is somehow
-        // unset, since that is where the recall is happening.
+        // Name the drones whose own rows decide this gate — never a location
+        // scope. Stowing a device CLEARS its location, so a location-scoped list
+        // cannot report the very state this step waits for: the success
+        // condition erases the evidence. Live on 2026-07-29,
+        // `GET devices?location=ESELLUSAU` returned exactly ONE row (the vessel)
+        // while all six drones sat stowed aboard it reporting `location: null`.
+        // Their rows never moved, so `lastLook` never advanced either and the
+        // probe re-fired on every tick until the deadline surfaced
+        // `dronesNotRecovered` over a fully recovered fleet.
+        //
+        // `resolveRefresh` reads each named code directly, which reports a
+        // stowed drone wherever it is and an in-transit one with its travel
+        // block — the carrier expansion is an addition to that, not the
+        // mechanism, which is what the old "a named probe could miss the rows it
+        // judges" reasoning conflated. Naming the DRONES also sidesteps the
+        // vessel's `stowed_devices` blob, which is not a reliable inverse of
+        // these columns (see preflight). Costs one read per drone still out —
+        // the price preflight already pays per target, and it shrinks as they
+        // come home.
         //
         // `thenStall: nil`: drones still flying is the expected answer, not a
         // fault, so an unresolved probe waits rather than demanding a human.
-        let system = directive.currentTarget ?? Self.system(of: vessel)
-        guard let system else { return .wait }
-        return .refreshDevicesInSystem(designation: system, thenStall: nil)
+        return .refreshDevices(deviceCodes: stranded.map(\.deviceCode), thenStall: nil)
     }
 
     /// When the last of the drones still out is due back, if any of them is

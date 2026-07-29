@@ -759,17 +759,26 @@ struct SurveyRunRecoveryTests {
         ) == .wait)
     }
 
-    /// Past the probe delay with no ETA on file: go and look — with ONE scoped
-    /// request for the whole system, not a read per device.
+    /// The live ESELLUSAU stall (2026-07-29). A location-scoped probe can never
+    /// observe the state this gate waits for, because **stowing a device clears
+    /// its location** — so the success condition erases the evidence.
     ///
-    /// Scoping to the system rather than naming devices is the load-bearing
-    /// part. The engine expands a NAMED device via that carrier's
-    /// `stowed_devices` blob, and a real vessel's blob did not list its
-    /// controller or drones at all, so a named probe could miss the very rows it
-    /// judges (that mismatch stalled a run for five and a half hours). A system
-    /// scope names nothing, so it can miss nothing — and costs one request
-    /// instead of eight.
-    @Test func probesTheWholeSystemInOneRequest() {
+    /// Verified against the live API while the run sat stuck: all six drones
+    /// reported `status: stowed`, `stowed_in_device_code: F2908E6E`,
+    /// `location: null`, and `GET devices?location=ESELLUSAU` returned exactly
+    /// ONE row — the vessel. The unfiltered fleet list returned all six with
+    /// their stow columns intact, which is the proof that scope, not staleness,
+    /// was the problem. The drones' rows never moved, so `lastLook` never
+    /// advanced and the probe re-fired on every tick until the 20-minute
+    /// deadline surfaced `dronesNotRecovered` over a fully recovered fleet.
+    ///
+    /// So the probe must NAME the drones whose rows decide the gate.
+    /// `resolveRefresh` reads each named code directly (`GET devices/{code}`),
+    /// which reports a stowed drone wherever it is; the carrier expansion is an
+    /// addition to that, not the mechanism — which is what the old "a named
+    /// probe could miss the rows it judges" reasoning conflated. Preflight's
+    /// staging check already names its drones for exactly this reason.
+    @Test func probeNamesTheStrandedDronesRatherThanTheirSystem() {
         let start = Date(timeIntervalSince1970: 900)
         let directive = run(step: SurveyRun.Step.recovering, controllerCode: "AMI1",
                             stepStartedAt: start)
@@ -777,10 +786,11 @@ struct SurveyRunRecoveryTests {
         // Rows last read before the probe interval, so the "don't re-read fresh
         // rows" floor is not what decides this.
         let lastSync = due.addingTimeInterval(-SurveyRun.recallProbeInterval - 1)
+        // Only the two still out — a drone already home is not re-read.
         #expect(SurveyRun().nextAction(
             directive: directive,
             world: world(recallingFleet(aboard: 1, updatedAt: lastSync), now: due)
-        ) == .refreshDevicesInSystem(designation: "TAU", thenStall: nil))
+        ) == .refreshDevices(deviceCodes: ["DRONE1", "DRONE2"], thenStall: nil))
     }
 
     /// A probe that comes back "still flying" must NOT stall — the drones are
@@ -795,7 +805,7 @@ struct SurveyRunRecoveryTests {
             directive: directive,
             world: world(recallingFleet(aboard: 0, updatedAt: lastSync), now: due)
         )
-        guard case let .refreshDevicesInSystem(_, thenStall) = action else {
+        guard case let .refreshDevices(_, thenStall) = action else {
             Issue.record("expected a probe, got \(action)"); return
         }
         #expect(thenStall == nil)
@@ -850,7 +860,7 @@ struct SurveyRunRecoveryTests {
                 recallingFleet(aboard: 0, adopted: 1, updatedAt: stale, arrivals: [passed]),
                 now: now
             )
-        ) == .refreshDevicesInSystem(designation: "TAU", thenStall: nil))
+        ) == .refreshDevices(deviceCodes: ["DRONE0"], thenStall: nil))
     }
 
     /// A drone that arrived but has not stowed reports no ETA at all. Without a

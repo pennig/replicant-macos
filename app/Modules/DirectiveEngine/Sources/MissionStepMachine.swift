@@ -75,16 +75,25 @@ public enum MissionAction: Equatable, Sendable {
     /// `GET devices?location=<designation>` in ONE request, reconciled, then the
     /// machine is asked again exactly as `.refreshDevices` does.
     ///
-    /// Prefer this whenever the answer depends on several devices in one place.
-    /// A recall probe needs the vessel, the controller and every drone still
-    /// out — eight per-device reads, where this is one, and one that does not
-    /// grow with the fleet. It also sidesteps the carrier-expansion trap
-    /// entirely: nothing has to be named, so nothing can be missed.
+    /// Use this to ask "who is PRESENT at this place" — one request, and one that
+    /// does not grow with the fleet. In-transit devices are included: a
+    /// travelling device reports `location: null` yet the server still matches it
+    /// to the system (probed live 2026-07-27).
     ///
-    /// In-transit devices ARE included. A travelling device reports
-    /// `location: null` yet the server still matches it to the system (probed
-    /// live 2026-07-27), which is exactly the case that matters here — the
-    /// drones worth waiting for are the ones in flight.
+    /// **It cannot answer anything about a STOWED device, and must never gate on
+    /// one.** Stowing clears a device's location, which drops it out of the
+    /// location index entirely: with six drones stowed aboard a vessel,
+    /// `GET devices?location=ESELLUSAU` returned exactly ONE row — the vessel
+    /// (probed live 2026-07-29). The unfiltered fleet list returned all six with
+    /// their stow columns intact, so this is a property of the scope, not of
+    /// staleness. A gate whose success condition is "stowed" therefore has its
+    /// evidence erased by the very thing it waits for, and since the absent rows
+    /// are never written, any "when did we last look" clock keyed on their
+    /// `updatedAt` never advances either — the probe re-fires forever. That is
+    /// the shape of the recall stall this case used to cause; it now names its
+    /// drones with `.refreshDevices` instead, which reads each row directly.
+    ///
+    /// So: this case for presence, `.refreshDevices` for containment.
     case refreshDevicesInSystem(designation: String, thenStall: DirectiveAttentionReason?)
     /// Pause and surface. The engine sets `needsAttention` plus the typed reason
     /// and stops evaluating until the user resolves it. Never auto-retried at

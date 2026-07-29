@@ -506,11 +506,15 @@ private func carrier(_ code: String, stowing: [String] = []) -> Device {
 /// Reading a whole system in one request instead of one request per device.
 ///
 /// `GET devices?location=<STAR>` returns every device the server considers
-/// present in that system — vessel, controller and drones together, in-transit
-/// ones included (a travelling device reports `location: null` but is still
-/// matched by the filter; probed live 2026-07-27). One page replaces the eight
-/// detail reads a recall probe used to spend, and the cost stops scaling with
-/// the size of the fleet.
+/// PRESENT in that system, in-transit ones included (a travelling device reports
+/// `location: null` but is still matched by the filter; probed live 2026-07-27),
+/// and the cost does not scale with the size of the fleet.
+///
+/// Presence is the limit of what it can answer. A STOWED device has no location
+/// and is simply absent from the response — six drones stowed aboard a vessel
+/// left `location=ESELLUSAU` returning only the vessel (probed live 2026-07-29).
+/// The recall gate that once used this action now names its drones instead; these
+/// tests cover the resolver's own contract, not that gate.
 @Suite("DirectiveEngine — system-scoped refresh")
 struct DirectiveRefreshInSystemTests {
     /// One filtered request, and every device it returns is reconciled — so the

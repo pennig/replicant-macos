@@ -260,11 +260,14 @@ actor DirectiveEngineCore {
     /// The same contract as `resolveRefresh`, paid for with ONE scoped list
     /// request instead of a read per device.
     ///
-    /// Rate limit is the whole point: a recall probe cares about a vessel, a
-    /// controller and every drone still out — one request here, versus one each
-    /// through `deviceRefresher`, and this one does not grow with the fleet.
-    /// It also cannot miss a row the way a device list can, since nothing has to
-    /// be named.
+    /// Rate limit is the whole point: one request for everything at a place,
+    /// versus one each through `deviceRefresher`, and this one does not grow with
+    /// the fleet.
+    ///
+    /// It answers PRESENCE only. A stowed device has no location and so is absent
+    /// from the response entirely (see `MissionAction.refreshDevicesInSystem`),
+    /// and because this walk deliberately prunes nothing, an absent row is left
+    /// exactly as stale as it was. Never resolve a containment question this way.
     ///
     /// Reconciled rather than upserted, exactly like the cold-load path, so the
     /// event-time guard and local provenance hold. **Deliberately does NOT
