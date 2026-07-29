@@ -1294,8 +1294,15 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     func pickLocation(atViewPoint p: CGPoint, viewSize: CGSize, pixelRadius: CGFloat = 16) -> String? {
         guard systemFocused, let model = orreryModel else { return nil }
         let reveal = orreryIsBody ? bodyProgress : orreryReveal
-        let layout = orreryLayout(model: model, center: orreryCenter, scale: orreryScale,
-                                  reveal: reveal, time: orbitClock)
+        // Hit-test what is actually on screen: a SYSTEM layer carries the recession
+        // from the drilled planet mid-cross-fade, so pick against the pushed frame or
+        // a click during a zoom-out would land on where the bodies used to be.
+        // Identity at rest, so ordinary picking is untouched.
+        let push = orreryIsBody ? OrreryPush.identity : livePush
+        let orreryCenter = push(orreryCenter)
+        let layout = orreryLayout(model: model, center: orreryCenter,
+                                  scale: orreryScale * push.factor,
+                                  reveal: reveal * push.factor, time: orbitClock)
         let view = camera.viewMatrix()
         let proj = camera.projectionMatrix(aspect: aspect)
         let w = Float(viewSize.width), h = Float(viewSize.height)
