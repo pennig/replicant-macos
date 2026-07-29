@@ -164,23 +164,13 @@ public struct SurveyRun: MissionStepMachine {
 
     /// Whether a system's scan counts say it is completely surveyed.
     ///
-    /// UNKNOWN counts are never "scanned": surveying an already-done system
-    /// costs one wasted trip, but skipping an unscanned one silently loses the
-    /// whole point of the run. Wrong in the cheap direction, deliberately.
+    /// Forwards to `StarSystem.isFullyScanned`, which is the one definition —
+    /// shared with the persistence layer that stamps `stars.fullyScannedAt`, so
+    /// the picker, the engine, and the catalog can never disagree about whether
+    /// a system is done. The `nil`-tolerance stays here: a system we hold no
+    /// blob for is not evidence of completeness.
     public static func isFullyScanned(_ system: StarSystem?) -> Bool {
-        guard let system,
-              let planetsTotal = system.planetsTotal, planetsTotal > 0,
-              let planetsScanned = system.planetsScanned,
-              planetsScanned >= planetsTotal
-        else { return false }
-        // Moons are optional in the payload; when the server reports a total, it
-        // has to be met too.
-        if let moonsTotal = system.moonsTotal, moonsTotal > 0 {
-            guard let moonsScanned = system.moonsScanned, moonsScanned >= moonsTotal else {
-                return false
-            }
-        }
-        return true
+        system?.isFullyScanned ?? false
     }
 
     /// The star system a device is currently in, or nil in transit / stowed.
