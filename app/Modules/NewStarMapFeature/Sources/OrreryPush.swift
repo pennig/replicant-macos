@@ -24,11 +24,23 @@ import simd
 ///
 /// Two algebraic properties carry the whole render path, and are pinned by
 /// `OrreryPushTests`:
-///   - the pivot is an exact fixed point, at any progress;
-///   - the scale composes into a layer's `(centre, scale, reveal)`, because an
+///   - the pivot is an exact fixed point, at any progress — so `|p' − pivot| =
+///     factor · |p − pivot|` and nothing can ever cross the pivot;
+///   - the scale composes into a layer's `(centre, reveal)`, because an
 ///     `OrreryLayout` is an affine map of scene coordinates and the scaffold
 ///     shaders already compute `orreryCenter + local · orreryReveal`. That is why
 ///     the rings need no shader change and no buffer rebuild.
+///
+/// **Apply the factor exactly once, through `reveal`.** `OrreryLayout` places every
+/// anchor at `sceneRadius · scale · reveal`, so pushing `scale` as well squares it.
+/// That failure is not subtle-looking but it *is* subtle to diagnose: the doubled form
+/// `push(centre) + (p − centre) · k²` equals the correct `push(p)` plus an error term
+/// of `(p − centre) · k(k−1)` — a pure radial-from-the-SUN expansion, 30× the orbit
+/// radius at k = 6. It swamps the real term, so the system reads as blowing up around
+/// the star rather than the drilled planet, bodies detach from their own rings, and an
+/// inner planet is thrown clean past the planet it is supposed to be receding from.
+/// Routing the factor through `reveal` alone also leaves body radii — which come off
+/// `scale` — at true world size, so bodies shrink purely by perspective.
 struct OrreryPush {
     /// The drilled planet's live world position — the one point that does not move.
     var pivot: SIMD3<Float>

@@ -3,6 +3,15 @@
 **Date:** 2026-07-28
 **Module:** `app/Modules/NewStarMapFeature`
 
+> **Correction, 2026-07-28 (post-implementation).** Where this document says the scale
+> composes into a layer's `(centre, scale, reveal)`, that is wrong and the first
+> implementation shipped the bug: `OrreryLayout` places every anchor at `sceneRadius ·
+> scale · reveal`, so pushing both squares the factor. It composes into `(centre,
+> reveal)` — the factor rides `reveal` alone. This also removes the "radius unchanged"
+> correction described below for bodies and pips: radii come off `scale`, which is no
+> longer pushed, so they are true world size for free. See the k² section in
+> `app/.claude/memory/body-drill-rush.md`.
+
 ## The problem
 
 Drilling from the system view into a planet currently reads as the solar system

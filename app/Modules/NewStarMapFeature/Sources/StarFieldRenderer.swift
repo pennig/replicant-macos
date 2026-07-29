@@ -865,9 +865,10 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
             // anchored to it — ships, pips, the selection ring, the SwiftUI overlays —
             // stays registered through the cross-fade instead of detaching from the
             // spreading orbits for the whole pull-back. A body layer is the pivot.
+            // The factor rides `reveal` ONLY — `scale` must stay true, or the layout's
+            // `sceneRadius · scale · reveal` applies it twice (see `encodeOrreryLayer`).
             let push = orreryIsBody ? OrreryPush.identity : livePush
-            return orreryLayout(model: model, center: push(orreryCenter),
-                                scale: orreryScale * push.factor,
+            return orreryLayout(model: model, center: push(orreryCenter), scale: orreryScale,
                                 reveal: reveal * push.factor, time: orbitClock)
         }()
 
@@ -1300,8 +1301,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         // Identity at rest, so ordinary picking is untouched.
         let push = orreryIsBody ? OrreryPush.identity : livePush
         let orreryCenter = push(orreryCenter)
-        let layout = orreryLayout(model: model, center: orreryCenter,
-                                  scale: orreryScale * push.factor,
+        let layout = orreryLayout(model: model, center: orreryCenter, scale: orreryScale,
                                   reveal: reveal * push.factor, time: orbitClock)
         let view = camera.viewMatrix()
         let proj = camera.projectionMatrix(aspect: aspect)
@@ -1837,16 +1837,21 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         // → it vanishes for one frame right before landing.
         guard alphaReveal > 0.001 || model.centralBody != nil else { return }
         // Fold the recession into this layer's frame. A uniform scale about the drilled
-        // planet composes exactly into (centre, reveal, scale) — see `OrreryPush` — so
+        // planet composes exactly into (centre, reveal) — see `OrreryPush` — so
         // shadowing the parameters here carries it through every draw below (scaffold,
-        // belt, bodies, pips) with nothing else to teach. `buildCenter` is deliberately
-        // NOT pushed: it's the baked origin the shaders subtract, and the composition
-        // identity depends on it staying put. The sun rides along so every light
-        // direction is preserved and lit faces don't swing as bodies fly out.
-        let bodyScale = scale                 // a body's OWN radius never spreads
+        // belt, bodies, pips) with nothing else to teach.
+        //
+        // It goes into `reveal` and NOWHERE ELSE. `OrreryLayout` places everything at
+        // `sceneRadius · scale · reveal`, so pushing `scale` as well applies the factor
+        // TWICE — bodies then fly out k× past their own rings, because the scaffold
+        // shaders have no scale and can only take the push through `orreryReveal`.
+        // Routing it through `reveal` alone also leaves body radii (which come off
+        // `scale`) at true world size for free, so bodies shrink purely by perspective.
+        // `buildCenter` is deliberately NOT pushed either: it's the baked origin the
+        // shaders subtract, and the composition identity depends on it staying put. The
+        // sun rides along so light directions are preserved and lit faces don't swing.
         let center = push(center)
         let emergeReveal = emergeReveal * push.factor
-        let scale = scale * push.factor
         let sun = push(sun)
         var u = baseUniforms
         u.orreryCenter = SIMD4(center, 0)     // the scaffold grows out of THIS layer's centre
@@ -1896,18 +1901,8 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         // across system↔body, never cross-faded — while its moons fade with the layer.
         var uCentral = u
         uCentral.orreryAlpha = orreryReveal
-        // `scale` carries the recession so ORBIT geometry spreads — but a body's own
-        // radius must not, or a receding planet would grow by exactly the factor it
-        // recedes and appear not to move at all. Radii go back to their true world
-        // size, leaving the bodies to shrink purely by perspective.
         let placed = placedOrreryBodies(model: model, center: center, scale: scale, sun: sun,
                                         reveal: emergeReveal, time: time, excludeID: excludeID)
-            .map { body -> PlacedBody in
-                guard !push.isIdentity else { return body }
-                var body = body
-                body.radius /= push.factor
-                return body
-            }
         enc.setRenderPipelineState(orreryBodyPipeline)
         // `pu` only ever takes one of two values for this whole layer — `uCentral` for
         // the (at most one, always-first-if-present) central body, `u` for every other
@@ -1969,8 +1964,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
 
         // Annotation pips: indicator dots + hazard markers, depth-read (occluded
         // behind a body), additive.
-        let pips = orreryPips(model: model, center: center, scale: scale,
-                              bodyScale: bodyScale, reveal: emergeReveal,
+        let pips = orreryPips(model: model, center: center, scale: scale, reveal: emergeReveal,
                               time: time, viewportPx: viewportPx, excludeID: excludeID)
         if !pips.isEmpty {
             var pipParams = MeshParams(viewportPixels: viewportPx, halfWidthPixels: 0, nodeRadiusPixels: 0)
@@ -2180,12 +2174,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     /// body that carries notable features, plus a pulsing marker on each incoming
     /// hazard. Positions mirror `placedOrreryBodies` (same orbit math, same reveal
     /// scale) so the pips track their bodies as they orbit and emerge on drill-in.
-    /// `bodyScale` is the scale a body's OWN radius is measured in, which on a pushed
-    /// layer is not the layer's (spread) `scale` — the pip row hugs the planet's rim,
-    /// so anchoring it to a radius that carried the recession would fling the dots off
-    /// their planet. Same split as the radius correction in `encodeOrreryLayer`.
     private func orreryPips(model: SystemModel, center: SIMD3<Float>, scale: Float,
-                            bodyScale: Float,
                             reveal: Float, time: Float, viewportPx: SIMD2<Float>,
                             excludeID: String? = nil) -> [OrreryPip] {
         let layout = orreryLayout(model: model, center: center, scale: scale, reveal: reveal, time: time)
@@ -2216,7 +2205,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
             // The planet's on-screen radius: project a point offset by its world
             // radius along view-x and measure the pixel span (same trick as the
             // star disc in `pickStar`). Scale the row's offset + spacing to it.
-            let worldRadius = Float(planet.displayRadius) * bodyScale
+            let worldRadius = Float(planet.displayRadius) * scale
             let viewPos = view * SIMD4<Float>(pos, 1)
             let screenR = project(viewPos).flatMap { c in
                 project(viewPos + SIMD4<Float>(worldRadius, 0, 0, 0)).map { length($0 - c) }

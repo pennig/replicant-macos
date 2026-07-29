@@ -48,24 +48,40 @@ pivot therefore folds into a layer's frame:
 k · world + (1−k) · pivot  ==  push(centre) + local · (reveal · k)
 ```
 
-So `encodeOrreryLayer` just shadows `center`, `emergeReveal`, `scale` and `sun`, and
-the recession carries through rings, HZ band, belt, bodies and pips with **no shader
-change and no buffer rebuild**. `buildCenter` must NOT be pushed — it is the baked
-origin the shaders subtract, and the identity depends on it staying put.
+So `encodeOrreryLayer` just shadows `center`, `emergeReveal` and `sun`, and the
+recession carries through rings, HZ band, belt, bodies and pips with **no shader change
+and no buffer rebuild**. `buildCenter` must NOT be pushed — it is the baked origin the
+shaders subtract, and the identity depends on it staying put.
 `OrreryPushTests.composesIntoCentreAndReveal` pins this; if it ever fails, the scaffold
 path is silently wrong.
 
-## Three places that must divide the factor back out
+## APPLY THE FACTOR EXACTLY ONCE, THROUGH `reveal` — the k² trap
 
-Positions spread; a body's own *radius* must not, or a planet grows by exactly the
-factor it recedes and appears not to move at all:
+This shipped broken on the first pass and is the thing most likely to be reintroduced.
+`OrreryLayout` places every anchor at `sceneRadius · scale · reveal`, so a layer pushed
+through **both** `scale` and `reveal` gets `k²`. Every CPU consumer — `encodeOrreryLayer`
+(bodies + pips), `frameOrreryLayout`, `pickLocation` — must push the CENTRE and multiply
+`reveal` alone. The scaffold shaders have no `scale` at all, so they can only take it
+through `orreryReveal`; that path was right from the start, which is exactly why the
+mismatch showed up as **bodies detaching from their own rings**.
 
-1. `encodeOrreryLayer` divides each `PlacedBody.radius` by `push.factor` (rings and
-   atmosphere halos derive from `PlacedBody`, so they follow).
-2. `orreryPips` takes a separate `bodyScale` — the pip row hugs a planet's rim by
-   projecting its world radius, so the spread scale would fling the dots off.
-3. `pickLocation` builds its layout from the **pushed** frame (or a click during a
-   zoom-out lands where the bodies used to be) while keeping true radii.
+Why it was hard to read off the screen: the doubled form `push(centre) + (p − centre)·k²`
+equals the correct `push(p)` plus an error term of `(p − centre)·k(k−1)` — a pure
+radial-from-the-**sun** expansion, **30× the orbit radius** at k = 6. That term swamps
+the real one, so the symptom is not "slightly too far": the whole system reads as
+blowing up around the *star*, and an inner planet gets flung clean **past** the drilled
+planet it should be receding from. (With one factor, `|p′ − pivot| = k · |p − pivot|`,
+so nothing can ever cross the pivot. `OrreryPushTests.layerFactorAppliesExactlyOnce` and
+`distanceFromPivotOnlyScales` pin both facts.)
+
+Routing it through `reveal` alone has a second payoff: body radii come off `scale`, so
+they stay at true world size for free and bodies shrink purely by perspective. An
+earlier attempt pushed `scale` and then divided the factor back out of every radius in
+three places (bodies, the pip row's rim anchor, picking) — all of that is gone.
+
+One consumer still builds its own layout and must stay push-aware: `pickLocation` picks
+against the **pushed** frame, or a click during a zoom-out lands where the bodies used
+to be. Its candidate radii use the true `orreryScale`, which is already correct.
 
 ## The sun is a star-field star, not an orrery body
 
@@ -79,13 +95,18 @@ The background sky is deliberately NOT pushed from this pivot: those stars are
 light-years out, already receded by `systemPush` and dimmed to `fieldFloor`, and
 pivoting them on a planet would swing the whole sky.
 
-## Not yet checked visually
+## Verification history
 
-Implemented, unit-tested and compiling (package + app target), but the effect itself
-was never seen: a background job cannot run a scratch build (Keychain login wall — see
-[[no-gui-verification-from-bg-jobs]]). The one thing flagged for a first look is the
-**habitable-zone band**, a large additive filled annulus that the expanding layer
-sweeps beneath the camera; if it washes the lower frame, front-load the scaffold's
-fade on a pushed layer rather than weakening the push.
+A background job cannot run a scratch build (Keychain login wall — see
+[[no-gui-verification-from-bg-jobs]]), so the effect can only be seen by Matt. That
+gap is what let the k² bug ship: it passed unit tests, both builds, and a careful
+diff read, because the transform was correct and only its *application* was doubled.
+**For anything in this renderer, a green suite is not evidence the picture is right** —
+ask for a look.
+
+Still unchecked at the time of the k² fix: the **habitable-zone band**, a large additive
+filled annulus that the expanding layer sweeps beneath the camera. If it washes the
+lower frame, front-load the scaffold's fade on a pushed layer rather than weakening the
+push.
 
 Related: [[orrery-physical-fidelity]], [[new-star-map-feature]].

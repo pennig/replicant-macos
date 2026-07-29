@@ -53,6 +53,38 @@ struct OrreryPushTests {
         }
     }
 
+    /// `OrreryLayout` places every anchor at `centre + direction · sceneRadius · scale
+    /// · reveal`. Pushing such a layer means pushing its CENTRE and multiplying exactly
+    /// ONE of `scale` / `reveal` — the renderer uses `reveal`, since the scaffold
+    /// shaders have no scale and body radii come off `scale`. Doing both squares the
+    /// factor, which is what made bodies fly out past their own rings.
+    @Test func layerFactorAppliesExactlyOnce() {
+        let push = OrreryPush(pivot: pivot, progress: 1, strength: 5)   // factor 6
+        let center = SIMD3<Float>(-4, 2, 1)
+        let direction = SIMD3<Float>(0, 0, 1)
+        let sceneRadius: Float = 3, scale: Float = 2, reveal: Float = 0.5
+
+        let truePosition = center + direction * (sceneRadius * scale * reveal)
+        let pushedOnce = push(center) + direction * (sceneRadius * scale * (reveal * push.factor))
+        #expect(simd_distance(pushedOnce, push(truePosition)) < 1e-3)
+
+        // …and the doubled form is NOT the push, by a wide margin.
+        let pushedTwice = push(center)
+            + direction * (sceneRadius * (scale * push.factor) * (reveal * push.factor))
+        #expect(simd_distance(pushedTwice, push(truePosition)) > 1)
+    }
+
+    /// The pivot being an exact fixed point means distance from it only ever scales, so
+    /// no body can cross the drilled planet on its way out however far it is flung.
+    @Test func distanceFromPivotOnlyScales() {
+        let push = OrreryPush(pivot: pivot, progress: 1, strength: 5)
+        for p in [SIMD3<Float>(9, 4, -2), SIMD3<Float>(-30, 0, 5), pivot + SIMD3<Float>(0.01, 0, 0)] {
+            let before = simd_distance(p, pivot)
+            let after = simd_distance(push(p), pivot)
+            #expect(abs(after - before * push.factor) < 1e-3)
+        }
+    }
+
     @Test func identityConstantLeavesEveryPointAlone() {
         let p = SIMD3<Float>(1, 2, 3)
         #expect(OrreryPush.identity(p) == p)
