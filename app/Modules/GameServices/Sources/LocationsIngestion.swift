@@ -174,6 +174,28 @@ public final class LocationsIngestion: Sendable {
                 // handful carry scans, so `ingestSurveyScans` returns before
                 // touching the database when the array is absent or empty.
                 _ = try? await locationsClient.ingestSurveyScans(payload: payload)
+            case "directive.completed":
+                // A survey finished, so this system's scan counts have moved —
+                // and those counts are what stamp `stars.fullyScannedAt` (see
+                // `SystemDetail.persist`). Re-read rather than trusting the
+                // completion: `SurveyRun.confirm` already refuses to believe a
+                // completion over the counts, stalling `.surveyIncomplete` when
+                // the server says done and the numbers disagree, and stamping a
+                // half-scanned system would show it as fully surveyed on the map.
+                //
+                // Safe from anywhere: `GET locations/{star}` is exploration-
+                // gated, not presence-gated, and a system that was just surveyed
+                // is explored.
+                //
+                // Survey Run performs this same read itself via `.refreshSystem`,
+                // so for engine-driven runs this duplicates one request.
+                // Accepted: surveys complete minutes to hours apart, and the
+                // alternative is a "is a directive driving this device" query on
+                // every completion.
+                guard payload["directive"]?.stringValue == "survey_system",
+                      let system = event.star ?? event.location
+                else { break }
+                try? await locationsClient.hydrateSystem(designation: system)
             case "salvage.discovered":
                 // The only source of a site's absolute resource totals.
                 _ = try? await locationsClient.recordSalvageDiscovery(payload: payload)
