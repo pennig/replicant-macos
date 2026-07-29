@@ -39,6 +39,8 @@ Module.SuiteName/functionName()/File.swift:line:column
 
 For example: `AppTests.CartTests/addsItem()/CartTests.swift:11:3`
 
+**`SuiteName` is the suite's Swift TYPE name, never its `@Suite("display name")`.** A suite declared `@Suite("System scan state") struct SystemScanStateTests` is filtered as `SystemScanStateTests`; passing `'System scan state'` matches nothing, exits 0, and prints only `warning: No matching test cases were run` — which is easy to read as "ran and passed" in a script that greps for failures. Gate on the `testEnded` count, not on the absence of failures.
+
 This is the same string that appears as `payload.id` on test records and `payload.testID` on events, so a filter expression and the JSON you get back share one namespace. That makes it practical to filter a run down, then key jq queries off the same identifiers.
 
 `--skip` is the inverse and composes with `--filter`. Both accept multiple occurrences.

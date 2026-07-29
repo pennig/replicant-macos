@@ -15,3 +15,5 @@ Inspect directly with the `sqlite3` CLI even while the app runs (WAL allows conc
 `sqlite3 -header -column "$DB" "SELECT ... "`. Key tables: `stars` (census/galaxy terrain — `explored`, `estimatedPlanets`, `fullyScannedAt`; NOTE this lags real scan state), `systemDetails` (per-system scan blob: `designation`, `systemJSON`, `recon`, `systemScanned` — decode planets via `json_array_length(json_extract(systemJSON,'$.planets'))`), plus devices/replicants/operations/etc.
 
 Gotcha that bit us: `stars.explored` and `stars.estimatedPlanets` are UNRELIABLE relative to `systemDetails` (a fully-scanned system can show `explored=0`; estimate can differ from the real planet count). The star map's galaxy view must merge `systemDetails.recon` over the census row. See [[new-star-map-feature]].
+
+`stars.fullyScannedAt` is now trustworthy (2026-07-29). It was written by nothing at all — null on all 14,122 rows — and is now stamped on every catalog write via `SystemDetail.persist`, plus backfilled for the 31 systems that were already surveyed. See [[system-detail-persist-choke-point]].
