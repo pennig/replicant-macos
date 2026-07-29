@@ -33,3 +33,40 @@ extension StarSystem {
         return true
     }
 }
+
+extension SystemDetail {
+    /// Persist a system's blob AND reconcile its census row's scan lifecycle
+    /// stamp, in one transaction.
+    ///
+    /// Every path that writes a `SystemDetail` goes through here — the seven in
+    /// `LocationsClient`, the star map's hydrate, and the Locations catalog's
+    /// hydrate-on-select. That is the point: `stars.fullyScannedAt` was declared,
+    /// documented, and read by the star map as the `.full` survey tier, but
+    /// written by nothing at all, so it was null on every one of 14,122 rows and
+    /// the map could never show a system as fully scanned. A stamp attached to
+    /// one write path would simply have grown new holes.
+    ///
+    /// The stamp is WRITE-ONCE. The column is named for an event, not a state,
+    /// and `Star`'s three local lifecycle timestamps are documented as ones the
+    /// survey never overwrites. Concretely: `moonsTotalEstimated` means moon
+    /// totals do get revised upward, and a retractable stamp would flip systems
+    /// between `.full` and `.partial` on estimate churn.
+    ///
+    /// A system with no census row still persists its blob — nothing to stamp is
+    /// not a failure.
+    public static func persist(system: StarSystem, at now: Date, in db: Database) throws {
+        let row = try SystemDetail(system: system, hydratedAt: now)
+        try SystemDetail.upsert { row }.execute(db)
+
+        guard system.isFullyScanned else { return }
+        // Read-then-write rather than a nullable predicate in the UPDATE: it
+        // makes write-once explicit at the call site, and folds "no census row"
+        // into the same guard. Only ever reached on the completing write, which
+        // happens once per system.
+        let star = try Star.where { $0.designation.eq(system.designation) }.fetchOne(db)
+        guard let star, star.fullyScannedAt == nil else { return }
+        try Star.where { $0.designation.eq(system.designation) }
+            .update { $0.fullyScannedAt = #bind(now) }
+            .execute(db)
+    }
+}

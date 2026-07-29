@@ -722,7 +722,9 @@ let package = Package(
             name: "UniverseModelsTests",
             dependencies: [
                 "API",
+                "GameDatabase",
                 "UniverseModels",
+                .product(name: "SQLiteData", package: "sqlite-data"),
             ],
             path: "UniverseModels/Tests"
         ),
