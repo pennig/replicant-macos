@@ -41,6 +41,16 @@ vertex StarVaryings star_vertex(uint vid                    [[vertex_id]],
     if (!isFocused && u.orreryReveal > 0.0) {
         float3 toStar = worldPos - u.fieldCenter.xyz;
         worldPos = u.fieldCenter.xyz + toStar * (1.0 + u.systemPush * u.orreryReveal);
+    } else if (isFocused && u.bodyPush > 0.0) {
+        // Drilling PAST the star into one of its planets. The star IS the sun (there
+        // is no sun body), so it has to fly away from that planet exactly as the rest
+        // of the system does, or it hangs at the same depth as the arriving moon
+        // system and merely fades. The background sky is deliberately left alone —
+        // see `bodyPush` in ShaderTypes.h. Because the push is RADIAL from the planet
+        // the star stays on the planet→sun lighting ray, so the lit faces below still
+        // point at the visible sun.
+        float3 toPivot = worldPos - u.bodyPivot.xyz;
+        worldPos = u.bodyPivot.xyz + toPivot * (1.0 + u.bodyPush);
     }
 
     // Billboard in view space so the quad always faces the camera.

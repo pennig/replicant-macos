@@ -277,6 +277,25 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         isBody ? bodyProgress : 1 - bodyProgress
     }
 
+    /// The drilled planet's live world position while a body cross-fade is in play —
+    /// the centre of the ACTIVE layer at body level, or of the DEPARTING one during a
+    /// zoom-out. Both are already tracked onto the planet every frame
+    /// (`trackBodyCentre` / `trackDepartingBodyCentre`), so either is exact.
+    private var bodyPivot: SIMD3<Float>? {
+        if orreryIsBody { return orreryCenter }
+        if let departing, departing.isBody { return departing.center }
+        return nil
+    }
+
+    /// This frame's recession of the SYSTEM layer away from the drilled planet — the
+    /// deeper counterpart of the galaxy field's `systemPush`. Identity whenever no
+    /// body is in play, so galaxy and system levels are untouched; never applied to a
+    /// body-level layer, which IS the pivot.
+    private var livePush: OrreryPush {
+        guard let bodyPivot, bodyProgress > 0 else { return .identity }
+        return OrreryPush(pivot: bodyPivot, progress: bodyProgress, strength: bodyPush)
+    }
+
     /// Start the eased system↔body cross-fade toward `target` (0 = system, 1 = body).
     private func beginBodyTransition(to target: Float, duration: Double, now: Double) {
         bodyFrom = bodyProgress
@@ -514,6 +533,13 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     private var systemPush: Float = 2.0
     private var fieldShrink: Float = 0.4
     private var fieldFloor: Float = 0.15
+    // System→body recession: how far the SYSTEM layer is scaled away from the
+    // drilled planet across the cross-fade. `systemPush` above does exactly this job
+    // one level up; without a counterpart here the siblings and the sun stay at a
+    // depth comparable to the arriving moon system and can only slide and fade,
+    // because the camera doesn't really dive on this move — see `OrreryPush`.
+    // 5 → they end up 6× further out.
+    private var bodyPush: Float = 5
 
     /// Builds the renderer for a fixed terrain of `stars` plus the live `overlays`
     /// (FTL mesh links + ships in transit). The domain `[Star]` is the source of
@@ -835,8 +861,14 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         frameOrreryLayout = {
             guard systemFocused, orreryReveal > 0.001, let model = orreryModel else { return nil }
             let reveal = orreryIsBody ? bodyProgress : orreryReveal
-            return orreryLayout(model: model, center: orreryCenter, scale: orreryScale,
-                                reveal: reveal, time: orbitClock)
+            // A SYSTEM layer rides the same recession its rings do, so everything
+            // anchored to it — ships, pips, the selection ring, the SwiftUI overlays —
+            // stays registered through the cross-fade instead of detaching from the
+            // spreading orbits for the whole pull-back. A body layer is the pivot.
+            let push = orreryIsBody ? OrreryPush.identity : livePush
+            return orreryLayout(model: model, center: push(orreryCenter),
+                                scale: orreryScale * push.factor,
+                                reveal: reveal * push.factor, time: orbitClock)
         }()
 
         guard let hdr = hdrTexture,
@@ -965,6 +997,9 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
             if orreryReveal > 0.001 {
                 let t = orbitClock
                 let viewportPx = SIMD2<Float>(Float(size.width), Float(size.height))
+                // The recession of a SYSTEM layer away from the drilled planet. A body
+                // layer is the pivot, so it never takes it.
+                let push = livePush
                 if let dep = departing {
                     // A body layer's orbits emerge/recede with `bodyProgress`; a system
                     // layer's with `orreryReveal` (systemProgress). Fade = the layer's
@@ -976,6 +1011,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
                         scale: dep.scale, emergeReveal: dep.isBody ? bodyProgress : orreryReveal,
                         alphaReveal: orreryReveal * layerOpacity(isBody: dep.isBody),
                         writesDepth: false, excludeID: dep.isBody ? nil : bodyPlanetID,
+                        push: dep.isBody ? .identity : push,
                         lineBuffer: dep.lineBuffer, lineCount: dep.lineCount,
                         hzBuffer: dep.hzBuffer, hzCount: dep.hzCount,
                         beltBuffer: dep.beltBuffer, beltCount: dep.beltCount,
@@ -988,6 +1024,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
                         scale: orreryScale, emergeReveal: orreryIsBody ? bodyProgress : orreryReveal,
                         alphaReveal: orreryReveal * layerOpacity(isBody: orreryIsBody),
                         writesDepth: true, excludeID: orreryIsBody ? nil : bodyPlanetID,
+                        push: orreryIsBody ? .identity : push,
                         lineBuffer: orreryLineBuffer, lineCount: orreryLineVertexCount,
                         hzBuffer: orreryHZBuffer, hzCount: orreryHZVertexCount,
                         beltBuffer: orreryBeltBuffer, beltCount: orreryBeltCount,
@@ -1770,11 +1807,17 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     /// so moons emerge from / recede into the planet exactly as planets do the star.
     /// `excludeID` drops the drilled planet from a SYSTEM layer (it's drawn once as the
     /// continuous central body, not blended against a second copy).
+    /// `push` scales a SYSTEM layer away from that same drilled planet across the body
+    /// cross-fade, so the rings spread and the sun + siblings are flung out instead of
+    /// merely fading (identity for a body layer, which IS the pivot). It composes into
+    /// this layer's centre + reveal + scale, which is why the scaffold shaders and
+    /// `OrreryLayout` need no push-awareness of their own — see `OrreryPush`.
     private func encodeOrreryLayer(_ enc: MTLRenderCommandEncoder,
                                    model: SystemModel, center: SIMD3<Float>,
                                    buildCenter: SIMD3<Float>, sun: SIMD3<Float>,
                                    scale: Float, emergeReveal: Float, alphaReveal: Float,
                                    writesDepth: Bool, excludeID: String?,
+                                   push: OrreryPush,
                                    lineBuffer: MTLBuffer?, lineCount: Int,
                                    hzBuffer: MTLBuffer?, hzCount: Int,
                                    beltBuffer: MTLBuffer?, beltCount: Int,
@@ -1786,11 +1829,23 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         // central would be skipped while the system layer still excludes that planet
         // → it vanishes for one frame right before landing.
         guard alphaReveal > 0.001 || model.centralBody != nil else { return }
+        // Fold the recession into this layer's frame. A uniform scale about the drilled
+        // planet composes exactly into (centre, reveal, scale) — see `OrreryPush` — so
+        // shadowing the parameters here carries it through every draw below (scaffold,
+        // belt, bodies, pips) with nothing else to teach. `buildCenter` is deliberately
+        // NOT pushed: it's the baked origin the shaders subtract, and the composition
+        // identity depends on it staying put. The sun rides along so every light
+        // direction is preserved and lit faces don't swing as bodies fly out.
+        let center = push(center)
+        let emergeReveal = emergeReveal * push.factor
+        let scale = scale * push.factor
+        let sun = push(sun)
         var u = baseUniforms
         u.orreryCenter = SIMD4(center, 0)     // the scaffold grows out of THIS layer's centre
         u.orreryBuildCenter = SIMD4(buildCenter, 0)   // …rebased from where it was baked
         u.orreryReveal = emergeReveal         // orbits/scaffold emerge from the centre by this
         u.orreryAlpha = alphaReveal           // fade this layer independently of the grow-out
+        u.bodyPush = 0                        // the sun's recession is a star-field concern
 
         // Habitable-zone band (filled), orbit rings, then the belt point ring.
         if let hzBuf = hzBuffer, hzCount > 0 {
@@ -1833,8 +1888,18 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         // across system↔body, never cross-faded — while its moons fade with the layer.
         var uCentral = u
         uCentral.orreryAlpha = orreryReveal
+        // `scale` carries the recession so ORBIT geometry spreads — but a body's own
+        // radius must not, or a receding planet would grow by exactly the factor it
+        // recedes and appear not to move at all. Radii go back to their true world
+        // size, leaving the bodies to shrink purely by perspective.
         let placed = placedOrreryBodies(model: model, center: center, scale: scale, sun: sun,
                                         reveal: emergeReveal, time: time, excludeID: excludeID)
+            .map { body -> PlacedBody in
+                guard !push.isIdentity else { return body }
+                var body = body
+                body.radius /= push.factor
+                return body
+            }
         enc.setRenderPipelineState(orreryBodyPipeline)
         // `pu` only ever takes one of two values for this whole layer — `uCentral` for
         // the (at most one, always-first-if-present) central body, `u` for every other
@@ -3054,12 +3119,17 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
             overlayDim: overlayDim,
             systemPush: systemPush,
             fieldShrink: fieldShrink,
+            // The star field's own copy of the recession, for the focused star alone —
+            // it IS the sun, so it flies away from the drilled planet with the rest of
+            // the system. Already ramped, hence `factor - 1` (0 = no push).
+            bodyPush: livePush.factor - 1,
             focusedStar: Int32(focusedStarIndex ?? -1),
             orreryCenter: SIMD4(orreryCenter, 0),
             orreryBuildCenter: SIMD4(orreryBuildCenter, 0),
             // The field recedes from the focused STAR, which never moves — not from
             // `orreryCenter`, which tracks the drilled planet at body level.
-            fieldCenter: SIMD4(focusedStarIndex.map { stars[$0].position } ?? orreryCenter, 0)
+            fieldCenter: SIMD4(focusedStarIndex.map { stars[$0].position } ?? orreryCenter, 0),
+            bodyPivot: SIMD4(bodyPivot ?? .zero, 0)
         )
     }
 

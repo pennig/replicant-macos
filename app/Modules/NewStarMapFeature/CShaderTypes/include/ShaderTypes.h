@@ -115,6 +115,18 @@ typedef struct {
     // orrery sun) is exempt from both. Both unwind on zoom-out for free.
     float systemPush;
     float fieldShrink;
+    // System→body recession of the SUN. There is no sun BODY — the focused star
+    // field star IS the sun — so the star field has to fly it away from the drilled
+    // planet itself, matching what the system orrery layer does around it. Without
+    // this the sun just hangs at the same depth as the arriving moon system.
+    // `bodyPush` is the extra radial distance factor (0 = none), already ramped by
+    // the cross-fade on the CPU; `bodyPivot` is the drilled planet's live position.
+    // Because the push is RADIAL from that planet, the star stays exactly on the
+    // planet→sun lighting ray, so lit faces keep pointing at the visible sun.
+    // The background sky is deliberately NOT pushed from this pivot: those stars are
+    // light-years out, already receded by `systemPush` and dimmed to the backdrop
+    // floor, and pivoting them on a planet would swing the whole sky.
+    float bodyPush;
     // The drilled-in star's instance index (-1 = none). That star becomes the
     // orrery's sun: it never fades (kept at full `fieldDim`) and its angular-size
     // ceiling is lifted so it keeps growing as you zoom in — no separate sun body,
@@ -133,6 +145,9 @@ typedef struct {
     // drilled planet as it orbits, and the star field must NOT be dragged along
     // with it (the recession pivot has to stay put or the whole sky slides).
     simd_float4 fieldCenter;
+    // The pivot the SUN recedes from during a system→body drill — the drilled
+    // planet's live world position. Meaningless when `bodyPush` is 0.
+    simd_float4 bodyPivot;
 } Uniforms;
 
 // One vertex of a lit orrery body mesh (sun / planet). The shared unit sphere,
