@@ -1,0 +1,151 @@
+//
+//  SalvageTargetPlannerTests.swift
+//  DirectiveEngineTests
+//
+//  The continuous Salvage Run's target selection. Pure function over fixtures,
+//  the same shape as SurveyRoamPlanner's tests: every star lies on the X axis so
+//  distances are readable by eye.
+//
+
+import Foundation
+import GameModels
+import Testing
+import UniverseModels
+
+@testable import DirectiveEngine
+
+@Suite("Salvage target planner")
+struct SalvageTargetPlannerTests {
+    /// A star `x` light-years out along the X axis. Only position matters here,
+    /// so every other column takes an inert default.
+    private func star(_ designation: String, x: Double) -> Star {
+        Star(
+            designation: designation, spectralType: "G", color: "yellow",
+            positionX: x, positionY: 0, positionZ: 0, estimatedPlanets: 3,
+            explored: false, hasLife: nil, entryPoint: nil,
+            createdAt: Date(timeIntervalSince1970: 0)
+        )
+    }
+
+    private func assay(_ system: String, body: String, units: Double) -> SiteAssay {
+        SiteAssay(
+            id: "\(body)-SAL-1", body: body, system: system,
+            siteType: "salvage", totals: ["structural": units], assayedAt: .distantPast
+        )
+    }
+
+    /// A device row with exactly the columns `meshSystems` and the fixture
+    /// itself care about — everything else takes an inert default. Confined to
+    /// this file: no shared `Device.fixture` exists yet in this repo (Task 1 hit
+    /// the same gap), and `SurveyRunTests`' `device(...)` helper hardcodes
+    /// `status`/`features` in ways that don't fit a relay row.
+    private static func device(
+        _ code: String, features: [String], status: String, location: String?
+    ) -> Device {
+        Device(
+            deviceCode: code, deviceType: "relay", replicantCode: "R1",
+            status: status, location: location, locationName: nil,
+            operationalCapacity: 100, queueSize: 0,
+            stowedInDeviceCode: nil, controllerDeviceCode: nil, attachedToDeviceCode: nil,
+            createdAt: Date(timeIntervalSince1970: 0),
+            availableCommands: [], features: features, tags: [],
+            detail: .object([:]),
+            updatedAt: Date(timeIntervalSince1970: 0), firstSeenAt: Date(timeIntervalSince1970: 0)
+        )
+    }
+
+    @Test func prefersAnAlreadyMeshedSystemOverARicherUnmeshedOne() {
+        let stars = ["HOME": star("HOME", x: 0), "MESHED": star("MESHED", x: 3), "RICH": star("RICH", x: 5)]
+        let target = SalvageTargetPlanner.nextTarget(
+            assays: [assay("MESHED", body: "MESHED-1", units: 100),
+                     assay("RICH", body: "RICH-1", units: 9000)],
+            stars: stars, meshSystems: ["HOME", "MESHED"], attempted: [],
+            vessel: Position(x: 0, y: 0, z: 0)
+        )
+        // Meshed wins on the FIRST key even at 90x less salvage: no relay to
+        // plant and no vessel needed to grant authority afterwards.
+        #expect(target == .init(system: "MESHED", units: 100, needsRelay: false))
+    }
+
+    @Test func prefersAOneHopSystemOverAnUnreachableRicherOne() {
+        let stars = [
+            "HOME": star("HOME", x: 0),
+            "NEAR": star("NEAR", x: 7),      // 7 ly from HOME's relay — inside 7.5
+            "FAR": star("FAR", x: 20),       // nothing within range
+        ]
+        let target = SalvageTargetPlanner.nextTarget(
+            assays: [assay("NEAR", body: "NEAR-1", units: 100),
+                     assay("FAR", body: "FAR-1", units: 9000)],
+            stars: stars, meshSystems: ["HOME"], attempted: [],
+            vessel: Position(x: 0, y: 0, z: 0)
+        )
+        #expect(target == .init(system: "NEAR", units: 100, needsRelay: true))
+    }
+
+    @Test func rejectsASystemMoreThanOneHopOut() {
+        let stars = ["HOME": star("HOME", x: 0), "FAR": star("FAR", x: 20)]
+        // Nothing reachable at all: the run has no target it could work, which
+        // is a `nil` rather than a bad pick. The vessel stays where it is.
+        #expect(SalvageTargetPlanner.nextTarget(
+            assays: [assay("FAR", body: "FAR-1", units: 9000)],
+            stars: stars, meshSystems: ["HOME"], attempted: [],
+            vessel: Position(x: 0, y: 0, z: 0)
+        ) == nil)
+    }
+
+    @Test func theFrontierExpandsAsSystemsJoinTheMesh() {
+        // FAR is 20 ly from HOME but only 6 from NEAR. Once NEAR is meshed it
+        // becomes reachable — this is the bootstrap property the whole design
+        // rests on, so it gets its own test.
+        let stars = ["HOME": star("HOME", x: 0), "NEAR": star("NEAR", x: 14), "FAR": star("FAR", x: 20)]
+        let assays = [assay("FAR", body: "FAR-1", units: 9000)]
+        #expect(SalvageTargetPlanner.nextTarget(
+            assays: assays, stars: stars, meshSystems: ["HOME", "NEAR"], attempted: [],
+            vessel: Position(x: 0, y: 0, z: 0)
+        ) == .init(system: "FAR", units: 9000, needsRelay: true))
+    }
+
+    @Test func sumsEveryBodysUnitsInASystem() {
+        let stars = ["HOME": star("HOME", x: 0), "TWO": star("TWO", x: 3)]
+        let target = SalvageTargetPlanner.nextTarget(
+            assays: [assay("TWO", body: "TWO-1", units: 100), assay("TWO", body: "TWO-6", units: 250)],
+            stars: stars, meshSystems: ["HOME", "TWO"], attempted: [],
+            vessel: Position(x: 0, y: 0, z: 0)
+        )
+        #expect(target?.units == 350)
+    }
+
+    @Test func neverOffersAnAttemptedSystem() {
+        // `attempted` is `Directive.targets` — append-only history. Without this
+        // the operator's Skip is a no-op, and a system that can never report
+        // itself finished pins the planner forever.
+        let stars = ["HOME": star("HOME", x: 0), "DONE": star("DONE", x: 3)]
+        #expect(SalvageTargetPlanner.nextTarget(
+            assays: [assay("DONE", body: "DONE-1", units: 100)],
+            stars: stars, meshSystems: ["HOME", "DONE"], attempted: ["DONE"],
+            vessel: Position(x: 0, y: 0, z: 0)
+        ) == nil)
+    }
+
+    @Test func breaksEqualRanksOnDesignationSoPlansAreReproducible() {
+        let stars = ["HOME": star("HOME", x: 0), "AAA": star("AAA", x: 3), "BBB": star("BBB", x: 3)]
+        let target = SalvageTargetPlanner.nextTarget(
+            assays: [assay("BBB", body: "BBB-1", units: 100), assay("AAA", body: "AAA-1", units: 100)],
+            stars: stars, meshSystems: ["HOME", "AAA", "BBB"], attempted: [],
+            vessel: Position(x: 0, y: 0, z: 0)
+        )
+        #expect(target?.system == "AAA")
+    }
+
+    @Test func meshSystemsAreTheOnesHoldingARelayingRelay() {
+        // Derived from live device rows, never from `ftlLinks` — an isolated
+        // relay produces no link rows at all, so a link-derived set would miss
+        // the system this run just meshed.
+        let devices = [
+            Self.device("R1", features: ["relay"], status: "relaying", location: "TOSLIT-3-L4"),
+            Self.device("R2", features: ["relay"], status: "idle", location: "WATTL-1-L4"),
+            Self.device("V", features: ["cruise"], status: "idle", location: "TOSLIT-3"),
+        ]
+        #expect(SalvageTargetPlanner.meshSystems(in: devices) == ["TOSLIT"])
+    }
+}
