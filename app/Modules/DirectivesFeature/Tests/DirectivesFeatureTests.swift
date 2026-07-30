@@ -375,6 +375,27 @@ struct DirectivesFeatureTests {
         #expect(store.state.timeline.entries.map(\.id) == ["L9"])
     }
 
+    /// The Salvage Run launcher is a SEPARATE presentation from the Survey Run
+    /// one, with its own reducer — this pins that the handoff back (select +
+    /// load timeline) works identically through it.
+    @Test func launchingASalvageRunLoadsItsTimeline() async throws {
+        let database = try GameDatabase.bootstrap()
+        let launched = Self.stalledMission(id: "D3", kind: .salvageRun)
+        try await database.write { db in
+            try Directive.insert { launched }.execute(db)
+            try DirectiveLogEntry.insert { Self.logEntry("L10", directiveID: "D3", at: 10) }.execute(db)
+        }
+        let store = TestStore(initialState: DirectivesFeature.State()) {
+            DirectivesFeature()
+        } withDependencies: { $0.defaultDatabase = database }
+        store.exhaustivity = .off
+
+        await store.send(.newSalvageRunTapped)
+        await store.send(.newSalvageRun(.presented(.delegate(.created(launched)))))
+        #expect(store.state.selectedRowID == "custom:D3")
+        #expect(store.state.timeline.entries.map(\.id) == ["L10"])
+    }
+
     nonisolated static func logEntry(
         _ id: String,
         directiveID: String? = nil,
@@ -390,9 +411,9 @@ struct DirectivesFeatureTests {
     }
 
     /// A stalled mission fixture, for the resolution verbs.
-    nonisolated static func stalledMission(id: String) -> Directive {
+    nonisolated static func stalledMission(id: String, kind: DirectiveKind = .surveyRun) -> Directive {
         Directive(
-            id: id, kind: .surveyRun, status: .needsAttention, deviceCode: "VESSEL1",
+            id: id, kind: kind, status: .needsAttention, deviceCode: "VESSEL1",
             controllerCode: "AMI1", targets: ["TAU"], targetIndex: 0, step: "configuring",
             stepStartedAt: Date(timeIntervalSince1970: 100), returnToOrigin: false,
             originDesignation: "SOL", attentionReason: .commandRejected,

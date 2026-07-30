@@ -138,6 +138,19 @@ private func running(
     )
 }
 
+// MARK: - Registration
+
+@Suite("Salvage Run — registration")
+struct SalvageRunRegistrationTests {
+    /// Until this passes the engine leaves every `salvageRun` row completely
+    /// alone — no writes at all (see `MissionRegistry`'s doc comment). This is
+    /// the one-line edit that turns the whole run live.
+    @Test func isRegisteredWithTheEngine() {
+        #expect(MissionRegistry.machine(for: .salvageRun) is SalvageRun)
+        #expect(MissionRegistry.firstStep(for: .salvageRun) == SalvageRun.Step.preflight)
+    }
+}
+
 // MARK: - Preflight
 
 @Suite("Salvage Run — preflight")

@@ -128,7 +128,13 @@ public enum DirectiveRow: Equatable, Identifiable, Sendable {
             // finished run. Count what is done instead. The current target is
             // not repeated here; `headlineDesignation` already renders it.
             if directive.roamCentre != nil {
-                return "\(directive.targetIndex) surveyed"
+                switch directive.kind {
+                case .salvageRun:
+                    let count = directive.targetIndex
+                    return "\(count) system\(count == 1 ? "" : "s") drained"
+                case .surveyRun, .relayRun:
+                    return "\(directive.targetIndex) surveyed"
+                }
             }
             let progress = directive.progress
             return "\(progress.completed)/\(progress.total)"
