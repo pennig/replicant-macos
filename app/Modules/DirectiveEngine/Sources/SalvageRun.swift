@@ -275,11 +275,28 @@ public struct SalvageRun: MissionStepMachine {
     /// terminal action always hands off to `Step.activating` rather than
     /// declaring the mesh work done.
     ///
-    /// A system with no Lagrange point at all cannot host a relay. That is a
-    /// degraded outcome, not an error: the salvage under a system with no
-    /// stable point is still worth taking, the run simply cannot extend the
-    /// mesh frontier through it — so this skips straight to mining unmeshed
-    /// rather than stalling on a target that will never satisfy the guard.
+    /// Two DIFFERENT causes can leave `Self.lagrangePoint(in:)` unable to name
+    /// a point, and conflating them was an Important bug caught in review: the
+    /// target's `SystemDetail` blob simply not being cached YET (the row
+    /// hasn't landed, or failed to decode) is NOT evidence the system
+    /// genuinely lacks a Lagrange point. `world.system(target)` being nil
+    /// nil-chained straight through `lagrangePoint(in:)` into the same
+    /// "no point" branch as a cached system that really has none — and
+    /// because nothing routes `configuring` back to `emplacing`, that silently
+    /// and permanently forfeited relay emplacement for the target, with no log
+    /// entry and no operator visibility. `travel()` routes arrival here
+    /// regardless of whether the blob is cached, so the race lands right after
+    /// arrival, before the passive rescan.
+    ///
+    /// So the two causes are split below: an uncached blob is a bounded
+    /// `.wait` — the same `systemResolutionDeadline` backstop `configure` uses
+    /// for its own `.unresolved` case, surfacing `.salvageSystemUnresolved` if
+    /// the passive rescan never lands. A CACHED system that genuinely has no
+    /// L4/L5 anywhere is the degraded-but-fine outcome: the salvage under a
+    /// system with no stable point is still worth taking, the run simply
+    /// cannot extend the mesh frontier through it — so this skips straight to
+    /// mining unmeshed rather than stalling on a target that will never
+    /// satisfy the guard.
     ///
     /// The relay-aboard check is re-run on every entry to this step rather than
     /// trusted from whatever got the vessel here. This is a backstop for the

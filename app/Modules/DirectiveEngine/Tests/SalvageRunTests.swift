@@ -459,6 +459,34 @@ struct SalvageRunEmplacementTests {
         #expect(SalvageRun().nextAction(directive: running(step: "emplacing"), world: world)
             == .advanceStep(nextStep: "restocking"))
     }
+
+    /// The Important fix carried in from Task 7's review: the target's
+    /// `SystemDetail` blob not being cached yet must NOT read as "this system
+    /// has no Lagrange point" — that conflation used to route straight to
+    /// `configuring`, silently and permanently forfeiting relay emplacement
+    /// for the target (nothing routes `configuring` back to `emplacing`).
+    /// Distinct from `minesUnmeshedWhenTheSystemHasNoLagrangePoint` above:
+    /// there `"TOSLIT"` IS present in `world.systems`, just genuinely without
+    /// a point; here it has no entry in `systems` at all.
+    @Test func waitsRatherThanForfeitingEmplacementWhenTheBlobIsntCachedYet() {
+        let arrived = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3")
+        let world = world(devices: [arrived, controller, drone, relay]) // no "TOSLIT" entry in `systems`
+        #expect(SalvageRun().nextAction(directive: running(step: "emplacing"), world: world) == .wait)
+    }
+
+    /// The bound on that wait, mirroring `configure`'s
+    /// `stallsWhenTheTargetSystemNeverResolves`: past `systemResolutionDeadline`
+    /// an unresolved system surfaces rather than waiting forever.
+    @Test func stallsWhenTheBlobNeverResolvesDuringEmplacement() {
+        let arrived = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3")
+        let directive = running(
+            step: "emplacing",
+            stepStartedAt: now.addingTimeInterval(-SalvageRun.systemResolutionDeadline - 1)
+        )
+        let world = world(devices: [arrived, controller, drone, relay], now: now) // still no "TOSLIT" entry
+        #expect(SalvageRun().nextAction(directive: directive, world: world)
+            == .stall(.salvageSystemUnresolved))
+    }
 }
 
 // MARK: - Mining fixtures
