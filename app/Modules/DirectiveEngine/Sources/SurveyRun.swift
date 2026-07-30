@@ -106,52 +106,27 @@ public struct SurveyRun: MissionStepMachine {
 
     // MARK: - Fleet queries
 
-    /// The AMI survey controller stowed aboard this vessel, if any.
-    ///
-    /// STOWED, not merely co-located: `launch` deploys the controller's stowed
-    /// devices, and one left standing alongside the vessel is left behind the
-    /// moment it departs. Identified by capability (`survey_system` in its
-    /// available directives) rather than `device_type`, so a differently-named
-    /// controller with the same capability still works — the fallback
-    /// vocabulary behind `availableDirectives` covers only repair devices, so it
-    /// can never make a non-controller match here.
+    /// The AMI survey controller stowed aboard this vessel, if any. Forwards to
+    /// the shared `AMIFleet` query (extracted 2026-07-30 so `SalvageRun` can
+    /// share the identical two-ended read) — see there for the full "why".
     public static func controller(aboard vessel: Device, in world: WorldSnapshot) -> Device? {
-        world.devices.values
-            .filter { $0.stowedInDeviceCode == vessel.deviceCode }
-            .filter { $0.availableDirectives.contains("survey_system") }
-            .min { $0.deviceCode < $1.deviceCode }
+        AMIFleet.stowed(aboard: vessel, in: world, offering: "survey_system")
     }
 
-    /// The controller's adopted drones that are also aboard the vessel. Both
-    /// halves matter: `launch` only deploys devices this controller has adopted,
-    /// and only ones that actually travelled with it.
-    ///
-    /// Adoption is read from BOTH ends of the link, because only one end is
-    /// always present. `controlled_devices` — the controller's side — ships only
-    /// in the single-device payload (`GET devices/{code}`); the fleet-wide
-    /// `GET devices` omits it entirely, and since a list sync rewrites the whole
-    /// `detail` blob it also erases whatever a previous inspector read had put
-    /// there. The drone's side, `controller_device_code`, is a promoted column
-    /// present in every payload. Reading only the controller's side meant a
-    /// perfectly staged vessel looked unstaged unless someone had recently
-    /// opened that controller's inspector.
+    /// The controller's adopted drones that are also aboard the vessel. Forwards
+    /// to `AMIFleet` — see there for why adoption is read from both ends of the
+    /// controller/drone link.
     public static func adoptedDrones(
         of controller: Device, aboard vessel: Device, in world: WorldSnapshot
     ) -> [Device] {
-        adoptedDrones(of: controller, in: world)
-            .filter { $0.stowedInDeviceCode == vessel.deviceCode }
+        AMIFleet.adoptedDrones(of: controller, aboard: vessel, in: world)
     }
 
     /// Every device this controller has adopted, wherever it currently is —
-    /// including the ones still deployed. The recall gate needs the whole set
-    /// (the `aboard:` variant above answers a different question: who came
-    /// along), because "some drones are home" is precisely the state that loses
-    /// the others.
+    /// including the ones still deployed. Forwards to `AMIFleet` — see there for
+    /// why the recall gate needs the whole set rather than just the ones aboard.
     public static func adoptedDrones(of controller: Device, in world: WorldSnapshot) -> [Device] {
-        let claimed = Set(controller.controlledDeviceCodes)
-        return world.devices.values
-            .filter { $0.controllerDeviceCode == controller.deviceCode || claimed.contains($0.deviceCode) }
-            .sorted { $0.deviceCode < $1.deviceCode }
+        AMIFleet.adoptedDrones(of: controller, in: world)
     }
 
     /// Whether any row backing a staging finding is too old to act on.
