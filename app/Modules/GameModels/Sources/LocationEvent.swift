@@ -96,6 +96,10 @@ public struct LocationEvent: Identifiable, Equatable, Sendable {
     /// Whether this event is still open (drives the badge and active grouping).
     public var isActive: Bool { status.lowercased() == "active" }
 
+    /// Whether the quest has closed — its rewards are granted rather than
+    /// promised, and its `consumed` manifest is worth showing.
+    public var isCompleted: Bool { status.lowercased() == "completed" }
+
     /// Whether the event is open *and* every objective is met — so it can be
     /// completed now. Drives the sidebar "ready" badge and the Complete button.
     public var isReady: Bool { isActive && objectivesMet }
@@ -134,8 +138,46 @@ extension LocationEvent {
         copy.eventDescription = event["description"]?.stringValue
         copy.discoveredAt = event["discovered_at"]?.stringValue.flatMap(DiversionSnapshot.parseDate)
         copy.completedAt = event["completed_at"]?.stringValue.flatMap(DiversionSnapshot.parseDate)
-        copy.detail = event
+        // The list entry replaces `detail` wholesale — except for `consumed`,
+        // which `accounts/events` never returns. Its only source is the
+        // `event.completed` stream payload, so an unconditional overwrite would
+        // make the Consumed card appear at completion and vanish at the next
+        // refresh. Carry a captured manifest across.
+        copy.detail = if let consumed = copy.detail["consumed"], event["consumed"] == nil {
+            event.adding("consumed", consumed)
+        } else {
+            event
+        }
         copy.updatedAt = now
+        return copy
+    }
+
+    /// Fold an `event.completed` stream payload into this record, closing the
+    /// quest without a re-read of the whole `accounts/events` list.
+    ///
+    /// The payload is thinner than a list entry — no `title`, `description` or
+    /// `criteria` — so this only writes what completion actually establishes,
+    /// leaving everything discovery already captured intact. The `rewards` and
+    /// `consumed` blocks are folded into `detail` purely as display material
+    /// for the closed quest: the XP among those rewards arrives separately as
+    /// its own `experience.gained` event (`source: "location_event"`), so
+    /// crediting it from here would award it twice.
+    public func completing(payload: [String: JSONValue], now: Date, completedAt: Date?) -> LocationEvent {
+        var copy = self
+        copy.status = "completed"
+        copy.objectivesMet = true
+        copy.completedAt = completedAt ?? now
+        copy.updatedAt = now
+        // Fill the summary columns only where discovery left them blank — an
+        // event completed before we ever saw it listed still renders a location.
+        if copy.location.isEmpty, let location = payload["location"]?.stringValue { copy.location = location }
+        if copy.eventType.isEmpty, let eventType = payload["event_type"]?.stringValue { copy.eventType = eventType }
+        if copy.tier == 0, let tier = payload["tier"]?.numberValue { copy.tier = Int(tier) }
+
+        // Discovery always leaves an object here, but a row that only ever saw
+        // this event has `{}` — which is still an object, so `adding` lands.
+        if let rewards = payload["rewards"] { copy.detail = copy.detail.adding("rewards", rewards) }
+        if let consumed = payload["consumed"] { copy.detail = copy.detail.adding("consumed", consumed) }
         return copy
     }
 }
@@ -247,6 +289,15 @@ public struct LocationEventDetail: Equatable, Sendable {
         public var id: String { resourceType }
     }
 
+    /// A device the completion consumed. Only an `event.completed` payload
+    /// carries these, and the devices are gone by the time it arrives — this is
+    /// the sole record of which ones the quest took.
+    public struct ConsumedDevice: Equatable, Sendable, Identifiable {
+        public let deviceCode: String
+        public let deviceType: String
+        public var id: String { deviceCode }
+    }
+
     public let met: Bool
     public let replicantPresent: Bool
     public let options: [Option]
@@ -254,13 +305,18 @@ public struct LocationEventDetail: Equatable, Sendable {
     public let civilisationPoints: Int?
     public let completionAchievement: String?
     public let rewardResources: [RewardResource]
+    /// Resources the completion spent. Empty until the event closes.
+    public let consumedResources: [RewardResource]
+    /// Devices the completion spent. Empty until the event closes.
+    public let consumedDevices: [ConsumedDevice]
 
     /// Decode from a raw event `detail` blob. Returns nil only when the blob has no
-    /// `progress` *and* no `rewards` (i.e. it was never hydrated).
+    /// `progress`, no `rewards` *and* no `consumed` (i.e. it was never hydrated).
     public init?(_ json: JSONValue) {
         let progress = json["progress"]
         let rewards = json["rewards"]
-        guard progress != nil || rewards != nil else { return nil }
+        let consumed = json["consumed"]
+        guard progress != nil || rewards != nil || consumed != nil else { return nil }
 
         met = progress?["met"]?.boolValue ?? false
         replicantPresent = progress?["replicant_present"]?.boolValue ?? false
@@ -292,14 +348,25 @@ public struct LocationEventDetail: Equatable, Sendable {
         experiencePoints = rewards?["xp"]?.numberValue.map(Int.init)
         civilisationPoints = rewards?["civilisation_points"]?.numberValue.map(Int.init)
         completionAchievement = rewards?["completion_achievement"]?.stringValue
-        if case .object(let dict)? = rewards?["resources"] {
-            rewardResources = dict
-                .compactMap { key, value in
-                    value.numberValue.map { RewardResource(resourceType: key, amount: Int($0)) }
-                }
-                .sorted { $0.resourceType < $1.resourceType }
-        } else {
-            rewardResources = []
+        rewardResources = Self.resources(rewards?["resources"])
+        consumedResources = Self.resources(consumed?["resources"])
+        consumedDevices = (consumed?["devices"]?.arrayValue ?? []).compactMap { device in
+            guard let code = device["device_code"]?.stringValue else { return nil }
+            return ConsumedDevice(
+                deviceCode: code,
+                deviceType: device["device_type"]?.stringValue ?? ""
+            )
         }
+    }
+
+    /// Decode a `{ "rares": 500, … }` resource map into sorted rows. Both the
+    /// granted and the consumed blocks use this shape.
+    private static func resources(_ json: JSONValue?) -> [RewardResource] {
+        guard case .object(let dict)? = json else { return [] }
+        return dict
+            .compactMap { key, value in
+                value.numberValue.map { RewardResource(resourceType: key, amount: Int($0)) }
+            }
+            .sorted { $0.resourceType < $1.resourceType }
     }
 }

@@ -86,6 +86,7 @@ let package = Package(
                 .product(name: "SQLiteData", package: "sqlite-data"),
                 "API",
                 "GameModels",
+                "GameServices",
                 "GameSession",
             ],
             path: "AccountManager/Sources"
@@ -97,12 +98,14 @@ let package = Package(
                 "API",
                 "GameDatabase",
                 "GameModels",
+                "GameServices",
                 "GameSession",
                 .product(name: "Dependencies", package: "swift-dependencies"),
                 .product(name: "HTTPTypes", package: "swift-http-types"),
                 .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime"),
                 .product(name: "Sharing", package: "swift-sharing"),
                 .product(name: "SQLiteData", package: "sqlite-data"),
+                "Utils",
             ],
             path: "AccountManager/Tests"
         ),
@@ -461,6 +464,7 @@ let package = Package(
             name: "LocationEventsFeatureTests",
             dependencies: [
                 "API",
+                "GameDatabase",
                 "GameModels",
                 "GameServices",
                 "LocationEventsFeature",

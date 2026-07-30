@@ -10,7 +10,9 @@
 
 import ComposableArchitecture
 import Foundation
+import GameModels
 import GameServices
+import SQLiteData
 
 public enum LocationEventsIngestion {
     /// The `.locationEvents` domain's refresh policy: the authoritative shape
@@ -44,6 +46,11 @@ public enum LocationEventsIngestion {
                 // `event.completed`); a fresh scan can also reveal one.
                 guard event.category == "event" || event.event == "scan.completed"
                 else { return }
+                // …except completion, which `completedRoute` applies directly to
+                // the one row that changed. Walking every page of the list to
+                // learn that a quest we already hold has closed is a lot of reads
+                // for one status flip.
+                guard event.event != "event.completed" else { return }
                 @Dependency(\.domainFreshness) var domainFreshness
                 domainFreshness.invalidate(.locationEvents)
             },
@@ -52,4 +59,51 @@ public enum LocationEventsIngestion {
                 domainFreshness.invalidate(.locationEvents)
             }
         )
+
+    /// A quest closing. Unlike discovery — which arrives without the criteria and
+    /// progress the screen needs, so it can only nudge the authoritative list —
+    /// `event.completed` carries everything completion establishes: the
+    /// designation, the rewards granted, and what was consumed to earn them. So
+    /// it lands on the single row it names.
+    ///
+    /// This is a *display-only* fold. The XP among those rewards is delivered
+    /// separately as `experience.gained` with `source: "location_event"` (and
+    /// credited there, by `AccountIngestion`); resource stock isn't modelled
+    /// outside this table at all. Nothing persisted beyond the quest row moves.
+    ///
+    /// Matching the exact event name rather than the family also means the Event
+    /// Log stops reporting completion as unhandled — the `.all` matcher above
+    /// never counted as a feature-specific route.
+    public static let completedRoute: EventRoute =
+        EventRoute(id: "locationEvents.completed", match: .event("event.completed")) { event in
+            @Dependency(\.defaultDatabase) var database
+            @Dependency(\.domainFreshness) var domainFreshness
+            @Dependency(\.date) var date
+
+            let payload = event.payload ?? [:]
+            guard
+                let designation = payload["designation"]?.stringValue,
+                !designation.isEmpty
+            else { return }
+
+            let now = date.now
+            let completedAt = event.date
+            let applied = try? await database.write { db -> Bool in
+                let existing = try LocationEvent
+                    .where { $0.designation.eq(designation) }
+                    .fetchOne(db)
+                guard let existing else { return false }
+                let completed = existing.completing(payload: payload, now: now, completedAt: completedAt)
+                try LocationEvent.upsert { completed }.execute(db)
+                return true
+            }
+
+            // A quest we never held locally — discovery missed, or it closed from
+            // another client. The payload carries no title or description, so a
+            // row built from it would render blank; fall back to the
+            // authoritative list, which is exactly what this route usually saves.
+            if applied != true {
+                domainFreshness.invalidate(.locationEvents)
+            }
+        }
 }

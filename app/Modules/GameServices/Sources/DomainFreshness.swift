@@ -34,6 +34,7 @@ public enum FreshnessDomain: String, CaseIterable, Sendable {
     case inbox            // Message table — head-page authoritative re-read
     case locationEvents   // LocationEvent table — full accounts/events walk
     case ftlMesh          // FTLLinkRecord table — O(relays) network reads
+    case account          // Account profile + Replicant roster — one accounts/me read
 }
 
 /// How a registered domain refreshes: the debounce window an `invalidate`

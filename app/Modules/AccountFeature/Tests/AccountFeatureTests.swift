@@ -72,7 +72,7 @@ import Testing
             $0.defaultFileStorage = .inMemory
             $0.accountClient.fetchAchievements = { [] }
             $0.accountClient.update = { captured.setValue($0) }
-            $0.accountManager.refreshAccount = { refreshed.setValue(true) }
+            $0.accountManager.refreshAccount = { refreshed.setValue(true); return true }
         } operation: {
             @Shared(.account) var account
             $account.withLock { $0 = makeAccount() }

@@ -70,4 +70,13 @@ public enum JSONValue: Codable, Sendable, Equatable {
         if case .object(let dict) = self { return dict[key] }
         return nil
     }
+
+    /// A copy of this object with `key` set to `value` — the write counterpart
+    /// of the subscript above, for folding one block into a stored blob.
+    /// Returns self unchanged when this isn't an object (there's no key to set).
+    public func adding(_ key: String, _ value: JSONValue) -> JSONValue {
+        guard case .object(var dict) = self else { return self }
+        dict[key] = value
+        return .object(dict)
+    }
 }

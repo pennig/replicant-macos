@@ -86,6 +86,7 @@ struct ReplicantApp: App {
         domainFreshness.register(.inbox, MessagesIngestion.domainRegistration)
         domainFreshness.register(.locationEvents, LocationEventsIngestion.domainRegistration)
         domainFreshness.register(.ftlMesh, FTLMeshRefresher.domainRegistration)
+        domainFreshness.register(.account, AccountIngestion.domainRegistration)
 
         // The declared event routes. `locationsIngestion` is an instance: its
         // passive-scan debounce is mutable state with a teardown obligation
@@ -94,6 +95,12 @@ struct ReplicantApp: App {
         for route in MessagesIngestion.eventRoutes { gameSync.registerRoute(route) }
         for route in locationsIngestion.eventRoutes { gameSync.registerRoute(route) }
         gameSync.registerRoute(LocationEventsIngestion.eventRoute)
+        // Completion lands on the one quest row it names, instead of the
+        // `eventRoute` above walking every page of `accounts/events` to find it.
+        gameSync.registerRoute(LocationEventsIngestion.completedRoute)
+        // `experience.gained` fires for nearly every action and moved nothing
+        // until now: XP only advanced when something re-read `accounts/me`.
+        gameSync.registerRoute(AccountIngestion.eventRoute)
         // `directive.*` had no route at all before Stage 3. It only writes a
         // `DirectiveLogEntry`; the engine observes that row rather than the
         // event, which is what keeps observe-reconciled-state intact.

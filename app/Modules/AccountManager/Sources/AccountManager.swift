@@ -42,7 +42,12 @@ public struct AccountManager: Sendable {
     /// from the Keychain (login isn't re-run then), so the sidebar roster and the
     /// Replicants directory's "own" set stay fresh across relaunches. Best-effort:
     /// a failed refresh leaves the last-persisted roster in place.
-    public var refreshAccount: @Sendable () async -> Void
+    ///
+    /// Returns whether the read actually landed. The `.account` freshness domain
+    /// refreshes through this, and `DomainRegistration.refresh` must report a
+    /// failure rather than swallow it — otherwise a read lost to a rate limit
+    /// stamps the domain fresh for a full TTL on the strength of nothing.
+    public var refreshAccount: @Sendable () async -> Bool
 
     /// The stored session token, if any — used to decide the initial app state
     /// synchronously at launch.
@@ -55,7 +60,7 @@ public struct AccountManager: Sendable {
         logIn: @escaping @Sendable (String) async throws -> Void,
         logOut: @escaping @Sendable () async -> Void,
         signUp: @escaping @Sendable (String, String, String) async throws -> Void,
-        refreshAccount: @escaping @Sendable () async -> Void,
+        refreshAccount: @escaping @Sendable () async -> Bool,
         restoredAPIKey: @escaping @Sendable () -> String?,
         registerHandler: @escaping @Sendable (SessionLifecycleHandler) -> Void
     ) {
@@ -186,12 +191,13 @@ extension AccountManager {
                 @Shared(.appStorage(Account.activeReplicantCodeKey)) var activeReplicantCode: String?
 
                 // Best-effort: any failure (offline, rate limit, transient) leaves
-                // the last-persisted roster untouched.
+                // the last-persisted roster untouched — and is reported, so a
+                // caller tracking freshness doesn't mistake it for a good read.
                 guard
                     let output = try? await gameClient().getV1AccountsMe(),
                     case let .ok(ok) = output,
                     let body = try? ok.body.json
-                else { return }
+                else { return false }
 
                 let replicants = (body.replicants ?? []).map(Replicant.init(schema:))
                 try? await database.write { db in
@@ -208,6 +214,7 @@ extension AccountManager {
                    current == nil || !replicants.contains(where: { $0.replicantCode == current }) {
                     $activeReplicantCode.withLock { $0 = first.replicantCode }
                 }
+                return true
             },
             restoredAPIKey: {
                 @Dependency(\.keychain) var keychain
@@ -234,7 +241,7 @@ extension AccountManager: TestDependencyKey {
         logIn: unimplemented("AccountManager.logIn"),
         logOut: unimplemented("AccountManager.logOut"),
         signUp: unimplemented("AccountManager.signUp"),
-        refreshAccount: unimplemented("AccountManager.refreshAccount"),
+        refreshAccount: unimplemented("AccountManager.refreshAccount", placeholder: false),
         restoredAPIKey: unimplemented("AccountManager.restoredAPIKey", placeholder: nil),
         registerHandler: unimplemented("AccountManager.registerHandler")
     )

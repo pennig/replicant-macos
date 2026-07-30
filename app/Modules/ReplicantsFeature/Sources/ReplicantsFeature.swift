@@ -304,7 +304,7 @@ public struct ReplicantsFeature {
                 let replicantsClient = self.replicantsClient
                 logger.info("replication succeeded\(newCode.map { " → \($0)" } ?? "", privacy: .public); refreshing roster + fleet")
                 return .run { send in
-                    await accountManager.refreshAccount()
+                    _ = await accountManager.refreshAccount()
                     if let devices = try? await devicesClient.fetchAll() {
                         for device in devices { await Reconciler().ingest(device) }
                     }

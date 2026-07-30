@@ -165,7 +165,7 @@ public struct AccountFeature {
                     do {
                         try await accountClient.update(update)
                         // Single writer for the shared profile stays AccountManager.
-                        await accountManager.refreshAccount()
+                        _ = await accountManager.refreshAccount()
                         await send(.saveSucceeded)
                     } catch {
                         await send(.saveFailed((error as? AccountClient.UpdateError)?.message ?? "Couldn't save your changes."))

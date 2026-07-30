@@ -186,7 +186,7 @@ struct MainFeature {
                 // Restored sessions skip login, so the roster can be stale (or
                 // empty after a DB reset). Re-fetch it so the sidebar and the
                 // Replicants directory's own set are current.
-                return .run { _ in await accountManager.refreshAccount() }
+                return .run { _ in _ = await accountManager.refreshAccount() }
 
             case .delegate:
                 return .none

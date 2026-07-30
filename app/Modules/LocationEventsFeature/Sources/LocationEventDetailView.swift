@@ -61,6 +61,9 @@ private struct QuestSheet: View {
                         objectivesCard(option, multi: quest.options.count > 1)
                     }
                     rewardsCard(quest)
+                    if !quest.consumedResources.isEmpty || !quest.consumedDevices.isEmpty {
+                        consumedCard(quest)
+                    }
                 }
 
                 if let description = event.eventDescription, !description.isEmpty {
@@ -156,7 +159,8 @@ private struct QuestSheet: View {
     // — Rewards —
 
     private func rewardsCard(_ quest: LocationEventDetail) -> some View {
-        RCReadoutCard("Rewards") {
+        // Once the quest closes these are granted, not promised.
+        RCReadoutCard(event.isCompleted ? "Rewards Granted" : "Rewards") {
             if let xp = quest.experiencePoints {
                 RewardRow(label: "Experience", value: "\(xp.formatted()) XP")
             }
@@ -174,6 +178,30 @@ private struct QuestSheet: View {
                     label: "Achievement",
                     value: achievement.replacingOccurrences(of: "_", with: " ").capitalized
                 )
+            }
+        }
+    }
+
+    // — Consumed (completion only) —
+
+    /// What the completion actually cost. Only an `event.completed` payload
+    /// carries this, and the devices it names are gone by the time it arrives —
+    /// this card is the only record the app keeps of which ones the quest took.
+    private func consumedCard(_ quest: LocationEventDetail) -> some View {
+        RCReadoutCard("Consumed") {
+            ForEach(quest.consumedResources) { resource in
+                RewardRow(
+                    label: resource.resourceType.replacingOccurrences(of: "_", with: " ").capitalized,
+                    value: resource.amount.formatted()
+                )
+            }
+            ForEach(quest.consumedDevices) { device in
+                HStack {
+                    Text(device.deviceType.replacingOccurrences(of: "_", with: " ").capitalized)
+                        .font(.rcBody).foregroundStyle(.rcTextSecondary)
+                    Spacer()
+                    Text(device.deviceCode).font(.rcMono).foregroundStyle(.rcTextPrimary)
+                }
             }
         }
     }

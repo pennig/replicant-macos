@@ -170,4 +170,88 @@ struct LocationEventParsingTests {
         #expect(!event.isReady)
         #expect(event.displayStatus == "completed")
     }
+
+    // MARK: Completion
+
+    /// The `event.completed` payload closes the quest and leaves everything
+    /// discovery captured — which the payload itself does not carry — intact.
+    @Test("Completion closes the quest without erasing the discovered detail")
+    func completionKeepsDiscoveredDetail() throws {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let completedAt = Date(timeIntervalSince1970: 2_000_000)
+        let discovered = LocationEvent.fresh(designation: "KRIOS-2-EVT-001", now: now)
+            .merging(event: resourceQuest, now: now)
+
+        let payload: [String: JSONValue] = [
+            "designation": .string("KRIOS-2-EVT-001"),
+            "rewards": .object(["xp": .number(450)]),
+            "consumed": .object([
+                "resources": .object(["volatiles": .number(80)]),
+                "devices": .array([
+                    .object([
+                        "device_code": .string("60C33A33"),
+                        "device_type": .string("cargo_lifter"),
+                    ])
+                ]),
+            ]),
+        ]
+        let completed = discovered.completing(payload: payload, now: now, completedAt: completedAt)
+
+        #expect(completed.status == "completed")
+        #expect(completed.isCompleted)
+        #expect(completed.objectivesMet)
+        #expect(!completed.isReady)
+        #expect(completed.completedAt == completedAt)
+        #expect(completed.title == "Medical Compound Request")   // survived
+        let quest = try #require(completed.quest)
+        #expect(quest.experiencePoints == 450)
+        #expect(quest.consumedResources.map(\.resourceType) == ["volatiles"])
+        #expect(quest.consumedDevices.map(\.deviceCode) == ["60C33A33"])
+        // The criteria discovery captured are still there to render against.
+        #expect(!quest.options.isEmpty)
+    }
+
+    /// `accounts/events` never returns `consumed` — the stream is its only
+    /// source. So the next authoritative refresh must not erase it, or the
+    /// Consumed card would appear at completion and vanish moments later.
+    @Test("A later authoritative refresh preserves the consumed manifest")
+    func refreshPreservesConsumedManifest() throws {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let payload: [String: JSONValue] = [
+            "designation": .string("KRIOS-2-EVT-001"),
+            "consumed": .object(["resources": .object(["volatiles": .number(80)])]),
+        ]
+        let completed = LocationEvent.fresh(designation: "KRIOS-2-EVT-001", now: now)
+            .merging(event: resourceQuest, now: now)
+            .completing(payload: payload, now: now, completedAt: nil)
+
+        // The list entry the next refresh brings back carries no `consumed`.
+        let refreshed = completed.merging(event: resourceQuest, now: now)
+
+        #expect(refreshed.quest?.consumedResources.map(\.resourceType) == ["volatiles"])
+    }
+
+    /// …but an incoming block still wins, so the server stays authoritative if
+    /// the list ever starts carrying one.
+    @Test("An incoming consumed block overwrites the captured one")
+    func incomingConsumedWins() throws {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let completed = LocationEvent.fresh(designation: "KRIOS-2-EVT-001", now: now)
+            .completing(
+                payload: [
+                    "consumed": .object(["resources": .object(["volatiles": .number(80)])])
+                ],
+                now: now,
+                completedAt: nil
+            )
+        let authoritative = json(#"""
+        {
+          "designation": "KRIOS-2-EVT-001",
+          "consumed": { "resources": { "carbon": 200 } }
+        }
+        """#)
+
+        let refreshed = completed.merging(event: authoritative, now: now)
+        #expect(refreshed.quest?.consumedResources.map(\.resourceType) == ["carbon"])
+    }
 }
