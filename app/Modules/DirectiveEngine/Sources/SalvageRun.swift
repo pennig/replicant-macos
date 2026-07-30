@@ -83,6 +83,11 @@ public struct SalvageRun: MissionStepMachine {
     /// per target.
     public static let stagingFreshness: TimeInterval = 5 * 60
 
+    /// How long to let an `activate` take before surfacing
+    /// `relayActivationFailed`. Generous — the relay's own confirm-read is what
+    /// flips its status, and that read is subject to the poll budget.
+    public static let activationDeadline: TimeInterval = 10 * 60
+
     /// The salvage configuration this mission insists on: deplete the named
     /// body, then recall the drones so the vessel can move on. `recall` is
     /// load-bearing — since v2.3.3 the server holds `directive.completed` until
@@ -99,6 +104,8 @@ public struct SalvageRun: MissionStepMachine {
         switch directive.step {
         case Step.preflight: return preflight(directive, vessel, world)
         case Step.travelling: return travel(directive, vessel, world)
+        case Step.emplacing: return emplace(directive, vessel, world)
+        case Step.activating: return activate(directive, vessel, world)
         default:
             // An unrecognised (or not-yet-handled) step must never dispatch. Waiting
             // is inert and recoverable — the user can cancel, or the step ships.
@@ -133,6 +140,30 @@ public struct SalvageRun: MissionStepMachine {
             .filter { $0.stowedInDeviceCode == vessel.deviceCode }
             .filter { $0.features.contains("relay") }
             .min { $0.deviceCode < $1.deviceCode }
+    }
+
+    /// A relay sitting at the vessel's own location — the one just deployed.
+    ///
+    /// `deploy` clears the device's `stowedInDeviceCode` the moment it lands,
+    /// so `relay(aboard:in:)` stops finding it at exactly the point `activate`
+    /// needs to. This is the co-location read that replaces it: resolve the
+    /// relay by WHERE IT NOW IS, never by what used to be stowed.
+    static func deployedRelay(near vessel: Device, in world: WorldSnapshot) -> Device? {
+        guard let location = vessel.location else { return nil }
+        return world.devices.values
+            .filter { $0.features.contains("relay") && $0.location == location }
+            .min { $0.deviceCode < $1.deviceCode }
+    }
+
+    /// The Lagrange point to emplace at: the first L4/L5 the system reports,
+    /// ordered by designation so the choice is reproducible across
+    /// evaluations. Relays require a gravitationally stable point and will not
+    /// work anywhere else, so a system with none is not emplaceable.
+    ///
+    /// Lagrange points hang off each PLANET (`Planet.lagrange: [SpecialSite]`),
+    /// not off the system — there is no `StarSystem.lagrangePoints`.
+    static func lagrangePoint(in system: StarSystem?) -> String? {
+        system?.planets.flatMap(\.lagrange).map(\.designation).sorted().first
     }
 
     /// Whether any row backing a staging finding is too old to act on. Same
@@ -212,6 +243,70 @@ public struct SalvageRun: MissionStepMachine {
         return .dispatch(
             kind: .travel, deviceCode: vessel.deviceCode,
             params: CommandParams(destination: target), nextStep: Step.travelling
+        )
+    }
+
+    /// Fly to the target's Lagrange point, then deploy the stowed relay once
+    /// there. `deploy` does not activate the relay — that is `activate`'s job,
+    /// a separate command verified against the live API — so this step's
+    /// terminal action always hands off to `Step.activating` rather than
+    /// declaring the mesh work done.
+    ///
+    /// A system with no Lagrange point at all cannot host a relay. That is a
+    /// degraded outcome, not an error: the salvage under a system with no
+    /// stable point is still worth taking, the run simply cannot extend the
+    /// mesh frontier through it — so this skips straight to mining unmeshed
+    /// rather than stalling on a target that will never satisfy the guard.
+    ///
+    /// The relay-aboard check is re-run on EVERY entry to this step, including
+    /// after arrival, rather than trusted from whatever got the vessel here.
+    /// `preflight`'s staging-freshness recheck deliberately excludes the relay
+    /// row (see its doc comment) — a stale-positive local row can carry the
+    /// vessel all the way out here on a wasted round trip. Catching that here,
+    /// rather than assuming departure proves possession, is what keeps this
+    /// step from ever dispatching `deploy` at a relay that was never actually
+    /// aboard: the miss instead reroutes to `Step.restocking`, the same honest
+    /// answer `preflight` would have given had it known.
+    private func emplace(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
+        guard let target = directive.currentTarget,
+              let point = Self.lagrangePoint(in: world.system(target))
+        else { return .advanceStep(nextStep: Step.configuring) }
+        guard let relay = Self.relay(aboard: vessel, in: world) else {
+            return .advanceStep(nextStep: Step.restocking)
+        }
+        if vessel.location != point {
+            if world.openOperation(for: vessel.deviceCode) != nil { return .wait }
+            return .dispatch(
+                kind: .travel, deviceCode: vessel.deviceCode,
+                params: CommandParams(destination: point), nextStep: Step.emplacing
+            )
+        }
+        if world.openOperation(for: relay.deviceCode) != nil { return .wait }
+        return .dispatch(
+            kind: OperationKind.simple("deploy"), deviceCode: relay.deviceCode,
+            params: CommandParams(), nextStep: Step.activating
+        )
+    }
+
+    /// Bring the deployed relay up, then hand off to mining once it reports
+    /// `relaying`. Backstopped by `activationDeadline`: a relay that deployed
+    /// but never came up is a dead run, since the whole point of the trip was
+    /// the mesh membership `relaying` alone confers.
+    private func activate(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
+        // Resolve the relay by where it now IS, not by what is stowed: `deploy`
+        // cleared its `stowedInDeviceCode`, so the aboard-query no longer finds
+        // it. This is the easy bug here.
+        guard let relay = Self.deployedRelay(near: vessel, in: world) else {
+            return .stall(.relayActivationFailed)
+        }
+        if relay.status == "relaying" { return .advanceStep(nextStep: Step.configuring) }
+        if world.now.timeIntervalSince(directive.stepStartedAt) > Self.activationDeadline {
+            return .stall(.relayActivationFailed)
+        }
+        if world.openOperation(for: relay.deviceCode) != nil { return .wait }
+        return .dispatch(
+            kind: OperationKind.simple("activate"), deviceCode: relay.deviceCode,
+            params: CommandParams(), nextStep: Step.activating
         )
     }
 }

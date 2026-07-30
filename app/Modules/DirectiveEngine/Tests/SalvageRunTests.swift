@@ -168,6 +168,18 @@ struct SalvageRunPreflightTests {
                 == .advanceStep(nextStep: "restocking"))
     }
 
+    /// The inverse of the routing test above, carried forward from Task 5's
+    /// review: an already-meshed target needs no relay, so a vessel with none
+    /// aboard must still depart rather than detour to base. Without this test
+    /// an inverted `!meshed` in the relay guard would pass every other case in
+    /// this suite while quietly sending every meshed target home empty-handed.
+    @Test func proceedsWithNoRelayAboardWhenTheTargetIsAlreadyMeshed() {
+        let up = device("R", location: "TOSLIT-3-L4", features: ["relay"], status: "relaying")
+        let snapshot = world(devices: [vessel, controller, drone, up]) // no relay aboard
+        #expect(SalvageRun().nextAction(directive: running(step: "preflight"), world: snapshot)
+                == .assignController(deviceCode: "CTRL", nextStep: "travelling"))
+    }
+
     /// A Salvage Run is always continuous — it has no finish line, so an
     /// empty queue means "plan the next one", never `.done`.
     @Test func extendsTheQueueWhenItEmpties() {
@@ -297,6 +309,110 @@ struct SalvageRunUnknownStepTests {
     /// never dispatch — it waits, same contract as `SurveyRun`.
     @Test func waitsOnAStepNotYetImplemented() {
         let snapshot = world(devices: [vessel, controller, drone, relay])
-        #expect(SalvageRun().nextAction(directive: running(step: "emplacing"), world: snapshot) == .wait)
+        #expect(SalvageRun().nextAction(directive: running(step: "restocking"), world: snapshot) == .wait)
+    }
+}
+
+// MARK: - Emplacement fixtures
+
+/// The moment `SalvageRunEmplacementTests` treats as "now" — aliases
+/// `fixtureNow` under the shorter name the deadline tests read most naturally.
+private let now = fixtureNow
+
+/// TOSLIT, with one planet carrying a Lagrange point. Lagrange points hang off
+/// each PLANET (`Planet.lagrange: [SpecialSite]`) — there is no
+/// `StarSystem.lagrangePoints`.
+private let toslit = StarSystem(
+    designation: "TOSLIT",
+    planets: [
+        Planet(designation: "TOSLIT-3", lagrange: [
+            SpecialSite(designation: "TOSLIT-3-L4", kind: .lagrange),
+        ]),
+    ]
+)
+
+/// TOSLIT with a planet but no Lagrange point anywhere — cannot host a relay.
+private let toslitWithNoLagrangePoint = StarSystem(
+    designation: "TOSLIT",
+    planets: [Planet(designation: "TOSLIT-3")]
+)
+
+// MARK: - Emplacement
+
+@Suite("Salvage Run — emplacement")
+struct SalvageRunEmplacementTests {
+    @Test func travelsToALagrangePointBeforeDeploying() {
+        // Relays only work at L4/L5 — the vessel must actually be there, not
+        // merely in the system.
+        let arrived = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3")
+        let world = world(devices: [arrived, controller, drone, relay], systems: ["TOSLIT": toslit])
+        #expect(SalvageRun().nextAction(directive: running(step: "emplacing"), world: world)
+            == .dispatch(kind: .travel, deviceCode: "VESSEL",
+                         params: CommandParams(destination: "TOSLIT-3-L4"), nextStep: "emplacing"))
+    }
+
+    @Test func deploysTheRelayOnceAtTheLagrangePoint() {
+        let atL4 = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3-L4")
+        let world = world(devices: [atL4, controller, drone, relay], systems: ["TOSLIT": toslit])
+        #expect(SalvageRun().nextAction(directive: running(step: "emplacing"), world: world)
+            == .dispatch(kind: .simple("deploy"), deviceCode: "RELAY",
+                         params: CommandParams(), nextStep: "activating"))
+    }
+
+    @Test func activatesTheDeployedRelay() {
+        // `deploy` does NOT activate — that is a separate command, verified
+        // live against the API.
+        let atL4 = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3-L4")
+        let deployed = device("RELAY", location: "TOSLIT-3-L4", features: ["relay"], status: "idle")
+        let world = world(devices: [atL4, controller, drone, deployed], systems: ["TOSLIT": toslit])
+        #expect(SalvageRun().nextAction(directive: running(step: "activating"), world: world)
+            == .dispatch(kind: .simple("activate"), deviceCode: "RELAY",
+                         params: CommandParams(), nextStep: "activating"))
+    }
+
+    @Test func advancesToConfiguringOnceTheRelayIsRelaying() {
+        let atL4 = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3-L4")
+        let up = device("RELAY", location: "TOSLIT-3-L4", features: ["relay"], status: "relaying")
+        let world = world(devices: [atL4, controller, drone, up], systems: ["TOSLIT": toslit])
+        #expect(SalvageRun().nextAction(directive: running(step: "activating"), world: world)
+            == .advanceStep(nextStep: "configuring"))
+    }
+
+    @Test func stallsWhenTheRelayNeverComesUp() {
+        // The backstop. A relay that deployed but never started relaying is a
+        // dead run — the whole point of the trip was the mesh membership.
+        let atL4 = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3-L4")
+        let deployed = device("RELAY", location: "TOSLIT-3-L4", features: ["relay"], status: "idle")
+        let stale = running(step: "activating", stepStartedAt: now.addingTimeInterval(-11 * 60))
+        let world = world(devices: [atL4, controller, drone, deployed],
+                          systems: ["TOSLIT": toslit], now: now)
+        #expect(SalvageRun().nextAction(directive: stale, world: world)
+            == .stall(.relayActivationFailed))
+    }
+
+    /// A system with no Lagrange point anywhere cannot host a relay — a
+    /// degraded outcome (the salvage is still worth taking), not an error, so
+    /// the run mines it unmeshed instead of stalling.
+    @Test func minesUnmeshedWhenTheSystemHasNoLagrangePoint() {
+        let arrived = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3")
+        let world = world(devices: [arrived, controller, drone, relay],
+                          systems: ["TOSLIT": toslitWithNoLagrangePoint])
+        #expect(SalvageRun().nextAction(directive: running(step: "emplacing"), world: world)
+            == .advanceStep(nextStep: "configuring"))
+    }
+
+    /// Carried forward from Task 5's review: `preflight`'s staging-freshness
+    /// recheck deliberately excludes the relay row (see its doc comment), so a
+    /// stale-positive "relay aboard" can carry the vessel all the way to the
+    /// Lagrange point before the gap is discoverable. `emplace` re-derives the
+    /// relay fresh on every entry — including after arrival — rather than
+    /// trusting whatever got the vessel here, so the miss surfaces as an
+    /// honest reroute to `restocking` instead of a `deploy` dispatched at a
+    /// device that was never actually there.
+    @Test func routesToRestockingWhenTheRelayIsNotActuallyAboardAfterAll() {
+        let atL4 = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3-L4")
+        let world = world(devices: [atL4, controller, drone], systems: ["TOSLIT": toslit]) // no relay anywhere
+        #expect(SalvageRun().nextAction(directive: running(step: "emplacing"), world: world)
+            == .advanceStep(nextStep: "restocking"))
     }
 }
