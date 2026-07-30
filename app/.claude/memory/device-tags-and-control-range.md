@@ -38,11 +38,23 @@ the other reason for the wait.)
 
 ## `in_control_range`
 
-A `Bool` on every device in both `DeviceListItemSchema` and `DeviceStatusSchema`. **Already in
-`openapi.json`, already decoded by the generated client, and read by nothing in the app's own `Device`
-model.** It is the server's own answer to whether a device is commandable right now — see
-[[ftl-authority-rule]] for the rule it encodes.
+A `Bool` on every device in both `DeviceListItemSchema` and `DeviceStatusSchema`. It is the server's
+own answer to whether a device is commandable right now — see [[ftl-authority-rule]] for the rule it
+encodes.
 
-Surfacing it is one append-only `ALTER TABLE` migration, and it turns the directives spec's
-"reachability is a precondition on every dispatch" from geometry the app infers into a fact it reads.
-Treat `nil` as **not yet read**, never as unreachable.
+**It is already wired up, and no migration is needed.** `Device.inControlRange` is a computed property
+over the `detail` blob (`detail["in_control_range"]?.boolValue`), with `isOutOfControlRange` beside it;
+`SchemaMappingTests` and `DeviceActivityTests` cover both, and `DevicesFeature/CommandGrid` already
+disables commands on an out-of-range device. A mission can read it today.
+
+Two things worth knowing anyway:
+
+- It **survives a list sync**, unlike `controlled_devices` ([[controlled-devices-detail-only]]),
+  because `in_control_range` is on the *list* schema too — so the `detail` rewrite that erases the
+  one leaves the other intact.
+- Treat `nil` as **not yet read**, never as unreachable. `isOutOfControlRange` already encodes that
+  asymmetry (a missing field is not "out of range"), so prefer it to `inControlRange == false`
+  spelled out by hand.
+
+Recorded because the 2026-07-30 salvage design initially specced an `ALTER TABLE` for this off a
+`grep` truncated by `head` — the field looked generated-but-unused when it was neither.

@@ -49,8 +49,12 @@ Probed live 2026-07-30 unless noted. Load-bearing for §5–§7; if any drifts, 
   `GET devices?location=X` falls into — stowing clears location, so a location query cannot see a
   device aboard a vessel. `GET /v1/devices` also accepts `?tag=` and `?untagged=`.
 - **`in_control_range: Bool`** ships on every device in both `DeviceListItemSchema` and
-  `DeviceStatusSchema`. It is already present in `openapi.json` and already decoded by the generated
-  client; nothing in the app's own `Device` model reads it. This is the server's own answer to §2.
+  `DeviceStatusSchema`. **Correction (2026-07-30, during planning): the app already reads it.**
+  `Device.inControlRange` is a computed property over the `detail` blob, with `isOutOfControlRange`
+  beside it; both are covered by `SchemaMappingTests` and `DeviceActivityTests`, and `CommandGrid`
+  already uses them. No migration and no model change are needed — §4.1's task was written on a bad
+  grep and has been struck. It survives a list sync because `in_control_range` is on the *list* schema
+  too, so the `detail` rewrite that erases `controlled_devices` does not erase this.
 - **`GET /v1/locations/{designation}`** returns `inventory: [{quantity, resource_type}]` — the
   location stockpile. AINALRAM-BELT-1 currently holds 51,150 units across the six types.
 - **A salvage body carries its sites.** `TOSLIT-3-2` (a moon) returns
@@ -78,17 +82,13 @@ Probed live 2026-07-30 unless noted. Load-bearing for §5–§7; if any drifts, 
 
 ## 4. Pre-work
 
-Two small additions. Both fix live wounds rather than anticipate future ones.
+One addition. It fixes a live wound rather than anticipating a future one.
 
-### 4.1 `Device.inControlRange`
+### 4.1 `Device.inControlRange` — STRUCK
 
-New nullable column via an **append-only** `SchemaMigration` (`ALTER TABLE`, never an edit to the
-existing `CREATE TABLE` — see the migrations rule), mapped from the already-decoded generated
-property. `nil` means *not yet read*, never *unreachable*.
-
-The directives spec asserts "reachability is a precondition on every dispatch" and today that is an
-inference from geometry. With this column it is a local read of a server-authored fact. Every mission
-gains a cheap, correct reachability guard.
+Planned as a migration; unnecessary. See §3 — the property already exists, is tested, and is already
+used in the UI. Missions can read `device.inControlRange` today with no schema change at all.
+`nil` still means *not yet read*, never *unreachable*, and callers must treat it that way.
 
 ### 4.2 Tag-resolved fleets
 
