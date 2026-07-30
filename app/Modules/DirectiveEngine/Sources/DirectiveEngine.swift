@@ -196,6 +196,11 @@ actor DirectiveEngineCore {
                 designation: designation, thenStall: thenStall,
                 directive: directive, machine: machine
             )
+        case let .refreshFleet(tag, thenStall):
+            action = await resolveFleetRefresh(
+                tag: tag, thenStall: thenStall,
+                directive: directive, machine: machine
+            )
         case let .extendQueue(centre):
             let resolution = await resolveExtendQueue(
                 centre: centre, directive: directive, machine: machine
@@ -354,6 +359,13 @@ actor DirectiveEngineCore {
             )
             return Resolution(action: resolved, directive: extended)
 
+        case let .refreshFleet(tag, thenStall):
+            let resolved = await resolveFleetRefresh(
+                tag: tag, thenStall: thenStall,
+                directive: extended, machine: machine
+            )
+            return Resolution(action: resolved, directive: extended)
+
         case let action:
             return Resolution(action: action, directive: extended)
         }
@@ -460,10 +472,54 @@ actor DirectiveEngineCore {
         return reAsk(machine, directive, fresh, thenStall: reason)
     }
 
+    /// The same contract as `resolveSystemRefresh`, paid for with ONE tag-scoped
+    /// request instead of a location-scoped one.
+    ///
+    /// This is the containment counterpart `.refreshDevicesInSystem` cannot
+    /// serve: a tag filter never touches `location`, so stowing a device does
+    /// not drop it out of scope.
+    ///
+    /// Reconciled through `Reconciler.ingest` — the same path every other
+    /// device read uses — one device at a time, exactly like
+    /// `resolveSystemRefresh`. **Never prune after this read**: every untagged
+    /// device is absent from a tag response by construction, and treating that
+    /// absence as "device gone" would delete the fleet, so this deliberately
+    /// never calls `Reconciler.pruneDevices`.
+    private func resolveFleetRefresh(
+        tag: String,
+        thenStall reason: DirectiveAttentionReason?,
+        directive: Directive,
+        machine: any MissionStepMachine
+    ) async -> MissionAction {
+        @Dependency(\.devicesClient) var devicesClient
+        @Dependency(\.defaultDatabase) var database
+        @Dependency(\.date) var date
+
+        do {
+            let devices = try await devicesClient.fetchByTag(tag)
+            let reconciler = Reconciler()
+            for device in devices { await reconciler.ingest(device) }
+            logger.info("directive \(directive.id, privacy: .public): reconciled \(devices.count) device(s) tagged \(tag, privacy: .public) in one request")
+        } catch {
+            // The run is no worse off than before the attempt; fall through and
+            // let the machine judge the rows it already has.
+            logger.error("directive \(directive.id, privacy: .public): fleet refresh of \(tag, privacy: .public) failed: \(error)")
+        }
+
+        let fresh: WorldSnapshot
+        do {
+            fresh = try await WorldSnapshot.read(from: database, now: date.now, directive: directive)
+        } catch {
+            logger.error("world snapshot after fleet refresh failed: \(error)")
+            return reason.map { .stall($0) } ?? .wait
+        }
+        return reAsk(machine, directive, fresh, thenStall: reason)
+    }
+
     /// Ask the machine once more against freshly-read rows, collapsing a repeat
-    /// refresh request into the carried fallback. Shared by both refresh paths:
-    /// this is the one-round loop guard, and it must behave identically however
-    /// the reads were paid for.
+    /// refresh request into the carried fallback. Shared by all three refresh
+    /// paths: this is the one-round loop guard, and it must behave identically
+    /// however the reads were paid for.
     private func reAsk(
         _ machine: any MissionStepMachine,
         _ directive: Directive,
@@ -472,7 +528,7 @@ actor DirectiveEngineCore {
     ) -> MissionAction {
         let action = machine.nextAction(directive: directive, world: fresh)
         switch action {
-        case .refreshDevices, .refreshDevicesInSystem:
+        case .refreshDevices, .refreshDevicesInSystem, .refreshFleet:
             guard let reason else {
                 // The mission asked for a wait fallback: the state it is
                 // watching is expected to still be unresolved, so another

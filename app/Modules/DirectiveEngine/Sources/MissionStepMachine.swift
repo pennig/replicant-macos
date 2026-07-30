@@ -95,6 +95,33 @@ public enum MissionAction: Equatable, Sendable {
     ///
     /// So: this case for presence, `.refreshDevices` for containment.
     case refreshDevicesInSystem(designation: String, thenStall: DirectiveAttentionReason?)
+    /// The same demand as `.refreshDevices`, scoped to a TAG instead of a device
+    /// list: `GET devices/tags/{tag}` in ONE request, reconciled, then the
+    /// machine is asked again.
+    ///
+    /// Prefer this wherever a mission owns a tagged fleet. `.refreshDevices`
+    /// costs one request per named device and can only refresh rows the mission
+    /// already knows to name; a tag read is one request whatever the fleet size
+    /// and returns members the local rows had not yet associated with the run.
+    ///
+    /// Unlike `.refreshDevicesInSystem` it CAN answer questions about stowed
+    /// devices — a tag filter never touches `location`, so stowing does not
+    /// erase the row from the scope. That is precisely the gate
+    /// `.refreshDevicesInSystem` cannot serve: verified live 2026-07-30, a fleet
+    /// tagged `auto:survey` was caught mid-flight with six drones and a
+    /// controller stowed aboard a travelling vessel — all eight devices reported
+    /// `location: null`, yet the tag query returned every one of them with
+    /// `stowedInDeviceCode` intact.
+    ///
+    /// **Never follow this with a prune.** Only devices carrying `tag` are
+    /// visible in the response — every untagged device is absent by
+    /// construction — so treating that absence as "device gone" would delete
+    /// the fleet.
+    ///
+    /// Bounded to one round, exactly like the other refresh cases: if the
+    /// re-asked machine wants another refresh, the engine stalls with
+    /// `thenStall` — or waits, when that is nil.
+    case refreshFleet(tag: String, thenStall: DirectiveAttentionReason?)
     /// Pause and surface. The engine sets `needsAttention` plus the typed reason
     /// and stops evaluating until the user resolves it. Never auto-retried at
     /// the mission layer (spec §8).

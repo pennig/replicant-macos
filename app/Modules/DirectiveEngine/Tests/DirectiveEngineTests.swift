@@ -654,6 +654,160 @@ struct DirectiveRefreshInSystemTests {
     }
 }
 
+/// `.refreshFleet` is `.refreshDevicesInSystem`'s counterpart for containment: a
+/// tag filter never touches `location`, so a stowed device — invisible to a
+/// location-scoped read — still comes back. Verified live 2026-07-30: a tagged
+/// fleet caught mid-flight (six drones and a controller stowed aboard a
+/// travelling vessel, all eight with `location: null`) came back complete from
+/// `GET devices/tags/{tag}`, stow columns intact.
+@Suite("DirectiveEngine — fleet-tag refresh")
+struct DirectiveRefreshFleetTests {
+    /// One tag request, and every device it returns is reconciled — so the
+    /// machine's second answer is computed against rows that now exist. Mirrors
+    /// `readsTheSystemOnceAndReconcilesEveryDevice`.
+    @Test func refreshFleetReadsTheTagThenReAsksTheMachine() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { mission(step: "start") }.execute(db)
+        }
+        let reads = LockIsolated<[String]>([])
+        let core = DirectiveEngineCore(
+            machines: [ScriptedMachine([
+                .refreshFleet(tag: "auto:salvage", thenStall: .noMiningDroneAboard),
+                .advanceStep(nextStep: "travelling"),
+            ])],
+            tick: .seconds(5)
+        )
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.devicesClient.fetchByTag = { tag in
+                reads.withValue { $0.append(tag) }
+                return [carrier("DRONE")]
+            }
+        } operation: {
+            await core.evaluateOnce(directiveID: "D1")
+            let directive = try await database.read { db in
+                try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+            }
+            #expect(directive?.status == .running)
+            #expect(directive?.step == "travelling")
+            #expect(directive?.attentionReason == nil)
+            let stored = try await database.read { db in
+                try Device.all.fetchAll(db).map(\.deviceCode)
+            }
+            #expect(stored == ["DRONE"])
+        }
+        // Exactly one request for the whole tagged fleet.
+        #expect(reads.value == ["auto:salvage"])
+    }
+
+    /// Asked twice with an authoritative tag read in between and still
+    /// unresolved: the carried reason surfaces. Bounded to ONE round — a machine
+    /// that asks again after the re-ask gets the carried stall, never a loop.
+    @Test func refreshFleetStallsWhenTheMachineStillWantsARefresh() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { mission(step: "start") }.execute(db)
+        }
+        let reads = LockIsolated<[String]>([])
+        let core = DirectiveEngineCore(
+            machines: [ScriptedMachine([
+                .refreshFleet(tag: "auto:salvage", thenStall: .noMiningDroneAboard),
+                .refreshFleet(tag: "auto:salvage", thenStall: .noMiningDroneAboard),
+            ])],
+            tick: .seconds(5)
+        )
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.devicesClient.fetchByTag = { tag in
+                reads.withValue { $0.append(tag) }
+                return []
+            }
+        } operation: {
+            await core.evaluateOnce(directiveID: "D1")
+            let directive = try await database.read { db in
+                try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+            }
+            #expect(directive?.status == .needsAttention)
+            #expect(directive?.attentionReason == .noMiningDroneAboard)
+        }
+        #expect(reads.value == ["auto:salvage"], "one refresh round per evaluation, never a loop")
+    }
+
+    /// A nil fallback waits instead of stalling — matches `.refreshDevicesInSystem`'s
+    /// `aNilFallbackWaitsInsteadOfStalling`.
+    @Test func aNilFallbackWaitsInsteadOfStalling() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { mission(step: "start") }.execute(db)
+        }
+        let core = DirectiveEngineCore(
+            machines: [ScriptedMachine([
+                .refreshFleet(tag: "auto:salvage", thenStall: nil),
+                .refreshFleet(tag: "auto:salvage", thenStall: nil),
+            ])],
+            tick: .seconds(5)
+        )
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.devicesClient.fetchByTag = { _ in [] }
+        } operation: {
+            await core.evaluateOnce(directiveID: "D1")
+            let directive = try await database.read { db in
+                try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+            }
+            #expect(directive?.status == .running)
+            #expect(directive?.attentionReason == nil)
+        }
+    }
+
+    /// A failed read must not strand the run and must not prune: a tag walk is
+    /// NOT the authoritative full fleet, so treating its absences as "device
+    /// gone" would delete the fleet. Mirrors
+    /// `aFailedReadHonoursTheFallbackAndPrunesNothing`.
+    @Test func aFailedReadHonoursTheFallbackAndPrunesNothing() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { mission(step: "start") }.execute(db)
+            try Device.insert { carrier("ELSEWHERE") }.execute(db)
+        }
+        struct ReadFailure: Error {}
+        let core = DirectiveEngineCore(
+            machines: [ScriptedMachine([
+                .refreshFleet(tag: "auto:salvage", thenStall: .noMiningDroneAboard),
+                .refreshFleet(tag: "auto:salvage", thenStall: .noMiningDroneAboard),
+            ])],
+            tick: .seconds(5)
+        )
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.devicesClient.fetchByTag = { _ in throw ReadFailure() }
+        } operation: {
+            await core.evaluateOnce(directiveID: "D1")
+            let directive = try await database.read { db in
+                try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+            }
+            #expect(directive?.attentionReason == .noMiningDroneAboard)
+            let stored = try await database.read { db in
+                try Device.all.fetchAll(db).map(\.deviceCode)
+            }
+            #expect(stored == ["ELSEWHERE"])
+        }
+    }
+}
+
 @Suite("DirectiveEngine — staging freshness")
 struct DirectiveRefreshDevicesTests {
     /// Fresh reads that repair the rows let the run continue: the machine's
