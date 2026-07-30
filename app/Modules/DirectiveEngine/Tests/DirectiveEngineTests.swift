@@ -806,6 +806,73 @@ struct DirectiveRefreshFleetTests {
             #expect(stored == ["ELSEWHERE"])
         }
     }
+
+    /// Regression for the untested combination flagged in review: `.extendQueue`
+    /// followed by `.refreshFleet` in the same evaluation. `resolveExtendQueue`
+    /// hands its own freshly-appended `directive` value into
+    /// `resolveFleetRefresh` and carries it back out as the `Resolution` the
+    /// executor commits — get that wiring wrong and the append rolls itself
+    /// back exactly like the trap `theAppendSurvivesTheActionAppliedAfterIt`
+    /// guards for `.refreshDevices`, just one refresh case over.
+    @Test func anExtendQueueAppendSurvivesAFollowingRefreshFleet() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { mission(step: "start", targets: [], targetIndex: 0) }.execute(db)
+            try Star.insert {
+                Star(
+                    designation: "CENTRE", spectralType: "G", color: "yellow",
+                    positionX: 0, positionY: 0, positionZ: 0, estimatedPlanets: 3,
+                    explored: false, hasLife: nil, entryPoint: nil,
+                    createdAt: Date(timeIntervalSince1970: 0), firstVisitedAt: nil,
+                    fullyScannedAt: Date(timeIntervalSince1970: 1)
+                )
+            }.execute(db)
+            try Star.insert {
+                Star(
+                    designation: "NEAR", spectralType: "G", color: "yellow",
+                    positionX: 2, positionY: 0, positionZ: 0, estimatedPlanets: 3,
+                    explored: false, hasLife: nil, entryPoint: nil,
+                    createdAt: Date(timeIntervalSince1970: 0), firstVisitedAt: nil,
+                    fullyScannedAt: nil
+                )
+            }.execute(db)
+        }
+        let reads = LockIsolated<[String]>([])
+        let core = DirectiveEngineCore(
+            machines: [ScriptedMachine([
+                .extendQueue(centre: "CENTRE"),
+                .refreshFleet(tag: "auto:salvage", thenStall: .noMiningDroneAboard),
+                .advanceStep(nextStep: "travelling"),
+            ])],
+            tick: .seconds(5)
+        )
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.devicesClient.fetchByTag = { tag in
+                reads.withValue { $0.append(tag) }
+                return []
+            }
+        } operation: {
+            await core.evaluateOnce(directiveID: "D1")
+        }
+
+        let directive = try await database.read { db in
+            try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+        }
+        // The trap this test guards: applying the post-refresh action to the
+        // PRE-extend directive value would write `targets` back to `[]` and
+        // roll the append away. Reading the persisted row is what catches it —
+        // asserting on the scripted machine's inputs would not.
+        #expect(directive?.targets == ["NEAR"])
+        #expect(directive?.step == "travelling")
+        #expect(directive?.status == .running)
+        // One refresh round for the whole evaluation, even though both the
+        // extend's re-ask and the refresh's re-ask call into the machine.
+        #expect(reads.value == ["auto:salvage"])
+    }
 }
 
 @Suite("DirectiveEngine — staging freshness")
