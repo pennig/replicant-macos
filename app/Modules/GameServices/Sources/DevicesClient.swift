@@ -54,17 +54,21 @@ public struct DevicesClient: Sendable {
 
     /// Every device carrying `tag` (`GET /v1/devices/tags/{tag}`, paged).
     ///
-    /// This is the ONE scope that answers "where is my whole fleet" correctly.
-    /// `fetchAtLocation` answers PRESENCE and cannot see a stowed device —
-    /// stowing clears `location`, which drops the row out of the location index
-    /// (six drones stowed aboard a vessel returned exactly one row, the vessel,
-    /// probed live 2026-07-29). A tag filter touches location not at all, so a
-    /// stowed device comes back with its `stowedInDeviceCode` intact and a
-    /// travelling one comes back with a null location (probed live 2026-07-30).
+    /// This is the one scope that reports the TAGGED fleet correctly regardless
+    /// of stow or travel state. `fetchAtLocation` answers PRESENCE and cannot
+    /// see a stowed device — stowing clears `location`, which drops the row out
+    /// of the location index (six drones stowed aboard a vessel returned
+    /// exactly one row, the vessel, probed live 2026-07-29). A tag filter
+    /// touches location not at all, so every tagged device comes back
+    /// regardless of state: probed live 2026-07-30, a whole tagged fleet caught
+    /// mid-flight came back with `location: null` across the board — the
+    /// vessel because it was travelling, the rest because stowing clears it —
+    /// and each stowed device still carried its `stowedInDeviceCode` intact.
     ///
-    /// **Not the authoritative full fleet.** Callers reconcile what it returns
-    /// and must never follow it with `Reconciler.pruneDevices` — every untagged
-    /// device is absent by construction.
+    /// **Not the authoritative full fleet.** Only devices carrying `tag` are
+    /// visible here — every untagged device is absent by construction — so
+    /// callers reconcile what it returns and must never follow it with
+    /// `Reconciler.pruneDevices`.
     public var fetchByTag: @Sendable (_ tag: String) async throws -> [Device]
 
     /// Read the diversion defense state at a location (`GET /v1/locations/{code}`),
