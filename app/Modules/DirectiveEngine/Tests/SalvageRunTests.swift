@@ -75,6 +75,19 @@ private let drone = device("DRONE", type: "mining_drone", stowedIn: "VESSEL", co
 /// An FTL relay stowed aboard the vessel, idle (not yet planted anywhere).
 private let relay = device("RELAY", type: "ftl_relay", stowedIn: "VESSEL", features: ["relay"])
 
+/// The fully-staged fleet — vessel, controller, drone, relay — all sharing one
+/// `updatedAt`, so the freshness tests can age the whole fleet with a single
+/// parameter. Mirrors `SurveyRunTests.stagedFleet`.
+private func stagedFleet(updatedAt: Date = fixtureNow) -> [Device] {
+    [
+        device("VESSEL", type: "heaven_vessel", updatedAt: updatedAt),
+        device("CTRL", type: "ami_mining_controller", stowedIn: "VESSEL",
+               controlled: ["DRONE"], directives: ["gather_salvage"], updatedAt: updatedAt),
+        device("DRONE", type: "mining_drone", stowedIn: "VESSEL", controlledBy: "CTRL", updatedAt: updatedAt),
+        device("RELAY", type: "ftl_relay", stowedIn: "VESSEL", features: ["relay"], updatedAt: updatedAt),
+    ]
+}
+
 private func operation(kind: OperationKind) -> GameModels.Operation {
     GameModels.Operation(
         id: "OP1", entityCode: "VESSEL", kind: kind.rawValue,
@@ -204,6 +217,36 @@ struct SalvageRunPreflightTests {
         let directive = running(step: "preflight", fleetTag: "auto:salvage-2")
         #expect(SalvageRun().nextAction(directive: directive, world: snapshot)
                 == .refreshFleet(tag: "auto:salvage-2", thenStall: .noMiningControllerAboard))
+    }
+}
+
+// MARK: - Staging freshness
+
+/// A POSITIVE staging finding is only as trustworthy as the rows under it.
+///
+/// Mining drones are AMI-adopted the same event-silent way survey drones are,
+/// so a drone abandoned elsewhere keeps its local "still aboard" claim until
+/// something reads it — the direction that actually loses a fleet (six
+/// drones, POLARISUM, 2026-07-26). This mirrors `SurveyRunStagingFreshnessTests`.
+@Suite("Salvage Run — staging freshness")
+struct SalvageRunStagingFreshnessTests {
+    /// Rows stale past `stagingFreshness` earn a tag read before the vessel is
+    /// committed to departure, rather than trusting a "still aboard" that could
+    /// no longer be true.
+    @Test func staleStagingRowsEarnAReadBeforeTheyAreBelieved() {
+        let stale = fixtureNow.addingTimeInterval(-SalvageRun.stagingFreshness - 1)
+        let snapshot = world(devices: stagedFleet(updatedAt: stale))
+        #expect(SalvageRun().nextAction(directive: running(step: "preflight"), world: snapshot)
+                == .refreshFleet(tag: "auto:salvage", thenStall: .unreachableDevice))
+    }
+
+    /// Freshly synced rows are believed without a read — the demand is paid
+    /// only when it could otherwise change the answer, so the happy path costs
+    /// nothing.
+    @Test func freshStagingRowsAreTrustedWithoutARead() {
+        let snapshot = world(devices: stagedFleet())
+        #expect(SalvageRun().nextAction(directive: running(step: "preflight"), world: snapshot)
+                == .assignController(deviceCode: "CTRL", nextStep: "travelling"))
     }
 }
 

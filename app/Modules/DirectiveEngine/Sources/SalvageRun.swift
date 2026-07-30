@@ -69,6 +69,20 @@ public struct SalvageRun: MissionStepMachine {
     /// arbitrary one.
     public static let baseSystem = "AINALRAM"
 
+    /// How old a row backing a POSITIVE staging finding may be and still be
+    /// believed without an authoritative re-read. Same value and reasoning as
+    /// `SurveyRun.stagingFreshness` — the doubt applies here unchanged.
+    ///
+    /// Staging is judged from `stowedInDeviceCode` columns, and mining drones
+    /// are AMI-adopted the same way survey drones are — event-silent — so a
+    /// drone abandoned in another system keeps claiming it is aboard until
+    /// something reads it. The negative-finding guards above only cover "we see
+    /// nothing, but have we been allowed to look?"; this is the same doubt
+    /// applied to a positive, which is the direction that actually loses a
+    /// fleet (six drones, POLARISUM, 2026-07-26). Costs at most one read round
+    /// per target.
+    public static let stagingFreshness: TimeInterval = 5 * 60
+
     /// The salvage configuration this mission insists on: deplete the named
     /// body, then recall the drones so the vessel can move on. `recall` is
     /// load-bearing — since v2.3.3 the server holds `directive.completed` until
@@ -121,30 +135,12 @@ public struct SalvageRun: MissionStepMachine {
             .min { $0.deviceCode < $1.deviceCode }
     }
 
-    /// The salvage bodies of `system`, richest-first, ready for the (not yet
-    /// implemented) `mine` step to work down one at a time.
-    ///
-    /// Ranked by summed `remainingPct` rather than absolute assayed units:
-    /// `WorldSnapshot` caches decoded `StarSystem` blobs, not the `SiteAssay`
-    /// unit totals `SalvageTargetPlanner` ranks systems by (that table isn't
-    /// threaded through this snapshot). Percentage-remaining is the ordering
-    /// this data can actually support; a future task should switch to exact
-    /// unit totals if `mine` needs them precisely rather than approximately.
-    /// A depleted site is excluded outright — there is nothing left to work.
-    public static func salvageBodies(in system: String, world: WorldSnapshot) -> [String] {
-        guard let star = world.system(system) else { return [] }
-        let sites = star.planets.flatMap { planet in
-            planet.salvage + planet.moons.flatMap(\.salvage)
-        }
-        return sites
-            .filter { !$0.depleted }
-            .sorted { lhs, rhs in
-                let lhsRemaining = lhs.remainingPct.values.reduce(0, +)
-                let rhsRemaining = rhs.remainingPct.values.reduce(0, +)
-                if lhsRemaining != rhsRemaining { return lhsRemaining > rhsRemaining }
-                return lhs.designation < rhs.designation
-            }
-            .map(\.designation)
+    /// Whether any row backing a staging finding is too old to act on. Same
+    /// shape as `SurveyRun.stagingIsStale` — one stale row is enough, because
+    /// "everything needed is aboard" is a conjunction, so its weakest member
+    /// decides how much it is worth.
+    static func stagingIsStale(_ devices: [Device], _ world: WorldSnapshot) -> Bool {
+        devices.contains { world.now.timeIntervalSince($0.updatedAt) > stagingFreshness }
     }
 
     /// The star system a device is currently in, or nil in transit / stowed.
@@ -183,6 +179,19 @@ public struct SalvageRun: MissionStepMachine {
         let meshed = SalvageTargetPlanner.meshSystems(in: Array(world.devices.values)).contains(target)
         if !meshed, Self.relay(aboard: vessel, in: world) == nil {
             return .advanceStep(nextStep: Step.restocking)
+        }
+        // The staging answer is positive — but it rests on rows that only a
+        // read can correct, and believing a stale one is how six drones were
+        // left in POLARISUM (see `SurveyRun.preflight`, the same reasoning
+        // unchanged). Deliberately AFTER the restocking check above: a target
+        // the vessel isn't actually departing for this tick (it's detouring to
+        // base instead) must not pay for a freshness read it doesn't need.
+        // `.refreshFleet` rather than `.refreshDevices` — this run resolves its
+        // whole fleet by tag (spec §4.2), so a tag read covers vessel,
+        // controller, and every drone in the ONE request that can also see
+        // stowed devices, rather than naming each row individually.
+        if Self.stagingIsStale([vessel, controller] + drones, world) {
+            return .refreshFleet(tag: tag, thenStall: .unreachableDevice)
         }
         return .assignController(deviceCode: controller.deviceCode, nextStep: Step.travelling)
     }
