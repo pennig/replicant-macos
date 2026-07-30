@@ -95,6 +95,87 @@ struct NewSalvageRunFeatureTests {
         #expect(store.state.eligibleVessels.map(\.deviceCode) == ["VES1"])
     }
 
+    // MARK: - Readiness (staged AND tagged)
+
+    /// A vessel that is BOTH physically staged and fully tagged is ready to
+    /// launch, and there is no untagged gap to report.
+    @Test func aStagedAndTaggedVesselIsReady() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            for device in Self.taggedFleet() { try Device.insert { device }.execute(db) }
+        }
+        let store = TestStore(initialState: NewSalvageRunFeature.State()) {
+            NewSalvageRunFeature()
+        } withDependencies: { $0.defaultDatabase = database }
+        store.exhaustivity = .off
+
+        #expect(store.state.readyVessels.map(\.deviceCode) == ["VES1"])
+        #expect(store.state.untaggedStagedVessel == nil)
+    }
+
+    /// A vessel that is physically staged but carries NO `auto:salvage` tag
+    /// anywhere is still `eligible` (staging is a different question from
+    /// tagging), but is NOT ready to launch, and IS named as the specific
+    /// gap the empty state should point at.
+    @Test func aStagedButUntaggedVesselIsNotReadyAndIsNamed() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            for device in Self.stagedFleet() { try Device.insert { device }.execute(db) }
+        }
+        let store = TestStore(initialState: NewSalvageRunFeature.State()) {
+            NewSalvageRunFeature()
+        } withDependencies: { $0.defaultDatabase = database }
+        store.exhaustivity = .off
+
+        #expect(store.state.eligibleVessels.map(\.deviceCode) == ["VES1"], "still physically staged")
+        #expect(store.state.readyVessels.isEmpty)
+        #expect(store.state.untaggedStagedVessel?.deviceCode == "VES1")
+    }
+
+    /// Tagging the vessel alone is NOT enough — the picker gates on the
+    /// WHOLE fleet the run depends on (vessel, controller, drones, relay),
+    /// since `.refreshFleet` is exactly as blind to an untagged controller or
+    /// drone as it is to an untagged vessel. Pins that the check isn't
+    /// accidentally checking only `vessel.tags`.
+    @Test func taggingOnlyTheVesselIsNotEnoughToBeReady() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            var fleet = Self.stagedFleet()
+            fleet[0].tags = [SalvageRun.defaultFleetTag] // the vessel only
+            for device in fleet { try Device.insert { device }.execute(db) }
+        }
+        let store = TestStore(initialState: NewSalvageRunFeature.State()) {
+            NewSalvageRunFeature()
+        } withDependencies: { $0.defaultDatabase = database }
+        store.exhaustivity = .off
+
+        #expect(store.state.readyVessels.isEmpty)
+        #expect(store.state.untaggedStagedVessel?.deviceCode == "VES1")
+    }
+
+    /// A relay aboard but missing the tag also blocks readiness, even when
+    /// the vessel/controller/drone are all correctly tagged — the relay is
+    /// part of the fleet `.refreshFleet` must be able to see too.
+    @Test func anUntaggedRelayAboardAlsoBlocksReadiness() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            for device in Self.taggedFleet() { try Device.insert { device }.execute(db) }
+            var relay = Self.bareVessel("RELAY1")
+            relay.deviceType = "ftl_relay"
+            relay.features = ["relay"]
+            relay.stowedInDeviceCode = "VES1"
+            // No tags — the gap this test pins.
+            try Device.insert { relay }.execute(db)
+        }
+        let store = TestStore(initialState: NewSalvageRunFeature.State()) {
+            NewSalvageRunFeature()
+        } withDependencies: { $0.defaultDatabase = database }
+        store.exhaustivity = .off
+
+        #expect(store.state.readyVessels.isEmpty)
+        #expect(store.state.untaggedStagedVessel?.deviceCode == "VES1")
+    }
+
     /// Launch writes exactly the row the design calls for: the run is always
     /// continuous, the controller is claimed later (at preflight, not here),
     /// and the queue starts empty because the engine plans the first target.
@@ -204,5 +285,15 @@ struct NewSalvageRunFeatureTests {
         drone.stowedInDeviceCode = "VES1"
         drone.controllerDeviceCode = "AMI1"
         return [bareVessel("VES1"), controller("AMI1", stowedIn: "VES1", controlling: ["DRONE1"]), drone]
+    }
+
+    /// `stagedFleet()` with every device also carrying `auto:salvage` — the
+    /// set the picker will actually offer, and the engine can actually see.
+    nonisolated static func taggedFleet() -> [Device] {
+        stagedFleet().map { fleetDevice in
+            var tagged = fleetDevice
+            tagged.tags = [SalvageRun.defaultFleetTag]
+            return tagged
+        }
     }
 }

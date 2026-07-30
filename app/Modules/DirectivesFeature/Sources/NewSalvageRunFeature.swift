@@ -13,6 +13,15 @@
 //  on. That is what makes it structurally impossible for this dialog to
 //  create a run that stalls on its very first evaluation.
 //
+//  Physically staged is not the whole story, though: the run resolves its
+//  entire fleet by the `auto:salvage` TAG (design spec §4.2), and `Device.tags`
+//  is a real, locally-synced column (populated by the same mapper that backs
+//  every fleet-wide fetch, and round-tripped through the device inspector's
+//  own tag edits). So the picker can and does tell "staged and tagged" apart
+//  from "staged but never tagged" at no extra cost — see `readyVessels` vs.
+//  `eligibleVessels`/`untaggedStagedVessel` below — rather than leaving that
+//  distinction to prose in an empty-state message.
+//
 
 import ComposableArchitecture
 import DirectiveEngine
@@ -41,22 +50,76 @@ public struct NewSalvageRunFeature {
             self.vesselCode = vesselCode
         }
 
-        /// Vessels carrying a mining controller with at least one adopted
-        /// drone stowed aboard. Built through a `WorldSnapshot` so the rule is
-        /// literally `SalvageRun`'s own — the same object the engine calls at
-        /// preflight, not a hand-rolled approximation of it.
-        public var eligibleVessels: [Device] {
-            let world = WorldSnapshot(
+        /// A `WorldSnapshot` over the currently-synced fleet — shared by every
+        /// computed property below so they all judge the SAME read.
+        private var world: WorldSnapshot {
+            WorldSnapshot(
                 devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
                 openOperations: [:],
                 now: Date(timeIntervalSince1970: 0)
             )
+        }
+
+        /// Vessels carrying a mining controller with at least one adopted
+        /// drone stowed aboard. Built through a `WorldSnapshot` so the rule is
+        /// literally `SalvageRun`'s own — the same object the engine calls at
+        /// preflight, not a hand-rolled approximation of it.
+        ///
+        /// This does NOT check tag membership — see `readyVessels` for the
+        /// set that also does. Kept separate because `SalvageRun.controller`/
+        /// `adoptedDrones` themselves don't filter by tag either (they read
+        /// stow/adoption columns), so "physically staged" and "tagged" are
+        /// genuinely two different questions with two different answers.
+        public var eligibleVessels: [Device] {
+            let world = self.world
             return devices.filter { candidate in
                 guard let controller = SalvageRun.controller(aboard: candidate, in: world) else {
                     return false
                 }
                 return !SalvageRun.adoptedDrones(of: controller, aboard: candidate, in: world).isEmpty
             }
+        }
+
+        /// Physically-staged vessels whose WHOLE relevant fleet — the vessel
+        /// itself, its controller, every drone the controller has adopted
+        /// aboard it, and any FTL relay aboard — carries `auto:salvage`.
+        ///
+        /// `SalvageRun` resolves its entire fleet by this one tag (design
+        /// spec §4.2): `.refreshFleet` calls `GET devices/tags/{tag}`, and a
+        /// device physically staged but missing the tag simply never comes
+        /// back from that read, however stale its local row gets. So this,
+        /// not `eligibleVessels`, is the set that can actually be launched
+        /// without risking a stall the moment the engine needs an
+        /// authoritative re-read. The picker offers only this set.
+        public var readyVessels: [Device] {
+            let world = self.world
+            return eligibleVessels.filter { isFullyTagged($0, in: world) }
+        }
+
+        /// A physically-staged vessel whose fleet is missing the tag
+        /// somewhere — named so the empty state can point at IT specifically
+        /// rather than a generic "some vessel needs a tag." Only meant to be
+        /// consulted when `readyVessels` is empty; see `NewSalvageRunSheet`.
+        public var untaggedStagedVessel: Device? {
+            let world = self.world
+            return eligibleVessels.first { !isFullyTagged($0, in: world) }
+        }
+
+        /// Whether `vessel`'s whole relevant fleet carries `auto:salvage`.
+        /// Gates on the FULL set the run depends on, not the vessel alone:
+        /// `SalvageRun`'s own doc comments (see `SalvageRun.swift`) list the
+        /// vessel, controller, drones, AND relay as needing the tag, and a
+        /// gap on any one of them is exactly as blinding to `.refreshFleet`
+        /// as a gap on the vessel. A relay is checked only when one is
+        /// actually aboard — it isn't required for eligibility (a vessel
+        /// with none still routes through `restocking`), so its absence here
+        /// must not read as a tagging problem.
+        private func isFullyTagged(_ vessel: Device, in world: WorldSnapshot) -> Bool {
+            guard let controller = SalvageRun.controller(aboard: vessel, in: world) else { return false }
+            let drones = SalvageRun.adoptedDrones(of: controller, aboard: vessel, in: world)
+            var fleet = [vessel, controller] + drones
+            if let relay = SalvageRun.relay(aboard: vessel, in: world) { fleet.append(relay) }
+            return fleet.allSatisfy { $0.tags.contains(SalvageRun.defaultFleetTag) }
         }
 
         /// The chosen vessel's current system — a Salvage Run's roam centre,
