@@ -35,6 +35,10 @@ public struct NewStarMapView: View {
     /// Memoizes the focused system's blob decode across body evaluations (see
     /// `SystemDecodeCache`). Reference type: reading through it never invalidates.
     @State private var decodeCache = SystemDecodeCache()
+    /// Per-system star-pip inputs (belt density + detected-life flag) per hydrated
+    /// system, memoized so the galaxy terrain's pips don't re-decode every blob on
+    /// each observed-table change.
+    @State private var systemPipCache = SystemPipCache()
     // MARK: The view-local query block — a DOCUMENTED exception to the house rule
     //
     // The project standard is that a feature's domain queries live in
@@ -98,6 +102,12 @@ public struct NewStarMapView: View {
         let recon = Dictionary(
             systemDetails.compactMap { d in Recon(rawValue: d.recon).map { (d.designation, $0) } },
             uniquingKeysWith: { first, _ in first })
+        // Belt density + detected-life per hydrated system — memoized, so this
+        // decodes only blobs that changed since the last evaluation. Drives each
+        // star's resource and life pips.
+        let pips = Dictionary(
+            systemDetails.map { ($0.designation, systemPipCache.pips(for: $0)) },
+            uniquingKeysWith: { first, _ in first })
         return surveyed.map { row in
             var s = Star(surveyed: row)
             switch recon[row.designation] {
@@ -107,6 +117,14 @@ public struct NewStarMapView: View {
             }
             s.isCurrentLocation = row.designation == current
             s.hasFTLRelay = relays.contains(row.designation)
+            s.resourceDensity = pips[row.designation]?.beltDensity?.factor
+            // The scanned per-body life supersedes the census `hasLife` boolean,
+            // which lags the scan (e.g. stays false for a prebiotic world). Additive
+            // only: a scan can light the leaf, never extinguish one the census set —
+            // a partial scan may not yet have reached the living body.
+            if s.life == .none, pips[row.designation]?.hasDetectedLife == true {
+                s.life = .complex
+            }
             return s
         }
     }
@@ -267,7 +285,65 @@ public struct NewStarMapView: View {
         else { return nil }
         var gs = GalaxySystem(surveyed: row.item, isCurrentLocation: row.designation == currentLocationID)
         if let recon = detailRecon(designation) { gs.recon = recon }
+        gs.deviceCount = deviceCount(in: designation)
         return gs
+    }
+
+    /// The position of the active replicant's current-location system — the origin
+    /// for the dossier's distance readout. Nil when we can't resolve it.
+    private var currentReplicantPosition: Position? {
+        guard let cur = currentStar else { return nil }
+        return surveyed.first { $0.designation == cur }?.item.position
+    }
+
+    /// Distance in light-years from the active replicant to `designation`, nil when
+    /// either endpoint can't be resolved.
+    private func distanceFromReplicant(to designation: String) -> Double? {
+        guard let from = currentReplicantPosition,
+              let to = surveyed.first(where: { $0.designation == designation })?.item.position
+        else { return nil }
+        return from.distance(to: to)
+    }
+
+    /// The number of devices (own + others) known in a system — own from the live
+    /// roster, others from the persisted scan blob, deduped by code (own wins).
+    private func deviceCount(in designation: String) -> Int {
+        var codes = Set<String>()
+        for d in devices where d.location.map(Self.systemDesignation) == designation {
+            codes.insert(d.deviceCode)
+        }
+        if let system = persistedSystem(designation) {
+            for p in system.planets {
+                p.devices.forEach { codes.insert($0.deviceCode) }
+                p.lagrange.forEach { $0.devices.forEach { codes.insert($0.deviceCode) } }
+                p.moons.forEach { $0.devices.forEach { codes.insert($0.deviceCode) } }
+            }
+            system.belts.forEach { $0.devices.forEach { codes.insert($0.deviceCode) } }
+            system.structures.forEach { $0.devices.forEach { codes.insert($0.deviceCode) } }
+        }
+        return codes.count
+    }
+
+    /// The highest detected life stage across a system's bodies (planets + moons),
+    /// capitalized for display; nil when nothing living has been found (or we hold
+    /// no detail). Ordered by the same biosphere strength the orrery renders.
+    private func highestLifeStage(in designation: String) -> String? {
+        guard let system = persistedSystem(designation) else { return nil }
+        var stages: [String] = []
+        for p in system.planets {
+            if let ls = p.lifeStage, OrreryMapping.hasDetectedLife(ls) { stages.append(ls) }
+            for m in p.moons where OrreryMapping.hasDetectedLife(m.lifeStage) {
+                if let ls = m.lifeStage { stages.append(ls) }
+            }
+        }
+        let best = stages.max { PlanetMaterial.lifeIntensity($0) < PlanetMaterial.lifeIntensity($1) }
+        return best?.capitalized
+    }
+
+    /// The strongest belt density reading (raw factor + label) in a system, nil when
+    /// it has no belt — the dossier's Resource readout, matching each star's pip.
+    private func beltDensity(in designation: String) -> BeltDensityReading? {
+        persistedSystem(designation).flatMap(SystemPips.highestDensity)
     }
 
     /// The focused orrery model. At `.system` it's the whole system (real
@@ -441,7 +517,16 @@ public struct NewStarMapView: View {
                         onDrillBody: { store.send(.drillIntoBodyRequested($0)) },
                         onSelectLocation: { store.send(.locationSelected($0)) },
                         onDismissLocation: { store.send(.selectionCleared) },
-                        onViewDevice: { store.send(.viewDeviceRequested($0)) }
+                        onViewDevice: { store.send(.viewDeviceRequested($0)) },
+                        systemBeltDensity: focusedSystemDesignation.flatMap(beltDensity(in:)),
+                        systemLifeStage: focusedSystemDesignation.flatMap(highestLifeStage(in:)),
+                        canTravel: canTravelFromHost,
+                        currentLocationCode: currentLocationID,
+                        onTravel: { destination in
+                            if let code = activeHostDevice?.deviceCode {
+                                store.send(.travelPreviewRequested(deviceCode: code, destination: destination))
+                            }
+                        }
                     )
                     .transition(.opacity)
                 }
@@ -520,6 +605,9 @@ public struct NewStarMapView: View {
                         SystemDossier(
                             system: system,
                             exactPlanetCount: exactPlanetCount(system.id),
+                            distanceLY: distanceFromReplicant(to: system.id),
+                            lifeStage: highestLifeStage(in: system.id),
+                            beltDensity: beltDensity(in: system.id),
                             canDrill: system.recon != .aware && !store.isTransitioning,
                             canTravel: canTravelFromHost && !system.isCurrentLocation,
                             onDrill: { store.send(.drillInRequested(system.id)) },
@@ -790,6 +878,14 @@ private struct SystemDossier: View {
     let system: GalaxySystem
     /// Exact count when the system is scanned; nil → show the census estimate.
     let exactPlanetCount: Int?
+    /// Distance in light-years from the active replicant, nil when unresolved.
+    let distanceLY: Double?
+    /// Highest detected life stage across the system's bodies, nil when lifeless
+    /// or unscanned — captions the leaf readout.
+    let lifeStage: String?
+    /// Strongest asteroid-belt density reading (raw factor + qualitative label),
+    /// nil when the system has no belt — drives the Resource readout.
+    let beltDensity: BeltDensityReading?
     let canDrill: Bool
     /// Whether the active replicant's host vessel can plot travel to this system
     /// (a surge-capable vessel, and not the current location). Drives the Travel
@@ -799,9 +895,23 @@ private struct SystemDossier: View {
     let onTravel: () -> Void
     let onClose: () -> Void
 
-    /// "3" when we know exactly, "~2" when it's still an estimate.
+    /// "3 planets" when we know exactly, "~2 planets" when it's still an estimate.
     private var planetCountText: String {
-        exactPlanetCount.map(String.init) ?? "~\(system.star.estimatedPlanets)"
+        exactPlanetCount.map { "\($0) planets" } ?? "~\(system.star.estimatedPlanets) planets"
+    }
+
+    /// The non-designation portion of the stat line: distance from the active
+    /// replicant · planet count. The spectral class leads it (rendered separately
+    /// in mono, since it's a code); the designation is already the title above.
+    private var subtitleTrailing: String {
+        var parts: [String] = []
+        if system.isCurrentLocation {
+            parts.append("current location")
+        } else if let distanceLY {
+            parts.append(String(format: "%.1f ly", distanceLY))
+        }
+        parts.append(planetCountText)
+        return parts.joined(separator: " · ")
     }
 
     var body: some View {
@@ -811,8 +921,8 @@ private struct SystemDossier: View {
                     Text(system.name)
                         .font(.rcHeadlineMono)
                         .foregroundStyle(.rcTextPrimary)
-                    Text("\(system.id) · \(system.spectralType)")
-                        .font(.rcMonoSmall)
+                    Text("\(Text(system.spectralType).font(.rcMonoSmall)) · \(subtitleTrailing)")
+                        .font(.rcCaption)
                         .foregroundStyle(.rcTextTertiary)
                 }
                 Spacer()
@@ -837,26 +947,37 @@ private struct SystemDossier: View {
             .font(.rcCaption)
             .foregroundStyle(.rcTextSecondary)
 
-            HStack(spacing: Space.l) {
-                stat("Devices", "\(system.deviceCount)")
-                stat("Vessels", "\(system.vesselCount)")
-                stat("Planets", planetCountText)
-            }
+            stat("Devices", "\(system.deviceCount)")
 
-            HStack(spacing: Space.l) {
-                readout("Resource", value: system.resourceRichness, color: .rcStatusWaiting)
-                if let life = system.lifeTier {
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text("Life").font(.rcCaption).foregroundStyle(.rcTextTertiary)
-                        Text(life.label).font(.rcBodyEmph).foregroundStyle(.rcStatusReady)
+            if beltDensity != nil || lifeStage != nil {
+                HStack(alignment: .top, spacing: Space.l) {
+                    if let beltDensity {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Resource").font(.rcCaption).foregroundStyle(.rcTextTertiary)
+                            HStack(spacing: Space.xs) {
+                                Image(systemName: "dollarsign.gauge.chart.leftthird.topthird.rightthird",
+                                      variableValue: Double(beltDensity.factor))
+                                    .font(.system(size: IconSize.s))
+                                Text(beltDensity.label.capitalized)
+                            }
+                            .font(.rcBodyEmph)
+                            .foregroundStyle(.rcSuccess)
+                        }
+                    }
+                    if let lifeStage {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Life").font(.rcCaption).foregroundStyle(.rcTextTertiary)
+                            HStack(spacing: Space.xs) {
+                                Image(systemName: "leaf.fill")
+                                    .font(.system(size: IconSize.s))
+                                Text(lifeStage)
+                            }
+                            .font(.rcBodyEmph)
+                            .foregroundStyle(.rcSuccess)
+                        }
                     }
                 }
             }
-
-            Text(exactPlanetCount.map { "\(distanceText) · \($0) planets" }
-                 ?? "\(distanceText) · ~\(system.star.estimatedPlanets) est. planets")
-                .font(.rcCaption)
-                .foregroundStyle(.rcTextTertiary)
 
             if system.recon != .aware || canTravel {
                 VStack(spacing: Space.xs) {
@@ -889,13 +1010,6 @@ private struct SystemDossier: View {
         }
     }
 
-    private var distanceText: String {
-        if system.isCurrentLocation { return "Current Location" }
-        let p = system.position
-        let ly = (p.x * p.x + p.y * p.y + p.z * p.z).squareRoot()
-        return String(format: "%.1f ly", ly)
-    }
-
     private func stat(_ label: String, _ value: String) -> some View {
         VStack(alignment: .leading, spacing: 1) {
             Text(label).font(.rcCaption).foregroundStyle(.rcTextTertiary)
@@ -903,15 +1017,6 @@ private struct SystemDossier: View {
         }
     }
 
-    private func readout(_ label: String, value: Double, color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(label).font(.rcCaption).foregroundStyle(.rcTextTertiary)
-            ZStack(alignment: .leading) {
-                Capsule().fill(.rcSurfaceRaised).frame(width: 64, height: 5)
-                Capsule().fill(color).frame(width: 64 * value, height: 5)
-            }
-        }
-    }
 }
 
 // MARK: - Ship dossier
@@ -1060,6 +1165,17 @@ private struct SystemHUD: View {
     let onSelectLocation: (String) -> Void
     let onDismissLocation: () -> Void
     let onViewDevice: (String) -> Void
+    /// The system's strongest belt reading + highest detected life stage, computed by
+    /// the parent from the same helpers the galaxy dossier uses — so the star card's
+    /// Resources / Life readouts match it exactly. System level only.
+    let systemBeltDensity: BeltDensityReading?
+    let systemLifeStage: String?
+    /// Whether a surge-capable host is available to plot travel (mirrors the galaxy
+    /// dossier's rule), the current location code (a body sitting AT it can't be a
+    /// destination), and the plot-travel callback (destination = the body designation).
+    let canTravel: Bool
+    let currentLocationCode: String?
+    let onTravel: (String) -> Void
 
     private var isBody: Bool { level == .body }
 
@@ -1112,33 +1228,65 @@ private struct SystemHUD: View {
                 if let sub = info.subtitle {
                     Text(sub).font(.rcMonoSmall).foregroundStyle(.rcTextTertiary)
                 }
-                if !info.facts.isEmpty {
-                    // A scanned planet or moon now carries up to six facts, which one
-                    // HStack would run straight off the 280pt card. Two columns wrap
-                    // instead, left-aligned so the labels line up down the card.
-                    let rows = Array(stride(from: 0, to: info.facts.count, by: 2))
-                    VStack(alignment: .leading, spacing: Space.s) {
-                        ForEach(rows, id: \.self) { start in
-                            HStack(alignment: .top, spacing: Space.l) {
-                                ForEach(start..<min(start + 2, info.facts.count), id: \.self) { i in
-                                    fact(info.facts[i].label, info.facts[i].value)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
+                // A planet reads like a mini system dossier: a recon line, then a
+                // Devices / Life stat row. Other kinds keep their fact grid.
+                if let recon = info.recon {
+                    HStack(spacing: Space.s) {
+                        Image(systemName: recon.symbol).font(.system(size: IconSize.s))
+                        Text(recon.label)
+                    }
+                    .font(.rcCaption).foregroundStyle(.rcTextSecondary)
+                }
+                if info.deviceCount != nil || info.lifeStage != nil {
+                    HStack(alignment: .top, spacing: Space.l) {
+                        if let dc = info.deviceCount { fact("Devices", "\(dc)") }
+                        if let life = info.lifeStage {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text("Life").font(.rcCaption).foregroundStyle(.rcTextTertiary)
+                                HStack(spacing: Space.xs) {
+                                    Image(systemName: "leaf.fill").font(.system(size: IconSize.s))
+                                    Text(life)
                                 }
-                                // Keep a lone trailing fact in the left column.
-                                if start + 2 > info.facts.count {
-                                    Spacer(minLength: 0).frame(maxWidth: .infinity)
-                                }
+                                .font(.rcBodyEmph).foregroundStyle(.rcSuccess)
                             }
                         }
                     }
                 }
+                if !info.facts.isEmpty { factGrid(info.facts) }
                 if !info.indicators.isEmpty { indicatorGlyphs(info.indicators) }
                 detailSections
+                if let travelCode = info.travelCode {
+                    Button { onTravel(travelCode) } label: {
+                        Label("Travel", systemImage: "location.north.line")
+                    }
+                    .buttonStyle(RCButtonStyle(.primary, fullWidth: true))
+                    .padding(.top, 2)
+                }
             }
             .padding(Space.m)
             .frame(width: 280, alignment: .leading)
             .hudGlass()
             .transition(.move(edge: .leading).combined(with: .opacity))
+        }
+    }
+
+    /// A two-column, left-aligned fact grid. A scanned body carries up to six facts,
+    /// which one HStack would run straight off the 280pt card.
+    @ViewBuilder private func factGrid(_ facts: [(label: String, value: String)]) -> some View {
+        let rows = Array(stride(from: 0, to: facts.count, by: 2))
+        VStack(alignment: .leading, spacing: Space.s) {
+            ForEach(rows, id: \.self) { start in
+                HStack(alignment: .top, spacing: Space.l) {
+                    ForEach(start..<min(start + 2, facts.count), id: \.self) { i in
+                        fact(facts[i].label, facts[i].value)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    // Keep a lone trailing fact in the left column.
+                    if start + 2 > facts.count {
+                        Spacer(minLength: 0).frame(maxWidth: .infinity)
+                    }
+                }
+            }
         }
     }
 
@@ -1254,6 +1402,15 @@ private struct SystemHUD: View {
         var subtitle: String?
         var facts: [(label: String, value: String)]
         var indicators: BodyIndicators
+        /// A recon line (● Scanned / ○ Unscanned) — set for a planet, nil otherwise.
+        var recon: (label: String, symbol: String)? = nil
+        /// Device count shown as a stat (set for a planet, whose device list is then
+        /// suppressed below in favour of this count). Nil keeps the device list.
+        var deviceCount: Int? = nil
+        /// Detected life stage for the Life stat, nil when lifeless/unscanned.
+        var lifeStage: String? = nil
+        /// Non-nil → show a Travel button plotting to this designation.
+        var travelCode: String? = nil
     }
 
     /// Resolve a picked location code against the current orrery `model` into its
@@ -1268,35 +1425,42 @@ private struct SystemHUD: View {
                 subtitle: model.star.spectralType, facts: [], indicators: [])
         }
         if let p = model.planets.first(where: { $0.id == code }) {
+            if !isBody {
+                // System level: a planet reads like a mini system dossier — its type and
+                // moon count in the subtitle, a recon line, a Devices / Life stat row,
+                // then its contents and a Travel button. Its physical facts move to the
+                // body-level planet card (drill in to see them).
+                let subtitle = [p.type, pluralized(p.moonCount, "moon")]
+                    .compactMap { $0 }.joined(separator: " · ")
+                let deviceCount = clusters.first { $0.anchorCode == code }?.devices.count ?? 0
+                let life = p.lifeStage.flatMap {
+                    OrreryMapping.hasDetectedLife($0) ? $0.capitalized : nil
+                }
+                return LocationDossierInfo(
+                    kind: "Planet",
+                    title: p.name.map { "\(p.designation) · \($0)" } ?? p.designation,
+                    subtitle: subtitle.isEmpty ? nil : subtitle,
+                    facts: [], indicators: p.indicators,
+                    recon: p.scanned ? ("Scanned", "circle.fill") : ("Unscanned", "circle"),
+                    deviceCount: deviceCount,
+                    lifeStage: life,
+                    travelCode: (canTravel && code != currentLocationCode) ? code : nil)
+            }
+            // Body level: the body is a moon. Each fact appears only when the scan
+            // reported it. `periodDays` is never nil (an unscanned moon gets an index
+            // ladder), so the period is gated on `reportedPeriodDays` rather than printed
+            // unconditionally.
             var facts: [(String, String)] = []
             if let t = p.type { facts.append(("Type", t)) }
-            if !isBody { facts.append(("Orbit", String(format: "%.2f AU", p.orbitalDistanceAu))) }
-            if !isBody, p.moonCount > 0 { facts.append(("Moons", "\(p.moonCount)")) }
-            if !isBody {
-                // System level: the body is a planet. Each fact appears only when the
-                // scan actually reported it, so an unscanned world shows none of them.
-                if p.rings != nil { facts.append(("Rings", "Yes")) }
-                if let h = p.spin.rotationHours { facts.append(("Day", BodyFactFormat.hours(abs(h)))) }
-                facts.append(("Year", BodyFactFormat.days(p.periodDays)))
-                if let t = p.spin.tiltDeg {
-                    facts.append(("Tilt", String(format: "%.1f°", t)
-                        + (p.spin.isRetrograde ? " · retrograde" : "")))
-                }
-            } else {
-                // Body level: the body is a moon. Same rule as the planet branch above:
-                // a fact appears only when the scan reported it. `periodDays` is never
-                // nil (an unscanned moon gets an index ladder), so the period is gated on
-                // `reportedPeriodDays` rather than printed unconditionally.
-                if let km = p.orbitalDistanceKm { facts.append(("Orbit", BodyFactFormat.km(km))) }
-                if let d = p.reportedPeriodDays { facts.append(("Period", BodyFactFormat.hours(d * 24))) }
-                if p.spin.tidallyLocked { facts.append(("Rotation", "Tidally locked")) }
-                if let air = p.atmosphere.label { facts.append(("Atmosphere", air)) }
-                if p.hasSubsurfaceOcean { facts.append(("Ocean", "Subsurface")) }
-            }
+            if let km = p.orbitalDistanceKm { facts.append(("Orbit", BodyFactFormat.km(km))) }
+            if let d = p.reportedPeriodDays { facts.append(("Period", BodyFactFormat.hours(d * 24))) }
+            if p.spin.tidallyLocked { facts.append(("Rotation", "Tidally locked")) }
+            if let air = p.atmosphere.label { facts.append(("Atmosphere", air)) }
+            if p.hasSubsurfaceOcean { facts.append(("Ocean", "Subsurface")) }
             return LocationDossierInfo(
-                kind: isBody ? "Moon" : "Planet",
+                kind: "Moon",
                 title: p.name.map { "\(p.designation) · \($0)" } ?? p.designation,
-                subtitle: p.inHabitableZone ? "In habitable zone" : nil,
+                subtitle: nil,
                 facts: facts, indicators: p.indicators)
         }
         // Swarm moons only exist at body level and carry a smaller field set than a
@@ -1355,40 +1519,124 @@ private struct SystemHUD: View {
 
             Text(model.star.name ?? model.star.designation)
                 .font(.rcTitleMono).foregroundStyle(.rcTextPrimary)
-            Text([model.star.designation, model.star.spectralType,
-                  model.star.temperatureK.map { "\(Int($0)) K" }]
-                    .compactMap { $0 }.joined(separator: " · "))
-                .font(.rcMonoSmall).foregroundStyle(.rcTextTertiary)
+            starSubtitle
+                .font(.rcCaption).foregroundStyle(.rcTextTertiary)
 
-            if model.star.massSolar != nil || model.star.luminositySolar != nil {
-                HStack(spacing: Space.l) {
-                    if let m = model.star.massSolar { fact("Mass", String(format: "%.2f M☉", m)) }
-                    if let l = model.star.luminositySolar { fact("Lum", String(format: "%.2f L☉", l)) }
-                }
-            }
-            if let hz = model.star.habitableZone {
-                fact("Habitable zone", String(format: "%.2f–%.2f AU", hz.innerAu, hz.outerAu))
-            }
-            HStack(spacing: Space.l) {
-                if isBody {
-                    fact("Moons", "\(model.planets.count)")
-                } else {
-                    fact("Planets", "\(model.planets.count)")
-                    fact("Belts", model.belts.isEmpty ? "None"
-                         : model.belts.compactMap(\.density).first.map { $0.capitalized } ?? "\(model.belts.count)")
-                    // Scan is only meaningful at system level (fills HZ / outer system).
-                    if model.star.habitableZone == nil {
-                        Button(action: onScan) {
-                            Label("Scan", systemImage: "dot.radiowaves.left.and.right").font(.rcCaption)
-                        }
-                        .buttonStyle(.plain).foregroundStyle(.rcAccent)
-                    }
-                }
-            }
+            if isBody { bodyFacts } else { starFacts }
         }
         .padding(Space.m)
         .frame(maxWidth: 280, alignment: .leading)
         .hudGlass()
+    }
+
+    /// The star card's subtitle. System level: spectral class · temperature (colour) ·
+    /// planet count. Body level (the drilled planet): its type — the parallel to the
+    /// star's spectral class. Only the spectral class is a designation-like code, so
+    /// (matching the galaxy dossier) it alone renders in mono; the rest is caption.
+    private var starSubtitle: Text {
+        if isBody {
+            return Text(model.star.spectralType ?? "—")
+        }
+        var trailing: [String] = []
+        if let k = model.star.temperatureK {
+            if let c = model.star.color, !c.isEmpty {
+                trailing.append("\(Int(k)) K (\(c.capitalized))")
+            } else {
+                trailing.append("\(Int(k)) K")
+            }
+        }
+        trailing.append(pluralized(model.planets.count, "planet"))
+        let rest = trailing.joined(separator: " · ")
+        if let spectral = model.star.spectralType {
+            return Text("\(Text(spectral).font(.rcMonoSmall)) · \(rest)")
+        }
+        return Text(rest)
+    }
+
+    /// The system-level star card's facts: star physicals, then the Resources / Life
+    /// readouts (identical to the galaxy dossier), the belt summary, and Scan.
+    @ViewBuilder private var starFacts: some View {
+        if model.star.massSolar != nil || model.star.luminositySolar != nil {
+            HStack(spacing: Space.l) {
+                if let m = model.star.massSolar { fact("Mass", String(format: "%.2f M☉", m)) }
+                if let l = model.star.luminositySolar { fact("Lum", String(format: "%.2f L☉", l)) }
+            }
+        }
+        if let hz = model.star.habitableZone {
+            fact("Habitable zone", String(format: "%.2f–%.2f AU", hz.innerAu, hz.outerAu))
+        }
+        resourceLifeReadout(belt: systemBeltDensity, life: systemLifeStage)
+        HStack(spacing: Space.l) {
+            fact("Belts", model.belts.isEmpty ? "None"
+                 : model.belts.compactMap(\.density).first.map { $0.capitalized } ?? "\(model.belts.count)")
+            // Scan is only meaningful at system level (fills HZ / outer system).
+            if model.star.habitableZone == nil {
+                Button(action: onScan) {
+                    Label("Scan", systemImage: "dot.radiowaves.left.and.right").font(.rcCaption)
+                }
+                .buttonStyle(.plain).foregroundStyle(.rcAccent)
+            }
+        }
+    }
+
+    /// The body-level planet card's physical facts — the set the system-level planet
+    /// dossier used to carry, now shown only after drilling in. Type lives in the
+    /// subtitle (paralleling the star card), so it's omitted here.
+    @ViewBuilder private var bodyFacts: some View {
+        factGrid(bodyPhysicalFacts)
+    }
+
+    private var bodyPhysicalFacts: [(label: String, value: String)] {
+        guard let c = model.centralBody else { return [] }
+        var facts: [(String, String)] = []
+        if let au = c.orbitalDistanceAu { facts.append(("Orbit", String(format: "%.2f AU", au))) }
+        if let y = c.periodDays { facts.append(("Year", BodyFactFormat.days(y))) }
+        let moons = model.planets.count + model.swarm.count
+        if moons > 0 { facts.append(("Moons", "\(moons)")) }
+        if c.rings != nil { facts.append(("Rings", "Yes")) }
+        if let h = c.spin.rotationHours { facts.append(("Day", BodyFactFormat.hours(abs(h)))) }
+        if let t = c.spin.tiltDeg {
+            facts.append(("Tilt", String(format: "%.1f°", t)
+                + (c.spin.isRetrograde ? " · retrograde" : "")))
+        }
+        if let air = c.atmosphere.label { facts.append(("Atmosphere", air)) }
+        return facts
+    }
+
+    /// The Resources / Life readout shared by the star card and the galaxy dossier: a
+    /// belt-density gauge + qualitative label, and a leaf + life stage.
+    @ViewBuilder private func resourceLifeReadout(belt: BeltDensityReading?, life: String?) -> some View {
+        if belt != nil || life != nil {
+            HStack(alignment: .top, spacing: Space.l) {
+                if let belt {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Resource").font(.rcCaption).foregroundStyle(.rcTextTertiary)
+                        HStack(spacing: Space.xs) {
+                            Image(systemName: "dollarsign.gauge.chart.leftthird.topthird.rightthird",
+                                  variableValue: Double(belt.factor))
+                                .font(.system(size: IconSize.s))
+                            Text(belt.label.capitalized)
+                        }
+                        .font(.rcBodyEmph).foregroundStyle(.rcSuccess)
+                    }
+                }
+                if let life {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Life").font(.rcCaption).foregroundStyle(.rcTextTertiary)
+                        HStack(spacing: Space.xs) {
+                            Image(systemName: "leaf.fill").font(.system(size: IconSize.s))
+                            Text(life)
+                        }
+                        .font(.rcBodyEmph).foregroundStyle(.rcSuccess)
+                    }
+                }
+            }
+        }
+    }
+
+    /// `"1 planet"` / `"7 planets"` — small singular-aware count for the subtitles.
+    private func pluralized(_ n: Int, _ noun: String) -> String {
+        "\(n) \(noun)\(n == 1 ? "" : "s")"
     }
 
     /// Max height for the roster list before it scrolls. A 59-moon roster would
