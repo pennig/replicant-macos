@@ -8,7 +8,7 @@
 
 - [Architecture review V3](architecture-review-v3.md) — 2026-07-20 five-axis review, **FULLY CLOSED 2026-07-28**: all four tranches (P0/P1/P2/P3) plus the last stragglers — V3.9 automation blockers 3–5 (answered by Directives; loop protection *obviated* by the clock-driven engine), S9 `new_device_code` CONFIRMED from the local ledger, T6 optionals done + Tagged/CommandParams decided against, LoggingMiddleware onto the house subsystem.
 - [Event stream migration](event-stream-migration.md) — v2.3.0 native SSE stream replaced the custom relay; single-channel EventPipeline, dotted event taxonomy, EventRoute matchers, loud unhandled-event logging.
-- [Event Log feature](event-log-feature.md) — EventLogFeature: persisted SSE ledger window (Tools menu); write hook in EventRouter.dispatch; unhandled flag+filter; JSONTreeView now shared from UI.
+- [Event Log feature](event-log-feature.md) — EventLogFeature: persisted SSE ledger window (Tools menu); write hook in EventRouter.dispatch; unhandled flag+filter; JSONTreeView now shared from UI. **The ledger query is capped at `displayLimit`** — an unbounded `@FetchAll` over the never-pruned table crashed the app with AttributeGraph "exhausted data space", because `SelectableList` (ScrollView+LazyVStack) measures every row.
 - [Monospace system/location names](monospace-system-names.md) — project rule: any system/location name (designation code) always renders in a mono font token.
 
 - [List row preview crash](list-row-preview-crash.md) — Xcode 26 crashes List previews when the row struct is in the same file as #Preview; keep row structs in their own file.

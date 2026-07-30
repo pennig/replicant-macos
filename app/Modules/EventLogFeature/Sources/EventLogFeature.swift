@@ -22,12 +22,26 @@ import SQLiteData
 
 @Reducer
 public struct EventLogFeature {
+    /// How many rows the ledger observes at once, newest first.
+    ///
+    /// This cap is load-bearing, not cosmetic. The list renders through
+    /// `SelectableList`, which is a `ScrollView { LazyVStack { ForEach } }` — and a
+    /// `LazyVStack` must measure its rows to size the scroll view's content, so the
+    /// laziness buys nothing here: SwiftUI allocates AttributeGraph nodes per row.
+    /// `eventLogs` is written by the stream and **never pruned** (it reached 15,839
+    /// rows across four days at ~400–660/hour), so an unbounded fetch grew the graph
+    /// until AttributeGraph aborted the app with "exhausted data space" mid-layout.
+    /// Bounding the *query* is what keeps the graph finite — the table still grows.
+    public static let displayLimit = 1000
+
     @ObservableState
     public struct State: Equatable {
-        /// Observed live from SQLite, newest first. Reloaded in place when the
-        /// "unhandled only" filter toggles (see `.binding(\.showUnhandledOnly)`).
+        /// Observed live from SQLite, newest first, capped at
+        /// ``EventLogFeature/displayLimit``. Reloaded in place when the "unhandled
+        /// only" filter toggles (see `.binding(\.showUnhandledOnly)`) — that reload
+        /// must carry the same cap, or the filter re-opens the unbounded fetch.
         @ObservationStateIgnored
-        @FetchAll(EventLog.order { $0.receivedAt.desc() })
+        @FetchAll(EventLog.order { $0.receivedAt.desc() }.limit(EventLogFeature.displayLimit))
         public var events: [EventLog]
 
         /// When on, `events` is narrowed to unhandled rows via a reloaded query.
@@ -78,7 +92,8 @@ public struct EventLogFeature {
                             .where {
                                 if unhandledOnly { !$0.isHandled }
                             }
-                            .order { $0.receivedAt.desc() },
+                            .order { $0.receivedAt.desc() }
+                            .limit(Self.displayLimit),
                         animation: .default
                     )
                 } catch: { _, _ in }

@@ -121,14 +121,75 @@ import Utils
             $0.defaultDatabase = database
         } operation: {
             @FetchAll(EventLog.order { $0.receivedAt.desc() }) var events: [EventLog]
-            // Same query the reducer issues when the filter turns on.
+            // Same query the reducer issues when the filter turns on, cap included.
             try await $events.load(
-                EventLog.where { !$0.isHandled }.order { $0.receivedAt.desc() }
+                EventLog
+                    .where { !$0.isHandled }
+                    .order { $0.receivedAt.desc() }
+                    .limit(EventLogFeature.displayLimit)
             )
             #expect(events.count == 1)
             #expect(events.first?.id == "u-1")
             #expect(events.allSatisfy { !$0.isHandled })
         }
+    }
+
+    // MARK: - Query cap
+
+    /// Fills the ledger past the display cap. Ascending `receivedAt`, so the highest
+    /// index is the newest row — what a newest-first query must keep.
+    private static func fillPastCap(_ database: any DatabaseWriter, handled: Bool) async throws -> Int {
+        let overflow = EventLogFeature.displayLimit + 25
+        try await database.write { db in
+            for i in 0 ..< overflow {
+                let row = handled
+                    ? Self.handledRow(id: "e-\(i)", at: TimeInterval(i))
+                    : Self.unhandledRow(id: "e-\(i)", at: TimeInterval(i))
+                try EventLog.insert { row }.execute(db)
+            }
+        }
+        return overflow
+    }
+
+    @Test("The observed ledger is capped at the newest displayLimit rows")
+    func observedLedgerCapsAtDisplayLimit() async throws {
+        let database = try GameDatabase.bootstrap()
+        let overflow = try await Self.fillPastCap(database, handled: true)
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+        } operation: {
+            let state = EventLogFeature.State()
+            try await state.$events.load()
+
+            // The whole point: an unbounded fetch would hand SwiftUI all `overflow`
+            // rows, and the LazyVStack measures every one of them.
+            #expect(state.events.count == EventLogFeature.displayLimit)
+            #expect(state.events.count < overflow)
+            // Newest first, so the cap drops the *oldest* rows, not the newest.
+            #expect(state.events.first?.id == "e-\(overflow - 1)")
+        }
+    }
+
+    @Test("Toggling the unhandled-only filter reloads a query that is still capped")
+    func unhandledFilterReloadStaysCapped() async throws {
+        let database = try GameDatabase.bootstrap()
+        let overflow = try await Self.fillPastCap(database, handled: false)
+
+        let store = TestStore(initialState: EventLogFeature.State()) {
+            EventLogFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
+        }
+        // The reload lands on `events` outside the action loop, which is not the
+        // assertion here — the row count after it settles is.
+        store.exhaustivity = .off
+
+        await store.send(.binding(.set(\.showUnhandledOnly, true)))
+        await store.finish()
+
+        #expect(store.state.events.count == EventLogFeature.displayLimit)
+        #expect(store.state.events.count < overflow)
     }
 
     // MARK: - Clear
