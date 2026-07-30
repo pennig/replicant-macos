@@ -1310,10 +1310,10 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
 
         // (designation, world position, world radius — 0 for a point anchor).
         var candidates: [(id: String, pos: SIMD3<Float>, radius: Float)] = []
+        // The drilled central body (a planet at body level) is selectable, but the
+        // system's star is not — clicking the sun at system focus selects nothing.
         if orreryIsBody, let cb = model.centralBody {
             candidates.append((model.star.designation, orreryCenter, Float(cb.displayRadius) * orreryScale))
-        } else if let fi = focusedStarIndex, stars.indices.contains(fi) {
-            candidates.append((model.star.designation, orreryCenter, stars[fi].worldRadius))
         }
         for planet in model.planets {
             candidates.append((planet.id, layout.orbiterPosition(planet), Float(planet.displayRadius) * orreryScale))

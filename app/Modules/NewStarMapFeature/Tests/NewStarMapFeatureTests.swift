@@ -580,22 +580,23 @@ import Metal
 @MainActor
 @Suite struct StatusSymbolTests {
 
-    private func star(scan: ScanState, life: LifeLevel = .none, minerals: Float = 0,
+    private func star(scan: ScanState, life: LifeLevel = .none, resourceDensity: Float? = nil,
                       hasInventory: Bool = false) -> Star {
         Star(name: "X", position: .zero, temperature: 5000, stellarClass: .G, ageMyr: 1000,
              hasFTLRelay: false, life: life,
-             resources: Resources(minerals: minerals, gas: 0, rare: 0),
+             resources: Resources(minerals: 0, gas: 0, rare: 0),
+             resourceDensity: resourceDensity,
              scan: scan, hasInventory: hasInventory)
     }
 
     @Test func unexploredShowsOnlyTheOpenCircle() {
         // No surveyed data is reported for an unexplored system.
-        #expect(star(scan: .unexplored, life: .teeming, minerals: 1, hasInventory: true)
+        #expect(star(scan: .unexplored, life: .teeming, resourceDensity: 1, hasInventory: true)
             .statusSymbols == [StatusSymbol(name: "circle", value: nil)])
     }
 
     @Test func exploredReportsSurveyedData() {
-        let s = star(scan: .full, life: .complex, minerals: 1, hasInventory: true)
+        let s = star(scan: .full, life: .complex, resourceDensity: 1, hasInventory: true)
         #expect(s.statusSymbols == [
             StatusSymbol(name: "circle.fill", value: nil),
             StatusSymbol(name: "leaf.fill", value: nil),
@@ -605,10 +606,17 @@ import Metal
     }
 
     @Test func partialScanUsesHalfCircleAndOmitsAbsentData() {
-        // Half circle, no life (none), a resource gauge at its value, no package.
-        #expect(star(scan: .partial, life: .none, minerals: 0.3).statusSymbols == [
+        // Half circle, no life (none), a resource gauge at the belt density, no package.
+        #expect(star(scan: .partial, life: .none, resourceDensity: 0.3).statusSymbols == [
             StatusSymbol(name: "circle.lefthalf.filled", value: nil),
             StatusSymbol(name: "dollarsign.gauge.chart.leftthird.topthird.rightthird", value: 0.3),
+        ])
+    }
+
+    @Test func scannedSystemWithoutABeltOmitsTheResourcePip() {
+        // The resource gauge is belt-driven: no belt (nil density) → no pip.
+        #expect(star(scan: .full, life: .none, resourceDensity: nil).statusSymbols == [
+            StatusSymbol(name: "circle.fill", value: nil),
         ])
     }
 }

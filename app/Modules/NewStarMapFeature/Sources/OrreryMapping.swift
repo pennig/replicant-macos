@@ -551,7 +551,12 @@ enum OrreryMapping {
             inHabitableZone: planet.inHabitableZone,
             surfaceTempC: planet.physical?.surfaceTempC,
             atmosphere: Atmosphere(apiValue: planet.physical?.atmosphere),
-            appearanceSeed: centralSeed)
+            appearanceSeed: centralSeed,
+            // The drilled planet's own orbit — the body-level card's Orbit / Year facts.
+            // Year is the scan-reported value only (never the Kepler fallback), so an
+            // unscanned planet shows no year rather than a fabricated one.
+            orbitalDistanceAu: planet.orbitalDistanceAu,
+            periodDays: planet.physical?.orbitalPeriodDays)
 
         // Split the roster: moons that earn a ring, and the rest. See `MoonTiering` for
         // why interest always wins and why a roster with no radii promotes nothing.

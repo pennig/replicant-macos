@@ -239,6 +239,12 @@ struct CentralBody: Equatable, Sendable {
     /// Scanned atmospheric thickness — see `OrreryPlanet.atmosphere`.
     var atmosphere: Atmosphere
     var appearanceSeed: Float
+    /// The drilled planet's own orbit around its star, carried so the body-level
+    /// planet card can show the same Orbit / Year facts the system-level view had.
+    /// `orbitalDistanceAu` is nil only when the parent scan gave no distance;
+    /// `periodDays` is the SCAN-REPORTED year (nil until scanned).
+    var orbitalDistanceAu: Double? = nil
+    var periodDays: Double? = nil
 }
 
 /// The full orrery presentation aggregate for one focus level. At system level the

@@ -34,6 +34,11 @@ public struct Star: Equatable {
     var life: LifeLevel
     /// Resource abundances, each 0…1.
     var resources: Resources
+    /// The system's overall resource density — the strongest asteroid belt's
+    /// density (0…1), or nil when the system has no belt. Drives the resource
+    /// gauge in the label's status row (the "resource density pip"), and the
+    /// same value captions the dossier's Resource readout.
+    var resourceDensity: Float? = nil
     /// How thoroughly the player has surveyed this system.
     var scan: ScanState
     /// Whether the player has resources stored/cached in this system. (Player state
@@ -94,8 +99,10 @@ extension Star {
         }
         if scan != .unexplored {
             if life != .none { syms.append(.init(name: "leaf.fill", value: nil)) }
-            syms.append(.init(name: "dollarsign.gauge.chart.leftthird.topthird.rightthird",
-                              value: resources.richness))     // 0…1 → variable fill
+            if let resourceDensity {                          // only when a belt exists
+                syms.append(.init(name: "dollarsign.gauge.chart.leftthird.topthird.rightthird",
+                                  value: resourceDensity))    // belt density 0…1 → variable fill
+            }
             if hasInventory { syms.append(.init(name: "shippingbox.fill", value: nil)) }
         }
         return syms
