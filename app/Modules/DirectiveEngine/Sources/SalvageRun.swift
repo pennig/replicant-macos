@@ -44,6 +44,13 @@ public struct SalvageRun: MissionStepMachine {
         public static let travelling = "travelling"
         public static let emplacing = "emplacing"
         public static let activating = "activating"
+        /// Polls for the dispatched `activate` to take, backstopped by
+        /// `activationDeadline`. Split from `activating` (which only dispatches)
+        /// because a step that dispatches on every re-entry re-stamps its own
+        /// `stepStartedAt` (`DirectiveExecutor.apply` does this unconditionally
+        /// on every accepted dispatch) — the deadline could never accumulate
+        /// from a step that kept resetting its own clock. See `confirmRelay`.
+        public static let confirmingRelay = "confirmingRelay"
         public static let configuring = "configuring"
         public static let launching = "launching"
         public static let awaiting = "awaiting"
@@ -105,7 +112,8 @@ public struct SalvageRun: MissionStepMachine {
         case Step.preflight: return preflight(directive, vessel, world)
         case Step.travelling: return travel(directive, vessel, world)
         case Step.emplacing: return emplace(directive, vessel, world)
-        case Step.activating: return activate(directive, vessel, world)
+        case Step.activating: return activate(vessel, world)
+        case Step.confirmingRelay: return confirmRelay(directive, vessel, world)
         default:
             // An unrecognised (or not-yet-handled) step must never dispatch. Waiting
             // is inert and recoverable — the user can cancel, or the step ships.
@@ -208,7 +216,8 @@ public struct SalvageRun: MissionStepMachine {
         // whole haul to stay commandable, which is exactly what the relay
         // frontier exists to avoid (spec §5 step 8, §7).
         let meshed = SalvageTargetPlanner.meshSystems(in: Array(world.devices.values)).contains(target)
-        if !meshed, Self.relay(aboard: vessel, in: world) == nil {
+        let relay = Self.relay(aboard: vessel, in: world)
+        if !meshed, relay == nil {
             return .advanceStep(nextStep: Step.restocking)
         }
         // The staging answer is positive — but it rests on rows that only a
@@ -221,7 +230,18 @@ public struct SalvageRun: MissionStepMachine {
         // whole fleet by tag (spec §4.2), so a tag read covers vessel,
         // controller, and every drone in the ONE request that can also see
         // stowed devices, rather than naming each row individually.
-        if Self.stagingIsStale([vessel, controller] + drones, world) {
+        //
+        // The relay row is folded into this set too (fixed after review): the
+        // `emplace` step re-derives `relay(aboard:in:)` on every entry, but that
+        // only re-queries these same cached local rows — it forces no live read
+        // and so cannot catch a claim that was ALREADY stale before departure.
+        // A relay that was stale-positive here is identically stale-positive at
+        // the Lagrange point, which would have let `emplace` dispatch `deploy`
+        // at a device that was never actually there. This is the one place that
+        // can actually correct it, before the vessel commits to the trip.
+        var stagingRows = [vessel, controller] + drones
+        if let relay { stagingRows.append(relay) }
+        if Self.stagingIsStale(stagingRows, world) {
             return .refreshFleet(tag: tag, thenStall: .unreachableDevice)
         }
         return .assignController(deviceCode: controller.deviceCode, nextStep: Step.travelling)
@@ -258,15 +278,18 @@ public struct SalvageRun: MissionStepMachine {
     /// mesh frontier through it — so this skips straight to mining unmeshed
     /// rather than stalling on a target that will never satisfy the guard.
     ///
-    /// The relay-aboard check is re-run on EVERY entry to this step, including
-    /// after arrival, rather than trusted from whatever got the vessel here.
-    /// `preflight`'s staging-freshness recheck deliberately excludes the relay
-    /// row (see its doc comment) — a stale-positive local row can carry the
-    /// vessel all the way out here on a wasted round trip. Catching that here,
-    /// rather than assuming departure proves possession, is what keeps this
-    /// step from ever dispatching `deploy` at a relay that was never actually
-    /// aboard: the miss instead reroutes to `Step.restocking`, the same honest
-    /// answer `preflight` would have given had it known.
+    /// The relay-aboard check is re-run on every entry to this step rather than
+    /// trusted from whatever got the vessel here. This is a backstop for the
+    /// relay being genuinely absent (never staged, released, decommissioned) —
+    /// NOT a substitute for staleness protection: `relay(aboard:in:)` only
+    /// re-queries the same cached local rows `preflight` already read, so it
+    /// forces no live read and cannot correct a claim that was already stale
+    /// before departure. That protection lives in `preflight`, which folds the
+    /// relay device into its staging-freshness recheck (fixed after review) —
+    /// a departure only reaches here once that read has already vetted the
+    /// relay as fresh. When THIS guard fires (the never-was-aboard case), it
+    /// reroutes to `Step.restocking` rather than dispatching `deploy` at a
+    /// device that was never actually there.
     private func emplace(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
         guard let target = directive.currentTarget,
               let point = Self.lagrangePoint(in: world.system(target))
@@ -281,21 +304,55 @@ public struct SalvageRun: MissionStepMachine {
                 params: CommandParams(destination: point), nextStep: Step.emplacing
             )
         }
-        if world.openOperation(for: relay.deviceCode) != nil { return .wait }
+        // No `openOperation` guard here: `deploy` is `OperationKind.simple`,
+        // which the command layer classifies `.immediate` and tracks with NO
+        // `Operation` row at all (`CommandClient`'s completion classification;
+        // `deadlineCommands` doesn't list `deploy`), so the lookup would always
+        // be nil — a guard that can never fire is not a guard, it's noise.
         return .dispatch(
             kind: OperationKind.simple("deploy"), deviceCode: relay.deviceCode,
             params: CommandParams(), nextStep: Step.activating
         )
     }
 
-    /// Bring the deployed relay up, then hand off to mining once it reports
-    /// `relaying`. Backstopped by `activationDeadline`: a relay that deployed
-    /// but never came up is a dead run, since the whole point of the trip was
-    /// the mesh membership `relaying` alone confers.
-    private func activate(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
+    /// Issue `activate` once. Dispatch-only, deliberately — mirrors
+    /// `SurveyRun.launch`, which likewise fires its command unconditionally
+    /// and leaves all polling to the next step. See `confirmRelay` for why
+    /// this step must never dispatch a second time on re-entry.
+    private func activate(_ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
         // Resolve the relay by where it now IS, not by what is stowed: `deploy`
         // cleared its `stowedInDeviceCode`, so the aboard-query no longer finds
         // it. This is the easy bug here.
+        guard let relay = Self.deployedRelay(near: vessel, in: world) else {
+            return .stall(.relayActivationFailed)
+        }
+        return .dispatch(
+            kind: OperationKind.simple("activate"), deviceCode: relay.deviceCode,
+            params: CommandParams(), nextStep: Step.confirmingRelay
+        )
+    }
+
+    /// Poll for the dispatched `activate` to take, then hand off to mining once
+    /// the relay reports `relaying`. Backstopped by `activationDeadline`: a
+    /// relay that deployed but never came up is a dead run, since the whole
+    /// point of the trip was the mesh membership `relaying` alone confers.
+    ///
+    /// Deliberately never dispatches — this is the fix for a real bug caught in
+    /// review. `activate` is `OperationKind.simple`, tracked with NO `Operation`
+    /// row (same reasoning as `emplace`'s dropped guard above), so an
+    /// `openOperation` check here could never be non-nil and could not have
+    /// stopped a same-step redispatch. Worse: `DirectiveExecutor.apply`'s
+    /// `.dispatch` case unconditionally re-stamps `stepStartedAt` to `date.now`
+    /// on every accepted dispatch, with no same-step exception — so the
+    /// original single-step design (`activate` dispatching back into itself on
+    /// every tick the relay wasn't yet `relaying`) reset the very clock
+    /// `activationDeadline` measures from on every evaluation, and the backstop
+    /// could never fire: a relay that never came up would have had `activate`
+    /// issued at the live API forever. Splitting the dispatch (`activate`,
+    /// above) from this poll — mirroring `SurveyRun.launching`/`.awaiting` — is
+    /// the fix: `stepStartedAt` is stamped exactly once, on entry to THIS step,
+    /// and accumulates honestly from there.
+    private func confirmRelay(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
         guard let relay = Self.deployedRelay(near: vessel, in: world) else {
             return .stall(.relayActivationFailed)
         }
@@ -303,10 +360,6 @@ public struct SalvageRun: MissionStepMachine {
         if world.now.timeIntervalSince(directive.stepStartedAt) > Self.activationDeadline {
             return .stall(.relayActivationFailed)
         }
-        if world.openOperation(for: relay.deviceCode) != nil { return .wait }
-        return .dispatch(
-            kind: OperationKind.simple("activate"), deviceCode: relay.deviceCode,
-            params: CommandParams(), nextStep: Step.activating
-        )
+        return .wait
     }
 }

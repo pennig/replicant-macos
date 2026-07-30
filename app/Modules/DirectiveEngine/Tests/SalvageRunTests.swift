@@ -260,6 +260,24 @@ struct SalvageRunStagingFreshnessTests {
         #expect(SalvageRun().nextAction(directive: running(step: "preflight"), world: snapshot)
                 == .assignController(deviceCode: "CTRL", nextStep: "travelling"))
     }
+
+    /// The fix for the Important finding from review: re-deriving
+    /// `relay(aboard:in:)` at `emplace` time only re-reads these same cached
+    /// local rows — it forces no live read, so it cannot catch a claim that
+    /// was already stale before departure. The relay row is folded into THIS
+    /// check instead, alongside `[vessel, controller] + drones`, so a stale
+    /// relay alone — with the rest of the fleet perfectly fresh — still earns
+    /// a read before the vessel commits to a trip it might not actually be
+    /// equipped for.
+    @Test func aStaleRelayRowEarnsAReadBeforeDepartureEvenWhenTheRestOfTheFleetIsFresh() {
+        let staleRelay = device(
+            "RELAY", type: "ftl_relay", stowedIn: "VESSEL", features: ["relay"],
+            updatedAt: fixtureNow.addingTimeInterval(-SalvageRun.stagingFreshness - 1)
+        )
+        let snapshot = world(devices: [vessel, controller, drone, staleRelay]) // vessel/controller/drone fresh
+        #expect(SalvageRun().nextAction(directive: running(step: "preflight"), world: snapshot)
+                == .refreshFleet(tag: "auto:salvage", thenStall: .unreachableDevice))
+    }
 }
 
 // MARK: - Travel
@@ -359,23 +377,43 @@ struct SalvageRunEmplacementTests {
                          params: CommandParams(), nextStep: "activating"))
     }
 
-    @Test func activatesTheDeployedRelay() {
+    @Test func activatesTheDeployedRelayOnceAndMovesToThePollingStep() {
         // `deploy` does NOT activate — that is a separate command, verified
-        // live against the API.
+        // live against the API. `activating` is dispatch-only: the poll (and
+        // its backstop deadline) live entirely in `confirmingRelay` — see
+        // the reasoning pinned by `waitsRatherThanRedispatchingWhileWithinTheDeadline`.
         let atL4 = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3-L4")
         let deployed = device("RELAY", location: "TOSLIT-3-L4", features: ["relay"], status: "idle")
         let world = world(devices: [atL4, controller, drone, deployed], systems: ["TOSLIT": toslit])
         #expect(SalvageRun().nextAction(directive: running(step: "activating"), world: world)
             == .dispatch(kind: .simple("activate"), deviceCode: "RELAY",
-                         params: CommandParams(), nextStep: "activating"))
+                         params: CommandParams(), nextStep: "confirmingRelay"))
     }
 
     @Test func advancesToConfiguringOnceTheRelayIsRelaying() {
         let atL4 = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3-L4")
         let up = device("RELAY", location: "TOSLIT-3-L4", features: ["relay"], status: "relaying")
         let world = world(devices: [atL4, controller, drone, up], systems: ["TOSLIT": toslit])
-        #expect(SalvageRun().nextAction(directive: running(step: "activating"), world: world)
+        #expect(SalvageRun().nextAction(directive: running(step: "confirmingRelay"), world: world)
             == .advanceStep(nextStep: "configuring"))
+    }
+
+    /// The property that pins the Critical fix from review: from the polling
+    /// step, a relay that is not yet `relaying` and is still inside the
+    /// deadline must `.wait` — it must NEVER dispatch. The original
+    /// single-step design dispatched `activate` again here, which (per
+    /// `DirectiveExecutor.apply`) re-stamps `stepStartedAt` on every accepted
+    /// dispatch, so the deadline below could never accumulate and this
+    /// assertion would have failed against that shape (it would have seen a
+    /// `.dispatch`, not `.wait`). This is exactly the regression guard the
+    /// review asked for.
+    @Test func waitsRatherThanRedispatchingWhileWithinTheDeadline() {
+        let atL4 = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3-L4")
+        let deployed = device("RELAY", location: "TOSLIT-3-L4", features: ["relay"], status: "idle")
+        let recent = running(step: "confirmingRelay", stepStartedAt: now.addingTimeInterval(-60))
+        let world = world(devices: [atL4, controller, drone, deployed],
+                          systems: ["TOSLIT": toslit], now: now)
+        #expect(SalvageRun().nextAction(directive: recent, world: world) == .wait)
     }
 
     @Test func stallsWhenTheRelayNeverComesUp() {
@@ -383,7 +421,7 @@ struct SalvageRunEmplacementTests {
         // dead run — the whole point of the trip was the mesh membership.
         let atL4 = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3-L4")
         let deployed = device("RELAY", location: "TOSLIT-3-L4", features: ["relay"], status: "idle")
-        let stale = running(step: "activating", stepStartedAt: now.addingTimeInterval(-11 * 60))
+        let stale = running(step: "confirmingRelay", stepStartedAt: now.addingTimeInterval(-11 * 60))
         let world = world(devices: [atL4, controller, drone, deployed],
                           systems: ["TOSLIT": toslit], now: now)
         #expect(SalvageRun().nextAction(directive: stale, world: world)
@@ -401,15 +439,12 @@ struct SalvageRunEmplacementTests {
             == .advanceStep(nextStep: "configuring"))
     }
 
-    /// Carried forward from Task 5's review: `preflight`'s staging-freshness
-    /// recheck deliberately excludes the relay row (see its doc comment), so a
-    /// stale-positive "relay aboard" can carry the vessel all the way to the
-    /// Lagrange point before the gap is discoverable. `emplace` re-derives the
-    /// relay fresh on every entry — including after arrival — rather than
-    /// trusting whatever got the vessel here, so the miss surfaces as an
-    /// honest reroute to `restocking` instead of a `deploy` dispatched at a
-    /// device that was never actually there.
-    @Test func routesToRestockingWhenTheRelayIsNotActuallyAboardAfterAll() {
+    /// `emplace`'s relay-aboard guard is a backstop for the relay being
+    /// genuinely absent — not a staleness fix (that lives in `preflight`, see
+    /// `aStaleRelayRowEarnsAReadBeforeDepartureEvenWhenTheRestOfTheFleetIsFresh`).
+    /// This pins the backstop itself: no relay anywhere in the world reroutes
+    /// to `restocking` rather than dispatching `deploy` at nothing.
+    @Test func routesToRestockingWhenNoRelayIsAboardAtAll() {
         let atL4 = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3-L4")
         let world = world(devices: [atL4, controller, drone], systems: ["TOSLIT": toslit]) // no relay anywhere
         #expect(SalvageRun().nextAction(directive: running(step: "emplacing"), world: world)
