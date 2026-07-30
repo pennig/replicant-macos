@@ -60,10 +60,19 @@ extension LocationEventsClient: DependencyKey {
             let output = try await gameClient().postV1LocationsLocationCodeEventsDesignation(
                 path: .init(locationCode: location, designation: designation)
             )
-            // The endpoint documents only a `default` response, so success and
-            // failure both arrive here — split on the status code.
             switch output {
+            case .ok:
+                // The resolution payload (`title`, `event_status`, `rewards`)
+                // is deliberately dropped: the authoritative re-read below is
+                // what the UI renders from, so believing this body instead
+                // would be a second source of truth for the same row. Surfacing
+                // `rewards` is the one thing it could add that the list cannot,
+                // and that wants a return type and a banner, not a silent read.
+                break
             case let .default(statusCode, response):
+                // `default` is now the NOT-200 branch, but it still spans any
+                // undocumented 2xx (a 201 or 204 would land here), so the range
+                // check stays rather than assuming everything here is a failure.
                 guard (200..<300).contains(statusCode) else {
                     let message = (try? response.body.json.message)
                         ?? "The event could not be completed (\(statusCode))."

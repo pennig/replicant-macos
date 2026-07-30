@@ -3748,6 +3748,28 @@
         },
         "additionalProperties": false
       },
+      "app_schemas_location_events_LocationEventResolutionResponseSchema": {
+        "type": "object",
+        "properties": {
+          "designation": {
+            "type": "string"
+          },
+          "event_status": {
+            "type": "string"
+          },
+          "rewards": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "status": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
       "app_schemas_species_SpeciesSchema": {
         "type": "object",
         "properties": {
@@ -8576,6 +8598,16 @@
     "/v1/locations/{location_code}/events/{designation}": {
       "post": {
         "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/app_schemas_location_events_LocationEventResolutionResponseSchema"
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/DEFAULT_ERROR"
           }
