@@ -609,4 +609,36 @@ struct SalvageRunMiningTests {
         #expect(SalvageRun().nextAction(directive: running(step: "configuring"), world: world)
             == .advanceTarget)
     }
+
+    /// CRITICAL fix from review: a system that hasn't been cached yet (its
+    /// `SystemDetail` row hasn't landed, or failed to decode) must NOT read as
+    /// "nothing left to mine" — the two collapsed to the same outcome before
+    /// this fix, and `configure` advanced past a system it had never actually
+    /// looked at. Since `.advanceTarget` is irreversible (`targetIndex` only
+    /// grows, and `SalvageTargetPlanner` excludes every already-attempted
+    /// system from ever being offered again), that silently and permanently
+    /// skipped a system that might hold real, assayed salvage. Distinct from
+    /// `advancesTheTargetWhenNoBodyIsLeftToWork` above: there the system IS
+    /// present in `world.systems`, just empty of live bodies; here `"TOSLIT"`
+    /// has no entry in `systems` at all.
+    @Test func waitsWhenTheTargetSystemIsntCachedYet() {
+        let world = world(devices: [atSystem, controller, drone]) // no "TOSLIT" entry in `systems`
+        #expect(SalvageRun().nextAction(directive: running(step: "configuring"), world: world) == .wait)
+    }
+
+    /// The bound on that wait: `.wait` is the only `MissionAction` that never
+    /// re-stamps `stepStartedAt` (`DirectiveExecutor.apply`'s `.wait` case is
+    /// a pure no-op — every other case, including `.refreshSystem`, commits
+    /// through `move()`), so it's the only way this backstop can genuinely
+    /// accumulate. Past `systemResolutionDeadline`, an unresolved system
+    /// surfaces rather than waiting forever.
+    @Test func stallsWhenTheTargetSystemNeverResolves() {
+        let directive = running(
+            step: "configuring",
+            stepStartedAt: now.addingTimeInterval(-SalvageRun.systemResolutionDeadline - 1)
+        )
+        let world = world(devices: [atSystem, controller, drone], now: now) // still no "TOSLIT" entry
+        #expect(SalvageRun().nextAction(directive: directive, world: world)
+            == .stall(.salvageSystemUnresolved))
+    }
 }

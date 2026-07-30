@@ -379,22 +379,47 @@ public struct SalvageRun: MissionStepMachine {
         return world.device(code)
     }
 
+    /// What resolving the next salvage body found. Distinguishes "nothing left
+    /// to mine" from "don't know yet" — the two collapse to the same `nil` if
+    /// left unstructured, and `configure` must never treat the second as the
+    /// first. `WorldSnapshot.read` already documents this exact convention for
+    /// a `StarSystem` blob that fails to decode ("treated as absent... which
+    /// is the safe direction to be wrong in") — this is that same rule applied
+    /// to the caller that acts on the blob.
+    enum NextBodyResolution: Equatable {
+        /// A live body to configure toward.
+        case body(String)
+        /// The target system is cached and holds no live salvage body —
+        /// genuinely finished, whether drained or never worth mining to begin
+        /// with. Also the outcome when the queue itself is exhausted (no
+        /// `currentTarget`): `.advanceTarget` handles that safely too, since it
+        /// resets to `firstStep` (`preflight`), whose own queue-exhausted check
+        /// runs on the very next evaluation.
+        case finished
+        /// The target system's catalogue blob (`SystemDetail`) isn't cached
+        /// yet — the row hasn't landed, or failed to decode. NOT evidence the
+        /// system is done; the caller must wait for it rather than advance.
+        case unresolved
+    }
+
     /// The next salvage body to work in the current target system: the richest
     /// one still holding salvage, by assayed units then designation.
     ///
     /// Re-derived from the catalogue on every evaluation rather than stored as a
     /// cursor. A cursor would drift the moment anything else depleted a site,
     /// and a depleted body simply stops being offered.
-    static func nextBody(in directive: Directive, world: WorldSnapshot) -> String? {
-        guard let target = directive.currentTarget, let system = world.system(target) else { return nil }
+    static func nextBody(in directive: Directive, world: WorldSnapshot) -> NextBodyResolution {
+        guard let target = directive.currentTarget else { return .finished }
+        guard let system = world.system(target) else { return .unresolved }
         // `salvageBodies(totals:)` ALREADY excludes depleted sites
         // (`where !site.depleted`), so no extra filter is needed — a drained body
-        // simply stops appearing, which is what makes `nil` mean "system finished".
+        // simply stops appearing, which is what makes an empty result mean
+        // "system finished" (now that "system absent" is its own case above).
         // Pass the assay totals: without them `unitsRemaining` and
         // `discoveredTotal` are both nil for every body and the ranking below
         // collapses to the designation tiebreak.
-        return system.salvageBodies(totals: world.siteAssays)
-            .max { lhs, rhs in
+        guard let body = system.salvageBodies(totals: world.siteAssays)
+            .max(by: { lhs, rhs in
                 // `unitsRemaining` is nil until the body's live percentages have
                 // been fetched; `discoveredTotal` carries the historical figure
                 // for exactly that case, and is the COMMON one. Falling back to 0
@@ -405,8 +430,9 @@ public struct SalvageRun: MissionStepMachine {
                 // `max(by:)` wants "lhs strictly precedes rhs"; ties break on
                 // designation so the pick is reproducible across evaluations.
                 return l == r ? lhs.designation > rhs.designation : l < r
-            }?
-            .designation
+            })?.designation
+        else { return .finished }
+        return .body(body)
     }
 
     /// Whether an in-force config already equals `salvageConfig(body:)` on the
@@ -421,37 +447,70 @@ public struct SalvageRun: MissionStepMachine {
         return config["location"]?.stringValue == body && config["recall"]?.boolValue == true
     }
 
+    /// How long `configuring` may wait on the target system's catalogue blob
+    /// before surfacing `salvageSystemUnresolved`. The vessel has already
+    /// arrived by the time this step runs, so the arrival itself already
+    /// triggers `LocationsIngestion`'s passive rescan independent of this
+    /// mission — this is a backstop against that never landing (a dropped
+    /// event, a persistent decode failure), not the expected path. Same scale
+    /// as `activationDeadline` / `backstopInterval`.
+    public static let systemResolutionDeadline: TimeInterval = 10 * 60
+
     private func configure(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
-        // No live salvage body left in this system — drained, or never held
-        // one worth mining to begin with. Checked FIRST, mirroring
-        // `preflight`'s queue-before-staging order: a target with nothing left
-        // must advance regardless of whether the fleet happens to still be
-        // staged for a step it will never take. `nextBody` returns nil both
-        // when the queue itself is exhausted (no `currentTarget`) and when the
-        // catalogue shows nothing left on this target; `.advanceTarget` handles
-        // the former safely too, since it resets to `firstStep` (`preflight`),
-        // whose own queue-exhausted check runs on the very next evaluation.
-        //
-        // This is also the seam Task 8's `verifying` step will hand back into:
-        // once it exists, a body that just finished routes back to
-        // `configuring`, and this same check is what recognises "nothing left"
-        // on that return trip — no separate finished-system check needs to live
-        // in `verifying` itself.
-        guard let body = Self.nextBody(in: directive, world: world) else {
+        switch Self.nextBody(in: directive, world: world) {
+        case .finished:
+            // Nothing live left in this system — drained, or never held
+            // anything worth mining, or the queue itself is exhausted.
+            // Checked FIRST, mirroring `preflight`'s queue-before-staging
+            // order: a target with nothing left must advance regardless of
+            // whether the fleet happens to still be staged for a step it will
+            // never take.
+            //
+            // This is also the seam Task 8's `verifying` step will hand back
+            // into: once it exists, a body that just finished routes back to
+            // `configuring`, and this same check is what recognises "nothing
+            // left" on that return trip — no separate finished-system check
+            // needs to live in `verifying` itself.
             return .advanceTarget
+
+        case .unresolved:
+            // The catalogue blob hasn't landed. This must NEVER read as
+            // "finished" — see `NextBodyResolution`'s doc and
+            // `WorldSnapshot.read`'s matching convention for a blob that
+            // fails to decode. A `.refreshSystem` request is deliberately NOT
+            // issued here: `DirectiveExecutor.apply`'s `.refreshSystem` case
+            // always calls `move()`, which re-stamps `stepStartedAt`
+            // unconditionally on every pass — so re-requesting it on every
+            // re-entry to this same step would reset the very clock the
+            // backstop below needs to measure from, the same class of bug as
+            // a same-step `.dispatch` (see the
+            // same-step-dispatch-needs-tracked-op memory note; `.refreshSystem`
+            // is not a `.dispatch`, but it shares the "any transition re-stamps
+            // the clock" hazard). `.wait` is the one action
+            // `DirectiveExecutor.apply` leaves entirely inert — no commit, no
+            // state change — so it is the only way this bound can genuinely
+            // accumulate. Nothing is lost by not actively requesting a
+            // refresh: the vessel's arrival already triggers the passive
+            // rescan on its own.
+            if world.now.timeIntervalSince(directive.stepStartedAt) > Self.systemResolutionDeadline {
+                return .stall(.salvageSystemUnresolved)
+            }
+            return .wait
+
+        case let .body(body):
+            guard let controller = claimedController(directive, vessel, world) else {
+                return .stall(.noMiningControllerAboard)
+            }
+            if controller.currentDirective == "gather_salvage",
+               Self.configMatches(controller.currentDirectiveConfig, body: body) {
+                return .advanceStep(nextStep: Step.launching)
+            }
+            return .dispatch(
+                kind: .setDirective, deviceCode: controller.deviceCode,
+                params: CommandParams(directive: "gather_salvage", configuration: Self.salvageConfig(body: body)),
+                nextStep: Step.launching
+            )
         }
-        guard let controller = claimedController(directive, vessel, world) else {
-            return .stall(.noMiningControllerAboard)
-        }
-        if controller.currentDirective == "gather_salvage",
-           Self.configMatches(controller.currentDirectiveConfig, body: body) {
-            return .advanceStep(nextStep: Step.launching)
-        }
-        return .dispatch(
-            kind: .setDirective, deviceCode: controller.deviceCode,
-            params: CommandParams(directive: "gather_salvage", configuration: Self.salvageConfig(body: body)),
-            nextStep: Step.launching
-        )
     }
 
     /// Issue `launch` once. Dispatch-only, deliberately — mirrors

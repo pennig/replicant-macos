@@ -92,6 +92,13 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
     /// The relay was deployed but never came up — `activate` was rejected, or
     /// no `relay.activated` arrived before the backstop.
     case relayActivationFailed
+    /// A Salvage Run reached `configuring` but the target system's catalogue
+    /// blob (`SystemDetail`) never arrived — the row is missing, or failed to
+    /// decode. Never inferred from a completed survey or a finished mine:
+    /// this is specifically "we don't know yet", surfaced only once the
+    /// backstop gives up waiting on it, so the run can't mistake absence for
+    /// "nothing left" and silently skip a system that may hold real salvage.
+    case salvageSystemUnresolved
 
     /// The stall panel's headline.
     public var displayName: String {
@@ -108,6 +115,7 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
         case .noMiningDroneAboard: "No mining drone aboard"
         case .awaitingRelayRestock: "Out of FTL relays"
         case .relayActivationFailed: "Relay didn't come up"
+        case .salvageSystemUnresolved: "System data unavailable"
         }
     }
 
@@ -140,6 +148,8 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
             "The vessel is at base with no relays left. Stow FTL relays aboard, then retry."
         case .relayActivationFailed:
             "The relay was deployed but never started relaying. Check it at the Lagrange point, then retry or skip this target."
+        case .salvageSystemUnresolved:
+            "The system's catalogue data never loaded after arrival. Retry to fetch it again, or skip this target."
         }
     }
 }
