@@ -27,6 +27,26 @@ A tag query gives a mission a **reliable roster of its own devices regardless of
 stowed**. Any automation that needs to answer "where is my fleet" should resolve by tag, not by
 location probe.
 
+**Proved on live data 2026-07-30**, against the continuous survey run's fleet tagged `auto:survey`,
+caught mid-flight with the drones stowed aboard a travelling vessel:
+
+```
+code       type                   status       location  stowed_in  in_control_range
+F2908E6E   heaven_vessel          travelling   null      null       false
+B2CBDEC6   ami_survey_controller  stowed       null      F2908E6E   true
+A697D0E8   survey_drone           stowed       null      F2908E6E   true      (x6 drones)
+```
+
+All eight came back in ONE request. **Every one has a null location** — the vessel because it is in
+transit, the rest because stowing clears it — so a location-scoped query has nothing to query by and
+returns an empty set for this fleet. Containment (`stowed_in_device_code`) survives intact. A tag
+containing a colon needs no encoding.
+
+**`in_control_range` is per-device and reflects transit, not just mesh membership**: `false` on the
+travelling vessel, `true` on the cargo stowed inside it. So a device in flight reports out-of-range as
+a matter of course. Never gate a mission on the *mover's* range flag — a freighter merely en route
+would read as unreachable. Gate on the destination, or on the fleet's settled members.
+
 `tags` is **already decoded and persisted** on `Device` (JSON column). Five surge plates are already
 tagged `taxi` in production, so the mechanism is in live use — just never for automation.
 
