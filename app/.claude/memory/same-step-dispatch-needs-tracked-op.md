@@ -31,9 +31,17 @@ return .dispatch(kind: .simple("activate"), deviceCode: relay.deviceCode,
    prevent a second dispatch prevents nothing. See [[device-command-shapes]] for the full per-command
    response-class table — the tracked kinds are `.travel` (deadline), `.mine` (continuous),
    `.print` (enqueued) and the scan family.
-2. **`DirectiveExecutor.apply`'s `.dispatch` case re-stamps `stepStartedAt` on EVERY accepted dispatch**,
-   unconditionally — there is no same-step exception. So a step that re-dispatches into itself resets the
-   very clock its own backstop measures from.
+2. **`DirectiveExecutor.apply` re-stamps `stepStartedAt` on EVERY action except `.wait`.** Verified
+   2026-07-30: `.wait` returns at `DirectiveExecutor.swift:37-41` writing nothing at all, while
+   `.dispatch` (accepted), `.advanceStep`, `.assignController` and `.refreshSystem` all go through
+   `move()`, which sets `stepStartedAt = date.now` unconditionally. There is no same-step exception
+   anywhere. So a step that loops back into itself by ANY of those routes resets the very clock its own
+   backstop measures from.
+
+   **`.wait` is the only action that lets a step deadline accumulate.** That generalises past dispatch:
+   a step that answers "not ready yet" with `.refreshSystem(designation:nextStep: <its own step>)` is
+   just as broken as one that re-dispatches, and looks even more innocent. Salvage Run's
+   system-resolution backstop is a bounded `.wait` for exactly this reason.
 
 Together: the command is re-issued at the live API on every 5s tick forever, and the deadline that was
 supposed to surface a stall can never accumulate. The failure is invisible in unit tests, because a step
