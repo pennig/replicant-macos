@@ -1139,7 +1139,27 @@ git commit -m "Plant a relay at the target so the freighter can work alone"
 
 **Interfaces:**
 - Consumes: Task 6's `Step.configuring`.
-- Produces: `configuring`, `launching`, `awaiting` steps and `SalvageRun.nextBody(in:world:)`.
+- Produces: `WorldSnapshot.siteAssays`, `configuring`, `launching`, `awaiting` steps, and `SalvageRun.nextBody(in:world:)`.
+
+**Prerequisite discovered during Task 5 — do this part first.** `WorldSnapshot` does **not** carry `SiteAssay` totals, so a machine cannot rank bodies by assayed units without them. A Task 5 implementer wrote a version ranking on summed `remainingPct` instead; it was reverted, because `LocationModels.swift` documents that roster-sourced sites carry an **empty** `remainingPct`, which makes that sort degrade silently to alphabetical with no signal that it did.
+
+So add to `WorldSnapshot`:
+
+```swift
+    /// Stored assay totals for the salvage sites in this directive's systems,
+    /// keyed by SITE designation (`TOSLIT-3-2-SAL-1`) — the shape
+    /// `StarSystem.salvageBodies(totals:)` expects.
+    ///
+    /// Read here rather than derived, because a site's ORIGINAL unit total is
+    /// historical event knowledge that the catalogue payload never carries: it
+    /// arrives once, on `salvage.discovered`, and would be clobbered by every
+    /// re-scan's blob rewrite. `SiteAssay` is the table that survives that
+    /// churn. Without it a mission can only see percentages, and a
+    /// roster-sourced site's percentages are empty.
+    public let siteAssays: [String: [String: Double]]
+```
+
+Populate it inside the existing `WorldSnapshot.read` transaction, scoped to the same `wanted` set of systems the `SystemDetail` blobs are scoped to — never the whole table. `SiteAssay` has a `system` column, so this is one `where { $0.system.in(Array(wanted)) }` fetch folded into `[siteDesignation: totals]`. Give it a `[:]` default in the initializer so every existing construction site keeps compiling.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1226,10 +1246,13 @@ Expected: FAIL.
     /// and a depleted body simply stops being offered.
     static func nextBody(in directive: Directive, world: WorldSnapshot) -> String? {
         guard let target = directive.currentTarget, let system = world.system(target) else { return nil }
-        // `salvageBodies()` ALREADY excludes depleted sites (`where !site.depleted`),
-        // so no extra filter is needed — a drained body simply stops appearing,
-        // which is what makes `nil` mean "system finished".
-        return system.salvageBodies()
+        // `salvageBodies(totals:)` ALREADY excludes depleted sites
+        // (`where !site.depleted`), so no extra filter is needed — a drained body
+        // simply stops appearing, which is what makes `nil` mean "system finished".
+        // Pass the assay totals: without them `unitsRemaining` and
+        // `discoveredTotal` are both nil for every body and the ranking below
+        // collapses to the designation tiebreak.
+        return system.salvageBodies(totals: world.siteAssays)
             .max { lhs, rhs in
                 // `unitsRemaining` is nil until the body's live percentages have
                 // been fetched; `discoveredTotal` carries the historical figure
