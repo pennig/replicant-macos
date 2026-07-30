@@ -803,9 +803,13 @@ struct DirectiveRefreshDevicesTests {
 /// here lives in the hand-off between the resolver and the executor and a
 /// scripted machine would not exercise it.
 ///
-/// None of these stage a fleet, so after the append the machine asks for a
-/// device refresh and the run stalls. That is expected: every assertion below is
-/// about `targets` and `status`, never about the step reached.
+/// Most of these deliberately leave the fleet unstaged, so after the append the
+/// machine asks for a device refresh; their assertions are about `targets`, never
+/// about the step reached. That an unstaged fixture ends up stalled is a property
+/// of the FIXTURE, not of extending a queue — reading it as "extends stall, of
+/// course they do" is what let a real bug hide here, so
+/// `aRefreshDemandedAfterTheAppendIsPaidForRatherThanStalled` stages a fleet
+/// properly and pins the opposite.
 @Suite("DirectiveEngine roam resolution")
 struct DirectiveEngineRoamTests {
     /// A census row `x` light-years out along the X axis.
@@ -854,13 +858,47 @@ struct DirectiveEngineRoamTests {
         )
     }
 
+    /// A vessel with a survey controller and one adopted drone stowed aboard, all
+    /// stamped `updatedAt` — the staged state a real roam run is in, and the only
+    /// state in which preflight gets past its staging checks to the freshness
+    /// demand this suite's regression is about.
+    private func stagedFleet(updatedAt: Date) -> [Device] {
+        func make(
+            _ code: String, type: String, stowedIn: String? = nil,
+            controlledBy: String? = nil, directives: [String] = []
+        ) -> Device {
+            var detail: [String: JSONValue] = [:]
+            if !directives.isEmpty {
+                detail["available_directives"] = .array(directives.map(JSONValue.string))
+            }
+            return Device(
+                deviceCode: code, deviceType: type, replicantCode: "R1", status: "idle",
+                // Stowing CLEARS a device's location, exactly as the server
+                // reports it.
+                location: stowedIn == nil ? "CENTRE-1" : nil, locationName: nil,
+                operationalCapacity: 100, queueSize: 0,
+                stowedInDeviceCode: stowedIn, controllerDeviceCode: controlledBy,
+                attachedToDeviceCode: nil, createdAt: Date(timeIntervalSince1970: 0),
+                availableCommands: [], features: [], tags: [], detail: .object(detail),
+                updatedAt: updatedAt, firstSeenAt: Date(timeIntervalSince1970: 0)
+            )
+        }
+        return [
+            make("VES1", type: "transport_hauler"),
+            make("AMI1", type: "ami_survey_controller", stowedIn: "VES1",
+                 directives: ["survey_system"]),
+            make("DRONE1", type: "survey_drone", stowedIn: "VES1", controlledBy: "AMI1"),
+        ]
+    }
+
     private func seed(
-        _ database: any DatabaseWriter, _ directive: Directive, _ stars: [Star]
+        _ database: any DatabaseWriter, _ directive: Directive, _ stars: [Star],
+        devices: [Device]? = nil
     ) async throws {
-        let vessel = self.vessel
+        let fleet = devices ?? [vessel]
         try await database.write { db in
             for star in stars { try Star.insert { star }.execute(db) }
-            try Device.insert { vessel }.execute(db)
+            for device in fleet { try Device.insert { device }.execute(db) }
             try Directive.insert { directive }.execute(db)
         }
     }
@@ -936,6 +974,58 @@ struct DirectiveEngineRoamTests {
             let updated = try await row(database)
             #expect(updated?.status == .completed)
         }
+    }
+
+    /// The regression for a stall that hit EVERY surveyed system in a live run:
+    /// `unreachableDevice` moments after the queue was extended, cleared by a
+    /// Retry that changed nothing about the world.
+    ///
+    /// The re-ask after an append can legitimately answer `.refreshDevices` —
+    /// preflight demands one read round before it trusts staging rows older than
+    /// `SurveyRun.stagingFreshness`, and at the end of a survey cycle they always
+    /// are: a cycle runs longer than five minutes and nothing touches the drone
+    /// rows while it does. That request has to be RESOLVED like any other. Handing
+    /// it to the executor unresolved makes it an instant stall on its carried
+    /// reason, naming a device problem that does not exist.
+    @Test func aRefreshDemandedAfterTheAppendIsPaidForRatherThanStalled() async throws {
+        let database = try GameDatabase.bootstrap()
+        // A thousand seconds old against a five-minute freshness bar: preflight
+        // will not act on these rows without reading them first.
+        try await seed(
+            database, roamDirective(),
+            [star("CENTRE", x: 0, scanned: true), star("NEAR", x: 2)],
+            devices: stagedFleet(updatedAt: Date(timeIntervalSince1970: 0))
+        )
+
+        let reads = LockIsolated<[String]>([])
+        let repaired = stagedFleet(updatedAt: Date(timeIntervalSince1970: 1_000))
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.deviceRefresher.refresh = { code, _ in
+                reads.withValue { $0.append(code) }
+                guard let row = repaired.first(where: { $0.deviceCode == code }) else { return nil }
+                // The live refresher WRITES what it read, and the resolver judges
+                // the re-read world rather than this return value — so a stub that
+                // only returns leaves the rows as stale as it found them.
+                try? await database.write { db in try Device.upsert { row }.execute(db) }
+                return row
+            }
+        } operation: {
+            let core = DirectiveEngineCore(machines: [SurveyRun()], tick: .seconds(5))
+            await core.evaluateOnce(directiveID: "D1")
+
+            let updated = try await row(database)
+            #expect(updated?.status == .running)
+            #expect(updated?.attentionReason == nil)
+            #expect(updated?.targets == ["NEAR"])
+            // Preflight's verdict once the rows are worth trusting: claim the
+            // controller and set off.
+            #expect(updated?.controllerCode == "AMI1")
+            #expect(updated?.step == SurveyRun.Step.travelling)
+        }
+        #expect(reads.value.sorted() == ["AMI1", "DRONE1", "VES1"])
     }
 
     /// A system this run has already aimed at is never offered again — the

@@ -319,16 +319,44 @@ actor DirectiveEngineCore {
             return Resolution(action: .wait, directive: extended)
         }
 
-        let action = machine.nextAction(directive: extended, world: world)
-        if case .extendQueue = action {
+        // The re-ask gets the SAME resolution the first ask would have got. An
+        // extend is not the end of the round: a mission that has just been handed
+        // a target may well need reads before it can act on one, and preflight
+        // always does — `stagingFreshness` is five minutes and a survey cycle is
+        // longer, so the rows backing staging are invariably past the bar by the
+        // time a queue is extended. Passing that request to the executor
+        // unresolved made it an immediate stall on its carried reason, which is
+        // how a healthy continuous run stopped at every single system with
+        // `unreachableDevice` and resumed, unchanged, on a Retry.
+        switch machine.nextAction(directive: extended, world: world) {
+        case .extendQueue:
             // A target was just appended and the machine still wants one. Not
             // reachable through preflight (it would have to skip the brand-new
             // target first, which is a fresh evaluation), so this is the
             // one-round loop guard rather than an expected path.
             logger.notice("directive \(directive.id, privacy: .public): roam extend did not settle — finishing")
             return Resolution(action: .done, directive: extended)
+
+        case let .refreshDevices(deviceCodes, thenStall):
+            // Bounded: `reAsk` collapses a repeat refresh into the carried stall,
+            // so this pays for exactly one read round — the same ceiling an
+            // evaluation that never extended is held to.
+            let resolved = await resolveRefresh(
+                deviceCodes: deviceCodes, thenStall: thenStall,
+                directive: extended, machine: machine
+            )
+            return Resolution(action: resolved, directive: extended)
+
+        case let .refreshDevicesInSystem(designation, thenStall):
+            let resolved = await resolveSystemRefresh(
+                designation: designation, thenStall: thenStall,
+                directive: extended, machine: machine
+            )
+            return Resolution(action: resolved, directive: extended)
+
+        case let action:
+            return Resolution(action: action, directive: extended)
         }
-        return Resolution(action: action, directive: extended)
     }
 
     /// Spend authoritative reads on a mission's `.refreshDevices` request, then
