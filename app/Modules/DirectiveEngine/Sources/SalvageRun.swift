@@ -117,6 +117,8 @@ public struct SalvageRun: MissionStepMachine {
         case Step.configuring: return configure(directive, vessel, world)
         case Step.launching: return launch(directive, vessel, world)
         case Step.awaiting: return awaitCompletion(directive, world)
+        case Step.verifying: return verify(directive, vessel, world)
+        case Step.restocking: return restock(directive, vessel, world)
         default:
             // An unrecognised (or not-yet-handled) step must never dispatch. Waiting
             // is inert and recoverable — the user can cancel, or the step ships.
@@ -201,7 +203,7 @@ public struct SalvageRun: MissionStepMachine {
             let centre = directive.roamCentre ?? Self.system(of: vessel) ?? Self.baseSystem
             return .extendQueue(centre: centre)
         }
-        let tag = directive.fleetTag ?? Self.defaultFleetTag
+        let tag = Self.fleetTag(directive)
         // Both staging checks are NEGATIVE findings over local rows, exactly
         // like `SurveyRun`'s: silence locally means either nothing is aboard or
         // nobody has been allowed to look lately, and only the first is worth
@@ -311,9 +313,22 @@ public struct SalvageRun: MissionStepMachine {
     /// reroutes to `Step.restocking` rather than dispatching `deploy` at a
     /// device that was never actually there.
     private func emplace(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
-        guard let target = directive.currentTarget,
-              let point = Self.lagrangePoint(in: world.system(target))
-        else { return .advanceStep(nextStep: Step.configuring) }
+        guard let target = directive.currentTarget else {
+            return .advanceStep(nextStep: Step.configuring)
+        }
+        guard let system = world.system(target) else {
+            // Blob not cached yet. `.wait` is the only `MissionAction` that
+            // never re-stamps `stepStartedAt` (see the same-step-dispatch
+            // memory note), so it's the only way this bound can genuinely
+            // accumulate — same shape as `configure`'s `.unresolved` handling.
+            if world.now.timeIntervalSince(directive.stepStartedAt) > Self.systemResolutionDeadline {
+                return .stall(.salvageSystemUnresolved)
+            }
+            return .wait
+        }
+        guard let point = Self.lagrangePoint(in: system) else {
+            return .advanceStep(nextStep: Step.configuring)
+        }
         guard let relay = Self.relay(aboard: vessel, in: world) else {
             return .advanceStep(nextStep: Step.restocking)
         }
@@ -600,5 +615,107 @@ public struct SalvageRun: MissionStepMachine {
             return .advanceStep(nextStep: Step.verifying)
         }
         return .wait
+    }
+
+    // MARK: - Verify & restock
+
+    /// The fleet tag a directive resolves against, falling back to
+    /// `defaultFleetTag` for a row that carries none of its own. Shared by
+    /// every step that needs to name the tag for a `.refreshFleet` — kept in
+    /// one place rather than each step repeating `directive.fleetTag ??
+    /// Self.defaultFleetTag`.
+    static func fleetTag(_ directive: Directive) -> String {
+        directive.fleetTag ?? Self.defaultFleetTag
+    }
+
+    /// Confirm the recall actually landed before doing anything else.
+    ///
+    /// This step exists because a Survey Run once lost its entire drone
+    /// complement: `directive.completed` meant the survey had finished, not
+    /// the recall, and the run read completion as clearance to depart,
+    /// stranding drones in the system it just left.
+    ///
+    /// But the server changed. Since v2.3.3, a directive configured with
+    /// `recall` (see `salvageConfig(body:)`) holds `directive.completed` until
+    /// the drones have finished travelling — so by the time this step runs
+    /// they SHOULD already be aboard, and a stranded-looking drone is far more
+    /// likely a stale local row than a real loss. That is why this is ONE
+    /// confirming read rather than `SurveyRun.recover`'s elaborate ETA-driven
+    /// polling: that machinery answers a doubt this run's completion
+    /// semantics have already resolved. If the FRESH rows still say a drone is
+    /// out, then it is a real loss and the run stalls rather than departing
+    /// without it.
+    ///
+    /// Once recovery is confirmed, `nextBody` decides where to go next — and
+    /// its `.unresolved` case must be handled exactly as `configure` and
+    /// `emplace` handle it (a bounded wait, never silently read as
+    /// `.finished`): the same Critical class of bug fixed one step over.
+    private func verify(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
+        guard let controller = claimedController(directive, vessel, world) else {
+            // Nothing to verify against, and a vanished controller is
+            // preflight's diagnosis to make — holding the run here would
+            // stall on a reason that doesn't name the real problem. Mirrors
+            // `SurveyRun.recover`'s identical handling.
+            return .advanceTarget
+        }
+        // The WIDE `AMIFleet` query, not the aboard-vessel one: recovery is
+        // judged over every drone this controller has ever adopted, wherever
+        // it currently is — "some drones are home" is precisely the state
+        // that loses the others (see `AMIFleet.adoptedDrones(of:in:)`'s own
+        // doc).
+        let stranded = AMIFleet.adoptedDrones(of: controller, in: world)
+            .filter { $0.stowedInDeviceCode != vessel.deviceCode }
+        if !stranded.isEmpty {
+            return .refreshFleet(tag: Self.fleetTag(directive), thenStall: .dronesNotRecovered)
+        }
+        switch Self.nextBody(in: directive, world: world) {
+        case .finished:
+            // Recovered, and nothing live left in this system: this target is
+            // done.
+            return .advanceTarget
+        case .body:
+            // Recovered, and more bodies here — work the next one.
+            return .advanceStep(nextStep: Step.configuring)
+        case .unresolved:
+            // The catalogue blob went missing again between `configure` and
+            // here (dropped event, decode failure) — must NEVER read as
+            // `.finished`. See `emplace`'s matching fix and doc for the full
+            // reasoning; same backstop, same deadline.
+            if world.now.timeIntervalSince(directive.stepStartedAt) > Self.systemResolutionDeadline {
+                return .stall(.salvageSystemUnresolved)
+            }
+            return .wait
+        }
+    }
+
+    /// The base a run restocks at. A constant for now — the delivery location
+    /// is spec §1's fixed destination, and making it configurable before
+    /// there is a second base would be a setting with one possible value.
+    public static let baseDesignation = "AINALRAM-BELT-1"
+
+    /// Fly the vessel home once it is out of relays, then stall for the
+    /// operator once it arrives. The engine never stows and never adopts —
+    /// staging is the player's job, the same contract as every other step in
+    /// this run — so this parks and asks rather than loading relays itself.
+    /// A relay found aboard short-circuits the detour immediately, whether
+    /// the vessel has reached base yet or not, so a player who stages one
+    /// mid-flight doesn't have to wait for the arrival that would otherwise
+    /// be pointless.
+    private func restock(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
+        if Self.relay(aboard: vessel, in: world) != nil {
+            return .advanceStep(nextStep: Step.preflight)
+        }
+        if vessel.location == Self.baseDesignation {
+            return .stall(.awaitingRelayRestock)
+        }
+        // `.travel` is a TRACKED op kind (creates an `Operation` row), so this
+        // guard actually fires — unlike the `.simple` verbs elsewhere in this
+        // file — and this same-step dispatch is the safe shape the
+        // same-step-dispatch-needs-tracked-op memory note describes.
+        if world.openOperation(for: vessel.deviceCode) != nil { return .wait }
+        return .dispatch(
+            kind: .travel, deviceCode: vessel.deviceCode,
+            params: CommandParams(destination: Self.baseDesignation), nextStep: Step.restocking
+        )
     }
 }

@@ -332,11 +332,14 @@ struct SalvageRunTravelTests {
 
 @Suite("Salvage Run — unrecognised step")
 struct SalvageRunUnknownStepTests {
-    /// A step this task hasn't wired up yet (or a genuinely unknown one) must
-    /// never dispatch — it waits, same contract as `SurveyRun`.
+    /// A genuinely unknown step — one outside this mission's whole vocabulary
+    /// — must never dispatch: it waits, same contract as `SurveyRun`. (Every
+    /// named step in `SalvageRun.Step` is wired up as of Task 8, so this can
+    /// no longer be exercised via a real-but-unimplemented step name; a bogus
+    /// string is what's left to hit the `default:` arm.)
     @Test func waitsOnAStepNotYetImplemented() {
         let snapshot = world(devices: [vessel, controller, drone, relay])
-        #expect(SalvageRun().nextAction(directive: running(step: "restocking"), world: snapshot) == .wait)
+        #expect(SalvageRun().nextAction(directive: running(step: "not-a-real-step"), world: snapshot) == .wait)
     }
 }
 
@@ -526,6 +529,12 @@ private let miningToslitAssays: [String: [String: Double]] = [
     "TOSLIT-6-5-SAL-1": ["ore": 500],
 ]
 
+/// TOSLIT with no salvage anywhere — drained, or never held any to begin
+/// with. Used by the `verifying` tests, distinct from `miningToslit` (which
+/// still holds live bodies) — the pair mirrors `configure`'s own
+/// finished-vs-live distinction one step over.
+private let drainedToslit = StarSystem(designation: "TOSLIT", planets: [])
+
 private func completion(at occurredAt: Date) -> DirectiveLogEntry {
     DirectiveLogEntry(
         id: "L1", directiveID: "D1", deviceCode: "CTRL", kind: .directiveCompleted,
@@ -668,5 +677,122 @@ struct SalvageRunMiningTests {
         let world = world(devices: [atSystem, controller, drone], now: now) // still no "TOSLIT" entry
         #expect(SalvageRun().nextAction(directive: directive, world: world)
             == .stall(.salvageSystemUnresolved))
+    }
+}
+
+// MARK: - Verification
+
+/// This step exists because a Survey Run once lost its entire drone
+/// complement: `directive.completed` meant the SURVEY had finished, not the
+/// RECALL, and the run read completion as clearance to depart, stranding
+/// drones behind. Since v2.3.3 the server holds `directive.completed` for a
+/// recall-configured directive until the drones finish travelling, so a
+/// stranded-looking drone here is far more likely a stale local row than a
+/// real loss — hence one confirming read, not `SurveyRun.recover`'s
+/// elaborate ETA-driven polling.
+@Suite("Salvage Run — verification")
+struct SalvageRunVerificationTests {
+    /// Every adopted drone is back aboard, and the system still holds live
+    /// salvage: route back to `configuring` to work the next body.
+    @Test func advancesToConfiguringWhenDronesAreHomeAndBodiesRemain() {
+        let world = world(devices: [atSystem, controller, drone],
+                          systems: ["TOSLIT": miningToslit], siteAssays: miningToslitAssays)
+        #expect(SalvageRun().nextAction(directive: running(step: "verifying"), world: world)
+            == .advanceStep(nextStep: "configuring"))
+    }
+
+    /// "Just in case": completion now implies recall, so a stranded-looking
+    /// drone is far more likely a stale row than a real loss. One
+    /// authoritative read decides — and only if it AGREES does the run stall.
+    @Test func readsTheFleetOnceBeforeBelievingADroneIsStranded() {
+        let stranded = device("DRONE", type: "mining_drone", location: "TOSLIT-6-5", controlledBy: "CTRL")
+        let world = world(devices: [atSystem, controller, stranded], systems: ["TOSLIT": miningToslit])
+        #expect(SalvageRun().nextAction(directive: running(step: "verifying"), world: world)
+            == .refreshFleet(tag: "auto:salvage", thenStall: .dronesNotRecovered))
+    }
+
+    /// No salvage left anywhere in the system: this target is finished.
+    @Test func advancesTheTargetOnceTheSystemIsDrained() {
+        let world = world(devices: [atSystem, controller, drone], systems: ["TOSLIT": drainedToslit])
+        #expect(SalvageRun().nextAction(directive: running(step: "verifying"), world: world)
+            == .advanceTarget)
+    }
+
+    /// A vanished controller is preflight's diagnosis to make, not
+    /// verifying's — holding here would stall on a reason that doesn't name
+    /// the real problem. Mirrors `SurveyRun.recover`'s identical handling.
+    @Test func advancesTheTargetWhenTheControllerHasVanished() {
+        let world = world(devices: [atSystem, drone], systems: ["TOSLIT": miningToslit])
+        #expect(SalvageRun().nextAction(directive: running(step: "verifying"), world: world)
+            == .advanceTarget)
+    }
+
+    /// The same Critical-class fix as `configure`/`emplace`, one step over:
+    /// once recovery is confirmed, an uncached system must not read as
+    /// "finished" — it must wait for the blob rather than silently advancing
+    /// the target past salvage it never actually looked at.
+    @Test func waitsWhenTheSystemIsntCachedYet() {
+        let world = world(devices: [atSystem, controller, drone]) // no "TOSLIT" entry
+        #expect(SalvageRun().nextAction(directive: running(step: "verifying"), world: world) == .wait)
+    }
+
+    /// The bound on that wait, same shape and deadline as `configure`'s.
+    @Test func stallsWhenTheSystemNeverResolves() {
+        let directive = running(
+            step: "verifying",
+            stepStartedAt: fixtureNow.addingTimeInterval(-SalvageRun.systemResolutionDeadline - 1)
+        )
+        let world = world(devices: [atSystem, controller, drone]) // still no "TOSLIT" entry
+        #expect(SalvageRun().nextAction(directive: directive, world: world)
+            == .stall(.salvageSystemUnresolved))
+    }
+}
+
+// MARK: - Restock
+
+@Suite("Salvage Run — restock")
+struct SalvageRunRestockTests {
+    /// Out of relays: travel to base.
+    @Test func travelsToBaseWhenOutOfRelays() {
+        let world = world(devices: [vessel, controller, drone])
+        #expect(SalvageRun().nextAction(directive: running(step: "restocking"), world: world)
+            == .dispatch(kind: .travel, deviceCode: "VESSEL",
+                         params: CommandParams(destination: "AINALRAM-BELT-1"), nextStep: "restocking"))
+    }
+
+    /// Mid-travel is a wait, never a second travel command stacked on the one
+    /// already in flight — the same tracked-op guard `travel()` uses. Safe as
+    /// a same-step dispatch precisely because `.travel` IS a tracked op kind
+    /// (see the same-step-dispatch-needs-tracked-op memory note).
+    @Test func waitsWhileTheTripToBaseIsUnderway() {
+        let world = world(devices: [vessel, controller, drone],
+                          openOperations: ["VESSEL": operation(kind: .travel)])
+        #expect(SalvageRun().nextAction(directive: running(step: "restocking"), world: world) == .wait)
+    }
+
+    /// The engine does NOT stow — that would loosen the never-stow contract,
+    /// which is its own future design. It parks and asks.
+    @Test func stallsForRestockOnceAtBase() {
+        let atBase = device("VESSEL", location: "AINALRAM-BELT-1")
+        let world = world(devices: [atBase, controller, drone])
+        #expect(SalvageRun().nextAction(directive: running(step: "restocking"), world: world)
+            == .stall(.awaitingRelayRestock))
+    }
+
+    @Test func resumesWhenRelaysAreStowedAndTheRunIsRetried() {
+        let atBase = device("VESSEL", location: "AINALRAM-BELT-1")
+        let world = world(devices: [atBase, controller, drone, relay])
+        #expect(SalvageRun().nextAction(directive: running(step: "restocking"), world: world)
+            == .advanceStep(nextStep: "preflight"))
+    }
+
+    /// A relay found aboard short-circuits the detour immediately, whether or
+    /// not the vessel has physically reached `AINALRAM-BELT-1` yet — staging
+    /// one mid-flight shouldn't force a pointless wait for arrival.
+    @Test func resumesAsSoonAsARelayIsAboardEvenBeforeReachingBase() {
+        let midTrip = device("VESSEL") // no location: still travelling
+        let world = world(devices: [midTrip, controller, drone, relay])
+        #expect(SalvageRun().nextAction(directive: running(step: "restocking"), world: world)
+            == .advanceStep(nextStep: "preflight"))
     }
 }
