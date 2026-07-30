@@ -114,6 +114,9 @@ public struct SalvageRun: MissionStepMachine {
         case Step.emplacing: return emplace(directive, vessel, world)
         case Step.activating: return activate(vessel, world)
         case Step.confirmingRelay: return confirmRelay(directive, vessel, world)
+        case Step.configuring: return configure(directive, vessel, world)
+        case Step.launching: return launch(directive, vessel, world)
+        case Step.awaiting: return awaitCompletion(directive, world)
         default:
             // An unrecognised (or not-yet-handled) step must never dispatch. Waiting
             // is inert and recoverable — the user can cancel, or the step ships.
@@ -359,6 +362,166 @@ public struct SalvageRun: MissionStepMachine {
         if relay.status == "relaying" { return .advanceStep(nextStep: Step.configuring) }
         if world.now.timeIntervalSince(directive.stepStartedAt) > Self.activationDeadline {
             return .stall(.relayActivationFailed)
+        }
+        return .wait
+    }
+
+    // MARK: - Mining loop
+
+    /// The controller this run claimed, re-resolved from the fleet on every
+    /// evaluation — the row is the checkpoint, and a controller since released
+    /// or decommissioned must surface rather than be dispatched at. Mirrors
+    /// `SurveyRun.claimedController`.
+    private func claimedController(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> Device? {
+        guard let code = directive.controllerCode else {
+            return Self.controller(aboard: vessel, in: world)
+        }
+        return world.device(code)
+    }
+
+    /// The next salvage body to work in the current target system: the richest
+    /// one still holding salvage, by assayed units then designation.
+    ///
+    /// Re-derived from the catalogue on every evaluation rather than stored as a
+    /// cursor. A cursor would drift the moment anything else depleted a site,
+    /// and a depleted body simply stops being offered.
+    static func nextBody(in directive: Directive, world: WorldSnapshot) -> String? {
+        guard let target = directive.currentTarget, let system = world.system(target) else { return nil }
+        // `salvageBodies(totals:)` ALREADY excludes depleted sites
+        // (`where !site.depleted`), so no extra filter is needed — a drained body
+        // simply stops appearing, which is what makes `nil` mean "system finished".
+        // Pass the assay totals: without them `unitsRemaining` and
+        // `discoveredTotal` are both nil for every body and the ranking below
+        // collapses to the designation tiebreak.
+        return system.salvageBodies(totals: world.siteAssays)
+            .max { lhs, rhs in
+                // `unitsRemaining` is nil until the body's live percentages have
+                // been fetched; `discoveredTotal` carries the historical figure
+                // for exactly that case, and is the COMMON one. Falling back to 0
+                // instead would rank every unhydrated body last and send the run
+                // to the least valuable target it knows about.
+                let l = lhs.unitsRemaining ?? lhs.discoveredTotal ?? 0
+                let r = rhs.unitsRemaining ?? rhs.discoveredTotal ?? 0
+                // `max(by:)` wants "lhs strictly precedes rhs"; ties break on
+                // designation so the pick is reproducible across evaluations.
+                return l == r ? lhs.designation > rhs.designation : l < r
+            }?
+            .designation
+    }
+
+    /// Whether an in-force config already equals `salvageConfig(body:)` on the
+    /// two fields that matter. Compared field by field rather than
+    /// whole-object, same reasoning as `SurveyRun.configMatches` — the server
+    /// may echo extra keys, and an inequality there is not a reason to
+    /// re-issue. A leftover `location` from manual use would otherwise
+    /// silently work the wrong body, so re-issuing is the default and only an
+    /// exact match on both fields skips it.
+    static func configMatches(_ config: JSONValue?, body: String) -> Bool {
+        guard let config else { return false }
+        return config["location"]?.stringValue == body && config["recall"]?.boolValue == true
+    }
+
+    private func configure(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
+        // No live salvage body left in this system — drained, or never held
+        // one worth mining to begin with. Checked FIRST, mirroring
+        // `preflight`'s queue-before-staging order: a target with nothing left
+        // must advance regardless of whether the fleet happens to still be
+        // staged for a step it will never take. `nextBody` returns nil both
+        // when the queue itself is exhausted (no `currentTarget`) and when the
+        // catalogue shows nothing left on this target; `.advanceTarget` handles
+        // the former safely too, since it resets to `firstStep` (`preflight`),
+        // whose own queue-exhausted check runs on the very next evaluation.
+        //
+        // This is also the seam Task 8's `verifying` step will hand back into:
+        // once it exists, a body that just finished routes back to
+        // `configuring`, and this same check is what recognises "nothing left"
+        // on that return trip — no separate finished-system check needs to live
+        // in `verifying` itself.
+        guard let body = Self.nextBody(in: directive, world: world) else {
+            return .advanceTarget
+        }
+        guard let controller = claimedController(directive, vessel, world) else {
+            return .stall(.noMiningControllerAboard)
+        }
+        if controller.currentDirective == "gather_salvage",
+           Self.configMatches(controller.currentDirectiveConfig, body: body) {
+            return .advanceStep(nextStep: Step.launching)
+        }
+        return .dispatch(
+            kind: .setDirective, deviceCode: controller.deviceCode,
+            params: CommandParams(directive: "gather_salvage", configuration: Self.salvageConfig(body: body)),
+            nextStep: Step.launching
+        )
+    }
+
+    /// Issue `launch` once. Dispatch-only, deliberately — mirrors
+    /// `SurveyRun.launch` and this run's own `activate`: `launch` is
+    /// `OperationKind.simple`, tracked with NO `Operation` row, so a same-step
+    /// redispatch guard here could never fire and would reset
+    /// `stepStartedAt` on every tick (see the same-step-dispatch memory note).
+    /// All polling lives in `awaitCompletion`, entered fresh via `nextStep`.
+    private func launch(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
+        guard let controller = claimedController(directive, vessel, world) else {
+            return .stall(.noMiningControllerAboard)
+        }
+        return .dispatch(
+            kind: OperationKind.simple("launch"), deviceCode: controller.deviceCode,
+            params: CommandParams(), nextStep: Step.awaiting
+        )
+    }
+
+    /// How long to wait on the `directive.completed` fast path before moving on
+    /// to verify anyway. Same value and reasoning as `SurveyRun.backstopInterval`
+    /// — a dropped SSE frame must not strand a run forever.
+    public static let backstopInterval: TimeInterval = 10 * 60
+
+    /// Tolerance when comparing a completion's time against the step's start.
+    /// Same value and reasoning as `SurveyRun.eventTimeSkewTolerance`.
+    static let eventTimeSkewTolerance: TimeInterval = 5
+
+    /// Whether a completion for THIS step has landed in the timeline.
+    /// Issue-time relative, not wall-clock — same shape as
+    /// `SurveyRun.completionSeen`, so a completion delivered by catch-up after
+    /// the app was closed still counts while a replay does not.
+    public static func completionSeen(_ directive: Directive, _ world: WorldSnapshot) -> Bool {
+        saw(.directiveCompleted, directive, world)
+    }
+
+    /// Whether a launch reporting zero deployed devices landed in THIS step. A
+    /// launch that deployed nothing cannot produce the completion `awaiting` is
+    /// waiting for, so this turns a permanent wait into a named stall. Same
+    /// shape as `SurveyRun.emptyLaunchSeen`.
+    public static func emptyLaunchSeen(_ directive: Directive, _ world: WorldSnapshot) -> Bool {
+        saw(.launchDeployedNothing, directive, world)
+    }
+
+    /// Whether an entry of `kind` belongs to the directive's current step.
+    private static func saw(
+        _ kind: DirectiveLogKind, _ directive: Directive, _ world: WorldSnapshot
+    ) -> Bool {
+        world.log.contains { entry in
+            entry.kind == kind
+                && entry.occurredAt >= directive.stepStartedAt
+                    .addingTimeInterval(-eventTimeSkewTolerance)
+        }
+    }
+
+    /// The riskiest wait in the design, same as `SurveyRun.awaitCompletion` —
+    /// the controller drives its drones server-side, so there is no operation
+    /// the app created to key off. Unlike the survey (which needs a system
+    /// re-read to confirm scan counts before trusting completion), a body's
+    /// depletion is confirmed by Task 8's `verifying` step, so a completion
+    /// here hands off directly rather than issuing its own refresh.
+    private func awaitCompletion(_ directive: Directive, _ world: WorldSnapshot) -> MissionAction {
+        if Self.completionSeen(directive, world) {
+            return .advanceStep(nextStep: Step.verifying)
+        }
+        // The controller told us this launch deployed nothing. No drones are
+        // out, so no completion is coming and the backstop would poll forever
+        // until someone noticed. Surface it now.
+        if Self.emptyLaunchSeen(directive, world) { return .stall(.launchDeployedNothing) }
+        if world.now.timeIntervalSince(directive.stepStartedAt) > Self.backstopInterval {
+            return .advanceStep(nextStep: Step.verifying)
         }
         return .wait
     }

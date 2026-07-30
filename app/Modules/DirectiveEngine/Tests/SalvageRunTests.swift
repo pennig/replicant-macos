@@ -35,6 +35,8 @@ private func device(
     directives: [String] = [],
     features: [String] = [],
     status: String = "idle",
+    currentDirective: String? = nil,
+    currentDirectiveConfig: [String: JSONValue]? = nil,
     updatedAt: Date = fixtureNow
 ) -> Device {
     var detail: [String: JSONValue] = [:]
@@ -45,6 +47,12 @@ private func device(
     }
     if !directives.isEmpty {
         detail["available_directives"] = .array(directives.map(JSONValue.string))
+    }
+    if let currentDirective {
+        detail["ami_directive"] = .object([
+            "name": .string(currentDirective),
+            "config": .object(currentDirectiveConfig ?? [:]),
+        ])
     }
     return Device(
         deviceCode: code, deviceType: type, replicantCode: "R1",
@@ -102,11 +110,12 @@ private func world(
     openOperations: [String: GameModels.Operation] = [:],
     log: [DirectiveLogEntry] = [],
     systems: [String: StarSystem] = [:],
+    siteAssays: [String: [String: Double]] = [:],
     now: Date = fixtureNow
 ) -> WorldSnapshot {
     WorldSnapshot(
         devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
-        openOperations: openOperations, log: log, systems: systems, now: now
+        openOperations: openOperations, log: log, systems: systems, siteAssays: siteAssays, now: now
     )
 }
 
@@ -449,5 +458,155 @@ struct SalvageRunEmplacementTests {
         let world = world(devices: [atL4, controller, drone], systems: ["TOSLIT": toslit]) // no relay anywhere
         #expect(SalvageRun().nextAction(directive: running(step: "emplacing"), world: world)
             == .advanceStep(nextStep: "restocking"))
+    }
+}
+
+// MARK: - Mining fixtures
+
+/// The vessel already at the target system, ready to configure and launch —
+/// distinct from `vessel` (not yet departed) and `arrived`-style locals used
+/// elsewhere in this file, which don't carry a `TOSLIT` location.
+private let atSystem = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3")
+
+/// TOSLIT with two live salvage bodies on two different planets: a moon of
+/// TOSLIT-3 holding a modest site, and a moon of TOSLIT-6 holding a richer
+/// one. Both sites are roster-sourced (empty `remainingPct`) — the COMMON
+/// state per the ranking's own doc comment — so telling them apart requires
+/// `miningToslitAssays` below, not the site's own percentages.
+private let miningToslit = StarSystem(
+    designation: "TOSLIT",
+    planets: [
+        Planet(designation: "TOSLIT-3", moons: [
+            Moon(designation: "TOSLIT-3-2", salvage: [
+                SalvageSite(designation: "TOSLIT-3-2-SAL-1", resourcesAvailable: ["ore"]),
+            ]),
+        ]),
+        Planet(designation: "TOSLIT-6", moons: [
+            Moon(designation: "TOSLIT-6-5", salvage: [
+                SalvageSite(designation: "TOSLIT-6-5-SAL-1", resourcesAvailable: ["ore"]),
+            ]),
+        ]),
+    ]
+)
+
+/// Stored assay totals for `miningToslit`'s two sites — TOSLIT-6-5-SAL-1 (500)
+/// outweighs TOSLIT-3-2-SAL-1 (100), so `nextBody` must pick TOSLIT-6-5. Both
+/// sites carry no live percentage, so this ranking exercises the
+/// `discoveredTotal` fallback specifically, not `unitsRemaining`.
+private let miningToslitAssays: [String: [String: Double]] = [
+    "TOSLIT-3-2-SAL-1": ["ore": 100],
+    "TOSLIT-6-5-SAL-1": ["ore": 500],
+]
+
+private func completion(at occurredAt: Date) -> DirectiveLogEntry {
+    DirectiveLogEntry(
+        id: "L1", directiveID: "D1", deviceCode: "CTRL", kind: .directiveCompleted,
+        summary: "Gather Salvage completed at TOSLIT", step: "awaiting",
+        operationID: nil, eventID: "E1", occurredAt: occurredAt
+    )
+}
+
+private func emptyLaunch(at occurredAt: Date) -> DirectiveLogEntry {
+    DirectiveLogEntry(
+        id: "L9", directiveID: "D1", deviceCode: "CTRL", kind: .launchDeployedNothing,
+        summary: "Launch deployed no devices", step: "awaiting",
+        operationID: nil, eventID: "E9", occurredAt: occurredAt
+    )
+}
+
+// MARK: - Mining loop
+
+@Suite("Salvage Run — mining loop")
+struct SalvageRunMiningTests {
+    /// `unitsRemaining ?? discoveredTotal ?? 0` — the richest body by that
+    /// figure, ties broken on designation. Both sites here are in the common
+    /// assayed-but-unhydrated state, so this specifically exercises the
+    /// `discoveredTotal` fallback, not `unitsRemaining`.
+    @Test func configuresGatherSalvageForTheRichestUnworkedBody() {
+        let world = world(devices: [atSystem, controller, drone],
+                          systems: ["TOSLIT": miningToslit], siteAssays: miningToslitAssays)
+        #expect(SalvageRun().nextAction(directive: running(step: "configuring"), world: world)
+            == .dispatch(kind: .setDirective, deviceCode: "CTRL",
+                         params: CommandParams(directive: "gather_salvage", configuration: [
+                             "location": .string("TOSLIT-6-5"), "recall": .bool(true),
+                         ]), nextStep: "launching"))
+    }
+
+    /// Re-issuing is the default: a leftover `location` from manual use would
+    /// silently work the wrong body. Only an exact field-by-field match on
+    /// `location` and `recall` skips the dispatch.
+    @Test func skipsSetDirectiveWhenTheInForceConfigAlreadyMatches() {
+        let configured = device(
+            "CTRL", type: "ami_mining_controller", stowedIn: "VESSEL",
+            controlled: ["DRONE"], directives: ["gather_salvage"],
+            currentDirective: "gather_salvage",
+            currentDirectiveConfig: ["location": .string("TOSLIT-6-5"), "recall": .bool(true)]
+        )
+        let world = world(devices: [atSystem, configured, drone],
+                          systems: ["TOSLIT": miningToslit], siteAssays: miningToslitAssays)
+        #expect(SalvageRun().nextAction(directive: running(step: "configuring"), world: world)
+            == .advanceStep(nextStep: "launching"))
+    }
+
+    @Test func reIssuesWhenTheInForceConfigNamesAnotherBody() {
+        let wrong = device(
+            "CTRL", type: "ami_mining_controller", stowedIn: "VESSEL",
+            controlled: ["DRONE"], directives: ["gather_salvage"],
+            currentDirective: "gather_salvage",
+            currentDirectiveConfig: ["location": .string("TOSLIT-3-2"), "recall": .bool(true)]
+        )
+        let world = world(devices: [atSystem, wrong, drone],
+                          systems: ["TOSLIT": miningToslit], siteAssays: miningToslitAssays)
+        guard case .dispatch(_, _, _, let next) = SalvageRun()
+            .nextAction(directive: running(step: "configuring"), world: world) else {
+            Issue.record("expected a re-issue"); return
+        }
+        #expect(next == "launching")
+    }
+
+    @Test func launchesTheController() {
+        let world = world(devices: [atSystem, controller, drone],
+                          systems: ["TOSLIT": miningToslit], siteAssays: miningToslitAssays)
+        #expect(SalvageRun().nextAction(directive: running(step: "launching"), world: world)
+            == .dispatch(kind: OperationKind.simple("launch"), deviceCode: "CTRL",
+                         params: CommandParams(), nextStep: "awaiting"))
+    }
+
+    @Test func waitsForCompletionThenVerifies() {
+        let world = world(devices: [atSystem, controller, drone])
+        #expect(SalvageRun().nextAction(directive: running(step: "awaiting"), world: world) == .wait)
+    }
+
+    /// Issue-time relative: a completion delivered by catch-up after the app
+    /// was closed still counts, while one predating this step is a replay.
+    @Test func advancesToVerifyingWhenCompletionLands() {
+        let directive = running(step: "awaiting", stepStartedAt: now)
+        let world = world(devices: [atSystem, controller, drone],
+                          log: [completion(at: now.addingTimeInterval(1))], now: now)
+        #expect(SalvageRun().nextAction(directive: directive, world: world)
+            == .advanceStep(nextStep: "verifying"))
+    }
+
+    /// No drones out means no completion is ever coming — surface it rather
+    /// than waiting forever.
+    @Test func stallsWhenALaunchDeployedNothing() {
+        let directive = running(step: "awaiting", stepStartedAt: now)
+        let world = world(devices: [atSystem, controller, drone],
+                          log: [emptyLaunch(at: now.addingTimeInterval(1))], now: now)
+        #expect(SalvageRun().nextAction(directive: directive, world: world)
+            == .stall(.launchDeployedNothing))
+    }
+
+    /// A system with no live salvage body left — drained, or never held one to
+    /// begin with — has nothing for `configuring` to configure toward. This is
+    /// also the seam Task 8's `verifying` step will hand back into once it
+    /// exists: it recognises "nothing left" identically whether this is the
+    /// first evaluation after arrival or a return trip after a body just
+    /// finished, so no separate finished-system check is needed there.
+    @Test func advancesTheTargetWhenNoBodyIsLeftToWork() {
+        let drained = StarSystem(designation: "TOSLIT", planets: [])
+        let world = world(devices: [atSystem, controller, drone], systems: ["TOSLIT": drained])
+        #expect(SalvageRun().nextAction(directive: running(step: "configuring"), world: world)
+            == .advanceTarget)
     }
 }
