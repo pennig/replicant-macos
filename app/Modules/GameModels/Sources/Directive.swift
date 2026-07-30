@@ -20,12 +20,14 @@ import SQLiteData
 public enum DirectiveKind: String, Codable, Equatable, Sendable, CaseIterable, QueryBindable {
     case surveyRun
     case relayRun
+    case salvageRun
 
     /// The list row's label, e.g. "Survey Run".
     public var title: String {
         switch self {
         case .surveyRun: "Survey Run"
         case .relayRun: "Relay Run"
+        case .salvageRun: "Salvage Run"
         }
     }
 }
@@ -79,6 +81,17 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
     case launchDeployedNothing
     /// The server rejected the step's command.
     case commandRejected
+    /// No AMI mining controller is stowed aboard the vessel. Staging is the
+    /// player's job — a Salvage Run uses what is already aboard and adopted.
+    case noMiningControllerAboard
+    /// The mining controller has no adopted drone stowed aboard the vessel.
+    case noMiningDroneAboard
+    /// The vessel is out of FTL relays and the next target needs one. It has
+    /// returned to base; stow relays aboard and retry.
+    case awaitingRelayRestock
+    /// The relay was deployed but never came up — `activate` was rejected, or
+    /// no `relay.activated` arrived before the backstop.
+    case relayActivationFailed
 
     /// The stall panel's headline.
     public var displayName: String {
@@ -91,6 +104,10 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
         case .dronesNotRecovered: "Drones not recovered"
         case .launchDeployedNothing: "Launch deployed nothing"
         case .commandRejected: "Command rejected"
+        case .noMiningControllerAboard: "No mining controller aboard"
+        case .noMiningDroneAboard: "No mining drone aboard"
+        case .awaitingRelayRestock: "Out of FTL relays"
+        case .relayActivationFailed: "Relay didn't come up"
         }
     }
 
@@ -115,6 +132,14 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
             "The controller launched but deployed no drones — check that its adopted drones are stowed aboard the vessel, then retry."
         case .commandRejected:
             "The server refused the last command. Check the device, then retry or skip this target."
+        case .noMiningControllerAboard:
+            "Stow an AMI mining controller aboard the vessel, then retry."
+        case .noMiningDroneAboard:
+            "Stow a mining drone aboard the vessel and adopt it with the controller, then retry."
+        case .awaitingRelayRestock:
+            "The vessel is at base with no relays left. Stow FTL relays aboard, then retry."
+        case .relayActivationFailed:
+            "The relay was deployed but never started relaying. Check it at the Lagrange point, then retry or skip this target."
         }
     }
 }
@@ -148,6 +173,13 @@ public struct Directive: Identifiable, Equatable, Sendable {
     /// authority on where a system is and copying its position here would let
     /// the two drift.
     public var roamCentre: String?
+    /// The tag identifying every device this run drives (`auto:salvage`).
+    ///
+    /// A tag rather than a device list because `GET devices/tags/{tag}` is the
+    /// only scope that reports a STOWED device — the state a staged mining kit
+    /// spends its whole life in. Nil for kinds that resolve their fleet some
+    /// other way (Survey Run reads `stowedInDeviceCode` directly).
+    public var fleetTag: String?
     /// The ordered queue of star-system designations still to visit.
     ///
     /// For a continuous run this is append-only HISTORY rather than a plan: the
@@ -188,6 +220,7 @@ public struct Directive: Identifiable, Equatable, Sendable {
         deviceCode: String,
         controllerCode: String? = nil,
         roamCentre: String? = nil,
+        fleetTag: String? = nil,
         targets: [String],
         targetIndex: Int,
         step: String,
@@ -204,6 +237,7 @@ public struct Directive: Identifiable, Equatable, Sendable {
         self.deviceCode = deviceCode
         self.controllerCode = controllerCode
         self.roamCentre = roamCentre
+        self.fleetTag = fleetTag
         self.targets = targets
         self.targetIndex = targetIndex
         self.step = step
@@ -331,6 +365,18 @@ extension Directive {
         try #sql(
             """
             ALTER TABLE "directives" ADD COLUMN "roamCentre" TEXT
+            """
+        )
+        .execute(db)
+    }
+
+    /// A separate migration, not an edit to any above: all three have shipped
+    /// and are recorded in real databases, so editing one means it silently
+    /// never runs again.
+    public static let addFleetTag = SchemaMigration("Add 'fleetTag' to 'directives'") { db in
+        try #sql(
+            """
+            ALTER TABLE "directives" ADD COLUMN "fleetTag" TEXT
             """
         )
         .execute(db)

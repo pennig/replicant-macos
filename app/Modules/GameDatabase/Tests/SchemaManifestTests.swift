@@ -47,6 +47,7 @@ import Testing
         "Create 'eventLogs' table",
         "Backfill 'fullyScannedAt' from systemDetails",
         "Add 'roamCentre' to 'directives'",
+        "Add 'fleetTag' to 'directives'",
     ]
 
     @Test func manifestMatchesTheFrozenList() {
