@@ -937,7 +937,21 @@ public struct SalvageRun: MissionStepMachine {
 }
 ```
 
-Reuse `SurveyRun.adoptedDrones(of:aboard:in:)`'s **exact** two-ended reading — adoption is read from both `controller.controlledDeviceCodes` and each drone's `controllerDeviceCode`, because `controlled_devices` is detail-only and a list sync erases it. Copy the logic rather than importing `SurveyRun`'s statics, so the two machines can diverge without coupling; note in a comment that it is a deliberate duplicate of a documented invariant.
+**Extract the adoption queries into a shared helper — do not duplicate them.** (Operator ruling, 2026-07-30, overriding this plan's first draft, which said to copy them.)
+
+Both machines need the same two-ended read: adoption is resolved from `controller.controlledDeviceCodes` **and** each drone's `controllerDeviceCode`, because `controlled_devices` ships only in the single-device payload and a list sync erases it from `detail`. Reading one end alone made a perfectly staged vessel look unstaged. That invariant is subtle enough that two copies would mean a future correction lands in only one of them.
+
+So: create `DirectiveEngine/Sources/AMIFleet.swift` — a plain enum, no TCA, no I/O — holding
+
+```swift
+AMIFleet.adoptedDrones(of: Device, in: WorldSnapshot) -> [Device]
+AMIFleet.adoptedDrones(of: Device, aboard: Device, in: WorldSnapshot) -> [Device]
+AMIFleet.stowed(aboard: Device, in: WorldSnapshot, offering directive: String) -> Device?
+```
+
+Move `SurveyRun`'s implementations there verbatim, **carrying their doc comments across intact** — the comments are the record of why the two-ended read exists. Then have `SurveyRun` call through. `SurveyRun.controller(aboard:in:)` becomes `AMIFleet.stowed(aboard:in:offering: "survey_system")` and `SalvageRun`'s becomes the same call with `"gather_salvage"`.
+
+This touches shipped `SurveyRun` code, which this plan did not originally budget for. Keep the change mechanical: no behaviour may change, and `SurveyRunTests` must stay green **without edits**. If a `SurveyRunTests` assertion has to change to accommodate the move, stop — that means the extraction altered behaviour, which it must not.
 
 `preflight` order (each guard matters and the order is load-bearing):
 1. vessel missing → `.stall(.unreachableDevice)`
