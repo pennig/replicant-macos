@@ -133,6 +133,8 @@ public struct BobnetFeature {
                 return selectionChanged(&state)
 
             case .binding(\.isAtLatest):
+                let nowAtLatest = state.isAtLatest
+                logger.info("DIAG binding isAtLatest -> \(nowAtLatest, privacy: .public)")
                 return reevaluateLinger(state)
 
             case .binding:
@@ -202,9 +204,12 @@ public struct BobnetFeature {
                 return .none
 
             case .latestMessageChanged:
+                logger.info("DIAG latestMessageChanged")
                 return reevaluateLinger(state)
 
             case .lingerElapsed:
+                let firedFor = state.selectedChannel ?? "nil"
+                logger.info("DIAG lingerElapsed FIRED channel=\(firedFor, privacy: .public)")
                 guard let channel = state.selectedChannel else { return .none }
                 let database = self.database
                 return .run { _ in
@@ -212,11 +217,20 @@ public struct BobnetFeature {
                         let maxID = try BobnetMessage
                             .where { $0.channel.eq(channel) }
                             .fetchAll(db).map(\.id).max() ?? 0
+                        logger.info("DIAG marker write \(channel, privacy: .public) -> \(maxID, privacy: .public)")
                         try BobnetReadMarker.advance(db, channel: channel, to: maxID)
                     }
+                    logger.info("DIAG marker write COMMITTED \(channel, privacy: .public)")
+                } catch: { error, _ in
+                    // Previously uncaught: a failing marker write vanished silently.
+                    logger.error("DIAG marker write FAILED: \(error, privacy: .public)")
                 }
 
             case let .detailAppeared(channel):
+                let selectedNow = state.selectedChannel ?? "nil"
+                logger.info(
+                    "DIAG detailAppeared \(channel ?? "nil", privacy: .public) selected=\(selectedNow, privacy: .public)"
+                )
                 // Re-entering the pane rebuilds the scroll view at the bottom,
                 // but delivers no geometry *change* — so the flag `.detailDisappeared`
                 // cleared on the way out has to be re-established here, or the
@@ -227,6 +241,10 @@ public struct BobnetFeature {
                 return reevaluateLinger(state)
 
             case let .detailDisappeared(channel):
+                let stillSelected = state.selectedChannel ?? "nil"
+                logger.info(
+                    "DIAG detailDisappeared \(channel ?? "nil", privacy: .public) selected=\(stillSelected, privacy: .public)"
+                )
                 // Stale identities from an intra-pane channel switch (the old `.id`'s
                 // onDisappear can fire after the new channel is already selected) must
                 // not clobber the new channel's linger — only a true pane departure
@@ -305,6 +323,15 @@ public struct BobnetFeature {
         state.markerAtSelection = state.channelList.rows
             .first { $0.name == channel }?.lastReadMessageID ?? 0
         state.isAtLatest = channel != nil
+        let snapshotMarker = state.markerAtSelection
+        let rowCount = state.channelList.rows.count
+        logger.info(
+            """
+            DIAG selectionChanged -> \(channel ?? "nil", privacy: .public) \
+            markerAtSelection=\(snapshotMarker, privacy: .public) \
+            rows=\(rowCount, privacy: .public)
+            """
+        )
         return .merge(
             reevaluateLinger(state),
             .run { [fetch = state.$channelMessages] _ in
@@ -318,14 +345,46 @@ public struct BobnetFeature {
     /// is unread. `cancelInFlight` restarts the window when a new message
     /// arrives mid-linger.
     private func reevaluateLinger(_ state: State) -> Effect<Action> {
-        guard let channel = state.selectedChannel,
-              state.isAtLatest,
-              let row = state.channelList.rows.first(where: { $0.name == channel }),
-              row.latestMessageID > row.lastReadMessageID
-        else { return .cancel(id: CancelID.linger) }
+        guard let channel = state.selectedChannel else {
+            logger.info("DIAG linger CANCEL: no channel selected")
+            return .cancel(id: CancelID.linger)
+        }
+        guard state.isAtLatest else {
+            logger.info("DIAG linger CANCEL: not at latest (\(channel, privacy: .public))")
+            return .cancel(id: CancelID.linger)
+        }
+        guard let row = state.channelList.rows.first(where: { $0.name == channel }) else {
+            logger.info(
+                """
+                DIAG linger CANCEL: no channelList row for \(channel, privacy: .public) \
+                (rows=\(state.channelList.rows.count, privacy: .public) \
+                names=\(state.channelList.rows.map(\.name).joined(separator: ","), privacy: .public))
+                """
+            )
+            return .cancel(id: CancelID.linger)
+        }
+        guard row.latestMessageID > row.lastReadMessageID else {
+            logger.info(
+                """
+                DIAG linger CANCEL: nothing unread \(channel, privacy: .public) \
+                latest=\(row.latestMessageID, privacy: .public) \
+                marker=\(row.lastReadMessageID, privacy: .public) \
+                unread=\(row.unreadCount, privacy: .public)
+                """
+            )
+            return .cancel(id: CancelID.linger)
+        }
+        logger.info(
+            """
+            DIAG linger ARMED \(channel, privacy: .public) \
+            latest=\(row.latestMessageID, privacy: .public) \
+            marker=\(row.lastReadMessageID, privacy: .public)
+            """
+        )
         let clock = self.clock
         return .run { send in
             try await clock.sleep(for: .seconds(3))
+            logger.info("DIAG linger slept 3s, sending lingerElapsed")
             await send(.lingerElapsed)
         }
         .cancellable(id: CancelID.linger, cancelInFlight: true)
