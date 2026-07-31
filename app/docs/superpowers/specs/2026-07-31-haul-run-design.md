@@ -149,9 +149,10 @@ Steps, with the dispatch/confirm split the `.immediate` classification forces:
    makes the interval real; 60s matches the Salvage Run's idle backoff.
 
 A pile counts as **drained** when its `LocationFootprint` reads `resources == 0`, or when it has
-vanished from the footprint entirely. Each pile is appended to `Directive.targets` when first assigned —
-append-only history, exactly as the roams use it — which is what makes "3 piles drained" computable in
-§9 without a new column.
+vanished from the footprint entirely. Nothing records which piles are finished: a drained pile simply
+stops being a candidate, and the planner re-derives the whole assignment from the current footprint on
+every cycle. That is the same "recompute, never cache" rule §7 of the superseded spec imposed on the
+salvage frontier, and for the same reason — the catalogue moves under the run.
 
 Steady-state cost is therefore one `GET /v1/locations` per 60s, plus one `set_directive` each time a
 pile drains — nothing per round trip, and nothing per unit moved.
@@ -163,8 +164,13 @@ The run halts on configuration errors only, and never on a quiet hauler.
 | Reason | Raised when |
 | --- | --- |
 | `noHaulControllerTagged` | a fresh tag read finds no `auto:haul` controller (**the only new reason**) |
-| `unreachableDevice` | every tagged controller reports `in_control_range == false`, so no `set_directive` can land — after a bounded wait, since a stationary replicant moving is transient |
-| `commandRejected` | the server refuses `set_directive` |
+| `unreachableDevice` | the controller an assignment names is missing from the fleet entirely |
+| `commandRejected` | the server refuses `set_directive`, or the controller never takes the config before the confirm deadline |
+
+**`in_control_range` is deliberately not pre-checked.** An out-of-range controller cannot accept
+`set_directive`, but the server rejecting the command already produces `commandRejected` with the
+server's own message. Gating on the local flag instead would add a second, staler judge of the same
+fact — and a stale `false` would stall a run whose controller is reachable.
 
 Explicitly **not** stalls: no reachable pile (idle and re-check); `_eval_state: blocked:` (see §3); a
 pile that drains slowly. Per the ruling carried over from §6 and §7 of the superseded spec, a quiet
@@ -186,11 +192,18 @@ hauler with the miner still working is healthy.
 
 ## 9. UI
 
-One launcher sheet, following `NewSalvageRunSheet`: it lists controllers carrying `auto:haul` and offers
-a distinct empty state naming an untagged transport controller, so a staged-but-untagged fleet says so
-instead of showing an empty picker. Row subtitle reports work done rather than *m/n*, matching the roam
-precedent — "3 piles drained · hauling `ATIANFU-BELT-1`". List rows, detail pane, stall panel and step
-timeline all come free from `DirectivesFeature`.
+One launcher sheet, following `NewSalvageRunSheet`. There is no picker to make: the tag chooses the
+fleet, so the sheet *reports* the controllers carrying `auto:haul` and offers Launch, with a distinct
+empty state naming an untagged transport controller so a staged-but-untagged fleet says so instead of
+showing an empty list. `Directive.deviceCode` — a required column — takes the lowest-coded tagged
+controller as the row's anchor; the machine never reads it, resolving its working set by tag on every
+evaluation, so a fleet that changes under the run is picked up without touching the row.
+
+The row subtitle names the work in flight rather than a count — "Hauling `ATIANFU-BELT-1`", or "Nothing
+reachable" when idle — read from the controllers' own in-force config. A count of drained piles is
+deliberately not offered: nothing stores one, and inventing a column to display a number would be the
+only reason that column existed. List rows, detail pane, stall panel and step timeline all come free
+from `DirectivesFeature`.
 
 Location and system designations render in a mono token, per the house rule.
 
