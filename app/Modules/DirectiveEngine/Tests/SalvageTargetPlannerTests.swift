@@ -148,4 +148,40 @@ struct SalvageTargetPlannerTests {
         ]
         #expect(SalvageTargetPlanner.meshSystems(in: devices) == ["TOSLIT"])
     }
+
+    /// The backend appends a parenthetical parameter to some statuses, so a raw
+    /// `status == "relaying"` reads a meshed system as unmeshed — and the run
+    /// then spends a 370-unit relay planting a second one where one already
+    /// stands. `Device.statusBase` strips the parameter.
+    @Test func meshSystemsSeeARelayingStatusCarryingAParameter() {
+        let devices = [
+            Self.device("R1", features: ["relay"], status: "relaying (TOSLIT)", location: "TOSLIT-3-L4"),
+        ]
+        #expect(SalvageTargetPlanner.meshSystems(in: devices) == ["TOSLIT"])
+    }
+
+    /// A `system_hub` carries the `relay` feature because it contains an
+    /// integrated relay, and it genuinely does mesh its system — so matching on
+    /// the CAPABILITY rather than the device type is correct here, unlike the
+    /// dispatch queries in `SalvageRun` (which must never `deploy` a hub).
+    @Test func meshSystemsCountASystemHubsIntegratedRelay() {
+        let devices = [
+            Self.device("HUB", features: ["relay", "hub"], status: "relaying", location: "WATTL-1"),
+        ]
+        #expect(SalvageTargetPlanner.meshSystems(in: devices) == ["WATTL"])
+    }
+
+    /// A mining assay must never be read as salvage. The table is shared by
+    /// design ("mining assays need no schema change when they land"), and the
+    /// first one to land would otherwise send a salvage run to a system holding
+    /// no salvage at all.
+    @Test func ignoresAssaysThatArentSalvage() {
+        let stars = ["HOME": star("HOME", x: 0), "ORE": star("ORE", x: 3)]
+        var mining = assay("ORE", body: "ORE-1", units: 9_000)
+        mining.siteType = "mining"
+        #expect(SalvageTargetPlanner.nextTarget(
+            assays: [mining], stars: stars, meshSystems: ["HOME"], attempted: [],
+            vessel: Position(x: 0, y: 0, z: 0)
+        ) == nil)
+    }
 }

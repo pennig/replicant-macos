@@ -99,6 +99,12 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
     /// backstop gives up waiting on it, so the run can't mistake absence for
     /// "nothing left" and silently skip a system that may hold real salvage.
     case salvageSystemUnresolved
+    /// A `gather_salvage` cycle finished and its drones came home, but the body
+    /// it worked is still on offer — even after an authoritative re-read of the
+    /// system. Without this the mining loop's only terminator was a single
+    /// `salvage.depleted` SSE frame, and a dropped one meant the run re-launched
+    /// the same body forever.
+    case salvageBodyNotDepleted
 
     /// The stall panel's headline.
     public var displayName: String {
@@ -116,6 +122,7 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
         case .awaitingRelayRestock: "Out of FTL relays"
         case .relayActivationFailed: "Relay didn't come up"
         case .salvageSystemUnresolved: "System data unavailable"
+        case .salvageBodyNotDepleted: "Salvage body isn't draining"
         }
     }
 
@@ -150,6 +157,8 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
             "The relay was deployed but never started relaying. Check it at the Lagrange point, then retry or skip this target."
         case .salvageSystemUnresolved:
             "The system's catalogue data never loaded after arrival. Retry to fetch it again, or skip this target."
+        case .salvageBodyNotDepleted:
+            "A salvage run finished on this body but it still reads as holding salvage. Check the site, then retry to work it again or skip this target."
         }
     }
 }

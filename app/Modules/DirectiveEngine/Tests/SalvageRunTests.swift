@@ -119,6 +119,28 @@ private func world(
     )
 }
 
+/// A `.stepStarted` timeline entry — the row `DirectiveExecutor.move` writes on
+/// every step transition, and the one `SalvageRun.stepEntryCount` counts to
+/// decide whether a re-entering step has already spent its read.
+private func stepStarted(_ step: String, at occurredAt: Date) -> DirectiveLogEntry {
+    DirectiveLogEntry(
+        id: "S-\(step)-\(occurredAt.timeIntervalSince1970)", directiveID: "D1",
+        deviceCode: nil, kind: .stepStarted, summary: "Step: \(step)", step: step,
+        operationID: nil, eventID: nil, occurredAt: occurredAt
+    )
+}
+
+/// The entry `DirectiveResolutionClient` writes when the operator resolves a
+/// stall. It re-arms the read budget: a Retry has to be able to buy a genuinely
+/// new look, or it is a no-op over an unchanged snapshot.
+private func resolvedEntry(_ step: String, at occurredAt: Date) -> DirectiveLogEntry {
+    DirectiveLogEntry(
+        id: "R-\(occurredAt.timeIntervalSince1970)", directiveID: "D1",
+        deviceCode: nil, kind: .resolved, summary: "Retried \(step)", step: step,
+        operationID: nil, eventID: nil, occurredAt: occurredAt
+    )
+}
+
 private func running(
     step: String = SalvageRun.Step.preflight,
     targets: [String] = ["TOSLIT"],
@@ -408,7 +430,7 @@ struct SalvageRunEmplacementTests {
         // its backstop deadline) live entirely in `confirmingRelay` — see
         // the reasoning pinned by `waitsRatherThanRedispatchingWhileWithinTheDeadline`.
         let atL4 = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3-L4")
-        let deployed = device("RELAY", location: "TOSLIT-3-L4", features: ["relay"], status: "idle")
+        let deployed = device("RELAY", type: "ftl_relay", location: "TOSLIT-3-L4", features: ["relay"], status: "idle")
         let world = world(devices: [atL4, controller, drone, deployed], systems: ["TOSLIT": toslit])
         #expect(SalvageRun().nextAction(directive: running(step: "activating"), world: world)
             == .dispatch(kind: .simple("activate"), deviceCode: "RELAY",
@@ -417,7 +439,7 @@ struct SalvageRunEmplacementTests {
 
     @Test func advancesToConfiguringOnceTheRelayIsRelaying() {
         let atL4 = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3-L4")
-        let up = device("RELAY", location: "TOSLIT-3-L4", features: ["relay"], status: "relaying")
+        let up = device("RELAY", type: "ftl_relay", location: "TOSLIT-3-L4", features: ["relay"], status: "relaying")
         let world = world(devices: [atL4, controller, drone, up], systems: ["TOSLIT": toslit])
         #expect(SalvageRun().nextAction(directive: running(step: "confirmingRelay"), world: world)
             == .advanceStep(nextStep: "configuring"))
@@ -434,7 +456,7 @@ struct SalvageRunEmplacementTests {
     /// review asked for.
     @Test func waitsRatherThanRedispatchingWhileWithinTheDeadline() {
         let atL4 = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3-L4")
-        let deployed = device("RELAY", location: "TOSLIT-3-L4", features: ["relay"], status: "idle")
+        let deployed = device("RELAY", type: "ftl_relay", location: "TOSLIT-3-L4", features: ["relay"], status: "idle")
         let recent = running(step: "confirmingRelay", stepStartedAt: now.addingTimeInterval(-60))
         let world = world(devices: [atL4, controller, drone, deployed],
                           systems: ["TOSLIT": toslit], now: now)
@@ -445,12 +467,73 @@ struct SalvageRunEmplacementTests {
         // The backstop. A relay that deployed but never started relaying is a
         // dead run — the whole point of the trip was the mesh membership.
         let atL4 = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3-L4")
-        let deployed = device("RELAY", location: "TOSLIT-3-L4", features: ["relay"], status: "idle")
+        let deployed = device("RELAY", type: "ftl_relay", location: "TOSLIT-3-L4", features: ["relay"], status: "idle")
         let stale = running(step: "confirmingRelay", stepStartedAt: now.addingTimeInterval(-11 * 60))
         let world = world(devices: [atL4, controller, drone, deployed],
                           systems: ["TOSLIT": toslit], now: now)
         #expect(SalvageRun().nextAction(directive: stale, world: world)
             == .stall(.relayActivationFailed))
+    }
+
+    /// Nothing else moves the relay row while this step polls: the `relay.*` SSE
+    /// route only invalidates FTL-mesh freshness, and the confirm-read that
+    /// follows `activate` fires before the server has necessarily flipped the
+    /// status. A bare wait could therefore sit on a stale row for the whole ten
+    /// minutes and then stall on a relay that came up fine, so a row that has
+    /// gone unread past `relayPollInterval` earns an authoritative look.
+    @Test func readsTheRelayRowRatherThanWaitingOnAStaleOne() {
+        let atL4 = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3-L4")
+        let stale = device(
+            "RELAY", type: "ftl_relay", location: "TOSLIT-3-L4", features: ["relay"],
+            status: "idle", updatedAt: now.addingTimeInterval(-SalvageRun.relayPollInterval - 1)
+        )
+        let directive = running(step: "confirmingRelay", stepStartedAt: now.addingTimeInterval(-120))
+        let world = world(devices: [atL4, controller, drone, stale],
+                          systems: ["TOSLIT": toslit], now: now)
+        // `thenStall: nil` — a relay still coming up is expected, not a fault,
+        // so a re-ask that still wants a read collapses to a wait rather than
+        // demanding a human.
+        #expect(SalvageRun().nextAction(directive: directive, world: world)
+            == .refreshDevices(deviceCodes: ["RELAY"], thenStall: nil))
+    }
+
+    /// The backend appends a parenthetical parameter to some statuses, so a raw
+    /// `status == "relaying"` reads a live relay as dead — a false
+    /// `relayActivationFailed` on a relay that is up and meshing.
+    /// `Device.statusBase` is the established form.
+    @Test func acceptsARelayingStatusCarryingAParameter() {
+        let atL4 = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3-L4")
+        let up = device("RELAY", type: "ftl_relay", location: "TOSLIT-3-L4",
+                        features: ["relay"], status: "relaying (TOSLIT)")
+        let world = world(devices: [atL4, controller, drone, up], systems: ["TOSLIT": toslit])
+        #expect(SalvageRun().nextAction(directive: running(step: "confirmingRelay"), world: world)
+            == .advanceStep(nextStep: "configuring"))
+    }
+
+    /// A `system_hub` carries the `relay` FEATURE — it contains an integrated
+    /// relay, which is why `SalvageTargetPlanner.meshSystems` is right to match
+    /// on the feature. These are dispatch queries though, and a stowed hub
+    /// matched by feature would have had `deploy` issued at it.
+    @Test func neverMistakesAStowedSystemHubForARelay() {
+        let atL4 = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3-L4")
+        let hub = device("HUB", type: "system_hub", stowedIn: "VESSEL", features: ["relay", "hub"])
+        let world = world(devices: [atL4, controller, drone, hub], systems: ["TOSLIT": toslit])
+        #expect(SalvageRun.relay(aboard: atL4, in: world) == nil)
+        // No relay aboard at all, so emplacement reroutes to restocking rather
+        // than deploying the hub.
+        #expect(SalvageRun().nextAction(directive: running(step: "emplacing"), world: world)
+            == .advanceStep(nextStep: "restocking"))
+    }
+
+    /// The same narrowing on the co-location query `activate` and `confirmRelay`
+    /// resolve through: a hub parked at the vessel's own Lagrange point is not
+    /// the relay this run just deployed.
+    @Test func neverMistakesACoLocatedSystemHubForTheDeployedRelay() {
+        let atL4 = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3-L4")
+        let hub = device("HUB", type: "system_hub", location: "TOSLIT-3-L4",
+                         features: ["relay", "hub"], status: "relaying")
+        let world = world(devices: [atL4, controller, drone, hub], systems: ["TOSLIT": toslit])
+        #expect(SalvageRun.deployedRelay(near: atL4, in: world) == nil)
     }
 
     /// A system with no Lagrange point anywhere cannot host a relay — a
@@ -491,15 +574,33 @@ struct SalvageRunEmplacementTests {
     }
 
     /// The bound on that wait, mirroring `configure`'s
-    /// `stallsWhenTheTargetSystemNeverResolves`: past `systemResolutionDeadline`
-    /// an unresolved system surfaces rather than waiting forever.
-    @Test func stallsWhenTheBlobNeverResolvesDuringEmplacement() {
+    /// `readsTheSystemOnceBeforeGivingUpOnIt`: past `systemResolutionDeadline`
+    /// the run spends ONE authoritative read rather than waiting forever — or
+    /// stalling on a snapshot that Retry could never change.
+    @Test func readsTheSystemOnceBeforeGivingUpDuringEmplacement() {
         let arrived = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3")
         let directive = running(
             step: "emplacing",
             stepStartedAt: now.addingTimeInterval(-SalvageRun.systemResolutionDeadline - 1)
         )
         let world = world(devices: [arrived, controller, drone, relay], now: now) // still no "TOSLIT" entry
+        #expect(SalvageRun().nextAction(directive: directive, world: world)
+            == .refreshSystem(designation: "TOSLIT", nextStep: "emplacing"))
+    }
+
+    /// And once that read has been spent, it surfaces.
+    @Test func stallsWhenTheBlobNeverResolvesDuringEmplacement() {
+        let arrived = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3")
+        let directive = running(
+            step: "emplacing",
+            stepStartedAt: now.addingTimeInterval(-SalvageRun.systemResolutionDeadline - 1)
+        )
+        let world = world(
+            devices: [arrived, controller, drone, relay],
+            log: [stepStarted("emplacing", at: now.addingTimeInterval(-1_200)),
+                  stepStarted("emplacing", at: now.addingTimeInterval(-601))],
+            now: now
+        )
         #expect(SalvageRun().nextAction(directive: directive, world: world)
             == .stall(.salvageSystemUnresolved))
     }
@@ -547,6 +648,21 @@ private let miningToslitAssays: [String: [String: Double]] = [
 /// still holds live bodies) — the pair mirrors `configure`'s own
 /// finished-vs-live distinction one step over.
 private let drainedToslit = StarSystem(designation: "TOSLIT", planets: [])
+
+/// `miningToslit` after its richest body has drained: TOSLIT-6-5 is gone and
+/// only TOSLIT-3-2 is still live. What honest progress through the mining loop
+/// looks like from `verifying`'s point of view.
+private let partlyDrainedToslit = StarSystem(
+    designation: "TOSLIT",
+    planets: [
+        Planet(designation: "TOSLIT-3", moons: [
+            Moon(designation: "TOSLIT-3-2", salvage: [
+                SalvageSite(designation: "TOSLIT-3-2-SAL-1", resourcesAvailable: ["ore"]),
+            ]),
+        ]),
+        Planet(designation: "TOSLIT-6"),
+    ]
+)
 
 private func completion(at occurredAt: Date) -> DirectiveLogEntry {
     DirectiveLogEntry(
@@ -680,16 +796,58 @@ struct SalvageRunMiningTests {
     /// re-stamps `stepStartedAt` (`DirectiveExecutor.apply`'s `.wait` case is
     /// a pure no-op — every other case, including `.refreshSystem`, commits
     /// through `move()`), so it's the only way this backstop can genuinely
-    /// accumulate. Past `systemResolutionDeadline`, an unresolved system
-    /// surfaces rather than waiting forever.
-    @Test func stallsWhenTheTargetSystemNeverResolves() {
+    /// accumulate. Past `systemResolutionDeadline` the run spends ONE
+    /// authoritative read — the fix for an Important review finding: the stall
+    /// this used to raise told the operator to "retry to fetch it again", but
+    /// nothing on this path ever fetched anything and `retry` only re-stamps the
+    /// clock, so Retry re-ran a pure function over the identical snapshot and
+    /// re-stalled forever. The only real exit was Skip, which permanently
+    /// forfeits a system that may hold real salvage.
+    @Test func readsTheSystemOnceBeforeGivingUpOnIt() {
         let directive = running(
             step: "configuring",
             stepStartedAt: now.addingTimeInterval(-SalvageRun.systemResolutionDeadline - 1)
         )
         let world = world(devices: [atSystem, controller, drone], now: now) // still no "TOSLIT" entry
         #expect(SalvageRun().nextAction(directive: directive, world: world)
+            == .refreshSystem(designation: "TOSLIT", nextStep: "configuring"))
+    }
+
+    /// Once that read has been spent — the step has been entered twice with no
+    /// resolution in between — the run surfaces rather than refreshing forever.
+    @Test func stallsWhenTheTargetSystemNeverResolves() {
+        let directive = running(
+            step: "configuring",
+            stepStartedAt: now.addingTimeInterval(-SalvageRun.systemResolutionDeadline - 1)
+        )
+        let world = world(
+            devices: [atSystem, controller, drone],
+            log: [stepStarted("configuring", at: now.addingTimeInterval(-1_200)),
+                  stepStarted("configuring", at: now.addingTimeInterval(-601))],
+            now: now
+        )
+        #expect(SalvageRun().nextAction(directive: directive, world: world)
             == .stall(.salvageSystemUnresolved))
+    }
+
+    /// And the operator's Retry re-arms it. This is what makes the stall's
+    /// guidance true: `DirectiveResolutionClient.retry` writes a `.resolved`
+    /// entry, which ends the budget walk, so the very next deadline buys a fresh
+    /// authoritative read rather than replaying the stale snapshot.
+    @Test func aRetryBuysAnotherReadRatherThanReplayingTheStall() {
+        let directive = running(
+            step: "configuring",
+            stepStartedAt: now.addingTimeInterval(-SalvageRun.systemResolutionDeadline - 1)
+        )
+        let world = world(
+            devices: [atSystem, controller, drone],
+            log: [stepStarted("configuring", at: now.addingTimeInterval(-1_200)),
+                  stepStarted("configuring", at: now.addingTimeInterval(-900)),
+                  resolvedEntry("configuring", at: now.addingTimeInterval(-601))],
+            now: now
+        )
+        #expect(SalvageRun().nextAction(directive: directive, world: world)
+            == .refreshSystem(designation: "TOSLIT", nextStep: "configuring"))
     }
 }
 
@@ -749,15 +907,90 @@ struct SalvageRunVerificationTests {
         #expect(SalvageRun().nextAction(directive: running(step: "verifying"), world: world) == .wait)
     }
 
-    /// The bound on that wait, same shape and deadline as `configure`'s.
+    /// The bound on that wait, same shape, deadline and one-read budget as
+    /// `configure`'s.
     @Test func stallsWhenTheSystemNeverResolves() {
         let directive = running(
             step: "verifying",
             stepStartedAt: fixtureNow.addingTimeInterval(-SalvageRun.systemResolutionDeadline - 1)
         )
-        let world = world(devices: [atSystem, controller, drone]) // still no "TOSLIT" entry
+        let world = world(
+            devices: [atSystem, controller, drone], // still no "TOSLIT" entry
+            log: [stepStarted("verifying", at: fixtureNow.addingTimeInterval(-1_200)),
+                  stepStarted("verifying", at: fixtureNow.addingTimeInterval(-601))]
+        )
         #expect(SalvageRun().nextAction(directive: directive, world: world)
             == .stall(.salvageSystemUnresolved))
+    }
+}
+
+// MARK: - Mining-loop progress
+
+/// The mining loop's only terminator used to be one SSE frame.
+///
+/// `configuring → launching → awaiting → verifying → configuring` re-derives
+/// `nextBody` on every pass, and a body leaves the candidate set only when its
+/// site's `depleted` flag flips — written solely by the `salvage.depleted`
+/// route. Nothing refreshed the system and nothing recorded which body had just
+/// been worked, so a single dropped frame meant a real `launch` POST every
+/// cycle, unbounded, with no deadline and no stall.
+@Suite("Salvage Run — mining-loop progress")
+struct SalvageRunLoopProgressTests {
+    /// The controller carrying an in-force `gather_salvage` config — the
+    /// server's own record of the body the finished cycle was working, which is
+    /// what lets the loop notice it is not progressing without a new column.
+    private func worked(_ body: String) -> Device {
+        device(
+            "CTRL", type: "ami_mining_controller", stowedIn: "VESSEL",
+            controlled: ["DRONE"], directives: ["gather_salvage"],
+            currentDirective: "gather_salvage",
+            currentDirectiveConfig: ["location": .string(body), "recall": .bool(true)]
+        )
+    }
+
+    /// The body just worked is still the richest live one. Rather than
+    /// re-launching at it — which is what the loop did forever — read the system
+    /// authoritatively: the common cause is a stale `depleted` flag, and the
+    /// read repairs it.
+    @Test func readsTheSystemWhenTheBodyJustWorkedComesBackAgain() {
+        let world = world(devices: [atSystem, worked("TOSLIT-6-5"), drone],
+                          systems: ["TOSLIT": miningToslit], siteAssays: miningToslitAssays)
+        #expect(SalvageRun().nextAction(directive: running(step: "verifying"), world: world)
+            == .refreshSystem(designation: "TOSLIT", nextStep: "verifying"))
+    }
+
+    /// Once that read has been spent and the body is STILL on offer, the run
+    /// surfaces instead of looping. A stall the operator can Skip past beats an
+    /// invisible command loop against the live API.
+    @Test func stallsWhenAWorkedBodyNeverDrains() {
+        let world = world(
+            devices: [atSystem, worked("TOSLIT-6-5"), drone],
+            log: [stepStarted("verifying", at: fixtureNow.addingTimeInterval(-120)),
+                  stepStarted("verifying", at: fixtureNow.addingTimeInterval(-60))],
+            systems: ["TOSLIT": miningToslit], siteAssays: miningToslitAssays
+        )
+        #expect(SalvageRun().nextAction(directive: running(step: "verifying"), world: world)
+            == .stall(.salvageBodyNotDepleted))
+    }
+
+    /// Progress looks like this: the body just worked has dropped out, and the
+    /// next-richest one is offered. The loop continues with no read spent.
+    @Test func continuesWhenTheNextBodyIsADifferentOne() {
+        let world = world(devices: [atSystem, worked("TOSLIT-6-5"), drone],
+                          systems: ["TOSLIT": partlyDrainedToslit],
+                          siteAssays: miningToslitAssays)
+        #expect(SalvageRun().nextAction(directive: running(step: "verifying"), world: world)
+            == .advanceStep(nextStep: "configuring"))
+    }
+
+    /// A controller running something else — or nothing — names no worked body,
+    /// so there is nothing to compare against and the loop proceeds normally.
+    /// This is the first pass through a fresh system, before any cycle has run.
+    @Test func proceedsWhenTheControllerNamesNoWorkedBody() {
+        let world = world(devices: [atSystem, controller, drone],
+                          systems: ["TOSLIT": miningToslit], siteAssays: miningToslitAssays)
+        #expect(SalvageRun().nextAction(directive: running(step: "verifying"), world: world)
+            == .advanceStep(nextStep: "configuring"))
     }
 }
 
@@ -785,11 +1018,19 @@ struct SalvageRunRestockTests {
 
     /// The engine does NOT stow — that would loosen the never-stow contract,
     /// which is its own future design. It parks and asks.
-    @Test func stallsForRestockOnceAtBase() {
+    ///
+    /// But it reads the fleet first, and that is not decoration: this is the one
+    /// step whose whole purpose is waiting on an operator action that changes a
+    /// stow column, and nothing else refreshes those rows while the run sits
+    /// here. A bare stall made Retry a structural no-op — the operator stows
+    /// relays, hits Retry, and the same stale rows still say none are aboard. A
+    /// tag read is also the only scope that can SEE a freshly stowed device,
+    /// since stowing clears `location`.
+    @Test func readsTheFleetBeforeStallingForRestockAtBase() {
         let atBase = device("VESSEL", location: "AINALRAM-BELT-1")
         let world = world(devices: [atBase, controller, drone])
         #expect(SalvageRun().nextAction(directive: running(step: "restocking"), world: world)
-            == .stall(.awaitingRelayRestock))
+            == .refreshFleet(tag: "auto:salvage", thenStall: .awaitingRelayRestock))
     }
 
     @Test func resumesWhenRelaysAreStowedAndTheRunIsRetried() {
