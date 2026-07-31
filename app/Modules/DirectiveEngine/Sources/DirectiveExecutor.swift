@@ -90,6 +90,16 @@ enum DirectiveExecutor {
             await move(directive, to: nextStep, controllerCode: directive.controllerCode)
             return true
 
+        case let .refreshFootprint(nextStep):
+            // Best-effort by contract, same reasoning as `.refreshSystem` above:
+            // this is a census read, and a stale census merely means the next
+            // cycle re-reads it. Stalling a continuous run on a transient GET
+            // would demand a human for something that fixes itself.
+            @Dependency(\.locationsClient) var locationsClient
+            try? await locationsClient.refreshFootprint()
+            await move(directive, to: nextStep, controllerCode: directive.controllerCode)
+            return true
+
         case let .setDeviceTags(deviceCode, tags, nextStep):
             // Best-effort by contract, same reasoning as `.refreshSystem` above:
             // the real work this action follows (a relay planted and meshing)
