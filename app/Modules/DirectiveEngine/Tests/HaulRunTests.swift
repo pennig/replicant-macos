@@ -66,13 +66,26 @@ private func footprint(_ location: String, _ resources: Int, at fetchedAt: Date 
 private func world(
     devices: [Device],
     footprints: [LocationFootprint] = [],
+    log: [DirectiveLogEntry] = [],
     now: Date = fixtureNow
 ) -> WorldSnapshot {
     WorldSnapshot(
         devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
         openOperations: [:],
+        log: log,
         footprints: Dictionary(footprints.map { ($0.location, $0) }, uniquingKeysWith: { _, last in last }),
         now: now
+    )
+}
+
+/// A bare `.stepStarted` timeline entry, the shape `dispatchAttemptCount`
+/// walks — everything the log-derived re-entry budget needs and nothing
+/// else. `id` is just a running counter; nothing in the budget reads it.
+private func stepStartedEntry(_ id: Int, _ step: String, at occurredAt: Date) -> DirectiveLogEntry {
+    DirectiveLogEntry(
+        id: "L\(id)", directiveID: "D1", deviceCode: nil, kind: .stepStarted,
+        summary: "Step: \(step)", step: step, operationID: nil, eventID: nil,
+        occurredAt: occurredAt
     )
 }
 
@@ -345,6 +358,165 @@ struct HaulRunTests {
         #expect(action == .advanceStep(nextStep: HaulRun.Step.assigning))
     }
 
+    /// Deferred item folded in during the round-2 fix: a controller that
+    /// became correctly pointed BETWEEN the `assigning` and `dispatching`
+    /// ticks (another controller's dispatch shifted the ranking, say) gets no
+    /// redundant `set_directive` — `dispatchAssignment` re-checks `isInForce`
+    /// before issuing anything.
+    @Test func dispatchingSkipsARedundantDispatchWhenAlreadyInForce() {
+        let alreadySettled = controller(
+            "C1", currentDirective: "ferry",
+            currentConfig: [
+                "collect": .string("ATIANFU-BELT-1"),
+                "deliver": .string(HaulRun.deliveryLocation),
+            ]
+        )
+        let action = HaulRun().nextAction(
+            directive: run(step: HaulRun.Step.dispatching, controllerCode: "C1"),
+            world: world(devices: [alreadySettled] + meshed, footprints: [footprint("ATIANFU-BELT-1", 3_537)])
+        )
+        #expect(action == .advanceStep(nextStep: HaulRun.Step.assigning))
+    }
+
+    // MARK: dispatch-attempt budget
+    //
+    // Round-2 regression coverage: `hasTakenSomeHaulConfig` (used by
+    // `confirm`) is looser than `isInForce` (used by `assign`), so a
+    // controller whose dispatched command is accepted but never actually
+    // APPLIED reads as instantly settled and gets re-pinned/re-dispatched by
+    // `assign` every cycle forever, with no deadline anywhere in the loop to
+    // stop it. `dispatchAssignment`'s log-derived `dispatchAttemptCount`
+    // bounds that.
+
+    /// Right at the budget: exactly `dispatchAttemptLimit` PRIOR dispatches
+    /// are logged, so this evaluation is dispatch number `dispatchAttemptLimit`
+    /// itself — still within budget, so it proceeds.
+    @Test func dispatchingProceedsWithinItsRepeatAttemptBudget() {
+        var log: [DirectiveLogEntry] = []
+        var when = fixtureNow.addingTimeInterval(-60)
+        var nextID = 0
+        for _ in 0..<(HaulRun.dispatchAttemptLimit - 1) {
+            log.append(stepStartedEntry(nextID, HaulRun.Step.assigning, at: when)); nextID += 1; when += 1
+            log.append(stepStartedEntry(nextID, HaulRun.Step.dispatching, at: when)); nextID += 1; when += 1
+            log.append(stepStartedEntry(nextID, HaulRun.Step.confirming, at: when)); nextID += 1; when += 1
+        }
+        log.append(stepStartedEntry(nextID, HaulRun.Step.assigning, at: when)); nextID += 1; when += 1
+        log.append(stepStartedEntry(nextID, HaulRun.Step.dispatching, at: when)) // the CURRENT entry
+
+        let stillOnOldPile = controller(
+            "C1", currentDirective: "ferry",
+            currentConfig: [
+                "collect": .string("SOME-OLDER-PILE-1"),
+                "deliver": .string(HaulRun.deliveryLocation),
+            ]
+        )
+        let action = HaulRun().nextAction(
+            directive: run(step: HaulRun.Step.dispatching, controllerCode: "C1"),
+            world: world(
+                devices: [stillOnOldPile] + meshed,
+                footprints: [footprint("ATIANFU-BELT-1", 3_537)],
+                log: log
+            )
+        )
+        #expect(action == .dispatch(
+            kind: .setDirective,
+            deviceCode: "C1",
+            params: CommandParams(directive: "ferry", configuration: [
+                "collect": .string("ATIANFU-BELT-1"),
+                "deliver": .string(HaulRun.deliveryLocation),
+            ]),
+            nextStep: HaulRun.Step.confirming
+        ))
+    }
+
+    /// **The loop terminator.** One cycle past `dispatchingProceedsWithinItsRepeatAttemptBudget`
+    /// — `dispatchAttemptLimit` PRIOR dispatches plus this one makes
+    /// `dispatchAttemptLimit + 1`, so `dispatchAssignment` stalls instead of
+    /// spending another `set_directive` POST on a command that has already
+    /// failed to apply this many times running. Without this bound, the
+    /// scenario `censusChurnDuringConfirmDoesNotFalselyStall` exercises for
+    /// `confirm` turns into an unbounded re-dispatch loop the moment the
+    /// controller's config genuinely never updates.
+    @Test func dispatchingStallsAfterExhaustingItsRepeatAttemptBudget() {
+        var log: [DirectiveLogEntry] = []
+        var when = fixtureNow.addingTimeInterval(-60)
+        var nextID = 0
+        for _ in 0..<HaulRun.dispatchAttemptLimit {
+            log.append(stepStartedEntry(nextID, HaulRun.Step.assigning, at: when)); nextID += 1; when += 1
+            log.append(stepStartedEntry(nextID, HaulRun.Step.dispatching, at: when)); nextID += 1; when += 1
+            log.append(stepStartedEntry(nextID, HaulRun.Step.confirming, at: when)); nextID += 1; when += 1
+        }
+        log.append(stepStartedEntry(nextID, HaulRun.Step.assigning, at: when)); nextID += 1; when += 1
+        log.append(stepStartedEntry(nextID, HaulRun.Step.dispatching, at: when)) // the CURRENT entry
+
+        let stillOnOldPile = controller(
+            "C1", currentDirective: "ferry",
+            currentConfig: [
+                "collect": .string("SOME-OLDER-PILE-1"),
+                "deliver": .string(HaulRun.deliveryLocation),
+            ]
+        )
+        let action = HaulRun().nextAction(
+            directive: run(step: HaulRun.Step.dispatching, controllerCode: "C1"),
+            world: world(
+                devices: [stillOnOldPile] + meshed,
+                footprints: [footprint("ATIANFU-BELT-1", 3_537)],
+                log: log
+            )
+        )
+        #expect(action == .stall(.commandRejected))
+    }
+
+    /// A Retry (`.resolved`) re-arms the budget exactly like
+    /// `SalvageRun.stepEntryCount` — an operator's Retry must buy a genuinely
+    /// new attempt, not replay an exhausted one.
+    @Test func dispatchingRetryReArmsTheBudget() {
+        var log: [DirectiveLogEntry] = []
+        var when = fixtureNow.addingTimeInterval(-120)
+        var nextID = 0
+        // A full exhausted budget...
+        for _ in 0..<HaulRun.dispatchAttemptLimit {
+            log.append(stepStartedEntry(nextID, HaulRun.Step.assigning, at: when)); nextID += 1; when += 1
+            log.append(stepStartedEntry(nextID, HaulRun.Step.dispatching, at: when)); nextID += 1; when += 1
+            log.append(stepStartedEntry(nextID, HaulRun.Step.confirming, at: when)); nextID += 1; when += 1
+        }
+        // ...followed by an operator Retry...
+        log.append(DirectiveLogEntry(
+            id: "LR", directiveID: "D1", deviceCode: nil, kind: .resolved,
+            summary: "Retried", step: HaulRun.Step.confirming, operationID: nil,
+            eventID: nil, occurredAt: when
+        ))
+        when += 1
+        // ...and one fresh attempt since.
+        log.append(stepStartedEntry(nextID, HaulRun.Step.assigning, at: when)); nextID += 1; when += 1
+        log.append(stepStartedEntry(nextID, HaulRun.Step.dispatching, at: when)) // the CURRENT entry
+
+        let stillOnOldPile = controller(
+            "C1", currentDirective: "ferry",
+            currentConfig: [
+                "collect": .string("SOME-OLDER-PILE-1"),
+                "deliver": .string(HaulRun.deliveryLocation),
+            ]
+        )
+        let action = HaulRun().nextAction(
+            directive: run(step: HaulRun.Step.dispatching, controllerCode: "C1"),
+            world: world(
+                devices: [stillOnOldPile] + meshed,
+                footprints: [footprint("ATIANFU-BELT-1", 3_537)],
+                log: log
+            )
+        )
+        #expect(action == .dispatch(
+            kind: .setDirective,
+            deviceCode: "C1",
+            params: CommandParams(directive: "ferry", configuration: [
+                "collect": .string("ATIANFU-BELT-1"),
+                "deliver": .string(HaulRun.deliveryLocation),
+            ]),
+            nextStep: HaulRun.Step.confirming
+        ))
+    }
+
     // MARK: confirming
 
     /// While the controller has not taken the config, wait — and crucially do NOT
@@ -391,11 +563,17 @@ struct HaulRunTests {
             ]
         )
         let neverDispatchedC2 = controller("C2")
+        // Both piles REACHABLE (unlike an earlier draft of this test, which
+        // put the second pile in an unmeshed system — `HaulTargetPlanner`
+        // filtered it out, `zip` produced only ONE assignment, C2 never
+        // appeared in the plan at all, and the test passed against the
+        // pre-fix code too, proving nothing). `AINALRAM-2` shares the
+        // delivery system, so it's reachable by construction.
         let action = HaulRun().nextAction(
             directive: run(step: HaulRun.Step.confirming, controllerCode: "C1"),
             world: world(
                 devices: [settledC1, neverDispatchedC2] + meshed,
-                footprints: [footprint("ATIANFU-BELT-1", 3_537), footprint("SHERATANON-6-1", 900)]
+                footprints: [footprint("ATIANFU-BELT-1", 3_537), footprint("AINALRAM-2", 900)]
             )
         )
         #expect(action == .advanceStep(nextStep: HaulRun.Step.assigning))
@@ -417,14 +595,18 @@ struct HaulRunTests {
                 "deliver": .string(HaulRun.deliveryLocation),
             ]
         )
-        // A richer pile appeared after the dispatch was issued — re-deriving
-        // the plan now would name a DIFFERENT collect target than the one C1
-        // is actually running.
+        // A richer, REACHABLE pile appeared after the dispatch was issued —
+        // re-deriving the plan now would name a DIFFERENT collect target than
+        // the one C1 is actually running. `AINALRAM-2` shares the delivery
+        // system, so — unlike an earlier draft of this test, which used an
+        // unmeshed location that `HaulTargetPlanner` filtered out before it
+        // ever entered the ranking — it is genuinely reachable and genuinely
+        // outranks `ATIANFU-BELT-1` once ATIANFU has been drawn down to 100.
         let action = HaulRun().nextAction(
             directive: run(step: HaulRun.Step.confirming, controllerCode: "C1"),
             world: world(
                 devices: [settledOnItsOriginalPile] + meshed,
-                footprints: [footprint("ATIANFU-BELT-1", 100), footprint("NEWLYDISCOVRD-1", 9_000)]
+                footprints: [footprint("ATIANFU-BELT-1", 100), footprint("AINALRAM-2", 9_000)]
             )
         )
         #expect(action == .advanceStep(nextStep: HaulRun.Step.assigning))

@@ -24,6 +24,19 @@
 //  `confirmDeadline`. See `Step.dispatching`'s and `Step.confirming`'s doc
 //  comments for the two failure modes this shape closes.
 //
+//  **`confirming` accepts ANY config this run could have issued, not just the
+//  most recently dispatched pile** (`hasTakenSomeHaulConfig`) — required so a
+//  moving census doesn't false-stall a controller that took the command
+//  correctly. That relaxation has a cost: it can no longer tell "settled" from
+//  "still running the config from BEFORE this dispatch", so a controller whose
+//  new command never actually applies (accepted but not taken — a lost write,
+//  or the server's own tick winning a race) reads as instantly settled and
+//  gets re-pinned and re-dispatched every cycle, forever, with no deadline and
+//  no stall. `dispatchAssignment` closes that with a log-derived re-entry
+//  budget (`dispatchAttemptCount`/`dispatchAttemptLimit`) — the same escape
+//  hatch `SalvageRun.stepEntryCount` uses, adapted to a bound spanning three
+//  steps instead of one. See `dispatchAttemptCount`'s doc comment.
+//
 //  Pure by contract: no I/O, no clock reads (time comes from `world.now`), no
 //  randomness. Every effect is the returned `MissionAction`.
 //
@@ -123,6 +136,12 @@ public struct HaulRun: MissionStepMachine {
     /// silence as a rejection.
     public static let confirmDeadline: TimeInterval = 5 * 60
 
+    /// How many `dispatching → confirming → assigning` cycles the SAME pinned
+    /// controller may spend without ever satisfying `isInForce`, before
+    /// `dispatchAssignment` stalls instead of dispatching again. See
+    /// `dispatchAttemptCount`'s doc comment for why this exists.
+    public static let dispatchAttemptLimit = 3
+
     public func nextAction(directive: Directive, world: WorldSnapshot) -> MissionAction {
         switch directive.step {
         case Step.preflight: return preflight(directive, world)
@@ -215,6 +234,72 @@ public struct HaulRun: MissionStepMachine {
         return config["deliver"]?.stringValue == deliveryLocation
     }
 
+    // MARK: - Re-entry budget
+
+    /// How many times, contiguously, `dispatching` has been entered — i.e. how
+    /// many `set_directive` dispatches this run has already spent on the
+    /// current pin — without the loop leaving for `assigning`'s SETTLED exit
+    /// (`Step.hauling`) or an operator resolution.
+    ///
+    /// **Why this exists.** `hasTakenSomeHaulConfig` (used by `confirm`) is
+    /// deliberately looser than `isInForce` (used by `assign`) so a moving
+    /// census doesn't false-stall a controller that took the dispatched
+    /// command correctly. The cost: `confirm` can no longer distinguish "took
+    /// the NEW config" from "still running the OLD one" — a command that is
+    /// accepted but never actually applied (a lost write, or the controller's
+    /// own tick winning a race) reads as instantly settled, so `confirm`
+    /// advances to `assigning` immediately, `assign`'s STRICT `isInForce`
+    /// check still sees the wrong pile and re-pins the same controller, and
+    /// the cycle repeats with no deadline anywhere in it — the loosened check
+    /// never waits, so `confirmDeadline` cannot accumulate. This budget is the
+    /// terminator that relaxation removed.
+    ///
+    /// **Read from the timeline, not a column** — the same technique
+    /// `SalvageRun.stepEntryCount` uses (see the
+    /// `same-step-dispatch-needs-tracked-op` memory note's "escape hatch"
+    /// section), adapted for a bound that spans THREE steps instead of one:
+    /// `assigning` (pin) and `confirming` (poll) entries are transparent —
+    /// they link one dispatch to the next without themselves costing a
+    /// command — while `dispatching` entries are counted, because that is
+    /// where the actual `set_directive` POST happens and is exactly the
+    /// budget the file header's "one `set_directive` per pile drained"
+    /// promises. The walk stops (without counting) at any `.stepStarted`
+    /// naming a step OUTSIDE the loop (`preflight`/`surveying`/`hauling`) —
+    /// evidence the run genuinely left it — and stops (counting) at a
+    /// `.resolved` entry, so an operator's Retry buys a fresh budget rather
+    /// than replaying an exhausted one, exactly like `stepEntryCount`.
+    ///
+    /// **Known imprecision, accepted (mirrors `stepEntryCount`'s own
+    /// documented caveat):** the log carries no controller code on
+    /// `.stepStarted`, so this count cannot by itself tell "controller C1
+    /// re-pinned three times" from "C1 once, then C2 twice". In practice this
+    /// rarely matters: `assign` always re-picks the FIRST still-not-in-force
+    /// controller in sorted order, so as long as the stuck controller sorts
+    /// first, it is the one re-picked every cycle. `dispatchAssignment` also
+    /// only ever consults this count for the controller it is ABOUT to
+    /// dispatch to, so the worst case is a controller inheriting a partially
+    /// spent budget from a different one's failed attempts — it fails safe
+    /// (an earlier stall, never a missed one).
+    static func dispatchAttemptCount(_ directive: Directive, _ world: WorldSnapshot) -> Int {
+        var count = 0
+        for entry in world.log.reversed() {
+            if entry.kind == .resolved {
+                count += 1
+                break
+            }
+            guard entry.kind == .stepStarted else { continue }
+            switch entry.step {
+            case Step.dispatching:
+                count += 1
+            case Step.assigning, Step.confirming:
+                continue
+            default:
+                return count
+            }
+        }
+        return count
+    }
+
     // MARK: - Steps
 
     /// Confirm there is a fleet at all, re-reading it authoritatively when the
@@ -282,12 +367,16 @@ public struct HaulRun: MissionStepMachine {
             return .advanceStep(nextStep: Step.assigning)
         }
         guard world.device(controllerCode) != nil else {
-            // The controller `assign` just pinned is no longer a fleet member —
-            // untagged or removed between that tick and this one. THIS is the
-            // live version of the unreachable-device guard: unlike in `assign`,
-            // `controllerCode` here is read back off the persisted row, so it
-            // can legitimately name a device that has since vanished. A
-            // configuration problem, not a lull.
+            // `world.device(_:)` is a raw lookup by code across ALL devices,
+            // independent of tags — untagging a controller removes it from
+            // `Self.controllers(...)`'s FILTERED fleet, never from
+            // `world.devices` itself. So this can only fail when the device is
+            // genuinely gone from the account (released, scrapped, or never
+            // synced), not merely untagged. THIS is the live version of the
+            // unreachable-device guard: unlike in `assign`, `controllerCode`
+            // here is read back off the persisted row, so it CAN legitimately
+            // name a device that has since vanished outright. A configuration
+            // problem, not a lull.
             return .stall(.unreachableDevice)
         }
         guard let pending = Self.plans(directive, world).first(where: { $0.controllerCode == controllerCode }) else {
@@ -295,6 +384,21 @@ public struct HaulRun: MissionStepMachine {
             // longer has anything pending. Nothing to dispatch — let `assign`
             // re-plan.
             return .advanceStep(nextStep: Step.assigning)
+        }
+        if Self.isInForce(pending, in: world) {
+            // Became correctly pointed between the `assigning` and
+            // `dispatching` ticks (another controller's dispatch nudged the
+            // ranking, say). Nothing to send — nothing to confirm either.
+            return .advanceStep(nextStep: Step.assigning)
+        }
+        guard Self.dispatchAttemptCount(directive, world) <= Self.dispatchAttemptLimit else {
+            // This controller has already spent its repeat-dispatch budget
+            // without ever satisfying `isInForce` — see
+            // `dispatchAttemptCount`'s doc comment. Surface it rather than
+            // spending another POST on a command that has already failed to
+            // apply `dispatchAttemptLimit` times running.
+            logger.notice("haul run \(directive.id, privacy: .public): \(controllerCode, privacy: .public) exhausted its dispatch-attempt budget — stalling")
+            return .stall(.commandRejected)
         }
         logger.info("haul run \(directive.id, privacy: .public): pointing \(pending.controllerCode, privacy: .public) at \(pending.location, privacy: .public)")
         return .dispatch(
@@ -320,9 +424,11 @@ public struct HaulRun: MissionStepMachine {
             return .advanceStep(nextStep: Step.assigning)
         }
         guard let controller = world.device(controllerCode) else {
-            // The controller this dispatch was aimed at is no longer a fleet
-            // member. Waiting out the deadline on a device that can never
-            // report back would just delay reaching the same conclusion.
+            // Absent from `world.devices` outright — same "genuinely gone,
+            // not merely untagged" distinction `dispatchAssignment`'s matching
+            // guard documents. Waiting out the deadline on a device that can
+            // never report back would just delay reaching the same
+            // conclusion.
             return .stall(.unreachableDevice)
         }
         if Self.hasTakenSomeHaulConfig(controller) {
