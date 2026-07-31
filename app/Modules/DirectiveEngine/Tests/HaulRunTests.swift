@@ -5,10 +5,20 @@
 //  The Haul Run as a pure function: (directive, world) → one action. No network,
 //  no clock — `world.now` is the only time source (design spec §6).
 //
+//  Two suites live here. `HaulRunTests` is that pure-function unit sweep.
+//  `HaulRunEndToEndTests` at the bottom drives a real directive row through the
+//  real `DirectiveEngineCore` over a real (in-memory) database and asserts what
+//  actually reaches the command governor — the one shape of test that can catch
+//  a planner the engine never calls. See that suite's doc comment.
+//
 
+import ConcurrencyExtras
+import Dependencies
 import Foundation
+import GameDatabase
 import GameModels
 import GameServices
+import SQLiteData
 import Testing
 import UniverseModels
 import Utils
@@ -817,5 +827,164 @@ struct HaulRunTests {
         let machine = MissionRegistry.machine(for: .haulRun)
         #expect(machine != nil)
         #expect(machine?.firstStep == HaulRun.Step.preflight)
+    }
+}
+
+// MARK: - End to end
+
+/// One command as the governor saw it. A struct rather than a tuple so the
+/// recorded value is unambiguously `Sendable` inside `LockIsolated`.
+private struct RecordedDispatch: Sendable {
+    let kind: OperationKind
+    let deviceCode: String
+    let params: CommandParams
+}
+
+private func readRow(_ database: any DatabaseReader) async throws -> Directive? {
+    try await database.read { db in
+        try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+    }
+}
+
+/// Drive `evaluateOnce` `count` times against the REGISTERED machines, returning
+/// the step the row landed on after each one.
+///
+/// Several evaluations, not one, because the cycle is
+/// `assigning` → `dispatching` → `confirming`: `assigning` only PINS a
+/// controller (`.assignController`), so the `set_directive` does not leave until
+/// the following tick. A single-evaluation test would assert on a row that has
+/// not commanded anything yet.
+private func drive(_ database: any DatabaseWriter, evaluations count: Int) async throws -> [String] {
+    let core = DirectiveEngineCore(machines: MissionRegistry.machines, tick: .seconds(5))
+    var steps: [String] = []
+    for _ in 0..<count {
+        await core.evaluateOnce(directiveID: "D1")
+        steps.append(try #require(await readRow(database)).step)
+    }
+    return steps
+}
+
+/// The regression guard the Salvage Run's `SalvageTargetPlanner` did not have.
+///
+/// That planner shipped with ZERO production callers: every unit test of it
+/// passed while the engine called something else entirely, and a run would have
+/// burned 370-unit relays at salvage-free systems. A unit test of either half —
+/// planner or machine — passes the whole time that seam is broken. Only a real
+/// row driven through the real `DirectiveEngineCore`, asserting the command that
+/// reaches the real governor seam, can fail.
+///
+/// So these tests deliberately buy the expensive parts: `GameDatabase.bootstrap()`
+/// rather than a `WorldSnapshot` fixture, and **`MissionRegistry.machines` rather
+/// than `[HaulRun()]`** — registration is part of what is guarded here. A machine
+/// nobody registers is dead code that every test in `HaulRunTests` still passes.
+@Suite("Haul Run end to end")
+struct HaulRunEndToEndTests {
+
+    /// The headline: a running row, through the real engine, issues a real
+    /// `set_directive` naming the RICHEST REACHABLE pile, to the controller the
+    /// run pinned, configured `collect`/`deliver`.
+    ///
+    /// The census deliberately contains three piles that each rule something out:
+    /// the delivery location itself is the richest of all (59,230) and must be
+    /// skipped because draining home into home is meaningless;
+    /// `SHERATANON-6-1` is reachable-looking but sits in a system no relay
+    /// meshes; and `ATIANFU-BELT-1` — the only pile that is both foreign and
+    /// meshed at both ends — is the answer. A planner the engine never called
+    /// could not produce it.
+    @Test func aRunningRowPointsTheControllerAtTheRichestPile() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            for device in [controller("C1")] + meshed {
+                try Device.insert { device }.execute(db)
+            }
+            for pile in [
+                footprint("ATIANFU-BELT-1", 3_537),
+                footprint("SHERATANON-6-1", 294),
+                footprint(HaulRun.deliveryLocation, 59_230),
+            ] {
+                try LocationFootprint.insert { pile }.execute(db)
+            }
+            try Directive.insert { run(step: HaulRun.Step.assigning) }.execute(db)
+        }
+
+        let dispatched = LockIsolated<[RecordedDispatch]>([])
+
+        let steps = try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(fixtureNow)
+            $0.uuid = .incrementing
+            $0.commandGovernor.dispatch = { kind, deviceCode, params in
+                dispatched.withValue {
+                    $0.append(RecordedDispatch(kind: kind, deviceCode: deviceCode, params: params))
+                }
+                return .dispatched(.accepted(operationID: nil))
+            }
+        } operation: {
+            try await drive(database, evaluations: 3)
+        }
+
+        // The real cycle, as observed: pin, then command, then hold. The third
+        // evaluation is what proves the command is not re-issued every tick —
+        // `confirming` waits out `confirmDeadline` instead.
+        #expect(steps == [
+            HaulRun.Step.dispatching,
+            HaulRun.Step.confirming,
+            HaulRun.Step.confirming,
+        ])
+
+        let calls = dispatched.value
+        #expect(calls.count == 1)
+        let call = try #require(calls.first)
+        #expect(call.kind == .setDirective)
+        #expect(call.deviceCode == "C1")
+        // `ferry`, not `shuttle`: the pile is in another system from home.
+        #expect(call.params.directive == HaulTargetPlanner.ferry)
+        #expect(call.params.configuration?["collect"]?.stringValue == "ATIANFU-BELT-1")
+        #expect(call.params.configuration?["deliver"]?.stringValue == HaulRun.deliveryLocation)
+
+        let row = try #require(await readRow(database))
+        // The pin persisted, which is what lets `confirming` judge this one
+        // controller rather than re-deriving the whole fleet's plan.
+        #expect(row.controllerCode == "C1")
+        #expect(row.status == .running)
+    }
+
+    /// The complement: with nothing reachable the engine issues NO command, and
+    /// the run parks in `hauling` still `.running`.
+    ///
+    /// `TENEGSHE-3` holds units, but no relay meshes TENEGSHE and it does not
+    /// share the delivery system — so it is not a target, and a command naming it
+    /// is exactly the shape of the Salvage Run's relay-burning bug. `.running`
+    /// rather than `.completed` is the other half: this automation is continuous,
+    /// and an empty frontier is a lull, not a finish line (spec §5) — the Salvage
+    /// Run keeps making new piles underneath it.
+    @Test func anEmptyFrontierIssuesNoCommandAndKeepsRunning() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Device.insert { controller("C1") }.execute(db)
+            try LocationFootprint.insert { footprint("TENEGSHE-3", 80) }.execute(db)
+            try Directive.insert { run(step: HaulRun.Step.assigning) }.execute(db)
+        }
+
+        let dispatched = LockIsolated(0)
+
+        let steps = try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(fixtureNow)
+            $0.uuid = .incrementing
+            $0.commandGovernor.dispatch = { _, _, _ in
+                dispatched.withValue { $0 += 1 }
+                return .dispatched(.accepted(operationID: nil))
+            }
+        } operation: {
+            try await drive(database, evaluations: 3)
+        }
+
+        #expect(dispatched.value == 0)
+        #expect(steps == [HaulRun.Step.hauling, HaulRun.Step.hauling, HaulRun.Step.hauling])
+
+        let row = try #require(await readRow(database))
+        #expect(row.status == .running)
+        #expect(row.step == HaulRun.Step.hauling)
     }
 }
