@@ -46,54 +46,74 @@ running it:
 
 ## Part A — Vessel tours the sites
 
-Insert one new step, **`positioning`**, between `configuring` and `launching`. The *vessel*,
-not the drones, does the traveling.
+Insert one new step, **`positioning`**, **ahead of** `configuring`. The *vessel*, not the
+drones, does the traveling.
 
 New mining loop:
 
 ```
-… → configuring → positioning → launching → awaiting → verifying → configuring → …
+[entry] → positioning → configuring → launching → awaiting → verifying → positioning → …
 ```
 
-### `configuring` (changed: one line)
-Unchanged in behavior — it resolves the richest live body (`nextBody`), and either confirms
-the controller is already configured for it or dispatches `set_directive`
-(`gather_salvage`, `{location: body, recall: true}`). Its **terminal `nextStep` changes from
-`launching` to `positioning`** on both exits (the already-configured `advanceStep` and the
-`dispatch`'s `nextStep`). Setting the directive does not deploy drones — `launch` does — so
-configuring the controller before the vessel arrives is harmless.
+where `[entry]` is every step that used to hand into `configuring` (see the call-site list
+below).
+
+### Why positioning goes *before* configuring (and keys off `nextBody`, not `workedBody`)
+`configure` re-issues `set_directive` on every body transition (body 1 never matches body 2),
+and **nothing writes the controller's `currentDirectiveConfig` optimistically** — the
+`ami_directive` block only reflects the new body once that command lands and the controller is
+re-synced (confirmed: no production writer of that column). So a `positioning` step placed
+*after* configure and keyed off `workedBody(controller)` would read the **stale previous body**
+on every transition and mis-target the vessel. Putting `positioning` first and keying it off
+the deterministic `nextBody(in:world:)` avoids the controller row entirely; `configure` then
+runs **last**, at the body, dispatching `set_directive` for the same `nextBody` immediately
+before `launch`. Server-side config and vessel location are established together, so `launch`
+always deploys at the vessel's location. A body depleting mid-flight simply re-targets
+`positioning` to the next-richest body — correct, not a divergence, because `configure` hasn't
+issued anything yet.
 
 ### `positioning` (new step)
-Flies the vessel to the body the controller was **just configured for**, resolved from
-`workedBody(controller)` — the controller's own in-force `gather_salvage` `location`, the
-server's record of the target. Deriving the destination from the controller (not a fresh
-`nextBody`) guarantees the vessel's destination and the directive's `location` cannot disagree
-if a body depletes mid-flight.
-
 ```
 positioning(directive, vessel, world):
-    controller = claimedController(...) else stall(.noMiningControllerAboard)
-    guard let body = workedBody(controller) else advanceStep(.configuring)   // not configured yet — back up
-    if vessel.location == body: advanceStep(.launching)                      // arrived — deploy locally
-    if openOperation(for: vessel) != nil: wait                               // trip under way; guard second dispatch
-    dispatch(.travel, vessel, destination: body, nextStep: .positioning)
+    switch nextBody(in: directive, world):
+        case .finished:   advanceTarget                       // nothing live here — this target is done
+        case .unresolved: unresolvedSystem(directive, world, target)   // blob not cached — bounded wait+read
+        case .body(body):
+            if vessel.location == body: advanceStep(.configuring)      // arrived — configure + launch locally
+            if openOperation(for: vessel) != nil: wait                 // trip under way; guard the second dispatch
+            dispatch(.travel, vessel, destination: body, nextStep: .positioning)
 ```
 
 `.travel` is a tracked op kind (creates an `Operation` row), so the `openOperation` guard
 actually fires and the same-step re-dispatch is the safe shape
 ([[same-step-dispatch-needs-tracked-op]]) — identical to `emplace`'s vessel travel and
-`restock`'s.
+`restock`'s. `positioning` inherits `configure`'s existing `.finished` / `.unresolved` handling
+(`advanceTarget` / `unresolvedSystem`) verbatim, since it now owns the first look at the system.
+
+### `configuring` (unchanged)
+Still resolves `nextBody`, confirms-or-dispatches `set_directive`
+(`gather_salvage`, `{location: body, recall: true}`), and hands to `launching`. Its terminal
+`nextStep` stays `launching`. Its `.finished` / `.unresolved` branches remain as defensive
+handling (now upstream-guarded by `positioning`).
+
+### Call sites that change (`configuring` → `positioning`)
+Every step that hands into the mining loop retargets its `nextStep` from `configuring` to
+`positioning`:
+- `travel` arrival, meshed arm (`advanceStep(meshed ? .configuring : .emplacing)`)
+- `emplace`, the `currentTarget == nil` arm and the no-Lagrange-point arm
+- `settle` (relay confirmed), both the `.setDeviceTags(nextStep:)` and `.advanceStep` exits
+- `verify`, the "drones home, more bodies" arm (`advanceStep(.configuring)`)
 
 ### Why this is uniform
-- **Unmeshed target with relay:** `emplace → activate → confirmRelay → settle → configuring`
+- **Unmeshed target with relay:** `emplace → activate → confirmRelay → settle → positioning`
   leaves the vessel at the Lagrange point; `positioning` pulls it to body 1 from there.
 - **Unmeshed target, no Lagrange point** (degraded-but-fine): `emplace` advances straight to
-  `configuring`; `positioning` pulls the vessel from wherever it is.
+  `positioning`; the vessel is pulled from wherever it is.
 - **Already-meshed target:** today `travel` drops it into `configuring` with the vessel still
   at the **entry point**, and the drones ferry from there — the worst case. `positioning` fixes
-  this for free: the vessel is pulled to each body like any other target.
-- **Body → body within a system:** `verify`'s "more bodies here" branch already routes back to
-  `configuring`, which re-picks → re-configures → re-positions. One vessel tour of the system's
+  this for free.
+- **Body → body within a system:** `verify`'s "more bodies here" arm routes to `positioning`,
+  which re-targets the next body and flies the vessel there. One vessel tour of the system's
   sites, drones deploying locally at each.
 
 Relay emplacement is untouched — it remains a one-time per-system setup ahead of the tour.
@@ -102,59 +122,68 @@ Relay emplacement is untouched — it remains a one-time per-system setup ahead 
 
 ## Part B — Smart await backstop
 
-Delete the blind `backstopInterval → verifying` advance. `awaitCompletion` gains the
-`vessel` it needs (it currently takes only `directive`, `world`; `nextAction` already holds
-`vessel`) and becomes state-driven.
+The whole fix lives in `awaitCompletion`. **`verify` is unchanged**: once the blind backstop is
+gone, `verify` is only ever reached when the drones are actually home (completion is held until
+recall lands) or genuinely lost, so its existing single-refresh
+`refreshFleet(thenStall: .dronesNotRecovered)` stays correct and remains the *one* place that
+raises that stall. `awaitCompletion`'s job is narrowed: **wait until mining is done, then hand
+to `verify` — never stall on its own.**
+
+Delete the blind `backstopInterval → verifying` advance. `awaitCompletion` gains the `vessel`
+it needs (it currently takes only `directive`, `world`; `nextAction` already holds `vessel`)
+and becomes state-driven:
 
 ```
 awaitCompletion(directive, vessel, world):
-    if completionSeen: advanceStep(.verifying)          // completion held until recall lands ⇒ drones home
-    if emptyLaunchSeen: stall(.launchDeployedNothing)    // unchanged
+    if completionSeen: advanceStep(.verifying)           // completion held until recall lands ⇒ drones home
+    if emptyLaunchSeen: stall(.launchDeployedNothing)     // unchanged
 
-    controller = claimedController(...) else wait        // transient stale row — a reconcile repairs it
+    controller = claimedController(...) else wait         // transient stale row — a reconcile repairs it
+    drones   = adoptedDrones(of: controller, in: world)   // WIDE query, wherever they are
+    evidence = [controller] + drones
+    lastLook = evidence.map(\.updatedAt).max() ?? .distantPast
+    canRead  = now - lastLook >= reconcileInterval        // throttle: at most one read per interval
+    freshSinceLaunch = lastLook >= directive.stepStartedAt
 
-    // Reconcile against fresh state. Deadline-then-staleness ordering per
-    // [[confirm-steps-need-fresh-evidence]]: force a fresh read only when the row is stale,
-    // and never let a failing read loop — the throttle is on the row's own updatedAt.
-    if now - controller.updatedAt > reconcileInterval:
-        refreshFleet(tag, thenStall: nil)                // one tag read: controller + drones + vessel
+    // Fresh-evidence rule [[confirm-steps-need-fresh-evidence]]: never trust a row read BEFORE
+    // launch (it still shows the drones aboard from when they were stowed). Read when the
+    // throttle allows; the throttle is what stops a failing read looping every tick.
+    if !freshSinceLaunch: return canRead ? refreshFleet(tag, thenStall: nil) : wait
 
-    // Fresh rows — judge recovery from them.
-    stranded = adoptedDrones(of: controller, in: world)          // WIDE query, wherever they are
-                 .filter { $0.stowedInDeviceCode != vessel.deviceCode }
-    if stranded.isEmpty: advanceStep(.verifying)                 // dropped completion frame — proceed
-    if controller.currentDirective == "gather_salvage": wait     // STILL MINING — no stall, no deadline
+    stranded = drones.filter { $0.stowedInDeviceCode != vessel.deviceCode }
+    if stranded.isEmpty: advanceStep(.verifying)                        // dropped completion frame — proceed
+    if controller.currentDirective == "gather_salvage":                // STILL MINING — no stall, ever
+        return canRead ? refreshFleet(tag, thenStall: nil) : wait       // periodic reconcile to catch completion
     // Controller idle, drones still out ⇒ post-mining recall (near-instant now the vessel sits at the body):
-    if let arrival = recallArrival(stranded), arrival > now: wait     // wait out the farthest traveller's ETA
-    if stranded.allSatisfy({ $0.activityDeadline == nil }):           // fresh read, yet none is travelling ⇒ lost
-        stall(.dronesNotRecovered)
-    refreshDevices(stranded.map(\.deviceCode), thenStall: nil)        // re-read the ones still flying
+    if stranded.contains(where: { $0.activityDeadline != nil }):        // someone still flying home
+        if let arrival = recallArrival(stranded), arrival > now: return wait   // wait out the farthest ETA
+        return canRead ? refreshDevices(stranded.map(\.deviceCode), thenStall: nil) : wait
+    advanceStep(.verifying)                                             // none flying, none aboard ⇒ let verify judge+stall
 ```
 
 Key properties:
 
-- **`controller.currentDirective == "gather_salvage"` is a *don't-stall-yet* gate, never a
-  success signal.** Success is only ever `completionSeen` or a fresh read showing every drone
-  aboard. So the design is robust to either interpretation of when the server clears
-  `currentDirective` (at mining-done or at recall-done): if it clears early we fall through to
-  the ETA-driven recall branch; if it never clears, the drones-aboard reconcile still exits.
-  Worst case of an unreliable flag is "wait a little longer," never a false stall or a false
-  success.
-- **The genuine-stuck detector needs no durable timestamp.** A stranded drone that, *after a
-  fresh read*, reports no travel block while the controller is idle is the real
-  loss (the POLARISUM shape) — stall it. One with a travel block is en route — wait out
-  `recallArrival` (reusing the `Device.activityDeadline` / farthest-ETA pattern SurveyRun's
-  `recover` already uses; add a small `recallArrival` helper to SalvageRun mirroring it).
-- **`verify` stops being a hard stall.** It is now reached only after recovery is established
-  (completion, or a fresh drones-aboard read). If it nonetheless sees a stranded drone (a
-  narrow race), it routes **back to `awaiting`** — the single owner of recovery logic — which
-  converges (reconcile shows them home → `verify`) or stalls correctly. The `dronesNotRecovered`
-  stall now lives in exactly one place.
+- **The still-mining gate is what kills the false stall.** `controller.currentDirective ==
+  "gather_salvage"` means drones are out *by design* — the run waits (reconciling on the
+  `reconcileInterval` cadence), never stalls, however long the cycle runs.
+- **`currentDirective` is a *don't-stall-yet* gate, never a success signal.** Success is only
+  ever `completionSeen` or a fresh read showing every drone aboard. So the design is robust to
+  either interpretation of when the server clears the flag: if it clears at mining-done we fall
+  to the recall branch; if it never clears, the drones-aboard reconcile still exits. Worst case
+  of an unreliable flag is "wait a little longer."
+- **`awaitCompletion` never stalls; `verify` owns `dronesNotRecovered`.** await hands to
+  `verify` only when the drones aren't actively travelling (all aboard, or mining done with none
+  en route). `verify` then does its one authoritative refresh and stalls only if the drones are
+  genuinely stranded — the POLARISUM shape. Part A (vessel at the body) makes recall near-zero,
+  so the recall branch is nearly vestigial, but it keeps a straggler mid-hop from ever reaching
+  `verify`'s single-read stall prematurely.
+- **`recallArrival`** is a small helper added to `SalvageRun`, mirroring SurveyRun's
+  (`stranded.compactMap(\.activityDeadline).max()`).
 
-New constant: `reconcileInterval` (~60 s, same scale as `relayPollInterval`). `backstopInterval`
-becomes dead once the blind timed advance is removed, so it is deleted; `eventTimeSkewTolerance`
-stays (it backs the issue-time-relative `completionSeen` / `emptyLaunchSeen` checks, which are
-untouched).
+New constant: `reconcileInterval` (2 min — long enough to keep steady-state mining reads cheap,
+short enough to catch a dropped completion promptly). `backstopInterval` becomes dead once the
+blind timed advance is removed, so it is deleted; `eventTimeSkewTolerance` stays (it backs the
+issue-time-relative `completionSeen` / `emptyLaunchSeen` checks, which are untouched).
 
 Part A makes Part B's recall branch rarely exercised (drones deploy and recall locally at the
 body, near-zero travel), but it remains the correct safety net for a genuinely lost drone.
@@ -173,24 +202,31 @@ body, near-zero travel), but it remains the correct safety net for a genuinely l
 `SalvageRunTests` is pure (`WorldSnapshot` in, `MissionAction` out) — every case below is a
 table-style assertion with no I/O.
 
-**Part A**
-- `configuring` terminal `nextStep` is `positioning` (both the already-configured and the
-  `set_directive` exits).
-- `positioning`: vessel not at body → `dispatch(.travel, destination: workedBody)`; open op →
-  `wait`; vessel at body → `advanceStep(.launching)`; controller not configured → back to
-  `configuring`; no controller → `noMiningControllerAboard`.
-- Already-meshed target: `travel` → `configuring` → `positioning` pulls the vessel off the
-  entry point (regression guard for the ferry-from-entry case).
-- Multi-body tour: `verify` next-body → `configuring` → `positioning` re-targets the next body.
+A fixture extension is needed: the `SalvageRunTests` `device()` helper has no travel-block
+support, so add an `arrivesAt:` parameter (mirroring `SurveyRunTests`) that writes a `travel`
+block (`arrives_at` / `final_arrives_at`) so a drone can report an `activityDeadline`.
 
-**Part B**
-- Controller still `gather_salvage`, drones out, **> 10 min** elapsed → `wait` (the core
-  regression: no more false `dronesNotRecovered`).
-- `completionSeen` → `verifying`.
-- Fresh rows, all drones aboard, no completion event → `verifying` (dropped-frame path).
-- Controller idle, a stranded drone with a live travel block → `wait` (ETA) then
-  `refreshDevices`; with **no** travel block after a fresh read → `stall(.dronesNotRecovered)`
-  (the real loss).
-- Stale controller row → `refreshFleet(thenStall: nil)` before judging (fresh-evidence rule);
-  throttled on `updatedAt` so a failing read does not loop.
-- `verify` sees a stranded drone → routes back to `awaiting`, not a stall.
+**Part A**
+- Existing entry-point transitions flip `configuring` → `positioning`: `travel` meshed arm;
+  `emplace` no-Lagrange arm; `confirmRelay`/`settle` (relay-up, untag, preserve-other-tags,
+  own-fleet-tag, already-untagged, parameterised-status); `verify` "more bodies" arm; and the
+  loop-progress "different next body" / "no worked body" arms. Update each assertion.
+- `configure` tests are **unchanged** (its terminal `nextStep` stays `launching`).
+- New `positioning`: `.body`, vessel not at it → `dispatch(.travel, destination: nextBody)`;
+  open op → `wait`; vessel at it → `advanceStep(.configuring)`; `.finished` → `advanceTarget`;
+  `.unresolved` (uncached blob) → `wait`, then the one-read backstop past
+  `systemResolutionDeadline`.
+- Already-meshed regression: `travel` → `positioning` dispatches vessel travel off the entry
+  point (guards the ferry-from-entry case).
+
+**Part B** (`verify` untouched — its tests stay green as-is)
+- Controller still `gather_salvage`, a drone deployed, rows fresh, **> 10 min** elapsed →
+  `wait` (the core regression: no more false `dronesNotRecovered`).
+- `completionSeen` → `verifying`; `emptyLaunchSeen` → `stall(.launchDeployedNothing)`.
+- Fresh-since-launch rows, all drones aboard, no completion → `verifying` (dropped-frame path).
+- Rows stale-since-launch (`updatedAt < stepStartedAt`) and older than `reconcileInterval` →
+  `refreshFleet(thenStall: nil)`; stale-since-launch but read within `reconcileInterval` →
+  `wait` (throttle guard against a read loop).
+- Controller idle, a straggler with a live travel block and a future ETA → `wait`; idle with a
+  stranded drone showing no travel block → `advanceStep(.verifying)` (hand off; `verify` refreshes
+  and raises `dronesNotRecovered` if the fresh read agrees).
