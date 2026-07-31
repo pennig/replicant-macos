@@ -227,6 +227,41 @@ import Testing
         #expect(store.state.selectedChannel == "#trade")
     }
 
+    /// A linger that outlived its cancellation must not advance the marker.
+    ///
+    /// `.cancel(id:)` cannot cancel an effect whose task has not yet registered
+    /// its cancellation token, so a linger armed and cancelled microseconds apart
+    /// — which is exactly what a scroll-geometry blip produces — runs its full
+    /// three seconds and fires. Observed in the wild marking a channel read while
+    /// the user was scrolling *away* from the bottom. `.lingerElapsed` re-checks
+    /// the arming conditions so the escaped timer is inert.
+    @Test func escapedLingerAfterScrollingAwayWritesNothing() async throws {
+        let clock = TestClock()
+        let (store, database) = try await makeStore(clock: clock)
+
+        await store.send(.binding(.set(\.isAtLatest, true)))
+        await store.send(.binding(.set(\.isAtLatest, false)))
+        await store.send(.lingerElapsed) // the cancellation didn't take
+        await store.finish()
+
+        #expect(try await marker(database, "#general") == nil)
+    }
+
+    /// The same escape, but the pane was left rather than scrolled.
+    @Test func escapedLingerAfterLeavingPaneWritesNothing() async throws {
+        let clock = TestClock()
+        let (store, database) = try await makeStore(clock: clock)
+
+        await store.send(.binding(.set(\.isAtLatest, true)))
+        await store.send(.detailDisappeared("#general")) {
+            $0.isAtLatest = false
+        }
+        await store.send(.lingerElapsed)
+        await store.finish()
+
+        #expect(try await marker(database, "#general") == nil)
+    }
+
     /// A fully-read channel arms nothing.
     @Test func nothingUnreadArmsNoTimer() async throws {
         let clock = TestClock()

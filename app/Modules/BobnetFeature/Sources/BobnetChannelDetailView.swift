@@ -9,12 +9,8 @@
 //
 
 import ComposableArchitecture
-import OSLog
 import SwiftUI
 import UI
-
-/// Temporary diagnostic channel for the read-marker linger investigation.
-private let diagLogger = Logger(subsystem: "name.pennig.replicould", category: "BobnetFeature")
 
 public struct BobnetChannelDetailView: View {
     @Bindable var store: StoreOf<BobnetFeature>
@@ -59,37 +55,19 @@ public struct BobnetChannelDetailView: View {
         .id(channel)
         .defaultScrollAnchor(.bottom)
         .onScrollGeometryChange(for: Bool.self) { geometry in
-            geometry.contentOffset.y + geometry.containerSize.height
-                >= geometry.contentSize.height - 24
-        } action: { wasAtBottom, isAtBottom in
-            diagLogger.info(
-                """
-                DIAG geometry \(wasAtBottom, privacy: .public) -> \(isAtBottom, privacy: .public) \
-                state=\(store.isAtLatest, privacy: .public) \
-                sends=\(store.isAtLatest != isAtBottom, privacy: .public)
-                """
+            BobnetScrollBottom.isAtBottom(
+                contentOffset: geometry.contentOffset.y,
+                containerHeight: geometry.containerSize.height,
+                contentHeight: geometry.contentSize.height,
+                bottomInset: geometry.contentInsets.bottom
             )
+        } action: { _, isAtBottom in
             if store.isAtLatest != isAtBottom {
                 store.send(.binding(.set(\.isAtLatest, isAtBottom)))
             }
         }
         .onChange(of: store.channelMessages.messages.last?.id) {
             store.send(.latestMessageChanged)
-        }
-        // Diagnostic only: coarse geometry so the numbers behind the at-bottom
-        // predicate are visible without logging every frame.
-        .onScrollGeometryChange(for: String.self) { geometry in
-            let offset = (geometry.contentOffset.y / 50).rounded() * 50
-            let bottomGap = geometry.contentSize.height
-                - (geometry.contentOffset.y + geometry.containerSize.height)
-            return """
-                off=\(Int(offset)) container=\(Int(geometry.containerSize.height)) \
-                content=\(Int(geometry.contentSize.height)) \
-                insets=(t\(Int(geometry.contentInsets.top)),b\(Int(geometry.contentInsets.bottom))) \
-                gap=\(Int((bottomGap / 25).rounded() * 25))
-                """
-        } action: { _, snapshot in
-            diagLogger.info("DIAG geom \(snapshot, privacy: .public)")
         }
         .onAppear { store.send(.detailAppeared(channel)) }
         .onDisappear { store.send(.detailDisappeared(channel)) }
