@@ -95,6 +95,17 @@ seam *between* a tested pure function and the engine that calls it.
   real `launch` POST every cycle, unbounded. It now compares `nextBody` against the body the
   controller's own in-force `gather_salvage` config names — the server's record of what was worked, so
   no new column — reads the system once when they match, then stalls `salvageBodyNotDepleted`.
+- **A planted relay drops its `auto:salvage` tag.** The tag earns its place while the relay is cargo —
+  it is what lets `preflight` verify the relay's existence and stowed state in the SAME one-request
+  `.refreshFleet` read as the controller and drones. Once deployed and activated it is permanent
+  infrastructure, so keeping it tagged would make every later fleet read drag back a growing tail of
+  planted relays. `MissionAction.setDeviceTags` (resolved in `DirectiveExecutor`, not
+  `DirectiveEngineCore` — it needs no re-ask, so it sits beside `.refreshSystem`) untags on
+  `confirmRelay`'s SUCCESS branch only: a relay that deployed but never came up keeps the tag because
+  it is still the run's problem. Three properties are load-bearing — `updateTags` is DECLARATIVE, so
+  the new set is `relay.tags.filter { $0 != tag }` and never `[]` (that would wipe operator tags);
+  it is idempotent on `tags.contains(tag)`; and it is BEST-EFFORT, advancing to `configuring` even if
+  the PATCH throws, because the relay is up and the mesh is what mattered.
 - **`features.contains("relay")` is right for `meshSystems` and wrong for a dispatch query.** A
   `system_hub` carries the feature (integrated relay) and genuinely meshes its system, but a dispatch
   query gets `deploy` issued at whatever it returns — so `relay(aboard:)` / `deployedRelay(near:)` are
