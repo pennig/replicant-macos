@@ -295,6 +295,10 @@ struct DirectiveEngineTests {
             #expect(directive?.stepStartedAt == Date(timeIntervalSince1970: 1_000))
             let entries = try await database.read { db in try DirectiveLogEntry.all.fetchAll(db) }
             #expect(entries.map(\.kind) == [.stepStarted])
+            // Only `.assignController` stamps a device onto its step entry; every
+            // other transition leaves it nil, which is what keeps the built-in
+            // History pane free of mission chatter (`DirectiveTimeline.fetch`).
+            #expect(entries.map(\.deviceCode) == [nil])
         }
     }
 
@@ -320,6 +324,16 @@ struct DirectiveEngineTests {
             }
             #expect(directive?.controllerCode == "AMI1")
             #expect(directive?.step == "travelling")
+            // The claimed controller is stamped onto the timeline entry too, not
+            // just onto the row's column. This is load-bearing rather than
+            // decorative: `HaulRun.dispatchAttemptCount` reads `deviceCode` back
+            // off these `.stepStarted` entries to scope its re-entry budget to
+            // ONE controller. Drop the stamp and the count silently reads zero
+            // forever, the budget guard becomes dead code, and the unbounded
+            // `set_directive` loop it exists to bound comes back.
+            let entries = try await database.read { db in try DirectiveLogEntry.all.fetchAll(db) }
+            #expect(entries.map(\.kind) == [.stepStarted])
+            #expect(entries.map(\.deviceCode) == ["AMI1"])
         }
     }
 

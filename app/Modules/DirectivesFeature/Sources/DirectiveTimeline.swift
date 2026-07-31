@@ -59,8 +59,20 @@ public struct DirectiveTimeline: FetchKeyRequest {
                 .fetchAll(db))
         }
         if let deviceCode {
+            // `.stepStarted` is excluded deliberately. A custom mission that
+            // claims a controller (`MissionAction.assignController`, used by the
+            // Survey, Salvage and Haul Runs) stamps that controller's code onto
+            // the step entry it writes, so the run's own step-by-step progress
+            // carries a `deviceCode` as well as a `directiveID`. Those belong to
+            // the MISSION's timeline, not to the controller's own history —
+            // rendering "Step: dispatching" under a built-in AMI directive would
+            // read as the controller's work, and at one entry per transition
+            // they would push real completions past `entryLimit`. Excluding the
+            // kind rather than requiring `directiveID IS NULL` keeps a genuinely
+            // dual-keyed completion (the `directive.*` route writes both) in both
+            // panes, which is the point of the shared table.
             return Value(entries: try DirectiveLogEntry
-                .where { $0.deviceCode.eq(deviceCode) }
+                .where { $0.deviceCode.eq(deviceCode) && $0.kind.neq(DirectiveLogKind.stepStarted) }
                 .order { $0.occurredAt.desc() }
                 .limit(Self.entryLimit)
                 .fetchAll(db))
