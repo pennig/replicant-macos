@@ -191,3 +191,58 @@ struct WorldSnapshotTests {
         #expect(world.siteAssays.isEmpty)
     }
 }
+
+@Suite("WorldSnapshot footprints")
+struct WorldSnapshotFootprintTests {
+
+    private func footprint(_ location: String, resources: Int, at fetchedAt: Date) -> LocationFootprint {
+        LocationFootprint(
+            location: location, devices: 0, resources: resources, resourceSites: 0,
+            locationEvents: 0, replicants: 0, fetchedAt: fetchedAt
+        )
+    }
+
+    private func directive() -> Directive {
+        Directive(
+            id: "D1", kind: .haulRun, status: .running, deviceCode: "CTRL1",
+            targets: [], targetIndex: 0, step: "preflight",
+            stepStartedAt: Date(timeIntervalSince1970: 0), returnToOrigin: false,
+            originDesignation: nil, attentionReason: nil,
+            createdAt: Date(timeIntervalSince1970: 0),
+            updatedAt: Date(timeIntervalSince1970: 0)
+        )
+    }
+
+    /// The whole table comes back, keyed by designation — the planner ranks
+    /// across every known location, so any scoping here would hide candidates.
+    @Test func everyFootprintRowIsReadAndKeyedByLocation() async throws {
+        let database = try GameDatabase.bootstrap()
+        let stamp = Date(timeIntervalSince1970: 500)
+        try await database.write { db in
+            try LocationFootprint.insert {
+                footprint("ATIANFU-BELT-1", resources: 3_537, at: stamp)
+                footprint("AINALRAM-BELT-1", resources: 59_230, at: stamp)
+                footprint("SOL-BELT-1", resources: 0, at: stamp)
+            }.execute(db)
+        }
+
+        let world = try await WorldSnapshot.read(
+            from: database, now: Date(timeIntervalSince1970: 1_000), directive: directive()
+        )
+
+        #expect(world.footprints.count == 3)
+        #expect(world.footprints["ATIANFU-BELT-1"]?.resources == 3_537)
+        #expect(world.footprints["SOL-BELT-1"]?.resources == 0)
+        #expect(world.footprints["ATIANFU-BELT-1"]?.fetchedAt == stamp)
+    }
+
+    /// An empty table is a legitimate cold-start state, not an error — the run
+    /// refreshes into it rather than stalling.
+    @Test func anEmptyTableReadsAsNoFootprints() async throws {
+        let database = try GameDatabase.bootstrap()
+        let world = try await WorldSnapshot.read(
+            from: database, now: Date(timeIntervalSince1970: 1_000), directive: directive()
+        )
+        #expect(world.footprints.isEmpty)
+    }
+}

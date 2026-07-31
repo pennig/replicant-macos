@@ -56,6 +56,19 @@ public struct WorldSnapshot: Equatable, Sendable {
     /// churn. Without it a mission can only see percentages, and a
     /// roster-sourced site's percentages are empty.
     public let siteAssays: [String: [String: Double]]
+    /// Every known location's holdings summary, by location designation — the
+    /// stockpile census the Haul Run ranks over.
+    ///
+    /// Read WHOLE, unlike `systems`/`siteAssays`: those are scoped to `wanted`
+    /// because decoding thousands of body blobs is expensive, whereas this table
+    /// holds one tiny row per known location (29 as of 2026-07-31) and the
+    /// planner's entire job is to compare all of them. Scoping it to the
+    /// directive's targets would hide exactly the piles the run exists to find.
+    ///
+    /// Kept as the whole row rather than just the unit count because the machine
+    /// needs `fetchedAt` too: `surveying` gates its refresh on how stale the
+    /// census is, and a bare `[String: Int]` could not answer that.
+    public let footprints: [String: LocationFootprint]
     /// The moment this snapshot was taken. Every time comparison in a mission
     /// uses this rather than `Date()`, so step machines stay pure and their
     /// tests deterministic.
@@ -68,6 +81,7 @@ public struct WorldSnapshot: Equatable, Sendable {
         dispatchedOperations: [String: GameModels.Operation] = [:],
         systems: [String: StarSystem] = [:],
         siteAssays: [String: [String: Double]] = [:],
+        footprints: [String: LocationFootprint] = [:],
         now: Date
     ) {
         self.devices = devices
@@ -76,6 +90,7 @@ public struct WorldSnapshot: Equatable, Sendable {
         self.dispatchedOperations = dispatchedOperations
         self.systems = systems
         self.siteAssays = siteAssays
+        self.footprints = footprints
         self.now = now
     }
 
@@ -140,6 +155,14 @@ public struct WorldSnapshot: Equatable, Sendable {
                 .fetchAll(db)
             let siteAssays = Dictionary(assays.map { ($0.id, $0.totals) }, uniquingKeysWith: { _, last in last })
 
+            // Whole table by design — see the property's doc comment. Read in
+            // the SAME transaction as everything else so a mission never sees a
+            // pile that a device row from a different instant contradicts.
+            let footprintRows = try LocationFootprint.all.fetchAll(db)
+            let footprints = Dictionary(
+                footprintRows.map { ($0.location, $0) }, uniquingKeysWith: { _, last in last }
+            )
+
             return WorldSnapshot(
                 devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
                 openOperations: Dictionary(operations.map { ($0.entityCode, $0) }, uniquingKeysWith: { _, last in last }),
@@ -147,6 +170,7 @@ public struct WorldSnapshot: Equatable, Sendable {
                 dispatchedOperations: Dictionary(dispatched.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last }),
                 systems: systems,
                 siteAssays: siteAssays,
+                footprints: footprints,
                 now: now
             )
         }
