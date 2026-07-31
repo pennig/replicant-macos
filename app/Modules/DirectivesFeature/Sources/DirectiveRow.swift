@@ -134,6 +134,16 @@ public enum DirectiveRow: Equatable, Identifiable, Sendable {
                     return "\(count) system\(count == 1 ? "" : "s") drained"
                 case .surveyRun, .relayRun:
                     return "\(directive.targetIndex) surveyed"
+                case .haulRun:
+                    // A Haul Run never stamps `roamCentre` — its launcher
+                    // anchors on the tagged fleet, not a queue/frontier, and
+                    // its subtitle (design spec §9) reads live off the
+                    // controllers' in-force config rather than a drained-pile
+                    // count. Unreachable in practice; fall back to the same
+                    // m/n readout the non-continuous path below uses so this
+                    // stays honest until that subtitle logic is built.
+                    let progress = directive.progress
+                    return "\(progress.completed)/\(progress.total)"
                 }
             }
             let progress = directive.progress
