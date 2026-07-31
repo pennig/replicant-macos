@@ -304,13 +304,18 @@ struct HaulRunTests {
         #expect(action != .done)
     }
 
-    /// The fleet vanishing mid-run is a configuration problem, so it stalls.
-    @Test func assigningStallsWhenTheFleetIsGone() {
+    /// The fleet vanishing mid-run is a configuration problem — but spec §7
+    /// raises `noHaulControllerTagged` on "a fresh TAG READ finds no
+    /// `auto:haul` controller", so `assigning` must buy that read exactly as
+    /// `preflight` does rather than stalling straight off local rows. The
+    /// engine's `reAsk` turns an unchanged answer into the carried stall on the
+    /// same tick; a transient local gap no longer strands a healthy fleet.
+    @Test func assigningReReadsTheFleetBeforeStallingOnIt() {
         let action = HaulRun().nextAction(
             directive: run(step: HaulRun.Step.assigning),
             world: world(devices: meshed, footprints: [footprint("ATIANFU-BELT-1", 3_537)])
         )
-        #expect(action == .stall(.noHaulControllerTagged))
+        #expect(action == .refreshFleet(tag: "auto:haul", thenStall: .noHaulControllerTagged))
     }
 
     /// **CRITICAL regression guard (2026-07-31 review).** Once the first pinned
@@ -764,6 +769,49 @@ struct HaulRunTests {
         #expect(action == .advanceStep(nextStep: HaulRun.Step.hauling))
     }
 
+    /// **CRITICAL regression guard (2026-07-31 final review).** A row read
+    /// BEFORE the dispatch went out is not evidence about it, however
+    /// haul-shaped its config — and in steady state that config IS what the
+    /// controller was running before the repoint, so believing it reported
+    /// "settled" instantly, on every tick, forever. Buy one authoritative read
+    /// instead. `thenStall: nil` keeps it bounded: the engine's `reAsk`
+    /// collapses a repeat request into `.wait`.
+    @Test func confirmingRefusesARowOlderThanTheDispatch() {
+        let onTheOldPile = controller(
+            "C1", currentDirective: "ferry",
+            currentConfig: [
+                "collect": .string("ATIANFU-BELT-1"),
+                "deliver": .string(HaulRun.deliveryLocation),
+            ],
+            updatedAt: fixtureNow.addingTimeInterval(-300)
+        )
+        let action = HaulRun().nextAction(
+            directive: run(step: HaulRun.Step.confirming, controllerCode: "C1"),
+            world: world(devices: [onTheOldPile] + meshed, footprints: [footprint("AINALRAM-2", 9_000)])
+        )
+        #expect(action == .refreshDevices(deviceCodes: ["C1"], thenStall: nil))
+    }
+
+    /// ...and does not pay for that read on every 5s tick. A row read moments
+    /// before the dispatch is stale as EVIDENCE but freshly read as a REQUEST,
+    /// so the throttle waits instead — `confirming` costs one read per repoint,
+    /// not one per tick.
+    @Test func confirmingThrottlesTheAuthoritativeRead() {
+        let justRead = controller(
+            "C1", currentDirective: "ferry",
+            currentConfig: [
+                "collect": .string("ATIANFU-BELT-1"),
+                "deliver": .string(HaulRun.deliveryLocation),
+            ],
+            updatedAt: fixtureNow.addingTimeInterval(-5)
+        )
+        let action = HaulRun().nextAction(
+            directive: run(step: HaulRun.Step.confirming, controllerCode: "C1"),
+            world: world(devices: [justRead] + meshed, footprints: [footprint("AINALRAM-2", 9_000)])
+        )
+        #expect(action == .wait)
+    }
+
     /// A controller that never takes the config gets ONE authoritative re-read
     /// before the run gives up — the local row may simply be stale.
     @Test func confirmingReReadsThenStallsPastTheDeadline() {
@@ -986,5 +1034,103 @@ struct HaulRunEndToEndTests {
         let row = try #require(await readRow(database))
         #expect(row.status == .running)
         #expect(row.step == HaulRun.Step.hauling)
+    }
+
+    /// **CRITICAL regression guard (2026-07-31 final review).** The steady
+    /// state, which nothing else here covers: the controller is ALREADY running
+    /// a haul config — the previous repoint's — and its local row was last read
+    /// minutes before this dispatch went out. Every other `confirming` fixture
+    /// and both e2e tests above use a controller with no `ami_directive` at all,
+    /// the fresh-controller case, which is the only one where `confirm`
+    /// genuinely waits.
+    ///
+    /// Before the fix a healthy repoint burned THREE redundant `set_directive`
+    /// POSTs and then falsely stalled: `hasTakenSomeHaulConfig` accepts any
+    /// ferry/shuttle delivering home, which is precisely the controller's
+    /// PRE-dispatch config, so `confirming` read the stale row, reported
+    /// "settled" on the very next 5s tick and never waited — `confirmDeadline`
+    /// could not accumulate, so the post-deadline authoritative read was
+    /// unreachable — while `assigning`'s strict `isInForce` still saw the old
+    /// `collect`, re-pinned the same controller, and `dispatching` POSTed
+    /// again. Three laps later `dispatchAttemptCount` tripped and stalled
+    /// `.commandRejected` on a command that had landed correctly. Measured:
+    /// `dispatching, confirming, assigning` three times over, `running` ×10
+    /// then `needsAttention`, three POSTs for one repoint (and three more per
+    /// Retry). Reachable on the live account from the first repoint after
+    /// launch, and the whole budget burns in ~50 seconds while device rows
+    /// refresh about five minutes apart.
+    ///
+    /// One POST, one authoritative read, and the run settles into `hauling`.
+    @Test func aControllerOnAnOldHaulConfigIsRepointedWithOneCommand() async throws {
+        let database = try GameDatabase.bootstrap()
+        // The live shape: C1 has been ferrying ATIANFU-BELT-1 home, that pile is
+        // now empty, and the local row predates this cycle by five minutes.
+        let onTheOldPile = controller(
+            "C1", currentDirective: "ferry",
+            currentConfig: [
+                "collect": .string("ATIANFU-BELT-1"),
+                "deliver": .string(HaulRun.deliveryLocation),
+            ],
+            updatedAt: fixtureNow.addingTimeInterval(-300)
+        )
+        try await database.write { db in
+            for device in [onTheOldPile] + meshed {
+                try Device.insert { device }.execute(db)
+            }
+            for pile in [footprint("ATIANFU-BELT-1", 0), footprint("AINALRAM-2", 9_000)] {
+                try LocationFootprint.insert { pile }.execute(db)
+            }
+            try Directive.insert { run(step: HaulRun.Step.assigning) }.execute(db)
+        }
+
+        let dispatched = LockIsolated<[RecordedDispatch]>([])
+        let reads = LockIsolated(0)
+
+        let steps = try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(fixtureNow)
+            $0.uuid = .incrementing
+            $0.commandGovernor.dispatch = { kind, deviceCode, params in
+                dispatched.withValue {
+                    $0.append(RecordedDispatch(kind: kind, deviceCode: deviceCode, params: params))
+                }
+                return .dispatched(.accepted(operationID: nil))
+            }
+            $0.deviceRefresher.refresh = { code, _ in
+                reads.withValue { $0 += 1 }
+                // The server answering honestly: the command DID land. The live
+                // refresher reconciles into the database, so this stand-in must
+                // too — `resolveRefresh` re-reads the snapshot from disk before
+                // asking the machine again.
+                let taken = controller(
+                    code, currentDirective: "shuttle",
+                    currentConfig: [
+                        "collect": .string("AINALRAM-2"),
+                        "deliver": .string(HaulRun.deliveryLocation),
+                    ]
+                )
+                try? await database.write { db in try Device.upsert { taken }.execute(db) }
+                return taken
+            }
+        } operation: {
+            try await drive(database, evaluations: 12)
+        }
+
+        // ONE `set_directive` for one repoint, and one read to confirm it.
+        #expect(dispatched.value.count == 1)
+        #expect(reads.value == 1)
+        let call = try #require(dispatched.value.first)
+        #expect(call.deviceCode == "C1")
+        #expect(call.params.configuration?["collect"]?.stringValue == "AINALRAM-2")
+
+        // Pin, command, confirm-by-read, then settle and stay settled.
+        #expect(steps == [
+            HaulRun.Step.dispatching,
+            HaulRun.Step.confirming,
+            HaulRun.Step.assigning,
+        ] + Array(repeating: HaulRun.Step.hauling, count: 9))
+
+        let row = try #require(await readRow(database))
+        #expect(row.status == .running)
     }
 }

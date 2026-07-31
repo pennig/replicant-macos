@@ -148,11 +148,21 @@ Steps, with the dispatch/confirm split the `.immediate` classification forces:
    `surveying`. `.wait` is the only action that lets `stepStartedAt` accumulate honestly, which is what
    makes the interval real; 60s matches the Salvage Run's idle backoff.
 
-A pile counts as **drained** when its `LocationFootprint` reads `resources == 0`, or when it has
-vanished from the footprint entirely. Nothing records which piles are finished: a drained pile simply
-stops being a candidate, and the planner re-derives the whole assignment from the current footprint on
-every cycle. That is the same "recompute, never cache" rule §7 of the superseded spec imposed on the
-salvage frontier, and for the same reason — the catalogue moves under the run.
+A pile counts as **drained** when its `LocationFootprint` reads `resources == 0` — that is the only
+signal. A pile *vanishing* from the census does **not** drain it: `LocationsClient.refreshFootprint`
+only upserts and never deletes, so a location the census stops returning keeps its last-known row,
+last-known `resources` and all. The consequence is deliberate but worth naming: such a pile stays a
+candidate at a value nothing will ever revise, and a controller can be pointed at a stockpile that is
+no longer there. It is self-correcting rather than fatal — the controller hauls nothing, the run stays
+healthy (a quiet hauler is not a stall, §7), and the next census that *does* mention the location
+overwrites the row. Making it exact would mean the footprint refresh pruning locations absent from the
+response, which is out of scope here and would need care: the footprint is a holdings overlay, and
+absence has other causes than depletion.
+
+Nothing records which piles are finished: a zeroed pile simply stops being a candidate, and the planner
+re-derives the whole assignment from the current footprint on every cycle. That is the same "recompute,
+never cache" rule §7 of the superseded spec imposed on the salvage frontier, and for the same reason —
+the catalogue moves under the run.
 
 Steady-state cost is therefore one `GET /v1/locations` per 60s, plus one `set_directive` each time a
 pile drains — nothing per round trip, and nothing per unit moved.

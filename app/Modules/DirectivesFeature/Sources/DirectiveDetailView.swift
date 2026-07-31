@@ -88,7 +88,7 @@ public struct DirectiveDetailView: View {
             switch store.selectedRow {
             case let .builtIn(builtIn):
                 builtInDetail(builtIn)
-            case let .custom(directive):
+            case let .custom(directive, _):
                 customDetail(directive)
             case nil:
                 RCContentUnavailableView("No Selection", systemImage: "square.dashed")

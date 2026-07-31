@@ -114,6 +114,23 @@ struct HaulTargetPlannerTests {
         ])
     }
 
+    /// The DELIVERY end of the mesh check, which nothing else guards: a mesh
+    /// that reaches the pile but not home cannot carry a `ferry` either.
+    /// ATIANFU is meshed and rich, AINALRAM — where everything is delivered —
+    /// is not, so there is no reachable pile at all. (Swapping the check's
+    /// `&&` for `||` is caught by `itSkipsUnmeshedSystemsHoweverRich`; DELETING
+    /// the delivery half was caught by nothing until this test.)
+    @Test func itSkipsAPileWhenTheDeliverySystemIsUnmeshed() {
+        let mesh = SalvageTargetPlanner.meshSystems(in: [relay(at: "ATIANFU-1-L4")])
+        let plans = HaulTargetPlanner.assignments(
+            controllers: [controller("C1")],
+            footprints: ["ATIANFU-BELT-1": 3_537],
+            meshSystems: mesh,
+            delivery: delivery
+        )
+        #expect(plans.isEmpty)
+    }
+
     /// A pile in the delivery system uses `shuttle`, not `ferry` — a ferry whose
     /// two ends share a system is malformed.
     @Test func aPileInTheDeliverySystemUsesShuttle() {

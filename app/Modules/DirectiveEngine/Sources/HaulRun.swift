@@ -32,7 +32,14 @@
 //  new command never actually applies (accepted but not taken — a lost write,
 //  or the server's own tick winning a race) reads as instantly settled and
 //  gets re-pinned and re-dispatched every cycle, forever, with no deadline and
-//  no stall. `dispatchAssignment` closes that with a log-derived re-entry
+//  no stall. TWO guards close that, and the first is the one steady state
+//  actually needs: `confirming` refuses to read a row OLDER than the dispatch
+//  as evidence at all (`controller.updatedAt >= directive.stepStartedAt`),
+//  buying one authoritative read instead. Without it the ORDINARY repoint —
+//  where the controller is already hauling the previous pile, and its row is
+//  minutes old — burned three redundant `set_directive` POSTs and then falsely
+//  stalled (2026-07-31 final review). `dispatchAssignment` covers what remains,
+//  a command genuinely accepted but never applied, with a log-derived re-entry
 //  budget (`dispatchAttemptCount`/`dispatchAttemptLimit`) — the same escape
 //  hatch `SalvageRun.stepEntryCount` uses, adapted to a bound spanning three
 //  steps instead of one AND scoped to ONE controller, not the whole tagged
@@ -94,9 +101,11 @@ public struct HaulRun: MissionStepMachine {
         /// See the `same-step-dispatch-needs-tracked-op` note.
         public static let dispatching = "dispatching"
         /// Polls until the pinned controller (`Directive.controllerCode`)
-        /// reports SOME config this run could have issued — `ferry` or
-        /// `shuttle`, delivering to `deliveryLocation` — then hands back to
-        /// `assigning`, which owns repointing.
+        /// reports, ON A ROW READ AFTER THE DISPATCH, SOME config this run
+        /// could have issued — `ferry` or `shuttle`, delivering to
+        /// `deliveryLocation` — then hands back to `assigning`, which owns
+        /// repointing. A row older than the dispatch buys one authoritative
+        /// read rather than being believed; see `confirm`.
         ///
         /// Deliberately does NOT require that config to be the exact pile
         /// `dispatching` most recently sent: the stockpile census has another
@@ -144,6 +153,16 @@ public struct HaulRun: MissionStepMachine {
     /// silence as a rejection.
     public static let confirmDeadline: TimeInterval = 5 * 60
 
+    /// How stale the pinned controller's row must be before `confirming` will
+    /// spend an authoritative read on it.
+    ///
+    /// Only reached when the row PREDATES the dispatch — see `confirm` — so in
+    /// the healthy case this throttle costs one read per repoint. Its real job
+    /// is the degenerate one: a row read moments before the command went out is
+    /// stale-as-evidence but freshly-read as a request, and re-reading it on
+    /// the very next 5s tick would buy nothing but rate limit.
+    public static let confirmReadInterval: TimeInterval = 30
+
     /// How many `dispatching → confirming → assigning` cycles the SAME pinned
     /// controller may spend without ever satisfying `isInForce`, before
     /// `dispatchAssignment` stalls instead of dispatching again. See
@@ -190,6 +209,36 @@ public struct HaulRun: MissionStepMachine {
         directive.fleetTag ?? defaultFleetTag
     }
 
+    /// The stockpile the tagged fleet is actually draining right now, or nil
+    /// when no tagged controller holds a haul config — the "Nothing reachable"
+    /// state.
+    ///
+    /// **The row subtitle's only possible source** (design spec §9: "the row
+    /// subtitle names the work in flight rather than a count… read from the
+    /// controllers' own in-force config"). A Haul Run stores no assignment
+    /// state — not a queue, not a `roamCentre`, not a drained-pile count — so
+    /// there is nothing on the `Directive` to render; what it is working exists
+    /// only on the controllers themselves. Lives here rather than in the
+    /// feature so "is this a config we could have issued" has exactly one
+    /// definition (`hasTakenSomeHaulConfig`), shared with `confirming`.
+    ///
+    /// Names the LOWEST-CODED controller's pile when several are hauling
+    /// different ones: the same total order `controllers(in:tag:)` and the
+    /// planner rank by, so the answer is stable across evaluations rather than
+    /// flickering with dictionary order. §9 asks for one designation, and
+    /// summarising N of them would be inventing UI the spec declines to offer.
+    public static func currentHaulTarget(devices: [Device], tag: String) -> String? {
+        devices
+            .filter { $0.tags.contains(tag) }
+            .sorted { $0.deviceCode < $1.deviceCode }
+            .lazy
+            .compactMap { device -> String? in
+                guard hasTakenSomeHaulConfig(device) else { return nil }
+                return device.currentDirectiveConfig?["collect"]?.stringValue
+            }
+            .first
+    }
+
     /// The assignment this evaluation would like every controller to be running.
     private static func plans(_ directive: Directive, _ world: WorldSnapshot) -> [HaulTargetPlanner.Assignment] {
         HaulTargetPlanner.assignments(
@@ -234,6 +283,13 @@ public struct HaulRun: MissionStepMachine {
     /// judge the controller's real, accepted config against a target that has
     /// since changed, and never match. `_eval_state` stays unread here too,
     /// for the same reason `isInForce` ignores it.
+    ///
+    /// **Only meaningful on a row read AFTER the dispatch.** Being deliberately
+    /// blind to which pile is named makes it equally blind to the controller's
+    /// PRE-dispatch config, which in steady state satisfies it exactly. `confirm`
+    /// is what enforces that ordering (`updatedAt >= stepStartedAt`); calling
+    /// this against an arbitrary row answers "is this controller hauling for
+    /// us", not "did it take the command".
     static func hasTakenSomeHaulConfig(_ controller: Device) -> Bool {
         guard let currentDirective = controller.currentDirective,
               [HaulTargetPlanner.ferry, HaulTargetPlanner.shuttle].contains(currentDirective),
@@ -380,7 +436,15 @@ public struct HaulRun: MissionStepMachine {
     private func assign(_ directive: Directive, _ world: WorldSnapshot) -> MissionAction {
         let tag = Self.fleetTag(of: directive)
         guard !Self.controllers(in: world, tag: tag).isEmpty else {
-            return .stall(.noHaulControllerTagged)
+            // Spec §7 raises `noHaulControllerTagged` on "a fresh TAG READ finds
+            // no `auto:haul` controller", never on local silence — so mirror
+            // `preflight` and buy the read first. `world.devices` is local
+            // SQLite, and a transient gap there (a sync that has not landed, a
+            // row nothing has touched) would otherwise stall a healthy fleet
+            // and demand a human for something a single request settles. The
+            // engine's `reAsk` bounds it: if the fresh rows still show no
+            // controller, the carried reason surfaces on this same tick.
+            return .refreshFleet(tag: tag, thenStall: .noHaulControllerTagged)
         }
         let assignments = Self.plans(directive, world)
         guard let pending = assignments.first(where: { !Self.isInForce($0, in: world) }) else {
@@ -455,6 +519,12 @@ public struct HaulRun: MissionStepMachine {
     /// re-derives the whole fleet's plan, and never dispatches, which is what
     /// lets `confirmDeadline` accumulate honestly. See `Step.confirming`'s doc
     /// comment for why both of those matter.
+    ///
+    /// Every path that STAYS in this step returns `.wait`, including the
+    /// pre-deadline `.refreshDevices` below — `reAsk` collapses a repeat
+    /// request into `.wait`, and `.wait` is the one action `DirectiveExecutor`
+    /// does not re-stamp `stepStartedAt` for. That is what keeps the deadline
+    /// this step measures real.
     private func confirm(_ directive: Directive, _ world: WorldSnapshot) -> MissionAction {
         guard let controllerCode = directive.controllerCode else {
             // `dispatchAssignment` always pins one before advancing here.
@@ -468,6 +538,33 @@ public struct HaulRun: MissionStepMachine {
             // never report back would just delay reaching the same
             // conclusion.
             return .stall(.unreachableDevice)
+        }
+        guard controller.updatedAt >= directive.stepStartedAt else {
+            // The local row was READ BEFORE the command went out, so it cannot
+            // say whether the controller took it — and because
+            // `hasTakenSomeHaulConfig` accepts ANY ferry/shuttle delivering
+            // home, the controller's PRE-dispatch config is exactly the thing
+            // it would mistake for evidence. In steady state that is the
+            // normal case, not an edge one: a repoint dispatches to a
+            // controller that is already hauling something, and device rows
+            // refresh about five minutes apart while this loop runs every 5s.
+            // Believing the stale row reported "settled" on the very next
+            // tick, so `confirming` never waited, `confirmDeadline` never
+            // accumulated, the post-deadline read below was unreachable, and
+            // `assigning`'s strict `isInForce` re-pinned the same controller
+            // for another POST until `dispatchAttemptCount` stalled the run —
+            // three redundant `set_directive`s and a false `.commandRejected`
+            // on a command that had landed (2026-07-31 final review).
+            //
+            // Buy one authoritative read instead, throttled by
+            // `confirmReadInterval` so this costs a read per repoint rather
+            // than one per tick. `thenStall: nil` matters: the engine's `reAsk`
+            // collapses a repeat request into `.wait`, so a read that fails or
+            // brings back nothing new is bounded rather than fatal.
+            if world.now.timeIntervalSince(controller.updatedAt) > Self.confirmReadInterval {
+                return .refreshDevices(deviceCodes: [controllerCode], thenStall: nil)
+            }
+            return .wait
         }
         if Self.hasTakenSomeHaulConfig(controller) {
             // Settled on SOME config this run could have issued — not

@@ -1569,7 +1569,7 @@ struct RefreshFootprintTests {
         }
         let refreshed = LockIsolated(0)
 
-        try await withDependencies {
+        await withDependencies {
             $0.defaultDatabase = database
             $0.date = .constant(Date(timeIntervalSince1970: 1_000))
             $0.uuid = .incrementing
@@ -1604,7 +1604,7 @@ struct RefreshFootprintTests {
         }
         struct Boom: Error {}
 
-        try await withDependencies {
+        await withDependencies {
             $0.defaultDatabase = database
             $0.date = .constant(Date(timeIntervalSince1970: 1_000))
             $0.uuid = .incrementing

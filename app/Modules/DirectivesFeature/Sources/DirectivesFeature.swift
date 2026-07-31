@@ -273,7 +273,7 @@ public struct DirectivesFeature {
         _ state: State,
         _ verb: @escaping @Sendable (DirectiveResolutionClient, String) async -> Void
     ) -> Effect<Action> {
-        guard case let .custom(directive) = state.selectedRow else { return .none }
+        guard case let .custom(directive, _) = state.selectedRow else { return .none }
         // Bound to a local: referencing the property wrapper inside the
         // @Sendable closure would capture the non-Sendable reducer.
         let resolution = self.directiveResolution

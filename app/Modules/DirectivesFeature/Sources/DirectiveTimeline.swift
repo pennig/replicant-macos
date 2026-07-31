@@ -39,7 +39,7 @@ public struct DirectiveTimeline: FetchKeyRequest {
     /// mission's own work.
     public static func request(for row: DirectiveRow?) -> DirectiveTimeline {
         switch row {
-        case let .custom(directive):
+        case let .custom(directive, _):
             DirectiveTimeline(directiveID: directive.id, deviceCode: nil)
         case let .builtIn(builtIn):
             DirectiveTimeline(directiveID: nil, deviceCode: builtIn.deviceCode)
