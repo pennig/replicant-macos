@@ -189,4 +189,36 @@ struct DirectiveSchemaTests {
         let loaded = try database.read { db in try DirectiveLogEntry.all.fetchAll(db) }
         #expect(loaded.count == 3)
     }
+
+    @Test func salvageRunKindHasATitle() {
+        #expect(DirectiveKind.salvageRun.title == "Salvage Run")
+    }
+
+    @Test func newAttentionReasonsCarryGuidance() {
+        // Every stall the engine can produce must name a fix — the panel renders
+        // `guidance` verbatim, and an empty one reads as a dead end.
+        for reason in [
+            DirectiveAttentionReason.noMiningControllerAboard,
+            .noMiningDroneAboard,
+            .awaitingRelayRestock,
+            .relayActivationFailed,
+        ] {
+            #expect(!reason.displayName.isEmpty)
+            #expect(!reason.guidance.isEmpty)
+        }
+    }
+
+    @Test func fleetTagRoundTripsThroughTheRow() throws {
+        let database = try GameDatabase.bootstrap()
+        let directive = Directive(
+            id: "d1", kind: .salvageRun, status: .running, deviceCode: "VESSEL",
+            fleetTag: "auto:salvage", targets: ["TOSLIT"], targetIndex: 0,
+            step: "preflight", stepStartedAt: .distantPast, returnToOrigin: false,
+            originDesignation: nil, attentionReason: nil,
+            createdAt: .distantPast, updatedAt: .distantPast
+        )
+        try database.write { try Directive.insert { directive }.execute($0) }
+        let read = try database.read { try Directive.all.fetchAll($0) }
+        #expect(read.first?.fleetTag == "auto:salvage")
+    }
 }

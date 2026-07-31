@@ -41,15 +41,21 @@ public struct DirectivesListView: View {
         }
         .toolbar {
             ToolbarItem {
-                Button { store.send(.newDirectiveTapped) } label: {
-                    Label("New Survey Run", systemImage: "plus")
+                Menu {
+                    Button("Survey Run") { store.send(.newDirectiveTapped) }
+                    Button("Salvage Run") { store.send(.newSalvageRunTapped) }
+                } label: {
+                    Label("New Mission", systemImage: "plus")
                 }
-                .help("Launch a new Survey Run")
+                .help("Launch a new mission")
             }
         }
-        // Feature-tier sheet: @Presents + scope, never .sheet(isPresented:).
+        // Feature-tier sheets: @Presents + scope, never .sheet(isPresented:).
         .sheet(item: $store.scope(state: \.newDirective, action: \.newDirective)) { newStore in
             NewDirectiveSheet(store: newStore)
+        }
+        .sheet(item: $store.scope(state: \.newSalvageRun, action: \.newSalvageRun)) { newStore in
+            NewSalvageRunSheet(store: newStore)
         }
         .navigationTitle("Directives")
     }

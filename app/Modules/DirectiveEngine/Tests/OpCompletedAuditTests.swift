@@ -24,6 +24,8 @@ private struct IdleMachine: MissionStepMachine {
     let kind: DirectiveKind = .surveyRun
     let firstStep = "start"
     func nextAction(directive: Directive, world: WorldSnapshot) -> MissionAction { .wait }
+    /// Never reached: this machine only ever waits.
+    func plan(_ context: RoamContext) -> RoamPlan { .exhausted }
 }
 
 private let epoch = Date(timeIntervalSince1970: 0)

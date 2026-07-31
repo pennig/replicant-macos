@@ -151,4 +151,43 @@ struct WorldSnapshotTests {
         #expect(world.devices.isEmpty)
         #expect(world.openOperations.isEmpty)
     }
+
+    /// Assay totals are read for the directive's targets, keyed by SITE
+    /// designation — the shape `StarSystem.salvageBodies(totals:)` expects —
+    /// so a mission can rank salvage bodies by assayed units rather than
+    /// degrading silently to alphabetical order.
+    @Test func loadsSiteAssaysForTheTargets() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try SiteAssay.insert {
+                SiteAssay(
+                    id: "SOL-3-SAL-1", body: "SOL-3", system: "SOL", siteType: "salvage",
+                    totals: ["ore": 500], assayedAt: Date(timeIntervalSince1970: 0)
+                )
+            }.execute(db)
+        }
+        let world = try await WorldSnapshot.read(
+            from: database, now: Date(timeIntervalSince1970: 100), directive: directive()
+        )
+        #expect(world.siteAssays == ["SOL-3-SAL-1": ["ore": 500]])
+    }
+
+    /// An assay belonging to a system the directive doesn't name is never
+    /// loaded — the same "only the wanted set" scoping as the `StarSystem`
+    /// blobs, never the whole table.
+    @Test func doesNotLoadSiteAssaysForUnrelatedSystems() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try SiteAssay.insert {
+                SiteAssay(
+                    id: "FARAWAY-2-SAL-1", body: "FARAWAY-2", system: "FARAWAY", siteType: "salvage",
+                    totals: ["ore": 500], assayedAt: Date(timeIntervalSince1970: 0)
+                )
+            }.execute(db)
+        }
+        let world = try await WorldSnapshot.read(
+            from: database, now: Date(timeIntervalSince1970: 100), directive: directive()
+        )
+        #expect(world.siteAssays.isEmpty)
+    }
 }

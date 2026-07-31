@@ -96,6 +96,7 @@ actor DirectiveEngineCore {
         supervisor = nil
         for (_, task) in executors { task.cancel() }
         executors.removeAll()
+        idlePlanUntil.removeAll()
     }
 
     /// Spawn an executor for each running directive that lacks one, and retire
@@ -119,6 +120,7 @@ actor DirectiveEngineCore {
         for (id, task) in executors where !runningIDs.contains(id) {
             task.cancel()
             executors[id] = nil
+            idlePlanUntil[id] = nil
         }
         for directive in running where executors[directive.id] == nil {
             executors[directive.id] = makeExecutor(directiveID: directive.id)
@@ -196,6 +198,11 @@ actor DirectiveEngineCore {
                 designation: designation, thenStall: thenStall,
                 directive: directive, machine: machine
             )
+        case let .refreshFleet(tag, thenStall):
+            action = await resolveFleetRefresh(
+                tag: tag, thenStall: thenStall,
+                directive: directive, machine: machine
+            )
         case let .extendQueue(centre):
             let resolution = await resolveExtendQueue(
                 centre: centre, directive: directive, machine: machine
@@ -230,15 +237,38 @@ actor DirectiveEngineCore {
         let directive: Directive
     }
 
+    /// How long an idling continuous run is left alone before its planner is
+    /// asked again.
+    ///
+    /// Only `.idle` runs pay this. `.extendQueue` reads the whole census, which
+    /// is affordable once per worked system (tens of minutes apart) and absurd on
+    /// the 5 s tick — and a run whose frontier is momentarily empty would ask on
+    /// every single one. The backing state is deliberately in-memory: it is a
+    /// read-rate optimisation, and losing it on relaunch costs one extra census
+    /// read.
+    static let idlePlanBackoff: TimeInterval = 60
+
+    /// When each idling directive's planner may next be asked.
+    private var idlePlanUntil: [String: Date] = [:]
+
     /// Pick the next target for a continuous run, append it, and ask the machine
     /// again against the EXTENDED row.
     ///
-    /// One census read per surveyed system — tens of minutes apart, not on the
-    /// 5 s tick — so reading the whole table is affordable and the candidate
-    /// filter stays in `SurveyRoamPlanner`, where it is unit-tested.
+    /// The engine gathers the data and owns the write; **which** system comes back
+    /// is the machine's own `plan(_:)`, so a survey roam's sliding bands and a
+    /// salvage run's mesh frontier each live with their mission. A `switch` on
+    /// `directive.kind` here would reintroduce exactly the coupling
+    /// `MissionRegistry` was built to remove — and, before this was a protocol
+    /// requirement, silently ran EVERY kind through `SurveyRoamPlanner`, whose
+    /// candidate filter (`fullyScannedAt == nil`) is the precise inverse of what
+    /// salvage needs.
     ///
-    /// A bounding box around the centre was considered and rejected: the band's
-    /// outer edge is `inner + shellWidth`, and `inner` is only known after
+    /// One census read per worked system — tens of minutes apart, not on the 5 s
+    /// tick — so reading the whole table is affordable and each candidate filter
+    /// stays in its own unit-tested planner.
+    ///
+    /// A bounding box around the centre was considered and rejected: the survey
+    /// band's outer edge is `inner + shellWidth`, and `inner` is only known after
     /// scanning the candidates, so bounding needs the very scan it would save.
     private func resolveExtendQueue(
         centre: String,
@@ -248,38 +278,31 @@ actor DirectiveEngineCore {
         @Dependency(\.defaultDatabase) var database
         @Dependency(\.date) var date
 
+        if let until = idlePlanUntil[directive.id], date.now < until {
+            return Resolution(action: .wait, directive: directive)
+        }
+
         let vesselCode = directive.deviceCode
         let attempted = Set(directive.targets)
 
-        let planned: String?
+        let plan: RoamPlan
         do {
-            planned = try await database.read { db -> String? in
-                // Bound to a `let` before the guard rather than chained inside
-                // it: a leading-dot chain broken across lines in a `guard let`
-                // condition ends the condition early, and the `$0` then resolves
-                // against this closure's own `db`.
-                let centreRow = try Star.where { $0.designation.eq(centre) }.fetchOne(db)
-                guard let centreStar = centreRow else { return nil }
-
+            let context = try await database.read { db -> RoamContext in
                 let vessel = try Device.where { $0.deviceCode.eq(vesselCode) }.fetchOne(db)
                 let vesselSystem = vessel?.location.map { SiteAssay.system(of: $0) }
                 let vesselStar = try vesselSystem.flatMap { designation in
                     try Star.where { $0.designation.eq(designation) }.fetchOne(db)
                 }
-
-                let candidates = try Star.all.fetchAll(db)
-                return SurveyRoamPlanner.nextTarget(
-                    centre: centreStar.position,
-                    // A stowed or in-transit vessel reports no location at all,
-                    // so measure the hop from the centre instead. Only WHICH
-                    // member of the band is cheapest changes — the band itself
-                    // is anchored on the centre either way, so the coverage
-                    // guarantee is unaffected.
-                    from: vesselStar?.position ?? centreStar.position,
-                    stars: candidates,
+                return RoamContext(
+                    centre: try Star.where { $0.designation.eq(centre) }.fetchOne(db),
+                    vessel: vesselStar?.position,
+                    stars: try Star.all.fetchAll(db),
+                    assays: try SiteAssay.all.fetchAll(db),
+                    devices: try Device.all.fetchAll(db),
                     attempted: attempted
                 )
             }
+            plan = machine.plan(context)
         } catch {
             // The run is no worse off than before the attempt; wait and let the
             // next tick try again.
@@ -287,8 +310,22 @@ actor DirectiveEngineCore {
             return Resolution(action: .wait, directive: directive)
         }
 
-        guard let planned else {
-            logger.info("directive \(directive.id, privacy: .public): nothing left to survey around \(centre, privacy: .public) — finishing")
+        let planned: String
+        switch plan {
+        case let .target(system):
+            idlePlanUntil[directive.id] = nil
+            planned = system
+        case .idle:
+            // Nothing reachable *right now*. The machine says more may appear —
+            // the survey roam keeps uncovering salvage, and each relay this run
+            // plants widens the frontier — so the run idles rather than finishing
+            // behind the operator's back.
+            idlePlanUntil[directive.id] = date.now.addingTimeInterval(Self.idlePlanBackoff)
+            logger.info("directive \(directive.id, privacy: .public): nothing reachable around \(centre, privacy: .public) — idling")
+            return Resolution(action: .wait, directive: directive)
+        case .exhausted:
+            idlePlanUntil[directive.id] = nil
+            logger.info("directive \(directive.id, privacy: .public): nothing left to plan around \(centre, privacy: .public) — finishing")
             return Resolution(action: .done, directive: directive)
         }
 
@@ -350,6 +387,13 @@ actor DirectiveEngineCore {
         case let .refreshDevicesInSystem(designation, thenStall):
             let resolved = await resolveSystemRefresh(
                 designation: designation, thenStall: thenStall,
+                directive: extended, machine: machine
+            )
+            return Resolution(action: resolved, directive: extended)
+
+        case let .refreshFleet(tag, thenStall):
+            let resolved = await resolveFleetRefresh(
+                tag: tag, thenStall: thenStall,
                 directive: extended, machine: machine
             )
             return Resolution(action: resolved, directive: extended)
@@ -460,10 +504,54 @@ actor DirectiveEngineCore {
         return reAsk(machine, directive, fresh, thenStall: reason)
     }
 
+    /// The same contract as `resolveSystemRefresh`, paid for with ONE tag-scoped
+    /// request instead of a location-scoped one.
+    ///
+    /// This is the containment counterpart `.refreshDevicesInSystem` cannot
+    /// serve: a tag filter never touches `location`, so stowing a device does
+    /// not drop it out of scope.
+    ///
+    /// Reconciled through `Reconciler.ingest` — the same path every other
+    /// device read uses — one device at a time, exactly like
+    /// `resolveSystemRefresh`. **Never prune after this read**: every untagged
+    /// device is absent from a tag response by construction, and treating that
+    /// absence as "device gone" would delete the fleet, so this deliberately
+    /// never calls `Reconciler.pruneDevices`.
+    private func resolveFleetRefresh(
+        tag: String,
+        thenStall reason: DirectiveAttentionReason?,
+        directive: Directive,
+        machine: any MissionStepMachine
+    ) async -> MissionAction {
+        @Dependency(\.devicesClient) var devicesClient
+        @Dependency(\.defaultDatabase) var database
+        @Dependency(\.date) var date
+
+        do {
+            let devices = try await devicesClient.fetchByTag(tag)
+            let reconciler = Reconciler()
+            for device in devices { await reconciler.ingest(device) }
+            logger.info("directive \(directive.id, privacy: .public): reconciled \(devices.count) device(s) tagged \(tag, privacy: .public) in one request")
+        } catch {
+            // The run is no worse off than before the attempt; fall through and
+            // let the machine judge the rows it already has.
+            logger.error("directive \(directive.id, privacy: .public): fleet refresh of \(tag, privacy: .public) failed: \(error)")
+        }
+
+        let fresh: WorldSnapshot
+        do {
+            fresh = try await WorldSnapshot.read(from: database, now: date.now, directive: directive)
+        } catch {
+            logger.error("world snapshot after fleet refresh failed: \(error)")
+            return reason.map { .stall($0) } ?? .wait
+        }
+        return reAsk(machine, directive, fresh, thenStall: reason)
+    }
+
     /// Ask the machine once more against freshly-read rows, collapsing a repeat
-    /// refresh request into the carried fallback. Shared by both refresh paths:
-    /// this is the one-round loop guard, and it must behave identically however
-    /// the reads were paid for.
+    /// refresh request into the carried fallback. Shared by all three refresh
+    /// paths: this is the one-round loop guard, and it must behave identically
+    /// however the reads were paid for.
     private func reAsk(
         _ machine: any MissionStepMachine,
         _ directive: Directive,
@@ -472,7 +560,7 @@ actor DirectiveEngineCore {
     ) -> MissionAction {
         let action = machine.nextAction(directive: directive, world: fresh)
         switch action {
-        case .refreshDevices, .refreshDevicesInSystem:
+        case .refreshDevices, .refreshDevicesInSystem, .refreshFleet:
             guard let reason else {
                 // The mission asked for a wait fallback: the state it is
                 // watching is expected to still be unresolved, so another

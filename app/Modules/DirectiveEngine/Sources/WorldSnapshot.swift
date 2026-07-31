@@ -45,6 +45,17 @@ public struct WorldSnapshot: Equatable, Sendable {
     /// the vessel's current system) are decoded: decoding the whole catalogue
     /// costs real time at thousands of bodies.
     public let systems: [String: StarSystem]
+    /// Stored assay totals for the salvage sites in this directive's systems,
+    /// keyed by SITE designation (`TOSLIT-3-2-SAL-1`) — the shape
+    /// `StarSystem.salvageBodies(totals:)` expects.
+    ///
+    /// Read here rather than derived, because a site's ORIGINAL unit total is
+    /// historical event knowledge that the catalogue payload never carries: it
+    /// arrives once, on `salvage.discovered`, and would be clobbered by every
+    /// re-scan's blob rewrite. `SiteAssay` is the table that survives that
+    /// churn. Without it a mission can only see percentages, and a
+    /// roster-sourced site's percentages are empty.
+    public let siteAssays: [String: [String: Double]]
     /// The moment this snapshot was taken. Every time comparison in a mission
     /// uses this rather than `Date()`, so step machines stay pure and their
     /// tests deterministic.
@@ -56,6 +67,7 @@ public struct WorldSnapshot: Equatable, Sendable {
         log: [DirectiveLogEntry] = [],
         dispatchedOperations: [String: GameModels.Operation] = [:],
         systems: [String: StarSystem] = [:],
+        siteAssays: [String: [String: Double]] = [:],
         now: Date
     ) {
         self.devices = devices
@@ -63,6 +75,7 @@ public struct WorldSnapshot: Equatable, Sendable {
         self.log = log
         self.dispatchedOperations = dispatchedOperations
         self.systems = systems
+        self.siteAssays = siteAssays
         self.now = now
     }
 
@@ -119,12 +132,21 @@ public struct WorldSnapshot: Equatable, Sendable {
                 if let system = try? detail.system() { systems[detail.designation] = system }
             }
 
+            // Same `wanted` scope as the system blobs above — never the whole
+            // table. `SiteAssay.system` is exactly the leading-segment
+            // designation `wanted` is built from (`SiteAssay.system(of:)`).
+            let assays = try SiteAssay
+                .where { $0.system.in(Array(wanted)) }
+                .fetchAll(db)
+            let siteAssays = Dictionary(assays.map { ($0.id, $0.totals) }, uniquingKeysWith: { _, last in last })
+
             return WorldSnapshot(
                 devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
                 openOperations: Dictionary(operations.map { ($0.entityCode, $0) }, uniquingKeysWith: { _, last in last }),
                 log: log,
                 dispatchedOperations: Dictionary(dispatched.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last }),
                 systems: systems,
+                siteAssays: siteAssays,
                 now: now
             )
         }

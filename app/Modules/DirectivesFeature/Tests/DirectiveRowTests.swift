@@ -274,6 +274,33 @@ struct DirectiveRowSubtitleTests {
         #expect(row.subtitle == "0 surveyed")
     }
 
+    /// A Salvage Run is continuous the same way a Survey Run is —
+    /// `targetIndex == targets.count` for the whole window between systems —
+    /// so it needs the same work-done readout, just its own verb and a plural
+    /// that actually agrees with the count.
+    @Test func aRoamingSalvageRunReportsWorkDoneNotMOverN() {
+        let row = DirectiveRow.custom(
+            mission(id: "D1", kind: .salvageRun, targets: ["TOSLIT", "WATTL"], targetIndex: 2, roamCentre: "AINALRAM")
+        )
+        #expect(row.subtitle == "2 systems drained")
+    }
+
+    /// The pluralisation the m/n branch never had to worry about: "1 system",
+    /// not "1 systems".
+    @Test func aSingleDrainedSystemIsNotPluralised() {
+        let row = DirectiveRow.custom(
+            mission(id: "D1", kind: .salvageRun, targets: ["TOSLIT"], targetIndex: 1, roamCentre: "AINALRAM")
+        )
+        #expect(row.subtitle == "1 system drained")
+    }
+
+    @Test func aRoamingSalvageRunThatHasDrainedNothingSaysSo() {
+        let row = DirectiveRow.custom(
+            mission(id: "D1", kind: .salvageRun, targets: [], targetIndex: 0, roamCentre: "AINALRAM")
+        )
+        #expect(row.subtitle == "0 systems drained")
+    }
+
     @Test func aBuiltInRowWithNoDronesHasNoSubtitle() {
         let row = DirectiveRow.builtIn(
             BuiltInDirective(

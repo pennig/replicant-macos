@@ -52,6 +52,25 @@ public struct DevicesClient: Sendable {
     /// absences as "gone" would delete the fleet.
     public var fetchAtLocation: @Sendable (_ designation: String) async throws -> [Device]
 
+    /// Every device carrying `tag` (`GET /v1/devices/tags/{tag}`, paged).
+    ///
+    /// This is the one scope that reports the TAGGED fleet correctly regardless
+    /// of stow or travel state. `fetchAtLocation` answers PRESENCE and cannot
+    /// see a stowed device — stowing clears `location`, which drops the row out
+    /// of the location index (six drones stowed aboard a vessel returned
+    /// exactly one row, the vessel, probed live 2026-07-29). A tag filter
+    /// touches location not at all, so every tagged device comes back
+    /// regardless of state: probed live 2026-07-30, a whole tagged fleet caught
+    /// mid-flight came back with `location: null` across the board — the
+    /// vessel because it was travelling, the rest because stowing clears it —
+    /// and each stowed device still carried its `stowedInDeviceCode` intact.
+    ///
+    /// **Not the authoritative full fleet.** Only devices carrying `tag` are
+    /// visible here — every untagged device is absent by construction — so
+    /// callers reconcile what it returns and must never follow it with
+    /// `Reconciler.pruneDevices`.
+    public var fetchByTag: @Sendable (_ tag: String) async throws -> [Device]
+
     /// Read the diversion defense state at a location (`GET /v1/locations/{code}`),
     /// mapping its `object` block to a `DiversionSnapshot`. A `diverting` device
     /// exposes no activity block of its own — the impact target, ETA, and
@@ -116,6 +135,28 @@ extension DevicesClient: DependencyKey {
         fetchAtLocation: { designation in
             let devices = try await Self.walk(location: designation)
             logger.info("fetched \(devices.count) device(s) at \(designation, privacy: .public) in one scoped walk")
+            return devices
+        },
+        fetchByTag: { tag in
+            @Dependency(\.gameClient) var gameClient
+            @Dependency(\.date) var date
+            // One client for the whole walk, and an issue-time stamp per page —
+            // same reasoning as `walk`: a page reconciles by when it was asked
+            // for, so a slow page can't regress a newer single-device read.
+            let client = gameClient()
+            var devices: [Device] = []
+            var cursor: Int?
+            repeat {
+                let issuedAt = date.now
+                let output = try await client.getV1DevicesTagsTag(
+                    path: .init(tag: tag),
+                    query: .init(cursor: cursor, limit: Self.pageSize)
+                )
+                let body = try output.ok.body.json
+                devices.append(contentsOf: (body.devices ?? []).map { Device(schema: $0, fetchedAt: issuedAt) })
+                cursor = body.nextCursor
+            } while cursor != nil
+            logger.info("fetched \(devices.count) device(s) tagged \(tag, privacy: .public)")
             return devices
         },
         diversion: { designation in
@@ -216,6 +257,7 @@ extension DevicesClient: TestDependencyKey {
         read: unimplemented("DevicesClient.read"),
         fetchAll: unimplemented("DevicesClient.fetchAll", placeholder: []),
         fetchAtLocation: unimplemented("DevicesClient.fetchAtLocation", placeholder: []),
+        fetchByTag: unimplemented("DevicesClient.fetchByTag", placeholder: []),
         diversion: unimplemented("DevicesClient.diversion", placeholder: nil),
         relayLinks: unimplemented("DevicesClient.relayLinks", placeholder: []),
         updateTags: unimplemented("DevicesClient.updateTags")

@@ -36,6 +36,11 @@ private struct ScriptedMachine: MissionStepMachine {
             remaining.isEmpty ? .wait : remaining.removeFirst()
         }
     }
+
+    /// Scripted actions can't express a plan, so borrow the survey roam's — the
+    /// tests that script an `.extendQueue` are about the resolver's wiring (the
+    /// append surviving the action applied after it), not about the ranking.
+    func plan(_ context: RoamContext) -> RoamPlan { SurveyRun().plan(context) }
 }
 
 private func mission(
@@ -376,6 +381,80 @@ struct DirectiveEngineTests {
         }
     }
 
+    /// `.setDeviceTags` PATCHes the new set, confirm-reads the device, then
+    /// advances — modeled on `.refreshSystem`, but with a follow-up read
+    /// instead of a preceding one.
+    @Test func setDeviceTagsUpdatesThenConfirmReadsThenAdvances() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { mission(step: "confirmingRelay") }.execute(db)
+        }
+        let core = DirectiveEngineCore(
+            machines: [ScriptedMachine([
+                .setDeviceTags(deviceCode: "RELAY", tags: ["operator:keep"], nextStep: "configuring"),
+            ])],
+            tick: .seconds(5)
+        )
+        let patched = LockIsolated<(String, [String])?>(nil)
+        let refreshed = LockIsolated<String?>(nil)
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.devicesClient.updateTags = { deviceCode, tags in
+                patched.setValue((deviceCode, tags))
+            }
+            $0.deviceRefresher.refresh = { code, priority in
+                refreshed.setValue(code)
+                #expect(priority == .high)
+                return nil
+            }
+        } operation: {
+            await core.evaluateOnce(directiveID: "D1")
+            #expect(patched.value?.0 == "RELAY")
+            #expect(patched.value?.1 == ["operator:keep"])
+            #expect(refreshed.value == "RELAY")
+            let directive = try await database.read { db in
+                try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+            }
+            #expect(directive?.step == "configuring")
+            #expect(directive?.status == .running)
+        }
+    }
+
+    /// A rejected/failed PATCH must never strand the run: the relay is up and
+    /// meshing, and the tag is housekeeping — the same best-effort contract as
+    /// `.refreshSystem`.
+    @Test func setDeviceTagsAdvancesEvenWhenTheUpdateFails() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { mission(step: "confirmingRelay") }.execute(db)
+        }
+        let core = DirectiveEngineCore(
+            machines: [ScriptedMachine([
+                .setDeviceTags(deviceCode: "RELAY", tags: [], nextStep: "configuring"),
+            ])],
+            tick: .seconds(5)
+        )
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.devicesClient.updateTags = { _, _ in throw DevicesClient.TagUpdateError("nope") }
+            $0.deviceRefresher.refresh = { _, _ in
+                Issue.record("must not confirm-read after a failed update")
+                return nil
+            }
+        } operation: {
+            await core.evaluateOnce(directiveID: "D1")
+            let directive = try await database.read { db in
+                try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+            }
+            #expect(directive?.step == "configuring")
+            #expect(directive?.status == .running)
+        }
+    }
+
     /// A directive whose kind has no registered machine is left completely
     /// alone — in this stage that is EVERY production directive, so a bug here
     /// would corrupt rows the moment the engine starts.
@@ -651,6 +730,227 @@ struct DirectiveRefreshInSystemTests {
             }
             #expect(stored == ["ELSEWHERE"])
         }
+    }
+}
+
+/// `.refreshFleet` is `.refreshDevicesInSystem`'s counterpart for containment: a
+/// tag filter never touches `location`, so a stowed device — invisible to a
+/// location-scoped read — still comes back. Verified live 2026-07-30: a tagged
+/// fleet caught mid-flight (six drones and a controller stowed aboard a
+/// travelling vessel, all eight with `location: null`) came back complete from
+/// `GET devices/tags/{tag}`, stow columns intact.
+@Suite("DirectiveEngine — fleet-tag refresh")
+struct DirectiveRefreshFleetTests {
+    /// One tag request, and every device it returns is reconciled — so the
+    /// machine's second answer is computed against rows that now exist. Mirrors
+    /// `readsTheSystemOnceAndReconcilesEveryDevice`.
+    @Test func refreshFleetReadsTheTagThenReAsksTheMachine() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { mission(step: "start") }.execute(db)
+        }
+        let reads = LockIsolated<[String]>([])
+        let core = DirectiveEngineCore(
+            machines: [ScriptedMachine([
+                .refreshFleet(tag: "auto:salvage", thenStall: .noMiningDroneAboard),
+                .advanceStep(nextStep: "travelling"),
+            ])],
+            tick: .seconds(5)
+        )
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.devicesClient.fetchByTag = { tag in
+                reads.withValue { $0.append(tag) }
+                return [carrier("DRONE")]
+            }
+        } operation: {
+            await core.evaluateOnce(directiveID: "D1")
+            let directive = try await database.read { db in
+                try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+            }
+            #expect(directive?.status == .running)
+            #expect(directive?.step == "travelling")
+            #expect(directive?.attentionReason == nil)
+            let stored = try await database.read { db in
+                try Device.all.fetchAll(db).map(\.deviceCode)
+            }
+            #expect(stored == ["DRONE"])
+        }
+        // Exactly one request for the whole tagged fleet.
+        #expect(reads.value == ["auto:salvage"])
+    }
+
+    /// Asked twice with an authoritative tag read in between and still
+    /// unresolved: the carried reason surfaces. Bounded to ONE round — a machine
+    /// that asks again after the re-ask gets the carried stall, never a loop.
+    @Test func refreshFleetStallsWhenTheMachineStillWantsARefresh() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { mission(step: "start") }.execute(db)
+        }
+        let reads = LockIsolated<[String]>([])
+        let core = DirectiveEngineCore(
+            machines: [ScriptedMachine([
+                .refreshFleet(tag: "auto:salvage", thenStall: .noMiningDroneAboard),
+                .refreshFleet(tag: "auto:salvage", thenStall: .noMiningDroneAboard),
+            ])],
+            tick: .seconds(5)
+        )
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.devicesClient.fetchByTag = { tag in
+                reads.withValue { $0.append(tag) }
+                return []
+            }
+        } operation: {
+            await core.evaluateOnce(directiveID: "D1")
+            let directive = try await database.read { db in
+                try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+            }
+            #expect(directive?.status == .needsAttention)
+            #expect(directive?.attentionReason == .noMiningDroneAboard)
+        }
+        #expect(reads.value == ["auto:salvage"], "one refresh round per evaluation, never a loop")
+    }
+
+    /// A nil fallback waits instead of stalling — matches `.refreshDevicesInSystem`'s
+    /// `aNilFallbackWaitsInsteadOfStalling`.
+    @Test func aNilFallbackWaitsInsteadOfStalling() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { mission(step: "start") }.execute(db)
+        }
+        let core = DirectiveEngineCore(
+            machines: [ScriptedMachine([
+                .refreshFleet(tag: "auto:salvage", thenStall: nil),
+                .refreshFleet(tag: "auto:salvage", thenStall: nil),
+            ])],
+            tick: .seconds(5)
+        )
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.devicesClient.fetchByTag = { _ in [] }
+        } operation: {
+            await core.evaluateOnce(directiveID: "D1")
+            let directive = try await database.read { db in
+                try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+            }
+            #expect(directive?.status == .running)
+            #expect(directive?.attentionReason == nil)
+        }
+    }
+
+    /// A failed read must not strand the run and must not prune: a tag walk is
+    /// NOT the authoritative full fleet, so treating its absences as "device
+    /// gone" would delete the fleet. Mirrors
+    /// `aFailedReadHonoursTheFallbackAndPrunesNothing`.
+    @Test func aFailedReadHonoursTheFallbackAndPrunesNothing() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { mission(step: "start") }.execute(db)
+            try Device.insert { carrier("ELSEWHERE") }.execute(db)
+        }
+        struct ReadFailure: Error {}
+        let core = DirectiveEngineCore(
+            machines: [ScriptedMachine([
+                .refreshFleet(tag: "auto:salvage", thenStall: .noMiningDroneAboard),
+                .refreshFleet(tag: "auto:salvage", thenStall: .noMiningDroneAboard),
+            ])],
+            tick: .seconds(5)
+        )
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.devicesClient.fetchByTag = { _ in throw ReadFailure() }
+        } operation: {
+            await core.evaluateOnce(directiveID: "D1")
+            let directive = try await database.read { db in
+                try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+            }
+            #expect(directive?.attentionReason == .noMiningDroneAboard)
+            let stored = try await database.read { db in
+                try Device.all.fetchAll(db).map(\.deviceCode)
+            }
+            #expect(stored == ["ELSEWHERE"])
+        }
+    }
+
+    /// Regression for the untested combination flagged in review: `.extendQueue`
+    /// followed by `.refreshFleet` in the same evaluation. `resolveExtendQueue`
+    /// hands its own freshly-appended `directive` value into
+    /// `resolveFleetRefresh` and carries it back out as the `Resolution` the
+    /// executor commits — get that wiring wrong and the append rolls itself
+    /// back exactly like the trap `theAppendSurvivesTheActionAppliedAfterIt`
+    /// guards for `.refreshDevices`, just one refresh case over.
+    @Test func anExtendQueueAppendSurvivesAFollowingRefreshFleet() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { mission(step: "start", targets: [], targetIndex: 0) }.execute(db)
+            try Star.insert {
+                Star(
+                    designation: "CENTRE", spectralType: "G", color: "yellow",
+                    positionX: 0, positionY: 0, positionZ: 0, estimatedPlanets: 3,
+                    explored: false, hasLife: nil, entryPoint: nil,
+                    createdAt: Date(timeIntervalSince1970: 0), firstVisitedAt: nil,
+                    fullyScannedAt: Date(timeIntervalSince1970: 1)
+                )
+            }.execute(db)
+            try Star.insert {
+                Star(
+                    designation: "NEAR", spectralType: "G", color: "yellow",
+                    positionX: 2, positionY: 0, positionZ: 0, estimatedPlanets: 3,
+                    explored: false, hasLife: nil, entryPoint: nil,
+                    createdAt: Date(timeIntervalSince1970: 0), firstVisitedAt: nil,
+                    fullyScannedAt: nil
+                )
+            }.execute(db)
+        }
+        let reads = LockIsolated<[String]>([])
+        let core = DirectiveEngineCore(
+            machines: [ScriptedMachine([
+                .extendQueue(centre: "CENTRE"),
+                .refreshFleet(tag: "auto:salvage", thenStall: .noMiningDroneAboard),
+                .advanceStep(nextStep: "travelling"),
+            ])],
+            tick: .seconds(5)
+        )
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.devicesClient.fetchByTag = { tag in
+                reads.withValue { $0.append(tag) }
+                return []
+            }
+        } operation: {
+            await core.evaluateOnce(directiveID: "D1")
+        }
+
+        let directive = try await database.read { db in
+            try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+        }
+        // The trap this test guards: applying the post-refresh action to the
+        // PRE-extend directive value would write `targets` back to `[]` and
+        // roll the append away. Reading the persisted row is what catches it —
+        // asserting on the scripted machine's inputs would not.
+        #expect(directive?.targets == ["NEAR"])
+        #expect(directive?.step == "travelling")
+        #expect(directive?.status == .running)
+        // One refresh round for the whole evaluation, even though both the
+        // extend's re-ask and the refresh's re-ask call into the machine.
+        #expect(reads.value == ["auto:salvage"])
     }
 }
 
@@ -1051,6 +1351,171 @@ struct DirectiveEngineRoamTests {
             await core.evaluateOnce(directiveID: "D1")
             let updated = try await row(database)
             #expect(updated?.targets == ["NEAR", "NEXT"])
+        }
+    }
+}
+
+// MARK: - Salvage roam resolution
+
+/// The seam a Critical review finding lived in: `.extendQueue` used to run
+/// `SurveyRoamPlanner` for every directive kind, so `SalvageTargetPlanner` had
+/// zero production callers and a Salvage Run planned its targets with the exact
+/// INVERSE filter — the survey planner offers only stars that are *not* fully
+/// scanned, while salvage is only ever known in systems the survey has already
+/// finished.
+///
+/// Driven end to end through `evaluateOnce` with the real `SalvageRun`, because
+/// the whole bug was in which planner the engine reached for: a unit test of
+/// `SalvageTargetPlanner` passed throughout and proved nothing.
+@Suite("DirectiveEngine salvage roam resolution")
+struct DirectiveEngineSalvageRoamTests {
+    private func star(_ designation: String, x: Double, scanned: Bool) -> Star {
+        Star(
+            designation: designation, spectralType: "G", color: "yellow",
+            positionX: x, positionY: 0, positionZ: 0, estimatedPlanets: 3,
+            explored: false, hasLife: nil, entryPoint: nil,
+            createdAt: Date(timeIntervalSince1970: 0), firstVisitedAt: nil,
+            fullyScannedAt: scanned ? Date(timeIntervalSince1970: 1) : nil
+        )
+    }
+
+    private func device(
+        _ code: String, type: String, location: String?,
+        features: [String] = [], status: String = "idle"
+    ) -> Device {
+        Device(
+            deviceCode: code, deviceType: type, replicantCode: "R1",
+            status: status, location: location, locationName: nil,
+            operationalCapacity: 100, queueSize: 0,
+            stowedInDeviceCode: nil, controllerDeviceCode: nil,
+            attachedToDeviceCode: nil, createdAt: Date(timeIntervalSince1970: 0),
+            availableCommands: [], features: features, tags: [], detail: .object([:]),
+            updatedAt: Date(timeIntervalSince1970: 1_000),
+            firstSeenAt: Date(timeIntervalSince1970: 0)
+        )
+    }
+
+    private func salvageDirective() -> Directive {
+        Directive(
+            id: "D1", kind: .salvageRun, status: .running, deviceCode: "VES1",
+            controllerCode: nil, roamCentre: "CENTRE", fleetTag: "auto:salvage",
+            targets: [], targetIndex: 0,
+            step: SalvageRun().firstStep,
+            stepStartedAt: Date(timeIntervalSince1970: 1_000),
+            returnToOrigin: false, originDesignation: "CENTRE", attentionReason: nil,
+            createdAt: Date(timeIntervalSince1970: 0),
+            updatedAt: Date(timeIntervalSince1970: 0)
+        )
+    }
+
+    /// CENTRE is meshed (a relay is up there) and fully scanned; RICH is 5 ly out
+    /// — inside relay range — fully scanned, and the only system carrying assayed
+    /// salvage; NEAR is 1 ly out and UNSCANNED, holding nothing.
+    ///
+    /// The two planners disagree by construction: `SurveyRoamPlanner` can only
+    /// ever pick NEAR (RICH and CENTRE are excluded by `fullyScannedAt != nil`),
+    /// and `SalvageTargetPlanner` can only ever pick RICH.
+    private func seed(_ database: any DatabaseWriter, assays: [SiteAssay]) async throws {
+        try await database.write { db in
+            for star in [
+                star("CENTRE", x: 0, scanned: true),
+                star("NEAR", x: 1, scanned: false),
+                star("RICH", x: 5, scanned: true),
+            ] { try Star.insert { star }.execute(db) }
+            try Device.insert { device("VES1", type: "heaven_vessel", location: "CENTRE-1") }.execute(db)
+            try Device.insert {
+                device("RLY1", type: "ftl_relay", location: "CENTRE-1",
+                       features: ["relay"], status: "relaying")
+            }
+            .execute(db)
+            for assay in assays { try SiteAssay.insert { assay }.execute(db) }
+            try Directive.insert { salvageDirective() }.execute(db)
+        }
+    }
+
+    private func richAssay() -> SiteAssay {
+        SiteAssay(
+            id: "RICH-2-SAL-1", body: "RICH-2", system: "RICH", siteType: "salvage",
+            totals: ["structural": 900], assayedAt: Date(timeIntervalSince1970: 0)
+        )
+    }
+
+    private func row(_ database: any DatabaseReader) async throws -> Directive? {
+        try await database.read { db in try Directive.where { $0.id.eq("D1") }.fetchOne(db) }
+    }
+
+    @Test func aSalvageRunPlansWithTheSalvagePlannerNotTheSurveyOne() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await seed(database, assays: [richAssay()])
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            // Preflight's staging check follows the append; the fleet is
+            // deliberately unstaged, so it asks for a tag read and then stalls.
+            // The assertion here is about the TARGET, not the step reached.
+            $0.devicesClient.fetchByTag = { _ in [] }
+        } operation: {
+            let core = DirectiveEngineCore(machines: [SalvageRun()], tick: .seconds(5))
+            await core.evaluateOnce(directiveID: "D1")
+
+            let updated = try await row(database)
+            // RICH is what the salvage ranking picks. NEAR is what the survey
+            // roam would have picked — and a run sent there would have found no
+            // salvage yet still deployed and activated a 370-unit relay before
+            // moving on to do it again.
+            #expect(updated?.targets == ["RICH"])
+            #expect(updated?.currentTarget == "RICH")
+        }
+    }
+
+    /// The counterpart: with no salvage known anywhere, a Salvage Run IDLES. It
+    /// must not complete — the launcher, the list row and the design all promise
+    /// a run that ends only on cancel, and the frontier is a moving snapshot that
+    /// the survey roam keeps refilling.
+    @Test func aSalvageRunWithNothingReachableIdlesRatherThanCompleting() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await seed(database, assays: [])
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+        } operation: {
+            let core = DirectiveEngineCore(machines: [SalvageRun()], tick: .seconds(5))
+            await core.evaluateOnce(directiveID: "D1")
+
+            let updated = try await row(database)
+            #expect(updated?.status == .running)
+            #expect(updated?.targets == [])
+            #expect(updated?.attentionReason == nil)
+        }
+    }
+
+    /// A system already aimed at is never offered again, so a run that drained
+    /// its only reachable system idles instead of looping back onto it.
+    @Test func anAttemptedSalvageSystemIsNotOfferedAgain() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await seed(database, assays: [richAssay()])
+        try await database.write { db in
+            var directive = try Directive.where { $0.id.eq("D1") }.fetchOne(db)!
+            directive.targets = ["RICH"]
+            directive.targetIndex = 1
+            try Directive.upsert { directive }.execute(db)
+        }
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+        } operation: {
+            let core = DirectiveEngineCore(machines: [SalvageRun()], tick: .seconds(5))
+            await core.evaluateOnce(directiveID: "D1")
+
+            let updated = try await row(database)
+            #expect(updated?.targets == ["RICH"])
+            #expect(updated?.status == .running)
         }
     }
 }

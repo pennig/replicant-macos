@@ -57,6 +57,10 @@ public struct DirectivesFeature {
         @Presents public var composer: DirectiveComposer.State?
         /// The new-mission launcher. Also feature-tier.
         @Presents public var newDirective: NewDirectiveFeature.State?
+        /// The new-Salvage-Run launcher. Its own presentation, not folded into
+        /// `newDirective`, because it has its own reducer with its own
+        /// eligibility rule (`SalvageRun`'s fleet queries, not `SurveyRun`'s).
+        @Presents public var newSalvageRun: NewSalvageRunFeature.State?
 
         public init(selectedRowID: String? = nil) {
             self.selectedRowID = selectedRowID
@@ -93,6 +97,8 @@ public struct DirectivesFeature {
         case dismissError
         /// Open the new-mission launcher.
         case newDirectiveTapped
+        /// Open the new-Salvage-Run launcher.
+        case newSalvageRunTapped
         /// Stall resolution on the selected custom mission (design spec §8).
         case retryTapped
         case skipTargetTapped
@@ -101,6 +107,7 @@ public struct DirectivesFeature {
         case resumeTapped
         case composer(PresentationAction<DirectiveComposer.Action>)
         case newDirective(PresentationAction<NewDirectiveFeature.Action>)
+        case newSalvageRun(PresentationAction<NewSalvageRunFeature.Action>)
     }
 
     public init() {}
@@ -173,6 +180,10 @@ public struct DirectivesFeature {
                 state.newDirective = NewDirectiveFeature.State()
                 return .none
 
+            case .newSalvageRunTapped:
+                state.newSalvageRun = NewSalvageRunFeature.State()
+                return .none
+
             case .retryTapped:
                 return resolve(state) { await $0.retry($1) }
 
@@ -198,6 +209,16 @@ public struct DirectivesFeature {
 
             case .newDirective:
                 return .none
+
+            case let .newSalvageRun(.presented(.delegate(.created(directive)))):
+                // Same handoff as `newDirective` above — the two launchers are
+                // separate presentations, but a freshly launched run gets
+                // selected either way.
+                state.selectedRowID = "custom:\(directive.id)"
+                return selectionChanged(&state)
+
+            case .newSalvageRun:
+                return .none
             }
         }
         .ifLet(\.$composer, action: \.composer) {
@@ -205,6 +226,9 @@ public struct DirectivesFeature {
         }
         .ifLet(\.$newDirective, action: \.newDirective) {
             NewDirectiveFeature()
+        }
+        .ifLet(\.$newSalvageRun, action: \.newSalvageRun) {
+            NewSalvageRunFeature()
         }
     }
 
