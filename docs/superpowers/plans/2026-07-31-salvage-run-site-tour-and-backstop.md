@@ -397,12 +397,16 @@ Replace the whole `awaitCompletion` method with:
 
         guard let controller = claimedController(directive, vessel, world) else { return .wait }
         let drones = AMIFleet.adoptedDrones(of: controller, in: world)
-        let evidence = [controller] + drones
-        let lastLook = evidence.map(\.updatedAt).max() ?? .distantPast
+        // Key freshness AND the read throttle off the DRONE rows via min() — the
+        // oldest drone must have been read since launch. NOT max([controller]+drones):
+        // AMI drones are event-silent while the controller churns via its
+        // `ami.*.digest`, so a fresh controller would vouch for a stale drone and
+        // read a still-deployed fleet as recovered. Mirrors `SurveyRun.recover`.
+        let lastLook = drones.map(\.updatedAt).min() ?? .distantPast
         let canRead = world.now.timeIntervalSince(lastLook) >= Self.reconcileInterval
 
-        // Never believe a row read BEFORE this step began (before launch): a
-        // pre-launch drone row still shows it stowed aboard, which would read as
+        // Never believe a drone row read BEFORE this step began (before launch):
+        // a pre-launch drone row still shows it stowed aboard, which would read as
         // "recovered" the instant the step starts. Force a post-launch read
         // first — throttled, so a failing one can't loop every tick.
         guard lastLook >= directive.stepStartedAt else {

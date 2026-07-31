@@ -140,15 +140,17 @@ awaitCompletion(directive, vessel, world):
 
     controller = claimedController(...) else wait         // transient stale row — a reconcile repairs it
     drones   = adoptedDrones(of: controller, in: world)   // WIDE query, wherever they are
-    evidence = [controller] + drones
-    lastLook = evidence.map(\.updatedAt).max() ?? .distantPast
+    lastLook = drones.map(\.updatedAt).min() ?? .distantPast   // the DRONE rows only, and the OLDEST of them
     canRead  = now - lastLook >= reconcileInterval        // throttle: at most one read per interval
-    freshSinceLaunch = lastLook >= directive.stepStartedAt
 
-    // Fresh-evidence rule [[confirm-steps-need-fresh-evidence]]: never trust a row read BEFORE
-    // launch (it still shows the drones aboard from when they were stowed). Read when the
+    // Fresh-evidence rule [[confirm-steps-need-fresh-evidence]]: never trust a drone row read
+    // BEFORE launch (it still shows the drone stowed aboard from when it was staged). Key the
+    // gate off the DRONES via min(), not off max([controller]+drones): AMI drones are
+    // event-silent [[ami-drones-are-event-silent]] while the controller churns via its
+    // `ami.*.digest`, so a fresh controller would otherwise vouch for a stale drone and read a
+    // still-deployed fleet as recovered. Same shape as `SurveyRun.recover`. Read when the
     // throttle allows; the throttle is what stops a failing read looping every tick.
-    if !freshSinceLaunch: return canRead ? refreshFleet(tag, thenStall: nil) : wait
+    if lastLook < directive.stepStartedAt: return canRead ? refreshFleet(tag, thenStall: nil) : wait
 
     stranded = drones.filter { $0.stowedInDeviceCode != vessel.deviceCode }
     if stranded.isEmpty: advanceStep(.verifying)                        // dropped completion frame — proceed
