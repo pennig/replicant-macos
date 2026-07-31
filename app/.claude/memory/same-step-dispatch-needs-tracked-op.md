@@ -94,3 +94,11 @@ The resolution, and the pattern to copy:
 
 `SalvageRun.stepEntryCount` is the implementation; `unresolvedSystem` and `sameBodyAgain` are its two
 consumers (the second is the mining loop's terminator, which had no bound at all).
+
+**One known imprecision in the budget, accepted:** a step that legitimately re-enters itself via a
+TRACKED dispatch also writes a second `.stepStarted`, so it arrives at its own read budget already
+partly spent. `SalvageRun.emplace` does this — it dispatches `.travel` to the Lagrange point with
+`nextStep: .emplacing`, so if the system blob goes missing *after* that hop, `unresolvedSystem` stalls
+without spending its automatic read. It fails safe (stalls rather than loops) and the operator's Retry
+still buys a real read, because `.resolved` re-arms the budget. Worth knowing before reusing
+`stepEntryCount` on a step with a self-dispatch.

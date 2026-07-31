@@ -1,12 +1,14 @@
 ---
 name: salvage-run-design
-description: "Salvage Run + Haul Run: two directive kinds, not one convoy. Approved 2026-07-30, not yet implemented. The split works only because planting a relay makes the freighter commandable without the miner parked alongside; the frontier bootstraps itself (9 relays -> 10 of 13 systems). Also records the threads deliberately NOT built."
+description: "Salvage Run SHIPPED 2026-07-30 (Haul Run still unbuilt, its own plan). Two directive kinds, not one convoy. The split works only because planting a relay makes the freighter commandable without the miner parked alongside; the frontier bootstraps itself (9 relays -> 10 of 13 systems). Also records the threads deliberately NOT built."
 metadata:
   type: project
 ---
 
-Spec: `docs/superpowers/specs/2026-07-30-salvage-run-design.md` (approved 2026-07-30, **not yet
-implemented**). Read it before any implementation work.
+Spec: `docs/superpowers/specs/2026-07-30-salvage-run-design.md`; plan:
+`docs/superpowers/plans/2026-07-30-salvage-run.md`. **Salvage Run SHIPPED 2026-07-30** across 9 tasks
+(1,196 tests green, 26 test products). **Haul Run is NOT built** — it is the spec's §6 and needs its
+own plan; until it exists, a Salvage Run leaves the mined resources piled at the salvage body.
 
 Unattended salvage: the survey roam finds salvage, and an automation mines it and gets it home to
 AINALRAM-BELT-1 with no operator input.
