@@ -195,6 +195,34 @@ public struct SurveyRun: MissionStepMachine {
         }
     }
 
+    // MARK: - Target planning
+
+    /// Where a continuous survey goes next: the cheapest hop inside an expanding
+    /// band of unsurveyed systems around the run's centre (`SurveyRoamPlanner`).
+    ///
+    /// `.exhausted` rather than `.idle` for both empty answers, and that is the
+    /// honest one here: the candidate set is "stars this account has not fully
+    /// scanned", which only ever shrinks as the run works. Nothing a survey does
+    /// puts a star back into it, so an empty census really is a finish line —
+    /// unlike a Salvage Run's frontier, which the survey itself keeps growing.
+    public func plan(_ context: RoamContext) -> RoamPlan {
+        // No census row for the centre means the band has no anchor to measure
+        // from. Nothing this run can do about it, and it is not a transient — the
+        // designation is stamped on the row at launch.
+        guard let centre = context.centre else { return .exhausted }
+        guard let next = SurveyRoamPlanner.nextTarget(
+            centre: centre.position,
+            // A stowed or in-transit vessel reports no location at all, so
+            // measure the hop from the centre instead. Only WHICH member of the
+            // band is cheapest changes — the band itself is anchored on the
+            // centre either way, so the coverage guarantee is unaffected.
+            from: context.vessel ?? centre.position,
+            stars: context.stars,
+            attempted: context.attempted
+        ) else { return .exhausted }
+        return .target(next)
+    }
+
     // MARK: - Steps
 
     private func preflight(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {

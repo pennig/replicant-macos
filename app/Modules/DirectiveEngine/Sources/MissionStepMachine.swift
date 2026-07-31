@@ -14,6 +14,7 @@
 import Foundation
 import GameModels
 import GameServices
+import UniverseModels
 
 /// What a mission wants to happen next. Exactly one per evaluation — a machine
 /// that needs two things in a row expresses the second on the next tick, which
@@ -150,6 +151,71 @@ public enum MissionAction: Equatable, Sendable {
     case done
 }
 
+/// Everything a mission's target planner may read, gathered by the engine in
+/// one database round so the planner itself stays a pure function.
+///
+/// A plain value rather than a set of closures on purpose: a machine that could
+/// ask for more data could ask for it *conditionally*, and the whole reason
+/// missions are testable as fixtures is that they cannot reach out.
+public struct RoamContext: Equatable, Sendable {
+    /// The census row for the run's roam centre, or nil when the census has
+    /// never heard of that designation.
+    public let centre: Star?
+    /// Where the vessel is right now, or nil when it is stowed or in transit —
+    /// both of which clear `location`, so "unknown" is the honest answer rather
+    /// than a stale coordinate.
+    public let vessel: Position?
+    /// The whole census.
+    public let stars: [Star]
+    /// Stored per-site assay totals, whole table. Tiny by construction, and the
+    /// only record of a site's ORIGINAL units (the catalogue blob never carries
+    /// them).
+    public let assays: [SiteAssay]
+    /// Every device row. Mesh membership is derived from these (see
+    /// `SalvageTargetPlanner.meshSystems(in:)`), never from `ftlLinks`.
+    public let devices: [Device]
+    /// Every system this run has already aimed at — `Directive.targets`, which
+    /// is append-only history for exactly this purpose.
+    public let attempted: Set<String>
+
+    public init(
+        centre: Star?,
+        vessel: Position?,
+        stars: [Star],
+        assays: [SiteAssay],
+        devices: [Device],
+        attempted: Set<String>
+    ) {
+        self.centre = centre
+        self.vessel = vessel
+        self.stars = stars
+        self.assays = assays
+        self.devices = devices
+        self.attempted = attempted
+    }
+}
+
+/// What a mission's planner decided when its queue ran dry.
+///
+/// The two empty answers are deliberately distinct, because the right response
+/// differs by mission. A Survey Run exhausts the census *permanently* — every
+/// star scanned is a finish line — while a Salvage Run's frontier is a moving
+/// snapshot: the survey roam keeps uncovering salvage (spec §7 measured the
+/// catalogue growing during the hour the design was written), and a relay
+/// planted elsewhere can bring a previously-unreachable system into range. For
+/// that run, "nothing reachable" is a lull, not an ending — and finishing it
+/// would contradict both the launcher's copy and the design's own rule that the
+/// run never asks the operator for anything (spec §1, and §6's matching "wait —
+/// not stall" for the Haul Run).
+public enum RoamPlan: Equatable, Sendable {
+    /// Aim at this system next.
+    case target(String)
+    /// Nothing reachable right now, but more may appear. Idle and re-ask later.
+    case idle
+    /// Nothing left, and nothing more is coming. Finish the run.
+    case exhausted
+}
+
 /// One mission kind's procedure.
 public protocol MissionStepMachine: Sendable {
     /// The directive kind this machine runs.
@@ -161,4 +227,17 @@ public protocol MissionStepMachine: Sendable {
     /// The single next action. MUST be pure: no I/O, no clock reads (use
     /// `world.now`), no randomness.
     func nextAction(directive: Directive, world: WorldSnapshot) -> MissionAction
+    /// Where this run goes next when `.extendQueue` asks. MUST be pure, exactly
+    /// like `nextAction` — the engine gathers the context and owns every read.
+    ///
+    /// A protocol requirement rather than a `switch directive.kind` in the
+    /// engine: a survey roam ranks by unsurveyed-ness in sliding bands and a
+    /// salvage run ranks by mesh reachability and assayed units, and those are
+    /// as much a part of a mission's procedure as its steps are. `MissionRegistry`
+    /// exists precisely so a new mission is one registration rather than an edit
+    /// to every place the engine names a kind, and a kind-switch here would put
+    /// that coupling straight back. Deliberately has NO default implementation:
+    /// a machine that forgot to answer would otherwise silently finish (or
+    /// silently idle) every continuous run of its kind.
+    func plan(_ context: RoamContext) -> RoamPlan
 }

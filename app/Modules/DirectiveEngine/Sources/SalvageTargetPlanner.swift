@@ -54,10 +54,21 @@ public enum SalvageTargetPlanner {
     /// so a link-derived set would omit the system this run just meshed — the
     /// one case that matters most here. Device rows also update the moment the
     /// activation confirm-read lands.
+    /// The `features` check is deliberately broader than `ftl_relay`: a
+    /// `system_hub` contains an integrated relay and genuinely does mesh its
+    /// system, so matching on the capability rather than the device type is
+    /// correct HERE — unlike the dispatch-site queries in `SalvageRun`, which
+    /// must not `deploy` a hub.
+    ///
+    /// `statusBase`, not `status`: the backend appends a parenthetical parameter
+    /// to some statuses, and a raw comparison would read a meshed system as
+    /// unmeshed — sending the run to spend a 370-unit relay on a system that
+    /// already has one. `BobnetFeature` uses `statusBase` for the identical
+    /// predicate.
     public static func meshSystems(in devices: [Device]) -> Set<String> {
         Set(
             devices
-                .filter { $0.features.contains("relay") && $0.status == "relaying" }
+                .filter { $0.features.contains("relay") && $0.statusBase == "relaying" }
                 .compactMap(\.location)
                 .map { SiteAssay.system(of: $0) }
         )
@@ -78,9 +89,14 @@ public enum SalvageTargetPlanner {
         vessel: Position?,
         relayRange: Double = relayRangeLY
     ) -> Target? {
-        // Fold the per-site assays into per-system totals once.
+        // Fold the per-site assays into per-system totals once. `siteType` is
+        // filtered rather than assumed: the table is shared with mining assays
+        // by design ("mining assays need no schema change when they land" —
+        // `SiteAssay`), and the first one to land would otherwise send a salvage
+        // run to a system holding no salvage at all.
         var units: [String: Double] = [:]
-        for assay in assays where !attempted.contains(assay.system) {
+        for assay in assays
+        where assay.siteType == "salvage" && !attempted.contains(assay.system) {
             units[assay.system, default: 0] += assay.totals.values.reduce(0, +)
         }
 

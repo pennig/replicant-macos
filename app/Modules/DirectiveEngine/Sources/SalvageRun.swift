@@ -192,6 +192,45 @@ public struct SalvageRun: MissionStepMachine {
         device.location.map { SiteAssay.system(of: $0) }
     }
 
+    // MARK: - Target planning
+
+    /// Where the run goes next: `SalvageTargetPlanner`'s ranking — already
+    /// meshed, then one relay-hop from the mesh, then richest, then nearest
+    /// (spec §7).
+    ///
+    /// This is the seam a Critical review finding turned up: before `plan(_:)`
+    /// was a `MissionStepMachine` requirement, `.extendQueue` resolved through
+    /// `SurveyRoamPlanner` for EVERY kind, and its candidate filter
+    /// (`fullyScannedAt == nil`) is the exact inverse of what salvage needs —
+    /// salvage is only known in systems the survey has already finished. A live
+    /// run would have walked outward to the nearest UNSCANNED star, found no
+    /// salvage, and still emplaced and activated a staged relay there (370 units
+    /// and 800 s of print each) before advancing and doing it again, until the
+    /// relay stock ran out.
+    ///
+    /// `.idle` rather than `.exhausted` on an empty answer: the salvage frontier
+    /// genuinely does exhaust for now — spec §7 measured 10 of 13 systems
+    /// reachable, with three needing a waypoint relay this planner deliberately
+    /// never offers — but it is a snapshot, not a limit. The survey roam keeps
+    /// finding new salvage (the catalogue grew during the hour the design was
+    /// written), and every relay this run plants can bring a deferred system into
+    /// range. Finishing here would silently contradict the launcher, the list row
+    /// and the design's own "never asks the operator anything" (§1); the Haul Run
+    /// settles the same question the same way (§6: "wait — not stall").
+    public func plan(_ context: RoamContext) -> RoamPlan {
+        let stars = Dictionary(
+            context.stars.map { ($0.designation, $0) }, uniquingKeysWith: { first, _ in first }
+        )
+        guard let target = SalvageTargetPlanner.nextTarget(
+            assays: context.assays,
+            stars: stars,
+            meshSystems: SalvageTargetPlanner.meshSystems(in: context.devices),
+            attempted: context.attempted,
+            vessel: context.vessel
+        ) else { return .idle }
+        return .target(target.system)
+    }
+
     // MARK: - Steps
 
     private func preflight(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
