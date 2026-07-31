@@ -19,14 +19,16 @@ struct ReplicationEligibilityTests {
         location: String? = nil,
         stowedIn: String? = nil,
         features: [String] = [],
-        commands: [String] = []
+        commands: [String] = [],
+        status: String = "idle",
+        inControlRange: Bool? = nil
     ) -> Device {
         let epoch = Date(timeIntervalSince1970: 0)
         return Device(
             deviceCode: code,
             deviceType: type,
             replicantCode: "R1",
-            status: "idle",
+            status: status,
             location: location,
             locationName: nil,
             operationalCapacity: 1,
@@ -38,7 +40,7 @@ struct ReplicationEligibilityTests {
             availableCommands: commands,
             features: features,
             tags: [],
-            detail: .object([:]),
+            detail: inControlRange.map { .object(["in_control_range": .bool($0)]) } ?? .object([:]),
             updatedAt: epoch,
             firstSeenAt: epoch
         )
@@ -132,5 +134,74 @@ struct ReplicationEligibilityTests {
         #expect(!result.canReplicate)
         #expect(result.sourceMatrixCode == nil)
         #expect(result.requirements.first { $0.id == "matrix" }?.isMet == false)
+    }
+
+    // MARK: - Matrix hint accuracy
+    //
+    // The matrix line fails for several structurally different reasons, and the
+    // hint has to name the one that actually applies. It used to hard-code
+    // "bring it into control range or wait for its current task to finish" for
+    // every unavailable-command case, which sent the player chasing conditions
+    // that were already satisfied (the live `pennig-scan` report: an in-range,
+    // idle matrix that simply lacks the `matrix` feature).
+
+    /// The matrix the resolver should pick, with the fields under test.
+    private func fleet(
+        matrixFeatures: [String],
+        matrixStatus: String = "stowed",
+        matrixInControlRange: Bool? = nil
+    ) -> [Device] {
+        var fleet = eligibleFleet()
+        fleet = fleet.map { dev in
+            guard dev.deviceCode == "MATRIX1" else { return dev }
+            return device(
+                code: "MATRIX1",
+                type: "replicant_matrix",
+                stowedIn: "HOST1",
+                features: matrixFeatures,
+                commands: [],
+                status: matrixStatus,
+                inControlRange: matrixInControlRange
+            )
+        }
+        return fleet
+    }
+
+    private func matrixHint(_ fleet: [Device]) -> String? {
+        ReplicationEligibility.resolve(hostDeviceCode: "HOST1", devices: fleet)
+            .requirements.first { $0.id == "matrix" }?.hint
+    }
+
+    @Test("An out-of-range matrix is reported as out of range")
+    func hintNamesControlRange() {
+        let hint = matrixHint(fleet(matrixFeatures: ["stow", "matrix"], matrixInControlRange: false))
+        #expect(hint?.contains("control range") == true)
+    }
+
+    @Test("A busy matrix is reported as busy, not out of range")
+    func hintNamesBusy() {
+        let hint = matrixHint(fleet(
+            matrixFeatures: ["stow", "matrix"], matrixStatus: "printing (ftl_relay)", matrixInControlRange: true
+        ))
+        #expect(hint?.contains("printing") == true)
+        #expect(hint?.contains("control range") == false)
+    }
+
+    /// The live `pennig-scan` case: in range, idle, but the backend withholds
+    /// `replicate` because the matrix carries no `matrix` feature. The hint must
+    /// say so rather than blaming control range or a current task.
+    @Test("A matrix lacking the `matrix` feature is reported as an unusable source")
+    func hintNamesMissingMatrixFeature() {
+        let hint = matrixHint(fleet(matrixFeatures: ["stow"], matrixInControlRange: true))
+        #expect(hint?.contains("control range") == false)
+        #expect(hint?.contains("current task") == false)
+        #expect(hint?.contains("replication source") == true)
+    }
+
+    @Test("A replicant with no matrix at all keeps the hosting hint")
+    func hintNamesMissingMatrix() {
+        var fleet = eligibleFleet()
+        fleet.removeAll { $0.deviceType == "replicant_matrix" }
+        #expect(matrixHint(fleet)?.contains("hosted in a replicant matrix") == true)
     }
 }

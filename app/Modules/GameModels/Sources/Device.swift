@@ -183,6 +183,30 @@ extension Device {
     public var isOutOfControlRange: Bool { inControlRange == false }
 }
 
+// MARK: - Replication source capability
+
+extension Device {
+    /// The statuses that mean "not currently running an activity". Everything else
+    /// the backend reports is some form of work in progress. Kept here rather than
+    /// reusing `DeviceStatus` (which lives in `UI`, a layer this module sits below).
+    private static let restingStatuses: Set<String> = ["idle", "ready", "stowed", "inactive"]
+
+    /// Whether the device is mid-activity. Drives "wait for its current task to
+    /// finish" messaging, so a resting device must never report `true`.
+    public var isBusy: Bool { !Self.restingStatuses.contains(statusBase) }
+
+    /// Whether this device can act as the *source* of a replication.
+    ///
+    /// The backend gates `replicate` on the `matrix` feature, and the two travel
+    /// together across the whole fleet. The non-obvious part: an
+    /// `empty_replicant_matrix` is printed *with* `matrix`, but once a replicant is
+    /// replicated into it the device becomes a `replicant_matrix` and the feature is
+    /// gone — so a replicant born from replication cannot itself replicate, while
+    /// the account's original matrix can. Confirmed against the live API on
+    /// 2026-07-31 (`60160672` vs `1F6A12EB`).
+    public var canBeSource: Bool { features.contains("matrix") }
+}
+
 // MARK: - Status parsing
 
 extension Device {

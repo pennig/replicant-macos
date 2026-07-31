@@ -136,9 +136,29 @@ public struct ReplicationEligibility: Equatable, Sendable {
             }
         }
 
-        let matrixHint: String = sourceIsMatrix
-            ? "This matrix can't issue a replication right now — bring it into control range or wait for its current task to finish."
-            : "This replicant must be hosted in a replicant matrix to replicate."
+        // The matrix line fails for structurally different reasons, so name the one
+        // that actually applies. A single hard-coded "bring it into control range or
+        // wait for its current task to finish" sent players chasing conditions that
+        // were already satisfied — the backend most often withholds `replicate`
+        // because the matrix simply isn't a usable source (see `canBeSource`).
+        let matrixHint: String
+        if let matrix = source {
+            if matrix.isOutOfControlRange {
+                matrixHint = "This matrix is cut off from its controller — bring it back into control range."
+            } else if !matrix.canBeSource {
+                matrixHint = """
+                    This matrix can't act as a replication source. Only a matrix carrying the \
+                    `matrix` feature can replicate — one that was itself created by replicating \
+                    into an empty matrix does not.
+                    """
+            } else if matrix.isBusy {
+                matrixHint = "This matrix is \(matrix.statusBase) — wait for its current task to finish."
+            } else {
+                matrixHint = "The backend isn't offering the replicate command on this matrix right now."
+            }
+        } else {
+            matrixHint = "This replicant must be hosted in a replicant matrix to replicate."
+        }
 
         let requirements = [
             ReplicationRequirement(
