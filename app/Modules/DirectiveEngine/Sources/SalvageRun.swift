@@ -51,6 +51,11 @@ public struct SalvageRun: MissionStepMachine {
         /// on every accepted dispatch) — the deadline could never accumulate
         /// from a step that kept resetting its own clock. See `confirmRelay`.
         public static let confirmingRelay = "confirmingRelay"
+        /// Fly the VESSEL to the salvage body it is about to work, so the drones
+        /// deploy locally rather than ferrying from a parked vessel. Runs BEFORE
+        /// `configuring` — see `position(_:_:_:)` for why the order and the
+        /// `nextBody` keying both matter.
+        public static let positioning = "positioning"
         public static let configuring = "configuring"
         public static let launching = "launching"
         public static let awaiting = "awaiting"
@@ -114,6 +119,7 @@ public struct SalvageRun: MissionStepMachine {
         case Step.emplacing: return emplace(directive, vessel, world)
         case Step.activating: return activate(vessel, world)
         case Step.confirmingRelay: return confirmRelay(directive, vessel, world)
+        case Step.positioning: return position(directive, vessel, world)
         case Step.configuring: return configure(directive, vessel, world)
         case Step.launching: return launch(directive, vessel, world)
         case Step.awaiting: return awaitCompletion(directive, world)
@@ -342,7 +348,7 @@ public struct SalvageRun: MissionStepMachine {
             // Arrived. Skip straight past the emplace step when a relay is
             // already relaying here — there is nothing to plant.
             let meshed = SalvageTargetPlanner.meshSystems(in: Array(world.devices.values)).contains(target)
-            return .advanceStep(nextStep: meshed ? Step.configuring : Step.emplacing)
+            return .advanceStep(nextStep: meshed ? Step.positioning : Step.emplacing)
         }
         // An open op means the trip is under way. Expected, not a stall — and
         // the guard that stops a second travel landing on top of the first.
@@ -396,7 +402,7 @@ public struct SalvageRun: MissionStepMachine {
     /// device that was never actually there.
     private func emplace(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
         guard let target = directive.currentTarget else {
-            return .advanceStep(nextStep: Step.configuring)
+            return .advanceStep(nextStep: Step.positioning)
         }
         guard let system = world.system(target) else {
             // Blob not cached yet — bounded wait, then one authoritative read,
@@ -405,7 +411,7 @@ public struct SalvageRun: MissionStepMachine {
             return unresolvedSystem(directive, world, target: target)
         }
         guard let point = Self.lagrangePoint(in: system) else {
-            return .advanceStep(nextStep: Step.configuring)
+            return .advanceStep(nextStep: Step.positioning)
         }
         guard let relay = Self.relay(aboard: vessel, in: world) else {
             return .advanceStep(nextStep: Step.restocking)
@@ -530,12 +536,12 @@ public struct SalvageRun: MissionStepMachine {
     private func settle(_ directive: Directive, _ relay: Device) -> MissionAction {
         let tag = Self.fleetTag(directive)
         guard relay.tags.contains(tag) else {
-            return .advanceStep(nextStep: Step.configuring)
+            return .advanceStep(nextStep: Step.positioning)
         }
         return .setDeviceTags(
             deviceCode: relay.deviceCode,
             tags: relay.tags.filter { $0 != tag },
-            nextStep: Step.configuring
+            nextStep: Step.positioning
         )
     }
 
@@ -669,6 +675,41 @@ public struct SalvageRun: MissionStepMachine {
             return .refreshSystem(designation: target, nextStep: directive.step)
         }
         return .stall(.salvageSystemUnresolved)
+    }
+
+    /// Fly the VESSEL to the salvage body it is about to work (spec §Part A), so
+    /// the drones deploy locally instead of ferrying from a parked vessel.
+    ///
+    /// Keyed off `nextBody` — the same deterministic ranking `configure` uses —
+    /// NOT the controller's in-force `gather_salvage` config: nothing writes
+    /// `currentDirectiveConfig` optimistically, so right after `configure`
+    /// re-issues `set_directive` the controller row still names the PREVIOUS body
+    /// until the command lands, and a config-keyed position would mis-target on
+    /// every transition. Running BEFORE `configure` and off `nextBody` also makes
+    /// a body draining mid-flight simply re-target the vessel to the next-richest
+    /// one — correct, because `configure` hasn't issued anything yet.
+    ///
+    /// Owns the first look at the target system, so it inherits `configure`'s
+    /// `.finished` / `.unresolved` handling verbatim.
+    private func position(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
+        switch Self.nextBody(in: directive, world: world) {
+        case .finished:
+            return .advanceTarget
+        case .unresolved:
+            guard let target = directive.currentTarget else { return .advanceTarget }
+            return unresolvedSystem(directive, world, target: target)
+        case let .body(body):
+            if vessel.location == body { return .advanceStep(nextStep: Step.configuring) }
+            // `.travel` is a tracked op kind (creates an `Operation` row), so this
+            // guard fires and the same-step re-dispatch is the safe shape
+            // (see the same-step-dispatch-needs-tracked-op note) — like `emplace`
+            // and `restock`.
+            if world.openOperation(for: vessel.deviceCode) != nil { return .wait }
+            return .dispatch(
+                kind: .travel, deviceCode: vessel.deviceCode,
+                params: CommandParams(destination: body), nextStep: Step.positioning
+            )
+        }
     }
 
     private func configure(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
@@ -849,7 +890,7 @@ public struct SalvageRun: MissionStepMachine {
             guard body != Self.workedBody(controller) else {
                 return sameBodyAgain(directive, world, target: target)
             }
-            return .advanceStep(nextStep: Step.configuring)
+            return .advanceStep(nextStep: Step.positioning)
         case .unresolved:
             // The catalogue blob went missing again between `configure` and
             // here (dropped event, decode failure) — must NEVER read as

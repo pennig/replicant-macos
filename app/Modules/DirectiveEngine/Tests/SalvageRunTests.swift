@@ -352,7 +352,7 @@ struct SalvageRunTravelTests {
         let here = device("R", location: "TOSLIT-3-L4", features: ["relay"], status: "relaying")
         let snapshot = world(devices: [arrived, controller, drone, relay, here])
         #expect(SalvageRun().nextAction(directive: running(step: "travelling"), world: snapshot)
-                == .advanceStep(nextStep: "configuring"))
+                == .advanceStep(nextStep: "positioning"))
     }
 
     /// Arrived at an unmeshed system: go emplace the relay before mining.
@@ -443,7 +443,7 @@ struct SalvageRunEmplacementTests {
         let up = device("RELAY", type: "ftl_relay", location: "TOSLIT-3-L4", features: ["relay"], status: "relaying")
         let world = world(devices: [atL4, controller, drone, up], systems: ["TOSLIT": toslit])
         #expect(SalvageRun().nextAction(directive: running(step: "confirmingRelay"), world: world)
-            == .advanceStep(nextStep: "configuring"))
+            == .advanceStep(nextStep: "positioning"))
     }
 
     /// The relay is now planted infrastructure, not cargo: `auto:salvage`
@@ -458,7 +458,7 @@ struct SalvageRunEmplacementTests {
                         features: ["relay"], status: "relaying", tags: ["auto:salvage"])
         let world = world(devices: [atL4, controller, drone, up], systems: ["TOSLIT": toslit])
         #expect(SalvageRun().nextAction(directive: running(step: "confirmingRelay"), world: world)
-            == .setDeviceTags(deviceCode: "RELAY", tags: [], nextStep: "configuring"))
+            == .setDeviceTags(deviceCode: "RELAY", tags: [], nextStep: "positioning"))
     }
 
     /// `updateTags` is declarative — it replaces the WHOLE set — so untagging
@@ -471,7 +471,7 @@ struct SalvageRunEmplacementTests {
         let world = world(devices: [atL4, controller, drone, up], systems: ["TOSLIT": toslit])
         #expect(SalvageRun().nextAction(directive: running(step: "confirmingRelay"), world: world)
             == .setDeviceTags(
-                deviceCode: "RELAY", tags: ["operator:keep", "operator:also-keep"], nextStep: "configuring"
+                deviceCode: "RELAY", tags: ["operator:keep", "operator:also-keep"], nextStep: "positioning"
             ))
     }
 
@@ -484,7 +484,7 @@ struct SalvageRunEmplacementTests {
         let directive = running(step: "confirmingRelay", fleetTag: "auto:salvage-2")
         let world = world(devices: [atL4, controller, drone, up], systems: ["TOSLIT": toslit])
         #expect(SalvageRun().nextAction(directive: directive, world: world)
-            == .setDeviceTags(deviceCode: "RELAY", tags: [], nextStep: "configuring"))
+            == .setDeviceTags(deviceCode: "RELAY", tags: [], nextStep: "positioning"))
     }
 
     /// Idempotent: a relay that no longer carries the fleet tag — the run
@@ -499,7 +499,7 @@ struct SalvageRunEmplacementTests {
                         features: ["relay"], status: "relaying", tags: ["operator:keep"])
         let world = world(devices: [atL4, controller, drone, up], systems: ["TOSLIT": toslit])
         #expect(SalvageRun().nextAction(directive: running(step: "confirmingRelay"), world: world)
-            == .advanceStep(nextStep: "configuring"))
+            == .advanceStep(nextStep: "positioning"))
     }
 
     /// The property that pins the Critical fix from review: from the polling
@@ -564,7 +564,7 @@ struct SalvageRunEmplacementTests {
                         features: ["relay"], status: "relaying (TOSLIT)")
         let world = world(devices: [atL4, controller, drone, up], systems: ["TOSLIT": toslit])
         #expect(SalvageRun().nextAction(directive: running(step: "confirmingRelay"), world: world)
-            == .advanceStep(nextStep: "configuring"))
+            == .advanceStep(nextStep: "positioning"))
     }
 
     /// A `system_hub` carries the `relay` FEATURE — it contains an integrated
@@ -601,7 +601,7 @@ struct SalvageRunEmplacementTests {
         let world = world(devices: [arrived, controller, drone, relay],
                           systems: ["TOSLIT": toslitWithNoLagrangePoint])
         #expect(SalvageRun().nextAction(directive: running(step: "emplacing"), world: world)
-            == .advanceStep(nextStep: "configuring"))
+            == .advanceStep(nextStep: "positioning"))
     }
 
     /// `emplace`'s relay-aboard guard is a backstop for the relay being
@@ -735,6 +735,59 @@ private func emptyLaunch(at occurredAt: Date) -> DirectiveLogEntry {
         summary: "Launch deployed no devices", step: "awaiting",
         operationID: nil, eventID: "E9", occurredAt: occurredAt
     )
+}
+
+// MARK: - Positioning
+
+/// The vessel — not the drones — travels to each salvage body, so the drones
+/// deploy locally instead of ferrying from a parked vessel. Keyed off
+/// `nextBody` (deterministic) rather than the controller's in-force config,
+/// which is written only on command-confirm and would name the previous body
+/// right after `configure` re-issues.
+@Suite("Salvage Run — positioning")
+struct SalvageRunPositioningTests {
+    /// The vessel is in the system but not yet at the richest body: fly it there.
+    @Test func travelsTheVesselToTheRichestBody() {
+        let world = world(devices: [atSystem, controller, drone],
+                          systems: ["TOSLIT": miningToslit], siteAssays: miningToslitAssays)
+        #expect(SalvageRun().nextAction(directive: running(step: "positioning"), world: world)
+            == .dispatch(kind: .travel, deviceCode: "VESSEL",
+                         params: CommandParams(destination: "TOSLIT-6-5"), nextStep: "positioning"))
+    }
+
+    /// Mid-trip is a wait, never a second travel stacked on the one in flight.
+    @Test func waitsWhileTheVesselIsUnderway() {
+        let world = world(devices: [atSystem, controller, drone],
+                          openOperations: ["VESSEL": operation(kind: .travel)],
+                          systems: ["TOSLIT": miningToslit], siteAssays: miningToslitAssays)
+        #expect(SalvageRun().nextAction(directive: running(step: "positioning"), world: world) == .wait)
+    }
+
+    /// Arrived at the body: hand to `configuring` to set the directive and launch
+    /// locally.
+    @Test func configuresOnceTheVesselIsAtTheBody() {
+        let atBody = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-6-5")
+        let world = world(devices: [atBody, controller, drone],
+                          systems: ["TOSLIT": miningToslit], siteAssays: miningToslitAssays)
+        #expect(SalvageRun().nextAction(directive: running(step: "positioning"), world: world)
+            == .advanceStep(nextStep: "configuring"))
+    }
+
+    /// No live body left in the system: this target is done. `positioning` owns
+    /// the first look now, so it inherits `configure`'s finished handling.
+    @Test func advancesTheTargetWhenNoBodyIsLeft() {
+        let drained = StarSystem(designation: "TOSLIT", planets: [])
+        let world = world(devices: [atSystem, controller, drone], systems: ["TOSLIT": drained])
+        #expect(SalvageRun().nextAction(directive: running(step: "positioning"), world: world)
+            == .advanceTarget)
+    }
+
+    /// An uncached system blob must NOT read as "nothing to mine" — wait for it,
+    /// same backstop as `configure`/`emplace`/`verify`.
+    @Test func waitsWhenTheSystemIsntCachedYet() {
+        let world = world(devices: [atSystem, controller, drone]) // no "TOSLIT" entry
+        #expect(SalvageRun().nextAction(directive: running(step: "positioning"), world: world) == .wait)
+    }
 }
 
 // MARK: - Mining loop
@@ -926,7 +979,7 @@ struct SalvageRunVerificationTests {
         let world = world(devices: [atSystem, controller, drone],
                           systems: ["TOSLIT": miningToslit], siteAssays: miningToslitAssays)
         #expect(SalvageRun().nextAction(directive: running(step: "verifying"), world: world)
-            == .advanceStep(nextStep: "configuring"))
+            == .advanceStep(nextStep: "positioning"))
     }
 
     /// "Just in case": completion now implies recall, so a stranded-looking
@@ -1037,7 +1090,7 @@ struct SalvageRunLoopProgressTests {
                           systems: ["TOSLIT": partlyDrainedToslit],
                           siteAssays: miningToslitAssays)
         #expect(SalvageRun().nextAction(directive: running(step: "verifying"), world: world)
-            == .advanceStep(nextStep: "configuring"))
+            == .advanceStep(nextStep: "positioning"))
     }
 
     /// A controller running something else — or nothing — names no worked body,
@@ -1047,7 +1100,7 @@ struct SalvageRunLoopProgressTests {
         let world = world(devices: [atSystem, controller, drone],
                           systems: ["TOSLIT": miningToslit], siteAssays: miningToslitAssays)
         #expect(SalvageRun().nextAction(directive: running(step: "verifying"), world: world)
-            == .advanceStep(nextStep: "configuring"))
+            == .advanceStep(nextStep: "positioning"))
     }
 }
 
