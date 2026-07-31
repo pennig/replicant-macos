@@ -9,6 +9,25 @@ Spec: `docs/superpowers/specs/2026-07-30-salvage-run-design.md`; plan:
 `docs/superpowers/plans/2026-07-30-salvage-run.md`. **Salvage Run SHIPPED 2026-07-30** across 9 tasks
 (1,196 tests green, 26 test products).
 
+**Amended 2026-07-31** (spec/plan `2026-07-31-salvage-run-site-tour-and-backstop*`): two operator-reported
+fixes to the shipped run. (1) **Vessel now tours the sites.** A new `positioning` step sits AHEAD of
+`configuring` (`… → positioning → configuring → launching → awaiting → verifying → positioning`); the
+VESSEL flies to each salvage body so drones deploy locally, instead of parking at the entry point /
+Lagrange and ferrying drones out-and-back per site (which doubled travel, worst at far/ many-site
+systems). `positioning` keys its destination off `nextBody` (deterministic), NOT `workedBody(controller)`
+— nothing writes `currentDirectiveConfig` optimistically, so the controller row names the PREVIOUS body
+until `set_directive` lands; `configure` runs last, at the body. Relay emplacement is unchanged
+(relay-first). (2) **`awaitCompletion` no longer false-stalls `dronesNotRecovered`.** The blind
+10-min backstop that dumped into `verify` mid-mining is gone; while the controller reports
+`gather_salvage` the run waits however long mining takes, reconciling on a `reconcileInterval` (2 min)
+cadence to catch a dropped completion, and hands to `verify` only once drones aren't travelling.
+`verify` is unchanged and stays the ONE `dronesNotRecovered` staller. The fresh-evidence gate keys off
+the DRONE rows via `min()`, never `max([controller]+drones)`: [[ami-drones-are-event-silent]] drones stay
+stale after launch while the controller churns via its digest, so a `max` would let a fresh controller
+vouch for a stale "still aboard" drone (the review-caught Critical). Blessed tradeoff: a server that
+keeps `gather_salvage` asserted while a drone is truly lost waits forever rather than stalling
+(Cancel-recoverable; false-stalls were the real pain).
+
 **Haul Run SHIPPED 2026-07-31 — see [[haul-run-design]], and note that §6 of this spec is SUPERSEDED.**
 §6 assumed our engine would hand-drive a `cargo_freighter` through travel → collect → travel →
 deposit. It never should have: the AMI transport controller already does exactly that server-side via
