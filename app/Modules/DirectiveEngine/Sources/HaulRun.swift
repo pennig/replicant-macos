@@ -556,6 +556,18 @@ public struct HaulRun: MissionStepMachine {
             // three redundant `set_directive`s and a false `.commandRejected`
             // on a command that had landed (2026-07-31 final review).
             //
+            // The deadline check has to come FIRST, ahead of the throttled
+            // read below: a row that can never be refreshed — offline, rate
+            // limited, a controller the server 404s — never satisfies this
+            // guard, so the throttled-read branch is the only thing that would
+            // ever run for it. That branch alone can't stall the run, because
+            // a failed or empty read never advances `controller.updatedAt`,
+            // so the next evaluation re-enters this same guard and asks
+            // again — an unrefreshable row would poll `.high` reads forever
+            // rather than ever reaching `confirmDeadline`.
+            if world.now.timeIntervalSince(directive.stepStartedAt) >= Self.confirmDeadline {
+                return .refreshDevices(deviceCodes: [controllerCode], thenStall: .commandRejected)
+            }
             // Buy one authoritative read instead, throttled by
             // `confirmReadInterval` so this costs a read per repoint rather
             // than one per tick. `thenStall: nil` matters: the engine's `reAsk`

@@ -792,6 +792,30 @@ struct HaulRunTests {
         #expect(action == .refreshDevices(deviceCodes: ["C1"], thenStall: nil))
     }
 
+    /// **CRITICAL regression guard (2026-07-31 final review, post-merge).** The
+    /// staleness guard above must not swallow the deadline it sits in front of.
+    /// A controller row that can never be refreshed — offline, rate-limited,
+    /// a controller the server 404s — never satisfies `updatedAt >=
+    /// stepStartedAt`, so without an escape here the guard's own throttled-read
+    /// branch is all that runs, forever: `.high` reads bypass the poll budget,
+    /// and because the failing read is what keeps `updatedAt` from advancing,
+    /// this is self-sustaining under exactly the condition (rate-limit
+    /// exhaustion) it would otherwise help recover from. Mirrors the reviewer's
+    /// probe: a controller row an hour old, `stepStartedAt` fifteen minutes
+    /// past `confirmDeadline`.
+    @Test func confirmingEscapesAnUnrefreshableRowPastTheDeadline() {
+        let neverRefreshed = controller("C1", updatedAt: fixtureNow.addingTimeInterval(-3_600))
+        let action = HaulRun().nextAction(
+            directive: run(
+                step: HaulRun.Step.confirming,
+                stepStartedAt: fixtureNow.addingTimeInterval(-HaulRun.confirmDeadline - 900),
+                controllerCode: "C1"
+            ),
+            world: world(devices: [neverRefreshed] + meshed, footprints: [footprint("ATIANFU-BELT-1", 3_537)])
+        )
+        #expect(action == .refreshDevices(deviceCodes: ["C1"], thenStall: .commandRejected))
+    }
+
     /// ...and does not pay for that read on every 5s tick. A row read moments
     /// before the dispatch is stale as EVIDENCE but freshly read as a REQUEST,
     /// so the throttle waits instead — `confirming` costs one read per repoint,
