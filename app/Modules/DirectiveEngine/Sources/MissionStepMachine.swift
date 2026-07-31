@@ -123,6 +123,25 @@ public enum MissionAction: Equatable, Sendable {
     /// re-asked machine wants another refresh, the engine stalls with
     /// `thenStall` — or waits, when that is nil.
     case refreshFleet(tag: String, thenStall: DirectiveAttentionReason?)
+    /// Replace `deviceCode`'s ENTIRE tag set with `tags`, then move to
+    /// `nextStep` regardless of outcome. Modeled on `.refreshSystem`: I/O
+    /// best-effort, then a plain step move — there is nothing to re-ask the
+    /// machine about, so unlike `.refreshDevices`/`.refreshFleet` this never
+    /// routes through a second evaluation.
+    ///
+    /// `DevicesClient.updateTags` is DECLARATIVE — it replaces the whole set —
+    /// so `tags` must be the device's FULL remaining set, computed by the
+    /// machine from the row it already read. Sending just the tag being
+    /// dropped, or `[]`, would silently wipe every other tag the operator put
+    /// on the device.
+    ///
+    /// Best-effort by contract, same reasoning as `.refreshSystem`: this exists
+    /// to detach housekeeping (a relay that just became permanent
+    /// infrastructure, say) from a fleet tag, and a transient PATCH failure
+    /// must never strand a run whose real work already succeeded. The engine
+    /// still confirm-reads the device afterward so the local row doesn't sit
+    /// stale, mirroring the tag editor's own PATCH-then-refresh (B4).
+    case setDeviceTags(deviceCode: String, tags: [String], nextStep: String)
     /// Pause and surface. The engine sets `needsAttention` plus the typed reason
     /// and stops evaluating until the user resolves it. Never auto-retried at
     /// the mission layer (spec §8).

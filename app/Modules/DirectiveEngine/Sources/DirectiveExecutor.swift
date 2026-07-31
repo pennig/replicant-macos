@@ -90,6 +90,31 @@ enum DirectiveExecutor {
             await move(directive, to: nextStep, controllerCode: directive.controllerCode)
             return true
 
+        case let .setDeviceTags(deviceCode, tags, nextStep):
+            // Best-effort by contract, same reasoning as `.refreshSystem` above:
+            // the real work this action follows (a relay planted and meshing)
+            // already succeeded, and the tag is housekeeping — a failed PATCH
+            // must log and advance rather than strand the run. Unlike
+            // `.refreshSystem` the failure IS logged: `updateTags` can reject
+            // (`TagUpdateError`) as well as fail transiently, and a rejection is
+            // worth a trace even though it must never stall the mission.
+            @Dependency(\.devicesClient) var devicesClient
+            @Dependency(\.deviceRefresher) var deviceRefresher
+            do {
+                try await devicesClient.updateTags(deviceCode, tags)
+                // Confirm-read through the coordinator so the local row matches
+                // the server, exactly as the tag editor does after its own PATCH
+                // (`DevicesClient.updateTags`'s doc: the follow-up read is the
+                // caller's job). A failed read here is not itself an error —
+                // the PATCH already landed; the next poll or SSE echo catches
+                // the row up.
+                _ = await deviceRefresher.refresh(deviceCode, .high)
+            } catch {
+                logger.notice("directive \(directive.id, privacy: .public): tag update for \(deviceCode, privacy: .public) failed: \(error) — advancing anyway")
+            }
+            await move(directive, to: nextStep, controllerCode: directive.controllerCode)
+            return true
+
         case let .refreshDevices(_, thenStall), let .refreshDevicesInSystem(_, thenStall), let .refreshFleet(_, thenStall):
             // The engine resolves this one before it ever reaches the executor
             // (it needs a second world read and a second call into the machine).

@@ -37,6 +37,7 @@ private func device(
     status: String = "idle",
     currentDirective: String? = nil,
     currentDirectiveConfig: [String: JSONValue]? = nil,
+    tags: [String] = [],
     updatedAt: Date = fixtureNow
 ) -> Device {
     var detail: [String: JSONValue] = [:]
@@ -60,7 +61,7 @@ private func device(
         operationalCapacity: 100, queueSize: 0,
         stowedInDeviceCode: stowedIn, controllerDeviceCode: controlledBy,
         attachedToDeviceCode: nil, createdAt: Date(timeIntervalSince1970: 0),
-        availableCommands: [], features: features, tags: [], detail: .object(detail),
+        availableCommands: [], features: features, tags: tags, detail: .object(detail),
         updatedAt: updatedAt, firstSeenAt: Date(timeIntervalSince1970: 0)
     )
 }
@@ -440,6 +441,62 @@ struct SalvageRunEmplacementTests {
     @Test func advancesToConfiguringOnceTheRelayIsRelaying() {
         let atL4 = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3-L4")
         let up = device("RELAY", type: "ftl_relay", location: "TOSLIT-3-L4", features: ["relay"], status: "relaying")
+        let world = world(devices: [atL4, controller, drone, up], systems: ["TOSLIT": toslit])
+        #expect(SalvageRun().nextAction(directive: running(step: "confirmingRelay"), world: world)
+            == .advanceStep(nextStep: "configuring"))
+    }
+
+    /// The relay is now planted infrastructure, not cargo: `auto:salvage`
+    /// earned its place while the relay was stowed (it's how `preflight`'s
+    /// `.refreshFleet` found it), but leaving it tagged means every future tag
+    /// read drags back a growing tail of relays this run planted and will
+    /// never touch again. Confirmed `relaying`, carrying the tag → untag it,
+    /// then move on.
+    @Test func untagsTheRelayOnceItStartsRelaying() {
+        let atL4 = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3-L4")
+        let up = device("RELAY", type: "ftl_relay", location: "TOSLIT-3-L4",
+                        features: ["relay"], status: "relaying", tags: ["auto:salvage"])
+        let world = world(devices: [atL4, controller, drone, up], systems: ["TOSLIT": toslit])
+        #expect(SalvageRun().nextAction(directive: running(step: "confirmingRelay"), world: world)
+            == .setDeviceTags(deviceCode: "RELAY", tags: [], nextStep: "configuring"))
+    }
+
+    /// `updateTags` is declarative — it replaces the WHOLE set — so untagging
+    /// must send the relay's remaining tags, never a bare `[]` that would wipe
+    /// anything else the operator put on it.
+    @Test func preservesTheRelaysOtherTagsWhenUntagging() {
+        let atL4 = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3-L4")
+        let up = device("RELAY", type: "ftl_relay", location: "TOSLIT-3-L4", features: ["relay"],
+                        status: "relaying", tags: ["operator:keep", "auto:salvage", "operator:also-keep"])
+        let world = world(devices: [atL4, controller, drone, up], systems: ["TOSLIT": toslit])
+        #expect(SalvageRun().nextAction(directive: running(step: "confirmingRelay"), world: world)
+            == .setDeviceTags(
+                deviceCode: "RELAY", tags: ["operator:keep", "operator:also-keep"], nextStep: "configuring"
+            ))
+    }
+
+    /// A non-default `fleetTag` is the tag that must be dropped — the same
+    /// rule `preflight`'s `.refreshFleet` follows via `SalvageRun.fleetTag`.
+    @Test func untagsAgainstTheRowsOwnFleetTagRatherThanTheDefault() {
+        let atL4 = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3-L4")
+        let up = device("RELAY", type: "ftl_relay", location: "TOSLIT-3-L4",
+                        features: ["relay"], status: "relaying", tags: ["auto:salvage-2"])
+        let directive = running(step: "confirmingRelay", fleetTag: "auto:salvage-2")
+        let world = world(devices: [atL4, controller, drone, up], systems: ["TOSLIT": toslit])
+        #expect(SalvageRun().nextAction(directive: directive, world: world)
+            == .setDeviceTags(deviceCode: "RELAY", tags: [], nextStep: "configuring"))
+    }
+
+    /// Idempotent: a relay that no longer carries the fleet tag — the run
+    /// relaunched after untagging landed, or the operator removed it by hand —
+    /// must not re-issue a redundant PATCH. `advancesToConfiguringOnceTheRelayIsRelaying`
+    /// above already covers this (its fixture carries no tags at all); this
+    /// test pins the property explicitly against a relay that has OTHER tags
+    /// but not this run's own.
+    @Test func advancesPlainlyWhenTheRelayNoLongerCarriesTheFleetTag() {
+        let atL4 = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3-L4")
+        let up = device("RELAY", type: "ftl_relay", location: "TOSLIT-3-L4",
+                        features: ["relay"], status: "relaying", tags: ["operator:keep"])
         let world = world(devices: [atL4, controller, drone, up], systems: ["TOSLIT": toslit])
         #expect(SalvageRun().nextAction(directive: running(step: "confirmingRelay"), world: world)
             == .advanceStep(nextStep: "configuring"))

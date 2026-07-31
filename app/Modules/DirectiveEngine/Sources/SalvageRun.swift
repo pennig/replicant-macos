@@ -478,7 +478,7 @@ public struct SalvageRun: MissionStepMachine {
         // parameter to some statuses, and a raw comparison would read a live
         // relay as dead — a false `relayActivationFailed` on a relay that is up
         // and meshing. `BobnetFeature` uses `statusBase` for this same predicate.
-        if relay.statusBase == "relaying" { return .advanceStep(nextStep: Step.configuring) }
+        if relay.statusBase == "relaying" { return settle(directive, relay) }
         if world.now.timeIntervalSince(directive.stepStartedAt) > Self.activationDeadline {
             return .stall(.relayActivationFailed)
         }
@@ -492,10 +492,11 @@ public struct SalvageRun: MissionStepMachine {
         // Safe against the clock-reset rule that governs this whole file: the
         // engine RESOLVES `.refreshDevices` before the executor ever sees it and
         // re-asks this same method against fresh rows, so what reaches
-        // `DirectiveExecutor.apply` is either the `.advanceStep` above (correct,
-        // the relay is up) or — since `thenStall` is nil and `reAsk` collapses a
-        // repeat request into it — a `.wait`, which writes nothing at all. The
-        // deadline keeps accumulating either way.
+        // `DirectiveExecutor.apply` is either `settle(relay)` above (correct,
+        // the relay is up — either `.setDeviceTags` or `.advanceStep`, both of
+        // which move to a DIFFERENT step) or — since `thenStall` is nil and
+        // `reAsk` collapses a repeat request into it — a `.wait`, which writes
+        // nothing at all. The deadline keeps accumulating either way.
         //
         // Throttled on the row's OWN `updatedAt` rather than on `stepStartedAt`,
         // which by design never moves while this step polls: a successful read
@@ -505,6 +506,37 @@ public struct SalvageRun: MissionStepMachine {
             return .refreshDevices(deviceCodes: [relay.deviceCode], thenStall: nil)
         }
         return .wait
+    }
+
+    /// The relay just confirmed `relaying` — the ONE point a relay becomes
+    /// planted infrastructure rather than cargo. While stowed, `auto:salvage`
+    /// earns its place: it is how `preflight`'s `.refreshFleet` finds the relay
+    /// in the same tag read as the rest of the fleet. Once planted it is
+    /// permanent — never picked up again — so the tag stops being useful and
+    /// starts being a cost: every future `.refreshFleet` for this run drags
+    /// back every relay ever planted, a tail that grows by one every target.
+    ///
+    /// So this drops the tag, but only if the relay actually carries it —
+    /// idempotent for a re-entered step (a relaunch, an operator who already
+    /// untagged it by hand), which must not re-issue a redundant PATCH. The
+    /// remaining set is computed here, in the pure mission, because
+    /// `DevicesClient.updateTags` is declarative and would otherwise wipe any
+    /// OTHER tag the operator put on this relay.
+    ///
+    /// Never dispatched from `activate` or `emplace`: a relay that deployed but
+    /// never came up is still this run's problem, and untagging it would drop
+    /// it out of every future `.refreshFleet` while it is still cargo, not
+    /// infrastructure.
+    private func settle(_ directive: Directive, _ relay: Device) -> MissionAction {
+        let tag = Self.fleetTag(directive)
+        guard relay.tags.contains(tag) else {
+            return .advanceStep(nextStep: Step.configuring)
+        }
+        return .setDeviceTags(
+            deviceCode: relay.deviceCode,
+            tags: relay.tags.filter { $0 != tag },
+            nextStep: Step.configuring
+        )
     }
 
     // MARK: - Mining loop

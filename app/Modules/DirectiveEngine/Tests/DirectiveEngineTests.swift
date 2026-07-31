@@ -381,6 +381,80 @@ struct DirectiveEngineTests {
         }
     }
 
+    /// `.setDeviceTags` PATCHes the new set, confirm-reads the device, then
+    /// advances — modeled on `.refreshSystem`, but with a follow-up read
+    /// instead of a preceding one.
+    @Test func setDeviceTagsUpdatesThenConfirmReadsThenAdvances() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { mission(step: "confirmingRelay") }.execute(db)
+        }
+        let core = DirectiveEngineCore(
+            machines: [ScriptedMachine([
+                .setDeviceTags(deviceCode: "RELAY", tags: ["operator:keep"], nextStep: "configuring"),
+            ])],
+            tick: .seconds(5)
+        )
+        let patched = LockIsolated<(String, [String])?>(nil)
+        let refreshed = LockIsolated<String?>(nil)
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.devicesClient.updateTags = { deviceCode, tags in
+                patched.setValue((deviceCode, tags))
+            }
+            $0.deviceRefresher.refresh = { code, priority in
+                refreshed.setValue(code)
+                #expect(priority == .high)
+                return nil
+            }
+        } operation: {
+            await core.evaluateOnce(directiveID: "D1")
+            #expect(patched.value?.0 == "RELAY")
+            #expect(patched.value?.1 == ["operator:keep"])
+            #expect(refreshed.value == "RELAY")
+            let directive = try await database.read { db in
+                try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+            }
+            #expect(directive?.step == "configuring")
+            #expect(directive?.status == .running)
+        }
+    }
+
+    /// A rejected/failed PATCH must never strand the run: the relay is up and
+    /// meshing, and the tag is housekeeping — the same best-effort contract as
+    /// `.refreshSystem`.
+    @Test func setDeviceTagsAdvancesEvenWhenTheUpdateFails() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { mission(step: "confirmingRelay") }.execute(db)
+        }
+        let core = DirectiveEngineCore(
+            machines: [ScriptedMachine([
+                .setDeviceTags(deviceCode: "RELAY", tags: [], nextStep: "configuring"),
+            ])],
+            tick: .seconds(5)
+        )
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.devicesClient.updateTags = { _, _ in throw DevicesClient.TagUpdateError("nope") }
+            $0.deviceRefresher.refresh = { _, _ in
+                Issue.record("must not confirm-read after a failed update")
+                return nil
+            }
+        } operation: {
+            await core.evaluateOnce(directiveID: "D1")
+            let directive = try await database.read { db in
+                try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+            }
+            #expect(directive?.step == "configuring")
+            #expect(directive?.status == .running)
+        }
+    }
+
     /// A directive whose kind has no registered machine is left completely
     /// alone — in this stage that is EVERY production directive, so a bug here
     /// would corrupt rows the moment the engine starts.
