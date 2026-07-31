@@ -38,9 +38,18 @@ private func device(
     currentDirective: String? = nil,
     currentDirectiveConfig: [String: JSONValue]? = nil,
     tags: [String] = [],
-    updatedAt: Date = fixtureNow
+    updatedAt: Date = fixtureNow,
+    arrivesAt: Date? = nil
 ) -> Device {
     var detail: [String: JSONValue] = [:]
+    if let arrivesAt {
+        // A drone flying home under recall — a single in-system hop, so both
+        // timing fields agree. Gives the row an `activityDeadline`.
+        detail["travel"] = .object([
+            "arrives_at": .string(arrivesAt.ISO8601Format()),
+            "final_arrives_at": .string(arrivesAt.ISO8601Format()),
+        ])
+    }
     if !controlled.isEmpty {
         detail["controlled_devices"] = .array(controlled.map { drone in
             .object(["device_code": .string(drone), "device_type": .string("mining_drone")])
@@ -57,7 +66,7 @@ private func device(
     }
     return Device(
         deviceCode: code, deviceType: type, replicantCode: "R1",
-        status: status, location: location, locationName: nil,
+        status: arrivesAt == nil ? status : "travelling", location: location, locationName: nil,
         operationalCapacity: 100, queueSize: 0,
         stowedInDeviceCode: stowedIn, controllerDeviceCode: controlledBy,
         attachedToDeviceCode: nil, createdAt: Date(timeIntervalSince1970: 0),
@@ -848,9 +857,84 @@ struct SalvageRunMiningTests {
                          params: CommandParams(), nextStep: "awaiting"))
     }
 
-    @Test func waitsForCompletionThenVerifies() {
-        let world = world(devices: [atSystem, controller, drone])
-        #expect(SalvageRun().nextAction(directive: running(step: "awaiting"), world: world) == .wait)
+    /// A controller actively mining (`gather_salvage` in force) with a drone
+    /// deployed, well past ten minutes: the run WAITS. This is the core
+    /// regression — the old blind ten-minute backstop dumped into `verify` here
+    /// and false-stalled `dronesNotRecovered` every long cycle.
+    @Test func waitsWhileMiningEvenPastTenMinutes() {
+        let mining = device(
+            "CTRL", type: "ami_mining_controller", stowedIn: "VESSEL",
+            controlled: ["DRONE"], directives: ["gather_salvage"],
+            currentDirective: "gather_salvage",
+            currentDirectiveConfig: ["location": .string("TOSLIT-6-5"), "recall": .bool(true)]
+        )
+        let deployed = device("DRONE", type: "mining_drone", location: "TOSLIT-6-5", controlledBy: "CTRL")
+        let directive = running(step: "awaiting", stepStartedAt: now.addingTimeInterval(-11 * 60))
+        let world = world(devices: [atSystem, mining, deployed], now: now)
+        #expect(SalvageRun().nextAction(directive: directive, world: world) == .wait)
+    }
+
+    /// A dropped completion frame: the drones are already home, nothing said so.
+    /// A fresh (post-launch) read showing all aboard hands off to `verify`.
+    @Test func verifiesWhenAllDronesAreHomeWithoutACompletionFrame() {
+        let directive = running(step: "awaiting", stepStartedAt: now.addingTimeInterval(-60))
+        // controller + drone are `fixtureNow`, which is >= stepStartedAt: fresh
+        // since launch, and the drone is stowed aboard.
+        let world = world(devices: [atSystem, controller, drone], now: now)
+        #expect(SalvageRun().nextAction(directive: directive, world: world)
+            == .advanceStep(nextStep: "verifying"))
+    }
+
+    /// Rows not read since launch (pre-launch `updatedAt`) can't be trusted — a
+    /// pre-launch drone still shows aboard. Force one fresh read first.
+    @Test func readsTheFleetWhenEvidencePredatesLaunch() {
+        let staleCtrl = device("CTRL", type: "ami_mining_controller", stowedIn: "VESSEL",
+                               controlled: ["DRONE"], directives: ["gather_salvage"],
+                               updatedAt: now.addingTimeInterval(-SalvageRun.reconcileInterval - 1))
+        let staleDrone = device("DRONE", type: "mining_drone", stowedIn: "VESSEL", controlledBy: "CTRL",
+                                updatedAt: now.addingTimeInterval(-SalvageRun.reconcileInterval - 1))
+        let directive = running(step: "awaiting", stepStartedAt: now) // launch just now; rows older
+        let world = world(devices: [atSystem, staleCtrl, staleDrone], now: now)
+        #expect(SalvageRun().nextAction(directive: directive, world: world)
+            == .refreshFleet(tag: "auto:salvage", thenStall: nil))
+    }
+
+    /// The throttle guard: pre-launch rows read within `reconcileInterval` wait
+    /// rather than re-reading every tick, so a failing read can't loop.
+    @Test func waitsRatherThanReReadingWithinTheReconcileInterval() {
+        let recentCtrl = device("CTRL", type: "ami_mining_controller", stowedIn: "VESSEL",
+                                controlled: ["DRONE"], directives: ["gather_salvage"],
+                                updatedAt: now.addingTimeInterval(-30))
+        let recentDrone = device("DRONE", type: "mining_drone", stowedIn: "VESSEL", controlledBy: "CTRL",
+                                 updatedAt: now.addingTimeInterval(-30))
+        let directive = running(step: "awaiting", stepStartedAt: now) // rows (-30s) predate launch (now)
+        let world = world(devices: [atSystem, recentCtrl, recentDrone], now: now)
+        #expect(SalvageRun().nextAction(directive: directive, world: world) == .wait)
+    }
+
+    /// Mining done (controller idle), a straggler still flying home with a future
+    /// ETA: wait it out rather than handing to `verify`'s single-read stall.
+    @Test func waitsForAStragglerStillFlyingHome() {
+        let idle = device("CTRL", type: "ami_mining_controller", stowedIn: "VESSEL",
+                          controlled: ["DRONE"], directives: ["gather_salvage"]) // no currentDirective
+        let flying = device("DRONE", type: "mining_drone", controlledBy: "CTRL",
+                            arrivesAt: now.addingTimeInterval(30))
+        let directive = running(step: "awaiting", stepStartedAt: now.addingTimeInterval(-60))
+        let world = world(devices: [atSystem, idle, flying], now: now)
+        #expect(SalvageRun().nextAction(directive: directive, world: world) == .wait)
+    }
+
+    /// Mining done, a drone not aboard and NOT travelling (no ETA): it isn't
+    /// coming on its own. Hand to `verify`, which refreshes once and raises
+    /// `dronesNotRecovered` if the fresh rows agree.
+    @Test func handsToVerifyWhenAStrandedDroneIsntComing() {
+        let idle = device("CTRL", type: "ami_mining_controller", stowedIn: "VESSEL",
+                          controlled: ["DRONE"], directives: ["gather_salvage"])
+        let stuck = device("DRONE", type: "mining_drone", location: "TOSLIT-6-5", controlledBy: "CTRL")
+        let directive = running(step: "awaiting", stepStartedAt: now.addingTimeInterval(-60))
+        let world = world(devices: [atSystem, idle, stuck], now: now)
+        #expect(SalvageRun().nextAction(directive: directive, world: world)
+            == .advanceStep(nextStep: "verifying"))
     }
 
     /// Issue-time relative: a completion delivered by catch-up after the app

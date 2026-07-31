@@ -122,7 +122,7 @@ public struct SalvageRun: MissionStepMachine {
         case Step.positioning: return position(directive, vessel, world)
         case Step.configuring: return configure(directive, vessel, world)
         case Step.launching: return launch(directive, vessel, world)
-        case Step.awaiting: return awaitCompletion(directive, world)
+        case Step.awaiting: return awaitCompletion(directive, vessel, world)
         case Step.verifying: return verify(directive, vessel, world)
         case Step.restocking: return restock(directive, vessel, world)
         default:
@@ -632,7 +632,7 @@ public struct SalvageRun: MissionStepMachine {
     /// triggers `LocationsIngestion`'s passive rescan independent of this
     /// mission — this is a backstop against that never landing (a dropped
     /// event, a persistent decode failure), not the expected path. Same scale
-    /// as `activationDeadline` / `backstopInterval`.
+    /// as `activationDeadline`.
     public static let systemResolutionDeadline: TimeInterval = 10 * 60
 
     /// How many `locations/{star}` reads an unresolved-system backstop may spend
@@ -771,10 +771,19 @@ public struct SalvageRun: MissionStepMachine {
         )
     }
 
-    /// How long to wait on the `directive.completed` fast path before moving on
-    /// to verify anyway. Same value and reasoning as `SurveyRun.backstopInterval`
-    /// — a dropped SSE frame must not strand a run forever.
-    public static let backstopInterval: TimeInterval = 10 * 60
+    /// How long between reconciling reads while `awaiting` waits on mining. Long
+    /// enough that a multi-minute mine cycle costs only a read every couple of
+    /// minutes; short enough to notice a DROPPED `directive.completed` frame
+    /// promptly. The throttle is also what stops a failing read looping every
+    /// tick (see the confirm-steps-need-fresh-evidence note).
+    public static let reconcileInterval: TimeInterval = 2 * 60
+
+    /// The soonest a still-out drone is due back, if any reports a trip — mirrors
+    /// `SurveyRun.recallArrival`. `activityDeadline` resolves the travel block's
+    /// leg-vs-route pair, so a recall hop yields its real arrival.
+    static func recallArrival(_ stranded: [Device]) -> Date? {
+        stranded.compactMap(\.activityDeadline).max()
+    }
 
     /// Tolerance when comparing a completion's time against the step's start.
     /// Same value and reasoning as `SurveyRun.eventTimeSkewTolerance`.
@@ -807,24 +816,68 @@ public struct SalvageRun: MissionStepMachine {
         }
     }
 
-    /// The riskiest wait in the design, same as `SurveyRun.awaitCompletion` —
-    /// the controller drives its drones server-side, so there is no operation
-    /// the app created to key off. Unlike the survey (which needs a system
-    /// re-read to confirm scan counts before trusting completion), a body's
-    /// depletion is confirmed by Task 8's `verifying` step, so a completion
-    /// here hands off directly rather than issuing its own refresh.
-    private func awaitCompletion(_ directive: Directive, _ world: WorldSnapshot) -> MissionAction {
+    /// Wait until the mining cycle is actually done, THEN hand to `verify` —
+    /// never stall here. `directive.completed` is authoritative (held until the
+    /// recall lands since v2.3.3, so it means "drones home"), and the only real
+    /// failure is a dropped frame, so every fallback is a reconciling read, not a
+    /// blind timer.
+    ///
+    /// The prior blind `backstopInterval` advance was the operator-visible bug:
+    /// mine cycles routinely run past ten minutes, so a fixed ten-minute advance
+    /// dumped into `verify` mid-mining — where the drones are legitimately still
+    /// out — and `verify` stalled `dronesNotRecovered` every cycle. The
+    /// still-mining gate below is the fix: while the controller reports
+    /// `gather_salvage`, this waits however long it takes.
+    ///
+    /// `verify` is unchanged and remains the ONE place that raises
+    /// `dronesNotRecovered`: this step advances there only once the drones aren't
+    /// travelling (all aboard, or mining finished with none en route), so
+    /// `verify`'s single authoritative refresh can't false-stall a straggler
+    /// mid-hop.
+    private func awaitCompletion(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
         if Self.completionSeen(directive, world) {
             return .advanceStep(nextStep: Step.verifying)
         }
-        // The controller told us this launch deployed nothing. No drones are
-        // out, so no completion is coming and the backstop would poll forever
-        // until someone noticed. Surface it now.
+        // The controller told us this launch deployed nothing — no completion is
+        // ever coming, so surface it now rather than reconciling forever.
         if Self.emptyLaunchSeen(directive, world) { return .stall(.launchDeployedNothing) }
-        if world.now.timeIntervalSince(directive.stepStartedAt) > Self.backstopInterval {
-            return .advanceStep(nextStep: Step.verifying)
+
+        guard let controller = claimedController(directive, vessel, world) else { return .wait }
+        let drones = AMIFleet.adoptedDrones(of: controller, in: world)
+        let evidence = [controller] + drones
+        let lastLook = evidence.map(\.updatedAt).max() ?? .distantPast
+        let canRead = world.now.timeIntervalSince(lastLook) >= Self.reconcileInterval
+
+        // Never believe a row read BEFORE this step began (before launch): a
+        // pre-launch drone row still shows it stowed aboard, which would read as
+        // "recovered" the instant the step starts. Force a post-launch read
+        // first — throttled, so a failing one can't loop every tick.
+        guard lastLook >= directive.stepStartedAt else {
+            return canRead ? .refreshFleet(tag: Self.fleetTag(directive), thenStall: nil) : .wait
         }
-        return .wait
+
+        let stranded = drones.filter { $0.stowedInDeviceCode != vessel.deviceCode }
+        // A dropped completion frame: the drones are already home, nothing said so.
+        if stranded.isEmpty { return .advanceStep(nextStep: Step.verifying) }
+        // Still mining — the drones are out by design. Reconcile on a cadence to
+        // catch completion (or the controller going idle); never stall, however
+        // long the cycle runs.
+        if controller.currentDirective == "gather_salvage" {
+            return canRead ? .refreshFleet(tag: Self.fleetTag(directive), thenStall: nil) : .wait
+        }
+        // Mining done, drones still out: a post-mining recall (near-instant now
+        // the vessel sits at the body). Wait out any traveller's own ETA; re-read
+        // the stragglers on the cadence otherwise.
+        if stranded.contains(where: { $0.activityDeadline != nil }) {
+            if let arrival = Self.recallArrival(stranded), arrival > world.now { return .wait }
+            return canRead
+                ? .refreshDevices(deviceCodes: stranded.map(\.deviceCode), thenStall: nil)
+                : .wait
+        }
+        // None travelling, none aboard, mining finished — they aren't coming on
+        // their own. Hand to `verify`, which refreshes once and raises
+        // `dronesNotRecovered` if the fresh rows agree.
+        return .advanceStep(nextStep: Step.verifying)
     }
 
     // MARK: - Verify & restock
