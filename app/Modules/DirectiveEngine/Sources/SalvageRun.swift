@@ -778,9 +778,9 @@ public struct SalvageRun: MissionStepMachine {
     /// tick (see the confirm-steps-need-fresh-evidence note).
     public static let reconcileInterval: TimeInterval = 2 * 60
 
-    /// The soonest a still-out drone is due back, if any reports a trip — mirrors
-    /// `SurveyRun.recallArrival`. `activityDeadline` resolves the travel block's
-    /// leg-vs-route pair, so a recall hop yields its real arrival.
+    /// When the LAST of the drones still out is due back, if any reports a trip —
+    /// mirrors `SurveyRun.recallArrival`. `activityDeadline` resolves the travel
+    /// block's leg-vs-route pair, so a recall hop yields its real arrival.
     static func recallArrival(_ stranded: [Device]) -> Date? {
         stranded.compactMap(\.activityDeadline).max()
     }
@@ -822,7 +822,7 @@ public struct SalvageRun: MissionStepMachine {
     /// failure is a dropped frame, so every fallback is a reconciling read, not a
     /// blind timer.
     ///
-    /// The prior blind `backstopInterval` advance was the operator-visible bug:
+    /// The prior blind ten-minute advance was the operator-visible bug:
     /// mine cycles routinely run past ten minutes, so a fixed ten-minute advance
     /// dumped into `verify` mid-mining — where the drones are legitimately still
     /// out — and `verify` stalled `dronesNotRecovered` every cycle. The
@@ -853,6 +853,15 @@ public struct SalvageRun: MissionStepMachine {
         if Self.emptyLaunchSeen(directive, world) { return .stall(.launchDeployedNothing) }
 
         guard let controller = claimedController(directive, vessel, world) else { return .wait }
+        // If this ever comes back empty (the controller adopted no drones at
+        // all), `lastLook` falls to `.distantPast`, the fresh-since-launch guard
+        // below never clears, and this loops a bounded `.refreshFleet` every
+        // `reconcileInterval` rather than advancing — unlike `verify`, which
+        // treats empty-stranded as recovered. Deliberately asymmetric: the real
+        // no-drones-deployed case is already caught by `emptyLaunchSeen` above,
+        // so an empty adoption reaching here would mean the adoption itself
+        // vanished mid-cycle, which is worth polling on rather than silently
+        // treating as "recovered".
         let drones = AMIFleet.adoptedDrones(of: controller, in: world)
         let lastLook = drones.map(\.updatedAt).min() ?? .distantPast
         let canRead = world.now.timeIntervalSince(lastLook) >= Self.reconcileInterval

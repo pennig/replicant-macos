@@ -958,6 +958,42 @@ struct SalvageRunMiningTests {
             == .refreshFleet(tag: "auto:salvage", thenStall: nil))
     }
 
+    /// Still mining and the throttle allows a read: reconcile the fleet (catch a
+    /// dropped completion / the controller going idle). Pins the still-mining
+    /// POSITIVE branch — `waitsWhileMiningEvenPastTenMinutes` only covers the
+    /// throttle-negative wait.
+    @Test func reconcilesTheFleetWhileMiningWhenTheThrottleAllows() {
+        let mining = device("CTRL", type: "ami_mining_controller", stowedIn: "VESSEL",
+                            controlled: ["DRONE"], directives: ["gather_salvage"],
+                            currentDirective: "gather_salvage",
+                            currentDirectiveConfig: ["location": .string("TOSLIT-6-5"), "recall": .bool(true)],
+                            updatedAt: now.addingTimeInterval(-3 * 60))
+        let deployed = device("DRONE", type: "mining_drone", location: "TOSLIT-6-5", controlledBy: "CTRL",
+                              updatedAt: now.addingTimeInterval(-3 * 60)) // fresh since launch, older than reconcileInterval
+        let directive = running(step: "awaiting", stepStartedAt: now.addingTimeInterval(-10 * 60))
+        let world = world(devices: [atSystem, mining, deployed], now: now)
+        #expect(SalvageRun().nextAction(directive: directive, world: world)
+            == .refreshFleet(tag: "auto:salvage", thenStall: nil))
+    }
+
+    /// Mining done, a straggler whose ETA has already passed and the throttle
+    /// allows: re-read just that drone rather than waiting or handing off. Pins
+    /// the recall-branch POSITIVE `refreshDevices` — `waitsForAStragglerStillFlyingHome`
+    /// only covers the future-ETA wait, and `handsToVerifyWhenAStrandedDroneIsntComing`
+    /// has no travel block at all.
+    @Test func reReadsAStragglerWhoseEtaHasPassed() {
+        let idle = device("CTRL", type: "ami_mining_controller", stowedIn: "VESSEL",
+                          controlled: ["DRONE"], directives: ["gather_salvage"],
+                          updatedAt: now.addingTimeInterval(-3 * 60))
+        let overdue = device("DRONE", type: "mining_drone", controlledBy: "CTRL",
+                             updatedAt: now.addingTimeInterval(-3 * 60),
+                             arrivesAt: now.addingTimeInterval(-10)) // travel block, ETA already passed
+        let directive = running(step: "awaiting", stepStartedAt: now.addingTimeInterval(-10 * 60))
+        let world = world(devices: [atSystem, idle, overdue], now: now)
+        #expect(SalvageRun().nextAction(directive: directive, world: world)
+            == .refreshDevices(deviceCodes: ["DRONE"], thenStall: nil))
+    }
+
     /// Issue-time relative: a completion delivered by catch-up after the app
     /// was closed still counts, while one predating this step is a replay.
     @Test func advancesToVerifyingWhenCompletionLands() {
