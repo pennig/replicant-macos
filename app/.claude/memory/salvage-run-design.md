@@ -7,8 +7,17 @@ metadata:
 
 Spec: `docs/superpowers/specs/2026-07-30-salvage-run-design.md`; plan:
 `docs/superpowers/plans/2026-07-30-salvage-run.md`. **Salvage Run SHIPPED 2026-07-30** across 9 tasks
-(1,196 tests green, 26 test products). **Haul Run is NOT built** — it is the spec's §6 and needs its
-own plan; until it exists, a Salvage Run leaves the mined resources piled at the salvage body.
+(1,196 tests green, 26 test products).
+
+**Haul Run SHIPPED 2026-07-31 — see [[haul-run-design]], and note that §6 of this spec is SUPERSEDED.**
+§6 assumed our engine would hand-drive a `cargo_freighter` through travel → collect → travel →
+deposit. It never should have: the AMI transport controller already does exactly that server-side via
+its `ferry` directive, at no API cost, so the shipped Haul Run only chooses which pile each
+`auto:haul`-tagged controller drains. Two of §6's rules were wrong and are corrected there — the
+`in_control_range` selection rule (a bare stockpile has no device to read a flag from) and the
+`collect_resources` call (which requires an explicit `resources` map, so "collect to fill" was never a
+single verb). The relay-plants-make-the-freighter-commandable insight below still holds; it is what
+satisfies ferry's own FTL-link requirement.
 
 Unattended salvage: the survey roam finds salvage, and an automation mines it and gets it home to
 AINALRAM-BELT-1 with no operator input.
