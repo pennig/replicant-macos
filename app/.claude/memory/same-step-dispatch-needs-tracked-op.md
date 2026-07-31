@@ -69,3 +69,28 @@ only `.wait` or `.refreshDevices(thenStall: nil)` — never a dispatch — which
 
 See [[directives-feature]] for the engine's step-machine contract and [[salvage-run-design]] for the
 feature this surfaced in.
+
+## The escape hatch: a re-entry budget off the timeline (2026-07-30)
+
+The rule above has a cost that bit on the next review: a step whose only real way forward is a READ
+cannot poll for it, because every refresh action re-stamps the clock its own backstop measures from.
+Salvage Run's three `.unresolved` branches took the safe half (`.wait`, bounded, then stall) and
+inherited the other half of the problem — the stall's guidance said "Retry to fetch it again", but
+nothing on that path ever fetched anything and `DirectiveResolutionClient.retry` only re-stamps
+`stepStartedAt`. Retry re-ran a pure function over the identical snapshot and re-stalled forever.
+
+The resolution, and the pattern to copy:
+
+- **Wait on the polling branch; read on the terminal one.** The deadline accumulates honestly under
+  `.wait`, and the single `.refreshSystem` fires only once the deadline has expired — the point at
+  which resetting the clock costs nothing because the alternative was stopping anyway.
+- **Bound the reads with a counter derived from the log, not a column.**
+  `DirectiveExecutor.move` writes a `.stepStarted` row on every transition, so walking `world.log`
+  backwards to the first entry naming a *different* step counts how many times the current step has
+  been entered contiguously. It survives a relaunch (same database as the row) and needs no migration.
+- **Stop the walk at `.resolved`, and count it.** Retry and Skip write that entry, so an operator's
+  Retry buys a genuinely new read instead of replaying the stall — which is what makes the guidance
+  true. Counting the boundary itself keeps the budget uniform however the step was reached.
+
+`SalvageRun.stepEntryCount` is the implementation; `unresolvedSystem` and `sameBodyAgain` are its two
+consumers (the second is the mining loop's terminator, which had no bound at all).

@@ -183,6 +183,16 @@ must recompute from `siteAssays` on every evaluation and must never cache a syst
   print against 20,471 units unlocked, roughly 3:1 and permanent. Five of the six waypoints are
   already fully scanned, so their L4 points are known; only CIHAMUKUY is unscanned.
 
+**An exhausted frontier is a lull, not an ending** (decided in review, 2026-07-30). The planner does
+genuinely run out — the three deferred systems above are exactly that — but the catalog it ranks is a
+moving target, and both the launcher ("until you cancel it") and §1's "never asks the operator
+anything" promise a run that ends only on cancel. So the mission answers `.idle` rather than
+`.exhausted` when nothing is reachable, the engine waits instead of completing the row, and the survey
+roam or the next relay refills the frontier under it. This matches §6's identical ruling for the Haul
+Run ("wait — not stall"). The re-check is backed off to a minute so an empty frontier does not rescan
+the census on every 5s tick. `SurveyRun` keeps `.exhausted`: nothing puts a fully-scanned star back
+into its candidate set, so its empty answer really is a finish line.
+
 Relays are cheap (370 units, 800s) against a base stockpile that already stands at 51,150 units.
 
 ## 8. Stalls

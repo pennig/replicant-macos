@@ -57,3 +57,43 @@ design rather than being smuggled into this one:
 
 See [[salvage-resource-amounts]] for the assay store the planner ranks on, and
 [[travel-is-cheap-vs-survey]] for why extra travel is affordable.
+
+## Built, and what the whole-branch review corrected (2026-07-30)
+
+Five of these were live-consequence bugs that no unit test could have caught, because each lived in the
+seam *between* a tested pure function and the engine that calls it.
+
+- **Target planning is a `MissionStepMachine` requirement, not an engine switch.**
+  `DirectiveEngineCore.resolveExtendQueue` used to call `SurveyRoamPlanner.nextTarget`
+  unconditionally, for every `DirectiveKind` — so `SalvageTargetPlanner` had **zero production
+  callers** and a Salvage Run planned with the exact inverse filter (`fullyScannedAt == nil`; salvage
+  is only ever known in systems the survey already finished). It would have walked outward to the
+  nearest UNSCANNED star, found no salvage, and still deployed and activated a 370-unit relay there
+  before repeating until stock ran out. Now `plan(RoamContext) -> RoamPlan` — the engine gathers
+  census/assays/devices/vessel in one read, each machine owns its ranking. **The regression guard has
+  to be end-to-end through `evaluateOnce`**: a unit test of either planner passed the whole time.
+- **`RoamPlan` distinguishes `.idle` from `.exhausted`.** A survey exhausts permanently (nothing puts
+  a star back in its candidate set) so it finishes. A salvage frontier is a snapshot — the survey roam
+  keeps uncovering salvage, and each relay widens reach — so it **idles and re-checks**, which is what
+  the launcher ("until you cancel it"), the list row and §1 already promised. Idle re-checks are
+  backed off 60s in the engine so an empty frontier does not scan the whole census on the 5s tick.
+- **A re-entry budget read off the timeline** (`SalvageRun.stepEntryCount`) is the migration-free way
+  to bound a step that re-enters itself. `DirectiveExecutor.move` already writes a `.stepStarted` row
+  per transition and Retry/Skip write `.resolved`; counting backwards to the first non-matching entry
+  gives an attempt counter that survives a relaunch. See [[same-step-dispatch-needs-tracked-op]].
+- **A stall whose guidance names a verb must make that verb work.** `salvageSystemUnresolved` said
+  "retry to fetch it again" on three branches that never issued `.refreshSystem`, against a `retry`
+  that only re-stamps the clock — so Retry replayed the same snapshot forever and only Skip (which
+  permanently forfeits the system) actually exited. The read now sits on the *terminal* branch, spent
+  once per visit, with Retry re-arming the budget.
+- **Two more stale-row stalls:** `confirmingRelay` polled a device row nothing refreshes (the
+  `relay.*` route only invalidates FTL-mesh freshness), and `awaitingRelayRestock` — the one stall
+  whose whole purpose is waiting on an operator changing a stow column — decided from local rows only.
+- **The mining loop's only terminator was one `salvage.depleted` SSE frame.** A dropped one meant a
+  real `launch` POST every cycle, unbounded. It now compares `nextBody` against the body the
+  controller's own in-force `gather_salvage` config names — the server's record of what was worked, so
+  no new column — reads the system once when they match, then stalls `salvageBodyNotDepleted`.
+- **`features.contains("relay")` is right for `meshSystems` and wrong for a dispatch query.** A
+  `system_hub` carries the feature (integrated relay) and genuinely meshes its system, but a dispatch
+  query gets `deploy` issued at whatever it returns — so `relay(aboard:)` / `deployedRelay(near:)` are
+  narrowed to `deviceType == "ftl_relay"`. Both `"relaying"` comparisons go through `Device.statusBase`.
