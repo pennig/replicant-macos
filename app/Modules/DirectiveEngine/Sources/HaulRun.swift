@@ -12,6 +12,18 @@
 //  at no cost to our API budget. This machine only chooses targets: one
 //  `set_directive` per pile drained, and one census read a minute.
 //
+//  **One controller repointed per tick.** `assigning` claims exactly one
+//  pending controller (`.assignController`) and hands it to `dispatching` to
+//  actually command — never the whole fleet at once. `confirming` then judges
+//  ONLY the controller `Directive.controllerCode` names, never the fleet's
+//  full plan. A fix landed 2026-07-31 after review found the earlier
+//  single-step `assign` let `confirming` re-derive the whole plan: with two
+//  tagged controllers and only one ever dispatched, the untouched second
+//  controller always read as "pending" and `confirming` could never leave,
+//  wedging the run into a false `.commandRejected` stall within
+//  `confirmDeadline`. See `Step.dispatching`'s and `Step.confirming`'s doc
+//  comments for the two failure modes this shape closes.
+//
 //  Pure by contract: no I/O, no clock reads (time comes from `world.now`), no
 //  randomness. Every effect is the returned `MissionAction`.
 //
@@ -36,14 +48,50 @@ public struct HaulRun: MissionStepMachine {
         public static let preflight = "preflight"
         public static let surveying = "surveying"
         public static let assigning = "assigning"
-        /// Polls until the controller reports the config actually in force.
+        /// Issues the command `assigning` chose, against the controller it just
+        /// pinned (`Directive.controllerCode`, written there via
+        /// `.assignController`).
         ///
-        /// Split from `assigning` — which only dispatches — because
-        /// `set_directive` classifies as `.immediate` and creates NO tracked
-        /// `Operation`. A step that dispatched it and named itself as `nextStep`
-        /// would find `world.openOperation` structurally nil every time, re-issue
-        /// on every 5s tick forever, and re-stamp its own `stepStartedAt` on each
-        /// accepted dispatch so no deadline could ever fire. See the
+        /// Split out from `assigning` for one reason: `confirming` must be able
+        /// to judge EXACTLY the controller a dispatch was aimed at, never the
+        /// whole tagged fleet. Before this step existed, `assigning` dispatched
+        /// directly and `confirming` re-derived the FULL plan on every tick,
+        /// waiting for every controller in it to be in force. But `assigning`
+        /// only ever repoints ONE controller per evaluation ("N controllers
+        /// settle over N ticks") — so with two tagged controllers, the second
+        /// one (never dispatched) always read as still-pending, and
+        /// `confirming` could never leave: it waited out `confirmDeadline` on a
+        /// controller nothing had asked to change, then falsely stalled the
+        /// whole run with `.commandRejected`. Pinning the ONE controller being
+        /// worked, here, is what lets `confirming` ask about it alone.
+        ///
+        /// Also keeps the same-step-dispatch rule intact on its own: this step
+        /// dispatches with `nextStep: .confirming`, never itself — `set_directive`
+        /// classifies as `.immediate` and creates NO tracked `Operation`, so a
+        /// step naming itself as `nextStep` would find `world.openOperation`
+        /// structurally nil every time and re-issue on every 5s tick forever.
+        /// See the `same-step-dispatch-needs-tracked-op` note.
+        public static let dispatching = "dispatching"
+        /// Polls until the pinned controller (`Directive.controllerCode`)
+        /// reports SOME config this run could have issued — `ferry` or
+        /// `shuttle`, delivering to `deliveryLocation` — then hands back to
+        /// `assigning`, which owns repointing.
+        ///
+        /// Deliberately does NOT require that config to be the exact pile
+        /// `dispatching` most recently sent: the stockpile census has another
+        /// writer (`LocationsFeature` refreshes it whenever the operator opens
+        /// the Locations catalog) and can move during the up-to-`confirmDeadline`
+        /// wait — a new pile appearing, or the dispatched pile draining past a
+        /// rival. Judging against a RE-DERIVED plan would then compare the
+        /// controller's real, accepted config against a target that no longer
+        /// matches it, producing the exact same false `.commandRejected` stall
+        /// the multi-controller bug did, but reachable with a single controller.
+        ///
+        /// Split from `assigning`/`dispatching` — never dispatches, only waits
+        /// or reads — because `set_directive` creates no tracked `Operation`,
+        /// so any elapsed-interval measurement must live in a step whose
+        /// pre-deadline path is exclusively `.wait`: that is the one action
+        /// `DirectiveExecutor` does not re-stamp `stepStartedAt` for. See the
         /// `same-step-dispatch-needs-tracked-op` note; this pairing is the fix.
         public static let confirming = "confirming"
         public static let hauling = "hauling"
@@ -80,6 +128,7 @@ public struct HaulRun: MissionStepMachine {
         case Step.preflight: return preflight(directive, world)
         case Step.surveying: return survey(directive, world)
         case Step.assigning: return assign(directive, world)
+        case Step.dispatching: return dispatchAssignment(directive, world)
         case Step.confirming: return confirm(directive, world)
         case Step.hauling: return haul(directive, world)
         default:
@@ -134,6 +183,11 @@ public struct HaulRun: MissionStepMachine {
     /// `blocked:[('no_taxi_plate', 1)]` while its surge-capable freighter hauls
     /// perfectly well (observed live 2026-07-31), so treating `blocked:` as a
     /// fault would halt a healthy run.
+    ///
+    /// Used by `assign` to decide whether a controller needs (re)pointing at
+    /// all. `confirm` deliberately does NOT use this — see `hasTakenSomeHaulConfig`
+    /// and `Step.confirming`'s doc comment for why a looser check is required
+    /// there.
     static func isInForce(_ assignment: HaulTargetPlanner.Assignment, in world: WorldSnapshot) -> Bool {
         guard let controller = world.device(assignment.controllerCode),
               controller.currentDirective == assignment.directive,
@@ -141,6 +195,24 @@ public struct HaulRun: MissionStepMachine {
         else { return false }
         return config["collect"]?.stringValue == assignment.location
             && config["deliver"]?.stringValue == deliveryLocation
+    }
+
+    /// Whether `controller` currently runs ANY config this run could have
+    /// issued — `ferry` or `shuttle`, delivering to `deliveryLocation` —
+    /// regardless of which pile it names.
+    ///
+    /// `confirm` uses this instead of `isInForce` against a re-derived plan,
+    /// because the stockpile census can move during the confirm window (see
+    /// `Step.confirming`'s doc comment): a plan-based comparison would then
+    /// judge the controller's real, accepted config against a target that has
+    /// since changed, and never match. `_eval_state` stays unread here too,
+    /// for the same reason `isInForce` ignores it.
+    static func hasTakenSomeHaulConfig(_ controller: Device) -> Bool {
+        guard let currentDirective = controller.currentDirective,
+              [HaulTargetPlanner.ferry, HaulTargetPlanner.shuttle].contains(currentDirective),
+              let config = controller.currentDirectiveConfig
+        else { return false }
+        return config["deliver"]?.stringValue == deliveryLocation
     }
 
     // MARK: - Steps
@@ -171,9 +243,17 @@ public struct HaulRun: MissionStepMachine {
         return .refreshFootprint(nextStep: Step.assigning)
     }
 
-    /// Point ONE controller at its pile, or move on when every controller already
-    /// matches. One dispatch per evaluation keeps the one-action-per-tick
-    /// contract; N controllers settle over N ticks.
+    /// Pin ONE pending controller for `dispatching` to command, or move on when
+    /// every controller already matches. One pin per evaluation keeps the
+    /// one-action-per-tick contract; N controllers settle over N ticks.
+    ///
+    /// Does not itself check `world.device(pending.controllerCode)` for
+    /// existence — `pending` always comes from `Self.plans`, which only ever
+    /// names controllers `Self.controllers` found IN `world.devices`, so that
+    /// guard could never fire here. The equivalent, LIVE guard is in
+    /// `dispatchAssignment`, which reads `Directive.controllerCode` back off
+    /// the persisted row — and a row's controller CAN have vanished by the
+    /// time that next tick runs.
     private func assign(_ directive: Directive, _ world: WorldSnapshot) -> MissionAction {
         let tag = Self.fleetTag(of: directive)
         guard !Self.controllers(in: world, tag: tag).isEmpty else {
@@ -187,8 +267,34 @@ public struct HaulRun: MissionStepMachine {
             // one, so an empty frontier is a lull (spec §5).
             return .advanceStep(nextStep: Step.hauling)
         }
-        guard world.device(pending.controllerCode) != nil else {
+        logger.debug("haul run \(directive.id, privacy: .public): pinning \(pending.controllerCode, privacy: .public)")
+        return .assignController(deviceCode: pending.controllerCode, nextStep: Step.dispatching)
+    }
+
+    /// Issue the command `assigning` chose, against the controller it just
+    /// pinned. Re-derives the target from the CURRENT world rather than
+    /// trusting anything carried on the directive — nothing is; the run stores
+    /// no assignment state of its own beyond `controllerCode` (file header).
+    private func dispatchAssignment(_ directive: Directive, _ world: WorldSnapshot) -> MissionAction {
+        guard let controllerCode = directive.controllerCode else {
+            // `assign` always pins one before advancing here. If it's somehow
+            // missing, there is nothing to dispatch to — go back and re-plan.
+            return .advanceStep(nextStep: Step.assigning)
+        }
+        guard world.device(controllerCode) != nil else {
+            // The controller `assign` just pinned is no longer a fleet member —
+            // untagged or removed between that tick and this one. THIS is the
+            // live version of the unreachable-device guard: unlike in `assign`,
+            // `controllerCode` here is read back off the persisted row, so it
+            // can legitimately name a device that has since vanished. A
+            // configuration problem, not a lull.
             return .stall(.unreachableDevice)
+        }
+        guard let pending = Self.plans(directive, world).first(where: { $0.controllerCode == controllerCode }) else {
+            // The census moved since `assign` ran and this controller no
+            // longer has anything pending. Nothing to dispatch — let `assign`
+            // re-plan.
+            return .advanceStep(nextStep: Step.assigning)
         }
         logger.info("haul run \(directive.id, privacy: .public): pointing \(pending.controllerCode, privacy: .public) at \(pending.location, privacy: .public)")
         return .dispatch(
@@ -202,12 +308,28 @@ public struct HaulRun: MissionStepMachine {
         )
     }
 
-    /// Poll until the dispatched config is in force, then go back for the next
-    /// controller. Only ever waits or reads — never dispatches — which is what
-    /// lets `confirmDeadline` accumulate honestly.
+    /// Poll until the PINNED controller (`Directive.controllerCode`) reports a
+    /// config this run could have issued, then go back to `assigning` — never
+    /// re-derives the whole fleet's plan, and never dispatches, which is what
+    /// lets `confirmDeadline` accumulate honestly. See `Step.confirming`'s doc
+    /// comment for why both of those matter.
     private func confirm(_ directive: Directive, _ world: WorldSnapshot) -> MissionAction {
-        let assignments = Self.plans(directive, world)
-        guard let pending = assignments.first(where: { !Self.isInForce($0, in: world) }) else {
+        guard let controllerCode = directive.controllerCode else {
+            // `dispatchAssignment` always pins one before advancing here.
+            // Defensive only: go back and let `assign` re-derive it.
+            return .advanceStep(nextStep: Step.assigning)
+        }
+        guard let controller = world.device(controllerCode) else {
+            // The controller this dispatch was aimed at is no longer a fleet
+            // member. Waiting out the deadline on a device that can never
+            // report back would just delay reaching the same conclusion.
+            return .stall(.unreachableDevice)
+        }
+        if Self.hasTakenSomeHaulConfig(controller) {
+            // Settled on SOME config this run could have issued — not
+            // necessarily the exact pile most recently dispatched, since the
+            // census can move during the wait. `assigning` owns repointing;
+            // hand back to it.
             return .advanceStep(nextStep: Step.assigning)
         }
         if world.now.timeIntervalSince(directive.stepStartedAt) < Self.confirmDeadline {
@@ -216,7 +338,7 @@ public struct HaulRun: MissionStepMachine {
         // Past the deadline, spend one authoritative read before giving up: the
         // command may well have landed while the local row sat stale. If the
         // re-ask still can't see it, the engine stalls with the carried reason.
-        return .refreshDevices(deviceCodes: [pending.controllerCode], thenStall: .commandRejected)
+        return .refreshDevices(deviceCodes: [controllerCode], thenStall: .commandRejected)
     }
 
     /// The quiet step. `.wait` is the only action that writes nothing, so this is

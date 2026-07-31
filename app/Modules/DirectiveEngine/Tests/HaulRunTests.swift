@@ -79,10 +79,12 @@ private func world(
 private func run(
     step: String,
     stepStartedAt: Date = fixtureNow,
-    fleetTag: String? = HaulRun.defaultFleetTag
+    fleetTag: String? = HaulRun.defaultFleetTag,
+    controllerCode: String? = nil
 ) -> Directive {
     Directive(
         id: "D1", kind: .haulRun, status: .running, deviceCode: "C1",
+        controllerCode: controllerCode,
         fleetTag: fleetTag, targets: [], targetIndex: 0, step: step,
         stepStartedAt: stepStartedAt, returnToOrigin: false,
         originDesignation: nil, attentionReason: nil,
@@ -161,8 +163,12 @@ struct HaulRunTests {
 
     // MARK: assigning
 
-    /// The headline: point the controller at the richest reachable pile.
-    @Test func assigningDispatchesSetDirective() {
+    /// The headline: pin the controller against the richest reachable pile.
+    /// `assigning` no longer dispatches directly — it claims the controller
+    /// (`.assignController`) and hands off to `dispatching`, which is what lets
+    /// `confirming` later judge exactly this one controller rather than the
+    /// whole fleet's plan (fix landed 2026-07-31, see `Step.dispatching`).
+    @Test func assigningPinsTheControllerAtTheRichestPile() {
         let action = HaulRun().nextAction(
             directive: run(step: HaulRun.Step.assigning),
             world: world(
@@ -170,20 +176,12 @@ struct HaulRunTests {
                 footprints: [footprint("ATIANFU-BELT-1", 3_537)]
             )
         )
-        #expect(action == .dispatch(
-            kind: .setDirective,
-            deviceCode: "C1",
-            params: CommandParams(directive: "ferry", configuration: [
-                "collect": .string("ATIANFU-BELT-1"),
-                "deliver": .string(HaulRun.deliveryLocation),
-            ]),
-            nextStep: HaulRun.Step.confirming
-        ))
+        #expect(action == .assignController(deviceCode: "C1", nextStep: HaulRun.Step.dispatching))
     }
 
-    /// The guard that makes the dispatch terminate: a controller already running
-    /// the intended config is left alone. Without this the run would re-issue the
-    /// same command on every cycle forever.
+    /// The guard that makes repointing terminate: a controller already running
+    /// the intended config is left alone. Without this the run would re-pin the
+    /// same controller on every cycle forever.
     @Test func assigningSkipsAControllerAlreadyPointedCorrectly() {
         let settled = controller(
             "C1", currentDirective: "ferry",
@@ -199,9 +197,11 @@ struct HaulRunTests {
         #expect(action == .advanceStep(nextStep: HaulRun.Step.hauling))
     }
 
-    /// A controller pointed at a DIFFERENT pile is repointed — this is what
-    /// happens the moment a pile drains.
-    @Test func assigningRepointsAControllerOnADrainedPile() {
+    /// A controller pointed at a DIFFERENT pile is not in force, so it is
+    /// pinned again for repointing — this is what happens the moment a pile
+    /// drains. The actual re-dispatch (with the NEW pile's params) is
+    /// `dispatching`'s job — see `dispatchingRepointsToTheNewRichestPile`.
+    @Test func assigningRepinsAControllerOnADrainedPile() {
         let onOldPile = controller(
             "C1", currentDirective: "ferry",
             currentConfig: [
@@ -216,15 +216,7 @@ struct HaulRunTests {
                 footprints: [footprint("SHERATANON-6-1", 0), footprint("ATIANFU-BELT-1", 3_537)]
             )
         )
-        #expect(action == .dispatch(
-            kind: .setDirective,
-            deviceCode: "C1",
-            params: CommandParams(directive: "ferry", configuration: [
-                "collect": .string("ATIANFU-BELT-1"),
-                "deliver": .string(HaulRun.deliveryLocation),
-            ]),
-            nextStep: HaulRun.Step.confirming
-        ))
+        #expect(action == .assignController(deviceCode: "C1", nextStep: HaulRun.Step.dispatching))
     }
 
     /// Nothing reachable is a LULL, not an ending. The run must never complete —
@@ -250,13 +242,116 @@ struct HaulRunTests {
         #expect(action == .stall(.noHaulControllerTagged))
     }
 
+    /// **CRITICAL regression guard (2026-07-31 review).** Once the first pinned
+    /// controller settles, `assigning` reaches the SECOND one — the sequence
+    /// the original single-step design could never complete, because
+    /// `confirming` re-derived the whole plan and waited on a controller
+    /// nothing had dispatched.
+    @Test func assigningReachesTheSecondControllerOnceTheFirstSettles() {
+        let settledC1 = controller(
+            "C1", currentDirective: "ferry",
+            currentConfig: [
+                "collect": .string("ATIANFU-BELT-1"),
+                "deliver": .string(HaulRun.deliveryLocation),
+            ]
+        )
+        let c2 = controller("C2")
+        // A second reachable pile in the ALREADY-meshed delivery system
+        // (AINALRAM) — no extra relay needed, and richer than nothing.
+        let action = HaulRun().nextAction(
+            directive: run(step: HaulRun.Step.assigning, controllerCode: "C1"),
+            world: world(
+                devices: [settledC1, c2] + meshed,
+                footprints: [footprint("ATIANFU-BELT-1", 3_537), footprint("AINALRAM-2", 900)]
+            )
+        )
+        #expect(action == .assignController(deviceCode: "C2", nextStep: HaulRun.Step.dispatching))
+    }
+
+    // MARK: dispatching
+
+    /// Once pinned, the controller is issued the exact command `assigning`
+    /// chose: the richest reachable pile, `ferry` to the delivery location.
+    @Test func dispatchingIssuesSetDirectiveToThePinnedController() {
+        let action = HaulRun().nextAction(
+            directive: run(step: HaulRun.Step.dispatching, controllerCode: "C1"),
+            world: world(
+                devices: [controller("C1")] + meshed,
+                footprints: [footprint("ATIANFU-BELT-1", 3_537)]
+            )
+        )
+        #expect(action == .dispatch(
+            kind: .setDirective,
+            deviceCode: "C1",
+            params: CommandParams(directive: "ferry", configuration: [
+                "collect": .string("ATIANFU-BELT-1"),
+                "deliver": .string(HaulRun.deliveryLocation),
+            ]),
+            nextStep: HaulRun.Step.confirming
+        ))
+    }
+
+    /// The repoint case: a controller pinned while sitting on a now-drained
+    /// pile is issued the NEW richest target, not the old one.
+    @Test func dispatchingRepointsToTheNewRichestPile() {
+        let onOldPile = controller(
+            "C1", currentDirective: "ferry",
+            currentConfig: [
+                "collect": .string("SHERATANON-6-1"),
+                "deliver": .string(HaulRun.deliveryLocation),
+            ]
+        )
+        let action = HaulRun().nextAction(
+            directive: run(step: HaulRun.Step.dispatching, controllerCode: "C1"),
+            world: world(
+                devices: [onOldPile] + meshed,
+                footprints: [footprint("SHERATANON-6-1", 0), footprint("ATIANFU-BELT-1", 3_537)]
+            )
+        )
+        #expect(action == .dispatch(
+            kind: .setDirective,
+            deviceCode: "C1",
+            params: CommandParams(directive: "ferry", configuration: [
+                "collect": .string("ATIANFU-BELT-1"),
+                "deliver": .string(HaulRun.deliveryLocation),
+            ]),
+            nextStep: HaulRun.Step.confirming
+        ))
+    }
+
+    /// **Minor regression guard (2026-07-31 review).** The controller
+    /// `assigning` pinned is gone by the time `dispatching` runs — untagged or
+    /// removed mid-cycle. This is where the unreachable-device guard can
+    /// actually fire: `Directive.controllerCode` is read back off the
+    /// persisted row here, unlike in `assigning` where it always comes fresh
+    /// from `world.devices` and could never be absent.
+    @Test func dispatchingStallsWhenThePinnedControllerHasVanished() {
+        let action = HaulRun().nextAction(
+            directive: run(step: HaulRun.Step.dispatching, controllerCode: "C1"),
+            world: world(devices: meshed, footprints: [footprint("ATIANFU-BELT-1", 3_537)])
+        )
+        #expect(action == .stall(.unreachableDevice))
+    }
+
+    /// Defensive: `assigning` always pins a controller before advancing here,
+    /// so this should never happen in practice — but waiting/re-planning is
+    /// inert and recoverable, so a missing pin bounces back rather than
+    /// force-unwrapping.
+    @Test func dispatchingWithNoPinnedControllerReturnsToAssigning() {
+        let action = HaulRun().nextAction(
+            directive: run(step: HaulRun.Step.dispatching),
+            world: world(devices: [controller("C1")] + meshed, footprints: [footprint("ATIANFU-BELT-1", 3_537)])
+        )
+        #expect(action == .advanceStep(nextStep: HaulRun.Step.assigning))
+    }
+
     // MARK: confirming
 
     /// While the controller has not taken the config, wait — and crucially do NOT
     /// re-dispatch, which would reset the deadline measuring the wait.
     @Test func confirmingWaitsForTheControllerToTakeTheConfig() {
         let action = HaulRun().nextAction(
-            directive: run(step: HaulRun.Step.confirming),
+            directive: run(step: HaulRun.Step.confirming, controllerCode: "C1"),
             world: world(devices: [controller("C1")] + meshed, footprints: [footprint("ATIANFU-BELT-1", 3_537)])
         )
         #expect(action == .wait)
@@ -272,10 +367,79 @@ struct HaulRunTests {
             ]
         )
         let action = HaulRun().nextAction(
-            directive: run(step: HaulRun.Step.confirming),
+            directive: run(step: HaulRun.Step.confirming, controllerCode: "C1"),
             world: world(devices: [settled] + meshed, footprints: [footprint("ATIANFU-BELT-1", 3_537)])
         )
         #expect(action == .advanceStep(nextStep: HaulRun.Step.assigning))
+    }
+
+    /// **CRITICAL regression guard (2026-07-31 review).** `confirming` must
+    /// judge only the controller it was dispatched for — never the whole
+    /// tagged fleet. Two controllers, only one ever dispatched: before the
+    /// fix, `confirming` re-derived the full plan and saw the untouched
+    /// second controller "pending" forever, so it could never leave this
+    /// step and the run stalled with a false `.commandRejected` inside
+    /// `confirmDeadline`. `assigning` dispatches exactly one controller per
+    /// tick ("N controllers settle over N ticks"), so `confirming` must see
+    /// only the ONE it was pinned to for that to actually be true.
+    @Test func confirmingIgnoresAnUndispatchedSecondController() {
+        let settledC1 = controller(
+            "C1", currentDirective: "ferry",
+            currentConfig: [
+                "collect": .string("ATIANFU-BELT-1"),
+                "deliver": .string(HaulRun.deliveryLocation),
+            ]
+        )
+        let neverDispatchedC2 = controller("C2")
+        let action = HaulRun().nextAction(
+            directive: run(step: HaulRun.Step.confirming, controllerCode: "C1"),
+            world: world(
+                devices: [settledC1, neverDispatchedC2] + meshed,
+                footprints: [footprint("ATIANFU-BELT-1", 3_537), footprint("SHERATANON-6-1", 900)]
+            )
+        )
+        #expect(action == .advanceStep(nextStep: HaulRun.Step.assigning))
+    }
+
+    /// **IMPORTANT regression guard (2026-07-31 review).** The census can move
+    /// during the confirm window — even with a SINGLE controller — because
+    /// `LocationsFeature` refreshes the footprint table whenever the operator
+    /// opens the Locations catalog. `confirming` must accept ANY config this
+    /// run could have issued, not only the exact pile most recently ranked
+    /// richest, or a re-derived plan that no longer names the controller's
+    /// real (accepted) target produces the same false stall as the critical
+    /// bug above, reachable with just one controller.
+    @Test func censusChurnDuringConfirmDoesNotFalselyStall() {
+        let settledOnItsOriginalPile = controller(
+            "C1", currentDirective: "ferry",
+            currentConfig: [
+                "collect": .string("ATIANFU-BELT-1"),
+                "deliver": .string(HaulRun.deliveryLocation),
+            ]
+        )
+        // A richer pile appeared after the dispatch was issued — re-deriving
+        // the plan now would name a DIFFERENT collect target than the one C1
+        // is actually running.
+        let action = HaulRun().nextAction(
+            directive: run(step: HaulRun.Step.confirming, controllerCode: "C1"),
+            world: world(
+                devices: [settledOnItsOriginalPile] + meshed,
+                footprints: [footprint("ATIANFU-BELT-1", 100), footprint("NEWLYDISCOVRD-1", 9_000)]
+            )
+        )
+        #expect(action == .advanceStep(nextStep: HaulRun.Step.assigning))
+    }
+
+    /// **Controller vanishing between assign and confirm.** The device
+    /// `dispatching` issued the command to is gone by the time `confirming`
+    /// checks it — waiting out the deadline on a device that can never report
+    /// back would just delay reaching the same conclusion.
+    @Test func confirmingStallsWhenThePinnedControllerHasVanished() {
+        let action = HaulRun().nextAction(
+            directive: run(step: HaulRun.Step.confirming, controllerCode: "C1"),
+            world: world(devices: meshed, footprints: [footprint("ATIANFU-BELT-1", 3_537)])
+        )
+        #expect(action == .stall(.unreachableDevice))
     }
 
     /// **A `blocked:` eval state is NOT a fault.** The live controller reads
@@ -320,7 +484,8 @@ struct HaulRunTests {
         let action = HaulRun().nextAction(
             directive: run(
                 step: HaulRun.Step.confirming,
-                stepStartedAt: fixtureNow.addingTimeInterval(-HaulRun.confirmDeadline - 1)
+                stepStartedAt: fixtureNow.addingTimeInterval(-HaulRun.confirmDeadline - 1),
+                controllerCode: "C1"
             ),
             world: world(devices: [controller("C1")] + meshed, footprints: [footprint("ATIANFU-BELT-1", 3_537)])
         )
