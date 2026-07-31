@@ -52,8 +52,13 @@ public struct BobnetFeature {
         /// "New messages" divider anchors here so it doesn't jump while the
         /// live marker advances.
         public var markerAtSelection: Int = 0
-        /// Whether the detail view is scrolled to the newest message (reported
-        /// by the view via scroll geometry).
+        /// Whether the detail view is showing the newest message.
+        ///
+        /// Established on selection and on the pane appearing — both render the
+        /// scroll view pinned to the bottom — and thereafter *maintained* by the
+        /// view's scroll-geometry reports. It cannot be sourced from geometry
+        /// alone: that callback fires only when its `Bool` changes, so the
+        /// opening at-the-bottom state is never announced.
         public var isAtLatest: Bool = false
         public var composeText: String = ""
         public var newChannelDraft: NewChannelDraft?
@@ -99,6 +104,9 @@ public struct BobnetFeature {
         /// identity is still the current selection (a true pane departure,
         /// not a stale intra-pane channel switch).
         case detailDisappeared(String?)
+        /// The detail view's scrolling content (identified by the channel it is
+        /// rendering) appeared — re-establishes the at-latest flag.
+        case detailAppeared(String?)
         case sendButtonTapped
         case sendSucceeded
         case sendFailed(String)
@@ -208,6 +216,16 @@ public struct BobnetFeature {
                     }
                 }
 
+            case let .detailAppeared(channel):
+                // Re-entering the pane rebuilds the scroll view at the bottom,
+                // but delivers no geometry *change* — so the flag `.detailDisappeared`
+                // cleared on the way out has to be re-established here, or the
+                // linger can never re-arm. Stale identities from a channel switch
+                // are ignored, mirroring `.detailDisappeared`.
+                guard channel == state.selectedChannel else { return .none }
+                state.isAtLatest = true
+                return reevaluateLinger(state)
+
             case let .detailDisappeared(channel):
                 // Stale identities from an intra-pane channel switch (the old `.id`'s
                 // onDisappear can fire after the new channel is already selected) must
@@ -271,15 +289,24 @@ public struct BobnetFeature {
     }
 
     /// Selection housekeeping shared by direct selection and channel creation:
-    /// snapshot the marker for the divider, reset the scroll flag, reload the
-    /// detail query, and cancel any linger in flight.
+    /// snapshot the marker for the divider, re-establish the scroll flag,
+    /// reload the detail query, and re-arm (or cancel) the linger.
+    ///
+    /// The newly-selected channel renders pinned to its newest message — the
+    /// detail scroll view is rebuilt per channel (`.id(channel)`) with
+    /// `.defaultScrollAnchor(.bottom)` — so `isAtLatest` is *true* here. It
+    /// cannot be left to the scroll-geometry callback to say so: that callback
+    /// fires only when its `Bool` changes, and it is applied outside the
+    /// `.id(channel)` identity, so it survives the rebuild holding the same
+    /// value and stays silent. Resetting to false here is what left every
+    /// switched-to channel unable to clear its unread count.
     private func selectionChanged(_ state: inout State) -> Effect<Action> {
         let channel = state.selectedChannel
         state.markerAtSelection = state.channelList.rows
             .first { $0.name == channel }?.lastReadMessageID ?? 0
-        state.isAtLatest = false
+        state.isAtLatest = channel != nil
         return .merge(
-            .cancel(id: CancelID.linger),
+            reevaluateLinger(state),
             .run { [fetch = state.$channelMessages] _ in
                 _ = try? await fetch.load(BobnetChannelMessages(channel: channel))
             }

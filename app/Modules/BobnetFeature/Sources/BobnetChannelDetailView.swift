@@ -65,6 +65,7 @@ public struct BobnetChannelDetailView: View {
         .onChange(of: store.channelMessages.messages.last?.id) {
             store.send(.latestMessageChanged)
         }
+        .onAppear { store.send(.detailAppeared(channel)) }
         .onDisappear { store.send(.detailDisappeared(channel)) }
         .background(.rcContentBackground)
         .navigationTitle(channel)

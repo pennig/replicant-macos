@@ -169,6 +169,64 @@ import Testing
         #expect(store.state.isAtLatest == true) // untouched by the stale disappear
     }
 
+    /// Switching to a channel arms the linger on its own, with no scroll report.
+    ///
+    /// The detail view renders pinned to the newest message
+    /// (`.defaultScrollAnchor(.bottom)`), so a freshly-selected channel *is* at
+    /// its latest — but nothing tells the reducer that. The scroll-geometry
+    /// callback only fires when its `Bool` *changes*, and the `.id(channel)`
+    /// rebuild does not re-deliver an initial report because the modifier is
+    /// applied outside that identity, so it keeps its stored previous value.
+    /// `selectionChanged` reset `isAtLatest` to false and nothing ever set it
+    /// back, leaving every switched-to channel unable to clear its unread count.
+    @Test func switchingToChannelArmsLingerWithoutScrollReport() async throws {
+        let clock = TestClock()
+        let (store, database) = try await makeStore(clock: clock)
+
+        // Away and back — the exact path that left isAtLatest dead-linked.
+        await store.send(.binding(.set(\.selectedChannel, "#trade")))
+        await store.send(.binding(.set(\.selectedChannel, "#general")))
+
+        await clock.advance(by: .seconds(3))
+        await store.receive(\.lingerElapsed)
+        await store.finish()
+
+        #expect(try await marker(database, "#general") == 2)
+    }
+
+    /// Re-entering the pane re-arms the linger. Leaving sends
+    /// `.detailDisappeared`, which clears `isAtLatest`; coming back the view is
+    /// pinned to the bottom again, but with no selection change and no
+    /// geometry *change* nothing would otherwise restore the flag.
+    @Test func reappearingPaneReArmsLinger() async throws {
+        let clock = TestClock()
+        let (store, database) = try await makeStore(clock: clock)
+
+        await store.send(.detailDisappeared("#general")) {
+            $0.isAtLatest = false
+        }
+        await store.send(.detailAppeared("#general"))
+
+        await clock.advance(by: .seconds(3))
+        await store.receive(\.lingerElapsed)
+        await store.finish()
+
+        #expect(try await marker(database, "#general") == 2)
+    }
+
+    /// A stale `.detailAppeared` from a channel the user already left must not
+    /// re-arm a linger against the newly-selected channel.
+    @Test func staleAppearanceFromChannelSwitchIsIgnored() async throws {
+        let clock = TestClock()
+        let (store, _) = try await makeStore(clock: clock)
+
+        await store.send(.binding(.set(\.selectedChannel, "#trade")))
+        await store.send(.detailAppeared("#general"))
+        await store.finish()
+
+        #expect(store.state.selectedChannel == "#trade")
+    }
+
     /// A fully-read channel arms nothing.
     @Test func nothingUnreadArmsNoTimer() async throws {
         let clock = TestClock()

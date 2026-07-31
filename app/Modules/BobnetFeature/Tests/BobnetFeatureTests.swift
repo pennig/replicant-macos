@@ -181,8 +181,13 @@ func bobnetMessage(
 
 @MainActor
 @Suite struct BobnetSelectionTests {
-    /// Selecting a channel snapshots its marker (for the "new" divider), resets
-    /// the at-latest flag, and reloads the detail query.
+    /// Selecting a channel snapshots its marker (for the "new" divider),
+    /// *establishes* the at-latest flag, and reloads the detail query.
+    ///
+    /// The flag is set rather than cleared because the detail view rebuilds per
+    /// channel (`.id(channel)`) and renders pinned to the newest message
+    /// (`.defaultScrollAnchor(.bottom)`) — the selected channel really is at its
+    /// latest, and no scroll-geometry report will arrive to say so.
     @Test func selectionSnapshotsMarkerAndReloadsMessages() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in
@@ -197,12 +202,16 @@ func bobnetMessage(
         try await withDependencies {
             $0.defaultDatabase = database
         } operation: {
+            let clock = TestClock()
             var initial = BobnetFeature.State()
-            initial.isAtLatest = true
+            initial.isAtLatest = false
             let store = TestStore(initialState: initial) {
                 BobnetFeature()
             } withDependencies: {
                 $0.defaultDatabase = database
+                // Message 8 is unread, so selection also arms the linger; the
+                // linger's own semantics are covered by `BobnetLingerTests`.
+                $0.continuousClock = clock
             }
             // The channel list is part of the fetch machinery, not the assertion.
             try await store.state.$channelList.load(BobnetChannelList())
@@ -210,8 +219,10 @@ func bobnetMessage(
             await store.send(.binding(.set(\.selectedChannel, "#general"))) {
                 $0.selectedChannel = "#general"
                 $0.markerAtSelection = 7
-                $0.isAtLatest = false
+                $0.isAtLatest = true
             }
+            await clock.advance(by: .seconds(3))
+            await store.receive(\.lingerElapsed)
             await store.finish()
             #expect(store.state.channelMessages.messages.map(\.id) == [7, 8])
         }
