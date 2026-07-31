@@ -19,7 +19,8 @@ private func device(
     type: String = "ami_survey_controller",
     directive: String? = nil,
     config: JSONValue? = nil,
-    controlled: [JSONValue] = []
+    controlled: [JSONValue] = [],
+    tags: [String] = []
 ) -> Device {
     var detail: [String: JSONValue] = [:]
     if let directive {
@@ -43,7 +44,7 @@ private func device(
         createdAt: Date(timeIntervalSince1970: 0),
         availableCommands: [],
         features: [],
-        tags: [],
+        tags: tags,
         detail: .object(detail),
         updatedAt: Date(timeIntervalSince1970: 0),
         firstSeenAt: Date(timeIntervalSince1970: 0)
@@ -55,17 +56,43 @@ private func mission(
     kind: DirectiveKind = .surveyRun,
     targets: [String] = ["TAU", "SHERATANON"],
     targetIndex: Int = 1,
-    roamCentre: String? = nil
+    roamCentre: String? = nil,
+    fleetTag: String? = nil
 ) -> Directive {
     Directive(
         id: id, kind: kind, status: .running, deviceCode: "VESSEL1",
-        roamCentre: roamCentre,
+        roamCentre: roamCentre, fleetTag: fleetTag,
         targets: targets, targetIndex: targetIndex, step: "surveying",
         stepStartedAt: Date(timeIntervalSince1970: 0),
         returnToOrigin: false, originDesignation: "SOL", attentionReason: nil,
         createdAt: Date(timeIntervalSince1970: 0),
         updatedAt: Date(timeIntervalSince1970: 0)
     )
+}
+
+/// A tagged AMI transport controller, optionally running a haul config — the
+/// only place a Haul Run's row subtitle can read what it is working from
+/// (design spec §9; the run stores no assignment state of its own).
+private func haulController(
+    code: String = "HAUL1",
+    collecting: String? = nil,
+    directive: String = "ferry",
+    deliver: String = "AINALRAM-BELT-1",
+    tags: [String] = ["auto:haul"]
+) -> Device {
+    guard let collecting else {
+        return device(code: code, type: "ami_transport_controller", tags: tags)
+    }
+    return device(
+        code: code, type: "ami_transport_controller", directive: directive,
+        config: .object(["collect": .string(collecting), "deliver": .string(deliver)]),
+        tags: tags
+    )
+}
+
+/// A Haul Run row: no queue, no `roamCentre`, nothing on the row to count.
+private func haulRun(id: String = "H1", fleetTag: String? = nil) -> Directive {
+    mission(id: id, kind: .haulRun, targets: [], targetIndex: 0, fleetTag: fleetTag)
 }
 
 @Suite("Directive rows")
@@ -322,5 +349,98 @@ struct DirectiveRowSubtitleTests {
             )
         )
         #expect(row.subtitle == "driven by Survey Run")
+    }
+
+    // MARK: Haul Run
+
+    /// **IMPORTANT regression guard (2026-07-31 final review).** A Haul Run has
+    /// `roamCentre == nil` and `targets == []`, so both progress readouts above
+    /// resolve to `0/0` — forever, on the only surface that could tell a working
+    /// run from an idled one. Spec §9: "the row subtitle names the work in
+    /// flight rather than a count… read from the controllers' own in-force
+    /// config. A count of drained piles is deliberately not offered."
+    @Test func aHaulRunNamesTheWorkInFlightRatherThanACount() {
+        let rows = DirectiveRow.merge(
+            devices: [haulController(collecting: "ATIANFU-BELT-1")],
+            directives: [haulRun()]
+        )
+        let row = rows.first
+        #expect(row?.subtitle == "Hauling")
+        #expect(row?.subtitle != "0/0")
+        // The designation rides the headline, which is the half rendered in a
+        // mono token (`.rcBodyEmphMono`) — a location designation must never
+        // land in the `.rcCaption` subtitle (house rule).
+        #expect(row?.headlineDesignation == "ATIANFU-BELT-1")
+        #expect(row?.title == "Haul Run → ATIANFU-BELT-1")
+    }
+
+    /// The complement, and the state `0/0` made invisible: nothing reachable.
+    @Test func aHaulRunWithNoControllerHoldingAHaulConfigSaysNothingReachable() {
+        let rows = DirectiveRow.merge(
+            devices: [haulController()],
+            directives: [haulRun()]
+        )
+        #expect(rows.first?.subtitle == "Nothing reachable")
+        #expect(rows.first?.headlineDesignation == nil)
+        #expect(rows.first?.title == "Haul Run")
+    }
+
+    /// The tag is the operator's opt-in, so an untagged controller — however
+    /// busy — is not this run's work and must not be reported as it.
+    @Test func aHaulRunIgnoresAnUntaggedController() {
+        let rows = DirectiveRow.merge(
+            devices: [haulController(collecting: "ATIANFU-BELT-1", tags: [])],
+            directives: [haulRun()]
+        )
+        #expect(rows.first?.subtitle == "Nothing reachable")
+    }
+
+    /// A `shuttle` — the in-system half of the same supply line — counts as
+    /// work in flight exactly as `ferry` does.
+    @Test func aHaulRunReportsAShuttleAsWorkInFlight() {
+        let rows = DirectiveRow.merge(
+            devices: [haulController(collecting: "AINALRAM-2", directive: "shuttle")],
+            directives: [haulRun()]
+        )
+        #expect(rows.first?.headlineDesignation == "AINALRAM-2")
+        #expect(rows.first?.subtitle == "Hauling")
+    }
+
+    /// A controller delivering somewhere ELSE is not doing this run's work —
+    /// the same `deliver` check `confirming` makes, so the row and the machine
+    /// cannot disagree about what counts.
+    @Test func aHaulRunIgnoresAControllerDeliveringElsewhere() {
+        let rows = DirectiveRow.merge(
+            devices: [haulController(collecting: "ATIANFU-BELT-1", deliver: "SHERATANON-6-1")],
+            directives: [haulRun()]
+        )
+        #expect(rows.first?.subtitle == "Nothing reachable")
+    }
+
+    /// A row carrying its own fleet tag resolves against THAT tag, exactly as
+    /// the machine resolves its working set on every evaluation.
+    @Test func aHaulRunHonoursItsOwnFleetTag() {
+        let rows = DirectiveRow.merge(
+            devices: [
+                haulController(code: "HAUL1", collecting: "ATIANFU-BELT-1", tags: ["auto:haul"]),
+                haulController(code: "HAUL2", collecting: "AINALRAM-2", tags: ["auto:haul-b"]),
+            ],
+            directives: [haulRun(fleetTag: "auto:haul-b")]
+        )
+        #expect(rows.first?.headlineDesignation == "AINALRAM-2")
+    }
+
+    /// Several controllers on different piles: name the lowest-coded one's, so
+    /// the row is stable across evaluations rather than flickering with
+    /// dictionary order.
+    @Test func aHaulRunNamesTheLowestCodedControllersPile() {
+        let rows = DirectiveRow.merge(
+            devices: [
+                haulController(code: "HAUL2", collecting: "AINALRAM-2"),
+                haulController(code: "HAUL1", collecting: "ATIANFU-BELT-1"),
+            ],
+            directives: [haulRun()]
+        )
+        #expect(rows.first?.headlineDesignation == "ATIANFU-BELT-1")
     }
 }

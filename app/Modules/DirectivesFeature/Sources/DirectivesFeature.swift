@@ -61,6 +61,9 @@ public struct DirectivesFeature {
         /// `newDirective`, because it has its own reducer with its own
         /// eligibility rule (`SalvageRun`'s fleet queries, not `SurveyRun`'s).
         @Presents public var newSalvageRun: NewSalvageRunFeature.State?
+        /// The new-Haul-Run launcher. Also its own presentation — there is no
+        /// picker to fold into `newDirective`, only a report-and-launch dialog.
+        @Presents public var newHaulRun: NewHaulRunFeature.State?
 
         public init(selectedRowID: String? = nil) {
             self.selectedRowID = selectedRowID
@@ -99,6 +102,8 @@ public struct DirectivesFeature {
         case newDirectiveTapped
         /// Open the new-Salvage-Run launcher.
         case newSalvageRunTapped
+        /// Open the new-Haul-Run launcher.
+        case newHaulRunTapped
         /// Stall resolution on the selected custom mission (design spec §8).
         case retryTapped
         case skipTargetTapped
@@ -108,6 +113,7 @@ public struct DirectivesFeature {
         case composer(PresentationAction<DirectiveComposer.Action>)
         case newDirective(PresentationAction<NewDirectiveFeature.Action>)
         case newSalvageRun(PresentationAction<NewSalvageRunFeature.Action>)
+        case newHaulRun(PresentationAction<NewHaulRunFeature.Action>)
     }
 
     public init() {}
@@ -184,6 +190,10 @@ public struct DirectivesFeature {
                 state.newSalvageRun = NewSalvageRunFeature.State()
                 return .none
 
+            case .newHaulRunTapped:
+                state.newHaulRun = NewHaulRunFeature.State()
+                return .none
+
             case .retryTapped:
                 return resolve(state) { await $0.retry($1) }
 
@@ -219,6 +229,15 @@ public struct DirectivesFeature {
 
             case .newSalvageRun:
                 return .none
+
+            case let .newHaulRun(.presented(.delegate(.created(directive)))):
+                // Same handoff as the other launchers — a freshly launched run
+                // gets selected.
+                state.selectedRowID = "custom:\(directive.id)"
+                return selectionChanged(&state)
+
+            case .newHaulRun:
+                return .none
             }
         }
         .ifLet(\.$composer, action: \.composer) {
@@ -229,6 +248,9 @@ public struct DirectivesFeature {
         }
         .ifLet(\.$newSalvageRun, action: \.newSalvageRun) {
             NewSalvageRunFeature()
+        }
+        .ifLet(\.$newHaulRun, action: \.newHaulRun) {
+            NewHaulRunFeature()
         }
     }
 
@@ -251,7 +273,7 @@ public struct DirectivesFeature {
         _ state: State,
         _ verb: @escaping @Sendable (DirectiveResolutionClient, String) async -> Void
     ) -> Effect<Action> {
-        guard case let .custom(directive) = state.selectedRow else { return .none }
+        guard case let .custom(directive, _) = state.selectedRow else { return .none }
         // Bound to a local: referencing the property wrapper inside the
         // @Sendable closure would capture the non-Sendable reducer.
         let resolution = self.directiveResolution

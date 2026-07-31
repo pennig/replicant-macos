@@ -94,6 +94,36 @@ struct DirectiveTimelineTests {
         #expect(controller.entries.map(\.id) == ["L1"])
     }
 
+    /// A mission's own step entries never leak into the controller's history,
+    /// even though they now carry its device code.
+    ///
+    /// `MissionAction.assignController` stamps the claimed controller onto the
+    /// `.stepStarted` entry it writes (so a re-entry budget can be scoped to one
+    /// controller), which means a Survey/Salvage/Haul Run's step transitions
+    /// carry BOTH keys. They are the mission's progress, not the controller's
+    /// completion history — "Step: dispatching" under a built-in AMI directive
+    /// would read as that device's own work, and at one entry per transition
+    /// they would push real completions past `entryLimit`.
+    @Test func builtInHistoryExcludesMissionStepEntries() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try DirectiveLogEntry.insert {
+                entry("L1", deviceCode: "AMI1", kind: .directiveCompleted, at: 10)
+            }.execute(db)
+            try DirectiveLogEntry.insert {
+                entry("L2", directiveID: "D1", deviceCode: "AMI1", kind: .stepStarted, at: 20)
+            }.execute(db)
+        }
+        let mission = try await database.read { db in
+            try DirectiveTimeline(directiveID: "D1", deviceCode: nil).fetch(db)
+        }
+        let controller = try await database.read { db in
+            try DirectiveTimeline(directiveID: nil, deviceCode: "AMI1").fetch(db)
+        }
+        #expect(mission.entries.map(\.id) == ["L2"], "the step belongs to the mission")
+        #expect(controller.entries.map(\.id) == ["L1"], "and never to the device's history")
+    }
+
     /// Nothing selected fetches nothing — never the whole table.
     @Test func emptyRequestFetchesNothing() async throws {
         let database = try GameDatabase.bootstrap()

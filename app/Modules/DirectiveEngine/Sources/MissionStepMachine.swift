@@ -40,6 +40,19 @@ public enum MissionAction: Equatable, Sendable {
     /// evaluation. Presence-gated (403 away from the system), so only ever
     /// asked for after arrival.
     case refreshSystem(designation: String, nextStep: String)
+    /// Re-read `GET /v1/locations` — the whole stockpile census in one request —
+    /// persist it, then move to `nextStep`.
+    ///
+    /// Best-effort and non-re-asking, exactly like `.refreshSystem`: there is no
+    /// "did it land" question worth a second evaluation, and a transient failure
+    /// must cost one cycle rather than stranding a continuous run. The machine
+    /// simply sees fresher `WorldSnapshot.footprints` next time round.
+    ///
+    /// **It moves the step, so it re-stamps `stepStartedAt`** (`DirectiveExecutor.move`
+    /// does that unconditionally). Any interval a machine measures must therefore
+    /// be measured from a step that only ever `.wait`s — `.wait` is the sole
+    /// action that writes nothing. See `same-step-dispatch-needs-tracked-op`.
+    case refreshFootprint(nextStep: String)
     /// "Before I believe this, read it." The engine re-reads each named device
     /// authoritatively — plus whatever those devices report stowed aboard them,
     /// because containment is a two-ended fact and one end alone can't settle it

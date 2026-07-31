@@ -44,6 +44,7 @@ public struct DirectivesListView: View {
                 Menu {
                     Button("Survey Run") { store.send(.newDirectiveTapped) }
                     Button("Salvage Run") { store.send(.newSalvageRunTapped) }
+                    Button("Haul Run") { store.send(.newHaulRunTapped) }
                 } label: {
                     Label("New Mission", systemImage: "plus")
                 }
@@ -56,6 +57,9 @@ public struct DirectivesListView: View {
         }
         .sheet(item: $store.scope(state: \.newSalvageRun, action: \.newSalvageRun)) { newStore in
             NewSalvageRunSheet(store: newStore)
+        }
+        .sheet(item: $store.scope(state: \.newHaulRun, action: \.newHaulRun)) { newStore in
+            NewHaulRunSheet(store: newStore)
         }
         .navigationTitle("Directives")
     }

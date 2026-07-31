@@ -295,6 +295,10 @@ struct DirectiveEngineTests {
             #expect(directive?.stepStartedAt == Date(timeIntervalSince1970: 1_000))
             let entries = try await database.read { db in try DirectiveLogEntry.all.fetchAll(db) }
             #expect(entries.map(\.kind) == [.stepStarted])
+            // Only `.assignController` stamps a device onto its step entry; every
+            // other transition leaves it nil, which is what keeps the built-in
+            // History pane free of mission chatter (`DirectiveTimeline.fetch`).
+            #expect(entries.map(\.deviceCode) == [nil])
         }
     }
 
@@ -320,6 +324,16 @@ struct DirectiveEngineTests {
             }
             #expect(directive?.controllerCode == "AMI1")
             #expect(directive?.step == "travelling")
+            // The claimed controller is stamped onto the timeline entry too, not
+            // just onto the row's column. This is load-bearing rather than
+            // decorative: `HaulRun.dispatchAttemptCount` reads `deviceCode` back
+            // off these `.stepStarted` entries to scope its re-entry budget to
+            // ONE controller. Drop the stamp and the count silently reads zero
+            // forever, the budget guard becomes dead code, and the unbounded
+            // `set_directive` loop it exists to bound comes back.
+            let entries = try await database.read { db in try DirectiveLogEntry.all.fetchAll(db) }
+            #expect(entries.map(\.kind) == [.stepStarted])
+            #expect(entries.map(\.deviceCode) == ["AMI1"])
         }
     }
 
@@ -1517,5 +1531,96 @@ struct DirectiveEngineSalvageRoamTests {
             #expect(updated?.targets == ["RICH"])
             #expect(updated?.status == .running)
         }
+    }
+}
+
+/// A machine that asks for a footprint refresh once and then waits, so an
+/// evaluation exercises exactly this action.
+private struct FootprintRefreshMachine: MissionStepMachine {
+    let kind: DirectiveKind = .haulRun
+    let firstStep = "surveying"
+    func nextAction(directive: Directive, world: WorldSnapshot) -> MissionAction {
+        directive.step == "surveying"
+            ? .refreshFootprint(nextStep: "assigning")
+            : .wait
+    }
+    func plan(_ context: RoamContext) -> RoamPlan { .idle }
+}
+
+@Suite("MissionAction .refreshFootprint")
+struct RefreshFootprintTests {
+
+    private func haulDirective() -> Directive {
+        Directive(
+            id: "D1", kind: .haulRun, status: .running, deviceCode: "CTRL1",
+            targets: [], targetIndex: 0, step: "surveying",
+            stepStartedAt: Date(timeIntervalSince1970: 0), returnToOrigin: false,
+            originDesignation: nil, attentionReason: nil,
+            createdAt: Date(timeIntervalSince1970: 0),
+            updatedAt: Date(timeIntervalSince1970: 0)
+        )
+    }
+
+    /// The headline: the refresh is issued, and the step advances.
+    @Test func itRefreshesTheFootprintThenAdvances() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { haulDirective() }.execute(db)
+        }
+        let refreshed = LockIsolated(0)
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.locationsClient.footprint = {
+                refreshed.withValue { $0 += 1 }
+                return ["ATIANFU-BELT-1": LocationCounts(
+                    locationEvents: 0, devices: 0, resourceSites: 0,
+                    resources: 3_537, replicants: 0
+                )]
+            }
+        } operation: {
+            let core = DirectiveEngineCore(
+                machines: [FootprintRefreshMachine()], tick: .seconds(5)
+            )
+            await core.evaluateOnce(directiveID: "D1")
+        }
+
+        #expect(refreshed.value == 1)
+        let row = try await database.read { db in
+            try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+        }
+        #expect(row?.step == "assigning")
+    }
+
+    /// Best-effort by contract: a failed read must advance the run anyway. The
+    /// machine re-asks for a refresh on its next cycle, so a transient network
+    /// failure costs one cycle rather than stranding the run.
+    @Test func aFailedRefreshStillAdvances() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { haulDirective() }.execute(db)
+        }
+        struct Boom: Error {}
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.locationsClient.footprint = { throw Boom() }
+        } operation: {
+            let core = DirectiveEngineCore(
+                machines: [FootprintRefreshMachine()], tick: .seconds(5)
+            )
+            await core.evaluateOnce(directiveID: "D1")
+        }
+
+        let row = try await database.read { db in
+            try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+        }
+        #expect(row?.step == "assigning")
+        #expect(row?.status == .running)
+        #expect(row?.attentionReason == nil)
     }
 }

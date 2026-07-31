@@ -21,6 +21,7 @@ public enum DirectiveKind: String, Codable, Equatable, Sendable, CaseIterable, Q
     case surveyRun
     case relayRun
     case salvageRun
+    case haulRun
 
     /// The list row's label, e.g. "Survey Run".
     public var title: String {
@@ -28,6 +29,7 @@ public enum DirectiveKind: String, Codable, Equatable, Sendable, CaseIterable, Q
         case .surveyRun: "Survey Run"
         case .relayRun: "Relay Run"
         case .salvageRun: "Salvage Run"
+        case .haulRun: "Haul Run"
         }
     }
 }
@@ -105,6 +107,10 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
     /// `salvage.depleted` SSE frame, and a dropped one meant the run re-launched
     /// the same body forever.
     case salvageBodyNotDepleted
+    /// No AMI transport controller carries the run's fleet tag, so the Haul Run
+    /// has nothing to drive. A configuration error rather than a lull — an empty
+    /// *frontier* idles, but an empty *fleet* can never resolve itself.
+    case noHaulControllerTagged
 
     /// The stall panel's headline.
     public var displayName: String {
@@ -123,6 +129,7 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
         case .relayActivationFailed: "Relay didn't come up"
         case .salvageSystemUnresolved: "System data unavailable"
         case .salvageBodyNotDepleted: "Salvage body isn't draining"
+        case .noHaulControllerTagged: "No haul controller tagged"
         }
     }
 
@@ -159,6 +166,8 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
             "The system's catalogue data never loaded after arrival. Retry to fetch it again, or skip this target."
         case .salvageBodyNotDepleted:
             "A salvage run finished on this body but it still reads as holding salvage. Check the site, then retry to work it again or skip this target."
+        case .noHaulControllerTagged:
+            "No AMI transport controller carries the \"auto:haul\" tag. Tag one from the device inspector, then retry."
         }
     }
 }

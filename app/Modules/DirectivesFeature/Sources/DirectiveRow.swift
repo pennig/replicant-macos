@@ -11,6 +11,7 @@
 //  logic hanging off a SwiftUI View traps under `swift test`.
 //
 
+import DirectiveEngine
 import Foundation
 import GameModels
 import Utils
@@ -63,14 +64,23 @@ public struct BuiltInDirective: Equatable, Identifiable, Sendable {
 
 /// One row of the Directives list — either kind.
 public enum DirectiveRow: Equatable, Identifiable, Sendable {
-    case custom(Directive)
+    /// A custom mission's row.
+    ///
+    /// `haulTarget` is the one piece of a row's display that cannot be read off
+    /// the `Directive`: a Haul Run stores no assignment state at all — no
+    /// queue, no `roamCentre`, no drained-pile count (spec §6 recomputes the
+    /// whole assignment from the census every cycle) — so what it is working
+    /// exists only on the tagged controllers' in-force config. `merge` reads it
+    /// there. Nil for every other kind, and for a Haul Run with nothing
+    /// reachable.
+    case custom(Directive, haulTarget: String? = nil)
     case builtIn(BuiltInDirective)
 
     /// Namespaced so a device code and a directive id can never collide in the
     /// list's selection.
     public var id: String {
         switch self {
-        case let .custom(directive): "custom:\(directive.id)"
+        case let .custom(directive, _): "custom:\(directive.id)"
         case let .builtIn(builtIn): "builtin:\(builtIn.deviceCode)"
         }
     }
@@ -79,7 +89,7 @@ public enum DirectiveRow: Equatable, Identifiable, Sendable {
     /// for a built-in directive.
     public var deviceCode: String {
         switch self {
-        case let .custom(directive): directive.deviceCode
+        case let .custom(directive, _): directive.deviceCode
         case let .builtIn(builtIn): builtIn.deviceCode
         }
     }
@@ -90,16 +100,22 @@ public enum DirectiveRow: Equatable, Identifiable, Sendable {
     /// the whole line.
     public var headline: String {
         switch self {
-        case let .custom(directive): directive.kind.title
+        case let .custom(directive, _): directive.kind.title
         case let .builtIn(builtIn): BlueprintPresentation.displayName(builtIn.directive)
         }
     }
 
     /// The designation half of the headline — a mission's current target, or nil
     /// (built-in rows name a directive, never a place).
+    ///
+    /// A Haul Run's target comes from `haulTarget` rather than the queue: it has
+    /// no queue, and this is the run that most needs the designation in a MONO
+    /// token (house rule), which is exactly what this half of the headline
+    /// renders. The subtitle names the work; this names the place.
     public var headlineDesignation: String? {
         switch self {
-        case let .custom(directive): directive.currentTarget
+        case let .custom(directive, haulTarget):
+            directive.kind == .haulRun ? haulTarget : directive.currentTarget
         case .builtIn: nil
         }
     }
@@ -121,7 +137,20 @@ public enum DirectiveRow: Equatable, Identifiable, Sendable {
     /// testable at all.
     public var subtitle: String? {
         switch self {
-        case let .custom(directive):
+        case let .custom(directive, haulTarget):
+            // A Haul Run has no queue to count — no `roamCentre`, no `targets`,
+            // and deliberately no drained-pile column (spec §9: "a count of
+            // drained piles is deliberately not offered… inventing a column to
+            // display a number would be the only reason that column existed").
+            // So it never reaches either progress readout below; an m/n here
+            // would read `0/0` forever, and an idled or mispointed run would be
+            // indistinguishable from a working one on the one surface that
+            // could tell them apart. Name the work in flight instead; the pile
+            // itself renders as `headlineDesignation`, in mono per the house
+            // rule.
+            if directive.kind == .haulRun {
+                return haulTarget == nil ? "Nothing reachable" : "Hauling"
+            }
             // A continuous run EXTENDS its queue instead of completing it, so
             // `targetIndex == targets.count` for the whole window between
             // finishing one system and planning the next — and "n/n" reads as a
@@ -134,6 +163,9 @@ public enum DirectiveRow: Equatable, Identifiable, Sendable {
                     return "\(count) system\(count == 1 ? "" : "s") drained"
                 case .surveyRun, .relayRun:
                     return "\(directive.targetIndex) surveyed"
+                case .haulRun:
+                    // Handled above, before the queue readouts.
+                    return nil
                 }
             }
             let progress = directive.progress
@@ -155,6 +187,11 @@ public enum DirectiveRow: Equatable, Identifiable, Sendable {
     /// for each device with a directive in force; `directives` contributes one
     /// per custom mission. A built-in row whose controller a live mission is
     /// driving carries that mission as `drivenBy`.
+    ///
+    /// `devices` also feeds a Haul Run's `haulTarget` — see the `.custom` case.
+    /// Both sources are already in hand here, which is why this is the one place
+    /// that cross-reference can be made without the row model reaching for the
+    /// database.
     public static func merge(devices: [Device], directives: [Directive]) -> [DirectiveRow] {
         let owners: [String: DirectiveOwner] = directives.reduce(into: [:]) { owners, directive in
             guard let controller = directive.controllerCode,
@@ -165,7 +202,19 @@ public enum DirectiveRow: Equatable, Identifiable, Sendable {
                 kindTitle: directive.kind.title
             )
         }
-        let custom = directives.map { DirectiveRow.custom($0) }
+        let custom = directives.map { directive -> DirectiveRow in
+            guard directive.kind == .haulRun else { return .custom(directive) }
+            // Resolved by TAG, exactly as the machine resolves its working set
+            // on every evaluation — the row must agree with what the run is
+            // actually commanding, and the tag is the operator's opt-in.
+            return .custom(
+                directive,
+                haulTarget: HaulRun.currentHaulTarget(
+                    devices: devices,
+                    tag: directive.fleetTag ?? HaulRun.defaultFleetTag
+                )
+            )
+        }
         let builtIn = devices.compactMap { device -> DirectiveRow? in
             guard let directive = device.currentDirective, !directive.isEmpty else { return nil }
             return .builtIn(
