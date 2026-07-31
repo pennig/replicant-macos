@@ -834,6 +834,16 @@ public struct SalvageRun: MissionStepMachine {
     /// travelling (all aboard, or mining finished with none en route), so
     /// `verify`'s single authoritative refresh can't false-stall a straggler
     /// mid-hop.
+    ///
+    /// The freshness gate below is keyed off the DRONE rows alone (`min`), never
+    /// the controller. AMI drones are event-silent — every bit of their activity
+    /// rolls into the controller's own `ami.*.digest`, so the controller's row
+    /// is very likely fresh moments after `launch` while the drones it commands
+    /// are still the stale, pre-launch "stowed aboard" rows. A `max` across
+    /// controller-and-drones would let that fresh controller row vouch for
+    /// stale drone evidence, reading a still-deployed fleet as recovered and
+    /// reintroducing the exact false `dronesNotRecovered` this step exists to
+    /// prevent. Mirrors `SurveyRun.recover`'s `stranded.map(\.updatedAt).min()`.
     private func awaitCompletion(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
         if Self.completionSeen(directive, world) {
             return .advanceStep(nextStep: Step.verifying)
@@ -844,14 +854,13 @@ public struct SalvageRun: MissionStepMachine {
 
         guard let controller = claimedController(directive, vessel, world) else { return .wait }
         let drones = AMIFleet.adoptedDrones(of: controller, in: world)
-        let evidence = [controller] + drones
-        let lastLook = evidence.map(\.updatedAt).max() ?? .distantPast
+        let lastLook = drones.map(\.updatedAt).min() ?? .distantPast
         let canRead = world.now.timeIntervalSince(lastLook) >= Self.reconcileInterval
 
         // Never believe a row read BEFORE this step began (before launch): a
         // pre-launch drone row still shows it stowed aboard, which would read as
-        // "recovered" the instant the step starts. Force a post-launch read
-        // first — throttled, so a failing one can't loop every tick.
+        // "recovered" the instant the step starts. Force a post-launch read of
+        // EVERY drone first — throttled, so a failing one can't loop every tick.
         guard lastLook >= directive.stepStartedAt else {
             return canRead ? .refreshFleet(tag: Self.fleetTag(directive), thenStall: nil) : .wait
         }

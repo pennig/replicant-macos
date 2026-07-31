@@ -937,6 +937,27 @@ struct SalvageRunMiningTests {
             == .advanceStep(nextStep: "verifying"))
     }
 
+    /// A fresh controller row must NOT vouch for a stale DRONE row. AMI drones
+    /// are event-silent, so the controller's own digest churn keeps its row
+    /// fresh right after launch while the drone row is still the pre-launch,
+    /// "stowed aboard" one. The freshness gate keys off the drones (min), so it
+    /// forces a real drone read here rather than reading the stale row as
+    /// "recovered" and advancing to verify — the very false `dronesNotRecovered`
+    /// this step exists to prevent.
+    @Test func doesNotTrustAStaleDroneRowVouchedForByAFreshController() {
+        let freshCtrl = device("CTRL", type: "ami_mining_controller", stowedIn: "VESSEL",
+                               controlled: ["DRONE"], directives: ["gather_salvage"],
+                               currentDirective: "gather_salvage",
+                               currentDirectiveConfig: ["location": .string("TOSLIT-6-5"), "recall": .bool(true)],
+                               updatedAt: now) // fresh: digest churn
+        let staleDrone = device("DRONE", type: "mining_drone", stowedIn: "VESSEL", controlledBy: "CTRL",
+                                updatedAt: now.addingTimeInterval(-SalvageRun.reconcileInterval - 1)) // pre-launch, looks aboard
+        let directive = running(step: "awaiting", stepStartedAt: now.addingTimeInterval(-60))
+        let world = world(devices: [atSystem, freshCtrl, staleDrone], now: now)
+        #expect(SalvageRun().nextAction(directive: directive, world: world)
+            == .refreshFleet(tag: "auto:salvage", thenStall: nil))
+    }
+
     /// Issue-time relative: a completion delivered by catch-up after the app
     /// was closed still counts, while one predating this step is a replay.
     @Test func advancesToVerifyingWhenCompletionLands() {
