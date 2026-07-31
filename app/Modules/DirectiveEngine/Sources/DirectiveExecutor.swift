@@ -78,7 +78,15 @@ enum DirectiveExecutor {
 
         case let .assignController(deviceCode, nextStep):
             logger.info("directive \(directive.id, privacy: .public) claims controller \(deviceCode, privacy: .public)")
-            await move(directive, to: nextStep, controllerCode: deviceCode)
+            // Stamps the claimed device onto the `.stepStarted` entry too
+            // (`move`'s `deviceCode:`), not just onto the row's
+            // `controllerCode` column — this is what lets a re-entry budget
+            // derived from the timeline (`HaulRun.dispatchAttemptCount`) be
+            // scoped to ONE controller rather than to the whole pass. No
+            // other `move(...)` call site passes this, so every other
+            // `.stepStarted` entry keeps writing `deviceCode: nil` exactly as
+            // before.
+            await move(directive, to: nextStep, controllerCode: deviceCode, deviceCode: deviceCode)
             return true
 
         case let .refreshSystem(designation, nextStep):
@@ -287,10 +295,18 @@ enum DirectiveExecutor {
     /// Move to a step, optionally claiming a controller, with the matching
     /// timeline entry. `stepStartedAt` is re-stamped: it is the reference point
     /// for the issue-time-relative completion guard.
+    ///
+    /// `deviceCode` defaults to nil and is separate from `controllerCode`
+    /// (which every caller sets, usually to `directive.controllerCode`
+    /// unchanged): it exists so the ONE caller claiming a NEW controller this
+    /// tick (`.assignController`) can stamp the timeline entry with who was
+    /// claimed, without every other transition's entries picking up a
+    /// leftover value.
     private static func move(
         _ directive: Directive,
         to nextStep: String,
-        controllerCode: String?
+        controllerCode: String?,
+        deviceCode: String? = nil
     ) async {
         @Dependency(\.date) var date
         @Dependency(\.uuid) var uuid
@@ -301,7 +317,7 @@ enum DirectiveExecutor {
         updated.updatedAt = date.now
         await commit(updated, [
             entry(directive, .stepStarted, "Step: \(nextStep)",
-                  step: nextStep, operationID: nil,
+                  step: nextStep, operationID: nil, deviceCode: deviceCode,
                   id: uuid().uuidString, at: date.now),
         ])
     }
@@ -328,17 +344,20 @@ enum DirectiveExecutor {
         logger.notice("directive \(directive.id, privacy: .public) stalled: \(summary, privacy: .public)")
     }
 
+    /// `deviceCode` defaults to nil, matching every call site except
+    /// `move`'s own — see `move`'s doc comment for why only that path sets it.
     private static func entry(
         _ directive: Directive,
         _ kind: DirectiveLogKind,
         _ summary: String,
         step: String?,
         operationID: String?,
+        deviceCode: String? = nil,
         id: String,
         at occurredAt: Date
     ) -> DirectiveLogEntry {
         DirectiveLogEntry(
-            id: id, directiveID: directive.id, deviceCode: nil, kind: kind,
+            id: id, directiveID: directive.id, deviceCode: deviceCode, kind: kind,
             summary: summary, step: step, operationID: operationID,
             eventID: nil, occurredAt: occurredAt
         )

@@ -81,12 +81,60 @@ private func world(
 /// A bare `.stepStarted` timeline entry, the shape `dispatchAttemptCount`
 /// walks — everything the log-derived re-entry budget needs and nothing
 /// else. `id` is just a running counter; nothing in the budget reads it.
-private func stepStartedEntry(_ id: Int, _ step: String, at occurredAt: Date) -> DirectiveLogEntry {
+/// `deviceCode` mirrors what `DirectiveExecutor`'s `.assignController` path
+/// now stamps onto a `dispatching` entry (nil for every other transition) —
+/// pass the pinned controller's code when building a `dispatching` entry,
+/// leave it nil for `assigning`/`confirming`.
+private func stepStartedEntry(
+    _ id: Int, _ step: String, deviceCode: String? = nil, at occurredAt: Date
+) -> DirectiveLogEntry {
     DirectiveLogEntry(
-        id: "L\(id)", directiveID: "D1", deviceCode: nil, kind: .stepStarted,
+        id: "L\(id)", directiveID: "D1", deviceCode: deviceCode, kind: .stepStarted,
         summary: "Step: \(step)", step: step, operationID: nil, eventID: nil,
         occurredAt: occurredAt
     )
+}
+
+/// The timeline + world for a healthy pass that has already settled
+/// controllers `1..<n` and is now pinning/dispatching the n-th — the exact
+/// shape `DirectiveExecutor` writes for a real multi-controller fleet, and
+/// the scenario an UNSCOPED `dispatchAttemptCount` false-stalled at n = 4
+/// (2026-07-31 review): `assign` pins one controller per evaluation and only
+/// leaves the loop once EVERY controller is in force, so a pass repointing N
+/// controllers writes N consecutive `dispatching` entries with no
+/// out-of-loop entry between them. Every pile shares the delivery system
+/// (`AINALRAM-\(k)`), so reachability never depends on the mesh fixture.
+private func healthyPass(size n: Int) -> (directive: Directive, world: WorldSnapshot) {
+    let codes = (1...n).map { "C\($0)" }
+    let locations = (1...n).map { "AINALRAM-\($0 + 1)" }
+    // Richest first, so `assign`'s ranking pairs sorted controller k with
+    // sorted-by-units candidate k: C1 gets the richest pile, C(n) the least.
+    let footprints = zip(locations, (1...n).reversed()).map { footprint($0, $1 * 1_000) }
+    let devices = codes.enumerated().map { index, code -> Device in
+        guard index < n - 1 else { return controller(code) } // the n-th: never dispatched
+        return controller(
+            code, currentDirective: "shuttle",
+            currentConfig: [
+                "collect": .string(locations[index]),
+                "deliver": .string(HaulRun.deliveryLocation),
+            ]
+        )
+    }
+
+    var log: [DirectiveLogEntry] = []
+    var when = fixtureNow.addingTimeInterval(-Double(n) * 10)
+    var nextID = 0
+    for index in 0..<(n - 1) {
+        log.append(stepStartedEntry(nextID, HaulRun.Step.assigning, at: when)); nextID += 1; when += 1
+        log.append(stepStartedEntry(nextID, HaulRun.Step.dispatching, deviceCode: codes[index], at: when)); nextID += 1; when += 1
+        log.append(stepStartedEntry(nextID, HaulRun.Step.confirming, at: when)); nextID += 1; when += 1
+    }
+    log.append(stepStartedEntry(nextID, HaulRun.Step.assigning, at: when)); nextID += 1; when += 1
+    log.append(stepStartedEntry(nextID, HaulRun.Step.dispatching, deviceCode: codes[n - 1], at: when)) // the CURRENT entry
+
+    let directive = run(step: HaulRun.Step.dispatching, controllerCode: codes[n - 1])
+    let snapshot = world(devices: devices + meshed, footprints: footprints, log: log)
+    return (directive, snapshot)
 }
 
 private func run(
@@ -387,21 +435,28 @@ struct HaulRunTests {
     // `assign` every cycle forever, with no deadline anywhere in the loop to
     // stop it. `dispatchAssignment`'s log-derived `dispatchAttemptCount`
     // bounds that.
+    //
+    // Round-3 regression coverage: that budget must be scoped to the ONE
+    // controller being judged, not the whole pass — `assign` pins one
+    // controller per evaluation and only leaves the loop once every
+    // controller is in force, so an UNSCOPED count over a healthy fleet of 4+
+    // controllers reaches the limit on the fleet's very first pass, before
+    // any dispatch has actually failed. See `healthyPass(size:)` below.
 
     /// Right at the budget: exactly `dispatchAttemptLimit` PRIOR dispatches
-    /// are logged, so this evaluation is dispatch number `dispatchAttemptLimit`
-    /// itself — still within budget, so it proceeds.
+    /// to THIS controller are logged, so this evaluation is dispatch number
+    /// `dispatchAttemptLimit` itself — still within budget, so it proceeds.
     @Test func dispatchingProceedsWithinItsRepeatAttemptBudget() {
         var log: [DirectiveLogEntry] = []
         var when = fixtureNow.addingTimeInterval(-60)
         var nextID = 0
         for _ in 0..<(HaulRun.dispatchAttemptLimit - 1) {
             log.append(stepStartedEntry(nextID, HaulRun.Step.assigning, at: when)); nextID += 1; when += 1
-            log.append(stepStartedEntry(nextID, HaulRun.Step.dispatching, at: when)); nextID += 1; when += 1
+            log.append(stepStartedEntry(nextID, HaulRun.Step.dispatching, deviceCode: "C1", at: when)); nextID += 1; when += 1
             log.append(stepStartedEntry(nextID, HaulRun.Step.confirming, at: when)); nextID += 1; when += 1
         }
         log.append(stepStartedEntry(nextID, HaulRun.Step.assigning, at: when)); nextID += 1; when += 1
-        log.append(stepStartedEntry(nextID, HaulRun.Step.dispatching, at: when)) // the CURRENT entry
+        log.append(stepStartedEntry(nextID, HaulRun.Step.dispatching, deviceCode: "C1", at: when)) // the CURRENT entry
 
         let stillOnOldPile = controller(
             "C1", currentDirective: "ferry",
@@ -443,11 +498,11 @@ struct HaulRunTests {
         var nextID = 0
         for _ in 0..<HaulRun.dispatchAttemptLimit {
             log.append(stepStartedEntry(nextID, HaulRun.Step.assigning, at: when)); nextID += 1; when += 1
-            log.append(stepStartedEntry(nextID, HaulRun.Step.dispatching, at: when)); nextID += 1; when += 1
+            log.append(stepStartedEntry(nextID, HaulRun.Step.dispatching, deviceCode: "C1", at: when)); nextID += 1; when += 1
             log.append(stepStartedEntry(nextID, HaulRun.Step.confirming, at: when)); nextID += 1; when += 1
         }
         log.append(stepStartedEntry(nextID, HaulRun.Step.assigning, at: when)); nextID += 1; when += 1
-        log.append(stepStartedEntry(nextID, HaulRun.Step.dispatching, at: when)) // the CURRENT entry
+        log.append(stepStartedEntry(nextID, HaulRun.Step.dispatching, deviceCode: "C1", at: when)) // the CURRENT entry
 
         let stillOnOldPile = controller(
             "C1", currentDirective: "ferry",
@@ -477,7 +532,7 @@ struct HaulRunTests {
         // A full exhausted budget...
         for _ in 0..<HaulRun.dispatchAttemptLimit {
             log.append(stepStartedEntry(nextID, HaulRun.Step.assigning, at: when)); nextID += 1; when += 1
-            log.append(stepStartedEntry(nextID, HaulRun.Step.dispatching, at: when)); nextID += 1; when += 1
+            log.append(stepStartedEntry(nextID, HaulRun.Step.dispatching, deviceCode: "C1", at: when)); nextID += 1; when += 1
             log.append(stepStartedEntry(nextID, HaulRun.Step.confirming, at: when)); nextID += 1; when += 1
         }
         // ...followed by an operator Retry...
@@ -489,7 +544,7 @@ struct HaulRunTests {
         when += 1
         // ...and one fresh attempt since.
         log.append(stepStartedEntry(nextID, HaulRun.Step.assigning, at: when)); nextID += 1; when += 1
-        log.append(stepStartedEntry(nextID, HaulRun.Step.dispatching, at: when)) // the CURRENT entry
+        log.append(stepStartedEntry(nextID, HaulRun.Step.dispatching, deviceCode: "C1", at: when)) // the CURRENT entry
 
         let stillOnOldPile = controller(
             "C1", currentDirective: "ferry",
@@ -511,6 +566,45 @@ struct HaulRunTests {
             deviceCode: "C1",
             params: CommandParams(directive: "ferry", configuration: [
                 "collect": .string("ATIANFU-BELT-1"),
+                "deliver": .string(HaulRun.deliveryLocation),
+            ]),
+            nextStep: HaulRun.Step.confirming
+        ))
+    }
+
+    /// **Important regression guard (2026-07-31 re-review), borderline
+    /// Critical.** A healthy fleet's very first pass must NOT stall. Three
+    /// controllers already settled, none of them ever retried; the fourth is
+    /// pinned and dispatched for the FIRST time. An unscoped
+    /// `dispatchAttemptCount` (counting every `dispatching` entry in the
+    /// pass, not just this controller's) would already read 4 here — this is
+    /// the exact `size: 4` scenario the reviewer verified stalls without the
+    /// controller-scoping fix.
+    @Test func dispatchingProceedsOnAHealthyFourControllerFleetsFirstPass() {
+        let (directive, snapshot) = healthyPass(size: 4)
+        let action = HaulRun().nextAction(directive: directive, world: snapshot)
+        #expect(action == .dispatch(
+            kind: .setDirective,
+            deviceCode: "C4",
+            params: CommandParams(directive: "shuttle", configuration: [
+                "collect": .string("AINALRAM-5"),
+                "deliver": .string(HaulRun.deliveryLocation),
+            ]),
+            nextStep: HaulRun.Step.confirming
+        ))
+    }
+
+    /// A larger fleet's first pass proves the bound now scales with
+    /// ATTEMPTS-PER-CONTROLLER, not fleet size — an unscoped count would have
+    /// failed even harder here than at `size: 4`.
+    @Test func dispatchingProceedsOnAHealthySevenControllerFleetsFirstPass() {
+        let (directive, snapshot) = healthyPass(size: 7)
+        let action = HaulRun().nextAction(directive: directive, world: snapshot)
+        #expect(action == .dispatch(
+            kind: .setDirective,
+            deviceCode: "C7",
+            params: CommandParams(directive: "shuttle", configuration: [
+                "collect": .string("AINALRAM-8"),
                 "deliver": .string(HaulRun.deliveryLocation),
             ]),
             nextStep: HaulRun.Step.confirming

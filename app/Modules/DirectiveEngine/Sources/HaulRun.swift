@@ -35,7 +35,15 @@
 //  no stall. `dispatchAssignment` closes that with a log-derived re-entry
 //  budget (`dispatchAttemptCount`/`dispatchAttemptLimit`) — the same escape
 //  hatch `SalvageRun.stepEntryCount` uses, adapted to a bound spanning three
-//  steps instead of one. See `dispatchAttemptCount`'s doc comment.
+//  steps instead of one AND scoped to ONE controller, not the whole tagged
+//  fleet: an UNSCOPED count trips on the very first pass of any healthy 4+
+//  controller fleet, because `assign` pins one controller per evaluation and
+//  only leaves the loop once every controller is in force, so a pass
+//  repointing N controllers writes N consecutive `dispatching` entries before
+//  any out-of-loop step appears between them (caught 2026-07-31). Scoping
+//  reads `DirectiveLogEntry.deviceCode`, which `DirectiveExecutor`'s
+//  `.assignController` path now stamps with the claimed controller. See
+//  `dispatchAttemptCount`'s doc comment.
 //
 //  Pure by contract: no I/O, no clock reads (time comes from `world.now`), no
 //  randomness. Every effect is the returned `MissionAction`.
@@ -236,10 +244,23 @@ public struct HaulRun: MissionStepMachine {
 
     // MARK: - Re-entry budget
 
-    /// How many times, contiguously, `dispatching` has been entered — i.e. how
-    /// many `set_directive` dispatches this run has already spent on the
-    /// current pin — without the loop leaving for `assigning`'s SETTLED exit
-    /// (`Step.hauling`) or an operator resolution.
+    /// How many times, contiguously, `controllerCode` has been PINNED for
+    /// dispatch — i.e. how many times `dispatching` has been entered naming
+    /// this specific controller — without the loop leaving for `assigning`'s
+    /// SETTLED exit (`Step.hauling`) or an operator resolution.
+    ///
+    /// **This counts entries into `dispatching`, not completed `set_directive`
+    /// POSTs.** Several of `dispatchAssignment`'s own exits (`controllerCode`
+    /// nil, the pinned device vanished, nothing pending for it, or it is
+    /// already `isInForce`) leave without dispatching anything at all — yet
+    /// each still followed a `.stepStarted(dispatching)` entry written by
+    /// `assign`'s `.assignController`, BEFORE `dispatchAssignment` ever ran to
+    /// decide whether to actually dispatch. That is still the right quantity
+    /// to bound: every one of those exits either ends the run or hands back to
+    /// `assigning`, which will only re-pin THIS controller if it is STILL not
+    /// `isInForce` — so a controller repeatedly re-ENTERING `dispatching` is
+    /// exactly a controller `assign` keeps choosing to (re)point, dispatch
+    /// count or not.
     ///
     /// **Why this exists.** `hasTakenSomeHaulConfig` (used by `confirm`) is
     /// deliberately looser than `isInForce` (used by `assign`) so a moving
@@ -257,30 +278,47 @@ public struct HaulRun: MissionStepMachine {
     /// **Read from the timeline, not a column** — the same technique
     /// `SalvageRun.stepEntryCount` uses (see the
     /// `same-step-dispatch-needs-tracked-op` memory note's "escape hatch"
-    /// section), adapted for a bound that spans THREE steps instead of one:
-    /// `assigning` (pin) and `confirming` (poll) entries are transparent —
-    /// they link one dispatch to the next without themselves costing a
-    /// command — while `dispatching` entries are counted, because that is
-    /// where the actual `set_directive` POST happens and is exactly the
-    /// budget the file header's "one `set_directive` per pile drained"
-    /// promises. The walk stops (without counting) at any `.stepStarted`
+    /// section), adapted twice over for this shape: the bound spans THREE
+    /// steps instead of one — `assigning` (pin) and `confirming` (poll)
+    /// entries are transparent, linking one dispatch to the next without
+    /// themselves costing a command, while `dispatching` entries are counted,
+    /// because that is where the actual `set_directive` POST happens (or
+    /// would have) and is exactly the budget the file header's "one
+    /// `set_directive` per pile drained" promises — AND the count is scoped to
+    /// ONE controller (`controllerCode`) rather than the whole pass: `assign`
+    /// pins one controller per evaluation and only leaves the loop once EVERY
+    /// controller in the fleet is in force, so an unscoped count over N
+    /// healthy, never-retried controllers reaches N on the very first pass —
+    /// a real incident on a 4-controller fleet, caught 2026-07-31. Scoping is
+    /// what `DirectiveLogEntry.deviceCode` is for: `DirectiveExecutor`'s
+    /// `.assignController` path stamps the claimed controller onto the
+    /// `.stepStarted(dispatching)` entry it writes (previously always nil),
+    /// so a `dispatching` entry naming a DIFFERENT controller is simply
+    /// irrelevant here rather than counted or treated as a loop boundary —
+    /// it neither adds to this controller's count nor resets it, since
+    /// `assign` can legitimately interleave several controllers' pins within
+    /// one pass. The walk stops (without counting) at any `.stepStarted`
     /// naming a step OUTSIDE the loop (`preflight`/`surveying`/`hauling`) —
     /// evidence the run genuinely left it — and stops (counting) at a
     /// `.resolved` entry, so an operator's Retry buys a fresh budget rather
     /// than replaying an exhausted one, exactly like `stepEntryCount`.
     ///
-    /// **Known imprecision, accepted (mirrors `stepEntryCount`'s own
-    /// documented caveat):** the log carries no controller code on
-    /// `.stepStarted`, so this count cannot by itself tell "controller C1
-    /// re-pinned three times" from "C1 once, then C2 twice". In practice this
-    /// rarely matters: `assign` always re-picks the FIRST still-not-in-force
-    /// controller in sorted order, so as long as the stuck controller sorts
-    /// first, it is the one re-picked every cycle. `dispatchAssignment` also
-    /// only ever consults this count for the controller it is ABOUT to
-    /// dispatch to, so the worst case is a controller inheriting a partially
-    /// spent budget from a different one's failed attempts — it fails safe
-    /// (an earlier stall, never a missed one).
-    static func dispatchAttemptCount(_ directive: Directive, _ world: WorldSnapshot) -> Int {
+    /// **Deliberately does NOT floor to 1** the way `stepEntryCount` does.
+    /// `stepEntryCount` floors because being IN a step at all guarantees at
+    /// least one entry into it, including the degenerate case of a step
+    /// that's also a mission's `firstStep` — evaluated before anything has
+    /// ever been logged for that directive. `dispatching` is never a
+    /// `firstStep`: the ONLY way into it is `assign`'s `.assignController`,
+    /// which unconditionally logs an entry first, so a real, on-disk
+    /// evaluation of this step always has at least one matching entry already
+    /// in `world.log` by the time this runs. A result of 0 therefore reflects
+    /// a log that was never populated at all — a bare test fixture, not
+    /// reachable production state — and returning 0 rather than flooring to 1
+    /// keeps the guard permissive in exactly that untested-fixture case
+    /// rather than asserting a floor production can't actually violate.
+    static func dispatchAttemptCount(
+        _ directive: Directive, _ world: WorldSnapshot, controllerCode: String
+    ) -> Int {
         var count = 0
         for entry in world.log.reversed() {
             if entry.kind == .resolved {
@@ -290,7 +328,7 @@ public struct HaulRun: MissionStepMachine {
             guard entry.kind == .stepStarted else { continue }
             switch entry.step {
             case Step.dispatching:
-                count += 1
+                if entry.deviceCode == controllerCode { count += 1 }
             case Step.assigning, Step.confirming:
                 continue
             default:
@@ -391,7 +429,7 @@ public struct HaulRun: MissionStepMachine {
             // ranking, say). Nothing to send — nothing to confirm either.
             return .advanceStep(nextStep: Step.assigning)
         }
-        guard Self.dispatchAttemptCount(directive, world) <= Self.dispatchAttemptLimit else {
+        guard Self.dispatchAttemptCount(directive, world, controllerCode: controllerCode) <= Self.dispatchAttemptLimit else {
             // This controller has already spent its repeat-dispatch budget
             // without ever satisfying `isInForce` — see
             // `dispatchAttemptCount`'s doc comment. Surface it rather than
