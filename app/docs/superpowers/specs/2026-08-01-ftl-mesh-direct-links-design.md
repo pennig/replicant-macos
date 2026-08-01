@@ -43,12 +43,40 @@ constant. This matters because ranges are **heterogeneous**: a `system_hub` carr
 integrated relay with a longer range (~12.5 ly) than a standalone `ftl_relay` (7.5 ly), so
 any single global threshold would be wrong as soon as a hub is deployed.
 
+## Storage model: keep the closure, filter on read
+
+The closure is **persisted in full**, with the metrics needed to classify each row. Filtering
+to direct links happens in the read path, not at ingest.
+
+The reason is not the subgraph lookup (with direct-links-only, a second component is visible
+on the map and a union-find away in code). It is **revisability**. We do not know whether a
+12.5 ly hub links to a 7.5 ly relay 10 ly away — that depends on whether reach is symmetric,
+and it cannot be tested until a hub exists. If the closure were discarded at ingest and the
+rule were wrong, correcting it would require a full mesh rebuild: `FTLMeshRefresher`
+documents this as "the single most expensive refresh an event can trigger" (O(relays) serial
+network reads), and it only fires on roster changes or relay liveness flips — so a wrong
+guess could sit stale indefinitely. With the closure retained, the rule is a read-side
+predicate and correcting it is immediate.
+
+Two consequences make this strictly better than filtering at ingest:
+
+- **The parity repair (§3) becomes exact.** It no longer has to reconstruct which systems the
+  server considers connected — the closure *is* that answer.
+- **The table stops being a trap.** The `ftl-authority-rule` memory warns "do not mistake
+  those rows for physical links," a warning that exists because these rows already misled a
+  design session. A row carrying `18.06 ly` beside a `7.5 ly` range is self-evidently not a
+  link.
+
+**Cost is negligible.** 100 relays is 4,950 rows (~300 KB); 500 relays is 124,750 rows. Revisit
+this decision if the relay count ever approaches 500 — below that, the quadratic row count is
+not worth engineering against.
+
 ## Design
 
-### 1. A pure reduction in `GameModels`
+### 1. Ingest keeps the metrics
 
-`DevicesClient.relayLinks` (`GameServices/Sources/DevicesClient.swift:173`) currently does
-I/O and edge resolution in one closure, which is untestable without the network. Split them.
+`DevicesClient.relayLinks` (`GameServices/Sources/DevicesClient.swift:173`) currently does I/O
+and edge resolution in one closure, which is untestable without the network. Split them.
 
 New value type beside `FTLLink`, modelling one relay's network view:
 
@@ -65,59 +93,108 @@ public struct RelayNetworkView: Equatable, Sendable {
 }
 ```
 
-And one entry point:
+And a pure resolver producing persistable rows:
 
 ```swift
-extension FTLLink {
-    public static func resolve(from views: [RelayNetworkView]) -> [FTLLink]
+extension FTLLinkRecord {
+    public static func rows(from views: [RelayNetworkView], now: Date) -> [FTLLinkRecord]
 }
 ```
 
-`relayLinks` then does only I/O: walk the roster, map each response into a
-`RelayNetworkView`, call `resolve`. This matches how `OrreryLayout` and `MissionStepMachine`
-are factored — a pure resolver with the I/O at the edge.
+`relayLinks` then does only I/O: walk the roster, map each response into a `RelayNetworkView`.
+This matches how `OrreryLayout` and `MissionStepMachine` are factored — a pure resolver with
+the I/O at the edge.
 
-`resolve` internally performs three steps, each independently testable:
+**Both endpoint ranges must be merged across views.** When relay A's view reports peer B, that
+view knows A's range but not B's. So `rows(from:)` first builds a `star -> rangeLy` map across
+*all* views, then stamps each canonical edge with `rangeA`/`rangeB` by lookup. A relay whose
+view failed to read contributes no range, leaving nil (see fail-open, below).
 
-1. **Closure set** — every reported connection as an `FTLLink`, annotated with its distance.
-2. **Direct set** — connections where `distanceLy <= rangeLy`.
-3. **Component-parity repair** — see §3.
+### 2. Schema: three columns, append-only
 
-### 2. Union semantics for heterogeneous ranges
+`FTLLinkRecord` gains three nullable columns:
 
-`relayLinks` already unions every relay's view into a `Set<FTLLink>`, and `FTLLink`
-canonicalises endpoint order, so reciprocal reports collapse. Keeping that structure means a
-link is drawn when **either** endpoint's range covers the distance: a 12.5 ly hub contributes
-its own long edges from its own view, while the 7.5 ly relay at the far end does not.
+| column | meaning |
+| --- | --- |
+| `distanceLy` | the server's `distance_ly` for this pair |
+| `rangeA` | range of the relay at endpoint `a` |
+| `rangeB` | range of the relay at endpoint `b` |
 
-This requires no extra code, and it is the safe direction — a union can never split a
-component the server considers whole.
+Per the append-only rule this is a **new** `SchemaMigration` appended to
+`GameDatabase.manifest` — three `ALTER TABLE ... ADD COLUMN` statements, never an edit to
+`createFTLLinks`. `SchemaManifestTests` gains the new identifier and `GoldenSchemaTests` is
+regenerated with `RC_REGENERATE_SCHEMA_FIXTURE=1`.
 
-### 3. Component-parity repair
+The migration also **clears the table**. Existing rows have no metrics, and under fail-open
+they would all classify as direct — reproducing today's hairball until the next rebuild. The
+mesh is a wholesale-rebuilt cache, so dropping it is safe; the map shows no mesh until the
+next refresh fires.
+
+Note `FTLLinkRecord.replace` inserts row-by-row in a loop (`FTLLink.swift:84`). That is fine
+at today's scale inside one transaction, but should be batched if row counts grow.
+
+### 3. The read path: one query, one reduction
+
+The filter and the parity repair live together in a single `FetchKeyRequest`, so they run once
+per database change on the database queue — not per SwiftUI body evaluation:
+
+```swift
+struct DirectFTLLinks: FetchKeyRequest {
+    func fetch(_ db: Database) throws -> [FTLLink]
+}
+```
+
+It fetches all rows and reduces in three steps:
+
+1. **Direct set** — rows where `distanceLy <= max(rangeA, rangeB)`.
+2. **Closure components** — union-find over *all* rows. This is the server's answer, free.
+3. **Parity repair** — union-find seeded with the direct set, then walk the remaining rows in
+   ascending `distanceLy`, adding any that join two distinct components, until component count
+   matches step 2.
+
+`NewStarMapView.swift:137` then feeds `StarMapOverlays.ftlLinks` from this instead of
+`ftlLinkRecords.map(\.link)`. `FTLLink` stays a plain endpoint pair and the renderer is
+untouched.
+
+The reduction is expressed in Swift rather than pure SQL because step 3 needs the closure
+regardless. If direct links are ever wanted *without* the repair, the SQL form is:
+
+```sql
+WHERE distanceLy IS NULL OR rangeA IS NULL OR rangeB IS NULL
+   OR distanceLy <= max(rangeA, rangeB)
+```
+
+The null clauses are load-bearing, not defensive: SQLite's two-argument `max` returns NULL if
+either argument is NULL, so the bare comparison evaluates to NULL and silently *drops* rows
+that the fail-open rule requires be kept.
+
+Aside, out of scope: the query currently sits as `@FetchAll` in the view
+(`NewStarMapView.swift:86`) rather than in `@ObservableState`, which deviates from the
+house standard. Not this change's job.
+
+### 4. Union semantics for heterogeneous ranges
+
+`max(rangeA, rangeB)` means a link is drawn when **either** endpoint can reach that far: a
+12.5 ly hub links to a 7.5 ly relay 10 ly away. This is the safe direction — a union can never
+split a component the server considers whole — and because it is one word in one predicate,
+switching to `min` is trivial if hub behaviour proves otherwise.
+
+### 5. Component-parity repair
 
 Filtering could in principle disconnect what the server considers one network (a relay whose
-view failed to read, an unexpected range asymmetry, a borderline float). The map would then
-lie in the opposite direction, showing two networks where there is one.
-
-After filtering, compare connected components of the direct set against components of the
-closure. If they disagree, add back closure edges — shortest first — until they match.
-Kruskal-style: union-find seeded with the direct edges, then walk the remaining closure edges
-in ascending `distance_ly`, adding any that join two distinct components.
-
-This makes the invariant explicit:
+view failed to read and left nil ranges on both sides of a long edge, an unexpected asymmetry,
+a borderline float). The map would then lie in the opposite direction, showing two networks
+where there is one. The repair in §3 enforces the invariant:
 
 > **Drawn components always equal server components.**
 
-It also makes the union-vs-intersection question in §2 non-load-bearing. If hub range
-semantics turn out to be asymmetric in a way we guessed wrong, the repair restores
-connectivity instead of silently drawing a fractured network.
+This makes the union-vs-intersection guess in §4 non-load-bearing for correctness: a wrong
+guess costs a slightly wrong *set of lines*, never a fractured network.
 
-The repair pool (closure minus direct) always has usable distances, so this ordering is
-well-defined: by the fail-open rule below, an edge with a nil `range_ly` or nil `distance_ly`
-is classified *direct* and never reaches the pool. An edge only lands in the pool if every
-view reporting it gave both numbers and found `distance > range`.
+The repair pool (closure minus direct) always has usable distances: by fail-open, a row with a
+nil `distanceLy` or nil ranges classifies as *direct* and never reaches the pool.
 
-### 4. Roster fix: match the relay *feature*, not the device type
+### 6. Roster fix: match the relay *feature*, not the device type
 
 `FTLMeshRefresher.swift:67` builds its roster with `deviceType.eq("ftl_relay")`. But
 `SalvageTargetPlanner.meshSystems` (`SalvageTargetPlanner.swift:52`) matches
@@ -134,56 +211,48 @@ the planner agree on what a mesh node is.
 StructuredQueries predicate may be awkward; fetching candidate devices and filtering in Swift
 is an acceptable implementation if so — the relay roster is small.
 
-The existing lack of a *status* filter is deliberate and stays: a deactivated relay returns
-no connections, so it drops out of the resolved edge set naturally.
-
-## Storage consequence
-
-Filtering at consumption means the closure is **never persisted**. On today's data the table
-goes from 55 rows to 22, and growth becomes roughly linear rather than quadratic — average
-degree stays near-constant (~4) as the network spreads spatially, so 100 relays would store
-on the order of 200 rows rather than 4,950.
-
-This requires **no schema migration**. `FTLLinkRecord` keeps its exact shape and simply holds
-fewer, truer rows. `distance_ly` is deliberately not persisted: the renderer can derive
-segment length from star positions it already has, since one world unit is one light-year
-(`Star.swift:8`).
-
-## What is not changing
-
-- `FTLLinkRecord`, its schema, and `replace(with:into:now:)` — unchanged.
-- `FTLMesh.build` (`FTLMesh.swift:29`) — still resolves stored links against terrain.
-- The mesh's relevance-field contribution and its rendering pipeline.
-- The refresher's triggers, debounce, and best-effort-per-relay behaviour.
-
-## Accepted trade
-
-The table stops answering "are these two systems in one network?" in a single lookup;
-that now needs a traversal. Nothing does this today — the star map (`NewStarMapView.swift:86`)
-is the only reader, and the directive engine derives mesh membership from device rows on
-purpose. If a consumer needs it later, union-find over ~n edges is trivial.
+The existing lack of a *status* filter is deliberate and stays: a deactivated relay returns no
+connections, so it drops out of the resolved edge set naturally.
 
 ## Behaviour on nil fields
 
-Both `range_ly` and `distance_ly` are optional in the generated types. If either is missing,
-**keep the edge** — fail open. A slightly noisy map is better than a missing link, and the
-parity repair cannot misfire as a result.
+Both `range_ly` and `distance_ly` are optional in the generated types, and a failed relay read
+leaves a nil range. If any of `distanceLy`, `rangeA`, `rangeB` is missing, **treat the row as
+direct** — fail open. A slightly noisy map beats a missing link, and the parity repair cannot
+misfire as a result.
+
+## What is not changing
+
+- `FTLLink` — stays a plain canonical endpoint pair.
+- `FTLMesh.build` (`FTLMesh.swift:29`), the relevance-field contribution, and the render
+  pipeline.
+- The refresher's triggers, debounce, and best-effort-per-relay behaviour.
+- `StarMapOverlays`' shape.
 
 ## Testing
 
-The resolver is pure and table-driven:
+The ingest resolver and the read reduction are both pure and table-driven.
 
-- Uniform range: a clique of closure edges reduces to only those within range.
-- Heterogeneous range: a 12.5 ly hub keeps a 10 ly edge that its 7.5 ly peer does not report
-  as direct (union semantics).
-- Parity repair: a filtered set that fragments a component is repaired to one component, and
-  the repair chooses the shortest available closure edge.
+**`FTLLinkRecord.rows(from:)`**
+- Ranges are merged across views: an edge reported only by A still carries B's range from B's
+  own view.
+- A relay whose view is absent leaves nil ranges rather than dropping the edge.
+- Reciprocal reports collapse to one canonical row.
+
+**`DirectFTLLinks` reduction**
+- Uniform range: a closure of 55 pairs reduces to the 22 within 7.5 ly, all 11 systems still
+  one component (fixture built from the real relay data).
+- Heterogeneous range: a 12.5 ly hub keeps a 10 ly edge its 7.5 ly peer does not.
+- Parity repair: a direct set that fragments a component is repaired to one component, and it
+  chooses the shortest available closure edge.
 - Parity no-op: when the direct set already matches, no edges are added.
-- Nil `range_ly` / nil `distance_ly`: edge kept.
-- Empty views, single relay with no connections: no edges, no crash.
+- Two genuine components stay two — the repair does not over-merge.
+- Nil `distanceLy` / nil ranges: row kept as direct.
+- Empty table and a single relay with no connections: no edges, no crash.
 
-A regression fixture built from the real 11-relay data asserts 55 closure pairs reduce to the
-22 in-range edges and that all 11 systems remain in one component.
+**Schema**
+- `SchemaManifestTests` identifier list updated; `GoldenSchemaTests` fixture regenerated.
+- Migration clears pre-existing rows.
 
 ## Expected result
 
