@@ -139,12 +139,25 @@ The filter and the parity repair live together in a single `FetchKeyRequest`, so
 per database change on the database queue — not per SwiftUI body evaluation:
 
 ```swift
-struct DirectFTLLinks: FetchKeyRequest {
-    func fetch(_ db: Database) throws -> [FTLLink]
+public struct DirectFTLLinks: FetchKeyRequest {
+    public struct Value: Equatable, Sendable {
+        public var links: [FTLLink] = []
+    }
+
+    public func fetch(_ db: Database) throws -> Value {
+        Value(links: Self.reduce(rows: try FTLLinkRecord.all.fetchAll(db)))
+    }
+
+    /// Pure: closure rows in, direct links out (with parity repair).
+    static func reduce(rows: [FTLLinkRecord]) -> [FTLLink]
 }
 ```
 
-It fetches all rows and reduces in three steps:
+This follows `BobnetChannelList` (`BobnetQueries.swift:46`) exactly — fetch the rows, delegate
+to a pure `static` reduction, return an `Equatable, Sendable` `Value`. The reduction is
+therefore unit-testable with no database.
+
+`reduce` works in three steps:
 
 1. **Direct set** — rows where `distanceLy <= max(rangeA, rangeB)`.
 2. **Closure components** — union-find over *all* rows. This is the server's answer, free.
