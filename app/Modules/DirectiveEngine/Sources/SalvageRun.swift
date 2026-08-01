@@ -100,6 +100,24 @@ public struct SalvageRun: MissionStepMachine {
     /// flips its status, and that read is subject to the poll budget.
     public static let activationDeadline: TimeInterval = 10 * 60
 
+    /// How long a vessel row may lag the arrival it is supposed to reflect
+    /// before the run gives up and surfaces `vesselPositionUnconfirmed`.
+    ///
+    /// Measured from the ARRIVAL, never from `stepStartedAt` — see
+    /// `travelPositionUnconfirmed` for why that distinction is the whole
+    /// design. Five minutes is roughly this account's device-row refresh
+    /// period, so a position that has not caught up by then is not merely late:
+    /// something dropped it (the `Reconciler.swift` `eventTime >= updatedAt`
+    /// second-granularity trap loses the write outright), and no amount of
+    /// further waiting will produce it.
+    public static let arrivalConfirmDeadline: TimeInterval = 5 * 60
+
+    /// Floor between confirm-reads of the vessel row while waiting for its
+    /// position to catch up with a completed arrival. The steps that wait here
+    /// are evaluated every 5 s, so without a floor the read would fire on every
+    /// tick.
+    public static let arrivalReadInterval: TimeInterval = 30
+
     /// The salvage configuration this mission insists on: deplete the named
     /// body, then recall the drones so the vessel can move on. `recall` is
     /// load-bearing — since v2.3.3 the server holds `directive.completed` until
@@ -350,6 +368,109 @@ public struct SalvageRun: MissionStepMachine {
         return .assignController(deviceCode: controller.deviceCode, nextStep: Step.travelling)
     }
 
+    // MARK: - Arrival freshness
+
+    /// When the last travel THIS directive dispatched for `vessel` finished, or
+    /// nil if it has never completed one.
+    ///
+    /// Read from `world.dispatchedOperations` rather than `openOperations`
+    /// precisely because that lookup **keeps closed ops** (see its doc comment):
+    /// the op this cares about is by definition already terminal — an open one
+    /// means the vessel is still flying and the `openOperation` guard has
+    /// already held the step. Scoped to this directive's own dispatches, so it
+    /// is a handful of rows and can never be satisfied by a travel some other
+    /// surface issued.
+    ///
+    /// `lastConfirmedAt` is the completion instant, not `completesAt`: the
+    /// latter is the *predicted* deadline and is nil for ops that never carried
+    /// one, whereas `lastConfirmedAt` is stamped by whichever writer closed the
+    /// row — which for a `travel.arrived` event is the same transaction that
+    /// closed it. That is exactly the watermark a device row has to beat.
+    static func lastTravelCompletion(for vessel: Device, _ world: WorldSnapshot) -> Date? {
+        world.dispatchedOperations.values
+            .lazy
+            .filter {
+                $0.entityCode == vessel.deviceCode
+                    && $0.kind == OperationKind.travel.rawValue
+                    && $0.status.isTerminal
+            }
+            .map(\.lastConfirmedAt)
+            .max()
+    }
+
+    /// What to do when the vessel's local row cannot yet be trusted to say
+    /// where the vessel is — nil when it can, and the dispatch may proceed.
+    ///
+    /// **The race this exists for.** `GameSync.deviceRoute` settles the two
+    /// facts carried by one `travel.arrived` event in two SEPARATE database
+    /// transactions, with awaits between them:
+    /// `Reconciler.applyOperationEvent` closes the vessel's open travel op
+    /// first, and `Reconciler.applyEventFields` writes `device.location`
+    /// second. Every travel dispatch site in this file reads exactly those two
+    /// facts — an equality check against `vessel.location`, then the
+    /// `openOperation` guard — and guards only on the first. So the instant
+    /// write #1 lands the guard opens, and if the 5 s tick falls in the gap
+    /// before write #2 commits, `vessel.location` still names the ORIGIN, the
+    /// equality fails, and the step re-commands travel to where the vessel
+    /// already physically is. The server answers `Already at destination` and
+    /// `DirectiveExecutor` stalls the run `.commandRejected` (live incident,
+    /// Salvage Run `BCC18F1C`, 2026-08-01: 139 ms after arrival).
+    ///
+    /// It is intermittent rather than constant — the same run's three earlier
+    /// cycles had the tick land 2–5 s after arrival and advanced cleanly — and
+    /// there is a second, independent way to land in the same state that no
+    /// amount of waiting closes: `Reconciler`'s `guard eventTime >=
+    /// device.updatedAt` drops the location write entirely when a device read
+    /// stamps `updatedAt` later within the same second (live `createdAt` has
+    /// only second granularity). Hence the deadline below.
+    ///
+    /// **Why the watermark is the arrival and not `stepStartedAt`.**
+    /// `HaulRun.confirm` proves freshness with `updatedAt >= stepStartedAt`,
+    /// which is right for a POLLING step but wrong for these: these are
+    /// dispatch steps, so on first entry `stepStartedAt` is the step-entry
+    /// instant and the vessel row is legitimately older than it — that gate
+    /// would delay every first travel by a whole deadline. Worse, a same-step
+    /// `.travel` dispatch re-stamps `stepStartedAt` (`DirectiveExecutor.apply`
+    /// does this for every action but `.wait`) and travel takes minutes, so by
+    /// the time the vessel arrives the deadline measured from `stepStartedAt`
+    /// is already blown. The completion of the last travel this directive
+    /// dispatched is the watermark that is true in both cases: on a cold run
+    /// there is none and the gate passes immediately, and after an arrival it
+    /// is precisely the instant the row must post-date.
+    ///
+    /// **Ordering is mandated** (see the confirm-steps-need-fresh-evidence
+    /// note, half two): deadline FIRST, then the throttled read, then `.wait`.
+    /// The throttle is measured against `vessel.updatedAt`, which only advances
+    /// when a read succeeds — so if reads keep failing (offline, 429, a device
+    /// the server 404s) a staleness-first ordering would never reach the
+    /// deadline, never stall, and issue a `.high` read every tick forever,
+    /// ~12 reads/minute, self-sustaining under the very rate-limit exhaustion
+    /// that caused it. `thenStall: nil` on the mid-flight read is what keeps it
+    /// bounded: `DirectiveEngine.reAsk` collapses a repeated refresh request
+    /// into `.wait`.
+    ///
+    /// **Gates the dispatch path only.** Callers place this after the
+    /// `openOperation` guard and immediately before their `.dispatch`, never
+    /// ahead of their location-equality check. A stale row that happens to
+    /// equal the destination is the benign direction — the step advances to
+    /// work a body the vessel is already at — while the hazard is exclusively
+    /// stale-says-elsewhere, which re-commands travel.
+    private func travelPositionUnconfirmed(_ vessel: Device, _ world: WorldSnapshot) -> MissionAction? {
+        // No travel this directive dispatched has ever completed: there is
+        // nothing for the row to post-date, so it cannot be lagging an arrival.
+        // Cold runs and first entries dispatch immediately.
+        guard let completion = Self.lastTravelCompletion(for: vessel, world) else { return nil }
+        // The row was written at or after the arrival closed, so it reflects it.
+        guard vessel.updatedAt < completion else { return nil }
+        if world.now.timeIntervalSince(completion) >= Self.arrivalConfirmDeadline {
+            return .refreshDevices(deviceCodes: [vessel.deviceCode], thenStall: .vesselPositionUnconfirmed)
+        }
+        if world.now.timeIntervalSince(vessel.updatedAt) > Self.arrivalReadInterval {
+            return .refreshDevices(deviceCodes: [vessel.deviceCode], thenStall: nil)
+        }
+        return .wait
+    }
+
     private func travel(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
         guard let target = directive.currentTarget else {
             return .advanceStep(nextStep: Step.preflight)
@@ -363,6 +484,10 @@ public struct SalvageRun: MissionStepMachine {
         // An open op means the trip is under way. Expected, not a stall — and
         // the guard that stops a second travel landing on top of the first.
         if world.openOperation(for: vessel.deviceCode) != nil { return .wait }
+        // …and the guard for the gap between that op closing and the arrival's
+        // location write landing, in which the check above says "not there yet"
+        // about a vessel that already is.
+        if let unconfirmed = travelPositionUnconfirmed(vessel, world) { return unconfirmed }
         return .dispatch(
             kind: .travel, deviceCode: vessel.deviceCode,
             params: CommandParams(destination: target), nextStep: Step.travelling
@@ -428,6 +553,9 @@ public struct SalvageRun: MissionStepMachine {
         }
         if vessel.location != point {
             if world.openOperation(for: vessel.deviceCode) != nil { return .wait }
+            // The `!=` above is the check that misreads a row still lagging the
+            // previous arrival; prove the row post-dates that arrival first.
+            if let unconfirmed = travelPositionUnconfirmed(vessel, world) { return unconfirmed }
             return .dispatch(
                 kind: .travel, deviceCode: vessel.deviceCode,
                 params: CommandParams(destination: point), nextStep: Step.emplacing
@@ -715,6 +843,11 @@ public struct SalvageRun: MissionStepMachine {
             // (see the same-step-dispatch-needs-tracked-op note) — like `emplace`
             // and `restock`.
             if world.openOperation(for: vessel.deviceCode) != nil { return .wait }
+            // This is the site the 2026-08-01 incident actually fired at: the
+            // hop from the entry point to the first body is short, so the tick
+            // after the arrival op closes lands well inside the window in which
+            // `vessel.location` still names where the vessel came from.
+            if let unconfirmed = travelPositionUnconfirmed(vessel, world) { return unconfirmed }
             return .dispatch(
                 kind: .travel, deviceCode: vessel.deviceCode,
                 params: CommandParams(destination: body), nextStep: Step.positioning
@@ -1061,6 +1194,10 @@ public struct SalvageRun: MissionStepMachine {
         // file — and this same-step dispatch is the safe shape the
         // same-step-dispatch-needs-tracked-op memory note describes.
         if world.openOperation(for: vessel.deviceCode) != nil { return .wait }
+        // Same arrival race as the other three travel sites: the equality check
+        // against `baseDesignation` above is decided from a row the arrival's
+        // second transaction may not have reached yet.
+        if let unconfirmed = travelPositionUnconfirmed(vessel, world) { return unconfirmed }
         return .dispatch(
             kind: .travel, deviceCode: vessel.deviceCode,
             params: CommandParams(destination: Self.baseDesignation), nextStep: Step.restocking
