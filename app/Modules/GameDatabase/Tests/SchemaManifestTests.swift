@@ -49,6 +49,7 @@ import Testing
         "Add 'roamCentre' to 'directives'",
         "Add 'fleetTag' to 'directives'",
         "Add 'depleted' to 'siteAssays'",
+        "Add link metrics to 'ftlLinks'",
     ]
 
     @Test func manifestMatchesTheFrozenList() {

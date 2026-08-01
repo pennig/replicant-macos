@@ -128,7 +128,7 @@ CREATE TABLE "ftlLinks" (
   "a" TEXT NOT NULL,
   "b" TEXT NOT NULL,
   "updatedAt" TEXT NOT NULL
-) STRICT;
+, "distanceLy" REAL, "rangeA" REAL, "rangeB" REAL) STRICT;
 
 CREATE TABLE "knownReplicants" (
   "replicantCode" TEXT PRIMARY KEY NOT NULL,

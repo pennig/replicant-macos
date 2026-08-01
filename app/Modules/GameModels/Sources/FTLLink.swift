@@ -59,12 +59,31 @@ public struct FTLLinkRecord: Identifiable, Equatable, Sendable {
     public var b: String
     /// When this edge was last written by a mesh rebuild.
     public var updatedAt: Date
+    /// The server's `distance_ly` for this pair, as reported on the connection.
+    /// Nil when the read failed or the field was absent — see `DirectFTLLinks`'
+    /// fail-open rule.
+    public var distanceLy: Double?
+    /// Relay range at endpoint `a`, merged in from that relay's own network view
+    /// (a view knows its own range, never its peer's).
+    public var rangeA: Double?
+    /// Relay range at endpoint `b`.
+    public var rangeB: Double?
 
-    public init(a: String, b: String, updatedAt: Date) {
+    public init(
+        a: String,
+        b: String,
+        updatedAt: Date,
+        distanceLy: Double? = nil,
+        rangeA: Double? = nil,
+        rangeB: Double? = nil
+    ) {
         self.id = "\(a)|\(b)"
         self.a = a
         self.b = b
         self.updatedAt = updatedAt
+        self.distanceLy = distanceLy
+        self.rangeA = rangeA
+        self.rangeB = rangeB
     }
 
     /// A record for a resolved link, stamped `now`.
@@ -103,6 +122,40 @@ extension FTLLinkRecord {
               "b" TEXT NOT NULL,
               "updatedAt" TEXT NOT NULL
             ) STRICT
+            """
+        )
+        .execute(db)
+    }
+
+    /// Adds the metrics that let the read path tell a real link from a closure
+    /// pair: the connection's distance, and each endpoint relay's range.
+    ///
+    /// The migration also CLEARS the table. Existing rows carry no metrics and
+    /// would all classify as direct under the fail-open rule — reproducing the
+    /// very hairball this change removes. The mesh is a wholesale-rebuilt cache,
+    /// so dropping it costs only an empty overlay until the next refresh fires.
+    public static let addLinkMetrics = SchemaMigration("Add link metrics to 'ftlLinks'") { db in
+        try #sql(
+            """
+            ALTER TABLE "ftlLinks" ADD COLUMN "distanceLy" REAL
+            """
+        )
+        .execute(db)
+        try #sql(
+            """
+            ALTER TABLE "ftlLinks" ADD COLUMN "rangeA" REAL
+            """
+        )
+        .execute(db)
+        try #sql(
+            """
+            ALTER TABLE "ftlLinks" ADD COLUMN "rangeB" REAL
+            """
+        )
+        .execute(db)
+        try #sql(
+            """
+            DELETE FROM "ftlLinks"
             """
         )
         .execute(db)
