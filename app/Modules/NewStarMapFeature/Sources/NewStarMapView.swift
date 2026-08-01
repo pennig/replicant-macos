@@ -80,10 +80,13 @@ public struct NewStarMapView: View {
     /// and device detail already read, so reading it here is what keeps all three
     /// naming the same destination.
     @FetchAll(Operation.order { $0.startedAt.desc() }) private var operations
-    /// The persisted FTL mesh — the edges the reducer rebuilds off each relay's
-    /// network view. Read straight from SQLite so the mesh draws instantly on
+    /// The drawable FTL mesh. `ftlLinks` stores the backend's CLOSURE — every
+    /// pair in a subgraph, however distant — so this query reduces it to the
+    /// links that are physically real, once per database change rather than per
+    /// body evaluation. Read straight from SQLite so the mesh draws instantly on
     /// launch and survives a moment where a relay's network read fails.
-    @FetchAll(FTLLinkRecord.all) private var ftlLinkRecords
+    /// See `DirectFTLLinks`.
+    @Fetch(DirectFTLLinks()) private var directFTLLinks = DirectFTLLinks.Value()
 
     public init(store: StoreOf<NewStarMapFeature>) {
         self.store = store
@@ -134,7 +137,7 @@ public struct NewStarMapView: View {
     /// from each relay's backend network view) and the ships in transit (from the
     /// live device roster).
     private var overlays: StarMapOverlays {
-        StarMapOverlays(ftlLinks: ftlLinkRecords.map(\.link), ships: ships)
+        StarMapOverlays(ftlLinks: directFTLLinks.links, ships: ships)
     }
 
     /// The active replicant's current-location *system* designation (e.g. `AINALRAM`),
