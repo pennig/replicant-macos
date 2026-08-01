@@ -168,11 +168,19 @@ public struct NewStarMapView: View {
     }
 
     /// The relay-capable devices, reduced to their star systems — the FTL mesh
-    /// nodes. Only `ftl_relay` devices participate; the `ftl_beacon` is not a mesh
-    /// node (the backend refuses its network view).
+    /// nodes.
+    ///
+    /// Matched on the relay CAPABILITY, not the device type, so it agrees with
+    /// `FTLMeshRefresher`'s roster and `SalvageTargetPlanner.meshSystems`: a
+    /// `system_hub` carries an integrated relay and genuinely meshes its system.
+    /// Under a `deviceType == "ftl_relay"` match a hub would mesh the system
+    /// without the map ever knowing — drawing links that terminate at a star
+    /// flagged as holding no relay, and never firing the roster-change trigger
+    /// that invalidates the mesh. An `ftl_beacon` is still excluded (the backend
+    /// refuses its network view), because it does not carry the `relay` feature.
     private var relayNodes: [RelayNode] {
         devices
-            .filter { $0.deviceType == "ftl_relay" }
+            .filter { $0.features.contains("relay") }
             .compactMap { device in
                 device.location
                     .map(Self.systemDesignation)

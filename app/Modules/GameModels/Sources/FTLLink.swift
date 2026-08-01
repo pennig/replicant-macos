@@ -2,11 +2,17 @@
 //  FTLLink.swift
 //  Replicould — shared game models
 //
-//  The real FTL comms mesh, as the backend reports it. An `ftl_relay` device
-//  exposes its live network view at `GET /v1/devices/{code}/network`
+//  The real FTL comms mesh, as the backend reports it. A relay-capable device
+//  (an `ftl_relay`, or a `system_hub`'s integrated relay) exposes its live
+//  network view at `GET /v1/devices/{code}/network`
 //  (`app_schemas_devices_DeviceNetworkSchema`): a `range_ly` and a list of
-//  `connections`, each naming the star of a peer relay it can reach. The star
-//  map renders that network directly rather than guessing links by proximity.
+//  `connections`, each naming a peer's star and its `distance_ly`.
+//
+//  What that returns is the CLOSURE of the relay's subgraph — within a connected
+//  subgraph there are no hops, so every peer is reported however distant. These
+//  rows store that closure verbatim, metrics and all; `DirectFTLLinks` is the one
+//  place that reduces it to the links which are physically real. Do not read
+//  drawable links off these rows directly.
 //
 
 import Foundation
@@ -84,11 +90,6 @@ public struct FTLLinkRecord: Identifiable, Equatable, Sendable {
         self.distanceLy = distanceLy
         self.rangeA = rangeA
         self.rangeB = rangeB
-    }
-
-    /// A record for a resolved link, stamped `now`.
-    public init(link: FTLLink, now: Date) {
-        self.init(a: link.a, b: link.b, updatedAt: now)
     }
 
     /// The render-domain link this row represents.
