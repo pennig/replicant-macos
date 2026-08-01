@@ -110,14 +110,35 @@ public struct SalvageRun: MissionStepMachine {
     /// What actually reaches this deadline is a vessel whose READS KEEP
     /// FAILING — offline, rate-limited, a device the server 404s — because the
     /// throttled read below is the only thing that can advance
-    /// `vessel.updatedAt` once the event path has already had its chance.
-    /// (Note it is NOT the `Reconciler` `eventTime >= device.updatedAt`
-    /// second-granularity drop: in that scenario the row's `updatedAt` is by
-    /// construction LATER than the event time the op was stamped with, so the
-    /// gate reads the row as fresh, passes, and never gets here. That trap
-    /// costs a stale *location*, not a stall.) Five minutes is roughly this
-    /// account's device-row refresh period, so a read that has not landed by
-    /// then is not merely late and waiting longer will not produce it.
+    /// `vessel.updatedAt` once the event path has already had its chance. Five
+    /// minutes is roughly this account's device-row refresh period, so a read
+    /// that has not landed by then is not merely late and waiting longer will
+    /// not produce it.
+    ///
+    /// **What this deadline — and the freshness gate as a whole — does NOT
+    /// cover.** There is a SECOND, still-unfixed trigger for the very stall
+    /// this branch exists to prevent, and no watermark computed in this file
+    /// catches it. `Reconciler.applyEventFields`
+    /// (`GameServices/Sources/Reconciler.swift:256`) drops the location write
+    /// outright on `guard eventTime >= device.updatedAt`, and live event
+    /// `createdAt` stamps carry only SECOND granularity. So a confirm-read that
+    /// stamps `device.updatedAt = 01:37:33.9` beats an arrival event whose
+    /// `eventTime` is `01:37:33`: the guard fails and the location is never
+    /// written at all — while `completeOpenOperation`, which has no such guard,
+    /// still closes the travel op at `01:37:33`. The row is then
+    /// fresh-but-WRONG: `updatedAt` (…33.9) POST-DATES the watermark (…33), so
+    /// `travelPositionUnconfirmed` returns nil, the gate passes, the site
+    /// dispatches travel to a body the vessel is already parked at, the server
+    /// answers `Already at destination`, and the run stalls `.commandRejected`
+    /// — the original incident, verbatim, by a different route. It is rarer
+    /// than the tick race: it needs a device read to land in the same
+    /// wall-clock second as the arrival event, which is why the incident that
+    /// was actually observed was the two-transaction gap and not this. Fixing
+    /// it belongs in `Reconciler.applyEventFields` — compare at the granularity
+    /// the stamps actually carry, rather than dropping a whole event's fields
+    /// on a sub-second tie — and not here, because a dropped write leaves
+    /// behind a row that is indistinguishable, by timestamp alone, from one
+    /// that genuinely reflects the arrival.
     public static let arrivalConfirmDeadline: TimeInterval = 5 * 60
 
     /// Floor between confirm-reads of the vessel row while waiting for its

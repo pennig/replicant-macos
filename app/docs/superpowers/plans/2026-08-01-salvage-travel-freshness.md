@@ -104,8 +104,12 @@ column — no migration.
 - `static let arrivalConfirmDeadline: TimeInterval = 5 * 60`
 - `static let arrivalReadInterval: TimeInterval = 30`
 - `static func lastTravelCompletion(for:_ world:) -> Date?` — the max `lastConfirmedAt` over
-  `world.dispatchedOperations` values that are `kind == .travel`, terminal, and
-  `entityCode == vessel.deviceCode`.
+  `world.dispatchedOperations` values that are `kind == .travel`, `status == .completed`, and
+  `entityCode == vessel.deviceCode`. (`.completed` **exactly**, not `OperationStatus.isTerminal`
+  — do not "fix" this back. `CommandClient.swift:209` stamps `lastConfirmedAt` when it marks a
+  live op `.superseded`, and `DeadlineScheduler.swift:199` does the same marking one `.unknown`;
+  both are accepted travels that never arrived, so admitting them would install a non-arrival as
+  the watermark and gate a legitimate dispatch behind an arrival that never happened.)
 - `private func travelPositionUnconfirmed(_ vessel:_ world:) -> MissionAction?` — nil when the
   row is trustworthy (or no travel has ever completed), otherwise the action above.
 - Call it in all four sites, immediately AFTER the `openOperation` guard and immediately BEFORE
@@ -128,3 +132,36 @@ column — no migration.
 ### Task 4 — review
 Whole-diff review against this plan, the two memory notes, and the four-site table. Confirm no
 site kept an unguarded dispatch and no first-dispatch path regressed.
+
+## Follow-ups (deliberately NOT in this branch)
+
+### `SurveyRun` has the identical unguarded shape
+
+`DirectiveEngine/Sources/SurveyRun.swift:415` (`returnHome`, destination `origin`, `nextStep:
+.returning`) and `:475` (`travel`, destination `target`, `nextStep: .travelling`) are exactly
+what all four `SalvageRun` sites looked like before this branch: a location-equality check, an
+`openOperation` guard, then a `.dispatch(kind: .travel, …)` whose `nextStep` is the step it is
+already in — and nothing proving the vessel row post-dates the arrival that opened the guard.
+
+Same two-transaction race in `GameSync.deviceRoute`, therefore the same failure: the op closes,
+the tick lands before the location write commits, `Self.system(of: vessel) == target` reads
+false about a vessel that has arrived, and the re-command comes back
+`commandRejected: "Already at destination"`. Survey Run has not been observed hitting it, but
+nothing about the shape makes it safer — Salvage Run simply flies more hops per hour.
+
+Fix is a lift-and-shift of `SalvageRun.lastTravelCompletion` / `travelPositionUnconfirmed` (the
+watermark reasoning transfers unchanged), placed after the `openOperation` guard and before the
+`.dispatch`. It is a separate change with its own tests — both the behavioural set and the
+**placement** test per site (fixture a vessel already AT the destination with a stale row and
+assert the step still advances, which is what pins the gate below the equality check rather than
+above it) — so it does not ride along here.
+
+### `emplace`'s placement test was skipped on purpose
+
+The other three sites got a gate-placement test; `emplace` did not. Its divergent state is
+unreachable: `emplacing` is only ever entered from `travel`, which advances only once
+`system(of: vessel) == target`, so the location write has by construction already landed by the
+time `emplace` runs. A test for it would assert against a state the machine cannot produce.
+Recorded here because that is an argument about the step graph, not about `emplace` itself — a
+refactor that lets any other step advance into `emplacing`, or that relaxes `travel`'s advance
+condition, invalidates it and owes the missing test.
