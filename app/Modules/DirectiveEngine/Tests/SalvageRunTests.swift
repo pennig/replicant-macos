@@ -1537,6 +1537,27 @@ struct SalvageRunArrivalFreshnessTests {
                              params: CommandParams(destination: "TOSLIT-6-5"), nextStep: "positioning"))
     }
 
+    /// Where the gate is allowed to sit, not just whether it fires.
+    ///
+    /// The gate must stay AFTER the location-equality check, and every other
+    /// stale fixture in this suite has `location != destination`, so they all
+    /// pass equally well against a gate hoisted above it. This is the fixture
+    /// that does not: the row is just as stale, but it happens to already name
+    /// the destination — the BENIGN direction, because the vessel is where it
+    /// needs to be and the step should advance to work the body. Hoisting the
+    /// gate turns that into a wait (then a read, then
+    /// `.vesselPositionUnconfirmed`) on every single arrival, which is a worse
+    /// bug than the one the gate fixes: it stalls the happy path.
+    @Test func positionAdvancesOnAStaleRowThatAlreadyNamesTheDestination() {
+        let snapshot = world(
+            devices: [laggingVessel(at: "TOSLIT-6-5"), controller, drone], // stale, but already at the body
+            dispatchedOperations: afterArrival(),
+            systems: ["TOSLIT": miningToslit], siteAssays: miningToslitAssays
+        )
+        #expect(SalvageRun().nextAction(directive: running(step: "positioning"), world: snapshot)
+                == .advanceStep(nextStep: "configuring"))
+    }
+
     // MARK: Site 4 — restock (destination = base)
 
     /// Site 4 of 4. Same race, decided against `baseDesignation` instead of a
@@ -1666,6 +1687,7 @@ struct SalvageRunArrivalFreshnessTests {
             dispatchedOperations: afterArrival(kind: .mine),
             systems: ["TOSLIT": miningToslit], siteAssays: miningToslitAssays
         )
+        #expect(SalvageRun.lastTravelCompletion(for: laggingVessel(at: "TOSLIT-3"), snapshot) == nil)
         #expect(SalvageRun().nextAction(directive: running(step: "positioning"), world: snapshot)
                 == .dispatch(kind: .travel, deviceCode: "VESSEL",
                              params: CommandParams(destination: "TOSLIT-6-5"), nextStep: "positioning"))
