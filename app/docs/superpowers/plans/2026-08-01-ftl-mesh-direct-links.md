@@ -269,7 +269,7 @@ struct FTLLinkIngestTests {
 
 ```bash
 cd app/Modules && swift test --disable-xctest --test-product GameModelsTests \
-  --filter 'FTL link ingest resolution' \
+  --filter 'FTLLinkIngestTests' \
   --event-stream-version 0 --event-stream-output-path .build/events.jsonl
 ```
 
@@ -361,7 +361,7 @@ extension FTLLinkRecord {
 
 ```bash
 cd app/Modules && swift test --disable-xctest --test-product GameModelsTests \
-  --filter 'FTL link ingest resolution' \
+  --filter 'FTLLinkIngestTests' \
   --event-stream-version 0 --event-stream-output-path .build/events.jsonl
 ```
 
@@ -539,7 +539,7 @@ struct DirectFTLLinksTests {
 
 ```bash
 cd app/Modules && swift test --disable-xctest --test-product GameModelsTests \
-  --filter 'FTL direct-link reduction' \
+  --filter 'DirectFTLLinksTests' \
   --event-stream-version 0 --event-stream-output-path .build/events.jsonl
 ```
 
@@ -673,7 +673,7 @@ private struct UnionFind {
 
 ```bash
 cd app/Modules && swift test --disable-xctest --test-product GameModelsTests \
-  --filter 'FTL direct-link reduction' \
+  --filter 'DirectFTLLinksTests' \
   --event-stream-version 0 --event-stream-output-path .build/events.jsonl
 ```
 
@@ -967,3 +967,41 @@ git commit -m "Memory: record the closure-stored / direct-drawn split for ftlLin
 **Type consistency:** `RelayNetworkView(star:rangeLy:connections:)` and `.Connection(star:distanceLy:)` are defined in Task 2 and consumed identically in Task 4. `FTLLinkRecord.rows(from:now:)` is defined in Task 2, consumed in Task 4. `FTLLinkRecord.replace(rows:into:)` is defined in Task 4 and consumed there. `DirectFTLLinks.reduce(rows:)` and `.Value.links` are defined in Task 3 and consumed in Task 6.
 
 **Note on Task 1 → Task 4 ordering:** Task 1 keeps `replace(with:into:now:)` compiling by giving the new `FTLLinkRecord` init parameters defaults. Task 4 then replaces that helper. This is deliberate — it keeps every task's tree green.
+
+---
+
+## Execution record (2026-08-01)
+
+All seven tasks executed. Each task was reviewed individually by an independent agent before the
+next began; findings were folded back in as their own commits.
+
+**Deviations from the plan as written:**
+
+- **Task 1** additionally gained a test pinning that the migration clears `ftlLinks` and nothing
+  else (`MigrationSafetyTests.linkMetricsMigrationClearsOnlyTheMesh`). Review found the migration's
+  only behaviour was untested. The row must be written with raw SQL, because the model now carries
+  columns the pre-migration schema lacks — which is the point.
+- **Task 2** changed the range merge from "first view wins" to **max of the non-nils**. Review found
+  that two relays can share a system, so first-wins could record a star's reach as the *shorter*
+  range and silently drop edges a hub can make. Confirmed live: AINALRAM currently holds three relay
+  devices, so this path runs in production today. Distances now resolve to the min rather than
+  last-wins, making the result independent of roster order.
+- **Task 3**'s union-semantics test was rewritten. Review proved the original passed under *both*
+  `max` and `min`, because the parity repair restored its single misclassified row. Both hub tests
+  now carry short alternate paths so the repair has no reason to intervene. Mutation-checked:
+  `max`→`min` now fails. Tests added for an empty direct set, multi-edge repair, and distance
+  exactly at the range limit.
+- **Task 5** is a no-op on current data — all 17 relay-featured devices are `ftl_relay`; no hub is
+  owned yet. It matters the moment one is.
+- **Task 7**'s live app launch was not possible from a background job (Keychain login wall). Verified
+  instead by probing all 13 relay network views from the live API and running the server's own
+  `range_ly` / `distance_ly` through an independent implementation of the spec: **55 closure rows →
+  22 drawn links, parity holds at one component, ALPHERATOZ down to its single ATIANFU link.** This
+  agrees with the Swift regression fixture, which derives its distances from star positions rather
+  than the server — two independent routes to the same 22.
+
+**Still outstanding:** launching the app to confirm the mesh redraws and that the migration clears
+the live table on first run.
+
+**Process note:** a broad `git add -A` swept a concurrent reviewer's scratch file into a commit
+(cleaned up in `16cabf3`). Use explicit paths when other agents share the tree.
