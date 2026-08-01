@@ -125,8 +125,10 @@ private struct UnionFind {
 
     mutating func componentCount() -> Int {
         var roots: Set<String> = []
-        // `Array(...)` is load-bearing: `find` path-compresses, which mutates
-        // `parent`, and iterating the live keys view while mutating is invalid.
+        // Snapshot the keys because `find` path-compresses, which mutates
+        // `parent` mid-iteration. Swift would define that away (the iterator
+        // holds the pre-mutation storage, and compression never adds or removes
+        // keys), so this is for the reader, not for correctness.
         for key in Array(parent.keys) { roots.insert(find(key)) }
         return roots.count
     }

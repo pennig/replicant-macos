@@ -176,14 +176,29 @@ struct DirectFTLLinksTests {
 
     /// A 12.5 ly hub reaches a 7.5 ly relay 10 ly away. Union semantics: the
     /// larger of the two ranges decides, so the edge survives.
+    ///
+    /// The two short alternates are load-bearing, not scenery. With HUB-RELAY
+    /// alone, the parity repair would restore it even under `min` semantics —
+    /// so a single-row test passes whichever rule is in force and pins nothing.
+    /// Here the alternates already hold the component together, so the repair
+    /// has no reason to add HUB-RELAY back: it is drawn if and only if
+    /// `isDirect` classified it as a link.
     @Test func longerRangedEndpointKeepsTheEdge() {
-        let rows = [row("HUB", "RELAY", distance: 10, rangeFirst: 12.5, rangeSecond: 7.5)]
+        let rows = [
+            row("HUB", "RELAY", distance: 10, rangeFirst: 12.5, rangeSecond: 7.5),
+            row("HUB", "OTHER", distance: 3),
+            row("OTHER", "RELAY", distance: 3),
+        ]
 
-        #expect(DirectFTLLinks.reduce(rows: rows) == [FTLLink("HUB", "RELAY")])
+        let links = DirectFTLLinks.reduce(rows: rows)
+
+        #expect(links.count == 3)
+        #expect(links.contains(FTLLink("HUB", "RELAY")))
     }
 
-    /// The same pair with both ranges short is NOT a link — proves the previous
-    /// test passes because of the hub's range, not by accident.
+    /// The same shape with both ranges short: now the edge must NOT be drawn.
+    /// Paired with the test above, this is what actually pins union semantics —
+    /// the only difference between them is the hub's range.
     @Test func bothEndpointsShortOfTheDistanceDropsTheEdge() {
         let rows = [
             row("HUB", "RELAY", distance: 10, rangeFirst: 7.5, rangeSecond: 7.5),
@@ -191,7 +206,49 @@ struct DirectFTLLinksTests {
             row("OTHER", "RELAY", distance: 3),
         ]
 
-        #expect(!DirectFTLLinks.reduce(rows: rows).contains(FTLLink("HUB", "RELAY")))
+        let links = DirectFTLLinks.reduce(rows: rows)
+
+        #expect(links.count == 2)
+        #expect(!links.contains(FTLLink("HUB", "RELAY")))
+    }
+
+    /// `<=`, not `<`: a pair exactly at the range limit is a link. Alternates
+    /// again, so the repair cannot be what puts it back.
+    @Test func distanceExactlyAtRangeIsDirect() {
+        let rows = [
+            row("A", "B", distance: 7.5),
+            row("A", "C", distance: 3),
+            row("B", "C", distance: 3),
+        ]
+
+        #expect(DirectFTLLinks.reduce(rows: rows).count == 3)
+    }
+
+    /// Every row filtered out: the repair rebuilds a shortest-edge spanning
+    /// tree from nothing rather than leaving the map blank.
+    @Test func repairsFromAnEmptyDirectSet() {
+        let rows = [
+            row("A", "B", distance: 20),
+            row("B", "C", distance: 25),
+            row("A", "C", distance: 30),
+        ]
+
+        #expect(Set(DirectFTLLinks.reduce(rows: rows)) == [FTLLink("A", "B"), FTLLink("B", "C")])
+    }
+
+    /// A component needing MORE than one repair edge — the early exit must not
+    /// stop before parity is actually restored.
+    @Test func repairsAComponentNeedingSeveralEdges() {
+        let rows = [
+            row("A", "B", distance: 20), row("A", "C", distance: 21), row("A", "D", distance: 22),
+            row("B", "C", distance: 23), row("B", "D", distance: 24), row("C", "D", distance: 25),
+        ]
+
+        let links = DirectFTLLinks.reduce(rows: rows)
+
+        // A 4-clique with nothing in range reduces to a 3-edge spanning tree.
+        #expect(links.count == 3)
+        #expect(Set(links) == [FTLLink("A", "B"), FTLLink("A", "C"), FTLLink("A", "D")])
     }
 
     /// If filtering would split a component the server reports as whole, the
