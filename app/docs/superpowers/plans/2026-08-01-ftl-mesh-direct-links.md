@@ -1000,8 +1000,14 @@ next began; findings were folded back in as their own commits.
   agrees with the Swift regression fixture, which derives its distances from star positions rather
   than the server — two independent routes to the same 22.
 
+- **Task 6 gained a follow-up** (`c5b0529`, after this record was first written). Final review found
+  the capability match had a second call site: `NewStarMapView.relayNodes`, which feeds the
+  `Star.hasFTLRelay` marker and the roster-change trigger. Both rosters now match on the relay
+  feature, so a hub cannot mesh a system that the map marks as relay-less.
+
 **Still outstanding:** launching the app to confirm the mesh redraws and that the migration clears
-the live table on first run.
+the live table on first run. Expect an empty overlay until the first rebuild — on a fresh process
+`DomainFreshness` has no stamp, so opening the star map triggers it immediately.
 
 **Process note:** a broad `git add -A` swept a concurrent reviewer's scratch file into a commit
 (cleaned up in `16cabf3`). Use explicit paths when other agents share the tree.

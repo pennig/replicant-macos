@@ -145,8 +145,9 @@ public struct NewStarMapFeature {
         case transitionCompleted
         // FTL mesh: the view fires this when the relay roster changes (and once on
         // appear); the reducer rebuilds and persists the mesh off each relay's
-        // backend network view. The view then renders the persisted `FTLLinkRecord`
-        // rows directly, so the drawn mesh survives relaunch and a failed read.
+        // backend network view. What gets persisted is the CLOSURE, so the view
+        // renders the `DirectFTLLinks` reduction of those rows — never the rows
+        // themselves — and the drawn mesh still survives relaunch and a failed read.
         case refreshMesh(rosterChanged: Bool)
         /// Full re-scan of the replicant's current system (the only source of HZ /
         /// outer-system / hazards); refreshes the persisted `SystemDetail`.

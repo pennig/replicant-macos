@@ -114,7 +114,7 @@ extension FTLMeshRefresher: DependencyKey {
 
 extension FTLMeshRefresher: TestDependencyKey {
     /// Inert by default: a test that wants the mesh rebuilt overrides this. The
-    /// no-op avoids reaching the unimplemented `DevicesClient.relayLinks`.
+    /// no-op avoids reaching the unimplemented `DevicesClient.relayNetworks`.
     public static let testValue = FTLMeshRefresher(refresh: {})
 }
 

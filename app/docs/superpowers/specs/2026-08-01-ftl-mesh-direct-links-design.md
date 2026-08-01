@@ -294,5 +294,14 @@ Three things this design did not anticipate, found during implementation and rev
    net: it masks classification errors, which is exactly what it is for, and exactly what makes
    the rule hard to test.
 
+4. **The capability match has a second call site.** §6 names only `FTLMeshRefresher`, but
+   `NewStarMapView.relayNodes` keeps its own relay roster — it drives `Star.hasFTLRelay` (the
+   mesh-node marker) and the `.onChange` trigger that invalidates the mesh. Left on a device-type
+   match, a `system_hub` would mesh its system while the map drew links terminating at a star
+   flagged as holding no relay, and the roster-change trigger would never fire for it. Both
+   rosters now match `features.contains("relay")`. Verified beacon-safe against the live fleet:
+   every owned `ftl_beacon` carries `["stow","audit","comms"]`, and no non-`ftl_relay` device
+   carries the `relay` feature.
+
 Also worth recording: inside an `FTLLinkRecord` extension the `@Table` macro's dynamic member
 lookup shadows the bare `max`, so it must be spelled `Swift.max`.

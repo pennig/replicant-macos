@@ -49,12 +49,20 @@ public struct FTLLink: Equatable, Sendable, Hashable {
 
 // MARK: - Persistence
 
-/// The FTL mesh persisted locally — one row per undirected edge between two star
-/// systems, so the map draws the mesh instantly on launch (no empty-state flash
-/// while the per-relay network reads land) and survives a moment where those
-/// reads fail. The mesh is small and always recomputed wholesale from every
-/// relay's live network view, so it's rewritten in full (see `replace`) whenever
-/// the relay roster changes or a relay's liveness flips (`relay_activated` /
+/// The FTL mesh persisted locally — one row per CLOSURE PAIR, not per physical
+/// link. Most of these pairs are not edges: the backend reports every peer in a
+/// relay's subgraph however distant, so a row's `distanceLy` can be several times
+/// its endpoints' range. `DirectFTLLinks` is what turns these rows into drawable
+/// links; nothing should read them as edges directly.
+///
+/// Persisting them means the map draws instantly on launch (no empty-state flash
+/// while the per-relay network reads land) and survives a moment where those reads
+/// fail. The one exception is the launch on which `addLinkMetrics` runs: it clears
+/// the table, so the overlay is empty until the next rebuild.
+///
+/// The mesh is small and always recomputed wholesale from every relay's live
+/// network view, so it's rewritten in full (see `replace`) whenever the relay
+/// roster changes or a relay's liveness flips (`relay_activated` /
 /// `relay_deactivated`). Endpoints keep `FTLLink`'s canonical order (`a <= b`),
 /// and `id` is their joined pair so reciprocal reports collapse to one row.
 @Table("ftlLinks")
