@@ -48,6 +48,7 @@ import Testing
         "Backfill 'fullyScannedAt' from systemDetails",
         "Add 'roamCentre' to 'directives'",
         "Add 'fleetTag' to 'directives'",
+        "Add 'depleted' to 'siteAssays'",
     ]
 
     @Test func manifestMatchesTheFrozenList() {

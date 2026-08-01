@@ -216,7 +216,7 @@ CREATE TABLE "siteAssays" (
   "siteType" TEXT NOT NULL DEFAULT 'salvage',
   "totals" TEXT NOT NULL DEFAULT '{}',
   "assayedAt" TEXT NOT NULL
-) STRICT;
+, "depleted" INTEGER NOT NULL DEFAULT 0) STRICT;
 
 CREATE TABLE "stars" (
   "designation" TEXT PRIMARY KEY NOT NULL,

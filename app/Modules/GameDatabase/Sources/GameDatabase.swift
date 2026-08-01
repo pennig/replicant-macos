@@ -70,6 +70,7 @@ public enum GameDatabase {
         Star.backfillFullyScannedAt,
         Directive.addRoamCentre,
         Directive.addFleetTag,
+        SiteAssay.addDepleted,
     ]
 
     /// Builds a migrator from `entries`. The parameter exists so tests can

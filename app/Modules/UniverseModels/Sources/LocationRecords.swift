@@ -166,10 +166,17 @@ public struct SiteAssay: Identifiable, Equatable, Sendable {
     @Column(as: [String: Double].JSONRepresentation.self) public var totals: [String: Double]
     /// When `totals` was last raised.
     public var assayedAt: Date
+    /// Whether this site's salvage is fully spent. Sticky — a salvage site never
+    /// replenishes, so once set nothing clears it. Set by every depletion-
+    /// observation path (the `salvage.depleted` event and a location re-fetch that
+    /// returns depleted) and PRESERVED by the merge writers, which rebuild the row.
+    /// The Salvage Run's target planner excludes depleted assays so a drained
+    /// system stops being chosen (the merge-only-raises `totals` never lower).
+    public var depleted: Bool
 
     public init(
         id: String, body: String, system: String, siteType: String,
-        totals: [String: Double], assayedAt: Date
+        totals: [String: Double], assayedAt: Date, depleted: Bool = false
     ) {
         self.id = id
         self.body = body
@@ -177,6 +184,7 @@ public struct SiteAssay: Identifiable, Equatable, Sendable {
         self.siteType = siteType
         self.totals = totals
         self.assayedAt = assayedAt
+        self.depleted = depleted
     }
 }
 
@@ -271,5 +279,13 @@ extension SiteAssay {
             """
         )
         .execute(db)
+    }
+
+    /// Append-only: adds the `depleted` flag introduced for the depletion-aware
+    /// Salvage planner. STRICT table, so INTEGER-boolean defaulting to 0 (false).
+    public static let addDepleted = SchemaMigration("Add 'depleted' to 'siteAssays'") { db in
+        try #sql("""
+            ALTER TABLE "siteAssays" ADD COLUMN "depleted" INTEGER NOT NULL DEFAULT 0
+            """).execute(db)
     }
 }
