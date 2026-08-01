@@ -183,15 +183,25 @@ public struct SalvageRun: MissionStepMachine {
             .min { $0.deviceCode < $1.deviceCode }
     }
 
-    /// The Lagrange point to emplace at: the first L4/L5 the system reports,
-    /// ordered by designation so the choice is reproducible across
-    /// evaluations. Relays require a gravitationally stable point and will not
-    /// work anywhere else, so a system with none is not emplaceable.
+    /// The Lagrange point to emplace the relay at.
     ///
-    /// Lagrange points hang off each PLANET (`Planet.lagrange: [SpecialSite]`),
-    /// not off the system — there is no `StarSystem.lagrangePoints`.
+    /// A relay needs a gravitationally stable point (an L4/L5) to mesh its
+    /// system. Confirmed live across every system, the system's ENTRY POINT is
+    /// itself an L4 (`<planet>-N-L4`) — and it is exactly where a bare-designation
+    /// travel lands the vessel, so emplacing there costs no extra in-system hop.
+    ///
+    /// This used to read `system.planets.flatMap(\.lagrange)`, but the
+    /// system-level locations endpoint returns NO per-planet lagrange sites (only
+    /// the entry point), so `Planet.lagrange` was empty for every normally-fetched
+    /// system and this returned nil — silently forfeiting relay emplacement on
+    /// every target (the run mined every system unmeshed). So: prefer the entry
+    /// point when it is an L4; otherwise every planet has an L4 by construction
+    /// (`<planet>-L4`), so synthesise one from the lowest planet designation for a
+    /// reproducible pick. Only a system with NO planets is genuinely unemplaceable.
     static func lagrangePoint(in system: StarSystem?) -> String? {
-        system?.planets.flatMap(\.lagrange).map(\.designation).sorted().first
+        guard let system else { return nil }
+        if let entry = system.entryPoint, entry.hasSuffix("-L4") { return entry }
+        return system.planets.map(\.designation).sorted().first.map { "\($0)-L4" }
     }
 
     /// Whether any row backing a staging finding is too old to act on. Same

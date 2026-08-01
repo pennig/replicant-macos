@@ -406,11 +406,57 @@ private let toslit = StarSystem(
     ]
 )
 
-/// TOSLIT with a planet but no Lagrange point anywhere — cannot host a relay.
-private let toslitWithNoLagrangePoint = StarSystem(
-    designation: "TOSLIT",
-    planets: [Planet(designation: "TOSLIT-3")]
-)
+/// TOSLIT with NO planets at all — the only genuinely unemplaceable case now
+/// that `lagrangePoint(in:)` synthesises an L4 from the lowest planet
+/// designation when the entry point isn't one. A system WITH a planet always
+/// has a synthesisable point, so "no Lagrange point" no longer describes a
+/// system that merely lacks a `Planet.lagrange` array.
+private let toslitWithNoPlanets = StarSystem(designation: "TOSLIT", planets: [])
+
+// MARK: - Lagrange point resolution
+
+/// `lagrangePoint(in:)` is a pure static function, tested directly rather than
+/// only through `emplace`'s dispatch shape.
+@Suite("Salvage Run — lagrange point resolution")
+struct SalvageRunLagrangePointTests {
+    /// The entry point IS an L4 — confirmed live across every system
+    /// (`<planet>-N-L4`) — so it is preferred even when a planet is present
+    /// and could otherwise supply a synthesised one.
+    @Test func prefersTheEntryPointWhenItIsAnL4() {
+        let sys = StarSystem(
+            designation: "TOSLIT", entryPoint: "TOSLIT-6-L4",
+            planets: [Planet(designation: "TOSLIT-3")]
+        )
+        #expect(SalvageRun.lagrangePoint(in: sys) == "TOSLIT-6-L4")
+    }
+
+    /// No entry point at all: every planet has an L4 by construction, so one
+    /// is synthesised from the LOWEST planet designation for a reproducible
+    /// pick.
+    @Test func synthesisesTheLowestPlanetsL4WhenNoEntryPoint() {
+        let sys = StarSystem(
+            designation: "TOSLIT", entryPoint: nil,
+            planets: [Planet(designation: "TOSLIT-6"), Planet(designation: "TOSLIT-3")]
+        )
+        #expect(SalvageRun.lagrangePoint(in: sys) == "TOSLIT-3-L4")
+    }
+
+    /// An entry point IS present but is not an L4 (a station, say) — still
+    /// synthesises from the lowest planet rather than trusting a non-L4 point.
+    @Test func synthesisesWhenTheEntryPointIsNotAnL4() {
+        let sys = StarSystem(
+            designation: "TOSLIT", entryPoint: "TOSLIT-STATION",
+            planets: [Planet(designation: "TOSLIT-3")]
+        )
+        #expect(SalvageRun.lagrangePoint(in: sys) == "TOSLIT-3-L4")
+    }
+
+    /// No planets at all: the one genuinely unemplaceable case.
+    @Test func returnsNilWhenTheSystemHasNoPlanets() {
+        let sys = StarSystem(designation: "TOSLIT", planets: [])
+        #expect(SalvageRun.lagrangePoint(in: sys) == nil)
+    }
+}
 
 // MARK: - Emplacement
 
@@ -432,6 +478,42 @@ struct SalvageRunEmplacementTests {
         #expect(SalvageRun().nextAction(directive: running(step: "emplacing"), world: world)
             == .dispatch(kind: .simple("deploy"), deviceCode: "RELAY",
                          params: CommandParams(), nextStep: "activating"))
+    }
+
+    /// The entry point is PREFERRED over a synthesised planet L4 — distinct
+    /// fixture from `toslit`, whose entry point is nil and whose synthesised
+    /// pick ("TOSLIT-3-L4") would otherwise be indistinguishable from a
+    /// deliberately-chosen entry point. Here the entry point
+    /// ("TOSLIT-6-L4") differs from what the lowest-planet synthesis would
+    /// produce ("TOSLIT-3-L4"), so a pass proves the preference is real.
+    @Test func prefersTheEntryPointOverASynthesisedPlanetL4() {
+        let entryPointToslit = StarSystem(
+            designation: "TOSLIT", entryPoint: "TOSLIT-6-L4",
+            planets: [Planet(designation: "TOSLIT-3", lagrange: [
+                SpecialSite(designation: "TOSLIT-3-L4", kind: .lagrange),
+            ])]
+        )
+        let atEntryPoint = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-6-L4")
+        let world = world(devices: [atEntryPoint, controller, drone, relay], systems: ["TOSLIT": entryPointToslit])
+        #expect(SalvageRun().nextAction(directive: running(step: "emplacing"), world: world)
+            == .dispatch(kind: .simple("deploy"), deviceCode: "RELAY",
+                         params: CommandParams(), nextStep: "activating"))
+    }
+
+    /// Same fixture, vessel not yet there: travel to the entry point rather
+    /// than the synthesised planet L4.
+    @Test func travelsToTheEntryPointRatherThanASynthesisedPlanetL4() {
+        let entryPointToslit = StarSystem(
+            designation: "TOSLIT", entryPoint: "TOSLIT-6-L4",
+            planets: [Planet(designation: "TOSLIT-3", lagrange: [
+                SpecialSite(designation: "TOSLIT-3-L4", kind: .lagrange),
+            ])]
+        )
+        let arrived = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3")
+        let world = world(devices: [arrived, controller, drone, relay], systems: ["TOSLIT": entryPointToslit])
+        #expect(SalvageRun().nextAction(directive: running(step: "emplacing"), world: world)
+            == .dispatch(kind: .travel, deviceCode: "VESSEL",
+                         params: CommandParams(destination: "TOSLIT-6-L4"), nextStep: "emplacing"))
     }
 
     @Test func activatesTheDeployedRelayOnceAndMovesToThePollingStep() {
@@ -602,13 +684,14 @@ struct SalvageRunEmplacementTests {
         #expect(SalvageRun.deployedRelay(near: atL4, in: world) == nil)
     }
 
-    /// A system with no Lagrange point anywhere cannot host a relay — a
-    /// degraded outcome (the salvage is still worth taking), not an error, so
-    /// the run mines it unmeshed instead of stalling.
-    @Test func minesUnmeshedWhenTheSystemHasNoLagrangePoint() {
+    /// A system with NO planets at all cannot host a relay — every planet has
+    /// an L4 by construction, so this is the one genuinely unemplaceable case
+    /// left. Degraded outcome (the salvage is still worth taking), not an
+    /// error, so the run mines it unmeshed instead of stalling.
+    @Test func minesUnmeshedWhenTheSystemHasNoPlanets() {
         let arrived = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3")
         let world = world(devices: [arrived, controller, drone, relay],
-                          systems: ["TOSLIT": toslitWithNoLagrangePoint])
+                          systems: ["TOSLIT": toslitWithNoPlanets])
         #expect(SalvageRun().nextAction(directive: running(step: "emplacing"), world: world)
             == .advanceStep(nextStep: "positioning"))
     }
