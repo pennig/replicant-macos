@@ -119,13 +119,15 @@ private func world(
     devices: [Device],
     openOperations: [String: GameModels.Operation] = [:],
     log: [DirectiveLogEntry] = [],
+    dispatchedOperations: [String: GameModels.Operation] = [:],
     systems: [String: StarSystem] = [:],
     siteAssays: [String: [String: Double]] = [:],
     now: Date = fixtureNow
 ) -> WorldSnapshot {
     WorldSnapshot(
         devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
-        openOperations: openOperations, log: log, systems: systems, siteAssays: siteAssays, now: now
+        openOperations: openOperations, log: log, dispatchedOperations: dispatchedOperations,
+        systems: systems, siteAssays: siteAssays, now: now
     )
 }
 
@@ -1382,5 +1384,310 @@ struct SalvageRunRestockTests {
         let world = world(devices: [midTrip, controller, drone, relay])
         #expect(SalvageRun().nextAction(directive: running(step: "restocking"), world: world)
             == .advanceStep(nextStep: "preflight"))
+    }
+}
+
+// MARK: - Arrival freshness fixtures
+
+/// The instant the incident's travel op closed, on `fixtureNow`'s clock.
+///
+/// Salvage Run `BCC18F1C`, 2026-08-01: vessel `C7836770` arrived at
+/// ALZEPHINA-7-4, its travel op `1F616245` closed `lastConfirmedAt = 01:37:33.000`,
+/// and the tick that re-commanded travel landed **139 ms later** — inside the
+/// window between `Reconciler.applyOperationEvent` closing the op and
+/// `Reconciler.applyEventFields` writing `device.location`. `fixtureNow` plays
+/// the part of that tick, so every fixture below is 139 ms after the arrival,
+/// exactly as it was live.
+private let arrivalClosedAt = fixtureNow.addingTimeInterval(-0.139)
+
+/// A vessel row written 5 s BEFORE the arrival closed: it still names the
+/// origin, and it is recent enough that the throttled read has not come due, so
+/// the gate's answer is a plain `.wait`.
+private let rowLaggingArrival = arrivalClosedAt.addingTimeInterval(-5)
+
+/// The incident's own vessel-row age: `updatedAt ≈ 01:35:30` against an arrival
+/// at `01:37:33` — 123 s behind, well past `arrivalReadInterval`.
+private let rowLaggingArrivalBy123s = arrivalClosedAt.addingTimeInterval(-123)
+
+/// One CLOSED travel op belonging to this directive, keyed by id the way
+/// `WorldSnapshot.dispatchedOperations` is.
+///
+/// Deliberately NOT `operation(kind:)` above: that one is the single OPEN op
+/// per device that the `openOperation` guard reads, and these are two different
+/// maps on purpose — a finished op must never read as in-flight. The arrival
+/// watermark lives only in this one.
+private func dispatchedTravel(
+    id: String = "1F616245",
+    entityCode: String = "VESSEL",
+    kind: OperationKind = .travel,
+    status: OperationStatus = .completed,
+    completedAt: Date = arrivalClosedAt
+) -> GameModels.Operation {
+    GameModels.Operation(
+        id: id, entityCode: entityCode, kind: kind.rawValue,
+        status: status, source: .event,
+        startedAt: completedAt.addingTimeInterval(-120), completesAt: nil,
+        lastConfirmedAt: completedAt, detail: .object([:])
+    )
+}
+
+/// The `dispatchedOperations` map for a single closed travel — the shape all
+/// four dispatch sites are gated against.
+private func afterArrival(
+    kind: OperationKind = .travel,
+    status: OperationStatus = .completed,
+    completedAt: Date = arrivalClosedAt
+) -> [String: GameModels.Operation] {
+    let op = dispatchedTravel(kind: kind, status: status, completedAt: completedAt)
+    return [op.id: op]
+}
+
+/// The vessel still claiming the place it departed from, with an `updatedAt`
+/// that predates the arrival — the exact row the incident decided from.
+private func laggingVessel(at origin: String?, updatedAt: Date = rowLaggingArrival) -> Device {
+    device("VESSEL", type: "heaven_vessel", location: origin, updatedAt: updatedAt)
+}
+
+// MARK: - Arrival freshness
+
+/// The 2026-08-01 `Already at destination` incident, one dispatch site at a time.
+///
+/// `GameSync.deviceRoute` settles a `travel.arrived` event in TWO transactions
+/// with awaits between them: the op closes first, `device.location` is written
+/// second. All four travel dispatch sites read exactly those two facts and used
+/// to guard only on the first, so a tick landing in the gap saw "op finished,
+/// vessel still at the origin" and re-commanded travel to where the vessel
+/// already was. The server rejected it and the run stalled `.commandRejected`.
+///
+/// Every fixture here therefore carries the PRIOR state the memory note
+/// demands — a closed travel op AND a vessel row older than it — because a
+/// world with no completed travel takes the gate's cold-run arm and proves
+/// nothing. Before these tests, every fixture in this file was that empty one.
+@Suite("Salvage Run — arrival freshness")
+struct SalvageRunArrivalFreshnessTests {
+    // MARK: Site 1 — travel (destination = the target system)
+
+    /// Site 1 of 4. Without the gate this re-commands `travel TOSLIT` at a
+    /// vessel whose op says it has already finished travelling.
+    @Test func travelWaitsWhenTheVesselRowStillLagsTheArrival() {
+        let snapshot = world(
+            devices: [laggingVessel(at: "AINALRAM-BELT-1"), controller, drone, relay],
+            dispatchedOperations: afterArrival()
+        )
+        #expect(SalvageRun().nextAction(directive: running(step: "travelling"), world: snapshot) == .wait)
+    }
+
+    /// The no-regression half: the same fixture with a row written AT the
+    /// arrival still departs. If this fails the gate has become a brake on
+    /// every legitimate travel, which is worse than the bug it fixes.
+    @Test func travelStillDispatchesWhenTheRowPostDatesTheArrival() {
+        let snapshot = world(
+            devices: [laggingVessel(at: "AINALRAM-BELT-1", updatedAt: arrivalClosedAt), controller, drone, relay],
+            dispatchedOperations: afterArrival()
+        )
+        #expect(SalvageRun().nextAction(directive: running(step: "travelling"), world: snapshot)
+                == .dispatch(kind: .travel, deviceCode: "VESSEL",
+                             params: CommandParams(destination: "TOSLIT"), nextStep: "travelling"))
+    }
+
+    // MARK: Site 2 — emplace (destination = the Lagrange point)
+
+    /// Site 2 of 4. The `vessel.location != point` check is what misreads the
+    /// lagging row here, so the gate sits between it and the dispatch.
+    @Test func emplaceWaitsWhenTheVesselRowStillLagsTheArrival() {
+        let snapshot = world(
+            devices: [laggingVessel(at: "TOSLIT-3"), controller, drone, relay],
+            dispatchedOperations: afterArrival(), systems: ["TOSLIT": toslit]
+        )
+        #expect(SalvageRun().nextAction(directive: running(step: "emplacing"), world: snapshot) == .wait)
+    }
+
+    @Test func emplaceStillDispatchesWhenTheRowPostDatesTheArrival() {
+        let snapshot = world(
+            devices: [laggingVessel(at: "TOSLIT-3", updatedAt: arrivalClosedAt), controller, drone, relay],
+            dispatchedOperations: afterArrival(), systems: ["TOSLIT": toslit]
+        )
+        #expect(SalvageRun().nextAction(directive: running(step: "emplacing"), world: snapshot)
+                == .dispatch(kind: .travel, deviceCode: "VESSEL",
+                             params: CommandParams(destination: "TOSLIT-3-L4"), nextStep: "emplacing"))
+    }
+
+    // MARK: Site 3 — position (destination = the salvage body)
+
+    /// Site 3 of 4 — the site the live incident actually fired at. The hop from
+    /// the entry point to the first body is short, so the tick after the arrival
+    /// op closes lands well inside the two-transaction window.
+    @Test func positionWaitsWhenTheVesselRowStillLagsTheArrival() {
+        let snapshot = world(
+            devices: [laggingVessel(at: "TOSLIT-3"), controller, drone],
+            dispatchedOperations: afterArrival(),
+            systems: ["TOSLIT": miningToslit], siteAssays: miningToslitAssays
+        )
+        #expect(SalvageRun().nextAction(directive: running(step: "positioning"), world: snapshot) == .wait)
+    }
+
+    @Test func positionStillDispatchesWhenTheRowPostDatesTheArrival() {
+        let snapshot = world(
+            devices: [laggingVessel(at: "TOSLIT-3", updatedAt: arrivalClosedAt), controller, drone],
+            dispatchedOperations: afterArrival(),
+            systems: ["TOSLIT": miningToslit], siteAssays: miningToslitAssays
+        )
+        #expect(SalvageRun().nextAction(directive: running(step: "positioning"), world: snapshot)
+                == .dispatch(kind: .travel, deviceCode: "VESSEL",
+                             params: CommandParams(destination: "TOSLIT-6-5"), nextStep: "positioning"))
+    }
+
+    // MARK: Site 4 — restock (destination = base)
+
+    /// Site 4 of 4. Same race, decided against `baseDesignation` instead of a
+    /// target — and this one runs with no relay aboard, so nothing short-circuits
+    /// ahead of the dispatch.
+    @Test func restockWaitsWhenTheVesselRowStillLagsTheArrival() {
+        let snapshot = world(
+            devices: [laggingVessel(at: "TOSLIT-6-5"), controller, drone], // no relay aboard
+            dispatchedOperations: afterArrival()
+        )
+        #expect(SalvageRun().nextAction(directive: running(step: "restocking"), world: snapshot) == .wait)
+    }
+
+    @Test func restockStillDispatchesWhenTheRowPostDatesTheArrival() {
+        let snapshot = world(
+            devices: [laggingVessel(at: "TOSLIT-6-5", updatedAt: arrivalClosedAt), controller, drone],
+            dispatchedOperations: afterArrival()
+        )
+        #expect(SalvageRun().nextAction(directive: running(step: "restocking"), world: snapshot)
+                == .dispatch(kind: .travel, deviceCode: "VESSEL",
+                             params: CommandParams(destination: "AINALRAM-BELT-1"), nextStep: "restocking"))
+    }
+
+    // MARK: The cold run
+
+    /// A run that has never completed a travel has no watermark for the row to
+    /// post-date, so it must depart on the very first evaluation. Getting this
+    /// wrong is why the watermark is the ARRIVAL and not `stepStartedAt`: that
+    /// gate would have delayed every first travel by a whole deadline.
+    @Test func dispatchesImmediatelyOnAColdRunWithNoCompletedTravel() {
+        let snapshot = world(devices: [laggingVessel(at: "TOSLIT-3"), controller, drone],
+                             systems: ["TOSLIT": miningToslit], siteAssays: miningToslitAssays)
+        #expect(SalvageRun.lastTravelCompletion(for: laggingVessel(at: "TOSLIT-3"), snapshot) == nil)
+        #expect(SalvageRun().nextAction(directive: running(step: "positioning"), world: snapshot)
+                == .dispatch(kind: .travel, deviceCode: "VESSEL",
+                             params: CommandParams(destination: "TOSLIT-6-5"), nextStep: "positioning"))
+    }
+
+    // MARK: The escalation ladder
+
+    /// Ordering is mandated by the confirm-steps-need-fresh-evidence note, half
+    /// two: the DEADLINE outranks the throttled read. The row here is stale on
+    /// both counts, and the deadline is what must answer — otherwise a vessel
+    /// whose reads never land (offline, 429, a device the server 404s) never
+    /// reaches its deadline, never stalls, and buys a `.high` read every tick
+    /// forever at ~12 reads a minute.
+    @Test func surfacesVesselPositionUnconfirmedOnceTheArrivalDeadlinePasses() {
+        let longAgo = fixtureNow.addingTimeInterval(-SalvageRun.arrivalConfirmDeadline)
+        let snapshot = world(
+            devices: [laggingVessel(at: "TOSLIT-3", updatedAt: longAgo.addingTimeInterval(-5)), controller, drone],
+            dispatchedOperations: afterArrival(completedAt: longAgo),
+            systems: ["TOSLIT": miningToslit], siteAssays: miningToslitAssays
+        )
+        #expect(SalvageRun().nextAction(directive: running(step: "positioning"), world: snapshot)
+                == .refreshDevices(deviceCodes: ["VESSEL"], thenStall: .vesselPositionUnconfirmed))
+    }
+
+    /// The incident's own numbers: the arrival closed 139 ms ago (nowhere near
+    /// the deadline) but the vessel row is 123 s old (past
+    /// `arrivalReadInterval`), so the run buys ONE authoritative read.
+    /// `thenStall: nil` is what keeps it bounded — `DirectiveEngine.reAsk`
+    /// collapses a repeat request into `.wait` rather than looping.
+    @Test func readsTheVesselRowOnceTheThrottleAllowsRatherThanWaitingBlind() {
+        let snapshot = world(
+            devices: [laggingVessel(at: "TOSLIT-3", updatedAt: rowLaggingArrivalBy123s), controller, drone],
+            dispatchedOperations: afterArrival(),
+            systems: ["TOSLIT": miningToslit], siteAssays: miningToslitAssays
+        )
+        #expect(SalvageRun().nextAction(directive: running(step: "positioning"), world: snapshot)
+                == .refreshDevices(deviceCodes: ["VESSEL"], thenStall: nil))
+    }
+
+    /// The bottom rung, pinned at the boundary: a row read exactly
+    /// `arrivalReadInterval` ago still waits. The ordinary case is the gap
+    /// closing on its own within a tick or two, and paying for a read every
+    /// time would spend the budget on a race that resolves itself.
+    @Test func waitsRatherThanReadingWithinTheArrivalReadInterval() {
+        let atTheBoundary = fixtureNow.addingTimeInterval(-SalvageRun.arrivalReadInterval)
+        let snapshot = world(
+            devices: [laggingVessel(at: "TOSLIT-3", updatedAt: atTheBoundary), controller, drone],
+            dispatchedOperations: afterArrival(),
+            systems: ["TOSLIT": miningToslit], siteAssays: miningToslitAssays
+        )
+        #expect(SalvageRun().nextAction(directive: running(step: "positioning"), world: snapshot) == .wait)
+    }
+
+    // MARK: Which ops count as an arrival
+
+    /// `.superseded` is stamped on an op when a NEWER command lands on the same
+    /// device, and it stamps `lastConfirmedAt` when it does. Counting it would
+    /// install a watermark for a trip that never finished — gating a real
+    /// dispatch behind an arrival that never happened, this bug inverted — so a
+    /// superseded travel must leave the dispatch path completely open.
+    @Test func aSupersededTravelIsNotAnArrivalWatermark() {
+        let snapshot = world(
+            devices: [laggingVessel(at: "TOSLIT-3"), controller, drone],
+            dispatchedOperations: afterArrival(status: .superseded),
+            systems: ["TOSLIT": miningToslit], siteAssays: miningToslitAssays
+        )
+        #expect(SalvageRun.lastTravelCompletion(for: laggingVessel(at: "TOSLIT-3"), snapshot) == nil)
+        #expect(SalvageRun().nextAction(directive: running(step: "positioning"), world: snapshot)
+                == .dispatch(kind: .travel, deviceCode: "VESSEL",
+                             params: CommandParams(destination: "TOSLIT-6-5"), nextStep: "positioning"))
+    }
+
+    /// `.unknown` is what `DeadlineScheduler` marks an op whose deadline passed
+    /// with nothing confirming it — the clearest case of a trip that did NOT
+    /// arrive, and it stamps `lastConfirmedAt` too.
+    @Test func anUnknownTravelIsNotAnArrivalWatermark() {
+        let snapshot = world(
+            devices: [laggingVessel(at: "TOSLIT-3"), controller, drone],
+            dispatchedOperations: afterArrival(status: .unknown),
+            systems: ["TOSLIT": miningToslit], siteAssays: miningToslitAssays
+        )
+        #expect(SalvageRun.lastTravelCompletion(for: laggingVessel(at: "TOSLIT-3"), snapshot) == nil)
+        #expect(SalvageRun().nextAction(directive: running(step: "positioning"), world: snapshot)
+                == .dispatch(kind: .travel, deviceCode: "VESSEL",
+                             params: CommandParams(destination: "TOSLIT-6-5"), nextStep: "positioning"))
+    }
+
+    /// A completed op of another KIND is not an arrival either: a finished
+    /// `mine` says nothing about where the vessel is, and treating it as a
+    /// watermark would gate travel behind mining.
+    @Test func aCompletedNonTravelOpIsNotAnArrivalWatermark() {
+        let snapshot = world(
+            devices: [laggingVessel(at: "TOSLIT-3"), controller, drone],
+            dispatchedOperations: afterArrival(kind: .mine),
+            systems: ["TOSLIT": miningToslit], siteAssays: miningToslitAssays
+        )
+        #expect(SalvageRun().nextAction(directive: running(step: "positioning"), world: snapshot)
+                == .dispatch(kind: .travel, deviceCode: "VESSEL",
+                             params: CommandParams(destination: "TOSLIT-6-5"), nextStep: "positioning"))
+    }
+
+    /// The watermark is the LATEST completed travel for THIS vessel: another
+    /// device's arrival is not evidence about ours, and an older leg of the same
+    /// route must not be mistaken for the one just finished.
+    @Test func theWatermarkIsTheLatestCompletedTravelForThisVessel() {
+        let earlier = dispatchedTravel(id: "303BFBAB", completedAt: arrivalClosedAt.addingTimeInterval(-857))
+        let latest = dispatchedTravel(id: "1F616245", completedAt: arrivalClosedAt)
+        let someoneElse = dispatchedTravel(
+            id: "OTHER", entityCode: "DRONE", completedAt: arrivalClosedAt.addingTimeInterval(60)
+        )
+        let mining = dispatchedTravel(id: "MINE", kind: .mine, completedAt: arrivalClosedAt.addingTimeInterval(90))
+        let snapshot = world(
+            devices: [laggingVessel(at: "TOSLIT-3"), controller, drone],
+            dispatchedOperations: [
+                earlier.id: earlier, latest.id: latest,
+                someoneElse.id: someoneElse, mining.id: mining,
+            ]
+        )
+        #expect(SalvageRun.lastTravelCompletion(for: laggingVessel(at: "TOSLIT-3"), snapshot) == arrivalClosedAt)
     }
 }

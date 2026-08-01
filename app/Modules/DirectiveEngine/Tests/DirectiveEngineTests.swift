@@ -1569,6 +1569,187 @@ struct DirectiveEngineSalvageRoamTests {
     }
 }
 
+/// The 2026-08-01 `Already at destination` incident, replayed end to end.
+///
+/// Salvage Run `BCC18F1C` stalled `commandRejected` in `positioning` at
+/// 01:37:34 — **139 ms** after the `travel.arrived` event for vessel `C7836770`
+/// at ALZEPHINA-7-4. `GameSync.deviceRoute` settles that one event in two
+/// separate transactions: `Reconciler.applyOperationEvent` closes the travel op
+/// first, `Reconciler.applyEventFields` writes `device.location` second. The
+/// tick landed in the gap, so the op was closed (nothing held the step) while
+/// the vessel row still said ALZEPHINA-6-23, and `positioning` re-commanded
+/// travel to a body the vessel was already parked at.
+///
+/// Driven through `evaluateOnce` with the real `SalvageRun` rather than as a
+/// unit test of `position`, because that is the only shape that is a genuine
+/// regression guard: a unit test of `position` alone passed throughout the
+/// live incident. What the engine reads — `dispatchedOperations`, scoped to
+/// this directive's own `.commandDispatched` entries — is assembled by
+/// `WorldSnapshot.read`, and only this path exercises that assembly.
+@Suite("DirectiveEngine — salvage arrival freshness")
+struct DirectiveEngineSalvageArrivalFreshnessTests {
+    /// The instant travel op `1F616245` closed (`lastConfirmedAt`, 01:37:33.000).
+    private static let arrival = Date(timeIntervalSince1970: 1_000)
+    /// The tick that re-commanded travel, 139 ms later.
+    private static let tick = arrival.addingTimeInterval(0.139)
+    /// The vessel row as the incident left it: 123 s behind the arrival.
+    private static let staleStamp = arrival.addingTimeInterval(-123)
+
+    /// The vessel, still claiming the body it departed from.
+    private func vessel(updatedAt: Date) -> Device {
+        Device(
+            deviceCode: "C7836770", deviceType: "heaven_vessel", replicantCode: "R1",
+            status: "idle", location: "ALZEPHINA-6-23", locationName: nil,
+            operationalCapacity: 100, queueSize: 0, stowedInDeviceCode: nil,
+            controllerDeviceCode: nil, attachedToDeviceCode: nil,
+            createdAt: Date(timeIntervalSince1970: 0), availableCommands: [],
+            features: [], tags: [], detail: .object([:]),
+            updatedAt: updatedAt, firstSeenAt: Date(timeIntervalSince1970: 0)
+        )
+    }
+
+    /// ALZEPHINA holding exactly one live salvage body — ALZEPHINA-7-4, the one
+    /// the vessel had just arrived at — so `nextBody` can only ever name it and
+    /// the re-commanded destination is unambiguous.
+    private var alzephina: StarSystem {
+        StarSystem(
+            designation: "ALZEPHINA",
+            planets: [
+                Planet(designation: "ALZEPHINA-7", moons: [
+                    Moon(designation: "ALZEPHINA-7-4", salvage: [
+                        SalvageSite(designation: "ALZEPHINA-7-4-SAL-1", resourcesAvailable: ["structural"]),
+                    ]),
+                ]),
+            ]
+        )
+    }
+
+    private func salvageDirective() -> Directive {
+        Directive(
+            id: "D1", kind: .salvageRun, status: .running, deviceCode: "C7836770",
+            controllerCode: nil, roamCentre: "ALZEPHINA", fleetTag: "auto:salvage",
+            targets: ["ALZEPHINA"], targetIndex: 0,
+            step: SalvageRun.Step.positioning,
+            stepStartedAt: Self.arrival.addingTimeInterval(-128),
+            returnToOrigin: false, originDesignation: "ALZEPHINA", attentionReason: nil,
+            createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0)
+        )
+    }
+
+    /// The op the engine's watermark comes from, plus the `.commandDispatched`
+    /// entry that scopes it into `WorldSnapshot.dispatchedOperations`. Both are
+    /// required: without the log entry the op is invisible to the snapshot, and
+    /// the gate would silently take its cold-run arm.
+    private func seed(_ database: any DatabaseWriter, vesselUpdatedAt: Date) async throws {
+        let detail = try SystemDetail(system: alzephina, hydratedAt: Date(timeIntervalSince1970: 0))
+        try await database.write { db in
+            try Device.insert { vessel(updatedAt: vesselUpdatedAt) }.execute(db)
+            try SystemDetail.upsert { detail }.execute(db)
+            try SiteAssay.insert {
+                SiteAssay(
+                    id: "ALZEPHINA-7-4-SAL-1", body: "ALZEPHINA-7-4", system: "ALZEPHINA",
+                    siteType: "salvage", totals: ["structural": 900],
+                    assayedAt: Date(timeIntervalSince1970: 0)
+                )
+            }.execute(db)
+            try GameModels.Operation.insert {
+                GameModels.Operation(
+                    id: "1F616245", entityCode: "C7836770", kind: OperationKind.travel.rawValue,
+                    status: .completed, source: .event,
+                    startedAt: Self.arrival.addingTimeInterval(-120), completesAt: nil,
+                    lastConfirmedAt: Self.arrival, detail: .object([:])
+                )
+            }.execute(db)
+            try DirectiveLogEntry.insert {
+                DirectiveLogEntry(
+                    id: "L-DISPATCH", directiveID: "D1", deviceCode: "C7836770",
+                    kind: .commandDispatched, summary: "travel ALZEPHINA-7-4",
+                    step: SalvageRun.Step.positioning, operationID: "1F616245", eventID: nil,
+                    occurredAt: Self.arrival.addingTimeInterval(-120)
+                )
+            }.execute(db)
+            try Directive.insert { salvageDirective() }.execute(db)
+        }
+    }
+
+    private func row(_ database: any DatabaseReader) async throws -> Directive? {
+        try await database.read { db in try Directive.where { $0.id.eq("D1") }.fetchOne(db) }
+    }
+
+    /// The incident itself. The travel op is closed, the vessel row is 123 s
+    /// behind it and still names ALZEPHINA-6-23, and the evaluation lands 139 ms
+    /// after the arrival. Nothing may be commanded off that row — and nothing
+    /// may stall either: this is a race that resolves itself, not a fault.
+    ///
+    /// `commandGovernor.dispatch` is deliberately left unstubbed, so a
+    /// re-commanded travel fails the test loudly at the point it is issued
+    /// rather than only via the assertions below.
+    @Test func aVesselRowLaggingTheArrivalNeitherReCommandsTravelNorStalls() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await seed(database, vesselUpdatedAt: Self.staleStamp)
+        let reads = LockIsolated<[String]>([])
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Self.tick)
+            $0.uuid = .incrementing
+            // The read does not land. That is the hostile case for the gate: the
+            // row stays stale through the re-ask, so `reAsk` must collapse the
+            // repeat request into a wait rather than escalating.
+            $0.deviceRefresher.refresh = { code, _ in
+                reads.withValue { $0.append(code) }
+                return nil
+            }
+        } operation: {
+            let core = DirectiveEngineCore(machines: [SalvageRun()], tick: .seconds(5))
+            await core.evaluateOnce(directiveID: "D1")
+
+            let updated = try await row(database)
+            #expect(updated?.step == SalvageRun.Step.positioning)
+            #expect(updated?.status == .running, "a self-resolving race must not need a human")
+            #expect(updated?.attentionReason == nil)
+
+            // The audit pass logs the arrival it just noticed (`.opCompleted`),
+            // which is right — but there must be no SECOND `.commandDispatched`,
+            // because that is the re-commanded travel the server rejected.
+            let entries = try await database.read { db in try DirectiveLogEntry.all.fetchAll(db) }
+            #expect(entries.map(\.kind).sorted { $0.rawValue < $1.rawValue }
+                    == [.commandDispatched, .opCompleted])
+            #expect(entries.filter { $0.kind == .commandDispatched }.map(\.id) == ["L-DISPATCH"],
+                    "the seeded dispatch only — no re-commanded travel")
+        }
+        #expect(reads.value == ["C7836770"], "exactly one authoritative read, never a loop")
+    }
+
+    /// The proof that the test above is not vacuous. Same fixture, same closed
+    /// travel op, same origin location — only the vessel row's `updatedAt` moves
+    /// forward to the arrival instant, and the run dispatches travel exactly as
+    /// it did before the gate existed. So the freshness of the row is the ONLY
+    /// thing standing between this fixture and a command, which is what makes
+    /// the wait above meaningful rather than an accident of the fixture.
+    @Test func theSameFixtureWithARowPostDatingTheArrivalStillDispatchesTravel() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await seed(database, vesselUpdatedAt: Self.arrival)
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Self.tick)
+            $0.uuid = .incrementing
+            $0.commandGovernor.dispatch = { _, _, _ in .dispatched(.accepted(operationID: "OP-NEW")) }
+        } operation: {
+            let core = DirectiveEngineCore(machines: [SalvageRun()], tick: .seconds(5))
+            await core.evaluateOnce(directiveID: "D1")
+
+            let updated = try await row(database)
+            #expect(updated?.status == .running)
+            #expect(updated?.attentionReason == nil)
+
+            let entries = try await database.read { db in try DirectiveLogEntry.all.fetchAll(db) }
+            #expect(entries.contains { $0.operationID == "OP-NEW" })
+        }
+    }
+}
+
 /// A machine that asks for a footprint refresh once and then waits, so an
 /// evaluation exercises exactly this action.
 private struct FootprintRefreshMachine: MissionStepMachine {
