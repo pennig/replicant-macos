@@ -158,4 +158,119 @@ import Utils
         let count = try await database.read { db in try SiteAssay.all.fetchCount(db) }
         #expect(count == 0)
     }
+
+    /// `depleted` is sticky: a fresh units observation must never resurrect a
+    /// spent site. The three assay writers rebuild `SiteAssay` from scratch on
+    /// every merge, so without explicitly carrying the flag forward they'd
+    /// default it back to `false`.
+    @Test func aFreshDiscoveryPreservesAnAlreadyDepletedAssay() async throws {
+        let database = try GameDatabase.bootstrap()
+        let p = try payload(livePayload)
+
+        try await database.write { db in
+            let seeded = SiteAssay(
+                id: "TAANSI-6-SAL-1", body: "TAANSI-6", system: "TAANSI",
+                siteType: "salvage", totals: ["conductive": 331],
+                assayedAt: Date(timeIntervalSince1970: 0), depleted: true
+            )
+            try SiteAssay.upsert { seeded }.execute(db)
+        }
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+        } operation: {
+            _ = try await LocationsClient.liveValue.recordSalvageDiscovery(payload: p)
+        }
+
+        let assay = try await database.read { db in
+            try SiteAssay.where { $0.id.eq("TAANSI-6-SAL-1") }.fetchOne(db)
+        }
+        #expect(try #require(assay).depleted == true)
+    }
+
+    /// `markSalvageDepleted` (the `salvage.depleted` event path) must ALSO mark
+    /// the durable assay row, not just the catalog blob — the planner reads
+    /// `SiteAssay.depleted`, not the blob.
+    @Test func markSalvageDepletedMarksTheAssayRow() async throws {
+        let database = try GameDatabase.bootstrap()
+        let now = Date(timeIntervalSince1970: 1_000)
+        let system = StarSystem(
+            designation: "TAANSI",
+            planets: [Planet(
+                designation: "TAANSI-6", recon: .scanned,
+                salvage: [SalvageSite(
+                    designation: "TAANSI-6-SAL-1",
+                    resourcesAvailable: ["conductive"], depleted: false,
+                    remainingPct: ["conductive": 80]
+                )]
+            )]
+        )
+        try await database.write { db in
+            let row = try SystemDetail(system: system, hydratedAt: now)
+            try SystemDetail.upsert { row }.execute(db)
+            let seeded = SiteAssay(
+                id: "TAANSI-6-SAL-1", body: "TAANSI-6", system: "TAANSI",
+                siteType: "salvage", totals: ["conductive": 331],
+                assayedAt: Date(timeIntervalSince1970: 0), depleted: false
+            )
+            try SiteAssay.upsert { seeded }.execute(db)
+        }
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(now)
+        } operation: {
+            _ = try await LocationsClient.liveValue.markSalvageDepleted(site: "TAANSI-6-SAL-1")
+        }
+
+        let assay = try await database.read { db in
+            try SiteAssay.where { $0.id.eq("TAANSI-6-SAL-1") }.fetchOne(db)
+        }
+        #expect(try #require(assay).depleted == true)
+    }
+
+    /// The fetch path (`hydrateSystem`, the caller of `SystemDetail.persist`
+    /// for a re-read `GET locations/{star}`) must ALSO mark the durable assay
+    /// when the fetched state reports a site as depleted — a re-fetch is the
+    /// other place a spent site is ever observed, and the planner only ever
+    /// reads the assay, never the blob.
+    @Test func hydratingADepletedSiteMarksItsAssay() async throws {
+        let database = try GameDatabase.bootstrap()
+        let now = Date(timeIntervalSince1970: 1_000)
+        try await database.write { db in
+            let seeded = SiteAssay(
+                id: "TAANSI-6-SAL-1", body: "TAANSI-6", system: "TAANSI",
+                siteType: "salvage", totals: ["conductive": 331],
+                assayedAt: Date(timeIntervalSince1970: 0), depleted: false
+            )
+            try SiteAssay.upsert { seeded }.execute(db)
+        }
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(now)
+            $0.locationsClient.system = { designation in
+                StarSystem(
+                    designation: designation,
+                    planets: [Planet(
+                        designation: "TAANSI-6", recon: .scanned,
+                        salvage: [SalvageSite(
+                            designation: "TAANSI-6-SAL-1",
+                            resourcesAvailable: [], depleted: true,
+                            remainingPct: ["conductive": 0]
+                        )]
+                    )]
+                )
+            }
+        } operation: {
+            @Dependency(\.locationsClient) var client
+            try await client.hydrateSystem(designation: "TAANSI")
+        }
+
+        let assay = try await database.read { db in
+            try SiteAssay.where { $0.id.eq("TAANSI-6-SAL-1") }.fetchOne(db)
+        }
+        #expect(try #require(assay).depleted == true)
+    }
 }

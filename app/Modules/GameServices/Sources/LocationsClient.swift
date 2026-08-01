@@ -191,6 +191,15 @@ extension LocationsClient {
             let cached = try? SystemDetail.where { $0.designation.eq(designation) }.fetchOne(db)
             let merged = (try? cached?.system()).flatMap { $0 }.map { $0.mergingSystemDetail(fresh) } ?? fresh
             try SystemDetail.persist(system: merged, at: now, in: db)
+
+            // Mark the durable assay for any site the FRESH fetch itself
+            // reports as depleted. Deliberately reads `fresh`, not `merged`:
+            // the merge keeps a richer cached body wholesale (including its
+            // stale salvage roster) when one exists, so a fresh depleted flag
+            // can be dropped by the merge before it ever reaches `merged`.
+            for site in fresh.knownSalvageSites where site.depleted {
+                try markAssayDepleted(site: site.designation, in: db)
+            }
         }
     }
 
@@ -268,7 +277,8 @@ extension LocationsClient {
                     system: SiteAssay.system(of: observation.designation),
                     siteType: "salvage",
                     totals: SiteAssay.raising(stored?.totals ?? [:], with: observed),
-                    assayedAt: now
+                    assayedAt: now,
+                    depleted: stored?.depleted ?? false
                 )
                 try SiteAssay.upsert { assay }.execute(db)
             }
@@ -344,7 +354,8 @@ extension LocationsClient {
                         system: SiteAssay.system(of: observation.designation),
                         siteType: "salvage",
                         totals: SiteAssay.raising(stored?.totals ?? [:], with: observed),
-                        assayedAt: now
+                        assayedAt: now,
+                        depleted: stored?.depleted ?? false
                     )
                     try SiteAssay.upsert { assay }.execute(db)
                 }
@@ -384,7 +395,8 @@ extension LocationsClient {
                 system: system,
                 siteType: "salvage",
                 totals: SiteAssay.raising(stored?.totals ?? [:], with: discovery.resources),
-                assayedAt: now
+                assayedAt: now,
+                depleted: stored?.depleted ?? false
             )
             try SiteAssay.upsert { assay }.execute(db)
 
@@ -410,11 +422,16 @@ extension LocationsClient {
     /// cached or nothing matches. Returns whether a row changed.
     @discardableResult
     public func markSalvageDepleted(site: String) async throws -> Bool {
-        try await mutateSalvage(atSite: site) {
+        let changed = try await mutateSalvage(atSite: site) {
             $0.depleted = true
             $0.resourcesAvailable = []
             $0.remainingPct = $0.remainingPct.mapValues { _ in 0 }
         }
+        @Dependency(\.defaultDatabase) var database
+        try await database.write { db in
+            try markAssayDepleted(site: site, in: db)
+        }
+        return changed
     }
 
     /// Drop one depleted resource from a site (a resource-level depletion
@@ -426,6 +443,20 @@ extension LocationsClient {
             $0.resourcesAvailable.removeAll { $0 == resource }
             $0.remainingPct[resource] = 0
         }
+    }
+
+    /// Scoped, one-way `UPDATE` of `SiteAssay.depleted` for exactly one site —
+    /// deliberately never a full upsert. A site with no assay row was never
+    /// assayed, and the Salvage Run planner only ever counts assayed sites, so
+    /// there's nothing to mark in that case and this is a silent no-op.
+    /// Shared by the two paths a site is ever observed spent: the
+    /// `salvage.depleted` event (`markSalvageDepleted`) and a location
+    /// re-fetch that reports a site as depleted (`hydrateSystem`). Never call
+    /// this to set `false` — `depleted` never clears.
+    private func markAssayDepleted(site: String, in db: Database) throws {
+        try SiteAssay.where { $0.id.eq(site) }
+            .update { $0.depleted = #bind(true) }
+            .execute(db)
     }
 
     /// Shared body: load the cached system, apply the transform to the ONE site
