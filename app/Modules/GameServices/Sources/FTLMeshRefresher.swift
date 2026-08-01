@@ -71,14 +71,17 @@ extension FTLMeshRefresher: DependencyKey {
                 return RelayNode(deviceCode: device.deviceCode, star: system)
             }
 
-            // Resolve off each relay's backend network view (a failed/refused read is
-            // skipped inside `relayLinks`), then replace the whole persisted mesh.
-            let links = (try? await devicesClient.relayLinks(nodes)) ?? []
+            // Read each relay's backend network view (a failed/refused read is
+            // skipped inside `relayNetworks`), then replace the whole persisted
+            // mesh with the closure plus its metrics. Classification into drawable
+            // links happens on the read side — see `DirectFTLLinks`.
+            let views = (try? await devicesClient.relayNetworks(nodes)) ?? []
             let now = date.now
+            let rows = FTLLinkRecord.rows(from: views, now: now)
             try? await database.write { db in
-                try FTLLinkRecord.replace(with: links, into: db, now: now)
+                try FTLLinkRecord.replace(rows: rows, into: db)
             }
-            logger.debug("mesh rebuilt: \(nodes.count) relay(s) → \(links.count) edge(s)")
+            logger.debug("mesh rebuilt: \(nodes.count) relay(s) → \(rows.count) closure row(s)")
         }
     )
 

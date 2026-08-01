@@ -78,13 +78,16 @@ public struct DevicesClient: Sendable {
     /// location carries no divertible object (or isn't readable).
     public var diversion: @Sendable (_ locationDesignation: String) async throws -> DiversionSnapshot?
 
-    /// Resolve the live FTL mesh for a set of relay devices by reading each one's
-    /// network view (`GET /v1/devices/{code}/network`). Every reported connection
-    /// becomes an undirected link between the relay's own star and the peer's
-    /// star; reciprocal reports collapse under `FTLLink`'s canonical ordering. A
-    /// relay whose network read fails (or a beacon that doesn't support the view)
-    /// is skipped rather than failing the whole mesh.
-    public var relayLinks: @Sendable (_ relays: [RelayNode]) async throws -> [FTLLink]
+    /// Read each relay's live network view (`GET /v1/devices/{code}/network`).
+    ///
+    /// Returns the views RAW — range and per-connection distance included —
+    /// rather than reducing them to links here. The backend reports the closure
+    /// of a relay's subgraph (every peer, however distant), so deciding which
+    /// pairs are real links is a separate, revisable concern that belongs on the
+    /// read side; see `DirectFTLLinks`. A relay whose network read fails (or a
+    /// beacon that doesn't support the view) is skipped rather than failing the
+    /// whole mesh.
+    public var relayNetworks: @Sendable (_ relays: [RelayNode]) async throws -> [RelayNetworkView]
 
     /// Replace a device's tag set (`PATCH /v1/devices/{code}`, `configuration.tags`).
     /// The declarative `tags` field replaces every tag at once, so the inspector —
@@ -170,14 +173,14 @@ extension DevicesClient: DependencyKey {
             let value = try JSONDecoder().decode(JSONValue.self, from: data)
             return DiversionSnapshot(objectBlock: value["object"], fallbackDesignation: designation)
         },
-        relayLinks: { relays in
+        relayNetworks: { relays in
             guard !relays.isEmpty else { return [] }
             @Dependency(\.gameClient) var gameClient
             // Resolve the client once and reuse it across the per-relay reads (the
             // governor is process-shared, but one client per walk is the clean
             // shape — mirrors `fetchAll`).
             let client = gameClient()
-            var links: Set<FTLLink> = []
+            var views: [RelayNetworkView] = []
             for relay in relays {
                 // A relay may briefly be undeployed / recalled, or the read may be
                 // refused (a beacon returns 400 "Device does not support relay").
@@ -187,14 +190,17 @@ extension DevicesClient: DependencyKey {
                       case let .ok(ok) = output,
                       let body = try? ok.body.json
                 else { continue }
-                for connection in body.connections ?? [] {
-                    guard let peer = connection.star, !peer.isEmpty else { continue }
-                    links.insert(FTLLink(relay.star, peer))
-                }
+                views.append(
+                    RelayNetworkView(
+                        star: relay.star,
+                        rangeLy: body.rangeLy,
+                        connections: (body.connections ?? []).compactMap { connection in
+                            guard let peer = connection.star, !peer.isEmpty else { return nil }
+                            return RelayNetworkView.Connection(
+                                star: peer, distanceLy: connection.distanceLy)
+                        }))
             }
-            // Deterministic order so the render terrain's equality is stable
-            // across fetches that return the same set.
-            return links.sorted { $0.a == $1.a ? $0.b < $1.b : $0.a < $1.a }
+            return views
         },
         updateTags: { deviceCode, tags in
             @Dependency(\.gameClient) var gameClient
@@ -259,7 +265,7 @@ extension DevicesClient: TestDependencyKey {
         fetchAtLocation: unimplemented("DevicesClient.fetchAtLocation", placeholder: []),
         fetchByTag: unimplemented("DevicesClient.fetchByTag", placeholder: []),
         diversion: unimplemented("DevicesClient.diversion", placeholder: nil),
-        relayLinks: unimplemented("DevicesClient.relayLinks", placeholder: []),
+        relayNetworks: unimplemented("DevicesClient.relayNetworks", placeholder: []),
         updateTags: unimplemented("DevicesClient.updateTags")
     )
 }

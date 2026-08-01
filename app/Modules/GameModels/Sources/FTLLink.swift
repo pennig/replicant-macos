@@ -96,14 +96,14 @@ public struct FTLLinkRecord: Identifiable, Equatable, Sendable {
 }
 
 extension FTLLinkRecord {
-    /// Replace the whole persisted mesh with a freshly-resolved edge set. The mesh
+    /// Replace the whole persisted mesh with a freshly-resolved row set. The mesh
     /// is always rebuilt in full (it's small and recomputed from every relay's live
     /// network view), so this clears the table and reinserts in one write — an
-    /// empty `links` correctly leaves no edges (e.g. no relays, or all inactive).
-    public static func replace(with links: [FTLLink], into db: Database, now: Date) throws {
+    /// empty `rows` correctly leaves no edges (e.g. no relays, or all inactive).
+    public static func replace(rows: [FTLLinkRecord], into db: Database) throws {
         try FTLLinkRecord.delete().execute(db)
-        for link in links {
-            try FTLLinkRecord.insert { FTLLinkRecord(link: link, now: now) }.execute(db)
+        for row in rows {
+            try FTLLinkRecord.insert { row }.execute(db)
         }
     }
 }
