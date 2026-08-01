@@ -26,7 +26,11 @@ the DRONE rows via `min()`, never `max([controller]+drones)`: [[ami-drones-are-e
 stale after launch while the controller churns via its digest, so a `max` would let a fresh controller
 vouch for a stale "still aboard" drone (the review-caught Critical). Blessed tradeoff: a server that
 keeps `gather_salvage` asserted while a drone is truly lost waits forever rather than stalling
-(Cancel-recoverable; false-stalls were the real pain).
+(Cancel-recoverable; false-stalls were the real pain). (3) **Relay emplacement actually works now**
+(commit 649f38c): `lagrangePoint(in:)` read the always-empty `Planet.lagrange` and returned nil for
+every system, so `emplace` silently skipped relay deployment and the run had NEVER planted a relay
+live — it now emplaces at the system's `entry_point` (itself an L4, where the vessel already
+arrives), falling back to a synthesised `<lowest planet>-L4`. See [[lagrange-points-and-entry-point]].
 
 **Haul Run SHIPPED 2026-07-31 — see [[haul-run-design]], and note that §6 of this spec is SUPERSEDED.**
 §6 assumed our engine would hand-drive a `cargo_freighter` through travel → collect → travel →
