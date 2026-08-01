@@ -43,6 +43,17 @@ planner, but the BLOB's `depleted` (read by within-system `nextBody`) can moment
 body wins the merge — narrow and self-correcting (a `salvage.depleted` event or `salvageBodyNotDepleted`
 stall resolves it).
 
+(5) **Arrival-freshness gate on all four travel dispatch sites** (2026-08-01, live incident): the run
+stalled `commandRejected: "Already at destination"` 139 ms after a `travel.arrived`, because
+`travel`/`emplace`/`position`/`restock` each guarded a re-dispatch on `openOperation` alone — and the
+arrival event closes that op in a *different transaction* from the one writing `device.location`. A
+tick landing in the gap re-commands travel at the body the vessel is parked on. Now gated on the
+completion of the last `.completed` travel this directive dispatched (read off
+`WorldSnapshot.dispatchedOperations`, no new column), ordered deadline → throttled read → `.wait`,
+stalling `.vesselPositionUnconfirmed` only once an authoritative read has been spent. Full mechanism,
+the `.completed`-not-`isTerminal` rule, the still-unfixed `Reconciler.swift:256` second door, and the
+`SurveyRun` sibling exposure are in [[confirm-steps-need-fresh-evidence]] half three.
+
 **Haul Run SHIPPED 2026-07-31 — see [[haul-run-design]], and note that §6 of this spec is SUPERSEDED.**
 §6 assumed our engine would hand-drive a `cargo_freighter` through travel → collect → travel →
 deposit. It never should have: the AMI transport controller already does exactly that server-side via
