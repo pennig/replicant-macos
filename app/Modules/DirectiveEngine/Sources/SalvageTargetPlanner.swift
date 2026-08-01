@@ -93,10 +93,15 @@ public enum SalvageTargetPlanner {
         // filtered rather than assumed: the table is shared with mining assays
         // by design ("mining assays need no schema change when they land" —
         // `SiteAssay`), and the first one to land would otherwise send a salvage
-        // run to a system holding no salvage at all.
+        // run to a system holding no salvage at all. `depleted` assays are
+        // excluded too: a drained site's `totals` only ever go UP (merge-only-
+        // raises), so units can never fall back to zero on their own — the
+        // `depleted` flag is the only signal that removes a spent site from
+        // ranking, and without it a fully-drained system could still win on
+        // units alone.
         var units: [String: Double] = [:]
         for assay in assays
-        where assay.siteType == "salvage" && !attempted.contains(assay.system) {
+        where assay.siteType == "salvage" && !assay.depleted && !attempted.contains(assay.system) {
             units[assay.system, default: 0] += assay.totals.values.reduce(0, +)
         }
 

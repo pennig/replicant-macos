@@ -27,10 +27,11 @@ struct SalvageTargetPlannerTests {
         )
     }
 
-    private func assay(_ system: String, body: String, units: Double) -> SiteAssay {
+    private func assay(_ system: String, body: String, units: Double, depleted: Bool = false) -> SiteAssay {
         SiteAssay(
             id: "\(body)-SAL-1", body: body, system: system,
-            siteType: "salvage", totals: ["structural": units], assayedAt: .distantPast
+            siteType: "salvage", totals: ["structural": units], assayedAt: .distantPast,
+            depleted: depleted
         )
     }
 
@@ -181,6 +182,32 @@ struct SalvageTargetPlannerTests {
         mining.siteType = "mining"
         #expect(SalvageTargetPlanner.nextTarget(
             assays: [mining], stars: stars, meshSystems: ["HOME"], attempted: [],
+            vessel: Position(x: 0, y: 0, z: 0)
+        ) == nil)
+    }
+
+    /// A drained site's `totals` only ever go up (merge-only-raises), so units
+    /// alone can never tell a spent system from a rich one — `depleted` is the
+    /// only signal that removes it from ranking. Without the filter this richer
+    /// system would win on the second `RankKey` field despite holding nothing.
+    @Test func skipsADepletedSystemEvenWhenItRanksRicher() {
+        let stars = ["HOME": star("HOME", x: 0), "POOR": star("POOR", x: 3), "RICH": star("RICH", x: 3)]
+        let target = SalvageTargetPlanner.nextTarget(
+            assays: [assay("RICH", body: "RICH-1", units: 9000, depleted: true),
+                     assay("POOR", body: "POOR-1", units: 100)],
+            stars: stars, meshSystems: ["HOME", "POOR", "RICH"], attempted: [],
+            vessel: Position(x: 0, y: 0, z: 0)
+        )
+        #expect(target == .init(system: "POOR", units: 100, needsRelay: false))
+    }
+
+    /// A system whose only salvage assay is depleted must never be offered —
+    /// not even as a last resort when nothing else is reachable.
+    @Test func neverOffersASystemWhoseOnlyAssayIsDepleted() {
+        let stars = ["HOME": star("HOME", x: 0), "SPENT": star("SPENT", x: 3)]
+        #expect(SalvageTargetPlanner.nextTarget(
+            assays: [assay("SPENT", body: "SPENT-1", units: 9000, depleted: true)],
+            stars: stars, meshSystems: ["HOME", "SPENT"], attempted: [],
             vessel: Position(x: 0, y: 0, z: 0)
         ) == nil)
     }

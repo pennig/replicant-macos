@@ -1454,6 +1454,17 @@ struct DirectiveEngineSalvageRoamTests {
         )
     }
 
+    /// RICH, but drained: proves `depleted` — not units — is what keeps a spent
+    /// site out of the ranking, through the full engine path rather than the
+    /// pure planner.
+    private func depletedRichAssay() -> SiteAssay {
+        SiteAssay(
+            id: "RICH-2-SAL-1", body: "RICH-2", system: "RICH", siteType: "salvage",
+            totals: ["structural": 900], assayedAt: Date(timeIntervalSince1970: 0),
+            depleted: true
+        )
+    }
+
     private func row(_ database: any DatabaseReader) async throws -> Directive? {
         try await database.read { db in try Directive.where { $0.id.eq("D1") }.fetchOne(db) }
     }
@@ -1491,6 +1502,30 @@ struct DirectiveEngineSalvageRoamTests {
     @Test func aSalvageRunWithNothingReachableIdlesRatherThanCompleting() async throws {
         let database = try GameDatabase.bootstrap()
         try await seed(database, assays: [])
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+        } operation: {
+            let core = DirectiveEngineCore(machines: [SalvageRun()], tick: .seconds(5))
+            await core.evaluateOnce(directiveID: "D1")
+
+            let updated = try await row(database)
+            #expect(updated?.status == .running)
+            #expect(updated?.targets == [])
+            #expect(updated?.attentionReason == nil)
+        }
+    }
+
+    /// A depleted site is not merely a poor pick, it must be invisible to the
+    /// ranking: RICH is the only system holding any assayed salvage at all, but
+    /// its assay is marked `depleted`, so the run must idle exactly as it would
+    /// with no assays seeded at all — never target RICH just because nothing
+    /// else out-ranks it.
+    @Test func aSalvageRunWithOnlyADepletedSiteIdlesRatherThanTargetingIt() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await seed(database, assays: [depletedRichAssay()])
 
         try await withDependencies {
             $0.defaultDatabase = database
