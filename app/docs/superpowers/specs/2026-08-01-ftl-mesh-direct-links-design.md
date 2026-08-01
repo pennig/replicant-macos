@@ -271,3 +271,28 @@ The ingest resolver and the read reduction are both pure and table-driven.
 
 ALPHERATOZ drops from 10 drawn lines to 1 — its only in-range peer is ATIANFU at 6.46 ly —
 rendering as a spur off the network, which is the truth.
+
+## Implementation amendments
+
+Three things this design did not anticipate, found during implementation and review:
+
+1. **Co-located relays need a range merge rule.** Two relays can sit in the *same* system — a
+   `system_hub`'s integrated relay beside a standalone one — with different ranges. The first
+   implementation kept whichever view came first in roster order, so a star's reach could be
+   recorded as the *shorter* of the two, silently dropping edges the hub can actually make and
+   persisting that until the next rebuild. Ingest now takes the **max of the non-nil ranges**,
+   mirroring the read side's union semantics.
+
+2. **Conflicting distances resolve to the min.** When both endpoints report a pair with different
+   distances, the result must not depend on roster order. They measure the same geometry and
+   should agree; taking the smaller only makes disagreement deterministic.
+
+3. **A single-row test cannot pin union semantics.** `distanceLy <= max(...)` versus `min(...)`
+   is invisible to a test whose only row gets restored by the parity repair anyway. Tests for the
+   rule must include short alternate paths, so the component is already whole and the repair has
+   no reason to add the long edge back. This is a direct consequence of the repair being a safety
+   net: it masks classification errors, which is exactly what it is for, and exactly what makes
+   the rule hard to test.
+
+Also worth recording: inside an `FTLLinkRecord` extension the `@Table` macro's dynamic member
+lookup shadows the bare `max`, so it must be spelled `Swift.max`.

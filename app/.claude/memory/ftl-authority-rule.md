@@ -20,8 +20,24 @@ system 3 ly from a relay is still dark until it has its own relay.
 
 **Within a connected subgraph there are no hops.** Any two systems in the same subgraph are
 effectively directly connected, however many ≤7.5 ly edges the subgraph contains. `ftlLinks` stores
-that **closure**, which is why it reads as a 7-clique containing pairs up to 12.53 ly apart — do not
-mistake those rows for physical links, and do not compute hop counts from them.
+that **closure**, which is why it reads as a clique containing pairs far beyond the edge range — do
+not mistake those rows for physical links, and do not compute hop counts from them.
+
+**The closure is still what is stored, but rows now carry their own metrics (2026-08-01).** Each
+`ftlLinks` row has `distanceLy` plus `rangeA`/`rangeB` (the endpoint relays' ranges), because
+`GET devices/{code}/network` returns `range_ly` and a per-connection `distance_ly` — both were
+decoded and thrown away until now. So a row is self-describing: 18.06 ly against a 7.5 ly range is
+visibly not a link. **Read the mesh through `DirectFTLLinks` (GameModels), never off the raw rows** —
+it is the one blessed reduction, filtering to `distanceLy <= max(rangeA, rangeB)` and then repairing
+components so the drawn graph always has the same component count as the closure. On the live
+11-relay mesh that is 55 stored rows → 22 drawn links. Classification stayed on the read side
+deliberately: hub-vs-relay range symmetry is untestable until a hub exists, and a rebuild is
+O(relays) serial network reads fired only on roster/liveness changes, so a wrong rule baked in at
+ingest would sit stale. Storage is quadratic in relay count — revisit around ~500 relays.
+
+**A `system_hub` counts as a mesh node.** `FTLMeshRefresher` rosters on `features.contains("relay")`,
+matching `SalvageTargetPlanner.meshSystems`; it previously matched `deviceType == "ftl_relay"`, which
+would have left every hub off the map entirely.
 
 Consequences that bite:
 
