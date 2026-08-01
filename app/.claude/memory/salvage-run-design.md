@@ -31,6 +31,17 @@ keeps `gather_salvage` asserted while a drone is truly lost waits forever rather
 every system, so `emplace` silently skipped relay deployment and the run had NEVER planted a relay
 live — it now emplaces at the system's `entry_point` (itself an L4, where the vessel already
 arrives), falling back to a synthesised `<lowest planet>-L4`. See [[lagrange-points-and-entry-point]].
+(4) **Depletion-aware planner** (commits d7b5a1c/80509bc/7db3d5b): `SalvageTargetPlanner.nextTarget`
+ranked systems off the merge-only-raises `SiteAssay` store, which is never lowered, so a fully-drained
+system kept its original units and kept being targeted (a new run drove to an already-cleared MENKENTAN
+first). Fix: `SiteAssay` gained a STICKY `depleted` flag (append-only migration), set on BOTH the
+`salvage.depleted` event (`markSalvageDepleted` now updates the assay too) and a location re-fetch (a sink
+reads the **fresh** fetched system's depleted sites — robust to the richer-body-wins `mergingSystemDetail`),
+preserved through the three assay writers, and excluded by `nextTarget` (`&& !assay.depleted`). Nothing ever
+clears it (salvage never replenishes). **Caveat:** on the fetch path the ASSAY is authoritative for the
+planner, but the BLOB's `depleted` (read by within-system `nextBody`) can momentarily lag if a richer cached
+body wins the merge — narrow and self-correcting (a `salvage.depleted` event or `salvageBodyNotDepleted`
+stall resolves it).
 
 **Haul Run SHIPPED 2026-07-31 — see [[haul-run-design]], and note that §6 of this spec is SUPERSEDED.**
 §6 assumed our engine would hand-drive a `cargo_freighter` through travel → collect → travel →
