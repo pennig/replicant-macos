@@ -107,6 +107,10 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
     /// `salvage.depleted` SSE frame, and a dropped one meant the run re-launched
     /// the same body forever.
     case salvageBodyNotDepleted
+    /// The vessel finished travelling to a body but its local row never
+    /// refreshed with the new position. The run cannot prove where the vessel
+    /// is and must not re-command travel at it.
+    case vesselPositionUnconfirmed
     /// No AMI transport controller carries the run's fleet tag, so the Haul Run
     /// has nothing to drive. A configuration error rather than a lull — an empty
     /// *frontier* idles, but an empty *fleet* can never resolve itself.
@@ -129,6 +133,7 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
         case .relayActivationFailed: "Relay didn't come up"
         case .salvageSystemUnresolved: "System data unavailable"
         case .salvageBodyNotDepleted: "Salvage body isn't draining"
+        case .vesselPositionUnconfirmed: "Vessel position unconfirmed"
         case .noHaulControllerTagged: "No haul controller tagged"
         }
     }
@@ -166,6 +171,8 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
             "The system's catalogue data never loaded after arrival. Retry to fetch it again, or skip this target."
         case .salvageBodyNotDepleted:
             "A salvage run finished on this body but it still reads as holding salvage. Check the site, then retry to work it again or skip this target."
+        case .vesselPositionUnconfirmed:
+            "The vessel finished travelling but its position never refreshed. Retry to re-read it, or cancel the run."
         case .noHaulControllerTagged:
             "No AMI transport controller carries the \"auto:haul\" tag. Tag one from the device inspector, then retry."
         }
