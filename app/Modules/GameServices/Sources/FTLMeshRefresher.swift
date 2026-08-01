@@ -58,14 +58,22 @@ extension FTLMeshRefresher: DependencyKey {
             @Dependency(\.devicesClient) var devicesClient
             @Dependency(\.date) var date
 
-            // The relay roster, straight from the persisted fleet — every ftl_relay
-            // device reduced to its (code, system). A deactivated relay stays in the
-            // roster; its network view simply returns no connections (verified live),
-            // so it drops out of the resolved edge set naturally — no status filter
-            // needed here.
+            // The relay roster, straight from the persisted fleet, reduced to
+            // (code, system). Matched on the relay CAPABILITY rather than the
+            // device type: a `system_hub` contains an integrated relay and
+            // genuinely meshes its system, so a `deviceType == "ftl_relay"` match
+            // left every hub off the map entirely. This is the same predicate
+            // `SalvageTargetPlanner.meshSystems` uses, and the two must not
+            // diverge — the map and the planner have to agree on what a mesh node
+            // is. Filtered in Swift because `features` is a JSON column; the
+            // fleet is small enough that the whole-table read is cheap.
+            //
+            // A deactivated relay stays in the roster; its network view simply
+            // returns no connections (verified live), so it drops out of the
+            // resolved edge set naturally — no status filter needed here.
             let relays = (try? await database.read { db in
-                try Device.where { $0.deviceType.eq("ftl_relay") }.fetchAll(db)
-            }) ?? []
+                try Device.all.fetchAll(db)
+            })?.filter { $0.features.contains("relay") } ?? []
             let nodes = relays.compactMap { device -> RelayNode? in
                 guard let system = device.location.map(Self.systemDesignation) else { return nil }
                 return RelayNode(deviceCode: device.deviceCode, star: system)
