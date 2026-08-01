@@ -63,17 +63,61 @@ struct FTLLinkIngestTests {
         #expect(FTLLinkRecord.rows(from: views, now: now).count == 1)
     }
 
-    /// One side reporting no distance must not erase the side that did report one.
-    @Test func prefersTheReportThatCarriedADistance() {
-        let views = [
-            RelayNetworkView(star: "A", rangeLy: 7.5, connections: [.init(star: "B", distanceLy: 4)]),
-            RelayNetworkView(star: "B", rangeLy: 7.5, connections: [.init(star: "A", distanceLy: nil)]),
-        ]
+    /// One side reporting no distance must not erase the side that did report
+    /// one — in EITHER arrival order, so the result cannot depend on the order
+    /// the relay roster happened to come back in.
+    @Test(arguments: [false, true])
+    func prefersTheReportThatCarriedADistance(measuredViewFirst: Bool) {
+        let measured = RelayNetworkView(
+            star: "A", rangeLy: 7.5, connections: [.init(star: "B", distanceLy: 4)])
+        let unmeasured = RelayNetworkView(
+            star: "B", rangeLy: 7.5, connections: [.init(star: "A", distanceLy: nil)])
+        let views = measuredViewFirst ? [measured, unmeasured] : [unmeasured, measured]
 
         let rows = FTLLinkRecord.rows(from: views, now: now)
 
         #expect(rows.count == 1)
         #expect(rows[0].distanceLy == 4)
+    }
+
+    /// Both sides measured, but disagree. Whatever we pick, it must not depend
+    /// on roster order.
+    @Test(arguments: [false, true])
+    func conflictingDistancesResolveIndependentlyOfOrder(shorterFirst: Bool) {
+        let shorter = RelayNetworkView(
+            star: "A", rangeLy: 7.5, connections: [.init(star: "B", distanceLy: 4)])
+        let longer = RelayNetworkView(
+            star: "B", rangeLy: 7.5, connections: [.init(star: "A", distanceLy: 5)])
+        let views = shorterFirst ? [shorter, longer] : [longer, shorter]
+
+        #expect(FTLLinkRecord.rows(from: views, now: now)[0].distanceLy == 4)
+    }
+
+    /// Two relays in ONE system — a `system_hub`'s integrated relay beside a
+    /// standalone one. The star's reach is the LARGER range, in either order:
+    /// keeping the first would silently drop edges the hub can actually make.
+    @Test(arguments: [false, true])
+    func coLocatedRelaysTakeTheLargerRange(hubFirst: Bool) {
+        let hub = RelayNetworkView(
+            star: "A", rangeLy: 12.5, connections: [.init(star: "B", distanceLy: 10)])
+        let standalone = RelayNetworkView(
+            star: "A", rangeLy: 7.5, connections: [.init(star: "B", distanceLy: 10)])
+        let views = hubFirst ? [hub, standalone] : [standalone, hub]
+
+        #expect(FTLLinkRecord.rows(from: views, now: now)[0].rangeA == 12.5)
+    }
+
+    /// A co-located relay whose own read failed contributes a nil range; it must
+    /// not wipe out the range its neighbour did report.
+    @Test(arguments: [false, true])
+    func nilRangeDoesNotEraseAKnownRange(nilFirst: Bool) {
+        let known = RelayNetworkView(
+            star: "A", rangeLy: 7.5, connections: [.init(star: "B", distanceLy: 3)])
+        let unknown = RelayNetworkView(
+            star: "A", rangeLy: nil, connections: [.init(star: "B", distanceLy: 3)])
+        let views = nilFirst ? [unknown, known] : [known, unknown]
+
+        #expect(FTLLinkRecord.rows(from: views, now: now)[0].rangeA == 7.5)
     }
 
     @Test func selfReferentialConnectionIsIgnored() {

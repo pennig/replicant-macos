@@ -50,15 +50,25 @@ extension FTLLinkRecord {
     /// A peer with no view of its own (its read failed, or it is not in the
     /// roster) leaves a nil range, which the read path treats as fail-open.
     public static func rows(from views: [RelayNetworkView], now: Date) -> [FTLLinkRecord] {
+        // Two relays can share a system — a `system_hub`'s integrated relay
+        // alongside a standalone `ftl_relay`. Their ranges differ, so the star's
+        // effective reach is the LARGER of them: keeping whichever view happened
+        // to come first in roster order could drop a real hub-reach edge. This
+        // mirrors the read side's `max(rangeA, rangeB)` union semantics.
         let rangeByStar = Dictionary(
             views.map { ($0.star, $0.rangeLy) },
-            uniquingKeysWith: { first, second in first ?? second })
+            uniquingKeysWith: { first, second in
+                guard let first, let second else { return first ?? second }
+                // `Swift.max`: inside an `FTLLinkRecord` extension the @Table
+                // macro's dynamic member lookup shadows the bare `max`.
+                return Swift.max(first, second)
+            })
 
         var byID: [String: FTLLinkRecord] = [:]
         for view in views {
             for connection in view.connections where connection.star != view.star {
                 let link = FTLLink(view.star, connection.star)
-                let row = FTLLinkRecord(
+                var row = FTLLinkRecord(
                     a: link.a,
                     b: link.b,
                     updatedAt: now,
@@ -66,11 +76,13 @@ extension FTLLinkRecord {
                     rangeA: rangeByStar[link.a] ?? nil,
                     rangeB: rangeByStar[link.b] ?? nil)
 
-                // Both endpoints report the same pair. Prefer whichever report
-                // actually carried a distance — a nil from one side must not
-                // erase a real measurement from the other.
-                if let existing = byID[row.id], existing.distanceLy != nil, row.distanceLy == nil {
-                    continue
+                // Both endpoints report the same pair. A nil from one side must
+                // not erase a real measurement from the other, and where both
+                // measured, the result must not depend on roster order — the two
+                // are the same geometry and should agree, so taking the smaller
+                // simply makes disagreement resolve deterministically.
+                if let existing = byID[row.id] {
+                    row.distanceLy = [existing.distanceLy, row.distanceLy].compactMap { $0 }.min()
                 }
                 byID[row.id] = row
             }
