@@ -519,14 +519,42 @@ fragment OrreryBodyOut orrery_body_fragment(OrreryBodyVaryings in [[stage_in]],
     // weighted toward the night side so it reads as self-illuminated.
     float3 lit = surf.albedo * (0.14 + 1.05 * diff) + surf.emissive * (0.4 + 0.6 * (1.0 - diff));
 
-    // Estimated bodies (partial recon): drain the colour toward grey and overlay a
-    // restless static/scanline flicker — the surface reads as provisional, not solid.
+    // Estimated bodies (partial recon): the surface must read as an unresolved SENSOR
+    // RETURN, not a world — so it is drained to a cold monochrome and broken up by four
+    // stacked artefacts. Each is deliberately coarse: at map scale a body is often only
+    // a few dozen pixels across, and per-pixel noise averages back out to flat dimming
+    // (which is what made the earlier, gentler version read as merely "a bit dark").
     if (in.estimated > 0.5) {
         float g = dot(lit, float3(0.299, 0.587, 0.114));
-        lit = mix(lit, float3(g), 0.55) * 0.82;
-        float stat = hash13(float3(floor(in.position.xy), floor(u.time * 14.0)));
-        float scan = 0.5 + 0.5 * sin(in.position.y * 0.6 + u.time * 6.0);
-        lit *= mix(0.7, 1.08, stat) * mix(0.9, 1.0, scan);
+        // Colour is intel: with none confirmed, keep only a trace of the world's own hue
+        // and push the remainder cold, so an estimated body never competes with a scanned
+        // neighbour for attention.
+        lit = mix(lit, float3(g) * float3(0.76, 0.88, 1.10), 0.90) * 0.60;
+
+        // 1. Static, in 2×2-pixel blocks re-rolled ~20×/s. Blocks (not pixels) survive
+        //    both the small on-screen body and the tonemap's highlight roll-off.
+        float2 cell = floor(in.position.xy * 0.5);
+        float stat = hash13(float3(cell, floor(u.time * 20.0)));
+
+        // 2. Scanlines: a narrow bright ridge on a dark field (squared sine) rather than
+        //    an even wobble, so the raster reads as a raster.
+        float s = 0.5 + 0.5 * sin(in.position.y * 0.9 + u.time * 7.0);
+        float scan = s * s;
+
+        lit *= mix(0.38, 1.60, stat) * mix(0.50, 1.15, scan);
+
+        // 3. A refresh band travelling down the body every ~2.5s — the one artefact that
+        //    is unmistakable at a glance and at any body size. It ADDS light (weighted to
+        //    the lit side but with a floor, so the night hemisphere sweeps too), which is
+        //    what makes the body look actively probed rather than just poorly rendered.
+        float sweep = fract(in.position.y * 0.006 - u.time * 0.4);
+        float d = (sweep - 0.5) * 8.0;
+        lit += (0.10 + 0.9 * g) * exp(-d * d) * 0.7 * float3(0.62, 0.86, 1.0);
+
+        // 4. Dropouts: a handful of 4px rows per second collapse to near-black, the
+        //    signal tearing. Rare enough to read as a glitch, not as texture.
+        float row = hash13(float3(floor(in.position.y * 0.25), floor(u.time * 9.0), 17.0));
+        lit *= 1.0 - 0.80 * step(0.955, row);
     }
 
     OrreryBodyOut out;
