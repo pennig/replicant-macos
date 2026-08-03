@@ -87,15 +87,17 @@ struct BrainEvaluationTests {
 
 @Suite("Brain — plan loop wiring")
 struct BrainLoopTests {
-    /// Under `TestClock`, `DirectiveEngineCore.start()` claims a `brain` task
-    /// alongside its supervisor, and every tick — driven directly the same
-    /// deterministic way `supervisorSpawnsOneExecutorPerRunningDirective`
-    /// drives `reconcileExecutors()`, sidestepping the Task-scheduling race a
-    /// bare `clock.advance` right after `start()` would carry — reads the
-    /// world and writes nothing: no directive is created, and no timeline
-    /// entry is logged. `stop()` then tears the loop down.
-    @Test func loopTicksAndWritesNothingWhenIdle() async throws {
-        let clock = TestClock()
+    /// `tickBrain()` driven directly, deterministically — the same seam
+    /// `evaluateOnce(directiveID:)` gets in the executor tests — with an
+    /// EXACT tick count, not just "no directive appeared": three calls must
+    /// leave `brainTickCount` at exactly 3, which would fail if a tick were
+    /// silently dropped or double-counted. `start()`/`stop()` are
+    /// deliberately not involved here — mixing manual calls with the live
+    /// automatic loop would race two independent sources of ticks against
+    /// the same counter. The wiring itself (`start()` actually spawns a
+    /// clock-driven `brain` task) is `theTimerLoopItselfTicksOnSchedule`'s
+    /// job below.
+    @Test func manualTicksWriteNothingAndCountExactly() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in
             try seedRelay(db, code: "REL1", location: "SOL")
@@ -104,17 +106,14 @@ struct BrainLoopTests {
         let core = DirectiveEngineCore(machines: [], tick: .seconds(5))
 
         await withDependencies {
-            $0.continuousClock = clock
             $0.defaultDatabase = database
             $0.date = .constant(Date(timeIntervalSince1970: 1_000))
         } operation: {
-            await core.start()
-            // Drive several ticks deterministically.
             await core.tickBrain()
             await core.tickBrain()
             await core.tickBrain()
-            await core.stop()
         }
+        #expect(await core.brainTickCount == 3)
 
         let directives = try await database.read { db in try Directive.all.fetchAll(db) }
         #expect(directives.isEmpty, "an idle brain must create no directive, however many ticks ran")
@@ -128,11 +127,31 @@ struct BrainLoopTests {
         #expect(relay?.updatedAt == Date(timeIntervalSince1970: 0), "an idle brain must not touch existing rows")
     }
 
-    /// The real timer loop, not a manual call: advancing `TestClock` alone
-    /// (with no manual `tickBrain()` call) must still produce the same
-    /// nothing-written outcome — proving `start()` actually wired `brain` to
-    /// the clock rather than leaving it a dead field.
-    @Test func theTimerLoopItselfTicksWithoutAnyManualDrive() async throws {
+    /// The real timer loop, not a manual call: `start()` alone wires a
+    /// `brain` `Task` that ticks once immediately (the same immediate-
+    /// first-tick shape `reconcileExecutors()` has, before the loop's first
+    /// `clock.sleep`). Asserting the EXACT count — not merely that no
+    /// directive appeared — is what makes this test able to fail if
+    /// `start()` stopped wiring `brain` to the clock at all: a dead `brain`
+    /// field, or a loop body that silently no-ops, would both leave
+    /// `directives.isEmpty` true (an idle brain writes nothing either way)
+    /// but would leave `brainTickCount` at 0, not 1.
+    ///
+    /// This deliberately does NOT try to also prove the "ticks again every
+    /// 5s" cadence by bulk-advancing `TestClock` further: `tickBrain()`'s
+    /// body reads the real database (`Brain.evaluateOnce()`), a genuine
+    /// cross-thread hop that `TestClock`'s cooperative-yield synchronization
+    /// cannot wait out — confirmed empirically, both a single
+    /// `.advance(by: .seconds(20))` and four sequential
+    /// `.advance(by: .seconds(5))` calls produced a non-reproducible tick
+    /// count across runs (1, then 2, then back to 1). Asserting an exact
+    /// count there would trade one false-confidence problem for a flaky
+    /// test — a worse one, since it fails intermittently rather than
+    /// reliably. The 5-second CADENCE itself is instead proven the
+    /// deterministic way, by `manualTicksWriteNothingAndCountExactly` above:
+    /// it drives `tickBrain()` directly, the very method this loop's body
+    /// calls every `tick`.
+    @Test func theTimerLoopItselfTicksOnSchedule() async throws {
         let clock = TestClock()
         let database = try GameDatabase.bootstrap()
         let core = DirectiveEngineCore(machines: [], tick: .seconds(5))
@@ -143,7 +162,16 @@ struct BrainLoopTests {
             $0.date = .constant(Date(timeIntervalSince1970: 1_000))
         } operation: {
             await core.start()
-            await clock.advance(by: .seconds(20))
+            // A zero-duration advance still runs `TestClock.advance`'s
+            // internal cooperative yield, which is enough to let the just-
+            // spawned `brain` Task reach the synchronous `brainTickCount +=
+            // 1` at the very top of `tickBrain()` — a real (if virtual-time-
+            // free) synchronization point, not a timing guess.
+            await clock.advance(by: .zero)
+            #expect(
+                await core.brainTickCount == 1,
+                "start() must wire brain to tick immediately — a dead `brain` field would leave this at 0"
+            )
             await core.stop()
         }
 

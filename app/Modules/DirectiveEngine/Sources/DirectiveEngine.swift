@@ -71,6 +71,12 @@ actor DirectiveEngineCore {
 
     /// Test seam: how many executors are alive.
     var executorCount: Int { executors.count }
+    /// Test seam: how many times the brain has ticked. The only way to prove
+    /// the plan loop is genuinely wired to the clock (as opposed to
+    /// `brain` being a dead field) — the no-writes assertions elsewhere hold
+    /// identically whether the loop ticked once or a hundred times, so they
+    /// can't catch the wiring being removed. Incremented in `tickBrain()`.
+    private(set) var brainTickCount = 0
 
     init(machines: [any MissionStepMachine], tick: Duration) {
         self.machines = Dictionary(machines.map { ($0.kind, $0) }, uniquingKeysWith: { first, _ in first })
@@ -134,6 +140,7 @@ actor DirectiveEngineCore {
     /// than `private` so tests can drive it directly, the same seam
     /// `reconcileExecutors()` and `evaluateOnce(directiveID:)` already use.
     func tickBrain() async {
+        brainTickCount += 1
         @Dependency(\.date) var date
         let decision = await Brain(now: date.now).evaluateOnce()
         // Phase A: idle/stall only — nothing to enact yet. Later tasks act on
