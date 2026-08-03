@@ -130,9 +130,9 @@ extension MeshGraph {
     /// One candidate path's running cost while it's still open. `pred ==
     /// nil` marks a zero-cost mesh source (the search's starting point).
     private struct DijkstraState {
-        var relays: Int
-        var dist: Double
-        var pred: String?
+        let relays: Int
+        let dist: Double
+        let pred: String?
     }
 
     /// A frontier entry: a candidate (not-yet-settled) cost to reach
@@ -161,8 +161,6 @@ extension MeshGraph {
     /// `reach` for the sizing rationale.
     private struct Heap<Element: Comparable> {
         private var storage: [Element] = []
-
-        var isEmpty: Bool { storage.isEmpty }
 
         mutating func insert(_ element: Element) {
             storage.append(element)
@@ -230,6 +228,15 @@ public extension MeshGraph {
     /// a heap keeps insert/pop at O(log n) with no added complexity risk,
     /// and — because `Frontier` is a strict total order — costs nothing in
     /// determinism versus the array.
+    ///
+    /// Cost bound: the early exit below only fires once every requested
+    /// target has settled, and for the intended caller (value-bearing
+    /// candidates scattered across the census) at least one target is
+    /// typically out of range of the mesh — so in practice the search runs
+    /// to exhaustion of the mesh's REACHABLE CONNECTED COMPONENT, not some
+    /// smaller early-terminated slice. At full census scale that's still
+    /// comfortably inside the 5-second tick budget: ~14k pops × ≤27-cell
+    /// probes plus an O(n log n) heap is single-digit milliseconds.
     func reach(targets: Set<String>, meshSystems: Set<String>) -> [String: Chain] {
         guard !targets.isEmpty, !meshSystems.isEmpty else { return [:] }
 

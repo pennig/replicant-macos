@@ -78,20 +78,24 @@ struct MeshGraphReachTests {
         #expect(c.completesNow)
     }
 
-    /// A target nearer a SECOND mesh system than the first must route from
-    /// the nearer source, not always from the first-listed one.
+    /// A target reachable from BOTH mesh sources, at different distances,
+    /// must route from the nearer one — a genuine multi-source contention
+    /// where the second-processed source must strictly improve `best[target]`
+    /// after the first already wrote it. (A world where one source is
+    /// simply unreachable, as in `multiSourceRoutesFromEveryMeshSystem`
+    /// above, can't exercise this: there'd be only one candidate route.)
     @Test func multiSourcePicksNearerSource() throws {
         let positions: [String: Position] = [
             "MESH1": .init(x: 0, y: 0, z: 0),
-            "MESH2": .init(x: 20, y: 0, z: 0),
-            "NEAR2": .init(x: 24, y: 0, z: 0), // one hop from MESH2 only
+            "MESH2": .init(x: 6, y: 0, z: 0),
+            "T": .init(x: 7, y: 0, z: 0), // 7 ly from MESH1, 1 ly from MESH2 — both in range
         ]
         let g = MeshGraph(positions: positions)
-        let chains = g.reach(targets: ["NEAR2"], meshSystems: ["MESH1", "MESH2"])
-        let c = try #require(chains["NEAR2"])
-        #expect(c.firstHop == "NEAR2")
+        let chains = g.reach(targets: ["T"], meshSystems: ["MESH1", "MESH2"])
+        let c = try #require(chains["T"])
+        #expect(c.firstHop == "T")
         #expect(c.relaysRemaining == 1)
-        #expect(c.hopDistance == 4)
+        #expect(c.hopDistance == 1)
     }
 
     /// Primary key is relay count, not distance: a 2-relay chain that's
@@ -128,34 +132,38 @@ struct MeshGraphReachTests {
     /// Determinism is a requirement, not a nicety: the brain recomputes this
     /// graph from scratch every 5-second tick with no memory of what it
     /// decided last time. If a genuine exact tie between two symmetric
-    /// routes resolves inconsistently (e.g. because it silently rode on
-    /// Dictionary iteration order), `firstHop` could flap between ticks and
-    /// thrash the fleet. MESH -- A -- T and MESH -- B -- T are exactly
+    /// routes resolves inconsistently, `firstHop` could flap between ticks
+    /// and thrash the fleet. MESH -- A -- T and MESH -- B -- T are exactly
     /// symmetric (same relay count, same total distance); the tie must
-    /// always resolve the same way — here, to "A" (lexicographically first)
-    /// — regardless of how the input dictionaries were built.
+    /// always resolve the same way — to "A" (lexicographically first).
+    ///
+    /// This is proven geometry-independently: the SAME two physical
+    /// positions are used in both runs, but which designation ("A" or "B")
+    /// occupies which position is swapped between them. If the winner were
+    /// actually decided by position (e.g. by `neighbours(of:)`'s grid scan
+    /// order, or by which literal happened to be built first) rather than
+    /// by designation, swapping the labels would flip — or at least
+    /// destabilize — the outcome. It doesn't: "A" wins both times, which
+    /// isolates designation as the deciding factor.
     @Test func exactTieBreaksDeterministicallyOnDesignation() throws {
-        // Two insertion orders for the SAME logical content: Dictionary
-        // iteration order is not guaranteed stable across instances, so
-        // building from differently-ordered sequences is the closest a unit
-        // test can get to stressing that non-guarantee.
-        // MESH-T direct is 10 ly (out of range); A and B are each exactly
-        // 7.071 ly from both MESH and T, a genuine exact tie on (relays,
-        // dist) between the two routes.
-        let forwardOrder: [(String, Position)] = [
-            ("MESH", .init(x: 0, y: 0, z: 0)),
-            ("A", .init(x: 5, y: 0, z: 5)),
-            ("B", .init(x: -5, y: 0, z: 5)),
-            ("T", .init(x: 0, y: 0, z: 10)),
-        ]
-        let reverseOrder = Array(forwardOrder.reversed())
+        // MESH-T direct is 10 ly (out of range); each of the two positions
+        // below is exactly 7.071 ly from both MESH and T, a genuine exact
+        // tie on (relays, dist) between whichever labels occupy them.
+        let mesh = Position(x: 0, y: 0, z: 0)
+        let target = Position(x: 0, y: 0, z: 10)
+        let positionOne = Position(x: 5, y: 0, z: 5)
+        let positionTwo = Position(x: -5, y: 0, z: 5)
 
         var results: [Chain] = []
-        for order in [forwardOrder, reverseOrder] {
-            let positions = Dictionary(uniqueKeysWithValues: order)
+        for (aPosition, bPosition) in [(positionOne, positionTwo), (positionTwo, positionOne)] {
+            let positions: [String: Position] = [
+                "MESH": mesh,
+                "A": aPosition,
+                "B": bPosition,
+                "T": target,
+            ]
             let g = MeshGraph(positions: positions)
-            let meshSystems = Set(order.map(\.0)).intersection(["MESH"])
-            let chains = g.reach(targets: ["T"], meshSystems: meshSystems)
+            let chains = g.reach(targets: ["T"], meshSystems: ["MESH"])
             let c = try #require(chains["T"])
             results.append(c)
         }
@@ -164,6 +172,114 @@ struct MeshGraphReachTests {
             #expect(c.firstHop == "A")
             #expect(c.waypoints == ["A", "T"])
         }
-        #expect(results[0] == results[1], "the tie must resolve identically across differently-ordered input")
+        #expect(results[0] == results[1], "the tie must resolve identically regardless of which position each designation occupies")
+    }
+
+    // MARK: - Randomized cross-check against a brute-force reference
+
+    /// A deterministic, seedable PRNG (SplitMix64). Fixed integer seeds only
+    /// — never `SystemRandomNumberGenerator` — so any disagreement this
+    /// cross-check finds reproduces exactly from the seed alone, rather than
+    /// depending on when the test happened to run.
+    private struct SplitMix64: RandomNumberGenerator {
+        private var state: UInt64
+        init(seed: UInt64) { state = seed }
+        mutating func next() -> UInt64 {
+            state &+= 0x9E37_79B9_7F4A_7C15
+            var z = state
+            z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+            z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+            return z ^ (z >> 31)
+        }
+    }
+
+    /// Exhaustive reference, independent of `MeshGraph`/Dijkstra: enumerates
+    /// every SIMPLE path (no repeated systems) from any mesh source to
+    /// `target` within `hopRange` via plain pairwise-distance adjacency
+    /// (not `neighbours(of:)`), branch-and-bound pruned on the same
+    /// `(relays, dist)` key `reach` uses, and returns the lexicographically
+    /// cheapest on `(relays, dist)`.
+    private static func bruteForceCheapest(
+        positions: [String: Position],
+        hopRange: Double,
+        meshSystems: Set<String>,
+        target: String
+    ) -> (relays: Int, dist: Double, firstHop: String)? {
+        guard !meshSystems.contains(target) else { return nil } // already meshed — not a grow target
+        var best: (relays: Int, dist: Double, firstHop: String)?
+
+        func dfs(current: String, visited: Set<String>, relays: Int, dist: Double, firstHop: String?) {
+            if let best, (relays, dist) >= (best.relays, best.dist) { return } // can't improve from here
+            if current == target, relays > 0, let firstHop {
+                best = (relays, dist, firstHop)
+                return // a simple path can't usefully extend past its own target
+            }
+            guard let currentPosition = positions[current] else { return }
+            for (candidate, candidatePosition) in positions where !visited.contains(candidate) {
+                let stepDist = currentPosition.distance(to: candidatePosition)
+                guard stepDist <= hopRange else { continue }
+                let addedRelay = meshSystems.contains(candidate) ? 0 : 1
+                let nextFirstHop = firstHop ?? (meshSystems.contains(candidate) ? nil : candidate)
+                dfs(
+                    current: candidate,
+                    visited: visited.union([candidate]),
+                    relays: relays + addedRelay,
+                    dist: dist + stepDist,
+                    firstHop: nextFirstHop
+                )
+            }
+        }
+
+        for source in meshSystems where positions[source] != nil {
+            dfs(current: source, visited: [source], relays: 0, dist: 0, firstHop: nil)
+        }
+        return best
+    }
+
+    /// `reach` is the single computation both Grow and Prune will read in
+    /// opposite directions, so it's worth checking against an independent,
+    /// exhaustive reference — not just the hand-picked worlds above. Builds
+    /// ~2,000 deterministic small random worlds (12 systems, 2-3 mesh
+    /// sources, one random unmeshed target each) and asserts `reach`'s
+    /// answer (relay count, distance, first hop, and reachability itself)
+    /// matches brute-force enumeration of every simple path.
+    @Test func randomizedCrossCheckAgainstBruteForce() throws {
+        let hopRange = 6.0
+        let systemNames = (0..<12).map { "S\($0)" }
+
+        for seed in UInt64(1)...2000 {
+            var rng = SplitMix64(seed: seed)
+            var positions: [String: Position] = [:]
+            for name in systemNames {
+                positions[name] = Position(
+                    x: Double.random(in: -8...8, using: &rng),
+                    y: Double.random(in: -8...8, using: &rng),
+                    z: Double.random(in: -8...8, using: &rng)
+                )
+            }
+            let meshCount = Int.random(in: 2...3, using: &rng)
+            let meshSystems = Set(systemNames.shuffled(using: &rng).prefix(meshCount))
+            let remaining = systemNames.filter { !meshSystems.contains($0) }
+            guard let target = remaining.shuffled(using: &rng).first else { continue }
+
+            let g = MeshGraph(positions: positions, hopRange: hopRange)
+            let chains = g.reach(targets: [target], meshSystems: meshSystems)
+            let reference = Self.bruteForceCheapest(
+                positions: positions, hopRange: hopRange, meshSystems: meshSystems, target: target
+            )
+
+            switch (chains[target], reference) {
+            case (nil, nil):
+                continue
+            case let (.some(c), .some(r)):
+                #expect(c.relaysRemaining == r.relays, "seed \(seed): relay count mismatch")
+                #expect(c.hopDistance == r.dist, "seed \(seed): distance mismatch")
+                #expect(c.firstHop == r.firstHop, "seed \(seed): first-hop mismatch")
+            default:
+                Issue.record(
+                    "seed \(seed): reachability mismatch — reach=\(String(describing: chains[target])), brute force=\(String(describing: reference))"
+                )
+            }
+        }
     }
 }
