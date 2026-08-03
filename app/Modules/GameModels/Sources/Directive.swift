@@ -115,6 +115,11 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
     /// has nothing to drive. A configuration error rather than a lull — an empty
     /// *frontier* idles, but an empty *fleet* can never resolve itself.
     case noHaulControllerTagged
+    /// The brain's resource-reserve rail vetoed a print: some resource type at
+    /// the hub sits below its reserve floor, so the print never went out.
+    /// Self-supply (mine/salvage) refills the hub over time, so this clears on
+    /// its own as stock recovers — it never needs an operator.
+    case printStockShort
 
     /// The stall panel's headline.
     public var displayName: String {
@@ -135,6 +140,7 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
         case .salvageBodyNotDepleted: "Salvage body isn't draining"
         case .vesselPositionUnconfirmed: "Vessel position unconfirmed"
         case .noHaulControllerTagged: "No haul controller tagged"
+        case .printStockShort: "Resource stock too low to print"
         }
     }
 
@@ -175,6 +181,8 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
             "The vessel finished travelling but its position never refreshed. Retry to re-read it, or cancel the run."
         case .noHaulControllerTagged:
             "No AMI transport controller carries the \"auto:haul\" tag. Tag one from the device inspector, then retry."
+        case .printStockShort:
+            "The hub doesn't have enough of a resource to print without dropping below reserve. It clears on its own as stock recovers — retry once supply catches up."
         }
     }
 }
@@ -199,7 +207,7 @@ public extension DirectiveAttentionReason {
         switch self {
         case .surveyIncomplete, .unreachableDevice, .vesselPositionUnconfirmed,
              .salvageSystemUnresolved, .salvageBodyNotDepleted, .commandRejected,
-             .relayActivationFailed:
+             .relayActivationFailed, .printStockShort:
             return .retry
         case .noSurveyControllerAboard, .noSurveyDroneAboard, .noMiningControllerAboard,
              .noMiningDroneAboard, .noRelayCoLocated, .dronesNotRecovered,
