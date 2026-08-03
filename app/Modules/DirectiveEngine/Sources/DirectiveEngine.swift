@@ -26,6 +26,7 @@ import SQLiteData
 import UniverseModels
 
 private let logger = Logger(subsystem: "name.pennig.replicould", category: "DirectiveEngine")
+private let brainLogger = Logger(subsystem: "name.pennig.replicould", category: "Brain")
 
 public struct DirectiveEngine: Sendable {
     /// Begin supervising running directives. Idempotent.
@@ -62,6 +63,11 @@ actor DirectiveEngineCore {
     private let tick: Duration
     private var supervisor: Task<Void, Never>?
     private var executors: [String: Task<Void, Never>] = [:]
+    /// The automation brain's plan loop — reads a `WorldView` and decides
+    /// what's worth doing every tick, beside (never inside) the supervisor
+    /// loop above. Phase A (this build) is inert: it reads and idles, never
+    /// writes. See `Brain.swift`.
+    private var brain: Task<Void, Never>?
 
     /// Test seam: how many executors are alive.
     var executorCount: Int { executors.count }
@@ -71,21 +77,41 @@ actor DirectiveEngineCore {
         self.tick = tick
     }
 
-    /// Claims `supervisor` before any suspension, so a concurrent `start()`
-    /// can't double-supervise and a `stop()` can't interleave between the guard
-    /// and the claim (the `GameSyncEngine.start()` shape).
+    /// Claims `supervisor` (and `brain`) before any suspension, so a
+    /// concurrent `start()` can't double-supervise and a `stop()` can't
+    /// interleave between the guard and the claim (the `GameSyncEngine.start()`
+    /// shape). Nothing suspends between the guard and either claim, so both
+    /// happen atomically within this actor turn.
     func start() {
         guard supervisor == nil else {
             logger.debug("start ignored — already running")
             return
         }
         logger.info("starting — \(self.machines.count) mission machine(s) registered")
-        @Dependency(\.continuousClock) var clock
-        let tick = self.tick
-        supervisor = Task { [weak self] in
-            while !Task.isCancelled {
-                await self?.reconcileExecutors()
-                try? await clock.sleep(for: tick)
+        do {
+            @Dependency(\.continuousClock) var clock
+            let tick = self.tick
+            supervisor = Task { [weak self] in
+                while !Task.isCancelled {
+                    await self?.reconcileExecutors()
+                    try? await clock.sleep(for: tick)
+                }
+            }
+        }
+        brainLogger.info("starting — brain online, calm, inert")
+        do {
+            // A separate local read of the same dependencies as the
+            // supervisor above, rather than sharing its `clock`/`tick` —
+            // mirrors `makeExecutor`'s own local read, and keeps two
+            // concurrently-running Task closures from capturing the same
+            // local variable.
+            @Dependency(\.continuousClock) var clock
+            let tick = self.tick
+            brain = Task { [weak self] in
+                while !Task.isCancelled {
+                    await self?.tickBrain()
+                    try? await clock.sleep(for: tick)
+                }
             }
         }
     }
@@ -94,9 +120,26 @@ actor DirectiveEngineCore {
         logger.info("stopping")
         supervisor?.cancel()
         supervisor = nil
+        brainLogger.info("stopping")
+        brain?.cancel()
+        brain = nil
         for (_, task) in executors { task.cancel() }
         executors.removeAll()
         idlePlanUntil.removeAll()
+    }
+
+    /// One brain tick: bridge the clock's `now` in via `@Dependency(\.date)`
+    /// (never `Date()`, so `TestClock` determinism holds), ask `Brain` for a
+    /// decision, and — Phase A only — do nothing with it. Internal rather
+    /// than `private` so tests can drive it directly, the same seam
+    /// `reconcileExecutors()` and `evaluateOnce(directiveID:)` already use.
+    func tickBrain() async {
+        @Dependency(\.date) var date
+        let decision = await Brain(now: date.now).evaluateOnce()
+        // Phase A: idle/stall only — nothing to enact yet. Later tasks act on
+        // `decision` through the same create/cancel/retry rails
+        // `DirectiveExecutor` already uses, never by writing a row here.
+        brainLogger.debug("tick: \(String(describing: decision), privacy: .public)")
     }
 
     /// Spawn an executor for each running directive that lacks one, and retire
