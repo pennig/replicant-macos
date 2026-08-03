@@ -17,6 +17,7 @@ import Foundation
 import GameModels
 import SQLiteData
 import UniverseModels
+@testable import DirectiveEngine
 
 // MARK: - Device seeds
 
@@ -107,4 +108,51 @@ func seedLocationEvent(
             firstSeenAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0)
         )
     }.execute(db)
+}
+
+// MARK: - WorldView fixtures
+
+/// Database-free `WorldView` fixtures for brain-logic tests (value ranking,
+/// pathfinding) that reason purely over a snapshot and have no need to round
+/// -trip through `GameDatabase` the way `WorldViewTests` does. Build one with
+/// `.empty(meshSystems:)`, then layer in only the fields a test cares about
+/// via `.with(...)`.
+extension WorldView {
+    /// An otherwise-blank snapshot — every collection empty, no hub, `now`
+    /// pinned to the epoch for determinism. `meshSystems` is the one field
+    /// worth defaulting at the call site since nearly every brain test names
+    /// at least one already-meshed system.
+    static func empty(meshSystems: Set<String> = []) -> WorldView {
+        WorldView(
+            devices: [:],
+            starPositions: [:],
+            meshSystems: meshSystems,
+            salvageUnits: [:],
+            eventSystems: [],
+            hubLocation: nil,
+            beltsBySystem: [:],
+            now: Date(timeIntervalSince1970: 0)
+        )
+    }
+
+    /// Returns a copy with the given fields overlaid; omitted parameters
+    /// carry over from `self` unchanged. Only exposes the fields brain tests
+    /// have needed so far — extend as later tasks need more.
+    func with(
+        salvageUnits: [String: Double]? = nil,
+        eventSystems: Set<String>? = nil,
+        starPositions: [String: Position]? = nil,
+        beltsBySystem: [String: [BeltInfo]]? = nil
+    ) -> WorldView {
+        WorldView(
+            devices: devices,
+            starPositions: starPositions ?? self.starPositions,
+            meshSystems: meshSystems,
+            salvageUnits: salvageUnits ?? self.salvageUnits,
+            eventSystems: eventSystems ?? self.eventSystems,
+            hubLocation: hubLocation,
+            beltsBySystem: beltsBySystem ?? self.beltsBySystem,
+            now: now
+        )
+    }
 }
