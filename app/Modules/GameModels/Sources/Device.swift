@@ -183,6 +183,20 @@ extension Device {
     public var isOutOfControlRange: Bool { inControlRange == false }
 }
 
+// MARK: - Mesh & print-hub predicates
+
+public extension Device {
+    /// The print hub predicate (06): a device that can accept `enqueue_print`.
+    /// Uses availableCommands (capability) rather than a deviceType string match,
+    /// which a print-vessel would otherwise miss. `system_hub` (mesh device) is a
+    /// DIFFERENT concept and is deliberately not matched here.
+    var isPrintHub: Bool { availableCommands.contains("enqueue_print") }
+
+    /// An FTL relay that is presently meshing its system. Capability, not type
+    /// (includes an integrated system_hub relay); status matched via statusBase.
+    var isActiveRelay: Bool { features.contains("relay") && statusBase == "relaying" }
+}
+
 // MARK: - Replication source capability
 
 extension Device {
@@ -680,6 +694,29 @@ extension Operation {
     /// non-travel ops.
     public var travelSnapshot: TravelSnapshot? {
         TravelSnapshot(travelObject: detail["result"])
+    }
+}
+
+// MARK: - Test fixture
+
+public extension Device {
+    /// A minimal device row for tests, in the same loud-defaults spirit as a
+    /// shared client's `testValue`: `code`/`type`/`location` are required
+    /// arguments (never a guessed default), and every other column takes an
+    /// inert placeholder a predicate test then overrides explicitly (e.g.
+    /// `availableCommands`, `features`, `status`) rather than relying on a
+    /// silently-plausible default to make the assertion pass.
+    static func fixture(code: String, type: String, location: String?) -> Device {
+        Device(
+            deviceCode: code, deviceType: type, replicantCode: "R1",
+            status: "idle", location: location, locationName: nil,
+            operationalCapacity: 100, queueSize: 0,
+            stowedInDeviceCode: nil, controllerDeviceCode: nil, attachedToDeviceCode: nil,
+            createdAt: Date(timeIntervalSince1970: 0),
+            availableCommands: [], features: [], tags: [],
+            detail: .object([:]),
+            updatedAt: Date(timeIntervalSince1970: 0), firstSeenAt: Date(timeIntervalSince1970: 0)
+        )
     }
 }
 
