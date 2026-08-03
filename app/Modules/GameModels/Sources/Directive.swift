@@ -179,6 +179,36 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
     }
 }
 
+/// How the brain (as an automated operator) responds to a directive that has
+/// halted-and-surfaced. The mission layer's halt matrix is unchanged; this is
+/// purely the brain's response classification (see brain-executor-seam.md).
+public enum BrainDisposition: String, Codable, Sendable, Equatable {
+    /// Self-corrects on a re-read — bounded auto-`retry`, budget timeline-derived, then escalate.
+    case retry
+    /// Needs a power the brain lacks (staging / adoption / replacement / tagging),
+    /// or an executor exhausted something it can't self-compose — surface to operator.
+    case escalate
+    /// An expected operator choice (the HITL seam) — surface as a decision request.
+    case decisionRequest
+}
+
+public extension DirectiveAttentionReason {
+    /// The brain never invents a response; it classifies the reason and drives
+    /// only `{retry, cancel}`. `skipTarget`/`pause`/`resume` stay operator-only.
+    var brainDisposition: BrainDisposition {
+        switch self {
+        case .surveyIncomplete, .unreachableDevice, .vesselPositionUnconfirmed,
+             .salvageSystemUnresolved, .salvageBodyNotDepleted, .commandRejected,
+             .relayActivationFailed:
+            return .retry
+        case .noSurveyControllerAboard, .noSurveyDroneAboard, .noMiningControllerAboard,
+             .noMiningDroneAboard, .noRelayCoLocated, .dronesNotRecovered,
+             .launchDeployedNothing, .noHaulControllerTagged, .awaitingRelayRestock:
+            return .escalate
+        }
+    }
+}
+
 /// One custom mission instance. Policy-ready by design: nothing here records
 /// whether a click or a future standing policy created the row.
 @Table
