@@ -160,9 +160,15 @@ public struct WorldView: Equatable, Sendable {
     ) throws -> [String: [BeltInfo]] {
         let surveyed = try SystemDetail.where { $0.systemScanned }.fetchAll(db)
         let candidates = surveyed.filter { !meshSystems.contains($0.designation) }
-        logger.debug("belts: decoding \(candidates.count, privacy: .public) surveyed/unmeshed system blob(s)")
 
         var belts: [String: [BeltInfo]] = [:]
+        // Failures are tallied, not logged per-row: this loop runs every
+        // 5-second tick, and a permanently-malformed row would otherwise
+        // flood the log forever (once per read × however many bad rows).
+        // `firstFailure` keeps one breadcrumb for diagnosability without
+        // per-row volume.
+        var failures = 0
+        var firstFailure: String?
         for detail in candidates {
             let system: StarSystem
             do {
@@ -172,9 +178,8 @@ public struct WorldView: Equatable, Sendable {
                 // degrade to "no belt data for this system" and keep going,
                 // the same direction `WorldSnapshot`'s per-directive blob
                 // read already degrades a failed decode.
-                logger.error(
-                    "belts: \(detail.designation, privacy: .public) failed to decode: \(error, privacy: .public)"
-                )
+                failures += 1
+                if firstFailure == nil { firstFailure = detail.designation }
                 continue
             }
             let classified = system.belts.compactMap { belt -> BeltInfo? in
@@ -184,6 +189,21 @@ public struct WorldView: Equatable, Sendable {
             if !classified.isEmpty {
                 belts[detail.designation] = classified
             }
+        }
+
+        // One line per read, regardless of candidate count or failure count
+        // — the performance guard the module doc promises.
+        if let firstFailure {
+            logger.debug(
+                """
+                belts: decoded \(candidates.count - failures, privacy: .public) surveyed/unmeshed \
+                system blob(s), \(failures, privacy: .public) failed (first: \(firstFailure, privacy: .public))
+                """
+            )
+        } else {
+            logger.debug(
+                "belts: decoded \(candidates.count, privacy: .public) surveyed/unmeshed system blob(s)"
+            )
         }
         return belts
     }
