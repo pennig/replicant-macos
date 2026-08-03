@@ -57,9 +57,15 @@ public struct GrowCandidate: Equatable, Sendable {
     /// see `GrowRanking.magnitude(at:over:)` for the exact per-tier
     /// definition and its rationale.
     public let magnitudeAtTier: Double
-    /// Accumulated hop distance (ly), from a mesh source to `firstHop`, of
-    /// whichever served chain achieves `relaysRemaining` — the sub-tiebreak
-    /// within field 2.
+    /// The accumulated length (ly) of the WHOLE winning served chain — from
+    /// a mesh source, THROUGH `firstHop`, all the way to that chain's own
+    /// target — not merely the distance to `firstHop` itself. Equal to
+    /// `Chain.hopDistance` (see that type's own doc) for whichever served
+    /// chain achieves `relaysRemaining`. The two quantities coincide only
+    /// when `relaysRemaining == 1` (a completing candidate, where `firstHop`
+    /// IS the chain's target); for a multi-relay candidate this is LONGER
+    /// than the leg to `firstHop` alone, since it also covers every hop
+    /// beyond it. The sub-tiebreak within field 2.
     public let hopDistance: Double
     /// Every target this hop's chains serve, sorted for a stable why-view
     /// (dictionary/set iteration order is not guaranteed).
@@ -108,8 +114,21 @@ public enum GrowRanking {
         }
 
         let candidates = byHop.map { hop, pairs -> GrowCandidate in
+            // Every `?? …` fallback below is unreachable in practice: `pairs`
+            // is never empty here (a `byHop` entry only exists because at
+            // least one `(chain, target)` was appended to it above), so
+            // `.min()`/`.max()` always succeeds. The fallbacks are a defensive
+            // sentinel for that invariant, not a real code path — `?? .max`
+            // would otherwise silently produce an absurd `relaysRemaining`
+            // if it ever broke, which is worth flagging rather than assuming.
             let completesNow = pairs.contains { $0.chain.completesNow }
             let minRelays = pairs.map(\.chain.relaysRemaining).min() ?? .max
+            // Filtered, not global: the min distance must come from a chain
+            // that actually ACHIEVES `minRelays` — see
+            // `hopDistanceIsTheMinimumAmongMinRelayChainsNotTheGlobalMinimum`
+            // for a constructed case where a higher-relay chain is shorter,
+            // proving this filter (and not a plain `.map(\.hopDistance).min()`)
+            // is load-bearing.
             let minDistance = pairs
                 .filter { $0.chain.relaysRemaining == minRelays }
                 .map(\.chain.hopDistance)
@@ -129,7 +148,20 @@ public enum GrowRanking {
         }
 
         return candidates.sorted { a, b in
-            // Field 1: completesNow, true first.
+            // Field 1: completesNow, true first. INERT today, same spirit as
+            // field 4 below, but for a different reason: `reach` only ever
+            // emits chains with `relaysRemaining >= 1`, so a group's minimum
+            // relay count equals 1 if and only if some pair's own chain
+            // completes (see `GrowCandidate.completesNow`'s doc) — i.e.
+            // `completesNow ⟺ relaysRemaining == 1` EXACTLY at the candidate
+            // level. Field 2 immediately below already agrees whenever this
+            // line would fire, so it can never actually change the sort
+            // outcome. Kept anyway (not deleted) because the comparator
+            // must read as the locked key verbatim — but if a later task
+            // ever redefines candidate aggregation (e.g. `completesNow`
+            // becomes "ALL served chains complete," not "any") this line
+            // goes from dead to live with zero test coverage guarding it;
+            // revisit `GrowRankingTests` if that redefinition ever happens.
             if a.completesNow != b.completesNow { return a.completesNow }
             // Field 2: fewest relaysRemaining, then shorter hopDistance.
             if a.relaysRemaining != b.relaysRemaining { return a.relaysRemaining < b.relaysRemaining }
