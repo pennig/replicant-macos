@@ -253,6 +253,15 @@ public struct Directive: Identifiable, Equatable, Sendable {
     /// spends its whole life in. Nil for kinds that resolve their fleet some
     /// other way (Survey Run reads `stowedInDeviceCode` directly).
     public var fleetTag: String?
+    /// A plan hint written once at launch, read by the mission executor to
+    /// choose its acquisition branch: nil prints a fresh relay at the hub,
+    /// non-nil names the existing relay to reclaim and redeploy instead.
+    ///
+    /// Deliberately narrow — this is NOT a lease. It carries no ownership and
+    /// reserves nothing; the executor still leases only the carrier
+    /// `deviceCode`, as it always has. An earlier "committed-devices" lease
+    /// field was proposed and rejected — do not let this grow into one.
+    public var sourceRelayCode: String?
     /// The ordered queue of star-system designations still to visit.
     ///
     /// For a continuous run this is append-only HISTORY rather than a plan: the
@@ -294,6 +303,7 @@ public struct Directive: Identifiable, Equatable, Sendable {
         controllerCode: String? = nil,
         roamCentre: String? = nil,
         fleetTag: String? = nil,
+        sourceRelayCode: String? = nil,
         targets: [String],
         targetIndex: Int,
         step: String,
@@ -311,6 +321,7 @@ public struct Directive: Identifiable, Equatable, Sendable {
         self.controllerCode = controllerCode
         self.roamCentre = roamCentre
         self.fleetTag = fleetTag
+        self.sourceRelayCode = sourceRelayCode
         self.targets = targets
         self.targetIndex = targetIndex
         self.step = step
@@ -450,6 +461,18 @@ extension Directive {
         try #sql(
             """
             ALTER TABLE "directives" ADD COLUMN "fleetTag" TEXT
+            """
+        )
+        .execute(db)
+    }
+
+    /// A separate migration, not an edit to any above: all four have shipped
+    /// and are recorded in real databases, so editing one means it silently
+    /// never runs again.
+    public static let addSourceRelayCode = SchemaMigration("Add 'sourceRelayCode' to 'directives'") { db in
+        try #sql(
+            """
+            ALTER TABLE "directives" ADD COLUMN "sourceRelayCode" TEXT
             """
         )
         .execute(db)

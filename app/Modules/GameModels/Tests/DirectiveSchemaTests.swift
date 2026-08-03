@@ -221,4 +221,35 @@ struct DirectiveSchemaTests {
         let read = try database.read { try Directive.all.fetchAll($0) }
         #expect(read.first?.fleetTag == "auto:salvage")
     }
+
+    /// `sourceRelayCode` is a plan hint the brain writes once at launch: nil
+    /// prints a fresh relay at the hub, non-nil names the existing relay to
+    /// reclaim instead. Both states must round-trip — a nullable column that
+    /// only ever proves `nil` proves very little.
+    @Test func sourceRelayCodeRoundTripsBothNilAndSet() throws {
+        let database = try GameDatabase.bootstrap()
+        let printedFresh = Directive(
+            id: "d1", kind: .relayRun, status: .running, deviceCode: "VESSEL1",
+            targets: ["TOSLIT"], targetIndex: 0,
+            step: "preflight", stepStartedAt: .distantPast, returnToOrigin: false,
+            originDesignation: nil, attentionReason: nil,
+            createdAt: .distantPast, updatedAt: .distantPast
+        )
+        let reclaimed = Directive(
+            id: "d2", kind: .relayRun, status: .running, deviceCode: "VESSEL2",
+            sourceRelayCode: "RELAY9",
+            targets: ["TOSLIT"], targetIndex: 0,
+            step: "preflight", stepStartedAt: .distantPast, returnToOrigin: false,
+            originDesignation: nil, attentionReason: nil,
+            createdAt: .distantPast, updatedAt: .distantPast
+        )
+        try database.write { db in
+            try Directive.insert { printedFresh }.execute(db)
+            try Directive.insert { reclaimed }.execute(db)
+        }
+
+        let loaded = try database.read { db in try Directive.order { $0.id }.fetchAll(db) }
+        #expect(loaded.map(\.sourceRelayCode) == [nil, "RELAY9"])
+        #expect(loaded == [printedFresh, reclaimed])
+    }
 }
