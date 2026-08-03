@@ -697,29 +697,6 @@ extension Operation {
     }
 }
 
-// MARK: - Test fixture
-
-public extension Device {
-    /// A minimal device row for tests, in the same loud-defaults spirit as a
-    /// shared client's `testValue`: `code`/`type`/`location` are required
-    /// arguments (never a guessed default), and every other column takes an
-    /// inert placeholder a predicate test then overrides explicitly (e.g.
-    /// `availableCommands`, `features`, `status`) rather than relying on a
-    /// silently-plausible default to make the assertion pass.
-    static func fixture(code: String, type: String, location: String?) -> Device {
-        Device(
-            deviceCode: code, deviceType: type, replicantCode: "R1",
-            status: "idle", location: location, locationName: nil,
-            operationalCapacity: 100, queueSize: 0,
-            stowedInDeviceCode: nil, controllerDeviceCode: nil, attachedToDeviceCode: nil,
-            createdAt: Date(timeIntervalSince1970: 0),
-            availableCommands: [], features: [], tags: [],
-            detail: .object([:]),
-            updatedAt: Date(timeIntervalSince1970: 0), firstSeenAt: Date(timeIntervalSince1970: 0)
-        )
-    }
-}
-
 // MARK: - Schema
 
 extension Device {
