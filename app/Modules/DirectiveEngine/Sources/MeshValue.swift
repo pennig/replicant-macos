@@ -25,7 +25,7 @@
 /// Exactly these three cases — do not add a fourth or reorder the existing
 /// ones; the ordering is a locked design decision, not an implementation
 /// detail this task revisits.
-public enum BeltClass: Int, Comparable, Sendable {
+public enum BeltClass: Int, Comparable, CaseIterable, Sendable {
     case sparse = 0
     case moderate = 1
     case rich = 2
@@ -181,8 +181,17 @@ public enum ValueCatalog {
 }
 
 extension BeltClass {
-    /// This class's place in the locked `ValueTier` ordering.
-    fileprivate var valueTier: ValueTier {
+    /// This class's place in the locked `ValueTier` ordering. Module-internal
+    /// (not `fileprivate`) rather than `public`: `ValueCatalog.build(from:)`
+    /// above is the only forward-direction caller, but `GrowRanking.swift`
+    /// (Task 12, same target) also needs this correspondence — in reverse,
+    /// to turn a winning `ValueTier` back into the `BeltClass` whose count it
+    /// should read — via `ValueTier.beltClass` there. That reverse accessor
+    /// is DERIVED from this one map (a search over `BeltClass.allCases`,
+    /// which is why `BeltClass` is `CaseIterable`), so this switch stays the
+    /// single source of truth for the tier↔class correspondence rather than
+    /// two switches drifting apart.
+    var valueTier: ValueTier {
         switch self {
         case .sparse: return .sparseBelt
         case .moderate: return .moderateBelt
