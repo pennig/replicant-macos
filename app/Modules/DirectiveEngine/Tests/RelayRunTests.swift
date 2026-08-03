@@ -332,6 +332,55 @@ struct RelayRunPrintingTests {
                 == .refreshDevices(deviceCodes: ["RLY1"], thenStall: .noRelayCoLocated))
     }
 
+    /// **The shared-queue mix-up.** The hub's print queue is never leased and
+    /// `acquire` deliberately queues behind whatever is in it. When the job
+    /// AHEAD of ours finishes, `Reconciler.completeOpenOperation` closes the
+    /// single open op on the hub — OURS — and stamps ITS `new_device_code` onto
+    /// it. Unfiltered, that code gets adopted: `stow` at a foreign live device,
+    /// hauled to another system, and only the eventual `deploy` rejection stops
+    /// it. So the clone must be type-checked before it is adopted.
+    @Test func doesNotAdoptANonRelayCloneFromTheSharedQueue() {
+        let foreign = printOp(newDeviceCode: "DRONE9")
+        let snapshot = world(
+            devices: [carrier(), hub(), device("DRONE9", type: "mining_drone", location: hubLocation)],
+            dispatchedOperations: [foreign.id: foreign]
+        )
+        // Inside the deadline it keeps waiting — it does NOT advance to stowing.
+        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.printing), world: snapshot) == .wait)
+        // And it does not burn reads on a row that is present and simply is not
+        // ours: re-reading a mining drone will never make it a relay.
+        #expect(RelayRun.printedRelay(in: snapshot) == nil)
+    }
+
+    /// The same mix-up seen from the step that would issue the command. With no
+    /// relay aboard and none co-located, nothing may be dispatched at the
+    /// foreign device the print named.
+    @Test func neverDispatchesStowAtANonRelayClone() {
+        let foreign = printOp(newDeviceCode: "DRONE9")
+        let snapshot = world(
+            devices: [carrier(), hub(), device("DRONE9", type: "mining_drone", location: hubLocation)],
+            dispatchedOperations: [foreign.id: foreign]
+        )
+        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.stowing), world: snapshot)
+                == .stall(.noRelayCoLocated))
+    }
+
+    /// …and when a genuine relay IS aboard, the type filter must fall through to
+    /// it rather than returning the foreign device — the parity with the two
+    /// fallback lookups, which have always filtered on type.
+    @Test func fallsThroughToTheRealRelayWhenThePrintNamedSomethingElse() {
+        let foreign = printOp(newDeviceCode: "DRONE9")
+        let snapshot = world(
+            devices: [
+                carrier(), hub(),
+                device("DRONE9", type: "mining_drone", location: hubLocation),
+                relay(stowedIn: "V1"),
+            ],
+            dispatchedOperations: [foreign.id: foreign]
+        )
+        #expect(RelayRun.relay(for: running(), carrier: carrier(), in: snapshot)?.deviceCode == "RLY1")
+    }
+
     /// A print that never produces a relay is a dead run: the whole trip exists
     /// to plant one. Backstopped rather than waited on forever.
     @Test func stallsWhenThePrintDeadlinePasses() {
@@ -348,6 +397,44 @@ struct RelayRunPrintingTests {
     @Test func waitsInsideThePrintDeadline() {
         let snapshot = world(devices: [carrier(), hub()])
         #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.printing), world: snapshot) == .wait)
+    }
+
+    /// A superseded print op is fail-safe — no loop, no spend — but it is
+    /// otherwise INVISIBLE: `.superseded` is neither `.completed` nor open, so
+    /// the run degrades to a silent 30-minute wait and then stalls with a reason
+    /// whose display name ("No relay aboard") names neither cause nor remedy.
+    /// The stall carries a diagnosis so the shared-queue cause is recoverable
+    /// from the log. Asserted as a pure function rather than by scraping logs.
+    @Test func namesTheCauseWhenThePrintProducesNothing() {
+        let superseded = printOp(status: .superseded, newDeviceCode: nil)
+        let world1 = world(devices: [carrier(), hub()], dispatchedOperations: [superseded.id: superseded])
+        #expect(RelayRun.printDiagnosis(in: world1).contains("superseded"))
+
+        let foreign = printOp(newDeviceCode: "DRONE9")
+        let world2 = world(
+            devices: [carrier(), hub(), device("DRONE9", type: "mining_drone", location: hubLocation)],
+            dispatchedOperations: [foreign.id: foreign]
+        )
+        #expect(RelayRun.printDiagnosis(in: world2).contains("mining_drone"))
+
+        let missing = printOp(newDeviceCode: "GHOST")
+        let world3 = world(devices: [carrier(), hub()], dispatchedOperations: [missing.id: missing])
+        #expect(RelayRun.printDiagnosis(in: world3).contains("GHOST"))
+
+        #expect(RelayRun.printDiagnosis(in: world(devices: [carrier(), hub()]))
+                    .contains("no print was ever dispatched"))
+    }
+
+    /// A superseded op still reaches the deadline stall rather than looping or
+    /// re-spending — the fail-safe half of the behaviour above.
+    @Test func stallsOnASupersededPrintRatherThanReprinting() {
+        let superseded = printOp(status: .superseded, newDeviceCode: nil)
+        let snapshot = world(devices: [carrier(), hub()], dispatchedOperations: [superseded.id: superseded])
+        let overdue = running(
+            step: RelayRun.Step.printing,
+            stepStartedAt: fixtureNow.addingTimeInterval(-RelayRun.printDeadline - 1)
+        )
+        #expect(RelayRun().nextAction(directive: overdue, world: snapshot) == .stall(.noRelayCoLocated))
     }
 }
 
@@ -555,6 +642,36 @@ struct RelayRunActivateTests {
         let snapshot = world(devices: [carrier(location: "VEGA-1-L4")])
         #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.activating), world: snapshot)
                 == .stall(.relayActivationFailed))
+    }
+
+    /// `SalvageRun.activate` gets this proof for free: it resolves through
+    /// `deployedRelay(near:)`, which requires the relay's location to equal the
+    /// vessel's, and a stowed device has no location — so a `deploy` that never
+    /// took cannot reach the dispatch. Resolving by printed code is right for
+    /// other reasons but loses that, so it is restored explicitly: activating
+    /// cargo is not a thing this run may do.
+    @Test func refusesToActivateARelayStillAboardTheCarrier() {
+        let done = printOp()
+        let snapshot = world(
+            devices: [carrier(location: "VEGA-1-L4"), relay(stowedIn: "V1")],
+            dispatchedOperations: [done.id: done]
+        )
+        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.activating), world: snapshot)
+                == .stall(.relayActivationFailed))
+    }
+
+    /// The mirror on the other side of the same command: a re-entered
+    /// `emplacing` whose `deploy` already took must hand off rather than
+    /// re-issue a command that has to be rejected.
+    @Test func emplacingHandsOffWhenTheDeployAlreadyTook() {
+        let done = printOp()
+        let snapshot = world(
+            devices: [carrier(location: "VEGA-1-L4"), relay(location: "VEGA-1-L4")],
+            dispatchedOperations: [done.id: done],
+            systems: ["VEGA": targetSystem()]
+        )
+        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.emplacing), world: snapshot)
+                == .advanceStep(nextStep: RelayRun.Step.activating))
     }
 }
 

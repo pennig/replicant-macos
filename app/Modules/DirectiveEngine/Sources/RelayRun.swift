@@ -216,12 +216,62 @@ public struct RelayRun: MissionStepMachine {
             .detail["result"]?["new_device_code"]?.stringValue
     }
 
+    /// The device a completed print named, **only if it is actually a relay**.
+    ///
+    /// The type check is not belt-and-braces; it is the whole safety of the
+    /// code-first lookup, and its absence was a live-account defect caught in
+    /// review. The hub's print queue is SHARED and never leased (ticket 05), and
+    /// `acquire` deliberately queues behind whatever is already in it. But
+    /// `Reconciler.completeOpenOperation` closes *the single open op on the hub
+    /// device* and files that event's `new_device_code` onto it, and
+    /// `CommandClient` supersedes any other open op on the hub when this run
+    /// dispatches. So when the job AHEAD of ours finishes, its `print.completed`
+    /// closes OUR operation row and stamps ITS device code as our clone.
+    ///
+    /// Unfiltered, that code was adopted wholesale: `stowing` would `stow` a
+    /// foreign live device — plausibly one another directive had staged — onto
+    /// our carrier, `travelling` would haul it to another system, and only the
+    /// eventual `deploy` rejection would stop it. `SalvageRun` states the rule
+    /// this restores: *"these are DISPATCH queries — whatever they return gets
+    /// `deploy` issued at it"*, which is why both fallback lookups below filter
+    /// on `deviceType` and why this one must too.
+    static func printedRelay(in world: WorldSnapshot) -> Device? {
+        guard let code = printedRelayCode(in: world), let device = world.device(code) else { return nil }
+        guard device.deviceType == relayDeviceType else { return nil }
+        return device
+    }
+
     /// Whether a print this directive dispatched is still in flight. `print` is a
     /// TRACKED kind (`.enqueued`), so unlike the `.simple` verbs it genuinely has
     /// a row to ask about.
     static func printInFlight(in world: WorldSnapshot) -> Bool {
         world.dispatchedOperations.values
             .contains { $0.kind == OperationKind.print.rawValue && $0.status.isOpen }
+    }
+
+    /// Why `printing` never got a relay, for the one log line the stall emits.
+    ///
+    /// The superseded case is the one that most needs naming: if anything else
+    /// dispatches a print at the shared hub after this run does, `CommandClient`
+    /// supersedes our row, and `.superseded` is neither `.completed` nor open —
+    /// so `printedRelayCode` stays nil and `printInFlight` reads false. That is
+    /// fail-safe (no loop, no spend) but it degrades to a silent 30-minute wait
+    /// and then a stall whose display name ("No relay aboard") describes neither
+    /// the cause nor the remedy.
+    static func printDiagnosis(in world: WorldSnapshot) -> String {
+        let prints = world.dispatchedOperations.values
+            .filter { $0.kind == OperationKind.print.rawValue }
+        if prints.isEmpty { return "no print was ever dispatched" }
+        if prints.contains(where: { $0.status == .superseded }) {
+            return "our print op was superseded — something else dispatched a print at the shared hub"
+        }
+        if let code = printedRelayCode(in: world) {
+            guard let device = world.device(code) else {
+                return "the print named \(code) but no row for it ever arrived"
+            }
+            return "the print named \(code), which is a \(device.deviceType), not a \(relayDeviceType)"
+        }
+        return "no print completed, and none is in flight"
     }
 
     /// The relay this run is moving, wherever it currently is.
@@ -234,8 +284,13 @@ public struct RelayRun: MissionStepMachine {
     /// had already staged aboard the carrier, or (post-`deploy`, when
     /// `stowedInDeviceCode` has just been cleared) one standing where the
     /// carrier stands.
+    ///
+    /// All three lookups filter on `deviceType` — the code-first one via
+    /// `printedRelay(in:)`. Every caller of this issues a command at what it
+    /// returns, so a device of the wrong type reaching a caller is the bug, not
+    /// an inefficiency.
     static func relay(for directive: Directive, carrier: Device, in world: WorldSnapshot) -> Device? {
-        if let code = printedRelayCode(in: world), let printed = world.device(code) { return printed }
+        if let printed = printedRelay(in: world) { return printed }
         return SalvageRun.relay(aboard: carrier, in: world)
             ?? SalvageRun.deployedRelay(near: carrier, in: world)
     }
@@ -315,26 +370,34 @@ public struct RelayRun: MissionStepMachine {
     /// completion this waits for is not the operation closing but the CLONE
     /// arriving — two facts that land in separate transactions.
     private func printing(_ directive: Directive, _ world: WorldSnapshot) -> MissionAction {
-        let code = Self.printedRelayCode(in: world)
-        // The positive first: the clone is in the fleet and the run may move on.
-        if let code, world.device(code) != nil {
+        // The positive first: a clone that is IN the fleet and IS a relay. The
+        // type check is what stops a shared-queue mix-up being adopted — see
+        // `printedRelay(in:)`.
+        if Self.printedRelay(in: world) != nil {
             return .advanceStep(nextStep: Step.stowing)
         }
         // Deadline BEFORE the read (see `confirm-steps-need-fresh-evidence`,
         // half two): the read below only advances on success, so a
         // staleness-first ordering would never reach the backstop while reads
-        // keep failing.
+        // keep failing. The diagnosis rides the stall because the reason's own
+        // display name ("No relay aboard") names neither cause nor remedy, and
+        // the superseded-op case in particular is otherwise invisible.
         if world.now.timeIntervalSince(directive.stepStartedAt) > Self.printDeadline {
+            logger.notice("relay run \(directive.id, privacy: .public): print produced no relay — \(Self.printDiagnosis(in: world), privacy: .public)")
             return .stall(.noRelayCoLocated)
         }
         if Self.printInFlight(in: world) { return .wait }
-        if let code {
-            // The completion named a device the fleet has not got. `GameSync`
-            // already spends a `.high` read on exactly this code off
-            // `print.completed`; this is the backstop for that read failing.
-            // One authoritative read of a named code is conclusive — a row it
-            // cannot produce will not appear by waiting — so it carries a stall
-            // rather than looping.
+        // The completion named a device the fleet has not got. `GameSync` already
+        // spends a `.high` read on exactly this code off `print.completed`; this
+        // is the backstop for that read failing. One authoritative read of a
+        // named code is conclusive — a row it cannot produce will not appear by
+        // waiting — so it carries a stall rather than looping.
+        //
+        // Gated on the row being ABSENT, not merely on the code existing: a row
+        // that is present but of the wrong type is already as well-read as it
+        // will ever be, and re-reading it forever would neither change it nor
+        // make it ours. That case falls through and waits out the deadline.
+        if let code = Self.printedRelayCode(in: world), world.device(code) == nil {
             return .refreshDevices(deviceCodes: [code], thenStall: .noRelayCoLocated)
         }
         return .wait
@@ -491,6 +554,14 @@ public struct RelayRun: MissionStepMachine {
                 params: CommandParams(destination: point), nextStep: Step.emplacing
             )
         }
+        // The mirror of `activate`'s stow guard: code-first resolution can also
+        // hand back a relay that is ALREADY deployed here, if this step is
+        // re-entered after a `deploy` whose step move was lost. Re-issuing
+        // `deploy` at a deployed relay is a command that must be rejected —
+        // hand off to activation instead.
+        if relay.stowedInDeviceCode == nil, relay.location == point {
+            return .advanceStep(nextStep: Step.activating)
+        }
         // No `openOperation` guard: `deploy` is untracked, so the lookup is
         // always nil — a guard that can never fire is noise, not safety. The
         // safety is that this hands off to a DIFFERENT step.
@@ -511,6 +582,17 @@ public struct RelayRun: MissionStepMachine {
         // step needs it. `relay(for:carrier:in:)` resolves by code first for
         // that reason.
         guard let relay = Self.relay(for: directive, carrier: carrier, in: world) else {
+            return .stall(.relayActivationFailed)
+        }
+        // Resolving by code is right for the reason above, but it costs a proof
+        // the cloned shape had for free: `SalvageRun.activate` goes through
+        // `deployedRelay(near:)`, which requires `relay.location ==
+        // vessel.location`, and a stowed device HAS no location — so a `deploy`
+        // that never took could not reach its dispatch. Code-first resolution
+        // happily returns a still-stowed relay, so restore the property
+        // explicitly: activating cargo is not a thing this run may do.
+        guard relay.stowedInDeviceCode == nil else {
+            logger.notice("relay run \(directive.id, privacy: .public): \(relay.deviceCode, privacy: .public) is still aboard \(carrier.deviceCode, privacy: .public) — deploy never took")
             return .stall(.relayActivationFailed)
         }
         return .dispatch(
