@@ -105,5 +105,18 @@ struct WorldViewTests {
         #expect(view.salvageUnits.isEmpty)
         #expect(view.eventSystems.isEmpty)
         #expect(view.hubLocation == nil)
+        #expect(view.beltsBySystem.isEmpty)
+    }
+
+    /// Task 9 scope addition: `beltsBySystem` exists on `WorldView` ahead of
+    /// its Task 11 hydration, always empty out of `read(from:now:)` since
+    /// that read touches no blob.
+    @Test func beltsBySystemIsAlwaysEmptyUntilTask11() async throws {
+        let db = try GameDatabase.bootstrap()
+        try await db.write { db in
+            try seedRelay(db, code: "R1", location: "SOL-3-L4", status: "relaying")
+        }
+        let view = try await db.read { try WorldView.read(from: $0, now: Date()) }
+        #expect(view.beltsBySystem.isEmpty)
     }
 }

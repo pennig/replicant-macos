@@ -15,11 +15,10 @@
 //  tables — devices, `stars`, `siteAssays`, `locationEvents` — and touches no
 //  blob.
 //
-//  Deliberately missing a `beltsBySystem` field: belt yields are a blob-decode
-//  concern (`ValueCatalog`, Task 8+) and `BeltInfo` doesn't exist until that
-//  task defines it. Task 9 adds the property alongside the type; Task 11
-//  populates it. Declaring an always-empty field ahead of a type that doesn't
-//  exist yet would be dead weight, not forward compatibility.
+//  `beltsBySystem` (Task 9): belt yields are a blob-decode concern deferred
+//  past this read — populated empty here since `read(from:now:)` touches no
+//  blob (see the module doc above); Task 11 hydrates it from decoded `Belt`
+//  data via `BeltClass.classify`, and Task 10 is its first consumer.
 //
 
 import Foundation
@@ -50,6 +49,11 @@ public struct WorldView: Equatable, Sendable {
     /// off-mesh hub is a later concern (escalate/unsupported per the 06
     /// design), not something the brain can route a `deliver` toward yet.
     public let hubLocation: String?
+    /// System → its belts, classified. Always empty as of this task (Task
+    /// 9) — the field exists so `BeltInfo` has a home on `WorldView`, but
+    /// nothing populates it until Task 11 decodes belt data from the
+    /// per-system blob.
+    public let beltsBySystem: [String: [BeltInfo]]
     /// The moment this snapshot was taken. Brain logic compares against this
     /// rather than `Date()`, keeping ranking passes pure and their tests
     /// deterministic.
@@ -62,6 +66,7 @@ public struct WorldView: Equatable, Sendable {
         salvageUnits: [String: Double],
         eventSystems: Set<String>,
         hubLocation: String?,
+        beltsBySystem: [String: [BeltInfo]] = [:],
         now: Date
     ) {
         self.devices = devices
@@ -70,6 +75,7 @@ public struct WorldView: Equatable, Sendable {
         self.salvageUnits = salvageUnits
         self.eventSystems = eventSystems
         self.hubLocation = hubLocation
+        self.beltsBySystem = beltsBySystem
         self.now = now
     }
 
@@ -117,6 +123,7 @@ public struct WorldView: Equatable, Sendable {
             salvageUnits: salvage,
             eventSystems: eventSystems,
             hubLocation: hub,
+            beltsBySystem: [:],  // Task 11 hydrates this from decoded belt data.
             now: now
         )
     }
