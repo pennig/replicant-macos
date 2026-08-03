@@ -236,8 +236,10 @@ struct DirectiveResolutionTests {
 
     /// The registry is the single source of mission registration — the engine
     /// and resolution must agree on which machines exist.
-    @Test func registryKnowsSurveyRunAndNotRelayRun() {
+    @Test func registryKnowsEveryRegisteredMission() {
         #expect(MissionRegistry.firstStep(for: .surveyRun) == SurveyRun().firstStep)
-        #expect(MissionRegistry.firstStep(for: .relayRun) == nil)
+        // Relay Run joined the registry with its machine; before that this
+        // asserted `nil`, which was the honest reading of an empty Stage 5.
+        #expect(MissionRegistry.firstStep(for: .relayRun) == RelayRun().firstStep)
     }
 }
