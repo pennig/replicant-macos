@@ -108,10 +108,12 @@ struct WorldViewTests {
         #expect(view.beltsBySystem.isEmpty)
     }
 
-    /// Task 9 scope addition: `beltsBySystem` exists on `WorldView` ahead of
-    /// its Task 11 hydration, always empty out of `read(from:now:)` since
-    /// that read touches no blob.
-    @Test func beltsBySystemIsAlwaysEmptyUntilTask11() async throws {
+    /// No `systemDetails` row means no belt data, regardless of mesh status —
+    /// `beltsBySystem` stays empty when there's nothing to decode in the
+    /// first place. The bounded-decode behaviour itself (surveyed + unmeshed
+    /// only, malformed-blob handling, classification) is covered end-to-end
+    /// in `WorldViewBeltsTests` (Task 11).
+    @Test func beltsBySystemIsEmptyWithNoSystemDetailRows() async throws {
         let db = try GameDatabase.bootstrap()
         try await db.write { db in
             try seedRelay(db, code: "R1", location: "SOL-3-L4", status: "relaying")

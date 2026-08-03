@@ -15,16 +15,31 @@
 //  tables — devices, `stars`, `siteAssays`, `locationEvents` — and touches no
 //  blob.
 //
-//  `beltsBySystem` (Task 9): belt yields are a blob-decode concern deferred
-//  past this read — populated empty here since `read(from:now:)` touches no
-//  blob (see the module doc above); Task 11 hydrates it from decoded `Belt`
-//  data via `BeltClass.classify`, and Task 10 is its first consumer.
+//  `beltsBySystem` (Task 11): the one blob decode in this whole read. Every
+//  other field above comes from a cheap table; belt richness only exists
+//  inside the per-system `StarSystem` JSON blob (`SystemDetail.systemJSON`),
+//  and decoding all ~14,000 census systems every 5-second tick would be the
+//  most expensive thing the brain does. Bounded two ways before a single
+//  blob is touched: SURVEYED — `SystemDetail.systemScanned` filters in SQL,
+//  since belt richness is only known once a system has been through its full
+//  system scan (see the field's doc below for why this is the right signal
+//  over `recon == .scanned`) — and UNMESHED — a meshed system needs no
+//  grow-scoring, so its blob is skipped in Swift before `.system()` is ever
+//  called. A single malformed blob degrades to "no belt data for this
+//  system" rather than failing the whole read (mirrors the same-shaped
+//  decode-failure handling in the sibling `WorldSnapshot` read). If this
+//  decode set ever grows past what's comfortable on a 5-second tick, the
+//  documented escape hatch is a dedicated `belts` index table populated at
+//  hydrate time — not built now, YAGNI until the count actually demands it.
 //
 
 import Foundation
 import GameModels
+import OSLog
 import SQLiteData
 import UniverseModels
+
+private let logger = Logger(subsystem: "name.pennig.replicould", category: "Brain")
 
 public struct WorldView: Equatable, Sendable {
     /// The whole fleet, by device code — the brain ranks across every
@@ -49,10 +64,11 @@ public struct WorldView: Equatable, Sendable {
     /// off-mesh hub is a later concern (escalate/unsupported per the 06
     /// design), not something the brain can route a `deliver` toward yet.
     public let hubLocation: String?
-    /// System → its belts, classified. Always empty as of this task (Task
-    /// 9) — the field exists so `BeltInfo` has a home on `WorldView`, but
-    /// nothing populates it until Task 11 decodes belt data from the
-    /// per-system blob.
+    /// System → its belts, classified. Populated only for systems that are
+    /// both surveyed (`SystemDetail.systemScanned`) and unmeshed — see the
+    /// module doc above for why. A system with belts in its blob that all
+    /// fail to classify (`BeltClass.classify` returns `nil`) is simply
+    /// absent here, same as a system with no belts at all.
     public let beltsBySystem: [String: [BeltInfo]]
     /// The moment this snapshot was taken. Brain logic compares against this
     /// rather than `Date()`, keeping ranking passes pure and their tests
@@ -116,6 +132,8 @@ public struct WorldView: Equatable, Sendable {
 
         let hub = Self.hubLocation(in: allDevices, meshSystems: mesh)
 
+        let belts = try Self.beltsBySystem(in: db, meshSystems: mesh)
+
         return WorldView(
             devices: devicesByCode,
             starPositions: positions,
@@ -123,9 +141,51 @@ public struct WorldView: Equatable, Sendable {
             salvageUnits: salvage,
             eventSystems: eventSystems,
             hubLocation: hub,
-            beltsBySystem: [:],  // Task 11 hydrates this from decoded belt data.
+            beltsBySystem: belts,
             now: now
         )
+    }
+
+    /// The bounded belt decode (see the module doc for why it must be
+    /// bounded at all). SQL narrows to the surveyed subset before any row's
+    /// `systemJSON` even leaves the database — the expensive direction to
+    /// filter, since most of the census is never scanned. `meshSystems` is
+    /// Swift-derived from device rows (`SalvageTargetPlanner.meshSystems`
+    /// has no SQL-expressible equivalent to push down), so the unmeshed
+    /// filter runs here, over that already-small surveyed set, and — this is
+    /// the point — strictly BEFORE `.system()` decodes anything, so a meshed
+    /// system's blob is never touched at all, not decoded-then-discarded.
+    private static func beltsBySystem(
+        in db: Database, meshSystems: Set<String>
+    ) throws -> [String: [BeltInfo]] {
+        let surveyed = try SystemDetail.where { $0.systemScanned }.fetchAll(db)
+        let candidates = surveyed.filter { !meshSystems.contains($0.designation) }
+        logger.debug("belts: decoding \(candidates.count, privacy: .public) surveyed/unmeshed system blob(s)")
+
+        var belts: [String: [BeltInfo]] = [:]
+        for detail in candidates {
+            let system: StarSystem
+            do {
+                system = try detail.system()
+            } catch {
+                // One bad row must not take the whole galaxy-wide read down —
+                // degrade to "no belt data for this system" and keep going,
+                // the same direction `WorldSnapshot`'s per-directive blob
+                // read already degrades a failed decode.
+                logger.error(
+                    "belts: \(detail.designation, privacy: .public) failed to decode: \(error, privacy: .public)"
+                )
+                continue
+            }
+            let classified = system.belts.compactMap { belt -> BeltInfo? in
+                BeltClass.classify(density: belt.density, richness: belt.richness)
+                    .map { BeltInfo(designation: belt.designation, beltClass: $0) }
+            }
+            if !classified.isEmpty {
+                belts[detail.designation] = classified
+            }
+        }
+        return belts
     }
 
     /// The single print hub this effort: the autofactory device's location,

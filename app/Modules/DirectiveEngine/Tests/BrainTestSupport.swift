@@ -95,6 +95,39 @@ func seedSalvageAssay(
     }.execute(db)
 }
 
+// MARK: - SystemDetail seeds
+
+/// A `systemDetails` row wrapping a minimal `StarSystem` blob — the fixture
+/// `WorldViewBeltsTests` needs. No `StarSystem.seedWithBelt`/`Star.seed`
+/// helper exists anywhere in this codebase (the task-11 brief invented one);
+/// this is the real shape, built on the actual `SystemDetail(system:
+/// hydratedAt:)` encoder so the row's `systemJSON` is genuine, round-trippable
+/// JSON, not a hand-typed string. `scanned` stamps `systemScanned` on both the
+/// row and the wrapped `StarSystem` in lockstep — `SystemDetail.systemScanned`
+/// is a denormalization of exactly that `StarSystem` field
+/// (`RawLocation.starSystem()`), so the two must never disagree in a fixture.
+func seedSystemDetail(
+    _ db: Database, system: String, scanned: Bool, belts: [Belt] = []
+) throws {
+    let starSystem = StarSystem(designation: system, systemScanned: scanned, belts: belts)
+    let row = try SystemDetail(system: starSystem, hydratedAt: Date(timeIntervalSince1970: 0))
+    try SystemDetail.insert { row }.execute(db)
+}
+
+/// A `systemDetails` row whose `systemJSON` is genuinely undecodable — for
+/// proving a single malformed blob degrades locally rather than failing the
+/// whole `WorldView.read`. Built from `SystemDetail`'s raw memberwise init
+/// (not the `StarSystem`-encoding one, which can't produce broken JSON), so
+/// `recon`/`systemScanned` are supplied directly.
+func seedMalformedSystemDetail(_ db: Database, system: String) throws {
+    try SystemDetail.insert {
+        SystemDetail(
+            designation: system, systemJSON: "{not valid json", recon: Recon.visited.rawValue,
+            systemScanned: true, hydratedAt: Date(timeIntervalSince1970: 0)
+        )
+    }.execute(db)
+}
+
 // MARK: - LocationEvent seeds
 
 /// A live location event ("quest") sited at a location. `status` defaults to
