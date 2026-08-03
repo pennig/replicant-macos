@@ -9,6 +9,16 @@ Spec: `docs/superpowers/specs/2026-07-30-salvage-run-design.md`; plan:
 `docs/superpowers/plans/2026-07-30-salvage-run.md`. **Salvage Run SHIPPED 2026-07-30** across 9 tasks
 (1,196 tests green, 26 test products).
 
+**AMENDED by [[brain-tendmesh-worthiness]] (automation-brain ticket 10, 2026-08-03): relay emplacement
+is to be REMOVED from the Salvage Run.** The brain's `tendMesh` goal becomes the **sole mesh
+authority** — it meshes systems ahead of demand, and the Salvage Run runs only against
+already-meshed systems (won't travel anywhere dark). So the `emplace`/relay-first steps
+(`lagrangePoint`, `confirmRelay`, the `auto:salvage`-tag-drop, etc.) come out when the run is brought
+up under the brain. The "planting a relay makes the freighter commandable" insight below still holds —
+`tendMesh` just does it *ahead of time* rather than the run doing it inline. This consciously overrides
+the automation-brain map's "additive, never rewrite a shipped run" standing preference. Not yet built;
+lands in the Salvage-Run-activation build session.
+
 **Amended 2026-07-31** (spec/plan `2026-07-31-salvage-run-site-tour-and-backstop*`): two operator-reported
 fixes to the shipped run. (1) **Vessel now tours the sites.** A new `positioning` step sits AHEAD of
 `configuring` (`… → positioning → configuring → launching → awaiting → verifying → positioning`); the
