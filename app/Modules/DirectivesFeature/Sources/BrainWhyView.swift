@@ -35,15 +35,14 @@ public struct BrainWhy: Equatable, Sendable {
     /// meshing VEGA — 3,200 units, 1 hop", "stalled — Relay didn't come up".
     public var topGoalGate: [BrainWhySpan]
     /// The candidates the tick ranked, best first — including on a tick that
-    /// launched nothing, which is when an operator most needs them. Capped at
-    /// `maxCandidates`; see `hiddenCandidates`.
+    /// launched nothing, which is when an operator most needs them.
+    ///
+    /// **Uncapped.** These used to be truncated to five with the remainder
+    /// counted, because the whole report was pinned above the Directives list
+    /// and a ranked field running to dozens would have become the entire pane.
+    /// It now renders in a scrolling detail pane, so there is nothing left to
+    /// protect and the operator can read the whole field.
     public var candidates: [BrainWhyRow]
-    /// How many further candidates the tick ranked but this card does not
-    /// show. Reported rather than silently dropped: the ranked field is one
-    /// entry per reachable first hop and can run to dozens, which would turn
-    /// a card that sits ABOVE the Directives list into the whole pane. An
-    /// operator needs to know the tail exists; they do not need to read it.
-    public var hiddenCandidates: Int
     /// What prune made of the mesh this tick: a reclaim taken, spare relays
     /// left standing, nothing spare at all, or a refusal to judge.
     ///
@@ -76,14 +75,12 @@ public struct BrainWhy: Equatable, Sendable {
     public init(
         topGoalGate: [BrainWhySpan],
         candidates: [BrainWhyRow],
-        hiddenCandidates: Int = 0,
         pruneNotes: [BrainWhyPruneNote] = [],
         limitPressure: [BrainWhyPressure],
         isEscalated: Bool
     ) {
         self.topGoalGate = topGoalGate
         self.candidates = candidates
-        self.hiddenCandidates = hiddenCandidates
         self.pruneNotes = pruneNotes
         self.limitPressure = limitPressure
         self.isEscalated = isEscalated
@@ -104,52 +101,20 @@ public struct BrainWhy: Equatable, Sendable {
     /// has already been recovered from.
     public static let rateLimitWindow: TimeInterval = 300
 
-    /// How many ranked candidates the card lists before it stops.
-    ///
-    /// Five: enough to see the shape of the decision (the winner and the
-    /// field it beat), few enough that the card stays a header rather than
-    /// becoming the pane. Beyond about the fifth, rank order has already made
-    /// the point and the rest is a list nobody reads — the same judgement
-    /// `Brain.list` makes when it names two served systems and counts the
-    /// rest.
-    public static let maxCandidates = 5
-
     /// Projects the brain's tick report into the why-view's shape.
     ///
     /// Exhaustive over `BrainDecision`, no `default:` — a case added later
     /// must force this switch open again, exactly as `.dispatch` once did.
     public static func from(report: BrainReport) -> BrainWhy {
-        let designations = knownDesignations(in: report)
-        let rows = candidates(in: report)
-        let visible = visibleCandidates(rows)
-        return BrainWhy(
-            topGoalGate: .spans(in: gate(for: report.decision), designations: designations),
-            candidates: visible,
-            hiddenCandidates: max(0, rows.count - visible.count),
+        BrainWhy(
+            topGoalGate: .spans(
+                in: gate(for: report.decision), designations: knownDesignations(in: report)
+            ),
+            candidates: candidates(in: report),
             pruneNotes: pruneNotes(in: report),
             limitPressure: pressure(in: report),
             isEscalated: isEscalated(report.decision)
         )
-    }
-
-    /// The first `maxCandidates` rows — except that the LAUNCHED row is never
-    /// cut.
-    ///
-    /// `Brain.plan` picks the best candidate NOT already in flight, which is
-    /// not necessarily rank 1. With five or more grows already flying, a plain
-    /// prefix would show five rows the tick REJECTED under a gate reading
-    /// "launched — meshing X" and never list X at all — the card would be
-    /// contradicting its own headline. The chosen row displaces the last
-    /// visible one instead.
-    ///
-    /// Its true rank travels with it, so the gap in the numbering (1, 2, 3, 4,
-    /// 9) is itself the signal that the field was truncated between them.
-    private static func visibleCandidates(_ rows: [BrainWhyRow]) -> [BrainWhyRow] {
-        let head = Array(rows.prefix(maxCandidates))
-        guard let chosen = rows.first(where: \.isChosen), !head.contains(where: \.isChosen) else {
-            return head
-        }
-        return Array(head.prefix(maxCandidates - 1)) + [chosen]
     }
 
     // MARK: - The gate
@@ -489,23 +454,35 @@ extension [BrainWhySpan] {
     }
 }
 
-/// A read-only card rendering a `BrainWhy`. Actions (launch/retire) already
-/// ride the `DirectiveLogEntry` timeline elsewhere in this feature, so this
-/// surface never dispatches anything — it only explains.
+/// The brain's status, as one line of window chrome above the Directives list —
+/// **a doorway, not a dashboard.**
 ///
-/// Every `fixedSize` line here is `lineLimit`ed, and that is load-bearing: the
-/// card renders in a `safeAreaInset`, where an unbounded one reports its
-/// zero-width wrap height as the WINDOW's minimum height (4,014pt, unresizable
-/// — see the chrome-min-height memory note).
+/// This used to be the whole report: the gate, both rails, prune's findings and
+/// five ranked candidates, all pinned above the list. That does not scale. Every
+/// goal the brain learns adds another block to a header nobody asked to see,
+/// and the header is the one place in this window where height is most
+/// expensive — it is subtracted from the list on every screen, forever.
+///
+/// So the header now answers exactly one question — *what is the brain doing
+/// right now?* — and everything behind that answer moves to
+/// `BrainWhyDetailView`, which scrolls and can afford to grow. Tapping selects
+/// the brain in the same `selectedRowID` the rows use.
+///
+/// The gate stays `lineLimit`ed for a second reason beyond brevity: chrome that
+/// wraps without a bound reports its zero-width wrap height as the WINDOW's
+/// minimum height (see the chrome-min-height memory note). Two lines here is a
+/// ceiling, not a target.
 public struct BrainWhyView: View {
     let why: BrainWhy
+    let action: () -> Void
 
-    public init(why: BrainWhy) {
+    public init(why: BrainWhy, action: @escaping () -> Void) {
         self.why = why
+        self.action = action
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: Space.s) {
+        Button(action: action) {
             HStack(alignment: .firstTextBaseline, spacing: Space.s) {
                 Image(systemName: why.isEscalated ? "exclamationmark.triangle.fill" : "brain.head.profile")
                     .font(.system(size: IconSize.m))
@@ -513,68 +490,26 @@ public struct BrainWhyView: View {
                 why.topGoalGate
                     .styled(prose: .rcBodyEmph, designation: .rcBodyEmphMono)
                     .foregroundStyle(.rcTextPrimary)
-                    // Two lines at the column's narrowest, so three is headroom.
-                    .lineLimit(3)
+                    .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 0)
+                Spacer(minLength: Space.xs)
+                // The affordance. Without it the strip reads as a status label
+                // and nobody discovers there is anything behind it.
+                Image(systemName: "chevron.right")
+                    .font(.rcCaption)
+                    .foregroundStyle(.rcTextTertiary)
             }
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel(why.gateText)
-
-            // Unconditional: `limitPressure` is never empty (see its doc — the
-            // two standing rails always report, healthy or not), so a guard
-            // here would be dead code.
-            VStack(alignment: .leading, spacing: Space.xxs) {
-                ForEach(why.limitPressure) { pressure in
-                    Text(pressure.detail)
-                        .font(.rcCaption)
-                        // A 429 was done TO us; the other two are choices we
-                        // made. They must not read alike.
-                        .foregroundStyle(pressure.isImposed ? .rcWarning : .rcTextSecondary)
-                }
-            }
-
-            // Prune sits beside the rails rather than among the candidates: the
-            // candidate rows are the grow field this tick ranked, and the mesh's
-            // standing shape is not one of them. Empty only when prune did not
-            // run at all.
-            if !why.pruneNotes.isEmpty {
-                VStack(alignment: .leading, spacing: Space.xxs) {
-                    ForEach(why.pruneNotes) { note in
-                        note.spans
-                            .styled(prose: .rcCaption, designation: .rcMonoSmall)
-                            // A step back for the states that merely describe a
-                            // mesh at rest. Never `.rcWarning`: that is this
-                            // card's escalation colour, and prune has nothing to
-                            // escalate.
-                            .foregroundStyle(note.isObservation ? .rcTextTertiary : .rcTextSecondary)
-                            // The longest note (declined) is already bounded in
-                            // content by `maxNamedSystems`; three lines fits it.
-                            .lineLimit(3)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-            }
-
-            if !why.candidates.isEmpty {
-                VStack(alignment: .leading, spacing: Space.xs) {
-                    ForEach(why.candidates) { candidate in
-                        BrainWhyRowView(row: candidate)
-                    }
-                    if why.hiddenCandidates > 0 {
-                        Text("+\(why.hiddenCandidates) more ranked below these")
-                            .font(.rcCaption)
-                            .foregroundStyle(.rcTextTertiary)
-                    }
-                }
-            }
+            .padding(Space.s)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.rcSurfaceRaised, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                    .strokeBorder(why.isEscalated ? .rcWarning : .rcSeparator, lineWidth: Hairline.thin)
+            )
+            .contentShape(Rectangle())
         }
-        .padding(Space.m)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.rcSurfaceRaised, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                .strokeBorder(why.isEscalated ? .rcWarning : .rcSeparator, lineWidth: Hairline.thin)
-        )
+        .buttonStyle(.plain)
+        .accessibilityLabel("Brain: \(why.gateText)")
+        .accessibilityHint("Shows the brain's full report")
     }
 }

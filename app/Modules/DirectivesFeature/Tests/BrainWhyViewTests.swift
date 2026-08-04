@@ -214,10 +214,11 @@ struct BrainWhyViewTests {
     }
 
     /// The ranked field is one entry per reachable first hop and can run to
-    /// dozens. The card sits ABOVE the Directives list, so an uncapped list
-    /// would push the rows it is explaining off screen — but the tail must
-    /// still be reported, not silently dropped.
-    @Test func alongRankedFieldIsCappedAndTheRemainderIsCounted() {
+    /// dozens. It used to be capped at five with the remainder counted, because
+    /// the report was pinned ABOVE the Directives list and would have pushed the
+    /// rows it explains off screen. It now renders in a scrolling detail pane,
+    /// so the whole field is projected and the operator can read all of it.
+    @Test func theWholeRankedFieldIsProjected() {
         let field = (1...12).map { index in
             GrowCandidate(
                 firstHop: "SYS\(index)",
@@ -233,21 +234,19 @@ struct BrainWhyViewTests {
         let why = BrainWhy.from(
             report: Self.report(.idle(reason: "no free carrier at SOL-3"), ranked: field)
         )
-        #expect(why.candidates.count == BrainWhy.maxCandidates)
-        #expect(why.candidates.map(\.rank) == [1, 2, 3, 4, 5])
-        #expect(why.hiddenCandidates == 7)
+        #expect(why.candidates.count == field.count)
+        #expect(why.candidates.map(\.rank) == Array(1...12))
     }
 
-    /// The cap must never hide the row the gate is talking about.
+    /// The row the gate is talking about is always in the field, at its true
+    /// rank.
     ///
     /// `Brain.plan` launches the best candidate NOT already in flight, which
-    /// need not be rank 1 — with five or more grows already flying it can sit
-    /// well down the field. A plain `prefix(5)` would then show five rows the
-    /// tick REJECTED under a headline reading "launched — meshing SYS9" and
-    /// never list SYS9, so the card would contradict itself. The chosen row
-    /// displaces the last visible one, keeping its true rank so the gap in the
-    /// numbering shows where the field was cut.
-    @Test func theCapNeverHidesTheLaunchedCandidate() {
+    /// need not be rank 1 — with several grows already flying it can sit well
+    /// down the field. While the field was capped this needed a displacement
+    /// rule to stop the card contradicting its own headline; uncapped it falls
+    /// out for free, and this pins that the headline and its row still agree.
+    @Test func theLaunchedCandidateIsListedAtItsTrueRank() {
         let field = (1...12).map { index in
             GrowCandidate(
                 firstHop: "SYS\(index)",
@@ -264,18 +263,18 @@ struct BrainWhyViewTests {
         let goal = Goal(kind: .tendMesh, target: "SYS9", rationale: "meshing SYS9 — 9 units, 9 hops")
         let why = BrainWhy.from(report: Self.report(.dispatch(goal, ranked: field), ranked: field))
 
-        #expect(why.candidates.count == BrainWhy.maxCandidates)
-        #expect(why.candidates.map(\.target) == ["SYS1", "SYS2", "SYS3", "SYS4", "SYS9"])
-        #expect(why.candidates.map(\.rank) == [1, 2, 3, 4, 9], "the launched row keeps its true rank")
-        #expect(why.candidates.last?.isChosen == true)
-        #expect(why.hiddenCandidates == 7)
-        // The gate names it, and now so does a row.
+        #expect(why.candidates.count == field.count)
+        let chosen = why.candidates.first { $0.isChosen }
+        #expect(chosen?.target == "SYS9")
+        #expect(chosen?.rank == 9, "the launched row keeps its true rank")
+        #expect(why.candidates.count(where: \.isChosen) == 1, "exactly one row is the chosen one")
+        // The gate names it, and so does a row.
         #expect(why.gateText.contains("SYS9"))
     }
 
-    /// The displacement only happens when it is needed — a chosen row already
-    /// inside the visible prefix must not be moved to the end.
-    @Test func aChosenRowInsideTheCapKeepsItsPlace() {
+    /// Rank order is the field's own order, and `isChosen` marks the launched
+    /// row wherever it sits — including near the top.
+    @Test func aChosenRowNearTheTopKeepsItsPlace() {
         let field = (1...8).map { index in
             GrowCandidate(
                 firstHop: "SYS\(index)", completesNow: false, relaysRemaining: index,
@@ -286,9 +285,8 @@ struct BrainWhyViewTests {
         let goal = Goal(kind: .tendMesh, target: "SYS2", rationale: "meshing SYS2 — 2 units, 2 hops")
         let why = BrainWhy.from(report: Self.report(.dispatch(goal, ranked: field), ranked: field))
 
-        #expect(why.candidates.map(\.target) == ["SYS1", "SYS2", "SYS3", "SYS4", "SYS5"])
-        #expect(why.candidates.map(\.isChosen) == [false, true, false, false, false])
-        #expect(why.hiddenCandidates == 3)
+        #expect(why.candidates.map(\.target) == (1...8).map { "SYS\($0)" })
+        #expect(why.candidates.map(\.isChosen) == [false, true, false, false, false, false, false, false])
     }
 
     // MARK: - Limit pressure

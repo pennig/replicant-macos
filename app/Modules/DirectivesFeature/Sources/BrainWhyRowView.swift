@@ -51,9 +51,10 @@ struct BrainWhyRowView: View {
                 row.servedSpans
                     .styled(prose: .rcCaption, designation: .rcMonoSmall)
                     .foregroundStyle(.rcTextTertiary)
-                    // Bounded like the card's other lines (see `BrainWhyView`).
-                    // Two, not three: up to five of these rows each pay the cap.
-                    .lineLimit(2)
+                    // Unbounded: these rows render only in `BrainWhyDetailView`,
+                    // inside a `ScrollView` that clamps their minimum height to
+                    // nothing. The cap they used to carry was there for the
+                    // pinned header, which no longer shows candidates at all.
                     .fixedSize(horizontal: false, vertical: true)
             }
 

@@ -27,6 +27,14 @@ private let logger = Logger(subsystem: "name.pennig.replicould", category: "Dire
 
 @Reducer
 public struct DirectivesFeature {
+    /// The reserved `selectedRowID` meaning "show the brain, not a run".
+    ///
+    /// Safe as a sentinel because every real row id is namespaced —
+    /// `DirectiveRow.id` is `builtin:<code>` or `custom:<id>` — so this can
+    /// never collide with one, and `selectedRow` resolves it to nil without
+    /// needing to know about it.
+    public static let brainSelectionID = "brain"
+
     @ObservableState
     public struct State: Equatable {
         /// The fleet — the source of every built-in row. `currentDirective` is
@@ -97,6 +105,22 @@ public struct DirectivesFeature {
             return rows.first { $0.id == selectedRowID }
         }
 
+        /// Whether the detail pane is showing the brain rather than a run.
+        ///
+        /// Rides the SAME `selectedRowID` as the rows, on a reserved id no row
+        /// can produce (`DirectiveRow.id` is always `builtin:`/`custom:`
+        /// prefixed). One selection means the two can never both be showing:
+        /// picking a run in the list writes its id here and the brain drops out
+        /// on its own, with no second piece of state to keep in step.
+        public var isBrainSelected: Bool { selectedRowID == DirectivesFeature.brainSelectionID }
+
+        /// How many runs `clearFinished` would delete. Drives both the menu
+        /// item's label and whether it is offered at all, so the count the
+        /// operator reads is the count that goes.
+        public var finishedCount: Int {
+            directives.count { DirectiveResolutionClient.finishedStatuses.contains($0.status) }
+        }
+
         /// The full `Device` behind the selected row — the composer needs it,
         /// and the detail pane reads its status.
         public var selectedDevice: Device? {
@@ -127,6 +151,10 @@ public struct DirectivesFeature {
         case cancelRunTapped
         case pauseTapped
         case resumeTapped
+        /// Delete every finished (`.completed`/`.cancelled`) run and its timeline.
+        case clearFinishedTapped
+        /// Show the brain's full report in the detail pane.
+        case brainTapped
         case composer(PresentationAction<DirectiveComposer.Action>)
         case newDirective(PresentationAction<NewDirectiveFeature.Action>)
         case newSalvageRun(PresentationAction<NewSalvageRunFeature.Action>)
@@ -225,6 +253,29 @@ public struct DirectivesFeature {
 
             case .resumeTapped:
                 return resolve(state) { await $0.resume($1) }
+
+            case .brainTapped:
+                state.selectedRowID = Self.brainSelectionID
+                // Deliberately NOT `selectionChanged`: the brain has no
+                // timeline, and re-running the query for it would clear the
+                // one belonging to whatever run was selected a moment ago —
+                // work the next real selection would only have to redo.
+                return .none
+
+            case .clearFinishedTapped:
+                // Drop a selection pointing at a row that is about to go, so the
+                // detail pane cannot be left rendering a deleted run. Done here
+                // rather than after the write: `directives` is a live query, so
+                // the rows vanish from under the view the moment it commits.
+                if case let .custom(directive, _) = state.selectedRow,
+                   DirectiveResolutionClient.finishedStatuses.contains(directive.status) {
+                    state.selectedRowID = nil
+                }
+                let resolution = self.directiveResolution
+                return .run { _ in
+                    let cleared = await resolution.clearFinished()
+                    logger.info("cleared \(cleared) finished run(s)")
+                }
 
             case let .newDirective(.presented(.delegate(.created(directive)))):
                 // Select the run that was just launched, so the detail pane is

@@ -45,6 +45,17 @@ public struct DirectivesListView: View {
                 }
                 .help("Launch a new mission")
             }
+            ToolbarItem {
+                // The count is in the title rather than a bare "Clear": this
+                // deletes rows and their timelines for good, so the number that
+                // goes should be readable before the click, not after it.
+                Button("Clear \(store.finishedCount) Finished", systemImage: "trash") {
+                    store.send(.clearFinishedTapped)
+                }
+                .labelStyle(.iconOnly)
+                .disabled(store.finishedCount == 0)
+                .help("Delete completed and cancelled runs and their timelines")
+            }
         }
         // Feature-tier sheets: @Presents + scope, never .sheet(isPresented:).
         .sheet(item: $store.scope(state: \.newDirective, action: \.newDirective)) { newStore in
@@ -78,7 +89,7 @@ public struct DirectivesListView: View {
                 // operator can DO about a mission already lives on the row
                 // and its detail pane.
                 if let why = store.brainWhy {
-                    BrainWhyView(why: why)
+                    BrainWhyView(why: why) { store.send(.brainTapped) }
                 }
             }
             .padding(Space.s)

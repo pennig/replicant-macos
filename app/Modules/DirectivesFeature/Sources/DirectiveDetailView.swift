@@ -85,13 +85,20 @@ public struct DirectiveDetailView: View {
 
     public var body: some View {
         Group {
-            switch store.selectedRow {
-            case let .builtIn(builtIn):
-                builtInDetail(builtIn)
-            case let .custom(directive, _):
-                customDetail(directive)
-            case nil:
-                RCContentUnavailableView("No Selection", systemImage: "square.dashed")
+            // The brain is checked FIRST and off the same selection: its
+            // reserved id resolves to no row, so leaving it to the `nil` branch
+            // would render "No Selection" over a deliberate one.
+            if store.isBrainSelected, let why = store.brainWhy {
+                BrainWhyDetailView(why: why)
+            } else {
+                switch store.selectedRow {
+                case let .builtIn(builtIn):
+                    builtInDetail(builtIn)
+                case let .custom(directive, _):
+                    customDetail(directive)
+                case nil:
+                    RCContentUnavailableView("No Selection", systemImage: "square.dashed")
+                }
             }
         }
         // Feature-tier sheet: @Presents + scope, never .sheet(isPresented:).
