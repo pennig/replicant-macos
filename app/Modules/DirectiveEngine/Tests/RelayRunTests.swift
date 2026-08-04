@@ -175,9 +175,15 @@ struct RelayRunAcquireTests {
     /// HEAVEN carrier then takes the clone aboard), so the dispatch names the
     /// hub's device code — not the carrier's.
     @Test func acquireStepEnqueuesAPrintAtTheHub() {
+        // The rail is armed by default (`BrainCeiling.totalReserveFloor`), so
+        // this fixture must clear it with real stock — otherwise the test
+        // would be exercising the veto, not the dispatch shape it names.
         let action = RelayRun().nextAction(
             directive: running(step: RelayRun.Step.acquire),
-            world: world(devices: [carrier(), hub()])
+            world: world(
+                devices: [carrier(), hub()],
+                footprints: [hubLocation: footprint(hubLocation, resources: 999_999)]
+            )
         )
         guard case let .dispatch(kind, deviceCode, params, next) = action else {
             Issue.record("expected a print dispatch, got \(action)")
@@ -235,31 +241,44 @@ struct RelayRunAcquireTests {
         }
     }
 
-    /// Unknown is never zero (the house invariant): no census row for the hub's
-    /// location means we have not been told the stock, which is not the same as
-    /// being told it is short. Vetoing on silence would deadlock the run against
-    /// a table nothing in this mission refreshes.
-    @Test func unknownStockNeverVetoesThePrint() {
+    /// Deliberately the OPPOSITE of "unknown is never zero": once the rail is
+    /// armed, a hub location with no census row at all must VETO, not permit —
+    /// "we couldn't read the stock" is not the same claim as "the stock is
+    /// fine," and the print is a real, irreversible spend. (An *unarmed* rail
+    /// is a separate case, covered by `unarmedRailNeverVetoesEvenOnUnknownStock`
+    /// below — it has no opinion at all, by design.)
+    @Test func unknownStockVetoesThePrintWhenArmed() {
         let snapshot = world(devices: [carrier(), hub()])
-        guard case .dispatch(.print, "AF1", _, RelayRun.Step.printing) =
-                RelayRun(reserveFloor: 500).nextAction(directive: running(), world: snapshot)
-        else {
-            Issue.record("an unknown stock must not veto the print")
-            return
-        }
+        #expect(RelayRun(reserveFloor: 500).nextAction(directive: running(), world: snapshot)
+                == .stall(.printStockShort))
     }
 
-    /// Production ships the rail unarmed: no calibrated floor exists yet, so the
-    /// veto must never fire on its own. This pins that as a deliberate state
-    /// rather than an accident — when the constant lands, this test changes.
-    @Test func theReserveRailShipsUnarmed() {
-        #expect(RelayRun().reserveFloor == nil)
+    /// Production ships the rail ARMED with `BrainCeiling.totalReserveFloor` —
+    /// the sum of the six verified per-type floors, the closest today's
+    /// total-only `LocationFootprint` can get to the true per-type check. This
+    /// pins that as a deliberate, live state (not the earlier `nil`-unarmed
+    /// placeholder) and proves stock below it actually vetoes end to end.
+    @Test func theReserveRailIsArmedWithTheCalibratedFloor() {
+        #expect(RelayRun().reserveFloor == BrainCeiling.totalReserveFloor)
         let broke = world(
             devices: [carrier(), hub()],
             footprints: [hubLocation: footprint(hubLocation, resources: 0)]
         )
-        guard case .dispatch(.print, _, _, _) = RelayRun().nextAction(directive: running(), world: broke) else {
-            Issue.record("an unarmed rail must not veto")
+        #expect(RelayRun().nextAction(directive: running(), world: broke) == .stall(.printStockShort))
+    }
+
+    /// The injection seam still lets a caller explicitly disarm the rail (e.g.
+    /// a fixture that wants to isolate a different code path from the reserve
+    /// check entirely) — and an explicitly unarmed rail keeps its original,
+    /// permissive behaviour: no opinion at all, including on stock it never
+    /// even managed to read. This is the one place "unknown is never short"
+    /// still holds, and only because the rail itself is off.
+    @Test func unarmedRailNeverVetoesEvenOnUnknownStock() {
+        let snapshot = world(devices: [carrier(), hub()])
+        guard case .dispatch(.print, "AF1", _, RelayRun.Step.printing) =
+                RelayRun(reserveFloor: nil).nextAction(directive: running(), world: snapshot)
+        else {
+            Issue.record("an explicitly unarmed rail must not veto, even on unknown stock")
             return
         }
     }
@@ -825,7 +844,10 @@ struct RelayRunSequenceTests {
             let snapshot = world(
                 devices: Array(devices.values),
                 dispatchedOperations: dispatched,
-                systems: ["VEGA": targetSystem()]
+                systems: ["VEGA": targetSystem()],
+                // The rail is armed by default: the walk must clear it with
+                // real stock or `acquire` vetoes before the happy path starts.
+                footprints: [hubLocation: footprint(hubLocation, resources: 999_999)]
             )
             let action = RelayRun().nextAction(directive: directive, world: snapshot)
             visited.append(directive.step)

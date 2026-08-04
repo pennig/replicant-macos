@@ -44,23 +44,27 @@ public struct RelayRun: MissionStepMachine {
     public let kind: DirectiveKind = .relayRun
     public var firstStep: String { Step.acquire }
 
-    /// The per-type resource reserve floor `R` — the rail that vetoes a print
-    /// which would drop the hub below the stock its other consumers need
+    /// The resource reserve floor `R` — the rail that vetoes a print which
+    /// would drop the hub below the stock its other consumers need
     /// (brain-goal-decision-policy, ticket 03's spend ceiling).
     ///
-    /// **Deliberately unarmed in production (`nil`), and deliberately not a
-    /// literal.** The calibrated value is a later task, and inventing one here
-    /// would ship a number that reads as measured when it is a guess — the
-    /// expensive direction to be wrong in, since too high never prints and too
-    /// low drains the hub. `nil` means "the rail is not armed yet": the veto is
-    /// structurally in place, wired at the one point it can do any good (before
-    /// the `enqueue_print`), and turning it on is a one-value change.
+    /// **Armed in production** with `BrainCeiling.totalReserveFloor` — the sum
+    /// of `BrainCeiling`'s six verified per-type floors (`K` relays' worth of
+    /// each type's real blueprint bill; see `BrainCeiling` for the constant
+    /// and its justification). A SUM, not the true per-type check `R` is
+    /// specified as: today's `LocationFootprint` carries one TOTAL holdings
+    /// count, not a per-type breakdown, so the sum is the closest this file
+    /// can get until the per-type stockpile record lands
+    /// (brain-resource-hub-model, ticket 06) — when it does, `printStockIsShort`
+    /// is the one place that changes to call `BrainCeiling.printPermitted(hubStock:)`
+    /// directly.
     ///
-    /// Injectable rather than a `static let` so the veto's behaviour is provable
-    /// under test without a calibrated constant existing yet.
+    /// Injectable rather than a `static let` so the veto's behaviour — and the
+    /// unarmed (`nil`) edge case — stays provable under test without every
+    /// caller depending on the calibrated constant.
     public let reserveFloor: Int?
 
-    public init(reserveFloor: Int? = nil) {
+    public init(reserveFloor: Int? = BrainCeiling.totalReserveFloor) {
         self.reserveFloor = reserveFloor
     }
 
@@ -297,19 +301,32 @@ public struct RelayRun: MissionStepMachine {
 
     /// Whether the reserve rail vetoes a print at `location`.
     ///
-    /// Unknown is never short — the house invariant. No census row for the hub's
-    /// location means nobody has told us the stock, which is a different fact
-    /// from being told it is low, and vetoing on silence would deadlock the run
-    /// against a table this mission never refreshes.
+    /// **Fails CLOSED on unreadable stock once armed — deliberately not
+    /// "unknown is never short."** An unarmed rail (`reserveFloor == nil`) has
+    /// no opinion and never vetoes, by design. But once armed, a MISSING
+    /// census row for the hub's location is not evidence the stock is fine —
+    /// it is evidence nobody has told us — so it vetoes too. This inverts what
+    /// an earlier version of this file did (treat absence as "not short"), on
+    /// review: the print is a real, irreversible resource spend, and "we
+    /// couldn't read the stock" must not be read as permission to spend it.
+    /// This is NOT the general "unknown is never zero" display convention
+    /// used elsewhere (salvage percentages, scan completeness) — those
+    /// protect against overstating depletion in the UI; this protects the
+    /// fleet's actual resources, a different risk in the opposite direction.
+    /// A stall here is not a dead end: `.printStockShort` already carries
+    /// `BrainDisposition.retry` (bounded auto-retry, then escalate), and the
+    /// census this reads is refreshed by other missions (e.g.
+    /// `HaulRun.survey`) and by the Locations feature, so the row this
+    /// mission itself never writes still arrives on its own.
     ///
     /// Reads the location's TOTAL holdings, which is all `LocationFootprint`
     /// carries today. The rail is specified per RESOURCE TYPE
-    /// (brain-resource-hub-model, ticket 06), and the per-type stockpile record
-    /// it needs is a later task; when it lands, this is the one place that
-    /// changes.
+    /// (brain-resource-hub-model, ticket 06; see `BrainCeiling`), and the
+    /// per-type stockpile record it needs is a later task; when it lands, this
+    /// is the one place that changes.
     func printStockIsShort(at location: String, _ world: WorldSnapshot) -> Bool {
         guard let floor = reserveFloor else { return false }
-        guard let footprint = world.footprints[location] else { return false }
+        guard let footprint = world.footprints[location] else { return true }
         return footprint.resources < floor
     }
 
