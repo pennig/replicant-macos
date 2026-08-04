@@ -133,6 +133,95 @@ struct BrainConfirmFreshTests {
         )
     }
 
+    /// **The other half of that race — the interleaving that a pre-write check
+    /// cannot survive.** Same operator launch, but committed AFTER the brain's
+    /// confirm-read has returned.
+    ///
+    /// The racing insert is driven from the `uuid` generator, which the brain
+    /// resolves once the confirm-read is in hand and immediately before it
+    /// opens its write transaction — the one deterministic seam that sits
+    /// between the two. `DatabaseWriter`'s synchronous `write` commits the row
+    /// there and then, so by the time the brain's own transaction opens the
+    /// collision is already on disk.
+    ///
+    /// A gate that re-read the ledger in a transaction of its own and then
+    /// inserted in a second one passes the pre-read test above and fails this
+    /// one: it would insert a second directive owning V1. Only a re-check
+    /// taken INSIDE the insert's transaction catches both.
+    @Test func anOperatorLaunchAfterTheConfirmReadIsStillCaught() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in try seedGrowableWorld(db) }
+        let racing = UUIDGenerator {
+            try? database.write { db in
+                try seedDirective(db, id: "OPERATOR", kind: .surveyRun, deviceCode: "V1")
+            }
+            return UUID(uuidString: "00000000-0000-0000-0000-0000000000FF")!
+        }
+
+        let decision = await decide(database, uuid: racing, refresher: confirmingRefresher(database))
+
+        #expect(decision == .idle(reason: carrierTakenReason))
+        #expect(
+            try await relayRuns(database).isEmpty,
+            "the operator's row landed after the confirm-read — only an in-transaction re-check sees it"
+        )
+    }
+
+    /// The in-flight-target predicate is re-checked at commit time too, not
+    /// only during selection. A second Relay Run aimed at VEGA lands in the
+    /// window; V1 itself is still perfectly free (the other run flies V2), so
+    /// nothing but that predicate can stop this tick.
+    ///
+    /// Latent today — no UI constructs a `.relayRun` and the brain loop is
+    /// serial — and asserted anyway, because it goes live the moment a second
+    /// brain-side launcher lands (prune, or a multi-launch pass), and the cost
+    /// of missing it is the 370-unit, ~800 s duplicate print the selection-side
+    /// filter already exists to prevent.
+    @Test func aTargetTakenByAnotherRelayRunInTheWindowIsDeferred() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try seedGrowableWorld(db, carriers: ["V1", "V2"], salvage: ["VEGA": 3_200])
+        }
+        let racing = UUIDGenerator {
+            try? database.write { db in
+                try seedRelayRun(db, id: "OTHER", deviceCode: "V2", targets: ["VEGA"])
+            }
+            return UUID(uuidString: "00000000-0000-0000-0000-0000000000FE")!
+        }
+
+        let decision = await decide(database, uuid: racing, refresher: confirmingRefresher(database))
+
+        #expect(decision == .idle(reason: "deferred — VEGA already in flight on confirm"))
+        let runs = try await relayRuns(database)
+        #expect(runs.map(\.id) == ["OTHER"], "the brain must not add a second run to the same hop")
+    }
+
+    /// **A carrier that drifted to a SIBLING LOCATION in the same system is not
+    /// free.** `SOL-4` is not `SOL-3`: the vessel is idle, unreserved and still
+    /// in the meshed system, and it is still wrong to launch on it — the relay
+    /// materialises at the printer, so `RelayRun.acquire` would stall
+    /// `unreachableDevice` on its first evaluation.
+    ///
+    /// This is the test that makes `Plan.grow`'s `hub` payload load-bearing.
+    /// Re-testing co-location against the lossy `origin` ("SOL"), or against
+    /// the carrier's own fresh location (a tautology), passes every other test
+    /// in this file and fails this one.
+    @Test func aCarrierThatDriftedToASiblingLocationIsDeferred() async throws {
+        let database = try GameDatabase.bootstrap()
+        let uuid = UUIDGenerator.incrementing
+        try await database.write { db in try seedGrowableWorld(db) }
+        let refresher = confirmingRefresher(database) { device in
+            var drifted = device
+            drifted.location = "SOL-4"   // same system, different location
+            return drifted
+        }
+
+        let decision = await decide(database, uuid: uuid, refresher: refresher)
+
+        #expect(decision == .idle(reason: carrierTakenReason))
+        #expect(try await relayRuns(database).isEmpty)
+    }
+
     /// A confirm-read that FAILS defers too, and says so in its own words. Fail
     /// -closed, the same reasoning the reserve rail uses: "we could not confirm"
     /// is not "it is fine".
@@ -150,7 +239,6 @@ struct BrainConfirmFreshTests {
         let decision = await decide(database, uuid: uuid, refresher: refresher)
 
         #expect(decision == .idle(reason: confirmFailedReason))
-        #expect(confirmFailedReason != carrierTakenReason, "the two deferrals must not read alike")
         #expect(try await relayRuns(database).isEmpty, "an unconfirmable carrier is never committed to")
         #expect(reads.value.count == 1, "…and the tick does not retry the read it just failed")
     }

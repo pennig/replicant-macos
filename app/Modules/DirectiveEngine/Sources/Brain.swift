@@ -172,19 +172,26 @@ struct Brain: Sendable {
             return .idle(reason: reason)
 
         case let .grow(goal, ranked, carrier, hub, origin):
-            // The confirm-fresh gate (clause 4c). Everything above this line
-            // ran on a best-effort snapshot; everything below it commits.
-            switch await confirmFresh(carrier: carrier, at: hub, database: database) {
+            // The confirm-fresh gate (clause 4c), in two halves that cannot be
+            // collapsed into one: the AUTHORITATIVE half is a network read and
+            // so cannot happen inside a database transaction, and the LOCAL
+            // half must happen inside the very transaction that inserts, or it
+            // is advice rather than a guarantee. So: read the server, carry the
+            // answer into `launch`, and re-check ownership there.
+            switch await confirmCarrier(carrier) {
             case let .deferred(reason):
                 // Same precedence as the idle arm above: a deferred tick did
                 // nothing, so a run already waiting on a human still outranks
                 // it as the thing worth reporting.
                 if let escalated { return .stall(escalated) }
                 return .idle(reason: reason)
-            case .proceed:
-                return await launch(
-                    goal: goal, ranked: ranked, carrier: carrier, origin: origin, database: database
+            case let .proceed(fresh):
+                let decision = await launch(
+                    goal: goal, ranked: ranked, carrier: fresh, hub: hub, origin: origin,
+                    database: database
                 )
+                if case .idle = decision, let escalated { return .stall(escalated) }
+                return decision
             }
         }
     }
@@ -257,17 +264,7 @@ struct Brain: Sendable {
             return .idle(reason: "no grow or prune work")
         }
 
-        // A hop another Relay Run is already flying to is not a candidate.
-        // Reserving the CARRIER alone does not cover this: with two free
-        // carriers, every tick between launch and arrival would print a
-        // second relay (370 units, ~800 s) for a system already being
-        // meshed, and the loser's `travel` step would then find the target
-        // meshed on arrival and hand a spare relay back to nobody.
-        let inFlight = Set(
-            directives
-                .filter { $0.kind == .relayRun && owningStatuses.contains($0.status) }
-                .flatMap(\.targets)
-        )
+        let inFlight = inFlightTargets(directives)
         guard let candidate = ranked.first(where: { !inFlight.contains($0.firstHop) }) else {
             return .idle(reason: "every grow candidate is already in flight")
         }
@@ -745,6 +742,25 @@ struct Brain: Sendable {
             .min { $0.deviceCode < $1.deviceCode }
     }
 
+    /// Every first hop a Relay Run in force is already flying to.
+    ///
+    /// A hop in this set is not a candidate. Reserving the CARRIER alone does
+    /// not cover it: with two free carriers, every tick between launch and
+    /// arrival would print a second relay (370 units, ~800 s) for a system
+    /// already being meshed, and the loser's `travel` step would then find the
+    /// target meshed on arrival and hand a spare relay back to nobody.
+    ///
+    /// Shared by the selection pass and the commit-time re-check for the same
+    /// reason `isFreeCarrier` is: a commitment must be re-tested against the
+    /// predicate that admitted it, not against a re-typed cousin of it.
+    static func inFlightTargets(_ directives: [Directive]) -> Set<String> {
+        Set(
+            directives
+                .filter { $0.kind == .relayRun && owningStatuses.contains($0.status) }
+                .flatMap(\.targets)
+        )
+    }
+
     /// The freedom test itself, over ONE device — extracted so the confirm
     /// -fresh gate applies exactly the predicate the ranking applied.
     ///
@@ -829,45 +845,32 @@ struct Brain: Sendable {
     /// dependence the gate exists to remove. It either lets the tick's already
     /// -made decision through, or it stops the tick.
     enum Confirmation: Equatable, Sendable {
-        case proceed
+        /// Proceed to commit, carrying the AUTHORITATIVE row the server just
+        /// gave — the commit-time re-check judges that, not the local copy it
+        /// may or may not have been reconciled into.
+        case proceed(carrier: Device)
         /// Write nothing; report this. The string is the why-view's line, so
         /// it names the carrier and reads as a sentence.
         case deferred(reason: String)
     }
 
-    /// Re-confirm, against authoritative state, that the carrier this tick
-    /// chose is still free — immediately before committing to it.
+    /// The AUTHORITATIVE half of the gate: what does the server say about this
+    /// carrier, right now, immediately before we commit to it?
     ///
-    /// **Why this exists.** `plan` ranks over a `WorldView` that may be seconds
-    /// old, and between that read and the `Directive.insert` below there is a
-    /// real window: the brain loop is serial so it cannot race itself, but the
-    /// UI launchers can (`NewDirectiveFeature` writes a directive on a vessel
-    /// the operator picked, with no knowledge of what the brain is mid-way
-    /// through deciding). Losing that race means two directives owning one
-    /// carrier — the executor would then fly the same vessel for two missions.
+    /// **Why a network read at all.** `plan` ranks over a `WorldView` that may
+    /// be seconds old, and nothing refreshes an idle vessel's row by itself
+    /// (`ami-drones-are-event-silent` is the extreme case, but a resting
+    /// heaven vessel is quiet too). Whether the carrier has left the hub or
+    /// picked up an errand is the one question the local database structurally
+    /// cannot answer, so it is the one this read is spent on.
     ///
-    /// **Why it re-reads BOTH ends.** The device row and the directive ledger
-    /// answer different halves of "free", and only both together are the
-    /// predicate `freeCarrier` applied:
+    /// **Why it does not also check ownership.** It cannot do so safely: this
+    /// is an `async` network read, so anything it learned about the directive
+    /// ledger would be stale by the time the insert opened its own
+    /// transaction. That half belongs — and now lives — inside the write
+    /// transaction itself (`commitBlocker`, applied in `launch`).
     ///
-    ///   - The `.high` `deviceRefresher` read is the authoritative half — has
-    ///     the vessel left the hub, is it mid-errand — and it is the one the
-    ///     local database genuinely cannot answer, since nothing refreshes an
-    ///     idle vessel's row by itself.
-    ///   - The ledger read is the OPERATOR half, and it is the one that closes
-    ///     the race above: a UI launch writes a `directives` row and touches no
-    ///     device, so a gate that re-read only the vessel would see an idle
-    ///     heaven vessel standing at the hub and commit straight into the
-    ///     collision. It is a local SQLite read of a tens-of-rows ledger — no
-    ///     API, no budget — and it is taken in one transaction with the fleet
-    ///     so the reservation closure sees a single consistent moment.
-    ///
-    /// The fresh row is overlaid onto that fleet rather than trusted to have
-    /// landed in it: `deviceRefresher` reconciles what it reads, but the
-    /// reconciler applies event-time guards we do not control here, and the
-    /// answer the gate acts on must be the one the server just gave.
-    ///
-    /// **A failed confirm defers too** — fail-closed, the same reasoning the
+    /// **A failed confirm defers** — fail-closed, the same reasoning the
     /// reserve rail uses. A `.high` refresh is suppressed by neither the TTL
     /// nor the read-budget floor (`PollCoordinator.refresh` applies both to
     /// `.low` only), so nil here means the authoritative read genuinely did not
@@ -878,18 +881,16 @@ struct Brain: Sendable {
     /// **When it fires, and how often.** Only from the `.grow` arm of
     /// `evaluateOnce` — i.e. only on a tick that has already decided to commit,
     /// which is what keeps a 5-second loop from becoming a `.high` read every
-    /// 5 seconds. The ceiling is therefore one `.high` read per tick (12/min,
-    /// for ONE device), reached only while there is a launchable candidate AND
-    /// the confirm keeps refusing. A NEGATIVE confirm cannot sustain that: it
-    /// reconciles the fresh row, so the next tick's snapshot already knows the
-    /// carrier is gone and either picks another or idles without confirming. A
-    /// FAILING confirm can, for as long as that device's read keeps failing —
-    /// deliberately, since the alternative (remembering the failure) is state
-    /// between ticks, which clause 2 forbids, and the same window would leave
-    /// the brain committing blind.
-    private func confirmFresh(
-        carrier: String, at hub: String, database: any DatabaseWriter
-    ) async -> Confirmation {
+    /// 5 seconds. The ceiling is one `.high` read per tick (12/min, for ONE
+    /// device), reached only while there is a launchable candidate AND the
+    /// commitment keeps being refused. Sustaining it needs the refusal to
+    /// survive into the next tick's snapshot — a failing read does that by
+    /// construction, and a negative answer does it whenever the reconciler
+    /// declines the fresh row (`confirm-steps-need-fresh-evidence` records a
+    /// live same-second drop path). Deliberate either way: the alternative is
+    /// remembering the refusal, which is state between ticks (clause 2), and
+    /// the same window would otherwise have the brain committing blind.
+    private func confirmCarrier(_ carrier: String) async -> Confirmation {
         @Dependency(\.deviceRefresher) var deviceRefresher
 
         guard let fresh = await deviceRefresher.refresh(carrier, .high) else {
@@ -901,44 +902,51 @@ struct Brain: Sendable {
             logger.error("confirm-read of carrier \(carrier, privacy: .public) failed — deferring launch")
             return .deferred(reason: "deferred — carrier \(carrier) could not be confirmed")
         }
-
-        let ledger: Ledger
-        do {
-            ledger = try await database.read { db in
-                Ledger(
-                    devices: Dictionary(
-                        try Device.all.fetchAll(db).map { ($0.deviceCode, $0) },
-                        uniquingKeysWith: { _, last in last }
-                    ),
-                    directives: try Directive.all.fetchAll(db)
-                )
-            }
-        } catch {
-            logger.error("confirm of carrier \(carrier, privacy: .public) could not re-read the ledger: \(error)")
-            return .deferred(reason: "deferred — carrier \(carrier) could not be confirmed")
-        }
-
-        var devices = ledger.devices
-        devices[carrier] = fresh
-        let reserved = Self.reservedDevices(directives: ledger.directives, devices: devices)
-        guard Self.isFreeCarrier(fresh, at: hub, reserved: reserved) else {
-            // `.notice`, like a launch: this is a race actually caught — rare,
-            // and the line that explains a launch an operator expected and did
-            // not get. It cannot become a heartbeat, since the reconciled row
-            // is in the next tick's snapshot.
-            logger.notice(
-                "confirm found carrier \(carrier, privacy: .public) no longer free at \(hub, privacy: .public) — deferring launch"
-            )
-            return .deferred(reason: "deferred — carrier \(carrier) unavailable on confirm")
-        }
-        return .proceed
+        return .proceed(carrier: fresh)
     }
 
-    /// The two halves of "who owns what", read in ONE transaction so the
-    /// reservation closure below sees a single consistent moment.
-    private struct Ledger: Sendable {
-        let devices: [String: Device]
-        let directives: [Directive]
+    /// The LOCAL half of the gate, as a pure function of one consistent set of
+    /// rows: is there any reason this commitment must not go ahead? Nil means
+    /// commit.
+    ///
+    /// It re-applies the two predicates the SELECTION applied, against rows
+    /// read inside the insert's own transaction:
+    ///
+    ///   - `isFreeCarrier`, over the reservation closure — the half that closes
+    ///     the operator race. A UI launcher (`NewDirectiveFeature`) writes a
+    ///     `directives` row on a vessel the operator picked and touches no
+    ///     device row at all, so a gate that re-read only the vessel would see
+    ///     an idle heaven vessel standing at the hub and commit straight into a
+    ///     collision — two directives owning one carrier.
+    ///   - `inFlightTargets` — latent today (no UI constructs a `.relayRun`,
+    ///     and the brain loop is serial, so nothing else can write one inside
+    ///     the window), live the moment a second brain-side launcher lands:
+    ///     prune, or the multi-launch pass `plan`'s doc anticipates. The cost
+    ///     of missing it is the same 370-unit, ~800 s duplicate print the
+    ///     selection-side filter exists to prevent, so it is re-checked here
+    ///     rather than left for that task to remember.
+    ///
+    /// Both are the SAME functions the selection used, never re-typed copies:
+    /// a commit-time check that drifted looser than selection would wave
+    /// through exactly the case selection would now reject.
+    static func commitBlocker(
+        carrier: Device, at hub: String, target: String,
+        directives: [Directive], devices: [String: Device]
+    ) -> String? {
+        // The freshly-read row is OVERLAID rather than trusted to have landed:
+        // `deviceRefresher` reconciles what it reads, but the reconciler
+        // applies event-time guards we do not control here, and the answer this
+        // acts on must be the one the server just gave.
+        var fleet = devices
+        fleet[carrier.deviceCode] = carrier
+        let reserved = reservedDevices(directives: directives, devices: fleet)
+        guard isFreeCarrier(carrier, at: hub, reserved: reserved) else {
+            return "deferred — carrier \(carrier.deviceCode) unavailable on confirm"
+        }
+        guard !inFlightTargets(directives).contains(target) else {
+            return "deferred — \(target) already in flight on confirm"
+        }
+        return nil
     }
 
     // MARK: - The launch
@@ -968,17 +976,38 @@ struct Brain: Sendable {
     /// A failed write degrades to `.idle`, never to `.dispatch`: the decision
     /// reports what the tick DID, and claiming a launch that did not land
     /// would put a lie in the why-view and in the log.
+    ///
+    /// **The confirm-fresh gate's local half runs HERE, inside the insert's own
+    /// transaction, and that placement is the whole guarantee.** Checking
+    /// ownership beforehand — in a transaction that commits and returns — only
+    /// narrows the window: a UI launcher committing in the gap between that
+    /// read and this write is not seen, and the tick inserts a second directive
+    /// owning the same carrier, which is the exact failure this gate exists to
+    /// prevent. Every writer in the app goes through this one `DatabaseWriter`,
+    /// so a re-check taken inside the write transaction cannot be interleaved
+    /// with: it either sees the racing row or the racing row waits for us. It
+    /// costs no extra I/O — the rows are read on the connection already open to
+    /// do the insert, and the `.high` device read was paid for before we got
+    /// here.
+    ///
+    /// The residual window is the one nothing local can close: the carrier's
+    /// SERVER state, as of a read that has just completed. That is the price of
+    /// the world being remote, and it is measured in the milliseconds since the
+    /// confirm-read returned rather than in the seconds since the snapshot.
     private func launch(
-        goal: Goal, ranked: [GrowCandidate], carrier: String, origin: String,
+        goal: Goal, ranked: [GrowCandidate], carrier: Device, hub: String, origin: String,
         database: any DatabaseWriter
     ) async -> BrainDecision {
+        // Resolved out here, never inside the write closure: GRDB runs that
+        // closure on its own writer thread, where the task-local dependency
+        // scope this tick is running in does not reach.
         @Dependency(\.uuid) var uuid
 
         let directive = Directive(
             id: uuid().uuidString,
             kind: .relayRun,
             status: .running,
-            deviceCode: carrier,
+            deviceCode: carrier.deviceCode,
             controllerCode: nil,
             roamCentre: nil,
             fleetTag: nil,
@@ -999,13 +1028,40 @@ struct Brain: Sendable {
             createdAt: now,
             updatedAt: now
         )
+        let blocker: String?
         do {
-            try await database.write { db in
+            blocker = try await database.write { db -> String? in
+                let directives = try Directive.all.fetchAll(db)
+                let devices = Dictionary(
+                    try Device.all.fetchAll(db).map { ($0.deviceCode, $0) },
+                    uniquingKeysWith: { _, last in last }
+                )
+                if let blocker = Self.commitBlocker(
+                    carrier: carrier, at: hub, target: goal.target,
+                    directives: directives, devices: devices
+                ) {
+                    return blocker
+                }
                 try Directive.insert { directive }.execute(db)
+                return nil
             }
         } catch {
             logger.error("launch of \(directive.id, privacy: .public) failed: \(error)")
             return .idle(reason: "launch failed")
+        }
+        if let blocker {
+            // `.debug`, not `.notice`. A caught race is a real decision and it
+            // is reported to the operator through the why-view — but this line
+            // can repeat every tick (the negative answer only clears once the
+            // next snapshot agrees, which a declined reconcile can delay), and
+            // nothing per-tick belongs at `.notice`.
+            logger.debug(
+                """
+                deferred launch on \(carrier.deviceCode, privacy: .public) \
+                at \(hub, privacy: .public) — \(blocker, privacy: .public)
+                """
+            )
+            return .idle(reason: blocker)
         }
         // `.notice`, unlike every other line in this file: a launch is rare,
         // irreversible in resource terms (it ends in a 370-unit print), and
@@ -1014,7 +1070,7 @@ struct Brain: Sendable {
         // without a second lookup.
         logger.notice(
             """
-            launched relay run \(directive.id, privacy: .public) on \(carrier, privacy: .public) \
+            launched relay run \(directive.id, privacy: .public) on \(carrier.deviceCode, privacy: .public) \
             — \(goal.rationale, privacy: .public)
             """
         )
