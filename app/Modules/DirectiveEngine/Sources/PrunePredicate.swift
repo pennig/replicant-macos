@@ -26,39 +26,39 @@
 //  loudly against the mesh-rooted reading (all four brief conditions), which
 //  is how this was caught rather than shipped.
 //
-//  Why the anchor is the hub's system: command authority flows from a
-//  STATIONARY replicant outward through linked relays (see the
-//  ftl-authority-rule note), and the single print hub of this effort is
-//  anchor-co-located by design (automation-brain ticket 06). `WorldView`
-//  carries no replicant position, and `hubLocation` is already the brain's
-//  handle on "where authority lives" — it is `nil` unless the hub's own
-//  system is meshed. When it IS nil, or the census cannot place it, the
-//  predicate cannot judge anything and pins everything: prune is the one
-//  part of this capability that destroys rather than creates, so every
+//  Why the anchor is the hub's system: it is the one place the brain already
+//  knows is both meshed and worth serving, and `hubLocation` is `nil` unless
+//  the hub's own system is meshed. When it IS nil, or the census cannot place
+//  it, the predicate cannot judge anything and pins everything: prune is the
+//  one part of this capability that destroys rather than creates, so every
 //  uncertain edge errs PINNED.
 //
-//  Two inherited optimisms, recorded because prune is where optimism turns
-//  destructive:
+//  THE ANCHOR IS NOT WHERE AUTHORITY COMES FROM — a replicant is (see the
+//  ftl-authority-rule note), and the design's claim that hub and replicant are
+//  co-located (automation-brain ticket 06) is asserted by nothing in the code.
+//  Task 23 closed that on the TARGET side: every meshed system holding a
+//  replicant is a served system in its own right, so the road to it is pinned
+//  whether or not the hub happens to stand on it. `servedSystems` /
+//  `replicantSystems` carry the full argument for why a target and not a
+//  second root.
 //
-//  1. `MeshGraph` models every relay link as a uniform 7.5 ly hop
-//     (`SalvageTargetPlanner.relayRangeLY`). For grow that is harmless — it
-//     over-plans and the plant simply fails to link. Here the same optimism
-//     runs the other way: a modelled-but-nonexistent link makes a real chain
-//     look redundant, and the redundant-looking half is what gets reclaimed.
-//     `ftlLinks` now carries per-endpoint `rangeA`/`rangeB` (see the
-//     ftl-authority-rule note); reading the real ranges would close it.
-//  2. The anchor is the hub's system rather than the stationary replicant's.
-//     Nothing ENFORCES the co-location the design assumes, and an autofactory
-//     meshed away from the replicant would put the relays on the replicant's
-//     own road on the reclaimable side — total authority loss.
-//     `Replicant.currentStar` already carries the truth. Fine to defer while
-//     this is an unwired pure function; it must NOT be deferred past the tick
-//     that first acts on a `reclaimable` entry.
+//  One inherited optimism remains, recorded because prune is where optimism
+//  turns destructive: `MeshGraph` models every relay link as a uniform 7.5 ly
+//  hop (`SalvageTargetPlanner.relayRangeLY`). For grow that is harmless — it
+//  over-plans and the plant simply fails to link. Here the same optimism runs
+//  the other way: a modelled-but-nonexistent link makes a real chain look
+//  redundant, and the redundant-looking half is what gets reclaimed. `ftlLinks`
+//  now carries per-endpoint `rangeA`/`rangeB` (see the ftl-authority-rule
+//  note); reading the real ranges would close it.
 //
 //  Pure function of `(WorldView, MeshGraph)` — no state, no I/O, no clock,
 //  no database, and no logging (there is nothing here a later why-view
-//  cannot re-derive). `graph` must be built from `view.starPositions`, the
-//  same contract `GrowRanking.rank` already relies on.
+//  cannot re-derive). The graph should be built from `view.starPositions`, as
+//  `GrowRanking.rank` builds it — and, since Task 23, a graph that ISN'T no
+//  longer breaks anything silently: the census precondition is asked of
+//  `graph.canPlace` rather than of the view's own census, so a graph that
+//  cannot place what the judgement depends on declines instead of shrinking
+//  the union under it.
 //
 
 import Foundation
@@ -180,12 +180,19 @@ public enum PrunePredicate {
         // exactly the lag this precondition exists for: an in-progress chain
         // toward value the census has not paged in yet would read as
         // reclaimable, and the brain would plant and un-plant it.
+        // Asked of the GRAPH, not of `view.starPositions` (Task 23). The
+        // search reads `MeshGraph`'s own positions, so validating the view's
+        // census only enforced the precondition if the two agreed — which was
+        // a documented contract with nothing behind it. `graph.canPlace` reads
+        // the same dictionary `search` does, so a caller handing over a
+        // filtered or older graph now DECLINES instead of silently shrinking
+        // the union and offering up whatever fell out of it.
         let targets = servedSystems(in: view)
         let mustBePlaceable = view.meshSystems
             .union(relays.compactMap { $0.location.map { SiteAssay.system(of: $0) } })
             .union([anchor])
             .union(targets)
-        let unplaceable = mustBePlaceable.filter { view.starPositions[$0] == nil }.sorted()
+        let unplaceable = mustBePlaceable.filter { !graph.canPlace($0) }.sorted()
         guard unplaceable.isEmpty else { return decline(.censusIncomplete(systems: unplaceable)) }
 
         var union = graph.pathUnion(to: targets, from: [anchor], free: view.meshSystems)
@@ -228,16 +235,59 @@ public enum PrunePredicate {
     ///     the design's target set is value-only, but a system can hold a
     ///     working vessel long after its last assay depletes;
     ///   - meshed systems whose value is UNKNOWN because nobody has surveyed
-    ///     them (`unsurveyedMeshSystems`) — unknown must read as pinned.
+    ///     them (`unsurveyedMeshSystems`) — unknown must read as pinned;
+    ///   - meshed systems where a REPLICANT stands (`replicantSystems`) —
+    ///     where authority itself comes from.
     ///
     /// The second and third exist because the value model answers "is there
     /// something worth going to?", and prune is also asking "is there
-    /// something already there?". Both extra sources only ever ADD targets,
-    /// so they can only ever move a relay from reclaimable to pinned.
+    /// something already there?". The fourth answers a third question again —
+    /// "is there anything still able to give an order?" — and is the one that
+    /// closes the anchor's standing gap (see below). All three only ever ADD
+    /// targets, so they can only ever move a relay from reclaimable to pinned.
     static func servedSystems(in view: WorldView) -> Set<String> {
         liveValueSystems(in: view)
             .union(fleetSystems(in: view))
             .union(unsurveyedMeshSystems(in: view))
+            .union(replicantSystems(in: view))
+    }
+
+    /// Meshed systems holding one of the account's replicants.
+    ///
+    /// **This is the fix for the anchor's standing weakness, and it is a fix on
+    /// the TARGET side rather than the source side.** The union is rooted at
+    /// the print hub's system, which is where authority lives only because
+    /// `brain-resource-hub-model` asserts the hub and the anchor replicant are
+    /// co-located — an assertion nothing enforces. Break it (an autofactory
+    /// meshed away from the replicant) and the relays on the replicant's own
+    /// road into the mesh lie on no anchor→target path: they read reclaimable,
+    /// and reclaiming them severs the mesh from the one stationary replicant
+    /// that makes any of it commandable (`ftl-authority-rule`, rule 2). Total
+    /// authority loss, and the worst possible way to discover the assumption
+    /// was load-bearing.
+    ///
+    /// **Why a target and not a second root.** Adding sources to a
+    /// multi-source Dijkstra can only make paths cheaper, which SHRINKS the
+    /// union — the unsafe direction, and it would also force an arbitrary
+    /// choice of "the" anchor among several replicants. Adding targets is
+    /// monotone: the union stays the pointwise union of complete anchor→target
+    /// paths, so it remains a connected serving subgraph, and it now spans the
+    /// hub, every value system, AND every replicant. Whichever replicant is
+    /// actually the stationary one, it sits inside that subgraph and reaches
+    /// everything in it — which is exactly the property authority needs. The
+    /// root choice then decides only WHICH redundant relay gets kept, never
+    /// whether anything load-bearing is lost.
+    ///
+    /// **Bounded to MESHED systems**, and that is not a shortcut. A system
+    /// holding no relay is on nobody's mesh road: authority there is rule (1),
+    /// a replicant physically present, which no relay confers and none can take
+    /// away. Admitting off-mesh systems would also drag every roaming
+    /// replicant's star into the census-coverage precondition — a survey
+    /// replicant wandering ahead of the census would make prune decline
+    /// forever. Meshed systems are already required to be placeable, so this
+    /// source adds no precondition burden at all.
+    static func replicantSystems(in view: WorldView) -> Set<String> {
+        view.meshSystems.intersection(view.replicantSystems)
     }
 
     /// Where our own deployed, non-relay devices stand.

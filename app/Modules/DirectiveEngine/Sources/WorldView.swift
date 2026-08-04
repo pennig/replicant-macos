@@ -42,6 +42,14 @@
 //  blobs out of the loop — is untouched. Grow is unaffected:
 //  `ValueCatalog.build` subtracts meshed systems itself.
 //
+//  Task 23 added the `replicants` read, and it closes a hole rather than
+//  widening a feature: authority in this game comes from a replicant (see the
+//  ftl-authority-rule note), and until now the brain's whole model of the world
+//  contained none — prune anchored on the print HUB as a proxy and the reclaim
+//  path's carrier precondition was unexpressible. Two projections come out of
+//  it (`replicantSystems`, `replicantHostDevices`); the rows themselves stay
+//  out, since nothing here reasons about a replicant's name or XP.
+//
 //  SURVEY IS THEREFORE NOW THE SOLE BOUND on the decode set, and the only
 //  observable proof of it left is `unsurveyedSystemExcluded` — the widening
 //  retired the other one. That same bound is also published as
@@ -88,6 +96,35 @@ public struct WorldView: Equatable, Sendable {
     /// (`BeltClass.classify` returns `nil`) is simply absent here, same as a
     /// system with no belts at all.
     public let beltsBySystem: [String: [BeltInfo]]
+    /// Every system holding one of the account's replicants.
+    ///
+    /// **This is where command authority comes from**, and until Task 23 the
+    /// brain could not see it at all (a review confirmed `WorldView` carried no
+    /// replicant anywhere). Per `ftl-authority-rule`, a command reaches a
+    /// device either because a replicant is physically present or because the
+    /// target shares a mesh subgraph with a STATIONARY one — so the systems
+    /// listed here are the roots the whole mesh hangs off, and `PrunePredicate`
+    /// must never offer up the relays that connect them.
+    ///
+    /// Read off `Replicant.currentStar` and passed through
+    /// `SiteAssay.system(of:)` so a value that arrives as a location
+    /// (`SOL-3`) reduces to its system the same way every other designation in
+    /// this file does. A replicant mid-flight is NOT filtered out: whichever
+    /// end of the trip `currentStar` names, treating it as authority-bearing
+    /// only ever ADDS a pin, and over-pinning is the safe direction (the
+    /// consumer, `PrunePredicate.servedSystems`, is monotone in its targets).
+    public let replicantSystems: Set<String>
+    /// The device codes that HOST a replicant (`Replicant.hostedDeviceCode`).
+    ///
+    /// The brain's answer to a question the executor can only ask the server
+    /// afterwards: `RelayRun`'s reclaim path deactivates the source relay,
+    /// which takes its system off the mesh, so authority to then issue the
+    /// `stow` comes only from `ftl-authority-rule` rule (1) — a replicant
+    /// physically present. That makes "does this carrier host a replicant?" a
+    /// precondition on choosing a reclaim source at all, and this is the field
+    /// that lets `Brain` check it before committing rather than discovering it
+    /// as a stall (`RelayRun.carrierRetainsAuthority`).
+    public let replicantHostDevices: Set<String>
     /// Systems that have been through a full system scan
     /// (`SystemDetail.systemScanned`) — the very rows `beltsBySystem` decodes.
     ///
@@ -112,6 +149,8 @@ public struct WorldView: Equatable, Sendable {
         hubLocation: String?,
         beltsBySystem: [String: [BeltInfo]] = [:],
         surveyedSystems: Set<String> = [],
+        replicantSystems: Set<String> = [],
+        replicantHostDevices: Set<String> = [],
         now: Date
     ) {
         self.devices = devices
@@ -122,6 +161,8 @@ public struct WorldView: Equatable, Sendable {
         self.hubLocation = hubLocation
         self.beltsBySystem = beltsBySystem
         self.surveyedSystems = surveyedSystems
+        self.replicantSystems = replicantSystems
+        self.replicantHostDevices = replicantHostDevices
         self.now = now
     }
 
@@ -169,6 +210,13 @@ public struct WorldView: Equatable, Sendable {
         let surveyed = try SystemDetail.where { $0.systemScanned }.fetchAll(db)
         let belts = Self.beltsBySystem(in: surveyed)
 
+        // The account's own roster — four rows on the live account, so the
+        // whole-table read is as cheap as the `locationEvents` one above and
+        // needs no scoping. Two fields come out of it, projected here rather
+        // than carried whole: the brain reasons about WHERE authority is and
+        // WHICH hull carries it, never about a replicant's XP or name.
+        let replicants = try Replicant.all.fetchAll(db)
+
         return WorldView(
             devices: devicesByCode,
             starPositions: positions,
@@ -178,6 +226,10 @@ public struct WorldView: Equatable, Sendable {
             hubLocation: hub,
             beltsBySystem: belts,
             surveyedSystems: Set(surveyed.map(\.designation)),
+            replicantSystems: Set(
+                replicants.compactMap { $0.currentStar.map { SiteAssay.system(of: $0) } }
+            ),
+            replicantHostDevices: Set(replicants.compactMap(\.hostedDeviceCode)),
             now: now
         )
     }

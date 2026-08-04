@@ -106,6 +106,29 @@ struct WorldViewTests {
         #expect(view.eventSystems.isEmpty)
         #expect(view.hubLocation == nil)
         #expect(view.beltsBySystem.isEmpty)
+        #expect(view.replicantSystems.isEmpty)
+        #expect(view.replicantHostDevices.isEmpty)
+    }
+
+    /// The `replicants` read (Task 23), projected into the two facts the brain
+    /// actually reasons over: WHERE authority stands and WHICH hull carries it.
+    ///
+    /// `currentStar` goes through `SiteAssay.system(of:)`, so a row that
+    /// arrives carrying a location rather than a bare designation still reduces
+    /// to its system — the same normalisation every other designation in this
+    /// file gets. A replicant with neither field set contributes to neither
+    /// projection rather than seeding an empty string into one of them, which
+    /// would read as a real system named "".
+    @Test func readProjectsReplicantsIntoAuthorityAndHostFacts() async throws {
+        let db = try GameDatabase.bootstrap()
+        try await db.write { db in
+            try seedReplicant(db, code: "REP1", star: "SOL", hostedDeviceCode: "V1")
+            try seedReplicant(db, code: "REP2", star: "VEGA-3", hostedDeviceCode: "V2")
+            try seedReplicant(db, code: "REP3", star: nil, hostedDeviceCode: nil)
+        }
+        let view = try await db.read { try WorldView.read(from: $0, now: Date()) }
+        #expect(view.replicantSystems == ["SOL", "VEGA"])
+        #expect(view.replicantHostDevices == ["V1", "V2"])
     }
 
     /// No `systemDetails` row means no belt data, regardless of mesh status —

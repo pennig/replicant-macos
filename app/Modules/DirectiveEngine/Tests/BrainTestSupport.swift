@@ -81,6 +81,29 @@ func seedPrintHub(_ db: Database, code: String, location: String) throws {
     )
 }
 
+// MARK: - Replicant seeds
+
+/// One of the account's replicants, standing at `star` and riding in
+/// `hostedDeviceCode`.
+///
+/// Both fields are load-bearing and neither is decoration: `currentStar` is
+/// where command authority lives (`PrunePredicate` roots its keep-set on it),
+/// and `hostedDeviceCode` is what makes a carrier legal to send on a RECLAIM —
+/// the source relay's system leaves the mesh the moment it is deactivated, so
+/// only a replicant physically aboard keeps the follow-up `stow` commandable.
+func seedReplicant(
+    _ db: Database, code: String, star: String?, hostedDeviceCode: String?
+) throws {
+    try Replicant.insert {
+        Replicant(
+            replicantCode: code, name: code, createdAt: Date(timeIntervalSince1970: 0),
+            currentStar: star, currentStarName: star,
+            currentLocation: star.map { "\($0)-1" }, currentLocationName: nil,
+            hostedDeviceCode: hostedDeviceCode
+        )
+    }.execute(db)
+}
+
 // MARK: - Directive seeds
 
 /// A directive row as a value, for tests that reason over directives without a
@@ -135,12 +158,13 @@ func seedRelayRun(
     deviceCode: String = "V1",
     step: String = RelayRun().firstStep,
     targets: [String] = ["VEGA"],
+    sourceRelayCode: String? = nil,
     at: Date = Date(timeIntervalSince1970: 0)
 ) throws {
     try Directive.insert {
         Directive(
             id: id, kind: .relayRun, status: .running, deviceCode: deviceCode,
-            controllerCode: nil, roamCentre: nil, fleetTag: nil, sourceRelayCode: nil,
+            controllerCode: nil, roamCentre: nil, fleetTag: nil, sourceRelayCode: sourceRelayCode,
             targets: targets, targetIndex: 0, step: step, stepStartedAt: at,
             returnToOrigin: false, originDesignation: "SOL", attentionReason: nil,
             createdAt: at, updatedAt: at
@@ -385,6 +409,12 @@ func seedGrowableWorld(
 ///
 /// `fleet` places non-relay devices (a vessel, a drone) at systems, which pin
 /// them the same way value does.
+///
+/// `replicants` names the systems holding one of the account's replicants —
+/// where command AUTHORITY stands, which prune must keep connected. It defaults
+/// to empty rather than to `[hub]`: the co-location the old design assumed is
+/// exactly what this parameter exists to be able to break, and a default that
+/// silently asserted it would make the away-from-the-hub case unwritable.
 func prunableWorld(
     positions: [String: Position],
     relays: [String: String],
@@ -393,7 +423,8 @@ func prunableWorld(
     belts: [String: [BeltInfo]] = [:],
     events: Set<String> = [],
     fleet: [String: String] = [:],
-    surveyed: Set<String>? = nil
+    surveyed: Set<String>? = nil,
+    replicants: Set<String> = []
 ) -> WorldView {
     let relayDevices = relays.sorted { $0.key < $1.key }.map { code, system in
         deviceFixture(
@@ -415,6 +446,7 @@ func prunableWorld(
         hubLocation: hub.flatMap { mesh.contains($0) ? "\($0)-3" : nil },
         beltsBySystem: belts,
         surveyedSystems: surveyed ?? Set(positions.keys),
+        replicantSystems: replicants,
         now: Date(timeIntervalSince1970: 0)
     )
 }

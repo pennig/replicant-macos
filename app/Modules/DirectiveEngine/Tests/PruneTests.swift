@@ -460,4 +460,135 @@ struct PruneTests {
         #expect(analysis.reclaimable.map(\.deviceCode) == ["REL_A", "REL_B", "REL_C"])
         #expect(analysis.reclaimable.map(\.system) == ["TWO", "THREE", "ONE"])
     }
+
+    // MARK: - The census precondition, enforced against the GRAPH
+
+    /// The precondition is only worth anything if it validates the census the
+    /// SEARCH reads, and until Task 23 it did not: it filtered
+    /// `view.starPositions` while `search`/`backtrack` read `MeshGraph`'s own
+    /// positions. The contract "build the graph from `view.starPositions`" was
+    /// documented and unenforced, so a caller handing over a filtered or older
+    /// graph passed the precondition vacuously — and every system the graph
+    /// could not place then dropped silently out of the union, taking with it
+    /// the pins it was the sole source of.
+    ///
+    /// This is that exact divergence: the view can place `W`, the graph cannot.
+    /// Read off the graph, `W` is unplaceable, the anchor cannot span the 14 ly
+    /// to `T` at all, the union collapses to the anchor, and both `REL_W` and
+    /// `REL_T` read reclaimable — with live salvage sitting behind them. The
+    /// predicate must refuse to judge instead.
+    @Test func aGraphThatCannotPlaceAMeshSystemDeclinesRatherThanShrinkingTheUnion() {
+        let positions: [String: Position] = [
+            "SOL": .init(x: 0, y: 0, z: 0),
+            "W": .init(x: 0, y: 7, z: 0),
+            "T": .init(x: 0, y: 14, z: 0),
+        ]
+        let world = prunableWorld(
+            positions: positions,
+            relays: ["REL_SOL": "SOL", "REL_W": "W", "REL_T": "T"],
+            salvage: ["T": 500]
+        )
+        // The one difference from `loadBearingRelayIsPinned`: the graph is
+        // built from a census missing `W`, which the VIEW still lists.
+        let deficient = MeshGraph(positions: positions.filter { $0.key != "W" })
+        let analysis = PrunePredicate.analyse(view: world, graph: deficient)
+
+        #expect(analysis.declined == .censusIncomplete(systems: ["W"]))
+        #expect(analysis.reclaimable.isEmpty, "a declined analysis offers up nothing at all")
+        #expect(analysis.pinned == ["REL_SOL", "REL_W", "REL_T"])
+    }
+
+    // MARK: - The anchor is authority, not just the printer
+
+    /// **The print hub is not where authority comes from — a replicant is.**
+    /// The anchor is the hub's system because the design asserts the two are
+    /// co-located (`brain-resource-hub-model`), and nothing enforces that. Here
+    /// they are not: the hub sits at `HUBSYS`, the replicant three systems away
+    /// at `REPSYS`, and the only value is at `VALUE` in the opposite direction.
+    ///
+    /// Judged on the hub→value path alone, the two relays on the replicant's
+    /// road (`REL_MID`, `REL_REP`) lie on no anchor→target path and read
+    /// reclaimable — and reclaiming them severs the mesh from the one
+    /// stationary replicant that makes ANY of it commandable
+    /// (`ftl-authority-rule`, rule 2). Total authority loss, dressed up as
+    /// tidying.
+    ///
+    /// So every meshed system holding a replicant is a served system in its own
+    /// right, and the road to it is pinned like any other.
+    @Test func relaysOnTheRoadToAReplicantAwayFromTheHubArePinned() {
+        let positions: [String: Position] = [
+            "HUBSYS": .init(x: 0, y: 0, z: 0),
+            "MID": .init(x: 0, y: 7, z: 0),
+            "REPSYS": .init(x: 0, y: 14, z: 0),
+            "VALUE": .init(x: 0, y: -7, z: 0),
+        ]
+        let world = prunableWorld(
+            positions: positions,
+            relays: [
+                "REL_HUB": "HUBSYS", "REL_MID": "MID", "REL_REP": "REPSYS", "REL_VAL": "VALUE",
+            ],
+            hub: "HUBSYS",
+            salvage: ["VALUE": 500],
+            replicants: ["REPSYS"]
+        )
+        let analysis = PrunePredicate.analyse(view: world, graph: MeshGraph(positions: positions))
+
+        #expect(analysis.declined == nil)
+        #expect(analysis.reclaimable.isEmpty, "nothing here is spare — every relay carries authority or value")
+        #expect(analysis.pinned == ["REL_HUB", "REL_MID", "REL_REP", "REL_VAL"])
+    }
+
+    /// The other side of the same rule, so the fix above is a TARGET and not a
+    /// blanket "pin everything near a replicant". `SPUR` holds a relay, holds
+    /// no replicant, and lies on no path from the hub to value or to the
+    /// replicant — it is still spare, and prune still says so.
+    @Test func aRelayOffEveryAuthorityAndValueRoadIsStillReclaimable() {
+        let positions: [String: Position] = [
+            "HUBSYS": .init(x: 0, y: 0, z: 0),
+            "REPSYS": .init(x: 0, y: 7, z: 0),
+            "VALUE": .init(x: 0, y: -7, z: 0),
+            "SPUR": .init(x: 7, y: 0, z: 0),
+        ]
+        let world = prunableWorld(
+            positions: positions,
+            relays: [
+                "REL_HUB": "HUBSYS", "REL_REP": "REPSYS", "REL_VAL": "VALUE", "REL_SPUR": "SPUR",
+            ],
+            hub: "HUBSYS",
+            salvage: ["VALUE": 500],
+            replicants: ["REPSYS"]
+        )
+        let analysis = PrunePredicate.analyse(view: world, graph: MeshGraph(positions: positions))
+
+        #expect(analysis.pinned == ["REL_HUB", "REL_REP", "REL_VAL"])
+        #expect(analysis.reclaimable == [ReclaimableRelay(deviceCode: "REL_SPUR", system: "SPUR")])
+    }
+
+    /// An OFF-MESH replicant adds no target. It is not an oversight: a system
+    /// holding no relay is on nobody's mesh road — authority there is rule (1),
+    /// a replicant present, which no relay grants and none can take away — and
+    /// admitting it would force the census precondition to place every roaming
+    /// replicant's system or decline forever.
+    ///
+    /// `ROAMING` sits 14 ly out — reachable only THROUGH `SPUR` — so the test
+    /// discriminates: treat every replicant system as a target and the road to
+    /// it pins `REL_SPUR`; treat only the meshed ones and `REL_SPUR` stays
+    /// spare, which is the answer.
+    @Test func anOffMeshReplicantPinsNothing() {
+        let positions: [String: Position] = [
+            "SOL": .init(x: 0, y: 0, z: 0),
+            "SPUR": .init(x: 0, y: 7, z: 0),
+            "ROAMING": .init(x: 0, y: 14, z: 0),
+        ]
+        let world = prunableWorld(
+            positions: positions,
+            relays: ["REL_SOL": "SOL", "REL_SPUR": "SPUR"],
+            salvage: ["SOL": 500],
+            replicants: ["ROAMING"]
+        )
+        let analysis = PrunePredicate.analyse(view: world, graph: MeshGraph(positions: positions))
+
+        #expect(analysis.declined == nil)
+        #expect(analysis.reclaimable == [ReclaimableRelay(deviceCode: "REL_SPUR", system: "SPUR")])
+    }
 }

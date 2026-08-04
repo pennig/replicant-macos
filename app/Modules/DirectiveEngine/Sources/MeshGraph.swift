@@ -78,6 +78,40 @@ public struct MeshGraph: Sendable {
         )
     }
 
+    /// Whether this graph can place `system` at all — i.e. whether the search
+    /// can ever reach it, settle it, or return it inside a path.
+    ///
+    /// **Task 23: this exists so a precondition can be enforced instead of
+    /// merely documented.** `PrunePredicate.analyse` has to prove that every
+    /// system its judgement depends on is one the search can place, because a
+    /// system the graph has never heard of drops silently out of the union —
+    /// taking with it every pin it was the sole source of, and offering up
+    /// load-bearing relays. It used to prove that against `WorldView
+    /// .starPositions` and a header comment saying the graph must be built from
+    /// the same census. Nothing enforced the comment, so a caller passing a
+    /// filtered or older graph made the whole precondition vacuous while the
+    /// union quietly shrank. Asking the GRAPH closes it: the check now reads
+    /// the very dictionary `search` and `backtrack` read, so the two cannot
+    /// disagree however the graph was built.
+    func canPlace(_ system: String) -> Bool { positions[system] != nil }
+
+    /// Straight-line distance between two systems in light-years, or nil if
+    /// this graph cannot place either of them.
+    ///
+    /// Read off the graph rather than off a caller's own census dictionary for
+    /// the reason `canPlace` exists: distance and reachability must be answered
+    /// from one set of positions, or a system can be "3 ly away" and
+    /// simultaneously unreachable. This is what bounds `Brain
+    /// .reclaimRangeLY` — the detour a reclaim adds over a print.
+    ///
+    /// Deliberately NOT a graph distance: it is the geometry, not a path cost,
+    /// and it answers "how far out of the way is this?" rather than "how many
+    /// relays would it take to get there?"
+    func separation(_ a: String, _ b: String) -> Double? {
+        guard let p = positions[a], let q = positions[b] else { return nil }
+        return p.distance(to: q)
+    }
+
     /// The systems within `hopRange` of `system`. Empty (not an error) if
     /// `system` isn't in the graph at all.
     ///

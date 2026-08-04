@@ -32,6 +32,16 @@
 //  confirm can only PROCEED or DEFER — it never re-ranks — and a confirm that
 //  fails defers exactly like one that comes back negative.
 //
+//  Task 23 joins the two halves of `tendMesh`. A launch no longer always means
+//  a print: before committing, the brain asks `PrunePredicate` which deployed
+//  relays are spare and, if the nearest one is within `reclaimRangeLY` of the
+//  plant site, sources the run from it instead (`reclaimSource`). That is
+//  ticket 06's "prefer redeploy over print", realised as DEMAND-TIME sourcing —
+//  there is no idle-relay pool and no `N` buffer cap, because ticket 10 retired
+//  both in favour of this. The brain only SELECTS the source; `RelayRun`
+//  confirms it against a fresh read before anything irreversible happens, and
+//  `PrunePredicate` remains the sole authority on what "spare" means.
+//
 //  STATELESS between ticks (clause 2). A tick is a pure function of
 //  `(WorldView, directive rows)`: no lease table, no cache, no memory. The
 //  ranking, the path-union behind it, and the reservation set are all
@@ -73,6 +83,52 @@ struct Brain: Sendable {
     /// HEAVEN vessel: the relay is printed at the hub and taken aboard a
     /// vessel already standing there.
     static let carrierDeviceType = "heaven_vessel"
+
+    /// How far off its road the brain will send a carrier to fetch a spare
+    /// relay it could otherwise print — measured from the PLANT SITE (the grow
+    /// candidate's first hop), not from the hub.
+    ///
+    /// **Measured from the plant site because that is what bounds the detour.**
+    /// Print flies `hub → target`; reclaim flies `hub → source → target`. The
+    /// extra distance is `d(hub,source) + d(source,target) − d(hub,target)`,
+    /// and the triangle inequality bounds that by `2 · d(source,target)`
+    /// regardless of where the hub happens to be. One number about the source
+    /// and the target therefore caps the whole detour, where a cutoff measured
+    /// from the hub would cap nothing.
+    ///
+    /// **Two relay hops (15 ly), and here is the trade behind it.** What a
+    /// reclaim BUYS is fixed and known: the entire 370-unit relay bill (carbon
+    /// 20, silicates 100, structural 80, rares 40, conductive 120, volatiles
+    /// 10) and the ~800 s print that spends it. What it COSTS grows with
+    /// distance — at most `2 · d` of extra travel, plus a deactivate/stow
+    /// round the print path does not pay.
+    ///
+    ///   - **The time side.** The fastest read we have on travel is the live
+    ///     one (`travel-is-cheap-vs-survey`): ETAs of 1–3 minutes, 467 s the
+    ///     worst observed, over a mesh whose own extent is ~16 ly — call it
+    ///     ~30 s/ly at the pessimistic end. At `d = 15` the detour bound is
+    ///     30 ly ≈ 870 s, which is the same order as the 800 s print it
+    ///     replaces. Past that the time cost keeps growing while the saving
+    ///     stays fixed, so this is where the trade stops being clearly
+    ///     favourable — and the bound is pessimistic twice over, since the
+    ///     factor of two is only attained when the source lies directly behind
+    ///     the carrier.
+    ///   - **The resource side breaks the tie in reclaim's favour**, which is
+    ///     why 15 rather than something tighter. `BrainCeiling
+    ///     .aggregateSpendFloor` sits at ~47% of the live hub's total stock, so
+    ///     units are the scarcer half of the bill by some margin; a reclaim
+    ///     that costs a few extra minutes and no units is a good trade almost
+    ///     everywhere inside this range.
+    ///
+    /// **Stated in the graph's own unit** (`SalvageTargetPlanner.relayRangeLY`,
+    /// 7.5) rather than as a bare 15.0, because that is the only length scale
+    /// this whole subsystem has: one hop is the distance a relay can bridge, so
+    /// two hops is "in the same neighbourhood as the plant site" said in the
+    /// vocabulary the mesh is built from. It also keeps the cutoff meaningful
+    /// if the range ever changes. As a sanity check against being dead code or
+    /// unbounded: the live 15-relay mesh fits inside a ~16 ly ball, so 15 ly is
+    /// roughly "anywhere on today's mesh".
+    static let reclaimRangeLY: Double = 2 * SalvageTargetPlanner.relayRangeLY
 
     /// The statuses in which a directive still OWNS its devices.
     ///
@@ -222,7 +278,7 @@ struct Brain: Sendable {
             logger.debug("idle — \(reason, privacy: .public)")
             return .idle(reason: reason)
 
-        case let .grow(goal, ranked, carrier, hub, origin):
+        case let .grow(goal, ranked, carrier, hub, origin, source):
             // The confirm-fresh gate (clause 4c), in two halves that cannot be
             // collapsed into one: the AUTHORITATIVE half is a network read and
             // so cannot happen inside a database transaction, and the LOCAL
@@ -239,7 +295,7 @@ struct Brain: Sendable {
             case let .proceed(fresh):
                 let decision = await launch(
                     goal: goal, ranked: ranked, carrier: fresh, hub: hub, origin: origin,
-                    database: database
+                    source: source, database: database
                 )
                 if case .idle = decision, let escalated { return .stall(escalated) }
                 return decision
@@ -323,7 +379,14 @@ struct Brain: Sendable {
         /// co-location against the LOCATION the carrier was chosen at. Passing
         /// the system and re-widening the test to it would let a vessel that
         /// had crossed to another location in the same system confirm as free.
-        case grow(goal: Goal, ranked: [GrowCandidate], carrier: String, hub: String, origin: String)
+        ///
+        /// `source` is where the relay comes from: nil PRINTS one at the hub
+        /// (370 units, ~800 s), non-nil RECLAIMS the spare relay it names for
+        /// nothing at all. See `reclaimSource`.
+        case grow(
+            goal: Goal, ranked: [GrowCandidate], carrier: String, hub: String, origin: String,
+            source: ReclaimChoice?
+        )
 
         /// The field this pass ranked, whichever way it went — the why-view's
         /// candidate list. One accessor rather than two matches at the call
@@ -331,9 +394,23 @@ struct Brain: Sendable {
         var ranked: [GrowCandidate] {
             switch self {
             case let .idle(_, ranked): ranked
-            case let .grow(_, ranked, _, _, _): ranked
+            case let .grow(_, ranked, _, _, _, _): ranked
             }
         }
+    }
+
+    /// A reclaim the brain chose, carried with the graph fact that justifies it
+    /// rather than as a bare device code.
+    ///
+    /// The distance rides along because it is what makes the choice CHECKABLE:
+    /// "sourced by reclaiming R9 at DEADEND, 7.1 ly from VEGA" is a statement
+    /// an operator can hold against the map, where "sourceRelayCode = R9" is
+    /// one they have to take on trust. Same discipline as `Goal.rationale` —
+    /// a graph fact, never a score.
+    struct ReclaimChoice: Equatable, Sendable {
+        let relay: ReclaimableRelay
+        /// Straight-line light-years from the relay's system to the plant site.
+        let distanceLY: Double
     }
 
     /// The greedy pass, grow-only.
@@ -385,7 +462,98 @@ struct Brain: Sendable {
             ranked: ranked,
             carrier: carrier.deviceCode,
             hub: hub,
-            origin: SiteAssay.system(of: hub)
+            origin: SiteAssay.system(of: hub),
+            // LAST, and only on a tick that is actually going to launch:
+            // `PrunePredicate.analyse` runs a second Dijkstra over the census,
+            // and there is nothing to source for a tick that has already
+            // decided to idle.
+            source: reclaimSource(
+                view: view, graph: graph, target: candidate.firstHop,
+                carrier: carrier, directives: directives
+            )
+        )
+    }
+
+    // MARK: - Sourcing the relay
+
+    /// Where this grow's relay should come from: the nearest spare relay within
+    /// `reclaimRangeLY` of the plant site, or nil to print a fresh one.
+    ///
+    /// **This is ticket 06's "prefer redeploy over print", and it is realised
+    /// as DEMAND-TIME sourcing.** There is deliberately no idle-relay pool and
+    /// no `N` buffer cap — ticket 10 retired both in favour of exactly this:
+    /// nothing is reclaimed speculatively, and a relay is only pulled out of
+    /// the mesh at the moment a grow has somewhere better to put it. That keeps
+    /// the brain stateless (clause 2): `sourceRelayCode` is a plan hint written
+    /// on the ROW, and the whole judgement is re-derived from the world next
+    /// tick.
+    ///
+    /// **`PrunePredicate` is the sole authority on usefulness** and nothing
+    /// here second-guesses it. The three filters below are all about something
+    /// else — whether the CARRIER may do this, whether the relay is already
+    /// spoken for, and whether it is close enough to be worth the trip.
+    ///
+    ///   1. **The carrier must host a replicant.** The reclaim sequence
+    ///      deactivates the source, which takes its system off the mesh; the
+    ///      `stow` that must follow is then commandable only under
+    ///      `ftl-authority-rule` rule (1), a replicant physically present. The
+    ///      executor's `RelayRun.carrierRetainsAuthority` turns a carrier
+    ///      without one into a loud stall rather than a permanent strand, but a
+    ///      stall is still a wasted run and a carrier held out of the fleet
+    ///      through three retries and an escalation. So the brain does not send
+    ///      one. This is checked FIRST, before the pathfinding, because it can
+    ///      veto the whole question for free. (It does not pick a DIFFERENT
+    ///      carrier: carrier selection is `freeCarrier`'s job and print works
+    ///      on any hull, so the fallback is simply to print.)
+    ///   2. **A declined analysis sources a print, never a guess.** `declined`
+    ///      means the predicate refused to judge this world, and its
+    ///      `reclaimable` list is empty as a consequence of the refusal rather
+    ///      than as a finding. Reading it as "nothing spare" happens to give the
+    ///      right answer here, but only by accident, and the accident is not
+    ///      worth relying on — the check is explicit.
+    ///   3. **A relay another run is already fetching is not offered twice.**
+    ///      Prune is stateless and re-derives `reclaimable` from the world every
+    ///      tick, and a source relay stays deployed and `relaying` for the whole
+    ///      flight of the run coming to collect it — so without this it stays on
+    ///      the list and a second carrier is sent to deactivate the same relay.
+    ///      The exact mirror of `inFlightTargets` on the sourcing side, and it
+    ///      is re-checked at commit time for the same reason that one is.
+    ///
+    /// Ties break on device code after distance, so the same world produces the
+    /// same choice every tick — the reproducibility a stateless brain that
+    /// re-decides from scratch depends on (`freeCarrier`'s `min(by:)` records
+    /// the argument).
+    static func reclaimSource(
+        view: WorldView, graph: MeshGraph, target: String, carrier: Device, directives: [Directive]
+    ) -> ReclaimChoice? {
+        guard view.replicantHostDevices.contains(carrier.deviceCode) else { return nil }
+
+        let analysis = PrunePredicate.analyse(view: view, graph: graph)
+        guard analysis.declined == nil else { return nil }
+
+        let claimed = inFlightSources(directives)
+        return analysis.reclaimable
+            .filter { !claimed.contains($0.deviceCode) }
+            .compactMap { relay -> ReclaimChoice? in
+                guard let distance = graph.separation(relay.system, target),
+                      distance <= reclaimRangeLY
+                else { return nil }
+                return ReclaimChoice(relay: relay, distanceLY: distance)
+            }
+            .min { ($0.distanceLY, $0.relay.deviceCode) < ($1.distanceLY, $1.relay.deviceCode) }
+    }
+
+    /// Every relay an in-force directive has already been told to reclaim.
+    ///
+    /// Not filtered by `kind`, unlike `inFlightTargets`: `sourceRelayCode` is a
+    /// `relayRun` field today, but a row of any kind naming a source is a row
+    /// claiming that relay, and the safe reading of an unexpected one is that
+    /// somebody owns it.
+    static func inFlightSources(_ directives: [Directive]) -> Set<String> {
+        Set(
+            directives
+                .filter { owningStatuses.contains($0.status) }
+                .compactMap(\.sourceRelayCode)
         )
     }
 
@@ -901,6 +1069,20 @@ struct Brain: Sendable {
         return "meshing \(candidate.firstHop) — \(candidate.magnitudeSummary)\(served), \(candidate.hopSummary)"
     }
 
+    /// How this run's relay is being sourced, as a clause for the launch line.
+    ///
+    /// Both arms name their cost, because that is the whole difference between
+    /// them and the operator's first question either way is "what did that
+    /// cost me?" A pure function rather than string-building inline so the
+    /// distance is formatted in exactly one place.
+    static func sourcing(_ source: ReclaimChoice?) -> String {
+        guard let source else { return "printing a fresh relay at the hub (370 units)" }
+        return """
+            reclaiming \(source.relay.deviceCode) from \(source.relay.system) \
+            (\(String(format: "%.1f", source.distanceLY)) ly out, no resources spent)
+            """
+    }
+
     /// Names the first two and counts the rest. A hop can serve a large group
     /// (one relay unlocking a whole pocket of the census), and an unbounded
     /// list in a log line and a UI headline helps nobody.
@@ -1000,12 +1182,23 @@ struct Brain: Sendable {
     ///     of missing it is the same 370-unit, ~800 s duplicate print the
     ///     selection-side filter exists to prevent, so it is re-checked here
     ///     rather than left for that task to remember.
+    ///   - `inFlightSources` — the same argument again for the RECLAIM half.
+    ///     Losing this race is worse than losing the target one: two carriers
+    ///     converge on one relay, the second finds it already stowed aboard
+    ///     somebody else and stalls (`RelayRun.reclaimDiagnosis` names exactly
+    ///     that case), and the mesh has meanwhile lost a node for one grow
+    ///     instead of two. A blocked commit DEFERS the whole tick rather than
+    ///     falling back to a print, because the tick's decision was made
+    ///     outside this transaction and the gate's contract is to let it
+    ///     through or stop it — never to substitute a different, resource
+    ///     -spending one. The next tick re-sources from scratch, five seconds
+    ///     later, at no cost but latency.
     ///
-    /// Both are the SAME functions the selection used, never re-typed copies:
-    /// a commit-time check that drifted looser than selection would wave
-    /// through exactly the case selection would now reject.
+    /// All three are the SAME functions the selection used, never re-typed
+    /// copies: a commit-time check that drifted looser than selection would
+    /// wave through exactly the case selection would now reject.
     static func commitBlocker(
-        carrier: Device, at hub: String, target: String,
+        carrier: Device, at hub: String, target: String, source: String?,
         directives: [Directive], devices: [String: Device]
     ) -> String? {
         // The freshly-read row is OVERLAID rather than trusted to have landed:
@@ -1021,6 +1214,9 @@ struct Brain: Sendable {
         guard !inFlightTargets(directives).contains(target) else {
             return "\(BrainDecision.deferralPrefix)\(target) already in flight on confirm"
         }
+        if let source, inFlightSources(directives).contains(source) {
+            return "\(BrainDecision.deferralPrefix)relay \(source) already claimed on confirm"
+        }
         return nil
     }
 
@@ -1034,10 +1230,12 @@ struct Brain: Sendable {
     /// reads as meshed). So the fields below are the whole interface between
     /// the brain and the mission, and each is a decision:
     ///
-    ///   - `sourceRelayCode: nil` — print a fresh relay. Non-nil is the
-    ///     reclaim branch, which `acquire` deliberately does not implement yet
-    ///     (Tasks 22–23); setting it here would park the run on `.wait`
-    ///     forever.
+    ///   - `sourceRelayCode` — where the relay comes from, and the one field
+    ///     here that is a JUDGEMENT rather than a constant. Nil prints a fresh
+    ///     one at the hub (370 units, ~800 s); non-nil sends the carrier to
+    ///     reclaim the spare relay it names, for no resources at all. See
+    ///     `reclaimSource` for how it is chosen and `RelayRun.acquire` for the
+    ///     two branches it selects between.
     ///   - `fleetTag: nil` / `controllerCode: nil` — ownership is the carrier
     ///     and nothing else (ticket 05). The relay is held by transitive stow;
     ///     a committed-devices lease field was proposed and rejected.
@@ -1071,7 +1269,7 @@ struct Brain: Sendable {
     /// confirm-read returned rather than in the seconds since the snapshot.
     private func launch(
         goal: Goal, ranked: [GrowCandidate], carrier: Device, hub: String, origin: String,
-        database: any DatabaseWriter
+        source: ReclaimChoice?, database: any DatabaseWriter
     ) async -> BrainDecision {
         // Resolved out here, never inside the write closure: GRDB runs that
         // closure on its own writer thread, where the task-local dependency
@@ -1086,7 +1284,7 @@ struct Brain: Sendable {
             controllerCode: nil,
             roamCentre: nil,
             fleetTag: nil,
-            sourceRelayCode: nil,
+            sourceRelayCode: source?.relay.deviceCode,
             targets: [goal.target],
             targetIndex: 0,
             step: RelayRun().firstStep,
@@ -1113,6 +1311,7 @@ struct Brain: Sendable {
                 )
                 if let blocker = Self.commitBlocker(
                     carrier: carrier, at: hub, target: goal.target,
+                    source: source?.relay.deviceCode,
                     directives: directives, devices: devices
                 ) {
                     return blocker
@@ -1139,14 +1338,17 @@ struct Brain: Sendable {
             return .idle(reason: blocker)
         }
         // `.notice`, unlike every other line in this file: a launch is rare,
-        // irreversible in resource terms (it ends in a 370-unit print), and
-        // the one brain event an operator reading the log after the fact needs
-        // to find. The rationale rides along so the line explains itself
-        // without a second lookup.
+        // irreversible in resource terms (it either ends in a 370-unit print or
+        // tears a live relay out of the mesh), and the one brain event an
+        // operator reading the log after the fact needs to find. The rationale
+        // and the SOURCING both ride along so the line explains itself without
+        // a second lookup — and the sourcing clause is a graph fact ("R9 at
+        // DEADEND, 7.1 ly from VEGA"), checkable against the map, for the same
+        // reason `rationale` is one.
         logger.notice(
             """
             launched relay run \(directive.id, privacy: .public) on \(carrier.deviceCode, privacy: .public) \
-            — \(goal.rationale, privacy: .public)
+            — \(goal.rationale, privacy: .public), \(Self.sourcing(source), privacy: .public)
             """
         )
         return .dispatch(goal, ranked: ranked)

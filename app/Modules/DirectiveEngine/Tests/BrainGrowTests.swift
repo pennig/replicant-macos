@@ -134,7 +134,10 @@ struct BrainGrowTests {
         #expect(row.deviceCode == "V1")
         #expect(row.targets == ["VEGA"])
         #expect(row.targetIndex == 0)
-        #expect(row.sourceRelayCode == nil, "a grow launch prints at the hub; reclaim sourcing is a later task")
+        #expect(
+            row.sourceRelayCode == nil,
+            "nothing in this world is reclaimable and no replicant rides in V1 — so this grow prints"
+        )
         #expect(row.step == RelayRun().firstStep)
         #expect(row.controllerCode == nil)
         #expect(row.fleetTag == nil, "ownership is the carrier alone — a Relay Run leases no fleet")
