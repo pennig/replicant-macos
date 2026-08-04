@@ -17,6 +17,14 @@
 //  outside the executor → `CommandGovernor` path, and never drives
 //  `skipTarget`/`pause`/`resume`, which are operator-only, permanently.
 //
+//  Task 17 adds the other half: when one of those runs halts and surfaces, the
+//  brain answers it as an AUTOMATED OPERATOR — with a bounded auto-`retry` on
+//  a reason that self-corrects, and with nothing at all on one that doesn't.
+//  Its whole operator vocabulary is `{retry, cancel}`; the three verbs above
+//  stay the operator's, and `BrainStallResponseTests` arms them with
+//  `unimplemented(...)` so that rule is enforced by the test suite rather than
+//  merely written down here.
+//
 //  STATELESS between ticks (clause 2). A tick is a pure function of
 //  `(WorldView, directive rows)`: no lease table, no cache, no memory. The
 //  ranking, the path-union behind it, and the reservation set are all
@@ -73,19 +81,57 @@ struct Brain: Sendable {
     /// right move — two copies of a three-case set is the ceiling.
     static let owningStatuses: Set<DirectiveStatus> = [.running, .needsAttention, .paused]
 
-    /// Read the world, decide what — if anything — is worth doing, and launch
-    /// it. One `database.read` (a consistent snapshot of the galaxy AND the
-    /// directive rows that reserve it), one pure decision, and at most one
-    /// `database.write`.
+    /// Read the world, decide what — if anything — is worth doing, and do it.
+    /// One `database.read` (a consistent snapshot of the galaxy, the directive
+    /// rows that reserve it, and the timelines of the brain's own halted
+    /// missions), then two pure decisions and at most one action of each kind.
+    ///
+    /// **Order of the two layers.** Stall response runs first, because it is
+    /// the cheap one: an auto-`retry` flips a row the executor already owns,
+    /// where a launch commits to a 370-unit print. They do not contend — a
+    /// `.needsAttention` directive still OWNS its carrier (`owningStatuses`),
+    /// so the reservation pass excludes it either way — which is why a tick
+    /// may do both.
+    ///
+    /// **What gets REPORTED, when the tick did more than one thing:** a launch
+    /// outranks an escalation, and an escalation outranks idling. An
+    /// escalated Relay Run does not block the brain (it holds one carrier, not
+    /// the fleet), so freezing growth to report it would be a worse answer
+    /// than growing and reporting the growth; the escalated row is surfaced in
+    /// the Directives list regardless of what this returns. `.stall` is
+    /// therefore what the tick says when it had nothing better to do AND
+    /// something needs a human — which is exactly `BrainWhy`'s
+    /// `isEscalated` (`brain-robustness-bar` clause 6: idle is surfaced-calm,
+    /// a stall is surfaced-AND-escalated).
+    ///
+    /// An auto-retry is deliberately NOT reported through `BrainDecision`:
+    /// there is no case for it, and adding one would force open the why-view's
+    /// exhaustive projection for a state that is an ACTION taken rather than a
+    /// plan formed. It is logged at `.notice` instead — the same level a
+    /// launch gets, for the same reason.
     func evaluateOnce() async -> BrainDecision {
         @Dependency(\.defaultDatabase) var database
 
         let snapshot: Snapshot
         do {
             snapshot = try await database.read { db in
-                Snapshot(
+                let directives = try Directive.all.fetchAll(db)
+                // Only the brain's OWN halted missions need a timeline, and
+                // only they get one: `directiveLogEntries` is append-only and
+                // never pruned, so the read is scoped by the indexed
+                // `(directiveID, occurredAt)` pair rather than swept whole
+                // every five seconds.
+                var log: [String: [DirectiveLogEntry]] = [:]
+                for directive in directives where Self.brainManagedStall(directive) != nil {
+                    log[directive.id] = try DirectiveLogEntry
+                        .where { $0.directiveID.eq(directive.id) }
+                        .order { $0.occurredAt }
+                        .fetchAll(db)
+                }
+                return Snapshot(
                     view: try WorldView.read(from: db, now: now),
-                    directives: try Directive.all.fetchAll(db)
+                    directives: directives,
+                    log: log
                 )
             }
         } catch {
@@ -93,8 +139,19 @@ struct Brain: Sendable {
             return .idle(reason: "world unavailable")
         }
 
+        let escalated = await respondToStalls(snapshot)
+
         switch Self.plan(view: snapshot.view, directives: snapshot.directives) {
         case let .idle(reason):
+            if let escalated {
+                // Per-tick like the idle line below, and `.debug` for the same
+                // reason: a permanently escalated run would otherwise narrate
+                // itself every five seconds forever. The escalation itself is
+                // already loud where it belongs — on the row, in the Directives
+                // list, and in the executor's own `.notice` when it stalled.
+                logger.debug("escalated — \(escalated.rawValue, privacy: .public)")
+                return .stall(escalated)
+            }
             // Per-tick, so `.debug` — a 5-second heartbeat at any louder level
             // would bury the launches this file exists to make visible.
             logger.debug("idle — \(reason, privacy: .public)")
@@ -107,11 +164,12 @@ struct Brain: Sendable {
         }
     }
 
-    /// One consistent read: the galaxy the brain ranks over, and the directive
-    /// rows that say which of it is already spoken for. Read in ONE
-    /// transaction on purpose — a carrier freed between two separate reads
-    /// would look free to the ranking and reserved to the reservation pass (or
-    /// worse, the reverse).
+    /// One consistent read: the galaxy the brain ranks over, the directive
+    /// rows that say which of it is already spoken for, and the timelines the
+    /// retry budget is derived from. Read in ONE transaction on purpose — a
+    /// carrier freed between two separate reads would look free to the ranking
+    /// and reserved to the reservation pass (or worse, the reverse), and a
+    /// timeline read after its own row could show a retry the row hasn't taken.
     ///
     /// `Directive.all`, not a status-filtered query, deliberately: which
     /// statuses own their devices is a RULE (`owningStatuses`), and splitting
@@ -121,6 +179,9 @@ struct Brain: Sendable {
     private struct Snapshot: Sendable {
         let view: WorldView
         let directives: [Directive]
+        /// Timeline entries, oldest first, for each brain-managed stall — and
+        /// for nothing else.
+        let log: [String: [DirectiveLogEntry]]
     }
 
     // MARK: - The greedy pass
@@ -194,6 +255,246 @@ struct Brain: Sendable {
             carrier: carrier.deviceCode,
             origin: SiteAssay.system(of: hub)
         )
+    }
+
+    // MARK: - Stall response
+
+    /// How many auto-retries the brain will spend on ONE stall episode before
+    /// it stops and leaves the run for a human.
+    ///
+    /// **Three, and here is the arithmetic behind it.** Each attempt costs at
+    /// most one API-driving evaluation (a `.high` confirm-read, a census
+    /// refresh, or a re-issued command), so the number is a direct budget of
+    /// live-API spend per stalled directive per episode. Attempt 1 covers a
+    /// genuine one-off — a lost write, a governor deferral, a row the sync
+    /// hadn't reached. Attempt 2 covers a slow-but-real recovery: a confirm-read
+    /// landing, a census refresh arriving. By attempt 3 the same condition has
+    /// survived three independent re-evaluations spread over `retryInterval`
+    /// each, and the evidence has flipped from "transient" to "structural" —
+    /// the marginal chance a fourth clears it is small, while the marginal cost
+    /// is unbounded, because a brain that keeps retrying keeps paying forever
+    /// on a run that will never self-correct AND keeps its carrier held out of
+    /// the fleet where nobody is looking at it.
+    ///
+    /// Being wrong in the other direction is the reason it isn't 1: escalation
+    /// spends the operator's attention, which is the scarcest resource in this
+    /// whole system, and a budget of one would spend it on every transient the
+    /// second attempt would have cleared silently.
+    static let retryBudget = 3
+
+    /// The minimum gap between two auto-retries of the SAME directive.
+    ///
+    /// Without it the budget is spent in three consecutive 5-second ticks —
+    /// fifteen seconds, which is not long enough for any of the conditions
+    /// `brainDisposition` calls `.retry` to have actually changed, so a
+    /// three-attempt budget would collapse into "escalate almost immediately"
+    /// while still paying for three API round-trips. A minute between attempts
+    /// gives a re-read something new to read, and caps the brain's stall-driven
+    /// API spend at one action per stalled directive per minute however large
+    /// the pile-up grows.
+    ///
+    /// Derived from the timeline like the count itself — the timestamp of the
+    /// last resolution in the episode — so it costs the stateless brain no
+    /// memory between ticks.
+    static let retryInterval: TimeInterval = 60
+
+    /// What the brain does about one halted mission of its own.
+    enum StallResponse: Equatable, Sendable {
+        /// Drive `retry` on this directive; `attempt` of `retryBudget`.
+        case retry(directiveID: String, reason: DirectiveAttentionReason, attempt: Int)
+        /// Budget left, but the last attempt is still inside `retryInterval`.
+        /// Handled, not escalated — an operator must not be told to look at a
+        /// run the brain is about to try again.
+        case waiting(directiveID: String, reason: DirectiveAttentionReason)
+        /// Left surfaced and untouched for a human.
+        case escalated(directiveID: String, reason: DirectiveAttentionReason)
+
+        /// The retry this response asks for, or nil if it asks for none —
+        /// so the one-action-per-tick pass can take the FIRST of them.
+        var retryAttempt: (directiveID: String, reason: DirectiveAttentionReason, attempt: Int)? {
+            guard case let .retry(directiveID, reason, attempt) = self else { return nil }
+            return (directiveID, reason, attempt)
+        }
+
+        /// The escalation this response reports, or nil.
+        var escalation: (directiveID: String, reason: DirectiveAttentionReason)? {
+            guard case let .escalated(directiveID, reason) = self else { return nil }
+            return (directiveID, reason)
+        }
+    }
+
+    /// The stalls the brain is allowed to answer, and the reason it answers
+    /// them with: its OWN missions, halted and surfaced.
+    ///
+    /// `kind == .relayRun` is the whole membership rule. A Survey Run or a
+    /// Salvage Run the operator launched belongs to the operator — a
+    /// `.retry`-disposition reason on one of those is not an invitation, and
+    /// answering it would be the brain quietly taking over missions nobody
+    /// gave it. (Every `relayRun` row in existence was written by
+    /// `Brain.launch`: no UI launches one.)
+    static func brainManagedStall(_ directive: Directive) -> DirectiveAttentionReason? {
+        guard directive.kind == .relayRun, directive.status == .needsAttention else { return nil }
+        return directive.attentionReason
+    }
+
+    /// How many resolutions this directive has taken since it last moved to a
+    /// different step, and when the most recent of them landed.
+    ///
+    /// **This is the retry budget, and it lives in the timeline rather than in
+    /// the brain.** The brain is stateless between ticks (`brain-robustness-bar`
+    /// clause 2) — there is no counter to hold a count in, and adding a column
+    /// would be inventing state the ledger already carries. Every resolution
+    /// writes a `.resolved` entry (`DirectiveResolutionClient.apply`) and every
+    /// stall writes a `.stalled` one (`DirectiveExecutor.stall`), in the same
+    /// database and the same transaction as the row change, so a count read
+    /// back off them survives a relaunch and can never disagree with what
+    /// actually happened. The technique is the house one —
+    /// `SalvageRun.stepEntryCount` and `HaulRun.dispatchAttemptCount` both
+    /// derive their budgets this way.
+    ///
+    /// **The episode boundary is the STEP.** Walking back from the newest
+    /// entry, the first one naming a step other than the directive's current
+    /// one ends the walk: the run was somewhere else, so everything before it
+    /// belongs to an earlier visit and buys a fresh budget. Entries naming the
+    /// current step are transparent — including `.commandDispatched`, which is
+    /// deliberate: a step that re-issues its command and stalls again on the
+    /// same step has not progressed, it has looped, and treating the dispatch
+    /// as progress would reset the budget on exactly the loop the budget
+    /// exists to bound. `.opCompleted` is transparent for a second reason too
+    /// — it is audit-only and deliberately BACK-DATED to when the op closed
+    /// (`DirectiveExecutor.recordCompletedOps`), so it is not evidence of
+    /// anything happening now.
+    ///
+    /// **Every `.resolved` entry counts, not just the brain's own retries.**
+    /// The alternative is string-matching `summary` ("Retried …"), which is a
+    /// display string, and the direction of that error is the dangerous one:
+    /// an unrecognised summary reads as "not an attempt" and hands the brain
+    /// more retries. Counting all of them is also the behaviour that is
+    /// actually right — a resolution of any kind that was followed by no
+    /// progress at all is an attempt that did not work, and the brain has no
+    /// business piling automated retries on top of an operator who has just
+    /// tried the same thing by hand and got nowhere.
+    static func retryEpisode(_ directive: Directive, log: [DirectiveLogEntry]) -> RetryEpisode {
+        var attempts = 0
+        var lastAttemptAt: Date?
+        walk: for entry in log.reversed() {
+            if let step = entry.step, step != directive.step { break walk }
+            guard entry.kind == .resolved else { continue }
+            attempts += 1
+            // Walking newest-first, so the first one seen is the latest.
+            if lastAttemptAt == nil { lastAttemptAt = entry.occurredAt }
+        }
+        return RetryEpisode(attempts: attempts, lastAttemptAt: lastAttemptAt)
+    }
+
+    /// The current stall episode's spend, read off the timeline.
+    struct RetryEpisode: Equatable, Sendable {
+        let attempts: Int
+        let lastAttemptAt: Date?
+    }
+
+    /// The pure decision for ONE directive. Nil for anything that isn't a
+    /// brain-managed stall.
+    ///
+    /// The switch over `brainDisposition` is exhaustive with no `default:` on
+    /// purpose — a disposition added later must force this open rather than
+    /// silently inheriting whichever branch happened to be the fallthrough.
+    ///
+    /// **`.decisionRequest` shares the `.escalate` branch, and that is a
+    /// decision, not an omission.** No reason maps to it today (see
+    /// `BrainStallDispositionTests`), so the branch is currently unreachable —
+    /// which is precisely why it needs to be written to the SAFE answer now,
+    /// while nothing depends on it. A decision request is by definition the
+    /// human-in-the-loop seam (`brain-executor-seam`): the mission has reached
+    /// a point where the CHOICE is the operator's, and a brain that answered it
+    /// would be making a policy call it was explicitly denied. Retrying is not
+    /// a neutral option there either — it re-runs the step that asked the
+    /// question and gets asked it again. So: surface it, touch nothing.
+    static func stallResponse(
+        for directive: Directive, log: [DirectiveLogEntry], now: Date
+    ) -> StallResponse? {
+        guard let reason = brainManagedStall(directive) else { return nil }
+
+        switch reason.brainDisposition {
+        case .escalate, .decisionRequest:
+            return .escalated(directiveID: directive.id, reason: reason)
+
+        case .retry:
+            let episode = retryEpisode(directive, log: log)
+            guard episode.attempts < retryBudget else {
+                return .escalated(directiveID: directive.id, reason: reason)
+            }
+            if let last = episode.lastAttemptAt, now.timeIntervalSince(last) < retryInterval {
+                // Also catches a stamp in the FUTURE (a clock that moved
+                // backwards, an SSE-sourced time we don't control): a negative
+                // interval waits rather than retrying, which is the safe
+                // direction — the tick after the clock catches up will retry.
+                return .waiting(directiveID: directive.id, reason: reason)
+            }
+            return .retry(directiveID: directive.id, reason: reason, attempt: episode.attempts + 1)
+        }
+    }
+
+    /// Drive at most one auto-`retry`, and report the first stall left needing
+    /// a human (nil if none is).
+    ///
+    /// **One retry per tick**, the same discipline `plan` applies to launches
+    /// and for the same reason: a tick spends one action and re-reads the world
+    /// five seconds later against a ledger that now contains it. This is what
+    /// keeps the known pile-up bounded — with N free carriers in a
+    /// resource-short world the brain can put N Relay Runs into
+    /// `.needsAttention` with the same reason (Task 16's review recorded this
+    /// as by design: the API vetoes, the brain never pre-judges), and without
+    /// the rule a single tick would fire N retries at once. Combined with the
+    /// per-directive `retryInterval`, the brain's total stall-driven API rate
+    /// is bounded both per-directive and per-tick.
+    ///
+    /// **Ordered by directive id** so a pile-up is worked through
+    /// deterministically. A stateless brain that re-ranks from scratch every
+    /// tick must make the same choice from the same world every time, or its
+    /// own behaviour stops being reproducible — the same argument
+    /// `freeCarrier`'s `min(by:)` records.
+    ///
+    /// Returning only the FIRST escalation is deliberate: `BrainDecision.stall`
+    /// carries one reason, and an operator with three escalated runs is going
+    /// to the Directives list anyway, where all three are surfaced. Reporting
+    /// the lowest-id one keeps this reproducible rather than arbitrary.
+    private func respondToStalls(_ snapshot: Snapshot) async -> DirectiveAttentionReason? {
+        let responses = snapshot.directives
+            .sorted { $0.id < $1.id }
+            .compactMap { Self.stallResponse(for: $0, log: snapshot.log[$0.id] ?? [], now: now) }
+        guard !responses.isEmpty else { return nil }
+
+        if let attempt = responses.compactMap(\.retryAttempt).first {
+            @Dependency(\.directiveResolution) var resolution
+            // `.notice`, like a launch and unlike everything else per-tick: an
+            // auto-retry is a real action taken on the operator's behalf, on a
+            // run they may already be looking at, and the reason plus the
+            // attempt count are what makes the line answer "why did this clear
+            // itself?" without a second lookup. It is bounded by construction —
+            // at most `retryBudget` of these per episode — so it can never
+            // become a heartbeat.
+            logger.notice(
+                """
+                auto-retry \(attempt.attempt, privacy: .public)/\(Self.retryBudget, privacy: .public) on relay run \
+                \(attempt.directiveID, privacy: .public) — \(attempt.reason.rawValue, privacy: .public)
+                """
+            )
+            // `retry` and `cancel` are the brain's ENTIRE operator vocabulary.
+            // `skipTarget`, `pause` and `resume` are the operator's,
+            // permanently — see this file's header and
+            // `BrainStallResponseTests.brainNeverDrivesOperatorOnlyVerbs`.
+            await resolution.retry(attempt.directiveID)
+        }
+
+        guard let escalation = responses.compactMap(\.escalation).first else { return nil }
+        logger.debug(
+            """
+            relay run \(escalation.directiveID, privacy: .public) left escalated \
+            — \(escalation.reason.rawValue, privacy: .public)
+            """
+        )
+        return escalation.reason
     }
 
     // MARK: - Reservation

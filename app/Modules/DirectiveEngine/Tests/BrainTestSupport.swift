@@ -122,6 +122,79 @@ func seedDirective(
     }.execute(db)
 }
 
+// MARK: - Relay Run / stall seeds
+
+/// A `.running` Relay Run shaped exactly as `Brain.launch` writes one — the
+/// starting point for every stall-response test, so those tests reason about a
+/// row the brain could really have produced rather than a hand-typed one.
+func seedRelayRun(
+    _ db: Database,
+    id: String,
+    deviceCode: String = "V1",
+    step: String = RelayRun().firstStep,
+    targets: [String] = ["VEGA"],
+    at: Date = Date(timeIntervalSince1970: 0)
+) throws {
+    try Directive.insert {
+        Directive(
+            id: id, kind: .relayRun, status: .running, deviceCode: deviceCode,
+            controllerCode: nil, roamCentre: nil, fleetTag: nil, sourceRelayCode: nil,
+            targets: targets, targetIndex: 0, step: step, stepStartedAt: at,
+            returnToOrigin: false, originDesignation: "SOL", attentionReason: nil,
+            createdAt: at, updatedAt: at
+        )
+    }.execute(db)
+}
+
+/// Halt-and-surface a directive **exactly as `DirectiveExecutor.stall` does**:
+/// the row flips to `.needsAttention` carrying its reason, and a `.stalled`
+/// timeline entry naming the current step lands beside it.
+///
+/// Mirroring the executor matters here rather than being tidiness: the brain's
+/// retry budget is derived from that timeline, so a fixture that wrote the row
+/// without the entry (or the entry without the step) would let a budget test
+/// pass against a timeline production never produces. Used both to seed a
+/// fresh stall and to re-stall a directive the brain has just retried.
+func stallDirective(
+    _ db: Database,
+    id: String,
+    reason: DirectiveAttentionReason,
+    entryID: String,
+    at: Date
+) throws {
+    guard var directive = try Directive.where({ $0.id.eq(id) }).fetchOne(db) else { return }
+    directive.status = .needsAttention
+    directive.attentionReason = reason
+    directive.updatedAt = at
+    try Directive.upsert { directive }.execute(db)
+    try DirectiveLogEntry.insert {
+        DirectiveLogEntry(
+            id: entryID, directiveID: id, deviceCode: nil, kind: .stalled,
+            summary: reason.rawValue, step: directive.step, operationID: nil,
+            eventID: nil, occurredAt: at
+        )
+    }.execute(db)
+}
+
+/// One timeline entry, for the tests that need a specific history rather than
+/// one built by driving the real transitions.
+func seedLogEntry(
+    _ db: Database,
+    id: String,
+    directiveID: String,
+    kind: DirectiveLogKind,
+    summary: String = "",
+    step: String?,
+    at: Date
+) throws {
+    try DirectiveLogEntry.insert {
+        DirectiveLogEntry(
+            id: id, directiveID: directiveID, deviceCode: nil, kind: kind,
+            summary: summary, step: step, operationID: nil, eventID: nil, occurredAt: at
+        )
+    }.execute(db)
+}
+
 // MARK: - Star seeds
 
 /// A census star at a given position. Only the fields `WorldView` reads are
