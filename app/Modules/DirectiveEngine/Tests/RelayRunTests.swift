@@ -758,6 +758,62 @@ struct RelayRunReclaimTests {
         ) == .refreshDevices(deviceCodes: ["V1"], thenStall: .unreachableDevice))
     }
 
+    /// **The discriminating case: young is not the same as AFTER.**
+    ///
+    /// A wall-clock freshness bound alone is the wrong key for this gate, and
+    /// on the NORMAL timeline it reads exactly the wrong row. The carrier's row
+    /// is written on arrival at `fetching`, while the mesh is still up — so it
+    /// reports `in_control_range: true` even for a carrier that would lose
+    /// authority the moment the relay goes down. `deactivating` then dispatches
+    /// at the RELAY, and `CommandClient`'s `.immediate` path confirm-reads only
+    /// the commanded device, so nothing reads the carrier at all. `deactivate`
+    /// is immediate server-side, so `confirmingIdle` typically sees the relay
+    /// non-relaying seconds later — with a carrier row that is seconds old,
+    /// comfortably inside the 5-minute bound, and entirely PRE-deactivate.
+    ///
+    /// So the gate must key on the watermark, not the age:
+    /// `carrier.updatedAt >= directive.stepStartedAt`. `stepStartedAt` for
+    /// `confirmingIdle` IS the deactivate dispatch instant, because
+    /// `DirectiveExecutor` re-stamps it on every accepted dispatch — the
+    /// watermark is free. This is the same rule
+    /// `confirm-steps-need-fresh-evidence` states and that this file already
+    /// applies two lines above the gate's call site.
+    ///
+    /// This fixture is the one that tells the two keys apart: the carrier row
+    /// is 200 s old — well inside `reclaimFreshness` — but predates
+    /// `stepStartedAt`, so it is pre-deactivate evidence. A wall-clock-only
+    /// gate advances to `stowing` here; a watermark gate buys the read.
+    @Test func aFreshButPreDeactivateCarrierRowIsNotEvidence() {
+        let directive = running(step: RelayRun.Step.confirmingIdle, sourceRelayCode: "R9")
+        // Sanity-pin the fixture's own premise, so this test cannot quietly
+        // stop discriminating if the shared fixtures move.
+        let carrierRow = carrier(
+            location: "DEAD-1-L4",
+            updatedAt: directive.stepStartedAt.addingTimeInterval(-100),
+            controlRange: true
+        )
+        #expect(carrierRow.updatedAt < directive.stepStartedAt, "the row must predate the deactivate")
+        #expect(fixtureNow.timeIntervalSince(carrierRow.updatedAt) < RelayRun.reclaimFreshness,
+                "…while still being young enough that a wall-clock gate would accept it")
+
+        #expect(RelayRun().nextAction(
+            directive: directive,
+            world: world(devices: [Self.source(status: "inactive"), carrierRow])
+        ) == .refreshDevices(deviceCodes: ["V1"], thenStall: .unreachableDevice))
+
+        // And the same row moved to just AFTER the deactivate is accepted — so
+        // the refusal above is the watermark's doing, not the fixture's.
+        let after = carrier(
+            location: "DEAD-1-L4",
+            updatedAt: directive.stepStartedAt.addingTimeInterval(1),
+            controlRange: true
+        )
+        #expect(RelayRun().nextAction(
+            directive: directive,
+            world: world(devices: [Self.source(status: "inactive"), after])
+        ) == .advanceStep(nextStep: RelayRun.Step.stowing))
+    }
+
     /// **The mesh race, which costs a RECLAIM run something it costs a print
     /// run nothing.** If the target gets meshed by somebody else while the
     /// carrier is in flight, `travelling` skips straight to `settling` and the
@@ -783,6 +839,14 @@ struct RelayRunReclaimTests {
         #expect(loss?.contains("net") == true)
         // …and a PRINT-sourced run, which loses nothing at all, says nothing.
         #expect(RelayRun.meshRaceLoss(running(sourceRelayCode: nil), target: "VEGA") == nil)
+
+        // WHAT THIS TEST DOES NOT COVER, stated so it does not look covered:
+        // the two assertions above pin the diagnosis (its inputs and its
+        // message) and the `.settling` advance, but NOT the `logger.warning`
+        // emission that sits between them in `travel`. `logger` is a
+        // file-private `os.Logger`, as in every mission machine, with no seam
+        // to intercept — deleting the call site leaves this suite green. The
+        // call site carries the same note.
     }
 
     /// Re-entering `acquire` after the relay is already aboard must not start

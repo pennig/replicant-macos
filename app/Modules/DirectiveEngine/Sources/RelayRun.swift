@@ -21,16 +21,21 @@
 //  HOSTS A REPLICANT, and nothing in these types can say so.** Deactivating the
 //  source takes its system off the mesh, so authority to then issue `stow`
 //  there comes only from `ftl-authority-rule` (1): a replicant physically
-//  present. It holds today because the carrier this run uses (`C7836770`) hosts
-//  `pennig-salvage`. It is not expressible here — `Directive` has no such
-//  field, and neither `WorldSnapshot` nor `WorldView` carries replicants at all
-//  — so it is enforced indirectly, by asking the SERVER: `carrierRetainsAuthority`
-//  gates the `stow` on the carrier's own `in_control_range` after the
-//  deactivate. Anything choosing a carrier for a reclaim-sourced run must
-//  honour the precondition regardless; the gate turns a permanent strand into a
-//  loud stall, it does not make an unhosted carrier workable. (The fleet's
-//  other `heaven_vessel`s include the one hosting `pennig-1`, the mesh ANCHOR,
-//  which must never travel — see the authority note.)
+//  present. It is not expressible here — `Directive` has no such field, and
+//  neither `WorldSnapshot` nor `WorldView` carries replicants at all — so it is
+//  enforced indirectly, by asking the SERVER: `carrierRetainsAuthority` gates
+//  the `stow` on the carrier's own `in_control_range` after the deactivate.
+//  Anything choosing a carrier for a reclaim-sourced run must honour the
+//  precondition regardless; the gate turns a permanent strand into a loud
+//  stall, it does not make an unhosted carrier workable.
+//
+//  As of 2026-08-04 the precondition holds FLEET-WIDE, not merely for the one
+//  carrier this run uses: all three `heaven_vessel`s host a replicant
+//  (`pennig-1`, `pennig-scan`, `pennig-salvage`), and `C7836770` — the vessel
+//  at the hub, hosting `pennig-salvage` — is the one a Relay Run actually
+//  takes. That is a fact about today's fleet and not a guarantee: `pennig-1`'s
+//  vessel is the mesh ANCHOR and must never travel at all (see the authority
+//  note), and anything a later `growFleet` builds starts out hosting nobody.
 //
 //  **Composition (print source): autofactory + co-located carrier.** The relay is printed
 //  AT the hub (`enqueue_print` on the autofactory) and taken aboard a HEAVEN
@@ -750,12 +755,26 @@ public struct RelayRun: MissionStepMachine {
     /// version of this comment got it wrong.** `.unreachableDevice` carries
     /// `BrainDisposition.retry`, and `Brain` retries the SAME directive with
     /// the SAME `sourceRelayCode` — it does not re-plan the source. The budget
-    /// is `Brain.retryBudget` (3) spread over a `Brain.retryInterval` (15 min)
-    /// floor, so a PERMANENTLY disqualified source (the plan named a mining
-    /// drone; the relay is already inactive) costs three futile retries over at
-    /// least 45 minutes and then an operator escalation — with the carrier
-    /// leased throughout, and, since `tendMesh` runs one Relay Run at a time,
-    /// with all mesh growth blocked until somebody looks. That is an acceptable
+    /// is `Brain.retryBudget` (3) against a `Brain.retryInterval` (15 min)
+    /// floor, and the FIRST retry fires immediately (`episode.lastAttemptAt` is
+    /// nil at the first stall, because a `.stalled` timeline entry is not a
+    /// `.resolved` one), so the attempts land at roughly t, t+15 min and
+    /// t+30 min, with escalation following the third at about t+30 — not
+    /// t+45, which is the off-by-one-interval this comment carried in its
+    /// previous draft. (`Brain.swift`'s own comment on `retryInterval` states
+    /// the same arithmetic the same wrong way; correcting it is a one-line
+    /// change to another file and is left to whoever owns it.)
+    ///
+    /// So a PERMANENTLY disqualified source (the plan named a mining drone; the
+    /// relay is already inactive) costs three futile retries over ~30 minutes
+    /// and then an operator escalation, with the carrier leased throughout
+    /// (`.needsAttention` is in the brain's `owningStatuses`). Whether that
+    /// stops mesh growth is a FLEET fact, not a scheduler rule: `Brain.plan`
+    /// launches at most one Relay Run per TICK, not one at a time, and an
+    /// escalated run holds one carrier rather than the fleet — concurrency is
+    /// bounded by how many free carriers stand at the hub. It happens to stop
+    /// growth dead on today's fleet, where only `C7836770` is at
+    /// `AINALRAM-BELT-1`. That is an acceptable
     /// failure mode for a case that should be rare and is always the result of
     /// a bad plan hint, and it is strictly better than either alternative
     /// (tearing down a relay on stale evidence, or spending 370 units the plan
@@ -983,14 +1002,44 @@ public struct RelayRun: MissionStepMachine {
     /// affirmatively reports, and the file header states the precondition for
     /// the case it cannot see.
     ///
-    /// The freshness read comes first for the reason `acquire` reads the hub
-    /// before trusting its stock: this is the last moment before a command
-    /// issued into a system the mesh no longer reaches, and a stale row is not
-    /// evidence. `thenStall` bounds it to exactly one round.
+    /// **Keyed on a WATERMARK, not on age — young is not the same as AFTER.**
+    /// A wall-clock bound alone reads the wrong row on the NORMAL timeline, not
+    /// the exotic one. `fetching` writes the carrier's row on arrival, while
+    /// the mesh is still up, so it reports `in_control_range: true` even for a
+    /// carrier that will lose authority the instant the relay goes down.
+    /// `deactivating` then dispatches at the RELAY, and `CommandClient`'s
+    /// `.immediate` path confirm-reads only the commanded device — nothing
+    /// reads the carrier. `deactivate` is immediate server-side, so
+    /// `confirmingIdle` normally sees the relay non-relaying seconds later,
+    /// with a carrier row that is seconds old, far inside `reclaimFreshness`,
+    /// and entirely PRE-deactivate. An age-only gate would therefore obtain
+    /// genuinely post-deactivate evidence only on the SLOW path, which inverts
+    /// the intent exactly.
+    ///
+    /// So the row must post-date the command whose effect it is being asked
+    /// about: `carrier.updatedAt >= directive.stepStartedAt`. That watermark is
+    /// free — `DirectiveExecutor` re-stamps `stepStartedAt` on every accepted
+    /// dispatch, so for `confirmingIdle` it IS the deactivate dispatch instant.
+    /// It is also the rule `confirm-steps-need-fresh-evidence` states and that
+    /// this file already applies two lines above this function's call site; the
+    /// age bound is kept alongside it as the backstop for a row that post-dates
+    /// the dispatch but has since gone unread for minutes.
+    ///
+    /// **Damage bound, so this is calibrated rather than over-built:** the
+    /// strand is already committed by the deactivate, so the worst a wrong
+    /// answer here does is misclassify the follow-up. Failing open dispatches
+    /// `stow`, the server rejects it, and `DirectiveExecutor` stalls
+    /// `.commandRejected` — also `.retry`. The cost of getting this wrong is a
+    /// less precise stall, not a new hazard. It is fixed because the header and
+    /// this doc both claim the stronger property, and moving the code is
+    /// cheaper than weakening the claim.
+    ///
+    /// `thenStall` bounds the read to exactly one round.
     private func carrierRetainsAuthority(
         _ directive: Directive, _ carrier: Device, _ world: WorldSnapshot
     ) -> MissionAction {
-        if world.now.timeIntervalSince(carrier.updatedAt) > Self.reclaimFreshness {
+        if carrier.updatedAt < directive.stepStartedAt
+            || world.now.timeIntervalSince(carrier.updatedAt) > Self.reclaimFreshness {
             return .refreshDevices(deviceCodes: [carrier.deviceCode], thenStall: .unreachableDevice)
         }
         guard !carrier.isOutOfControlRange else {
@@ -1076,6 +1125,16 @@ public struct RelayRun: MissionStepMachine {
             // reclaim reached this branch having already torn its source's
             // system off the mesh, so finishing here is a net loss dressed as a
             // success. It still finishes; it does not do so quietly.
+            //
+            // NOT COVERED BY A TEST, and deliberately recorded as such rather
+            // than left to look covered: `meshRaceLoss` is asserted directly
+            // (inputs and message), and the `.settling` advance is asserted
+            // directly, but the EMISSION between them cannot be observed from a
+            // test — `logger` is a file-private `os.Logger`, as it is in every
+            // mission machine, and there is no seam to intercept. Deleting
+            // these two lines leaves the suite green. Introducing a logger
+            // dependency for one call site would make this the only machine in
+            // the family with one, which is a worse trade than the gap.
             if meshed, let loss = Self.meshRaceLoss(directive, target: target) {
                 logger.warning("relay run \(directive.id, privacy: .public): \(loss, privacy: .public)")
             }
