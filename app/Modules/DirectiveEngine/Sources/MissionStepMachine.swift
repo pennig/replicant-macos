@@ -41,18 +41,43 @@ public enum MissionAction: Equatable, Sendable {
     /// asked for after arrival.
     case refreshSystem(designation: String, nextStep: String)
     /// Re-read `GET /v1/locations` — the whole stockpile census in one request —
-    /// persist it, then move to `nextStep`.
+    /// persist it, then ask the machine once more against the fresh
+    /// `WorldSnapshot.footprints`.
     ///
-    /// Best-effort and non-re-asking, exactly like `.refreshSystem`: there is no
-    /// "did it land" question worth a second evaluation, and a transient failure
-    /// must cost one cycle rather than stranding a continuous run. The machine
-    /// simply sees fresher `WorldSnapshot.footprints` next time round.
+    /// **Resolved by the engine, reusing the SAME `reAsk` collapse
+    /// `.refreshDevices` uses** (`DirectiveEngineCore.resolveFootprintRefresh`)
+    /// — NOT a bare "refresh then move" the way this case worked before
+    /// 2026-08-03. That earlier shape self-looped unbounded: a persistently
+    /// unreadable census (a location genuinely never appearing in the
+    /// response, or the refresh request itself always failing) made a
+    /// same-step re-entry (`nextStep` equal to the current step) hammer the
+    /// live API at the engine's full 5s tick rate forever, because
+    /// `DirectiveExecutor.move` re-stamps `stepStartedAt` unconditionally on
+    /// every re-entry — the same trap `same-step-dispatch-needs-tracked-op`
+    /// documents for `.simple` verb dispatches, just for a refresh action
+    /// instead of a dispatch.
     ///
-    /// **It moves the step, so it re-stamps `stepStartedAt`** (`DirectiveExecutor.move`
-    /// does that unconditionally). Any interval a machine measures must therefore
-    /// be measured from a step that only ever `.wait`s — `.wait` is the sole
-    /// action that writes nothing. See `same-step-dispatch-needs-tracked-op`.
-    case refreshFootprint(nextStep: String)
+    /// Two real fallbacks exist for when the re-ask still wants a refresh,
+    /// because this case serves missions with different tolerances:
+    /// - `thenStall` non-nil (e.g. `RelayRun.acquire`'s `.printStockShort`):
+    ///   collapse to `.stall(thenStall)`, exactly like `.refreshDevices`. Use
+    ///   this whenever the census gates something irreversible (a spend) —
+    ///   a persistently-failing refresh must escalate through
+    ///   `BrainDisposition.retry`'s bounded-retry-then-escalate, never retry
+    ///   forever.
+    /// - `thenStall` nil (`HaulRun.survey`): the resolver falls back to
+    ///   `.advanceStep(nextStep: nextStep)` instead of `.wait` — preserving
+    ///   the original "a transient failure must cost one cycle rather than
+    ///   stranding a continuous run" contract for a caller whose `nextStep`
+    ///   is always a DIFFERENT step, so it was never at risk of the self-loop
+    ///   trap above and doesn't need to change behaviour to be safe.
+    ///
+    /// `nextStep` is that fallback destination — used only when `thenStall`
+    /// is nil AND the re-ask still wants a refresh (or the post-refresh world
+    /// read itself fails). A caller that always escalates may still name a
+    /// sensible self-referential `nextStep` for documentation's sake; it will
+    /// simply never be reached.
+    case refreshFootprint(nextStep: String, thenStall: DirectiveAttentionReason?)
     /// "Before I believe this, read it." The engine re-reads each named device
     /// authoritatively — plus whatever those devices report stowed aboard them,
     /// because containment is a two-ended fact and one end alone can't settle it

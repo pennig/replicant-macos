@@ -98,16 +98,6 @@ enum DirectiveExecutor {
             await move(directive, to: nextStep, controllerCode: directive.controllerCode)
             return true
 
-        case let .refreshFootprint(nextStep):
-            // Best-effort by contract, same reasoning as `.refreshSystem` above:
-            // this is a census read, and a stale census merely means the next
-            // cycle re-reads it. Stalling a continuous run on a transient GET
-            // would demand a human for something that fixes itself.
-            @Dependency(\.locationsClient) var locationsClient
-            try? await locationsClient.refreshFootprint()
-            await move(directive, to: nextStep, controllerCode: directive.controllerCode)
-            return true
-
         case let .setDeviceTags(deviceCode, tags, nextStep):
             // Best-effort by contract, same reasoning as `.refreshSystem` above:
             // the real work this action follows (a relay planted and meshing)
@@ -133,13 +123,18 @@ enum DirectiveExecutor {
             await move(directive, to: nextStep, controllerCode: directive.controllerCode)
             return true
 
-        case let .refreshDevices(_, thenStall), let .refreshDevicesInSystem(_, thenStall), let .refreshFleet(_, thenStall):
+        case let .refreshDevices(_, thenStall), let .refreshDevicesInSystem(_, thenStall),
+             let .refreshFleet(_, thenStall), let .refreshFootprint(_, thenStall):
             // The engine resolves this one before it ever reaches the executor
-            // (it needs a second world read and a second call into the machine).
-            // Reaching here means that resolution was bypassed, so honour the
-            // carried fallback rather than silently dropping the action.
+            // (it needs a second world read and a second call into the machine —
+            // see `DirectiveEngineCore.resolveFootprintRefresh` for the
+            // `.refreshFootprint` case specifically, added 2026-08-03 after an
+            // earlier "refresh then move" shape here self-looped unbounded on a
+            // persistently-unreadable census). Reaching here means that
+            // resolution was bypassed, so honour the carried fallback rather
+            // than silently dropping the action.
             guard let thenStall else { return true }
-            logger.notice("directive \(directive.id, privacy: .public): unresolved refreshDevices — stalling with \(thenStall.rawValue, privacy: .public)")
+            logger.notice("directive \(directive.id, privacy: .public): unresolved refresh — stalling with \(thenStall.rawValue, privacy: .public)")
             await stall(directive, reason: thenStall, detail: nil)
             return false
 

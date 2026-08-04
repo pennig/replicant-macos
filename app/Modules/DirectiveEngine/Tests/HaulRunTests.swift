@@ -216,7 +216,9 @@ struct HaulRunTests {
             directive: run(step: HaulRun.Step.surveying),
             world: world(devices: [controller("C1")] + meshed, footprints: [old])
         )
-        #expect(action == .refreshFootprint(nextStep: HaulRun.Step.assigning))
+        // thenStall: nil — HaulRun's survey never escalates on a stale/failed
+        // census; it always advances anyway (see `HaulRun.survey`'s doc).
+        #expect(action == .refreshFootprint(nextStep: HaulRun.Step.assigning, thenStall: nil))
     }
 
     /// A census read moments ago is not read again — the 5s tick must not

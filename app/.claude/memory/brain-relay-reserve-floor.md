@@ -169,15 +169,69 @@ never-resolves case now correctly ESCALATES** (via `.printStockShort`'s
 bounded-retry-then-escalate disposition) rather than retrying forever — round
 1's "retries indefinitely, never hammering" trade-off was itself a defect
 (the retry WAS hammering, per the round-2 finding above), not a deliberate,
-acceptable choice; that framing has been retired. Residual gap, explicitly
-out of scope: if `refreshFootprint()` itself always fails/throws (not just
-"this one location is absent from an otherwise-successful census"), NO row's
-`fetchedAt` ever advances, the table-wide gate stays stale forever, and the
-same unthrottled 5s-tick loop recurs — an even more pathological failure than
-the one fixed here, and one `HaulRun.survey` is itself not fully immune to
-either (its own throttle comes from its `haul` step's dedicated wait
-elsewhere in that machine's cycle, a shape `RelayRun`'s single `acquire` step
-does not have). Not addressed here — a whole-API-down scenario is a
-different, larger failure than "one location's row is missing," and fixing
-it would need new state that the same-step re-stamp trap above already rules
-out at this layer.
+acceptable choice; that framing has been retired.
+
+**Round 3 — `MissionAction.refreshFootprint` gained `thenStall`, closing the
+whole-API-outage residual round 2 left explicitly out of scope.** Round 2's
+own report predicted a gap: if `LocationsClient.refreshFootprint()` itself
+always throws (not just "this one location is absent from an
+otherwise-successful census" — an offline network, an expired/rotated token,
+sustained 429/5xx, and judged in review to be the MORE common trigger, not
+rarer), no row's `fetchedAt` ever advances, the table-wide gate stays stale
+forever, and the same unthrottled ~12/min 5s-tick loop recurs. Round 3 closed
+this by mirroring the ALREADY-SHIPPED shape `.refreshDevices` uses rather than
+inventing new machinery:
+- `MissionAction.refreshFootprint` is now `(nextStep: String, thenStall:
+  DirectiveAttentionReason?)`.
+- It is resolved by the ENGINE (`DirectiveEngineCore.resolveFootprintRefresh`,
+  beside `resolveRefresh`/`resolveSystemRefresh`/`resolveFleetRefresh`), not
+  by `DirectiveExecutor` doing a bare "I/O then move" — that bare shape is
+  exactly what let `.refreshFootprint` self-loop unbounded in the first
+  place. The resolver does the I/O once (best-effort, swallowed on failure),
+  re-reads the world, and re-asks the SAME `reAsk` helper the device-refresh
+  paths share — now generalised with an `orElse:` fallback (default `.wait`,
+  unchanged for its three existing callers) so `.refreshFootprint`'s own
+  fallback can differ per caller.
+- `RelayRun.acquire` passes `thenStall: .printStockShort`: a persistently-
+  failing census in front of an irreversible spend must escalate, so a
+  repeat `.refreshFootprint` on the re-ask collapses to `.stall`.
+- `HaulRun.survey` passes `thenStall: nil` and relies on `reAsk`'s `orElse:
+  .advanceStep(nextStep: nextStep)` override to preserve its own,
+  already-shipped "a transient failure must cost one cycle rather than
+  stranding a continuous run" contract UNCHANGED — it always names a
+  DIFFERENT step, so it was never at risk of the self-loop this whole
+  mechanism exists to close, and this round's change is compile-compat only
+  for it, not a behaviour change.
+- `DirectiveExecutor.apply`'s `.refreshFootprint` case is now the same
+  "the engine should have resolved this already" bypass fallback
+  `.refreshDevices`/`.refreshDevicesInSystem`/`.refreshFleet` share.
+
+Proven bounded end to end (through the REAL `DirectiveEngineCore.evaluateOnce`
++ `DirectiveExecutor.apply`, not a pure-function fixture) by
+`RefreshFootprintTests.persistentlyFailingFootprintRefreshEscalatesAfterOneRound`
+in `DirectiveEngineTests.swift`: a permanently-throwing `locationsClient
+.footprint` escalates to `.stall` after exactly one I/O attempt, and a SECOND
+`evaluateOnce` call makes zero further attempts (a stalled directive is
+`.needsAttention`, not `.running`, so the executor never re-evaluates it
+automatically).
+
+**Round 3 minor — a stale-but-PRESENT hub row could be trusted.** Because the
+refresh-trigger gate is table-wide (round 2), a hub row that simply stops
+appearing in later census refreshes — while some OTHER location keeps the
+table looking fresh — would not retrigger a refresh, and `printStockIsShort`
+would read that row's arbitrarily old `resources` value at face value,
+potentially permitting a print on stale "abundance." Considered reverting the
+refresh-trigger gate to per-location scope (now that `thenStall`'s one-round
+engine-level bounding makes ANY gate scope safe from the original self-loop),
+but that would silently invalidate
+`persistentlyMissingFootprintEscalatesRatherThanRefreshingForever`'s premise
+(which proves termination by simulating OTHER locations refreshing while the
+hub's never does — meaningless without table scope) and add an extra refresh
+call on every evaluation where only the hub's own row is stale. Fixed instead
+as a separate, read-time-only veto check inside `printStockIsShort`: a hub row
+older than `RelayRun.hubFreshness` (5 min — the SAME "how old may a positive
+finding be and still be believed" bound already used for the hub DEVICE row,
+reused here for the identical reason, deliberately more generous than the
+60s refresh-trigger gate) fails closed rather than being trusted. This cannot
+reopen the self-loop risk — it is a veto decision, not another refresh
+request. Covered by `staleHubRowIsNotTrustedEvenWhenTheCensusAsAWholeLooksFresh`.

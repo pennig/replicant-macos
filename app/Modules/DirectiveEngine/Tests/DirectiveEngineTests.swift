@@ -1751,14 +1751,30 @@ struct DirectiveEngineSalvageArrivalFreshnessTests {
 }
 
 /// A machine that asks for a footprint refresh once and then waits, so an
-/// evaluation exercises exactly this action.
+/// evaluation exercises exactly this action. `thenStall: nil` mirrors
+/// `HaulRun.survey`'s own contract (advance anyway on a transient miss,
+/// never escalate) — see `EscalatingFootprintRefreshMachine` below for the
+/// other real contract, `RelayRun.acquire`'s.
 private struct FootprintRefreshMachine: MissionStepMachine {
     let kind: DirectiveKind = .haulRun
     let firstStep = "surveying"
     func nextAction(directive: Directive, world: WorldSnapshot) -> MissionAction {
         directive.step == "surveying"
-            ? .refreshFootprint(nextStep: "assigning")
+            ? .refreshFootprint(nextStep: "assigning", thenStall: nil)
             : .wait
+    }
+    func plan(_ context: RoamContext) -> RoamPlan { .idle }
+}
+
+/// A machine that always wants a footprint refresh with a REAL `thenStall`,
+/// regardless of the world it's handed — the shape `RelayRun.acquire` uses in
+/// production, where a persistently-unreadable census sits in front of an
+/// irreversible spend and must escalate rather than retry forever.
+private struct EscalatingFootprintRefreshMachine: MissionStepMachine {
+    let kind: DirectiveKind = .haulRun
+    let firstStep = "surveying"
+    func nextAction(directive: Directive, world: WorldSnapshot) -> MissionAction {
+        .refreshFootprint(nextStep: "surveying", thenStall: .printStockShort)
     }
     func plan(_ context: RoamContext) -> RoamPlan { .idle }
 }
@@ -1838,5 +1854,54 @@ struct RefreshFootprintTests {
         #expect(row?.step == "assigning")
         #expect(row?.status == .running)
         #expect(row?.attentionReason == nil)
+    }
+
+    /// **Termination proof, at the real engine — not just the pure mission
+    /// function.** Review round 2 bounded "one location missing from an
+    /// otherwise-successful census refresh." This proves the OTHER
+    /// pathological case is also bounded: the refresh request itself
+    /// persistently failing outright (an offline network, an expired token,
+    /// sustained 5xx/429 — strictly more common than the round-2 case, not
+    /// rarer). A machine using `thenStall` (`RelayRun.acquire`'s real
+    /// contract) must escalate to a stall after exactly ONE round, and a
+    /// stalled directive must never be auto-re-evaluated — proven here end to
+    /// end through `DirectiveEngineCore.evaluateOnce` and
+    /// `DirectiveExecutor.apply`, the real machinery, not a fixture standing
+    /// in for it.
+    @Test func persistentlyFailingFootprintRefreshEscalatesAfterOneRound() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { haulDirective() }.execute(db)
+        }
+        struct Boom: Error {}
+        let attempts = LockIsolated(0)
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.locationsClient.footprint = {
+                attempts.withValue { $0 += 1 }
+                throw Boom()
+            }
+        } operation: {
+            let core = DirectiveEngineCore(
+                machines: [EscalatingFootprintRefreshMachine()], tick: .seconds(5)
+            )
+            // TWO full evaluations — the second is what proves the stall
+            // actually STOPS the loop rather than merely delaying it by one
+            // tick: a naive fix might still escalate on evaluation 1 but keep
+            // retrying on every subsequent one.
+            await core.evaluateOnce(directiveID: "D1")
+            await core.evaluateOnce(directiveID: "D1")
+        }
+
+        #expect(attempts.value == 1, "a stalled (non-running) directive must never be auto-re-evaluated")
+        let row = try await database.read { db in
+            try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+        }
+        #expect(row?.status == .needsAttention)
+        #expect(row?.attentionReason == .printStockShort)
+        #expect(row?.step == "surveying", "must not have advanced — it escalated instead")
     }
 }

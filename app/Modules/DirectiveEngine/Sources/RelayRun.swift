@@ -324,6 +324,24 @@ public struct RelayRun: MissionStepMachine {
     /// `printStockIsShort` in that case, which vetoes and stalls rather than
     /// looping. Bounded to at most one refresh per `pollInterval`, exactly
     /// like `HaulRun.survey`'s own cadence on the same table.
+    ///
+    /// **Trade-off, closed elsewhere rather than reopening this gate**: table
+    /// scope means a PRESENT hub row that simply stops being refreshed, while
+    /// some other location keeps the table looking fresh, would not retrigger
+    /// a refresh through this check alone — found in review round 3.
+    /// `.refreshFootprint` gaining `thenStall` (this same round) means a
+    /// per-location gate is no longer at risk of the original self-loop this
+    /// function's doc opens with (any repeat request now collapses to a
+    /// stall after exactly one round, regardless of gate scope), so reverting
+    /// to per-location scope here was considered — but that would silently
+    /// invalidate `persistentlyMissingFootprintEscalatesRatherThanRefreshingForever`'s
+    /// premise (it proves termination by hand-simulating OTHER locations
+    /// refreshing while the hub's never does, which requires table scope to
+    /// mean anything) and cost an extra refresh call on every evaluation
+    /// where only the hub's own row is stale, however healthy the rest of
+    /// the census is. Kept table-wide here and closed the narrower gap as a
+    /// read-time veto check instead — see `printStockIsShort`'s
+    /// `hubFreshness` bound.
     func footprintCensusIsStale(_ world: WorldSnapshot) -> Bool {
         guard let newest = world.footprints.values.map(\.fetchedAt).max() else { return true }
         return world.now.timeIntervalSince(newest) > Self.pollInterval
@@ -356,6 +374,25 @@ public struct RelayRun: MissionStepMachine {
     /// rather than something only true by convention at the one call site
     /// that exists today.
     ///
+    /// **A PRESENT-but-old hub row is caught here too, on a separate,
+    /// deliberately more generous bound than `footprintCensusIsStale`'s
+    /// `pollInterval`.** That gate is table-wide (`footprintCensusIsStale`'s
+    /// doc explains why), which proves the census was refreshed SOMEWHERE
+    /// recently — never that THIS location specifically was. A hub that
+    /// simply stops appearing in later refreshes while some other location
+    /// keeps the table looking fresh would otherwise have its arbitrarily old
+    /// `resources` reading trusted at face value here, silently permitting a
+    /// print on stale "abundance." Found in review (round 3): the trade of
+    /// widening the refresh-trigger gate to table-scope (round 2, to bound
+    /// the self-loop that existed before `.refreshFootprint` gained
+    /// `thenStall`) opened this narrower gap as a side effect. Fixed WITHOUT
+    /// touching the refresh-trigger gate — this is a read-time veto check,
+    /// not another refresh request, so it cannot reopen the self-loop risk:
+    /// a hub row older than `Self.hubFreshness` (the same "how old may a
+    /// positive finding be and still be believed" bound already used for the
+    /// hub DEVICE row, reused here for the identical reason) fails closed
+    /// rather than being trusted.
+    ///
     /// Reads the location's TOTAL holdings, which is all `LocationFootprint`
     /// carries today. The rail is specified per RESOURCE TYPE
     /// (brain-resource-hub-model, ticket 06; see `BrainCeiling`), and the
@@ -364,6 +401,7 @@ public struct RelayRun: MissionStepMachine {
     func printStockIsShort(at location: String, _ world: WorldSnapshot) -> Bool {
         guard let floor = reserveFloor else { return false }
         guard let footprint = world.footprints[location] else { return true }
+        if world.now.timeIntervalSince(footprint.fetchedAt) > Self.hubFreshness { return true }
         return footprint.resources < floor
     }
 
@@ -412,8 +450,19 @@ public struct RelayRun: MissionStepMachine {
         // unbounded). Gated on the rail being armed: an unarmed rail has no
         // opinion on stock at all, so there is nothing here worth the extra
         // request.
+        //
+        // `thenStall: .printStockShort` — unlike `HaulRun.survey`'s `nil`,
+        // this MUST escalate on a persistently-unreadable census (the whole
+        // refresh request failing outright, not just this location being
+        // absent from an otherwise-successful one): the census gates a real,
+        // irreversible spend, so "we still can't read it" has to reach
+        // `BrainDisposition.retry`'s bounded-retry-then-escalate rather than
+        // retry forever. `nextStep: Step.acquire` documents the shape (a
+        // successful re-ask naturally re-derives the right action by
+        // re-entering this same step) but is never actually reached as a
+        // fallback destination, because a `thenStall` is always given.
         if reserveFloor != nil, footprintCensusIsStale(world) {
-            return .refreshFootprint(nextStep: Step.acquire)
+            return .refreshFootprint(nextStep: Step.acquire, thenStall: .printStockShort)
         }
         if let location = hub.location, printStockIsShort(at: location, world) {
             // The most safety-relevant veto in this capability — unlike its

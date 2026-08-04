@@ -253,6 +253,11 @@ actor DirectiveEngineCore {
                 tag: tag, thenStall: thenStall,
                 directive: directive, machine: machine
             )
+        case let .refreshFootprint(nextStep, thenStall):
+            action = await resolveFootprintRefresh(
+                nextStep: nextStep, thenStall: thenStall,
+                directive: directive, machine: machine
+            )
         case let .extendQueue(centre):
             let resolution = await resolveExtendQueue(
                 centre: centre, directive: directive, machine: machine
@@ -448,6 +453,13 @@ actor DirectiveEngineCore {
             )
             return Resolution(action: resolved, directive: extended)
 
+        case let .refreshFootprint(nextStep, thenStall):
+            let resolved = await resolveFootprintRefresh(
+                nextStep: nextStep, thenStall: thenStall,
+                directive: extended, machine: machine
+            )
+            return Resolution(action: resolved, directive: extended)
+
         case let action:
             return Resolution(action: action, directive: extended)
         }
@@ -598,25 +610,90 @@ actor DirectiveEngineCore {
         return reAsk(machine, directive, fresh, thenStall: reason)
     }
 
+    /// Spend one best-effort census refresh on a mission's `.refreshFootprint`
+    /// request, then ask it once more against the fresh world — the same
+    /// shape `resolveRefresh`/`resolveSystemRefresh`/`resolveFleetRefresh` use,
+    /// reusing the SAME `reAsk` collapse those three share.
+    ///
+    /// Best-effort by contract, matching `.refreshFootprint`'s original
+    /// reasoning: the request itself must never be the thing that strands a
+    /// mission over a transient GET, so a failure here is logged and the
+    /// re-ask proceeds against whatever `WorldSnapshot.footprints` already
+    /// holds rather than short-circuiting.
+    ///
+    /// **Why this needed its own resolver instead of just adding
+    /// `.refreshFootprint` to `reAsk`'s existing case list as-is**: this
+    /// action serves two callers with genuinely different fallback needs when
+    /// the re-ask still wants a refresh. `RelayRun.acquire` passes a real
+    /// `thenStall` and must collapse to `.stall(reason)`, identically to the
+    /// device-refresh paths — a persistently-unreadable census sits in front
+    /// of an irreversible resource spend, so it has to escalate through
+    /// `BrainDisposition.retry`'s bounded-retry-then-escalate rather than
+    /// retry forever (the defect this whole resolver exists to close — see
+    /// `MissionAction.refreshFootprint`'s doc). `HaulRun.survey` passes `nil`
+    /// and needs `.advanceStep(nextStep:)` on that same branch, not `.wait`,
+    /// to preserve its already-documented "a transient failure must cost one
+    /// cycle rather than stranding a continuous run" contract — it always
+    /// names a DIFFERENT step as `nextStep`, so it was never at risk of the
+    /// self-loop trap `.refreshFootprint`'s doc describes, and changing its
+    /// nil-fallback to `.wait` would be a real behaviour regression `reAsk`'s
+    /// hardcoded `.wait` cannot express. `reAsk` takes an `orElse:` fallback
+    /// for exactly this — its three existing callers all keep the implicit
+    /// `.wait` default, so their behaviour is unchanged.
+    private func resolveFootprintRefresh(
+        nextStep: String,
+        thenStall reason: DirectiveAttentionReason?,
+        directive: Directive,
+        machine: any MissionStepMachine
+    ) async -> MissionAction {
+        @Dependency(\.locationsClient) var locationsClient
+        @Dependency(\.defaultDatabase) var database
+        @Dependency(\.date) var date
+
+        do {
+            try await locationsClient.refreshFootprint()
+        } catch {
+            logger.notice("directive \(directive.id, privacy: .public): footprint refresh failed: \(error)")
+        }
+
+        let fresh: WorldSnapshot
+        do {
+            fresh = try await WorldSnapshot.read(from: database, now: date.now, directive: directive)
+        } catch {
+            logger.error("world snapshot after footprint refresh failed: \(error)")
+            return reason.map { .stall($0) } ?? .advanceStep(nextStep: nextStep)
+        }
+        return reAsk(machine, directive, fresh, thenStall: reason, orElse: .advanceStep(nextStep: nextStep))
+    }
+
     /// Ask the machine once more against freshly-read rows, collapsing a repeat
-    /// refresh request into the carried fallback. Shared by all three refresh
+    /// refresh request into the carried fallback. Shared by all four refresh
     /// paths: this is the one-round loop guard, and it must behave identically
     /// however the reads were paid for.
+    ///
+    /// `orElse` is what the mission gets back when it still wants the SAME
+    /// kind of refresh and no `thenStall` reason was given — `.wait` for the
+    /// three device-scoped refreshes (their nil-fallback contract: "the state
+    /// being watched is expected to resolve on its own"), but
+    /// `resolveFootprintRefresh` overrides it to `.advanceStep(nextStep:)` for
+    /// a caller whose own contract is "advance anyway on a transient miss."
     private func reAsk(
         _ machine: any MissionStepMachine,
         _ directive: Directive,
         _ fresh: WorldSnapshot,
-        thenStall reason: DirectiveAttentionReason?
+        thenStall reason: DirectiveAttentionReason?,
+        orElse fallback: MissionAction = .wait
     ) -> MissionAction {
         let action = machine.nextAction(directive: directive, world: fresh)
         switch action {
-        case .refreshDevices, .refreshDevicesInSystem, .refreshFleet:
+        case .refreshDevices, .refreshDevicesInSystem, .refreshFleet, .refreshFootprint:
             guard let reason else {
-                // The mission asked for a wait fallback: the state it is
-                // watching is expected to still be unresolved, so another
-                // evaluation is the answer, not a human.
-                logger.debug("directive \(directive.id, privacy: .public): fresh reads still unresolved — waiting")
-                return .wait
+                // The mission asked for a fallback rather than an escalation:
+                // either the state it is watching is expected to resolve on
+                // its own (`.wait`), or it has somewhere safe to go anyway
+                // (`.advanceStep`, `.refreshFootprint`'s callers only).
+                logger.debug("directive \(directive.id, privacy: .public): fresh reads still unresolved — \(String(describing: fallback), privacy: .public)")
+                return fallback
             }
             logger.notice("directive \(directive.id, privacy: .public): fresh reads confirm \(reason.rawValue, privacy: .public)")
             return .stall(reason)

@@ -258,8 +258,15 @@ struct RelayRunAcquireTests {
     /// at all, by design, so it does not even ask for a refresh.)
     @Test func missingFootprintTriggersARefreshRatherThanAnImmediateVeto() {
         let snapshot = world(devices: [carrier(), hub()])
+        // thenStall: .printStockShort — this gate MUST escalate rather than
+        // retry forever if the census never resolves (round 3's fix). Proven
+        // end to end (through the real engine resolver, since "the refresh
+        // request itself keeps failing" can only be observed there, not from
+        // this pure function) by
+        // `RefreshFootprintTests.persistentlyFailingFootprintRefreshEscalatesAfterOneRound`
+        // in `DirectiveEngineTests.swift`.
         #expect(RelayRun(reserveFloor: 500).nextAction(directive: running(), world: snapshot)
-                == .refreshFootprint(nextStep: RelayRun.Step.acquire))
+                == .refreshFootprint(nextStep: RelayRun.Step.acquire, thenStall: .printStockShort))
     }
 
     /// A footprint that IS present but older than the shared poll interval is
@@ -275,7 +282,30 @@ struct RelayRunAcquireTests {
             )]
         )
         #expect(RelayRun(reserveFloor: 500).nextAction(directive: running(), world: snapshot)
-                == .refreshFootprint(nextStep: RelayRun.Step.acquire))
+                == .refreshFootprint(nextStep: RelayRun.Step.acquire, thenStall: .printStockShort))
+    }
+
+    /// **The stale-hub-row Minor from review round 3.** A hub whose OWN row
+    /// has gone silent — arbitrarily old — while some OTHER location keeps
+    /// refreshing (so the table-wide gate above sees a recent `fetchedAt`
+    /// and does not retrigger) must NOT have its ancient `resources` reading
+    /// trusted as "abundant." `printStockIsShort`'s separate `hubFreshness`
+    /// bound catches exactly this, failing closed rather than reopening the
+    /// refresh-trigger gate (which would risk the self-loop
+    /// `footprintCensusIsStale`'s doc describes).
+    @Test func staleHubRowIsNotTrustedEvenWhenTheCensusAsAWholeLooksFresh() {
+        let snapshot = world(
+            devices: [carrier(), hub()],
+            footprints: [
+                hubLocation: footprint(
+                    hubLocation, resources: 999_999,
+                    fetchedAt: fixtureNow.addingTimeInterval(-(RelayRun.hubFreshness + 1))
+                ),
+                "SOME-OTHER-BELT-1": footprint("SOME-OTHER-BELT-1", resources: 1),
+            ]
+        )
+        #expect(RelayRun(reserveFloor: 500).nextAction(directive: running(), world: snapshot)
+                == .stall(.printStockShort))
     }
 
     /// `printStockIsShort` fails closed on a missing footprint as ITS OWN
