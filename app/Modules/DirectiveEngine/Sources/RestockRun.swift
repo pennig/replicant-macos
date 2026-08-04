@@ -105,12 +105,40 @@ public struct RestockRun: MissionStepMachine {
         if world.openOperation(for: hub.deviceCode) != nil { return .wait }
 
         // The rail, read through `RelayRun`'s own veto so the two cannot drift.
-        // A stale census is not evidence either way, and unlike `RelayRun.acquire`
-        // there is nothing here worth refreshing FOR: no carrier is waiting on
-        // the answer, and the census refreshes on its own cadence. Waiting is
-        // both cheaper and safer than spending a read to hurry a top-up.
+        //
+        // **A stale census buys a refresh rather than waiting it out.** An
+        // earlier version waited, on the reasoning that no carrier is standing
+        // by for the answer and "the census refreshes on its own cadence".
+        // **There is no such cadence**: `LocationsClient.refreshFootprint()` has
+        // exactly two production callers — a mission's own `.refreshFootprint`
+        // action and the Locations screen when a human opens it. Nothing polls
+        // it. So waiting meant restock could only ever print inside the ≤60s
+        // window after some OTHER mission happened to refresh, which made every
+        // individual decision correct and the whole run inert.
+        //
+        // The read is bought only once every guard above has said this run
+        // genuinely wants to print — unmet demand, a pool below it, no print
+        // already in flight. A fleet with nothing to print for spends nothing,
+        // which is the bound that matters: the cost is proportional to wanting
+        // stock, not to existing.
+        //
+        // Bounded three ways beyond that. (1) `reAsk`'s `paid: Set<RefreshKind>`
+        // allows at most ONE footprint round per evaluation. (2) The gate is
+        // TABLE-WIDE (`footprintCensusIsStale` reads the newest `fetchedAt` of
+        // any row), so one SUCCESSFUL refresh satisfies it for a whole
+        // `pollInterval` — and a refresh that succeeds while still not listing
+        // the hub is positive evidence, falling through to `printStockIsShort`,
+        // which fails closed. That is the per-location self-loop
+        // `brain-relay-reserve-floor` round 2 had to remove, and it stays
+        // removed. (3) `thenStall: nil` because restock must never escalate a
+        // top-up (see this method's doc) — so a persistently FAILING refresh
+        // costs one census read per tick while demand is unmet, the same
+        // documented ceiling `Brain.confirmCarrier` carries and for the same
+        // reason: the alternative is remembering the refusal, which is state.
         let rail = RelayRun(reserveFloor: reserveFloor)
-        if rail.footprintCensusIsStale(world) { return .wait }
+        if rail.footprintCensusIsStale(world) {
+            return .refreshFootprint(nextStep: Step.stocking, thenStall: nil)
+        }
         if rail.printStockIsShort(at: location, world) { return .wait }
 
         logger.info(

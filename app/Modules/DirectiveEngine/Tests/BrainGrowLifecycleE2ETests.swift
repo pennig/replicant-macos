@@ -642,14 +642,23 @@ struct BrainGrowLifecycleE2ETests {
         #expect(commands == [
             SeamCommand(verb: "print", deviceCode: "HUB1", deviceType: SalvageRun.relayDeviceType),
             SeamCommand(verb: "stow", deviceCode: firstClone, target: "V1"),
+            // RESTOCK, printing the NEXT relay the moment the hub's queue frees
+            // up — while the first run is still on the ground loading. This is
+            // the print/deliver decoupling the branch exists for: the printer
+            // is the bottleneck, so it must not sit idle waiting for a carrier
+            // to come back.
+            SeamCommand(verb: "print", deviceCode: "HUB1", deviceType: SalvageRun.relayDeviceType),
             SeamCommand(verb: "travel", deviceCode: "V1", destination: target),
             SeamCommand(verb: "deploy", deviceCode: firstClone),
             SeamCommand(verb: "activate", deviceCode: firstClone),
             // The return leg — the command this whole branch exists to add.
             SeamCommand(verb: "travel", deviceCode: "V1", destination: hubLocation),
-            // …and the next target's print, launched off the carrier that just
-            // came home.
-            SeamCommand(verb: "print", deviceCode: "HUB1", deviceType: SalvageRun.relayDeviceType),
+            // …and the payoff: the next target's run CLAIMS the spare restock
+            // already made rather than issuing a print of its own. There is no
+            // second print in this list, and its absence is the whole point —
+            // before restock, this run would have stood at the hub waiting out
+            // a full print cycle before it could leave.
+            SeamCommand(verb: "stow", deviceCode: cloneCode(forPrint: 2), target: "V1"),
         ], "the run's command sequence, as the governor saw it")
 
         // 1a. THE RETURN LEG'S DESTINATION, called out on its own because it is
@@ -724,6 +733,18 @@ struct BrainGrowLifecycleE2ETests {
         #expect(second.targets == [runnerUp], "the meshed system must not be grown at twice")
         #expect(second.deviceCode == "V1", "the same vessel, home and re-tasked")
         #expect(second.status == .running)
+
+        // 5a. RESTOCK EARNED ITS KEEP. Exactly two prints were issued for two
+        //     relays, and the second was issued by the RESTOCK run long before
+        //     the grow that consumed it existed. So the second grow skipped the
+        //     print wait entirely — the gap between "carrier is free" and
+        //     "carrier is loaded" is one stow rather than a full print cycle.
+        #expect(commands.filter { $0.verb == "print" }.count == 2, "one print per relay, no more")
+        let restock = try await database.read { db in
+            try Directive.where { $0.kind.eq(DirectiveKind.restockRun) }.fetchAll(db)
+        }
+        #expect(restock.count == 1, "one persistent restock row, idempotent across every tick")
+        #expect(restock.first?.deviceCode == "HUB1", "hosted on the printer, never on a carrier")
 
         // 6. THE BRAIN CONVERGED. The last tick ranked ALTAIR and nothing else:
         //    VEGA is meshed, so `ValueCatalog` no longer offers it. This is the
@@ -833,7 +854,10 @@ struct BrainGrowLifecycleE2ETests {
         )
 
         let commands = await server.commands
-        #expect(commands.map(\.verb) == ["print", "stow", "travel", "deploy", "activate"],
+        // The second `print` is restock's, not the run's — it tops the pool up
+        // regardless of what the run is doing, which is exactly what makes it
+        // useful and also what makes it invisible to the failure under test.
+        #expect(commands.map(\.verb) == ["print", "stow", "print", "travel", "deploy", "activate"],
                 "every command still went out — the failure is in the world, not in the run")
 
         let relay = try #require(

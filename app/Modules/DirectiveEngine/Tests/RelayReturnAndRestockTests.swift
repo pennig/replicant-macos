@@ -19,9 +19,14 @@
 //  decisions, including the ones the e2e's happy path never reaches.
 //
 
+import API
+import Dependencies
 import Foundation
+import GameDatabase
 import GameModels
 import GameServices
+import GameSession
+import SQLiteData
 import Testing
 import UniverseModels
 import Utils
@@ -373,16 +378,90 @@ struct RestockRunTests {
         #expect(RestockRun().nextAction(directive: directive, world: snapshot) == .wait)
     }
 
-    /// A census too old to trust is not evidence either way, so it waits. Unlike
-    /// `RelayRun.acquire` there is no carrier standing by for the answer, so
-    /// restock spends no read to hurry a top-up.
-    @Test("a stale census waits rather than spending against an unreadable stockpile")
-    func staleCensusWaits() {
+    /// **A stale census buys its own refresh.** Nothing polls
+    /// `LocationFootprint` — `refreshFootprint()` has two production callers,
+    /// a mission's own action and the Locations screen — so a restock that
+    /// merely waited would print only inside the ≤60s window after some other
+    /// mission happened to refresh, and be inert the rest of the time.
+    @Test("a stale census is refreshed rather than waited out")
+    func staleCensusBuysARefresh() {
         let directive = restockRun(targets: ["VEGA", "ALTAIR"])
         let stale = now.addingTimeInterval(-(RelayRun.pollInterval + 60))
         let snapshot = world(
             devices: [hub(), liveRelay("REL0", at: hubLocation)],
             footprints: healthyCensus(fetchedAt: stale)
+        )
+
+        #expect(RestockRun().nextAction(directive: directive, world: snapshot)
+                == .refreshFootprint(nextStep: RestockRun.Step.stocking, thenStall: nil))
+    }
+
+    /// **`thenStall` is nil, and that is a contract rather than an omission.** A
+    /// top-up nothing is waiting on must never put a human in the loop, so a
+    /// census that stays unreadable degrades to idle-calm. `RelayRun.acquire`
+    /// passes a REAL reason on the same action for the opposite reason — there
+    /// an irreversible resource spend has a carrier standing in front of it.
+    @Test("the refresh restock asks for can never escalate to a human")
+    func theRefreshNeverEscalates() {
+        let directive = restockRun(targets: ["VEGA"])
+        let stale = now.addingTimeInterval(-(RelayRun.pollInterval + 60))
+        let snapshot = world(
+            devices: [hub(), liveRelay("REL0", at: hubLocation)],
+            footprints: healthyCensus(fetchedAt: stale)
+        )
+
+        guard case let .refreshFootprint(_, thenStall) =
+                RestockRun().nextAction(directive: directive, world: snapshot) else {
+            Issue.record("expected a footprint refresh")
+            return
+        }
+        #expect(thenStall == nil)
+    }
+
+    /// **The read is bought only by a run that actually wants to print.** With
+    /// demand met the stale census is never even consulted, so a converged
+    /// fleet spends nothing — the bound that makes this affordable is that cost
+    /// tracks wanting stock, not existing.
+    @Test("a stale census costs nothing when there is nothing to print for", arguments: [
+        ("demand met", [String]()),
+    ])
+    func staleCensusCostsNothingWithoutDemand(_ label: String, targets: [String]) {
+        let directive = restockRun(targets: targets)
+        let stale = now.addingTimeInterval(-(RelayRun.pollInterval + 60))
+        let snapshot = world(
+            devices: [hub(), liveRelay("REL0", at: hubLocation)],
+            footprints: healthyCensus(fetchedAt: stale)
+        )
+
+        #expect(RestockRun().nextAction(directive: directive, world: snapshot) == .wait,
+                "\(label) must not buy a census read")
+    }
+
+    /// …and neither does a run whose print is already in flight.
+    @Test("a stale census costs nothing while a print is already running")
+    func staleCensusCostsNothingWithAPrintInFlight() {
+        let directive = restockRun(targets: ["VEGA", "ALTAIR"])
+        let stale = now.addingTimeInterval(-(RelayRun.pollInterval + 60))
+        let snapshot = world(
+            devices: [hub(), liveRelay("REL0", at: hubLocation)],
+            openOperations: openOp("AF1", kind: .print),
+            footprints: healthyCensus(fetchedAt: stale)
+        )
+
+        #expect(RestockRun().nextAction(directive: directive, world: snapshot) == .wait)
+    }
+
+    /// A refresh that SUCCEEDS but still does not list the hub is positive
+    /// evidence, not another refresh: the table-wide gate is satisfied, so it
+    /// falls through to the reserve veto, which fails closed on a missing row.
+    /// This is what keeps the request from self-looping — the per-location
+    /// version of this gate had to be removed for exactly that reason.
+    @Test("a fresh census that omits the hub falls through to the veto, not to another read")
+    func freshCensusWithoutTheHubVetoes() {
+        let directive = restockRun(targets: ["VEGA", "ALTAIR"])
+        let snapshot = world(
+            devices: [hub(), liveRelay("REL0", at: hubLocation)],
+            footprints: census(BrainCeiling.aggregateSpendFloor * 2, at: "SOMEWHERE-ELSE")
         )
 
         #expect(RestockRun().nextAction(directive: directive, world: snapshot) == .wait)
@@ -464,5 +543,166 @@ struct RestockRunTests {
 
         #expect(RestockRun().nextAction(directive: directive, world: snapshot)
                 == .advanceStep(nextStep: RestockRun.Step.stocking))
+    }
+}
+
+// MARK: - Restock through the real engine
+
+/// **The census refresh, driven through `DirectiveEngineCore` rather than
+/// asserted on the pure mission function.**
+///
+/// `brain-relay-reserve-floor` round 4 records exactly why this suite has to
+/// exist: every `RelayRun` test was a pure-function table, NO test drove the
+/// machine through the real engine, and the bug that shipped was in the
+/// engine's re-ask collapse rather than in the machine. Restock now asks for a
+/// census read on a step that names ITSELF as `nextStep`, which is the shape
+/// that has already caused one unbounded API hammer in this file's history — so
+/// the bound gets proven where it actually lives.
+@Suite("Restock Run — the census refresh at the engine", .serialized)
+struct RestockEngineTests {
+
+    private static let instant = Date(timeIntervalSince1970: 100_000)
+
+    private func seed(
+        _ database: any DatabaseWriter,
+        censusFetchedAt: Date?,
+        targets: [String] = ["VEGA", "ALTAIR"]
+    ) async throws {
+        try await database.write { db in
+            try Directive.insert {
+                Directive(
+                    id: "R1", kind: .restockRun, status: .running, deviceCode: "AF1",
+                    controllerCode: nil, roamCentre: nil, fleetTag: nil, sourceRelayCode: nil,
+                    targets: targets, targetIndex: 0,
+                    step: RestockRun.Step.stocking,
+                    stepStartedAt: Self.instant, returnToOrigin: false,
+                    originDesignation: hubSystem, attentionReason: nil,
+                    createdAt: Self.instant, updatedAt: Self.instant
+                )
+            }.execute(db)
+            try Device.insert { hub() }.execute(db)
+            try Device.insert { liveRelay("REL0", at: hubLocation) }.execute(db)
+            if let censusFetchedAt {
+                try LocationFootprint.insert {
+                    LocationFootprint(
+                        location: hubLocation, devices: 1,
+                        resources: BrainCeiling.aggregateSpendFloor * 2,
+                        resourceSites: 0, locationEvents: 0, replicants: 0,
+                        fetchedAt: censusFetchedAt
+                    )
+                }.execute(db)
+            }
+        }
+    }
+
+    /// **Termination.** The refresh fails outright and keeps failing — an
+    /// offline network, an expired token, sustained 5xx. The evaluation must
+    /// buy at most ONE census round (`reAsk`'s `paid` set) and then stop, and
+    /// the run must be left calm: still running, no attention reason, no
+    /// operator summoned for a top-up nobody is waiting on.
+    @Test func aPersistentlyFailingRefreshCostsOneReadAndNeverEscalates() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await seed(database, censusFetchedAt: Self.instant.addingTimeInterval(-3_600))
+        struct Boom: Error {}
+        let attempts = LockIsolated(0)
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Self.instant)
+            $0.uuid = .incrementing
+            $0.locationsClient.footprint = {
+                attempts.withValue { $0 += 1 }
+                throw Boom()
+            }
+        } operation: {
+            let core = DirectiveEngineCore(machines: [RestockRun()], tick: .seconds(5))
+            await core.evaluateOnce(directiveID: "R1")
+        }
+
+        #expect(attempts.value == 1, "one census round per evaluation, however stale the reading stays")
+        let row = try #require(
+            await database.read { db in try Directive.where { $0.id.eq("R1") }.fetchOne(db) }
+        )
+        #expect(row.status == .running, "a top-up that cannot read the stockpile is not a halt")
+        #expect(row.attentionReason == nil, "…and never asks a human to look at it")
+        #expect(row.step == RestockRun.Step.stocking, "it re-decides next tick rather than parking")
+    }
+
+    /// The point of the whole change: with the read landing, the run gets from
+    /// a stale census to an actual print inside ONE evaluation. Before this it
+    /// waited, and — since nothing polls `LocationFootprint` — waited forever.
+    @Test func aSuccessfulRefreshTurnsAStaleCensusIntoAPrint() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await seed(database, censusFetchedAt: Self.instant.addingTimeInterval(-3_600))
+        let attempts = LockIsolated(0)
+        let printed = LockIsolated<[String]>([])
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Self.instant)
+            $0.uuid = .incrementing
+            $0.commandGovernor = .liveValue
+            $0.gameClient = {
+                var client = GameClient.testValue
+                client.budget = { _ in RateLimitGovernor.Snapshot(limit: 60, remaining: 60, resetAt: nil) }
+                return client
+            }()
+            $0.commandClient = {
+                var client = CommandClient.testValue
+                client.dispatch = { kind, deviceCode, _ in
+                    printed.withValue { $0.append("\(kind.rawValue)→\(deviceCode)") }
+                    return .accepted(operationID: "OP-1")
+                }
+                return client
+            }()
+            // The real `refreshFootprint()` persistence runs on top of this, so
+            // the `fetchedAt` stamp that satisfies the gate is written by
+            // production code rather than by the test.
+            $0.locationsClient.footprint = {
+                attempts.withValue { $0 += 1 }
+                return [hubLocation: LocationCounts(
+                    locationEvents: 0, devices: 1, resourceSites: 0,
+                    resources: BrainCeiling.aggregateSpendFloor * 2, replicants: 0
+                )]
+            }
+        } operation: {
+            let core = DirectiveEngineCore(machines: [RestockRun()], tick: .seconds(5))
+            await core.evaluateOnce(directiveID: "R1")
+        }
+
+        #expect(attempts.value == 1, "one read bought the print")
+        #expect(printed.value == ["print→AF1"], "and the print actually went out in the same evaluation")
+        let row = try #require(
+            await database.read { db in try Directive.where { $0.id.eq("R1") }.fetchOne(db) }
+        )
+        #expect(row.step == RestockRun.Step.printing)
+        #expect(row.attentionReason == nil)
+    }
+
+    /// **A converged fleet spends nothing.** Demand met, so the stale census is
+    /// never consulted and no read is bought — the bound that makes buying the
+    /// read affordable at all is that the cost tracks wanting stock rather than
+    /// existing.
+    @Test func aRunWithNoDemandBuysNoCensusRead() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await seed(
+            database, censusFetchedAt: Self.instant.addingTimeInterval(-3_600), targets: []
+        )
+        let attempts = LockIsolated(0)
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Self.instant)
+            $0.uuid = .incrementing
+            $0.locationsClient.footprint = {
+                attempts.withValue { $0 += 1 }
+                return [:]
+            }
+        } operation: {
+            let core = DirectiveEngineCore(machines: [RestockRun()], tick: .seconds(5))
+            await core.evaluateOnce(directiveID: "R1")
+        }
+
+        #expect(attempts.value == 0, "nothing to print for means nothing to read for")
     }
 }

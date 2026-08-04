@@ -35,32 +35,51 @@ Re-deriving also means the carrier follows the hub if the hub ever moves, and it
 guarantees the place a run flies home to and the place the next run launches from
 cannot drift apart.
 
-## Restock only prints opportunistically, and the reason is NOT in restock
+## Restock buys its own census read, and it HAS to
 
-`RestockRun.stocking` waits when `RelayRun.footprintCensusIsStale` — the
+`RestockRun.stocking` gates on `RelayRun.footprintCensusIsStale` — the
 table-wide `LocationFootprint.fetchedAt` gate, bound at `pollInterval` (60s).
-Its doc says waiting is fine because "the census refreshes on its own cadence".
 
-**There is no such cadence.** `LocationsClient.refreshFootprint()` has exactly
-two production callers: `DirectiveEngine`'s resolver for a mission's
-`.refreshFootprint` action (`RelayRun.acquire`, `HaulRun.survey`), and the
-Locations catalog screen when a human opens it. Nothing polls it. So restock can
-only print inside the ≤60s window following another mission's census refresh —
-it is opportunistic, not continuous, which is weaker than the spec's stated goal
-("the printer should run continuously while there is unmet demand").
+The first cut WAITED there, reasoning that no carrier is standing by for the
+answer and "the census refreshes on its own cadence". **There is no such
+cadence.** `LocationsClient.refreshFootprint()` has exactly two production
+callers: `DirectiveEngine`'s resolver for a mission's `.refreshFootprint` action
+(`RelayRun.acquire`, `HaulRun.survey`), and the Locations catalog screen when a
+human opens it. Nothing polls it. So restock could only print inside the ≤60s
+window following some other mission's refresh — every individual decision
+correct, the whole run inert. Caught by the e2e once its driver started
+evaluating non-`relayRun` rows: restock was created on tick 1 with real demand,
+correctly waited on an open print op, then the census went stale at t=65s and it
+never printed across 90 ticks.
 
-Demonstrated in `BrainGrowLifecycleE2ETests`' world: restock is created on tick
-1 with real demand and correctly waits on an open print op, then the census goes
-stale at t=65s and it never prints across 90 ticks. Every individual decision is
-correct; the composite is inert.
+**Fixed by having it buy the read** — `.refreshFootprint(nextStep: .stocking,
+thenStall: nil)`. Four things make that safe, and all four are load-bearing:
 
-Not fixed here — it is an implementation change beyond the e2e, and the options
-have a real trade. Either restock buys its own refresh (`.refreshFootprint`,
-bounded one-per-kind by `reAsk`'s `paid` set, mirroring `acquire`) at the cost of
-API reads for a top-up nothing is waiting on, or something polls the footprint
-table on a cadence. **Do not "fix" it by widening restock's own freshness bound**
-— with no refresher the census goes stale forever regardless, so that only moves
-the dead line from 60s to 300s.
+1. **Placement.** The read is bought only AFTER unmet demand, a pool below it,
+   and no-print-in-flight have all said this run wants to print. Cost tracks
+   wanting stock, not existing, so a converged fleet spends nothing.
+2. **`reAsk`'s `paid: Set<RefreshKind>`** allows at most one footprint round per
+   evaluation.
+3. **The gate is TABLE-WIDE.** One successful refresh satisfies it for a whole
+   `pollInterval`, and a refresh that succeeds while still not listing the hub is
+   POSITIVE EVIDENCE — it falls through to `printStockIsShort`, which fails
+   closed. This is why the step may name itself as `nextStep` without the
+   unbounded self-loop that `brain-relay-reserve-floor` round 2 had to remove;
+   that loop existed because the gate was then PER-LOCATION.
+4. **`thenStall: nil`**, because restock must never escalate a top-up nobody is
+   waiting on. The cost of that choice, stated plainly: a persistently FAILING
+   refresh spends one census read per tick while demand is unmet — the same
+   documented ceiling `Brain.confirmCarrier` carries, for the same reason (the
+   alternative is remembering the refusal, which is state between ticks).
+
+**Do not "fix" a future staleness complaint by widening restock's freshness
+bound** — with nothing polling the table the census goes stale forever
+regardless, so that only moves the dead line from 60s to 300s.
+
+Proven at the engine, not just on the pure function (`RestockEngineTests`), for
+the reason round 4 records: the last bug of this shape was in the engine's
+re-ask collapse rather than in any machine, and every `RelayRun` test at the time
+was a pure-function table.
 
 ## Testing
 
@@ -71,8 +90,13 @@ the dead line from 60s to 300s.
   absence of the hand-fly is the point of that test now. `seedGrowWorld` seeds an
   entry point for the runner-up too, or the second run parks in `emplacing`
   re-asking for a system nothing answers for.
-- `RelayReturnAndRestockTests` — 19 unit cases over the return leg, restock's
-  seven declining branches (every one `.wait`, never `.stall`), and the hub seam.
+- `RelayReturnAndRestockTests` — 26 cases over the return leg, restock's
+  declining branches (every one `.wait`, never `.stall`), the hub seam, and
+  `RestockEngineTests` driving the census refresh through the real
+  `DirectiveEngineCore`.
+- In the e2e the payoff is visible as an ABSENCE: the second grow's command
+  sequence contains a `stow` and no `print`, because restock made that spare
+  while the first run was still in flight. Two prints total for two relays.
 - The driver in the e2e evaluates EVERY running directive, not just relay runs —
   restock is a running directive the brain writes, and a driver filtering on
   `.relayRun` leaves the printer inert in the test and nowhere else.
