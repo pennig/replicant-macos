@@ -24,10 +24,13 @@ struct TagsEditor: View {
     @State private var newTag: String = ""
     @FocusState private var focused: Bool
 
-    private var trimmedTag: String { newTag.trimmingCharacters(in: .whitespacesAndNewlines) }
+    /// Normalised the way the server will store it, so what the operator sees
+    /// after the next sync is what this editor already showed them — and so
+    /// "AUTO:Haul" cannot be added alongside an existing "auto:haul".
+    private var trimmedTag: String { Device.normalizedTag(newTag) }
 
     /// Enabled once the field holds a non-empty tag the device doesn't already carry.
-    private var canAdd: Bool { !trimmedTag.isEmpty && !device.tags.contains(trimmedTag) }
+    private var canAdd: Bool { !trimmedTag.isEmpty && !device.hasTag(trimmedTag) }
 
     var body: some View {
         HStack(alignment: .top, spacing: Space.m) {
@@ -110,7 +113,7 @@ struct TagsEditor: View {
     private func commit() {
         let tag = trimmedTag
         newTag = ""
-        guard !tag.isEmpty, !device.tags.contains(tag) else { return }
+        guard !tag.isEmpty, !device.hasTag(tag) else { return }
         store.send(.tagsEdited(deviceCode: device.deviceCode, tags: device.tags + [tag]))
     }
 

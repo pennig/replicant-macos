@@ -52,7 +52,7 @@ The evidence, in case a similar shape shows up again:
   to prove a relay is its own clone — only that nobody else has taken it. That is
   what makes a superseded print survivable, and it is checked in both `acquire`
   and `printing`.
-- **`Brain.carrierTag = "auto:tendMesh"`**, in `isFreeCarrier`. Untagged means the
+- **`Brain.carrierTag = "auto:tendmesh"`**, in `isFreeCarrier`. Untagged means the
   brain launches NOTHING; `carrierBlocker` says so by name rather than reporting
   it as busyness (which would send an operator hunting a problem that isn't there).
 - **FIFO via `queuePosition` + `claimableRelay`.** `WorldSnapshot` gained `peers`
@@ -74,6 +74,25 @@ first to finish stowing before it can see its own relay.
 choice, possibly indefinitely; counting it would starve every other run at that
 hub. `.needsAttention` IS counted — halted but one `retry` from moving, which is
 exactly the state the two rescued runs were in.
+
+## The server LOWERCASES every tag
+
+Tagging the vessel is what exposed this: `auto:tendMesh` typed in the device
+inspector came back from the fleet as **`auto:tendmesh`**, and the brand-new
+exact-match carrier gate then refused the very vessel that had just been opted
+in. `auto:haul` and `auto:salvage` had only ever been safe because they happen to
+be spelled in lowercase already — nothing was enforcing it.
+
+So a tag is now compared in exactly one place: **`Device.hasTag(_:)`**, which
+normalises BOTH sides (`Device.normalizedTag` = trim + lowercase). Every call
+site went through it — `Brain.isFreeCarrier`/`carrierBlocker`/`reservedDevices`,
+`HaulRun` (×2), `SalvageRun`, `NewHaulRunFeature`, `NewSalvageRunFeature` — and
+`TagsEditor` normalises before SENDING, so what the operator sees after the next
+sync is what they typed, and "AUTO:Haul" can no longer be added beside an
+existing "auto:haul". Constants are spelled in the normalised form, because they
+are quoted back at the operator and should match the inspector.
+
+**Never compare `device.tags.contains(...)` directly.**
 
 ## Things to know before touching this again
 

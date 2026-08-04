@@ -197,6 +197,34 @@ public extension Device {
     var isActiveRelay: Bool { features.contains("relay") && statusBase == "relaying" }
 }
 
+// MARK: - Tags
+
+extension Device {
+    /// **The server normalises every tag to lowercase.** Send `auto:tendMesh`
+    /// and the fleet reads back `auto:tendmesh` — confirmed live on 2026-08-04,
+    /// where a vessel tagged from the device inspector came back lowercased and
+    /// an exact-match gate refused the very vessel the operator had just opted
+    /// in.
+    ///
+    /// So a tag is only ever compared through here. `auto:haul` and
+    /// `auto:salvage` happened to be spelled in lowercase already and worked by
+    /// luck; that is not a property worth relying on for the next tag somebody
+    /// adds.
+    public static func normalizedTag(_ raw: String) -> String {
+        raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    /// Whether this device carries `tag`, compared the way the server stores it.
+    ///
+    /// Both sides are normalised rather than just the constant: a row written
+    /// before a sync — or by an optimistic local edit — can still hold whatever
+    /// the operator typed.
+    public func hasTag(_ tag: String) -> Bool {
+        let wanted = Self.normalizedTag(tag)
+        return tags.contains { Self.normalizedTag($0) == wanted }
+    }
+}
+
 // MARK: - Replication source capability
 
 extension Device {

@@ -57,6 +57,31 @@ struct BrainCarrierTagTests {
         #expect(Brain.freeCarrier(at: hubLocation, devices: devices, reserved: [])?.deviceCode == "V1")
     }
 
+    /// **The live regression.** The server normalises tags to lowercase, so a
+    /// vessel the operator tagged `auto:tendMesh` from the device inspector
+    /// comes back wearing `auto:tendmesh`. An exact-match gate refused exactly
+    /// the vessel that had just been opted in — the one failure mode this whole
+    /// gate must not have. Both spellings resolve, in both directions.
+    @Test("the tag resolves whatever case the fleet reports it in", arguments: [
+        "auto:tendmesh", "auto:tendMesh", "AUTO:TENDMESH",
+    ])
+    func theTagResolvesInAnyCase(_ stored: String) {
+        let devices = fleet([vessel("965AC2C3", tags: [stored])])
+
+        #expect(
+            Brain.freeCarrier(at: hubLocation, devices: devices, reserved: [])?.deviceCode == "965AC2C3",
+            "a vessel tagged \(stored) must be flyable"
+        )
+    }
+
+    /// The constant is spelled the way the fleet actually stores it, so the
+    /// string quoted back at the operator in `carrierBlocker` matches what they
+    /// will see in the device inspector.
+    @Test("the carrier tag is spelled in its normalised form")
+    func carrierTagIsNormalised() {
+        #expect(Brain.carrierTag == Device.normalizedTag(Brain.carrierTag))
+    }
+
     /// The live fleet's exact shape: three idle vessels, none tagged. Before the
     /// gate this launched three runs.
     @Test("a hub full of untagged vessels yields no carrier at all")
