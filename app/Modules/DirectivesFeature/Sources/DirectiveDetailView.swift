@@ -239,9 +239,13 @@ public struct DirectiveDetailView: View {
                     // appear twice, which would collide as a SwiftUI id.
                     ForEach(Array(directive.targets.enumerated()), id: \.offset) { index, target in
                         HStack(spacing: Space.s) {
-                            Image(systemName: index < directive.targetIndex
-                                  ? "checkmark.circle.fill" : "circle")
-                                .foregroundStyle(index < directive.targetIndex ? .rcAccent : .rcTextTertiary)
+                            // `hasDelivered(targetAt:)`, never a bare
+                            // `targetIndex` comparison: the cursor is not a
+                            // completion count, and a Relay Run finishes
+                            // without ever moving it.
+                            let delivered = directive.hasDelivered(targetAt: index)
+                            Image(systemName: delivered ? "checkmark.circle.fill" : "circle")
+                                .foregroundStyle(delivered ? .rcAccent : .rcTextTertiary)
                             Text(target)
                                 .font(.rcMonoSmall)
                                 .foregroundStyle(.rcTextPrimary)

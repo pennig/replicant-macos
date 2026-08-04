@@ -346,6 +346,29 @@ public struct Directive: Identifiable, Equatable, Sendable {
     public var currentTarget: String? {
         targets.indices.contains(targetIndex) ? targets[targetIndex] : nil
     }
+
+    /// Whether the target at `index` has been delivered.
+    ///
+    /// **`targetIndex` alone is not the answer, and reading it as though it
+    /// were shows a finished run as unfinished.** It is a CURSOR — the target
+    /// being worked on now — which is exactly how `currentTarget` resolves it.
+    /// A machine only advances that cursor when it moves ON to another target,
+    /// so a single-target run has no reason to ever touch it, and `RelayRun`
+    /// never does. Such a run completes with `targetIndex == 0`, and `0 < 0` is
+    /// false, so a plain cursor comparison draws an empty circle beside a
+    /// system that really was meshed.
+    ///
+    /// Advancing the cursor at the end instead is NOT the fix and would be a
+    /// real bug: `RelayRun.settle` and `returnHome` both read `currentTarget`,
+    /// which goes nil the moment the cursor passes the end of `targets`.
+    ///
+    /// So delivery is read off the run's own STATUS, which is what actually
+    /// carries "this work is finished". Only `.completed` counts — a cancelled
+    /// or failed run stopped wherever its cursor stood and must keep showing
+    /// exactly the targets it genuinely reached.
+    public func hasDelivered(targetAt index: Int) -> Bool {
+        status == .completed || index < targetIndex
+    }
 }
 
 /// What a log entry records.
