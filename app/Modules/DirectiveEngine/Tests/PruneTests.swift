@@ -59,6 +59,9 @@ struct PruneTests {
         let analysis = PrunePredicate.analyse(view: world, graph: MeshGraph(positions: positions))
         #expect(analysis.pinned == ["REL_SOL", "REL_W", "REL_T"])
         #expect(analysis.reclaimable.isEmpty)
+        // Pinned-by-judgement, and this is the ONLY thing that says so: the
+        // partition itself is byte-identical to what a decline returns.
+        #expect(analysis.declined == nil)
     }
 
     /// The thrash guard. W was planted this tick as the first hop toward V,
@@ -241,6 +244,9 @@ struct PruneTests {
         let world = prunableWorld(positions: [:], relays: [:], hub: nil)
         let analysis = PrunePredicate.analyse(view: world, graph: MeshGraph(positions: [:]))
         #expect(analysis == PruneAnalysis(pinned: [], reclaimable: []))
+        // Not `.noAnchor`, though there is no hub: with nothing deployed
+        // there is nothing to judge, which is a real (empty) answer.
+        #expect(analysis.declined == nil)
     }
 
     /// No anchor, no judgement. Without a hub the brain has nothing to root
@@ -264,6 +270,7 @@ struct PruneTests {
         let analysis = PrunePredicate.analyse(view: world, graph: MeshGraph(positions: positions))
         #expect(analysis.pinned == ["REL_SOL", "REL_W"])
         #expect(analysis.reclaimable.isEmpty)
+        #expect(analysis.declined == .noAnchor)
     }
 
     /// An anchor the census cannot place is the same "cannot judge" as no
@@ -283,6 +290,7 @@ struct PruneTests {
         let analysis = PrunePredicate.analyse(view: world, graph: MeshGraph(positions: positions))
         #expect(analysis.pinned == ["REL_SOL", "REL_W", "REL_T"])
         #expect(analysis.reclaimable.isEmpty)
+        #expect(analysis.declined == .censusIncomplete(systems: ["SOL"]))
     }
 
     /// A census hole ANYWHERE in the mesh stops the whole judgement, not just
@@ -316,6 +324,40 @@ struct PruneTests {
         let analysis = PrunePredicate.analyse(view: world, graph: MeshGraph(positions: positions))
         #expect(analysis.pinned == ["REL_SOL", "REL_MINE", "REL_DEAD"])
         #expect(analysis.reclaimable.isEmpty)
+        #expect(analysis.declined == .censusIncomplete(systems: ["MINE"]))
+    }
+
+    /// An in-progress chain toward value the census has not paged in yet must
+    /// not be offered up — the thrash guard failing under exactly the lag the
+    /// coverage precondition exists for.
+    ///
+    /// The target sources are all independent of the `stars` table (salvage
+    /// from `SiteAssay`, belts from `SystemDetail`, events from
+    /// `LocationEvent`), so "we know V holds salvage but have no census row
+    /// for it" is a reachable state. An unplaceable target drops silently out
+    /// of `pathUnion`, taking with it the only pin W had — and W is a relay
+    /// the brain planted THIS tick, so it would be planted and reclaimed in
+    /// consecutive ticks.
+    ///
+    /// Isolated against `brandNewHopTowardUnreachedValueIsPinnedByConstruction`
+    /// — the identical world WITH V's census row, where REL_W is pinned by
+    /// judgement (`declined == nil`). Same verdict on REL_W here, reached the
+    /// other way, and `declined` is what tells the two apart.
+    @Test func inProgressChainTowardUnplaceableValueIsNotOfferedUp() {
+        let positions: [String: Position] = [
+            "SOL": .init(x: 0, y: 0, z: 0),
+            "W": .init(x: 0, y: 7, z: 0),
+            // V holds a live assay, but its census row has not arrived.
+        ]
+        let world = prunableWorld(
+            positions: positions,
+            relays: ["REL_SOL": "SOL", "REL_W": "W"],
+            salvage: ["V": 500]
+        )
+        let analysis = PrunePredicate.analyse(view: world, graph: MeshGraph(positions: positions))
+        #expect(analysis.pinned == ["REL_SOL", "REL_W"])
+        #expect(analysis.reclaimable.isEmpty)
+        #expect(analysis.declined == .censusIncomplete(systems: ["V"]))
     }
 
     /// A system holding our own deployed hardware is pinned even when its

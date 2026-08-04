@@ -79,6 +79,24 @@ public struct ReclaimableRelay: Equatable, Sendable {
     }
 }
 
+/// Why prune refused to judge this tick.
+///
+/// A refusal pins every relay, which is byte-identical to the answer a
+/// healthy, fully load-bearing mesh gives — so without this the why-view
+/// could not tell "declined" from "nothing to reclaim" without recomputing
+/// the preconditions itself, and a chronically incomplete census would read
+/// as a permanently tidy mesh. Both cases carry the FACT that caused them
+/// (never a scalar or a bare flag), because every prune statement the
+/// operator sees is meant to be checkable against the map.
+public enum PruneDeclineReason: Equatable, Sendable {
+    /// No print hub, or its system is off-mesh — nothing to root the
+    /// anchor→target paths at.
+    case noAnchor
+    /// The census cannot place one or more systems the judgement depends on,
+    /// named here (sorted). See the precondition in `analyse`.
+    case censusIncomplete(systems: [String])
+}
+
 /// The partition of every deployed, actively-relaying device into the ones
 /// the mesh needs and the ones it does not. Total by construction: each
 /// active relay lands in exactly one side.
@@ -90,10 +108,20 @@ public struct PruneAnalysis: Equatable, Sendable {
     /// sources a reclaim from this list — an order that varied with hash
     /// seeding would make the brain's choice irreproducible tick to tick.
     public let reclaimable: [ReclaimableRelay]
+    /// `nil` when the predicate actually judged — which is the only state in
+    /// which an empty `reclaimable` really means "nothing is useless".
+    /// Non-nil means every relay is pinned because prune declined, not
+    /// because the mesh earned it.
+    public let declined: PruneDeclineReason?
 
-    public init(pinned: Set<String>, reclaimable: [ReclaimableRelay]) {
+    public init(
+        pinned: Set<String>,
+        reclaimable: [ReclaimableRelay],
+        declined: PruneDeclineReason? = nil
+    ) {
         self.pinned = pinned
         self.reclaimable = reclaimable
+        self.declined = declined
     }
 }
 
@@ -106,14 +134,24 @@ public enum PrunePredicate {
         let relays = view.devices.values
             .filter(\.isActiveRelay)
             .sorted { $0.deviceCode < $1.deviceCode }
-        let pinEverything = PruneAnalysis(pinned: Set(relays.map(\.deviceCode)), reclaimable: [])
+
+        // Nothing deployed is not a refusal to judge — there is simply
+        // nothing to judge — so this returns a real (empty) partition with
+        // no decline reason, rather than reporting a hubless world as one.
+        guard !relays.isEmpty else { return PruneAnalysis(pinned: [], reclaimable: []) }
+
+        func decline(_ reason: PruneDeclineReason) -> PruneAnalysis {
+            PruneAnalysis(
+                pinned: Set(relays.map(\.deviceCode)), reclaimable: [], declined: reason
+            )
+        }
 
         // No anchor to root the union at: nothing can be judged useless, so
         // nothing is. An unrooted search returns an empty union, which reads
         // as "reclaim the entire mesh" — the exact failure this capability
         // must not have.
         guard let anchor = view.hubLocation.map({ SiteAssay.system(of: $0) }) else {
-            return pinEverything
+            return decline(.noAnchor)
         }
 
         // CENSUS-COVERAGE PRECONDITION. The union can only ever contain
@@ -132,16 +170,25 @@ public enum PrunePredicate {
         // says staleness may degrade efficiency but never safety: an
         // incompletely-placed mesh means prune declines to judge this tick and
         // tries again on the next. Nothing is lost but a reclaim's latency.
+        //
+        // The TARGETS are covered too, not just the mesh. Every target source
+        // is independent of the `stars` table (`salvageUnits` from
+        // `SiteAssay`, `beltsBySystem` from `SystemDetail`, `eventSystems`
+        // from `LocationEvent`), so an unplaceable target is reachable — and
+        // it drops silently out of `pathUnion`, taking with it the pin it
+        // was the sole source of. That is the thrash guard failing under
+        // exactly the lag this precondition exists for: an in-progress chain
+        // toward value the census has not paged in yet would read as
+        // reclaimable, and the brain would plant and un-plant it.
+        let targets = servedSystems(in: view)
         let mustBePlaceable = view.meshSystems
             .union(relays.compactMap { $0.location.map { SiteAssay.system(of: $0) } })
             .union([anchor])
-        guard mustBePlaceable.allSatisfy({ view.starPositions[$0] != nil }) else {
-            return pinEverything
-        }
+            .union(targets)
+        let unplaceable = mustBePlaceable.filter { view.starPositions[$0] == nil }.sorted()
+        guard unplaceable.isEmpty else { return decline(.censusIncomplete(systems: unplaceable)) }
 
-        var union = graph.pathUnion(
-            to: servedSystems(in: view), from: [anchor], free: view.meshSystems
-        )
+        var union = graph.pathUnion(to: targets, from: [anchor], free: view.meshSystems)
         // The anchor is on every anchor→target path by definition, so it is
         // already in the union whenever any target is reachable. Inserting it
         // unconditionally covers the one case that isn't — no live value
