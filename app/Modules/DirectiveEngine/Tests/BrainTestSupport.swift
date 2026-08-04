@@ -13,8 +13,10 @@
 //  Task 3 — see `DevicePredicatesTests.swift`'s private `Device.fixture`).
 //
 
+import Dependencies
 import Foundation
 import GameModels
+import GameServices
 import SQLiteData
 import UniverseModels
 @testable import DirectiveEngine
@@ -193,6 +195,58 @@ func seedLogEntry(
             summary: summary, step: step, operationID: nil, eventID: nil, occurredAt: at
         )
     }.execute(db)
+}
+
+// MARK: - Confirm-read seeds
+
+/// One confirm-read the brain asked for.
+///
+/// The priority is recorded as a FLAG rather than the enum itself:
+/// `RefreshPriority` declares no `Equatable` conformance, and a recording that
+/// could not tell `.low` from `.high` would leave the gate's whole point — a
+/// just-in-time authoritative read, not a TTL-suppressible hint — unprovable.
+struct ConfirmRead: Equatable, Sendable {
+    let deviceCode: String
+    let isHigh: Bool
+}
+
+/// A `deviceRefresher` stand-in that answers from the LOCAL fleet table — the
+/// "nothing moved between ranking and the commit" world, which is what every
+/// launch test means when it says the carrier was free.
+///
+/// `answering` receives the row the database holds and returns what the SERVER
+/// says about it: the row unchanged (nothing moved), a mutated row (something
+/// did), or nil (the read failed / was deferred). It is `async` so a test can
+/// also mutate the world *inside* the confirm window — which is how the
+/// operator-launches-in-the-race-window test is written.
+///
+/// Every call lands in `reads`, so a test can prove WHEN the brain confirms
+/// rather than only what it concluded: a gate that fired on every tick would
+/// spend a `.high` read against the live API every five seconds.
+///
+/// **Deliberately does not write the answer back.** The live client reconciles
+/// (that is `PollCoordinator`'s job, not the brain's); a stand-in that stamped
+/// `devices.updatedAt` would break the row-for-row "a launching brain writes
+/// the directive and nothing else" assertions over a write the brain does not
+/// make.
+func confirmingRefresher(
+    _ database: any DatabaseWriter,
+    reads: LockIsolated<[ConfirmRead]> = LockIsolated([]),
+    answering: @escaping @Sendable (Device) async -> Device? = { $0 }
+) -> DeviceRefreshClient {
+    DeviceRefreshClient { code, priority in
+        let isHigh: Bool
+        switch priority {
+        case .high: isHigh = true
+        case .low: isHigh = false
+        }
+        reads.withValue { $0.append(ConfirmRead(deviceCode: code, isHigh: isHigh)) }
+        let row = try? await database.read { db in
+            try Device.where { $0.deviceCode.eq(code) }.fetchOne(db)
+        }
+        guard let row = row.flatMap({ $0 }) else { return nil }
+        return await answering(row)
+    }
 }
 
 // MARK: - Star seeds

@@ -55,11 +55,20 @@ private let tickTime = Date(timeIntervalSince1970: 1_000)
 /// file would then be incapable of failing no matter which guard was removed
 /// (review found exactly that). One generator per TEST, shared across its
 /// ticks, is what makes a second launch produce a second row.
+///
+/// **On `deviceRefresher`.** Every launch here has to clear Task 18's confirm
+/// -fresh gate, which spends a `.high` confirm-read on the carrier immediately
+/// before committing. `confirmingRefresher` answers from the local fleet table
+/// — the "nothing moved between ranking and the commit" world, which is what
+/// every test in this file already means when it says the carrier was free.
+/// What happens when that answer comes back different (or not at all) is
+/// `BrainConfirmFreshTests`' subject, not this file's.
 private func tick(_ database: any DatabaseWriter, core: DirectiveEngineCore, uuid: UUIDGenerator) async {
     await withDependencies {
         $0.defaultDatabase = database
         $0.date = .constant(tickTime)
         $0.uuid = uuid
+        $0.deviceRefresher = confirmingRefresher(database)
     } operation: {
         await core.tickBrain()
     }
@@ -73,6 +82,7 @@ private func decide(_ database: any DatabaseWriter, uuid: UUIDGenerator) async -
         $0.defaultDatabase = database
         $0.date = .constant(tickTime)
         $0.uuid = uuid
+        $0.deviceRefresher = confirmingRefresher(database)
     } operation: {
         await Brain(now: tickTime).evaluateOnce()
     }

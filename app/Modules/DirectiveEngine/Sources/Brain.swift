@@ -25,6 +25,13 @@
 //  `unimplemented(...)` so that rule is enforced by the test suite rather than
 //  merely written down here.
 //
+//  Task 18 is the rule that makes the whole thing safe to rank on stale data:
+//  ranking runs on a best-effort `WorldView`, but every irreversible
+//  commitment is gated on a just-in-time `.high` confirm-read (clause 4c).
+//  Staleness may cost a tick of efficiency; it may never cost safety. The
+//  confirm can only PROCEED or DEFER — it never re-ranks — and a confirm that
+//  fails defers exactly like one that comes back negative.
+//
 //  STATELESS between ticks (clause 2). A tick is a pure function of
 //  `(WorldView, directive rows)`: no lease table, no cache, no memory. The
 //  ranking, the path-union behind it, and the reservation set are all
@@ -164,10 +171,21 @@ struct Brain: Sendable {
             logger.debug("idle — \(reason, privacy: .public)")
             return .idle(reason: reason)
 
-        case let .grow(goal, ranked, carrier, origin):
-            return await launch(
-                goal: goal, ranked: ranked, carrier: carrier, origin: origin, database: database
-            )
+        case let .grow(goal, ranked, carrier, hub, origin):
+            // The confirm-fresh gate (clause 4c). Everything above this line
+            // ran on a best-effort snapshot; everything below it commits.
+            switch await confirmFresh(carrier: carrier, at: hub, database: database) {
+            case let .deferred(reason):
+                // Same precedence as the idle arm above: a deferred tick did
+                // nothing, so a run already waiting on a human still outranks
+                // it as the thing worth reporting.
+                if let escalated { return .stall(escalated) }
+                return .idle(reason: reason)
+            case .proceed:
+                return await launch(
+                    goal: goal, ranked: ranked, carrier: carrier, origin: origin, database: database
+                )
+            }
         }
     }
 
@@ -198,10 +216,18 @@ struct Brain: Sendable {
     /// snapshot — no clock, no database, no dependencies.
     enum Plan {
         case idle(reason: String)
-        /// Launch a Relay Run for `goal` on `carrier`, which sets off from
-        /// `origin` (the hub's system). `ranked` is the whole field the choice
-        /// was made against, carried through for the why-view.
-        case grow(goal: Goal, ranked: [GrowCandidate], carrier: String, origin: String)
+        /// Launch a Relay Run for `goal` on `carrier`, which stands at `hub`
+        /// and so sets off from `origin` (the hub's system). `ranked` is the
+        /// whole field the choice was made against, carried through for the
+        /// why-view.
+        ///
+        /// `hub` rides along beside `origin` rather than being re-derived from
+        /// it: `origin` is `SiteAssay.system(of: hub)`, a lossy projection
+        /// ("SOL-3" → "SOL"), and the confirm-fresh gate has to re-test
+        /// co-location against the LOCATION the carrier was chosen at. Passing
+        /// the system and re-widening the test to it would let a vessel that
+        /// had crossed to another location in the same system confirm as free.
+        case grow(goal: Goal, ranked: [GrowCandidate], carrier: String, hub: String, origin: String)
     }
 
     /// The greedy pass, grow-only.
@@ -260,6 +286,7 @@ struct Brain: Sendable {
             goal: Goal(kind: .tendMesh, target: candidate.firstHop, rationale: rationale(for: candidate)),
             ranked: ranked,
             carrier: carrier.deviceCode,
+            hub: hub,
             origin: SiteAssay.system(of: hub)
         )
     }
@@ -714,13 +741,23 @@ struct Brain: Sendable {
         at hub: String, devices: [String: Device], reserved: Set<String>
     ) -> Device? {
         devices.values
-            .filter {
-                $0.deviceType == carrierDeviceType
-                    && $0.location == hub
-                    && !$0.isBusy
-                    && !reserved.contains($0.deviceCode)
-            }
+            .filter { isFreeCarrier($0, at: hub, reserved: reserved) }
             .min { $0.deviceCode < $1.deviceCode }
+    }
+
+    /// The freedom test itself, over ONE device — extracted so the confirm
+    /// -fresh gate applies exactly the predicate the ranking applied.
+    ///
+    /// That identity is the point: a gate that re-tested "free" more loosely
+    /// than the selection did would wave through the very carrier the
+    /// selection would now reject, and one that tested it more strictly would
+    /// defer ticks that had nothing wrong with them. Two copies of a
+    /// four-clause predicate is exactly how that drift starts, so there is one.
+    static func isFreeCarrier(_ device: Device, at hub: String, reserved: Set<String>) -> Bool {
+        device.deviceType == carrierDeviceType
+            && device.location == hub
+            && !device.isBusy
+            && !reserved.contains(device.deviceCode)
     }
 
     // MARK: - The rationale
@@ -779,6 +816,129 @@ struct Brain: Sendable {
     private static func list(_ names: [String]) -> String {
         guard names.count > 2 else { return names.joined(separator: ", ") }
         return "\(names[0]), \(names[1]) +\(names.count - 2) more"
+    }
+
+    // MARK: - The confirm-fresh gate
+
+    /// The gate's two — and only two — answers.
+    ///
+    /// There is deliberately no third case for "confirm again", "try the next
+    /// candidate", or "take a different carrier". The confirm is not a second
+    /// selection pass: re-ranking on it would make WHICH system the brain
+    /// meshes depend on the timing of a network read, which is precisely the
+    /// dependence the gate exists to remove. It either lets the tick's already
+    /// -made decision through, or it stops the tick.
+    enum Confirmation: Equatable, Sendable {
+        case proceed
+        /// Write nothing; report this. The string is the why-view's line, so
+        /// it names the carrier and reads as a sentence.
+        case deferred(reason: String)
+    }
+
+    /// Re-confirm, against authoritative state, that the carrier this tick
+    /// chose is still free — immediately before committing to it.
+    ///
+    /// **Why this exists.** `plan` ranks over a `WorldView` that may be seconds
+    /// old, and between that read and the `Directive.insert` below there is a
+    /// real window: the brain loop is serial so it cannot race itself, but the
+    /// UI launchers can (`NewDirectiveFeature` writes a directive on a vessel
+    /// the operator picked, with no knowledge of what the brain is mid-way
+    /// through deciding). Losing that race means two directives owning one
+    /// carrier — the executor would then fly the same vessel for two missions.
+    ///
+    /// **Why it re-reads BOTH ends.** The device row and the directive ledger
+    /// answer different halves of "free", and only both together are the
+    /// predicate `freeCarrier` applied:
+    ///
+    ///   - The `.high` `deviceRefresher` read is the authoritative half — has
+    ///     the vessel left the hub, is it mid-errand — and it is the one the
+    ///     local database genuinely cannot answer, since nothing refreshes an
+    ///     idle vessel's row by itself.
+    ///   - The ledger read is the OPERATOR half, and it is the one that closes
+    ///     the race above: a UI launch writes a `directives` row and touches no
+    ///     device, so a gate that re-read only the vessel would see an idle
+    ///     heaven vessel standing at the hub and commit straight into the
+    ///     collision. It is a local SQLite read of a tens-of-rows ledger — no
+    ///     API, no budget — and it is taken in one transaction with the fleet
+    ///     so the reservation closure sees a single consistent moment.
+    ///
+    /// The fresh row is overlaid onto that fleet rather than trusted to have
+    /// landed in it: `deviceRefresher` reconciles what it reads, but the
+    /// reconciler applies event-time guards we do not control here, and the
+    /// answer the gate acts on must be the one the server just gave.
+    ///
+    /// **A failed confirm defers too** — fail-closed, the same reasoning the
+    /// reserve rail uses. A `.high` refresh is suppressed by neither the TTL
+    /// nor the read-budget floor (`PollCoordinator.refresh` applies both to
+    /// `.low` only), so nil here means the authoritative read genuinely did not
+    /// land, and "we could not confirm" is not "it is fine". It reports its own
+    /// distinct reason, because an operator has to be able to tell an API
+    /// problem from a carrier that was taken.
+    ///
+    /// **When it fires, and how often.** Only from the `.grow` arm of
+    /// `evaluateOnce` — i.e. only on a tick that has already decided to commit,
+    /// which is what keeps a 5-second loop from becoming a `.high` read every
+    /// 5 seconds. The ceiling is therefore one `.high` read per tick (12/min,
+    /// for ONE device), reached only while there is a launchable candidate AND
+    /// the confirm keeps refusing. A NEGATIVE confirm cannot sustain that: it
+    /// reconciles the fresh row, so the next tick's snapshot already knows the
+    /// carrier is gone and either picks another or idles without confirming. A
+    /// FAILING confirm can, for as long as that device's read keeps failing —
+    /// deliberately, since the alternative (remembering the failure) is state
+    /// between ticks, which clause 2 forbids, and the same window would leave
+    /// the brain committing blind.
+    private func confirmFresh(
+        carrier: String, at hub: String, database: any DatabaseWriter
+    ) async -> Confirmation {
+        @Dependency(\.deviceRefresher) var deviceRefresher
+
+        guard let fresh = await deviceRefresher.refresh(carrier, .high) else {
+            // `.error`, not `.notice`: an authoritative read that did not land
+            // is a fault, and this line is the only place it is visible. It
+            // shares the per-tick repeat characteristic of the "world read
+            // failed" line above, and for the same reason — the condition is
+            // itself the fault, not chatter about a healthy world.
+            logger.error("confirm-read of carrier \(carrier, privacy: .public) failed — deferring launch")
+            return .deferred(reason: "deferred — carrier \(carrier) could not be confirmed")
+        }
+
+        let ledger: Ledger
+        do {
+            ledger = try await database.read { db in
+                Ledger(
+                    devices: Dictionary(
+                        try Device.all.fetchAll(db).map { ($0.deviceCode, $0) },
+                        uniquingKeysWith: { _, last in last }
+                    ),
+                    directives: try Directive.all.fetchAll(db)
+                )
+            }
+        } catch {
+            logger.error("confirm of carrier \(carrier, privacy: .public) could not re-read the ledger: \(error)")
+            return .deferred(reason: "deferred — carrier \(carrier) could not be confirmed")
+        }
+
+        var devices = ledger.devices
+        devices[carrier] = fresh
+        let reserved = Self.reservedDevices(directives: ledger.directives, devices: devices)
+        guard Self.isFreeCarrier(fresh, at: hub, reserved: reserved) else {
+            // `.notice`, like a launch: this is a race actually caught — rare,
+            // and the line that explains a launch an operator expected and did
+            // not get. It cannot become a heartbeat, since the reconciled row
+            // is in the next tick's snapshot.
+            logger.notice(
+                "confirm found carrier \(carrier, privacy: .public) no longer free at \(hub, privacy: .public) — deferring launch"
+            )
+            return .deferred(reason: "deferred — carrier \(carrier) unavailable on confirm")
+        }
+        return .proceed
+    }
+
+    /// The two halves of "who owns what", read in ONE transaction so the
+    /// reservation closure below sees a single consistent moment.
+    private struct Ledger: Sendable {
+        let devices: [String: Device]
+        let directives: [Directive]
     }
 
     // MARK: - The launch
