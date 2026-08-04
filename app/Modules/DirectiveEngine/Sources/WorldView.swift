@@ -42,6 +42,13 @@
 //  blobs out of the loop — is untouched. Grow is unaffected:
 //  `ValueCatalog.build` subtracts meshed systems itself.
 //
+//  SURVEY IS THEREFORE NOW THE SOLE BOUND on the decode set, and the only
+//  observable proof of it left is `unsurveyedSystemExcluded` — the widening
+//  retired the other one. That same bound is also published as
+//  `surveyedSystems` (below) rather than left implicit, because "we have
+//  never looked at this system" and "we looked and found nothing" are
+//  different facts to prune and identical in `beltsBySystem`.
+//
 
 import Foundation
 import GameModels
@@ -81,6 +88,16 @@ public struct WorldView: Equatable, Sendable {
     /// (`BeltClass.classify` returns `nil`) is simply absent here, same as a
     /// system with no belts at all.
     public let beltsBySystem: [String: [BeltInfo]]
+    /// Systems that have been through a full system scan
+    /// (`SystemDetail.systemScanned`) — the very rows `beltsBySystem` decodes.
+    ///
+    /// Carried separately because `beltsBySystem` alone cannot tell "surveyed,
+    /// and genuinely holds no belt" from "never looked": both are simply
+    /// absent from it. Prune needs exactly that distinction — an unsurveyed
+    /// system's value is UNKNOWN, and unknown must read as pinned, never as
+    /// reclaimable. Grow has no use for it (an unsurveyed system yields no
+    /// `ValueTarget` either way).
+    public let surveyedSystems: Set<String>
     /// The moment this snapshot was taken. Brain logic compares against this
     /// rather than `Date()`, keeping ranking passes pure and their tests
     /// deterministic.
@@ -94,6 +111,7 @@ public struct WorldView: Equatable, Sendable {
         eventSystems: Set<String>,
         hubLocation: String?,
         beltsBySystem: [String: [BeltInfo]] = [:],
+        surveyedSystems: Set<String> = [],
         now: Date
     ) {
         self.devices = devices
@@ -103,6 +121,7 @@ public struct WorldView: Equatable, Sendable {
         self.eventSystems = eventSystems
         self.hubLocation = hubLocation
         self.beltsBySystem = beltsBySystem
+        self.surveyedSystems = surveyedSystems
         self.now = now
     }
 
@@ -143,7 +162,12 @@ public struct WorldView: Equatable, Sendable {
 
         let hub = Self.hubLocation(in: allDevices, meshSystems: mesh)
 
-        let belts = try Self.beltsBySystem(in: db)
+        // One fetch, two fields: SURVEY is the sole bound on the blob decode,
+        // so the rows that define `surveyedSystems` are exactly the rows
+        // `beltsBySystem` decodes. Reading them once keeps the two from ever
+        // disagreeing about what "surveyed" means.
+        let surveyed = try SystemDetail.where { $0.systemScanned }.fetchAll(db)
+        let belts = Self.beltsBySystem(in: surveyed)
 
         return WorldView(
             devices: devicesByCode,
@@ -153,19 +177,19 @@ public struct WorldView: Equatable, Sendable {
             eventSystems: eventSystems,
             hubLocation: hub,
             beltsBySystem: belts,
+            surveyedSystems: Set(surveyed.map(\.designation)),
             now: now
         )
     }
 
     /// The bounded belt decode (see the module doc for why it must be
-    /// bounded at all). SQL narrows to the surveyed subset before any row's
-    /// `systemJSON` even leaves the database — the expensive direction to
-    /// filter, and the only one that matters, since most of the census is
-    /// never scanned. Both consumers then narrow further on their own terms:
-    /// grow drops meshed systems in `ValueCatalog.build`, prune keeps them.
-    private static func beltsBySystem(in db: Database) throws -> [String: [BeltInfo]] {
-        let candidates = try SystemDetail.where { $0.systemScanned }.fetchAll(db)
-
+    /// bounded at all). SURVEY is now the SOLE bound, applied in SQL by the
+    /// caller before any row's `systemJSON` leaves the database — the
+    /// expensive direction to filter, and the only one that matters, since
+    /// most of the census is never scanned. Both consumers then narrow
+    /// further on their own terms: grow drops meshed systems in
+    /// `ValueCatalog.build`, prune keeps them.
+    private static func beltsBySystem(in candidates: [SystemDetail]) -> [String: [BeltInfo]] {
         var belts: [String: [BeltInfo]] = [:]
         // Failures are tallied, not logged per-row: this loop runs every
         // 5-second tick, and a permanently-malformed row would otherwise

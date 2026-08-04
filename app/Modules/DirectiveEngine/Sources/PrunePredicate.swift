@@ -37,6 +37,24 @@
 //  part of this capability that destroys rather than creates, so every
 //  uncertain edge errs PINNED.
 //
+//  Two inherited optimisms, recorded because prune is where optimism turns
+//  destructive:
+//
+//  1. `MeshGraph` models every relay link as a uniform 7.5 ly hop
+//     (`SalvageTargetPlanner.relayRangeLY`). For grow that is harmless — it
+//     over-plans and the plant simply fails to link. Here the same optimism
+//     runs the other way: a modelled-but-nonexistent link makes a real chain
+//     look redundant, and the redundant-looking half is what gets reclaimed.
+//     `ftlLinks` now carries per-endpoint `rangeA`/`rangeB` (see the
+//     ftl-authority-rule note); reading the real ranges would close it.
+//  2. The anchor is the hub's system rather than the stationary replicant's.
+//     Nothing ENFORCES the co-location the design assumes, and an autofactory
+//     meshed away from the replicant would put the relays on the replicant's
+//     own road on the reclaimable side — total authority loss.
+//     `Replicant.currentStar` already carries the truth. Fine to defer while
+//     this is an unwired pure function; it must NOT be deferred past the tick
+//     that first acts on a `reclaimable` entry.
+//
 //  Pure function of `(WorldView, MeshGraph)` — no state, no I/O, no clock,
 //  no database, and no logging (there is nothing here a later why-view
 //  cannot re-derive). `graph` must be built from `view.starPositions`, the
@@ -88,17 +106,41 @@ public enum PrunePredicate {
         let relays = view.devices.values
             .filter(\.isActiveRelay)
             .sorted { $0.deviceCode < $1.deviceCode }
+        let pinEverything = PruneAnalysis(pinned: Set(relays.map(\.deviceCode)), reclaimable: [])
 
         // No anchor to root the union at: nothing can be judged useless, so
         // nothing is. An unrooted search returns an empty union, which reads
         // as "reclaim the entire mesh" — the exact failure this capability
         // must not have.
-        guard let anchor = anchorSystem(in: view) else {
-            return PruneAnalysis(pinned: Set(relays.map(\.deviceCode)), reclaimable: [])
+        guard let anchor = view.hubLocation.map({ SiteAssay.system(of: $0) }) else {
+            return pinEverything
+        }
+
+        // CENSUS-COVERAGE PRECONDITION. The union can only ever contain
+        // systems the graph can place: `search` seeds sources and relaxes
+        // neighbours only `where positions[…] != nil`, and `backtrack` walks
+        // nodes the search settled. So a system missing from the census is
+        // absent from the union however load-bearing it is — and a hole
+        // anywhere in the mesh breaks the union DOWNSTREAM of it too, since no
+        // path can be routed through a system the graph has never heard of. A
+        // per-relay check would save only the unplaceable relay itself and
+        // still offer up everything standing behind it.
+        //
+        // The `stars` census genuinely lags — it repopulates after a reset and
+        // trails `systemDetails` (app/.claude/memory/sqlite-db-location.md) —
+        // so this is a live state, not a theoretical one. Robustness clause 3
+        // says staleness may degrade efficiency but never safety: an
+        // incompletely-placed mesh means prune declines to judge this tick and
+        // tries again on the next. Nothing is lost but a reclaim's latency.
+        let mustBePlaceable = view.meshSystems
+            .union(relays.compactMap { $0.location.map { SiteAssay.system(of: $0) } })
+            .union([anchor])
+        guard mustBePlaceable.allSatisfy({ view.starPositions[$0] != nil }) else {
+            return pinEverything
         }
 
         var union = graph.pathUnion(
-            to: liveValueSystems(in: view), from: [anchor], free: view.meshSystems
+            to: servedSystems(in: view), from: [anchor], free: view.meshSystems
         )
         // The anchor is on every anchor→target path by definition, so it is
         // already in the union whenever any target is reachable. Inserting it
@@ -129,16 +171,58 @@ public enum PrunePredicate {
         return PruneAnalysis(pinned: pinned, reclaimable: reclaimable)
     }
 
-    /// The system every anchor→target path is rooted at: the print hub's, on
-    /// the design's anchor-co-location (see the file header). `nil` — "cannot
-    /// judge" — when there is no hub, when its system is off-mesh (which is
-    /// how `WorldView.hubLocation` already reports one), or when the census
-    /// cannot place that system, since a search from a system the graph has
-    /// never heard of settles nothing and yields an empty union.
-    private static func anchorSystem(in view: WorldView) -> String? {
-        guard let hub = view.hubLocation else { return nil }
-        let system = SiteAssay.system(of: hub)
-        return view.starPositions[system] != nil ? system : nil
+    /// Everything the mesh must keep serving — the target set the union is
+    /// built over. Three sources, each answering the same question ("would
+    /// losing authority here cost us something we cannot get back?") from a
+    /// different direction:
+    ///
+    ///   - live VALUE, reached or grow-wanted (`liveValueSystems`);
+    ///   - where our own deployed hardware actually STANDS (`fleetSystems`) —
+    ///     the design's target set is value-only, but a system can hold a
+    ///     working vessel long after its last assay depletes;
+    ///   - meshed systems whose value is UNKNOWN because nobody has surveyed
+    ///     them (`unsurveyedMeshSystems`) — unknown must read as pinned.
+    ///
+    /// The second and third exist because the value model answers "is there
+    /// something worth going to?", and prune is also asking "is there
+    /// something already there?". Both extra sources only ever ADD targets,
+    /// so they can only ever move a relay from reclaimable to pinned.
+    static func servedSystems(in view: WorldView) -> Set<String> {
+        liveValueSystems(in: view)
+            .union(fleetSystems(in: view))
+            .union(unsurveyedMeshSystems(in: view))
+    }
+
+    /// Where our own deployed, non-relay devices stand.
+    ///
+    /// Per the ftl-authority-rule note a device is commandable only while its
+    /// system shares a mesh subgraph with the stationary replicant, so
+    /// reclaiming the chain to a system holding a working vessel does not
+    /// merely lose value — it strands the hardware, unrecoverably. The case
+    /// is ordinary, not exotic: the last assay at S depletes while the
+    /// salvage vessel and its drones are still on station and a Haul Run is
+    /// still draining S's pile. S leaves the value set that same tick.
+    ///
+    /// ACTIVE RELAYS ARE EXCLUDED, and that exclusion is load-bearing: a
+    /// relay is itself a deployed device, so counting relays here would make
+    /// every relay pin its own system and prune could never return anything.
+    /// A relay is exactly the thing being judged, never evidence for itself.
+    static func fleetSystems(in view: WorldView) -> Set<String> {
+        Set(
+            view.devices.values
+                .filter { !$0.isActiveRelay }
+                .compactMap { $0.location.map { SiteAssay.system(of: $0) } }
+        )
+    }
+
+    /// Meshed systems nobody has surveyed. Their belts — the one value signal
+    /// that never depletes — are unknowable until a system scan lands, and
+    /// `beltsBySystem` cannot distinguish "looked, found none" from "never
+    /// looked" (both are simply absent), which is why `WorldView` publishes
+    /// `surveyedSystems` separately. Treating the unknown as a target keeps
+    /// the uncertain case on the pinned side.
+    static func unsurveyedMeshSystems(in view: WorldView) -> Set<String> {
+        view.meshSystems.subtracting(view.surveyedSystems)
     }
 
     /// Every system holding live value — un-depleted salvage, a belt worth
@@ -151,14 +235,11 @@ public enum PrunePredicate {
     /// grow-wanted one. Same three signals, same `WorldView` fields, opposite
     /// end of the same question.
     ///
-    /// KNOWN GAP — reached mine belts: `WorldView.beltsBySystem` is populated
+    /// Reached mine belts specifically: `WorldView.beltsBySystem` is populated
     /// for surveyed systems whether meshed or not (widened by this task for
-    /// exactly this reason), but it depends on the system having been through
-    /// a full system scan. A meshed system whose belts have never been
-    /// surveyed contributes no target and its relay reads as reclaimable —
-    /// which is the unsafe direction. It is bounded in practice: `tendMesh`
-    /// only ever grows toward value it can already see, so a system meshed
-    /// for its belts was surveyed before it was meshed.
+    /// exactly this reason). What it still cannot report is a system nobody
+    /// has scanned — handled as unknown by `unsurveyedMeshSystems` rather than
+    /// silently read as "holds nothing".
     static func liveValueSystems(in view: WorldView) -> Set<String> {
         // `> 0` rather than key-presence: `WorldView.salvageUnits` already
         // excludes depleted sites, but a system whose remaining assays sum to

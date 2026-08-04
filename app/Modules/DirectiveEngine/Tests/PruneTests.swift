@@ -199,8 +199,14 @@ struct PruneTests {
     /// which is genuinely redundant. The tiebreak then pins ONE COMPLETE
     /// chain (SOL→AWEST→T here), so the loser's reclamation cannot strand T:
     /// the pinned set is by construction a connected subgraph that still
-    /// serves every live target, and that stays true even if every
-    /// reclaimable relay went at once.
+    /// serves every live target.
+    ///
+    /// That property is about SERVING THE TARGETS, and it does not license
+    /// reclaiming the whole complement in one go: a reclaim is itself an
+    /// operation on a relay, and taking a nearer reclaimable relay first can
+    /// remove the command authority needed to reach a farther one. Sequencing
+    /// reclaims is the reclaim task's problem; the partition only promises
+    /// that nothing on the pinned side is ever needed by nothing.
     ///
     /// Proven geometry-independently, the same way `MeshGraphReachTests`
     /// proves `reach`'s own tiebreak: the two positions are mirror images
@@ -279,6 +285,95 @@ struct PruneTests {
         #expect(analysis.reclaimable.isEmpty)
     }
 
+    /// A census hole ANYWHERE in the mesh stops the whole judgement, not just
+    /// the judgement of the unplaceable relay.
+    ///
+    /// The union can only contain systems the graph can place, so a missing
+    /// census row makes a system invisible to the search — and, worse, breaks
+    /// every path that would have run THROUGH it, offering up load-bearing
+    /// relays standing behind the hole. The `stars` census really does lag
+    /// (it repopulates after a reset and trails `systemDetails`), so this is
+    /// a live state.
+    ///
+    /// Isolated to one variable against `perpetualMineBeltRelayIsNeverPrunable`
+    /// — the identical world, in which REL_DEAD is reclaimable — with MINE's
+    /// census row removed and MINE still marked surveyed, so the flip can only
+    /// be the census hole and not the unknown-value clause. Note MINE is not
+    /// the relay whose verdict changes: DEAD is placeable and still stops
+    /// being offered.
+    @Test func censusHoleAnywhereInTheMeshPinsEveryRelay() {
+        let positions: [String: Position] = [
+            "SOL": .init(x: 0, y: 0, z: 0),
+            // MINE's census row has not been paged in yet.
+            "DEAD": .init(x: 0, y: -7, z: 0),
+        ]
+        let world = prunableWorld(
+            positions: positions,
+            relays: ["REL_SOL": "SOL", "REL_MINE": "MINE", "REL_DEAD": "DEAD"],
+            belts: ["MINE": [BeltInfo(designation: "MINE-2-BELT", beltClass: .rich)]],
+            surveyed: ["SOL", "MINE", "DEAD"]
+        )
+        let analysis = PrunePredicate.analyse(view: world, graph: MeshGraph(positions: positions))
+        #expect(analysis.pinned == ["REL_SOL", "REL_MINE", "REL_DEAD"])
+        #expect(analysis.reclaimable.isEmpty)
+    }
+
+    /// A system holding our own deployed hardware is pinned even when its
+    /// value is gone.
+    ///
+    /// The scenario is ordinary: the last salvage assay at `WORKING` depletes
+    /// while the vessel and its drones are still on station and a Haul Run is
+    /// still draining the pile. Value-only targeting drops the system that
+    /// same tick and offers up the relay that makes the vessel commandable at
+    /// all — and per the FTL authority rule, a device whose system leaves the
+    /// mesh subgraph cannot be recovered, so this strands hardware rather
+    /// than merely losing value.
+    ///
+    /// `EMPTY` is the control: identical in every respect, no vessel.
+    @Test func systemHoldingOurOwnDeployedDevicesIsPinned() {
+        let positions: [String: Position] = [
+            "SOL": .init(x: 0, y: 0, z: 0),
+            "WORKING": .init(x: 0, y: 7, z: 0),
+            "EMPTY": .init(x: 0, y: -7, z: 0),
+        ]
+        let world = prunableWorld(
+            positions: positions,
+            relays: ["REL_SOL": "SOL", "REL_WORKING": "WORKING", "REL_EMPTY": "EMPTY"],
+            salvage: [:], // the pile depleted this tick
+            fleet: ["V1": "WORKING"] // …but the vessel is still there
+        )
+        let analysis = PrunePredicate.analyse(view: world, graph: MeshGraph(positions: positions))
+        #expect(analysis.pinned == ["REL_SOL", "REL_WORKING"])
+        #expect(analysis.reclaimable == [ReclaimableRelay(deviceCode: "REL_EMPTY", system: "EMPTY")])
+    }
+
+    /// A meshed system nobody has surveyed holds UNKNOWN value, and unknown
+    /// reads as pinned.
+    ///
+    /// Belt richness — the one value signal that never depletes — is only
+    /// legible after a full system scan, and `beltsBySystem` cannot tell
+    /// "scanned, holds no belt" from "never scanned": both are simply absent.
+    /// `SURVEYED` is the control that proves the distinction is really being
+    /// drawn — same shape, same lack of any known value, but it HAS been
+    /// looked at, so its emptiness is a fact rather than an absence of one.
+    @Test func meshedSystemNobodyHasSurveyedIsPinned() {
+        let positions: [String: Position] = [
+            "SOL": .init(x: 0, y: 0, z: 0),
+            "UNKNOWN": .init(x: 0, y: 7, z: 0),
+            "SURVEYED": .init(x: 0, y: -7, z: 0),
+        ]
+        let world = prunableWorld(
+            positions: positions,
+            relays: ["REL_SOL": "SOL", "REL_UNKNOWN": "UNKNOWN", "REL_SURVEYED": "SURVEYED"],
+            surveyed: ["SOL", "SURVEYED"]
+        )
+        let analysis = PrunePredicate.analyse(view: world, graph: MeshGraph(positions: positions))
+        #expect(analysis.pinned == ["REL_SOL", "REL_UNKNOWN"])
+        #expect(
+            analysis.reclaimable == [ReclaimableRelay(deviceCode: "REL_SURVEYED", system: "SURVEYED")]
+        )
+    }
+
     /// A relay that reports itself relaying but carries no location cannot be
     /// placed on the map, so it cannot be judged useless — it is pinned. The
     /// case is reachable in the live fleet: stowing clears `location` while
@@ -296,7 +391,8 @@ struct PruneTests {
         world = WorldView(
             devices: devices, starPositions: world.starPositions, meshSystems: world.meshSystems,
             salvageUnits: world.salvageUnits, eventSystems: world.eventSystems,
-            hubLocation: world.hubLocation, beltsBySystem: world.beltsBySystem, now: world.now
+            hubLocation: world.hubLocation, beltsBySystem: world.beltsBySystem,
+            surveyedSystems: world.surveyedSystems, now: world.now
         )
         let analysis = PrunePredicate.analyse(view: world, graph: MeshGraph(positions: positions))
         #expect(analysis.pinned == ["REL_SOL", "REL_LOST"])

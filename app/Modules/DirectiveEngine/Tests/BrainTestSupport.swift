@@ -376,21 +376,36 @@ func seedGrowableWorld(
 /// `WorldView.hubLocation`'s own rule: a location inside that system, but only
 /// when the system is genuinely meshed — `nil` otherwise, which is exactly how
 /// an off-mesh hub reaches the brain.
+///
+/// `surveyed` defaults to every system with a census position — a fully
+/// surveyed neighbourhood, which is what a test means unless it is
+/// specifically about unknown value. Prune treats an unsurveyed MESHED system
+/// as a target (unknown ⇒ pinned), so the default keeps that clause quiet in
+/// every test that is not about it.
+///
+/// `fleet` places non-relay devices (a vessel, a drone) at systems, which pin
+/// them the same way value does.
 func prunableWorld(
     positions: [String: Position],
     relays: [String: String],
     hub: String? = "SOL",
     salvage: [String: Double] = [:],
     belts: [String: [BeltInfo]] = [:],
-    events: Set<String> = []
+    events: Set<String> = [],
+    fleet: [String: String] = [:],
+    surveyed: Set<String>? = nil
 ) -> WorldView {
-    let devices = relays.sorted { $0.key < $1.key }.map { code, system in
+    let relayDevices = relays.sorted { $0.key < $1.key }.map { code, system in
         deviceFixture(
             code: code, type: "ftl_relay", location: "\(system)-1",
             status: "relaying", features: ["relay"]
         )
     }
-    let mesh = SalvageTargetPlanner.meshSystems(in: devices)
+    let fleetDevices = fleet.sorted { $0.key < $1.key }.map { code, system in
+        deviceFixture(code: code, type: "heaven_vessel", location: "\(system)-1")
+    }
+    let devices = relayDevices + fleetDevices
+    let mesh = SalvageTargetPlanner.meshSystems(in: relayDevices)
     return WorldView(
         devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
         starPositions: positions,
@@ -399,6 +414,7 @@ func prunableWorld(
         eventSystems: events,
         hubLocation: hub.flatMap { mesh.contains($0) ? "\($0)-3" : nil },
         beltsBySystem: belts,
+        surveyedSystems: surveyed ?? Set(positions.keys),
         now: Date(timeIntervalSince1970: 0)
     )
 }
@@ -450,7 +466,8 @@ extension WorldView {
         salvageUnits: [String: Double]? = nil,
         eventSystems: Set<String>? = nil,
         starPositions: [String: Position]? = nil,
-        beltsBySystem: [String: [BeltInfo]]? = nil
+        beltsBySystem: [String: [BeltInfo]]? = nil,
+        surveyedSystems: Set<String>? = nil
     ) -> WorldView {
         WorldView(
             devices: devices,
@@ -460,6 +477,7 @@ extension WorldView {
             eventSystems: eventSystems ?? self.eventSystems,
             hubLocation: hubLocation,
             beltsBySystem: beltsBySystem ?? self.beltsBySystem,
+            surveyedSystems: surveyedSystems ?? self.surveyedSystems,
             now: now
         )
     }

@@ -84,6 +84,30 @@ struct WorldViewBeltsTests {
         }
         let view = try await db.read { try WorldView.read(from: $0, now: Date()) }
         #expect(view.beltsBySystem["HYGIEA"] == nil)
+        #expect(!view.surveyedSystems.contains("HYGIEA"))
+    }
+
+    /// `surveyedSystems` is the same bound as the decode set, published so
+    /// prune can tell "scanned, holds no belt" from "never scanned" — which
+    /// `beltsBySystem` alone cannot, since both are absent from it. Both
+    /// systems here are absent from `beltsBySystem` for exactly that pair of
+    /// different reasons; only `surveyedSystems` separates them.
+    @Test func surveyedSystemsSeparatesLookedAndFoundNothingFromNeverLooked() async throws {
+        let db = try GameDatabase.bootstrap()
+        try await db.write { db in
+            try seedStar(db, designation: "SCANNEDBARE", x: 8, y: 0, z: 0)
+            try seedStar(db, designation: "NEVERSCANNED", x: 9, y: 0, z: 0)
+            try seedSystemDetail(db, system: "SCANNEDBARE", scanned: true, belts: [])
+            try seedSystemDetail(
+                db, system: "NEVERSCANNED", scanned: false,
+                belts: [Belt(designation: "NEVERSCANNED-2-BELT", density: "dense")]
+            )
+        }
+        let view = try await db.read { try WorldView.read(from: $0, now: Date()) }
+        #expect(view.beltsBySystem["SCANNEDBARE"] == nil)
+        #expect(view.beltsBySystem["NEVERSCANNED"] == nil)
+        #expect(view.surveyedSystems.contains("SCANNEDBARE"))
+        #expect(!view.surveyedSystems.contains("NEVERSCANNED"))
     }
 
     /// `BeltClass.classify` returning `nil` (unrecognised/absent density, no
