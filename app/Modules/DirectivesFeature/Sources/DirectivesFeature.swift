@@ -48,6 +48,16 @@ public struct DirectivesFeature {
         @Fetch(DirectiveTimeline(directiveID: nil, deviceCode: nil))
         public var timeline = DirectiveTimeline.Value()
 
+        /// The automation brain's latest tick, published by
+        /// `DirectiveEngineCore.tickBrain()` (see `BrainReport`). Nil before
+        /// the first tick of a session — the engine starts with the sync
+        /// engine on login, so on a cold launch there is genuinely nothing to
+        /// explain yet, and an empty card would be a worse answer than none.
+        ///
+        /// In-memory shared state, not a query: the why-view is DERIVED, and
+        /// the brain design forbids giving it a table.
+        @Shared(.brainReport) public var brainReport: BrainReport?
+
         /// The selected row's namespaced id (see `DirectiveRow.id`).
         public var selectedRowID: String?
         /// A failed or rejected command, shown as a banner over the list.
@@ -72,6 +82,13 @@ public struct DirectivesFeature {
         /// The merged list.
         public var rows: [DirectiveRow] {
             DirectiveRow.merge(devices: devices, directives: directives)
+        }
+
+        /// The brain's why-view, derived from the latest tick. Computed here
+        /// rather than stored so it can never fall out of step with the
+        /// report it explains.
+        public var brainWhy: BrainWhy? {
+            brainReport.map(BrainWhy.from(report:))
         }
 
         /// The selected row, or nil when nothing (or something stale) is selected.

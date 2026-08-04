@@ -31,6 +31,7 @@
 //  before this ranking ever runs).
 //
 
+import Foundation
 import UniverseModels
 
 /// One grow candidate: an unmeshed system worth planting a relay at, plus
@@ -91,6 +92,59 @@ public struct GrowCandidate: Equatable, Sendable {
         self.hopDistance = hopDistance
         self.servedTargets = servedTargets
         self.designation = designation
+    }
+}
+
+// MARK: - Graph facts
+
+/// The candidate, said out loud. One vocabulary, defined here beside the
+/// fields it describes, so the brain's launch rationale (`Brain.rationale`,
+/// which is the log line and the why-view's headline) and the why-view's
+/// per-candidate rows cannot drift into describing the same candidate two
+/// different ways. A graph fact, never a scalar — the whole point of
+/// `GrowRanking`'s field-by-field key is that a choice stays checkable
+/// against the map.
+extension GrowCandidate {
+    /// The winning tier's magnitude in ITS OWN units — belts as belts, events
+    /// as events, salvage as units. `GrowRanking.magnitude(at:over:)` defines
+    /// each of these; rendering a belt count as "units" would be a fact the
+    /// operator could not check.
+    public var magnitudeSummary: String {
+        switch bestTier {
+        case .salvage: Self.counted(magnitudeAtTier, "unit")
+        case .event: Self.counted(magnitudeAtTier, "live event")
+        case .richBelt: Self.counted(magnitudeAtTier, "rich belt")
+        case .moderateBelt: Self.counted(magnitudeAtTier, "moderate belt")
+        case .sparseBelt: Self.counted(magnitudeAtTier, "sparse belt")
+        }
+    }
+
+    /// How far the winning chain still has to run, including this hop.
+    public var hopSummary: String {
+        "\(relaysRemaining) hop\(relaysRemaining == 1 ? "" : "s")"
+    }
+
+    /// Where the value is, when it is not at the hop itself. Without this a
+    /// two-hop grow reads as a hop toward nothing, at a system with no value
+    /// of its own.
+    public var targetsBeyondFirstHop: [String] {
+        servedTargets.filter { $0 != firstHop }
+    }
+
+    /// `3200, "unit"` → `"3,200 units"`. Grouping is pinned to `en_US` rather
+    /// than taken from the current locale: the surrounding sentence is a
+    /// hard-coded English string, and a locale-dependent separator would make
+    /// this line — and its test — read differently on different machines for
+    /// no gain.
+    private static func counted(_ value: Double, _ noun: String) -> String {
+        // `Int(_: Double)` TRAPS on NaN, infinity, and anything past `Int.max`,
+        // and this value is summed straight out of server-supplied assay
+        // totals. A trap here would take the whole process down from inside a
+        // 5-second background loop, over a log line — so a nonsense magnitude
+        // degrades to a nonsense-looking number instead.
+        let rounded = value.rounded()
+        let whole = rounded.isFinite && rounded.magnitude < Double(Int.max) ? Int(rounded) : Int.max
+        return "\(whole.formatted(.number.locale(Locale(identifier: "en_US")))) \(noun)\(whole == 1 ? "" : "s")"
     }
 }
 

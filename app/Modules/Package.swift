@@ -258,9 +258,11 @@ let package = Package(
                 "API",
                 "GameModels",
                 "GameServices",
+                "GameSession",
                 "UniverseModels",
                 "Utils",
                 .product(name: "Dependencies", package: "swift-dependencies"),
+                .product(name: "Sharing", package: "swift-sharing"),
                 .product(name: "SQLiteData", package: "sqlite-data"),
             ],
             path: "DirectiveEngine/Sources"
@@ -277,6 +279,7 @@ let package = Package(
                 "UniverseModels",
                 "Utils",
                 .product(name: "Dependencies", package: "swift-dependencies"),
+                .product(name: "Sharing", package: "swift-sharing"),
                 .product(name: "SQLiteData", package: "sqlite-data"),
             ],
             path: "DirectiveEngine/Tests"
@@ -307,6 +310,7 @@ let package = Package(
                 "UniverseModels",
                 "Utils",
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "Sharing", package: "swift-sharing"),
                 .product(name: "SQLiteData", package: "sqlite-data"),
             ],
             path: "DirectivesFeature/Tests"

@@ -2,48 +2,425 @@
 //  BrainWhyViewTests.swift
 //  Replicould — Directives feature
 //
-//  `BrainWhy.from(decision:view:)` is the brain's derived why-view model: it
-//  projects a `BrainDecision` into graph-fact text an operator reads
-//  directly, never a score. `isEscalated` is the load-bearing bit — an idle
-//  brain must read as calm-but-surfaced, a stalled one as surfaced AND
-//  escalated (robustness bar clause 6); they must not look alike.
+//  `BrainWhy.from(report:)` is the brain's derived why-view model: it projects
+//  the `BrainReport` the engine publishes every tick into graph-fact text an
+//  operator reads directly, never a score.
 //
-//  Exhaustive over `BrainDecision`'s three cases — no `default:`. `.dispatch`
-//  arrived in Task 16 and forced this file open, exactly as intended; a
-//  fourth case would do the same.
+//  Three things here are load-bearing beyond "the strings look right":
+//
+//    • `isEscalated` — an idle brain must read as calm-but-surfaced, a stalled
+//      one as surfaced AND escalated (robustness bar clause 6). They must not
+//      look alike, and a deferral must not creep into looking like a stall.
+//    • A recent 429 must surface DISTINCTLY from self-throttling. Asserted on
+//      `BrainWhyPressure.Kind`, structurally, not by matching prose — a test
+//      that only compared strings would pass on a build that rendered both as
+//      the same kind of line.
+//    • Designations are tagged for monospace even when embedded mid-sentence
+//      (the house rule Task 5's review flagged this surface for).
 //
 
+import ComposableArchitecture
+import DirectiveEngine
+import Foundation
+import GameDatabase
 import GameModels
+import Sharing
 import Testing
-@testable import DirectiveEngine
 @testable import DirectivesFeature
+
+/// The exact sentence `Brain.rationale(for:)` produces for the `vega` fixture.
+/// Spelled out rather than computed so these tests pin the WORDING an operator
+/// sees, and would fail if the engine's phrasing drifted.
+private let vegaRationale = "meshing VEGA — 3,200 units, 1 hop"
 
 @Suite("BrainWhy")
 struct BrainWhyViewTests {
+    // MARK: - Fixtures
+
+    static let now = Date(timeIntervalSince1970: 1_000_000)
+
+    /// A one-hop salvage candidate whose value sits at the hop itself.
+    static let vega = GrowCandidate(
+        firstHop: "VEGA",
+        completesNow: true,
+        relaysRemaining: 1,
+        bestTier: .salvage,
+        magnitudeAtTier: 3200,
+        hopDistance: 4.2,
+        servedTargets: ["VEGA"],
+        designation: "VEGA"
+    )
+
+    /// A two-hop belt candidate whose value sits BEYOND the hop — the case
+    /// that makes `servedTargets` worth rendering at all.
+    static let polarisum = GrowCandidate(
+        firstHop: "POLARISUM",
+        completesNow: false,
+        relaysRemaining: 2,
+        bestTier: .richBelt,
+        magnitudeAtTier: 2,
+        hopDistance: 9.1,
+        servedTargets: ["ALTAIR", "POLARISUM"],
+        designation: "POLARISUM"
+    )
+
+    /// Limits with plenty of room and no 429 — the "nothing to see here"
+    /// baseline every test that isn't about limits builds on.
+    static func calmLimits(rateLimitedAt: Date? = nil) -> BrainLimits {
+        BrainLimits(
+            actionsRemaining: 54,
+            actionsLimit: 60,
+            actionsFloor: 6,
+            hubStock: 41_000,
+            spendFloor: 35_078,
+            rateLimitedAt: rateLimitedAt
+        )
+    }
+
+    static func report(
+        _ decision: BrainDecision,
+        ranked: [GrowCandidate] = [],
+        hubLocation: String? = "SOL-3",
+        limits: BrainLimits = calmLimits(),
+        observedAt: Date = now
+    ) -> BrainReport {
+        BrainReport(
+            decision: decision,
+            ranked: ranked,
+            hubLocation: hubLocation,
+            limits: limits,
+            observedAt: observedAt
+        )
+    }
+
+    // MARK: - The gate
+
     @Test func idleIsSurfacedButNotEscalated() {
-        let why = BrainWhy.from(decision: .idle(reason: "no grow or prune work"), view: nil)
-        #expect(why.topGoalGate == "idle — no grow or prune work")
+        let why = BrainWhy.from(report: Self.report(.idle(reason: "no grow or prune work")))
+        #expect(why.gateText == "idle — no grow or prune work")
         #expect(why.candidates.isEmpty)
         #expect(!why.isEscalated) // idle-calm must NOT read as a stall (clause 6)
     }
 
-    /// A launch is surfaced and calm — a directive going out is normal
-    /// operation, not an escalation. The gate is the goal's own rationale
-    /// (already a graph fact), and `candidates` stays empty on purpose:
-    /// rendering the ranked field is Task 19's job, and this asserts that the
-    /// minimal arm added with `.dispatch` does not quietly half-render it.
-    @Test func dispatchIsSurfacedAndCalm() {
-        let goal = Goal(kind: .tendMesh, target: "VEGA", rationale: "meshing VEGA — 3,200 units, 1 hop")
-        let why = BrainWhy.from(decision: .dispatch(goal, ranked: []), view: nil)
-        #expect(why.topGoalGate == "launched — meshing VEGA — 3,200 units, 1 hop")
-        #expect(why.candidates.isEmpty)
+    /// The brief's step 1, first half: a dispatch decision renders the top
+    /// candidate's rationale as the gate, and lists the runners-up as rows.
+    @Test func dispatchRendersTheTopCandidatesRationaleAsTheGate() {
+        let goal = Goal(kind: .tendMesh, target: "VEGA", rationale: vegaRationale)
+        let why = BrainWhy.from(
+            report: Self.report(
+                .dispatch(goal, ranked: [Self.vega, Self.polarisum]),
+                ranked: [Self.vega, Self.polarisum]
+            )
+        )
+        #expect(why.gateText == "launched — meshing VEGA — 3,200 units, 1 hop")
         #expect(!why.isEscalated)
+        #expect(why.candidates.map(\.target) == ["VEGA", "POLARISUM"])
+        #expect(why.candidates.map(\.isChosen) == [true, false])
     }
 
     @Test func stallIsSurfacedAndEscalated() {
-        let why = BrainWhy.from(decision: .stall(.relayActivationFailed), view: nil)
-        #expect(why.topGoalGate == "stalled — \(DirectiveAttentionReason.relayActivationFailed.displayName)")
-        #expect(why.candidates.isEmpty)
+        let why = BrainWhy.from(report: Self.report(.stall(.relayActivationFailed)))
+        #expect(why.gateText == "stalled — \(DirectiveAttentionReason.relayActivationFailed.displayName)")
         #expect(why.isEscalated)
+    }
+
+    /// A deferral is folded into `.idle` by the engine (Task 18), but it is a
+    /// different state to an operator — "we chose not to, and here is what
+    /// changed under us". It must not be prefixed as though nothing was
+    /// available, and it must not escalate.
+    @Test func aDeferralReadsAsItsOwnGateNotAsAnOrdinaryIdle() {
+        let why = BrainWhy.from(
+            report: Self.report(.idle(reason: "\(BrainDecision.deferralPrefix)VEGA already in flight on confirm"))
+        )
+        #expect(why.gateText == "deferred — VEGA already in flight on confirm")
+        #expect(!why.gateText.hasPrefix("idle"))
+        #expect(!why.isEscalated)
+    }
+
+    /// The four gate states the design names must all read differently. Pinned
+    /// as a set so a build that collapsed any two of them fails here rather
+    /// than in a screenshot.
+    @Test func theFourGateStatesAllReadDifferently() {
+        let goal = Goal(kind: .tendMesh, target: "VEGA", rationale: vegaRationale)
+        let gates = [
+            BrainWhy.from(report: Self.report(.dispatch(goal, ranked: [Self.vega]), ranked: [Self.vega])),
+            BrainWhy.from(
+                report: Self.report(
+                    .idle(reason: "\(BrainDecision.deferralPrefix)carrier HV01 unavailable on confirm")
+                )
+            ),
+            BrainWhy.from(report: Self.report(.idle(reason: "no grow or prune work"))),
+            BrainWhy.from(report: Self.report(.stall(.printStockShort))),
+        ]
+        #expect(Set(gates.map(\.gateText)).count == 4)
+        // Only the stall escalates — the clause-6 distinction, over all four
+        // states at once rather than one test per state.
+        #expect(gates.map(\.isEscalated) == [false, false, false, true])
+    }
+
+    // MARK: - Ranked candidates
+
+    /// Rank order is the brain's order, and every row is a graph fact: what
+    /// the hop unlocks, in the winning tier's own units, plus the chain
+    /// length. A hop whose value sits beyond it names where.
+    @Test func candidatesRenderInRankOrderWithTheirGraphFacts() {
+        let why = BrainWhy.from(
+            report: Self.report(.idle(reason: "no free carrier at SOL-3"), ranked: [Self.vega, Self.polarisum])
+        )
+        #expect(why.candidates.map(\.rank) == [1, 2])
+        #expect(why.candidates.map(\.target) == ["VEGA", "POLARISUM"])
+        #expect(why.candidates.map(\.fact) == ["3,200 units · 1 hop", "2 rich belts · 2 hops"])
+        // The hop itself is never repeated in its own served list.
+        #expect(why.candidates.map(\.servedTargets) == [[], ["ALTAIR"]])
+        // A tick that launched nothing has no chosen row.
+        #expect(why.candidates.allSatisfy { !$0.isChosen })
+    }
+
+    /// The candidate list is not a launch-only surface: the ticks an operator
+    /// most needs explained are the ones that DIDN'T launch.
+    @Test func candidatesAreShownOnATickThatLaunchedNothing() {
+        let why = BrainWhy.from(
+            report: Self.report(
+                .idle(reason: "every grow candidate is already in flight"),
+                ranked: [Self.vega, Self.polarisum]
+            )
+        )
+        #expect(why.candidates.count == 2)
+    }
+
+    /// The ranked field is one entry per reachable first hop and can run to
+    /// dozens. The card sits ABOVE the Directives list, so an uncapped list
+    /// would push the rows it is explaining off screen — but the tail must
+    /// still be reported, not silently dropped.
+    @Test func alongRankedFieldIsCappedAndTheRemainderIsCounted() {
+        let field = (1...12).map { index in
+            GrowCandidate(
+                firstHop: "SYS\(index)",
+                completesNow: false,
+                relaysRemaining: index,
+                bestTier: .salvage,
+                magnitudeAtTier: Double(index),
+                hopDistance: Double(index),
+                servedTargets: ["SYS\(index)"],
+                designation: "SYS\(index)"
+            )
+        }
+        let why = BrainWhy.from(
+            report: Self.report(.idle(reason: "no free carrier at SOL-3"), ranked: field)
+        )
+        #expect(why.candidates.count == BrainWhy.maxCandidates)
+        #expect(why.candidates.map(\.rank) == [1, 2, 3, 4, 5])
+        #expect(why.hiddenCandidates == 7)
+    }
+
+    // MARK: - Limit pressure
+
+    /// The design's "limits are signals" clause: a 429 is the SERVER refusing
+    /// us; self-throttling is us pacing ourselves. Asserted on the typed kind,
+    /// so a build that rendered them as one kind of line fails here.
+    @Test func aRecent429SurfacesDistinctlyFromSelfThrottling() {
+        let throttled = BrainWhy.from(
+            report: Self.report(
+                .idle(reason: "no grow or prune work"),
+                limits: BrainLimits(
+                    actionsRemaining: 4, actionsLimit: 60, actionsFloor: 6,
+                    hubStock: 41_000, spendFloor: 35_078, rateLimitedAt: nil
+                )
+            )
+        )
+        let rateLimited = BrainWhy.from(
+            report: Self.report(
+                .idle(reason: "no grow or prune work"),
+                limits: Self.calmLimits(rateLimitedAt: Self.now.addingTimeInterval(-120))
+            )
+        )
+
+        // Self-throttling reports the governor and nothing more: we are not
+        // being rate-limited, and saying so would be false.
+        #expect(!throttled.limitPressure.contains { $0.kind == .rateLimited })
+        #expect(throttled.limitPressure.contains { $0.kind == .governor })
+
+        // A 429 gets its OWN line, of its own kind, marked as imposed rather
+        // than chosen — and does not merely re-word the governor line.
+        let imposed = rateLimited.limitPressure.filter { $0.kind == .rateLimited }
+        #expect(imposed.count == 1)
+        #expect(imposed.first?.isImposed == true)
+        #expect(rateLimited.limitPressure.contains { $0.kind == .governor })
+        #expect(imposed.first?.detail != rateLimited.limitPressure.first { $0.kind == .governor }?.detail)
+    }
+
+    /// A 429 from an hour ago is history, not pressure. Without a window the
+    /// line would sit there for the rest of the session and stop meaning
+    /// anything.
+    @Test func anOld429IsNotReportedAsCurrentPressure() {
+        let why = BrainWhy.from(
+            report: Self.report(
+                .idle(reason: "no grow or prune work"),
+                limits: Self.calmLimits(rateLimitedAt: Self.now.addingTimeInterval(-3600))
+            )
+        )
+        #expect(!why.limitPressure.contains { $0.kind == .rateLimited })
+    }
+
+    /// The governor line states both halves of the fact — what is left, and
+    /// where we stop ourselves — so "4 left" is readable as pressure rather
+    /// than as a number without a scale.
+    @Test func theGovernorLineNamesTheFloorItPacesAgainst() {
+        let why = BrainWhy.from(report: Self.report(.idle(reason: "no grow or prune work")))
+        let governor = why.limitPressure.first { $0.kind == .governor }
+        #expect(governor?.detail == "commands — 54 of 60 left this minute, pacing ourselves below 6")
+    }
+
+    /// Reserve-floor headroom, in the three states the rail itself has: above
+    /// the floor, below it, and unread. Unread must read as a VETO, not as
+    /// "fine" — `BrainCeiling.printPermitted` fails closed for the same reason.
+    @Test func theReserveFloorLineReportsHeadroomAndFailsClosedWhenUnread() {
+        func line(hubStock: Int?) -> String? {
+            BrainWhy.from(
+                report: Self.report(
+                    .idle(reason: "no grow or prune work"),
+                    limits: BrainLimits(
+                        actionsRemaining: 54, actionsLimit: 60, actionsFloor: 6,
+                        hubStock: hubStock, spendFloor: 35_078, rateLimitedAt: nil
+                    )
+                )
+            ).limitPressure.first { $0.kind == .reserveFloor }?.detail
+        }
+        #expect(line(hubStock: 41_000) == "hub stock — 41,000 units against a 35,078 reserve floor")
+        #expect(line(hubStock: 12_000) == "hub stock — 12,000 units, below the 35,078 reserve floor — printing vetoed")
+        #expect(line(hubStock: nil) == "hub stock — no census reading — printing vetoed until one lands")
+    }
+
+    // MARK: - Monospace for embedded designations
+
+    /// The house rule, applied to a sentence rather than a standalone label:
+    /// the designations inside the gate come back tagged so the view can put
+    /// them in a mono token, and the prose around them does not.
+    @Test func designationsEmbeddedInTheGateAreTaggedForMonospace() {
+        let goal = Goal(
+            kind: .tendMesh, target: "POLARISUM",
+            rationale: "meshing POLARISUM — 2 rich belts at ALTAIR, 2 hops"
+        )
+        let why = BrainWhy.from(
+            report: Self.report(.dispatch(goal, ranked: [Self.polarisum]), ranked: [Self.polarisum])
+        )
+        #expect(why.topGoalGate == [
+            .prose("launched — meshing "),
+            .designation("POLARISUM"),
+            .prose(" — 2 rich belts at "),
+            .designation("ALTAIR"),
+            .prose(", 2 hops"),
+        ])
+    }
+
+    /// The hub is a location designation too, and it turns up in the idle gate
+    /// the brain emits most often when the fleet is busy.
+    @Test func theHubDesignationInAnIdleGateIsTagged() {
+        let why = BrainWhy.from(
+            report: Self.report(.idle(reason: "no free carrier at SOL-3"), hubLocation: "SOL-3")
+        )
+        #expect(why.topGoalGate == [.prose("idle — no free carrier at "), .designation("SOL-3")])
+    }
+
+    /// The split matches codes it was TOLD, never a shape. "Out of FTL relays"
+    /// is a stall's display name; "FTL" is not a star system and must stay
+    /// prose — this is the concrete case that rules out an all-caps heuristic.
+    @Test func anAllCapsWordThatIsNotAKnownDesignationStaysProse() {
+        let why = BrainWhy.from(
+            report: Self.report(.stall(.awaitingRelayRestock), ranked: [Self.vega])
+        )
+        #expect(why.topGoalGate == [.prose("stalled — Out of FTL relays")])
+    }
+
+    /// Longest match wins, so a system whose designation is a prefix of a
+    /// location's cannot swallow it — and a code embedded inside a longer word
+    /// is not a code.
+    @Test func theSplitPrefersTheLongestCodeAndRespectsBoundaries() {
+        #expect(
+            [BrainWhySpan].spans(in: "carrier free at SOL-3, none at SOL", designations: ["SOL", "SOL-3"])
+                == [
+                    .prose("carrier free at "), .designation("SOL-3"),
+                    .prose(", none at "), .designation("SOL"),
+                ]
+        )
+        #expect(
+            [BrainWhySpan].spans(in: "SOLARIS is not SOL", designations: ["SOL"])
+                == [.prose("SOLARIS is not "), .designation("SOL")]
+        )
+    }
+}
+
+/// The reading end of the why-view's feed, and the reason this surface is not
+/// an orphan.
+///
+/// Task 5 shipped `BrainWhy`/`BrainWhyRow`/`BrainWhyView` with ZERO production
+/// callers, because no live `BrainDecision` reached the UI. This suite pins
+/// the chain that closed it:
+///
+///   `DirectiveEngineCore.tickBrain()`
+///     → `@Shared(.brainReport)`                (proven from the engine's end
+///                                               by `BrainLoopTests`)
+///     → `DirectivesFeature.State.brainReport`  (asserted here)
+///     → `DirectivesFeature.State.brainWhy`     (asserted here)
+///     → `DirectivesListView`'s `.safeAreaInset` (a compile-time reference —
+///                                               the only step a logic test
+///                                               cannot execute, and the one
+///                                               the compiler checks for us)
+///
+/// Nothing here fakes a report: the value read is whatever was written under
+/// the same shared key, through the same in-memory store the engine writes to.
+@Suite("BrainWhy — reachable from the Directives surface")
+@MainActor
+struct BrainWhyReachabilityTests {
+    /// A report published under `.brainReport` reaches the Directives
+    /// reducer's state and projects into a why-view. If the `@Shared` property
+    /// were dropped from `State`, or `brainWhy` stopped projecting, this fails.
+    @Test func aPublishedReportReachesTheDirectivesFeaturesState() throws {
+        let database = try GameDatabase.bootstrap()
+        let storage = InMemoryStorage()
+        let goal = Goal(kind: .tendMesh, target: "VEGA", rationale: vegaRationale)
+        let published = BrainWhyViewTests.report(
+            .dispatch(goal, ranked: [BrainWhyViewTests.vega]),
+            ranked: [BrainWhyViewTests.vega]
+        )
+
+        withDependencies {
+            $0.defaultDatabase = database
+            $0.defaultInMemoryStorage = storage
+        } operation: {
+            @Shared(.brainReport) var report: BrainReport?
+            $report.withLock { $0 = published }
+
+            let store = TestStore(initialState: DirectivesFeature.State()) {
+                DirectivesFeature()
+            } withDependencies: {
+                $0.defaultDatabase = database
+                $0.defaultInMemoryStorage = storage
+            }
+            store.exhaustivity = .off
+
+            #expect(store.state.brainReport == published)
+            #expect(store.state.brainWhy?.gateText == "launched — meshing VEGA — 3,200 units, 1 hop")
+            #expect(store.state.brainWhy?.candidates.map(\.target) == ["VEGA"])
+        }
+    }
+
+    /// Before the first tick of a session there is nothing to explain, so the
+    /// card must not render at all — an empty card would claim the brain had
+    /// said something when it hadn't.
+    @Test func noReportMeansNoCard() throws {
+        let database = try GameDatabase.bootstrap()
+        withDependencies {
+            $0.defaultDatabase = database
+            $0.defaultInMemoryStorage = InMemoryStorage()
+        } operation: {
+            let store = TestStore(initialState: DirectivesFeature.State()) {
+                DirectivesFeature()
+            } withDependencies: {
+                $0.defaultDatabase = database
+            }
+            store.exhaustivity = .off
+            #expect(store.state.brainWhy == nil)
+        }
     }
 }

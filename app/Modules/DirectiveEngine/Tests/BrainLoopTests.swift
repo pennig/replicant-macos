@@ -15,6 +15,7 @@ import Dependencies
 import Foundation
 import GameDatabase
 import GameModels
+import Sharing
 import SQLiteData
 import Testing
 @testable import DirectiveEngine
@@ -179,5 +180,56 @@ struct BrainLoopTests {
 
         let directives = try await database.read { db in try Directive.all.fetchAll(db) }
         #expect(directives.isEmpty)
+    }
+
+    /// The why-view's feed, from the engine's end (Task 19): a tick PUBLISHES
+    /// its report to `@Shared(.brainReport)`.
+    ///
+    /// This is half of the proof that `BrainWhy`/`BrainWhyView` are reachable
+    /// from the app — the other half (`DirectivesFeature.State` reading the
+    /// same key and projecting it) lives in `BrainWhyViewTests`, because it is
+    /// the feature module that owns the reading end. Between them the chain is
+    /// covered end to end with no faked step: this test drives the real
+    /// `tickBrain()` against a real database, and asserts on the real key.
+    ///
+    /// The `defaultInMemoryStorage` override is what makes it hermetic —
+    /// without it every test in the process would publish into one store.
+    @Test func aTickPublishesItsReportToTheWhyViewsFeed() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try seedRelay(db, code: "REL1", location: "SOL")
+            try seedStar(db, designation: "SOL", x: 0, y: 0, z: 0)
+        }
+        let storage = InMemoryStorage()
+        let core = DirectiveEngineCore(machines: [], tick: .seconds(5))
+        let tickTime = Date(timeIntervalSince1970: 1_000)
+
+        let published: BrainReport? = await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(tickTime)
+            $0.defaultInMemoryStorage = storage
+        } operation: {
+            @Shared(.brainReport) var report: BrainReport?
+            // Nothing to explain before the first tick — the card must not
+            // appear over an empty session.
+            #expect(report == nil)
+            await core.tickBrain()
+            return report
+        }
+
+        // A world with a mesh but nothing worth reaching: the decision the
+        // operator sees is the real one this world produces, not a placeholder.
+        #expect(published?.decision == .idle(reason: "no grow or prune work"))
+        #expect(published?.observedAt == tickTime)
+        // The rails are reported even on an idle tick — headroom is a standing
+        // fact, not something that only exists when a launch is blocked.
+        #expect(published?.limits.spendFloor == BrainCeiling.aggregateSpendFloor)
+
+        // Publishing is not persisting: the why-view is derived state and the
+        // brain design forbids it a table.
+        let tables = try await database.read { db in
+            try #sql("SELECT name FROM sqlite_master WHERE type = 'table'", as: String.self).fetchAll(db)
+        }
+        #expect(!tables.contains { $0.localizedCaseInsensitiveContains("brain") })
     }
 }

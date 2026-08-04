@@ -2,19 +2,17 @@
 //  BrainWhyView.swift
 //  Replicould — Directives feature
 //
-//  The brain's legibility surface (brain-robustness-bar clause 8): a derived
-//  view model projecting a `BrainDecision` into graph facts an operator can
-//  verify against the map, plus a minimal read-only SwiftUI card rendering
-//  it. No table backs this — like `WorldView`, it's recomputed from what the
-//  engine already persisted, never written itself.
+//  The brain's legibility surface (`brain-robustness-bar` clause 8): a derived
+//  view model projecting the `BrainReport` the engine publishes every tick into
+//  graph facts an operator can verify against the map, plus a read-only SwiftUI
+//  card rendering it. No table backs this — like `WorldView`, it is recomputed
+//  from what the engine already knew, never written itself.
 //
-//  Not wired into `DirectivesListView` this task: there is currently no path
-//  by which a live `BrainDecision` reaches the UI (`tickBrain()` computes
-//  one and discards it, by design for this phase — see `DirectiveEngine.swift`).
-//  Wiring a static decision in now would mean rendering a value the engine
-//  isn't actually reporting, which is the fake-data-source trap this surface
-//  exists to avoid. Task 19 (the live ranked-candidate feed) wires this view
-//  into the Directives surface together with its actual data source.
+//  Wired in Task 19: `DirectiveEngineCore.tickBrain()` publishes a
+//  `BrainReport` to `@Shared(.brainReport)`, `DirectivesFeature.State` reads
+//  it, and `DirectivesListView` renders this card above the Directives list.
+//  Before that the type had no production caller at all — see `BrainReport`'s
+//  own header for why the feed is shaped the way it is.
 //
 //  `BrainWhy` is deliberately top-level here rather than nested in
 //  `BrainWhyView` — logic nested on a SwiftUI `View` traps `swift test`
@@ -23,53 +21,237 @@
 //
 
 import DirectiveEngine
+import Foundation
 import SwiftUI
 import UI
 
-/// A `BrainDecision`, projected into what an operator needs to read at a
-/// glance: the current goal gate, any candidates under consideration, and
-/// what's constraining spend — all as text, never a number to interpret.
+/// A `BrainReport`, projected into what an operator needs to read at a
+/// glance: the current goal gate, the candidates under consideration, and
+/// what is constraining spend — all as text, never a number to interpret.
 public struct BrainWhy: Equatable, Sendable {
-    /// The decision's headline, e.g. "idle — no grow or prune work" or
-    /// "stalled — Relay didn't come up".
-    public var topGoalGate: String
-    /// Ranked candidates under consideration. Still always empty: `.dispatch`
-    /// now carries the ranked field, but rendering it (the runners-up a
-    /// launch was chosen against) is Task 19's job, not this projection's.
+    /// The decision's headline, split into prose and designation runs so the
+    /// view can honour the monospace rule for codes embedded mid-sentence
+    /// (see `BrainWhySpan`). E.g. "idle — no grow or prune work", "launched —
+    /// meshing VEGA — 3,200 units, 1 hop", "stalled — Relay didn't come up".
+    public var topGoalGate: [BrainWhySpan]
+    /// The candidates the tick ranked, best first — including on a tick that
+    /// launched nothing, which is when an operator most needs them. Capped at
+    /// `maxCandidates`; see `hiddenCandidates`.
     public var candidates: [BrainWhyRow]
-    /// Spend-ceiling facts constraining the brain's choices, e.g. an idle
-    /// relay cap. Always empty until a task that produces limit pressure.
-    public var limitPressure: [String]
+    /// How many further candidates the tick ranked but this card does not
+    /// show. Reported rather than silently dropped: the ranked field is one
+    /// entry per reachable first hop and can run to dozens, which would turn
+    /// a card that sits ABOVE the Directives list into the whole pane. An
+    /// operator needs to know the tail exists; they do not need to read it.
+    public var hiddenCandidates: Int
+    /// The rails constraining the brain's choices right now.
+    public var limitPressure: [BrainWhyPressure]
     /// Distinguishes idle-calm from a stall (robustness bar clause 6): a
     /// brain with nothing to do is surfaced but calm; a stalled one is
-    /// surfaced AND escalated. The view must not let these look alike.
+    /// surfaced AND escalated. The view must not let these look alike. A
+    /// DEFERRAL is not a stall either — it is a tick that chose not to act,
+    /// which is normal operation.
     public var isEscalated: Bool
 
-    public init(topGoalGate: String, candidates: [BrainWhyRow], limitPressure: [String], isEscalated: Bool) {
+    public init(
+        topGoalGate: [BrainWhySpan],
+        candidates: [BrainWhyRow],
+        hiddenCandidates: Int = 0,
+        limitPressure: [BrainWhyPressure],
+        isEscalated: Bool
+    ) {
         self.topGoalGate = topGoalGate
         self.candidates = candidates
+        self.hiddenCandidates = hiddenCandidates
         self.limitPressure = limitPressure
         self.isEscalated = isEscalated
     }
 
-    /// Projects the brain's tick result into the why-view's shape. `view` is
-    /// unused — the goal's own `rationale` is already a graph fact, and
-    /// explaining the ranked field against the galaxy state is Task 19.
+    /// The gate as one plain string — what an operator would read aloud, and
+    /// what the card's accessibility label uses.
+    public var gateText: String { topGoalGate.text }
+
+    /// How recently the server must have answered 429 for it to count as
+    /// current pressure rather than history.
+    ///
+    /// Five minutes: long enough that a 429 is still on screen when the
+    /// operator looks up from whatever prompted them to look, short enough
+    /// that the line stops meaning "right now" before it stops being shown.
+    /// A permanent line would decay into furniture within one session — the
+    /// governor's own penalty window is seconds, so anything older than this
+    /// has already been recovered from.
+    public static let rateLimitWindow: TimeInterval = 300
+
+    /// How many ranked candidates the card lists before it stops.
+    ///
+    /// Five: enough to see the shape of the decision (the winner and the
+    /// field it beat), few enough that the card stays a header rather than
+    /// becoming the pane. Beyond about the fifth, rank order has already made
+    /// the point and the rest is a list nobody reads — the same judgement
+    /// `Brain.list` makes when it names two served systems and counts the
+    /// rest.
+    public static let maxCandidates = 5
+
+    /// Projects the brain's tick report into the why-view's shape.
     ///
     /// Exhaustive over `BrainDecision`, no `default:` — a case added later
-    /// must force this switch open again, exactly as `.dispatch` just did.
-    public static func from(decision: BrainDecision, view: WorldView?) -> BrainWhy {
+    /// must force this switch open again, exactly as `.dispatch` once did.
+    public static func from(report: BrainReport) -> BrainWhy {
+        let designations = knownDesignations(in: report)
+        let rows = candidates(in: report)
+        return BrainWhy(
+            topGoalGate: .spans(in: gate(for: report.decision), designations: designations),
+            candidates: Array(rows.prefix(maxCandidates)),
+            hiddenCandidates: max(0, rows.count - maxCandidates),
+            limitPressure: pressure(in: report),
+            isEscalated: isEscalated(report.decision)
+        )
+    }
+
+    // MARK: - The gate
+
+    private static func gate(for decision: BrainDecision) -> String {
         switch decision {
         case let .idle(reason):
-            BrainWhy(topGoalGate: "idle — \(reason)", candidates: [], limitPressure: [], isEscalated: false)
+            // A deferral already names itself (`BrainDecision.deferralPrefix`)
+            // and is its own state, so prefixing it with "idle — " would both
+            // read as a stutter and claim there was nothing to do, when in
+            // fact there was and the brain declined it.
+            decision.isDeferral ? reason : "idle — \(reason)"
         case let .dispatch(goal, _):
-            // The gate only. `ranked` is deliberately dropped here: rendering
-            // the candidate list is Task 19, and half-rendering it now would
-            // ship a surface nobody has specified.
-            BrainWhy(topGoalGate: "launched — \(goal.rationale)", candidates: [], limitPressure: [], isEscalated: false)
+            // The goal's own rationale IS the gate: it is already the graph
+            // fact for the top candidate ("meshing VEGA — 3,200 units, 1
+            // hop"), produced by the same `GrowCandidate` vocabulary the rows
+            // below use, so the headline and its row can never disagree.
+            "launched — \(goal.rationale)"
         case let .stall(reason):
-            BrainWhy(topGoalGate: "stalled — \(reason.displayName)", candidates: [], limitPressure: [], isEscalated: true)
+            "stalled — \(reason.displayName)"
         }
+    }
+
+    private static func isEscalated(_ decision: BrainDecision) -> Bool {
+        switch decision {
+        case .idle, .dispatch: false
+        case .stall: true
+        }
+    }
+
+    // MARK: - Candidates
+
+    private static func candidates(in report: BrainReport) -> [BrainWhyRow] {
+        let chosen: String? = if case let .dispatch(goal, _) = report.decision { goal.target } else { nil }
+        return report.ranked.enumerated().map { index, candidate in
+            BrainWhyRow(
+                rank: index + 1,
+                target: candidate.firstHop,
+                servedTargets: candidate.targetsBeyondFirstHop,
+                // The winning tier's own units plus the chain length — the
+                // graph fact, composed from `GrowCandidate`'s vocabulary
+                // rather than restated here.
+                fact: "\(candidate.magnitudeSummary) · \(candidate.hopSummary)",
+                isChosen: candidate.firstHop == chosen
+            )
+        }
+    }
+
+    // MARK: - Limit pressure
+
+    private static func pressure(in report: BrainReport) -> [BrainWhyPressure] {
+        let limits = report.limits
+        var lines: [BrainWhyPressure] = []
+
+        // First, because it is the only one of the three that was done TO us.
+        if let at = limits.rateLimitedAt {
+            let age = report.observedAt.timeIntervalSince(at)
+            if age >= 0, age <= rateLimitWindow {
+                lines.append(
+                    BrainWhyPressure(
+                        kind: .rateLimited,
+                        detail: "rate limited — the server returned 429 \(elapsed(age)), not self-pacing"
+                    )
+                )
+            }
+        }
+
+        // Both halves of the fact: what is left, and where we stop ourselves.
+        // "4 left" alone is a number without a scale.
+        lines.append(
+            BrainWhyPressure(
+                kind: .governor,
+                detail: """
+                    commands — \(count(limits.actionsRemaining)) of \(count(limits.actionsLimit)) \
+                    left this minute, pacing ourselves below \(count(limits.actionsFloor))
+                    """
+            )
+        )
+
+        let floor = count(limits.spendFloor)
+        let stock: String = if let hubStock = limits.hubStock {
+            hubStock < limits.spendFloor
+                ? "\(count(hubStock)) units, below the \(floor) reserve floor — printing vetoed"
+                : "\(count(hubStock)) units against a \(floor) reserve floor"
+        } else {
+            // Unread is a VETO, not "fine" — the same direction
+            // `BrainCeiling.printPermitted` and `RelayRun.printStockIsShort`
+            // both fail. Saying nothing here would let silence read as
+            // permission to spend.
+            "no census reading — printing vetoed until one lands"
+        }
+        lines.append(BrainWhyPressure(kind: .reserveFloor, detail: "hub stock — \(stock)"))
+
+        return lines
+    }
+
+    /// Coarse, because the precision is not the point: an operator needs to
+    /// know whether a 429 is still relevant, not to the second when it landed.
+    /// Bounded by `rateLimitWindow`, so only "just now" and single-digit
+    /// minutes can ever be produced.
+    private static func elapsed(_ seconds: TimeInterval) -> String {
+        seconds < 60 ? "just now" : "\(Int(seconds / 60))m ago"
+    }
+
+    /// Grouping pinned to `en_US`, matching `GrowCandidate`'s own counting —
+    /// the surrounding sentences are hard-coded English, and a locale-
+    /// dependent separator would make these lines (and their tests) read
+    /// differently on different machines for no gain.
+    private static func count(_ value: Int) -> String {
+        value.formatted(.number.locale(Locale(identifier: "en_US")))
+    }
+
+    // MARK: - Designations
+
+    /// Every system/location designation this report is known to contain.
+    ///
+    /// Gathered from the report rather than inferred from the text's shape —
+    /// see `BrainWhySpan`'s header for the "Out of FTL relays" case that
+    /// rules a shape heuristic out. A carrier device code inside a deferral
+    /// reason is deliberately absent: it is not a system or location name,
+    /// which is what the monospace rule governs.
+    private static func knownDesignations(in report: BrainReport) -> Set<String> {
+        var codes = Set(report.ranked.flatMap { [$0.firstHop] + $0.servedTargets })
+        if case let .dispatch(goal, _) = report.decision { codes.insert(goal.target) }
+        if let hub = report.hubLocation { codes.insert(hub) }
+        return codes
+    }
+}
+
+extension [BrainWhySpan] {
+    /// The line as one `Text`, with designations in the prominence-matched
+    /// mono token.
+    ///
+    /// Built as a single `AttributedString` with a per-run `font` attribute
+    /// rather than by concatenating `Text` values (`Text + Text` is
+    /// deprecated on macOS 26). One `Text` also means the line wraps as one
+    /// paragraph, which is what makes the monospace rule satisfiable for a
+    /// designation embedded mid-sentence at all.
+    func styled(prose: Font, designation: Font) -> Text {
+        var line = AttributedString()
+        for span in self {
+            var run = AttributedString(span.text)
+            run.font = span.isDesignation ? designation : prose
+            line += run
+        }
+        return Text(line)
     }
 }
 
@@ -85,22 +267,27 @@ public struct BrainWhyView: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: Space.s) {
-            HStack(spacing: Space.s) {
+            HStack(alignment: .firstTextBaseline, spacing: Space.s) {
                 Image(systemName: why.isEscalated ? "exclamationmark.triangle.fill" : "brain.head.profile")
                     .font(.system(size: IconSize.m))
                     .foregroundStyle(why.isEscalated ? .rcWarning : .rcTextSecondary)
-                Text(why.topGoalGate)
-                    .font(.rcBodyEmph)
+                why.topGoalGate
+                    .styled(prose: .rcBodyEmph, designation: .rcBodyEmphMono)
                     .foregroundStyle(.rcTextPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
             }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(why.gateText)
 
             if !why.limitPressure.isEmpty {
                 VStack(alignment: .leading, spacing: Space.xxs) {
-                    ForEach(why.limitPressure, id: \.self) { pressure in
-                        Text(pressure)
+                    ForEach(why.limitPressure) { pressure in
+                        Text(pressure.detail)
                             .font(.rcCaption)
-                            .foregroundStyle(.rcTextSecondary)
+                            // A 429 was done TO us; the other two are choices
+                            // we made. They must not read alike.
+                            .foregroundStyle(pressure.isImposed ? .rcWarning : .rcTextSecondary)
                     }
                 }
             }
@@ -108,23 +295,22 @@ public struct BrainWhyView: View {
             if !why.candidates.isEmpty {
                 VStack(alignment: .leading, spacing: Space.xs) {
                     ForEach(why.candidates) { candidate in
-                        HStack(spacing: Space.xs) {
-                            Text(candidate.target)
-                                .font(.rcMonoSmall)
-                                .foregroundStyle(.rcTextPrimary)
-                            Text(candidate.rationale)
-                                .font(.rcCaption)
-                                .foregroundStyle(.rcTextSecondary)
-                        }
+                        BrainWhyRowView(row: candidate)
+                    }
+                    if why.hiddenCandidates > 0 {
+                        Text("+\(why.hiddenCandidates) more ranked below these")
+                            .font(.rcCaption)
+                            .foregroundStyle(.rcTextTertiary)
                     }
                 }
             }
         }
         .padding(Space.m)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(.rcSurfaceRaised, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                .strokeBorder(.rcSeparator, lineWidth: Hairline.thin)
+                .strokeBorder(why.isEscalated ? .rcWarning : .rcSeparator, lineWidth: Hairline.thin)
         )
     }
 }

@@ -50,6 +50,8 @@
 import Dependencies
 import Foundation
 import GameModels
+import GameServices
+import GameSession
 import OSLog
 import SQLiteData
 import UniverseModels
@@ -117,6 +119,18 @@ struct Brain: Sendable {
     /// plan formed. It is logged at `.notice` instead — the same level a
     /// launch gets, for the same reason.
     func evaluateOnce() async -> BrainDecision {
+        await report().decision
+    }
+
+    /// `evaluateOnce()` plus everything the why-view needs to explain it: the
+    /// ranked field the decision was made against, the hub, and the rails
+    /// (`BrainReport`). Does exactly the same work and takes exactly the same
+    /// actions — the report is what the tick already knew, gathered rather
+    /// than discarded, so nothing here changes what the brain DOES.
+    ///
+    /// `evaluateOnce()` remains the seam for tests that only care about the
+    /// decision; `DirectiveEngineCore.tickBrain()` calls this one.
+    func report() async -> BrainReport {
         @Dependency(\.defaultDatabase) var database
 
         let snapshot: Snapshot
@@ -147,21 +161,61 @@ struct Brain: Sendable {
                         .fetchAll(db),
                     by: { $0.directiveID ?? "" }
                 )
+                let view = try WorldView.read(from: db, now: now)
                 return Snapshot(
-                    view: try WorldView.read(from: db, now: now),
+                    view: view,
                     directives: directives,
-                    log: log
+                    log: log,
+                    // Read in the SAME transaction as everything else, for the
+                    // same reason the rest of the snapshot is: a stock figure
+                    // from a different instant than the devices it is meant to
+                    // explain is a fact about no world that ever existed. Only
+                    // the hub's own row — the census table is whole-galaxy and
+                    // the rail only judges one location.
+                    hubFootprint: try view.hubLocation.flatMap { hub in
+                        try LocationFootprint.where { $0.location.eq(hub) }.fetchOne(db)
+                    }
                 )
             }
         } catch {
             logger.error("world read failed: \(error)")
-            return .idle(reason: "world unavailable")
+            // No snapshot means no hub reading — but the governor is a
+            // separate, process-local fact that is still perfectly readable,
+            // and a tick that couldn't reach the database is exactly when an
+            // operator wants to know whether we are being rate-limited.
+            return await BrainReport(
+                decision: .idle(reason: "world unavailable"),
+                ranked: [],
+                hubLocation: nil,
+                limits: Self.limits(hubFootprint: nil),
+                observedAt: now
+            )
         }
 
         let escalated = await respondToStalls(snapshot)
+        let plan = Self.plan(view: snapshot.view, directives: snapshot.directives)
+        let decision = await decide(plan, escalated: escalated, database: database)
 
-        switch Self.plan(view: snapshot.view, directives: snapshot.directives) {
-        case let .idle(reason):
+        return await BrainReport(
+            decision: decision,
+            ranked: plan.ranked,
+            hubLocation: snapshot.view.hubLocation,
+            limits: Self.limits(hubFootprint: snapshot.hubFootprint),
+            observedAt: now
+        )
+    }
+
+    /// Carry out `plan`, and say what the tick did. Split out of `report()` so
+    /// the gathering of what to REPORT sits in one place and the enactment in
+    /// another; the precedence rule between a launch, an escalation, and
+    /// idling is documented on `evaluateOnce()` above and lives here.
+    private func decide(
+        _ plan: Plan,
+        escalated: DirectiveAttentionReason?,
+        database: any DatabaseWriter
+    ) async -> BrainDecision {
+        switch plan {
+        case let .idle(reason, _):
             // `respondToStalls` has already logged the escalation (with the
             // directive id, which is the part worth having); a second line for
             // the same fact here would just double the per-tick noise.
@@ -196,6 +250,30 @@ struct Brain: Sendable {
         }
     }
 
+    /// The rails, as they stand at this tick. Two independent readings: the
+    /// process-shared actions budget (which knows both what is left and
+    /// whether the server has recently said 429), and the hub's census row
+    /// judged against `BrainCeiling`'s reserve floor.
+    ///
+    /// Reports, never gates. The rails themselves are enforced where they
+    /// already were — `CommandGovernor` for the budget,
+    /// `RelayRun.printStockIsShort` for the floor — and nothing here can
+    /// change what a tick does. Read via `@Dependency(\.gameClient)` so the
+    /// figure shown is the one the governor every dispatch throttles on, not
+    /// a second copy.
+    private static func limits(hubFootprint: LocationFootprint?) async -> BrainLimits {
+        @Dependency(\.gameClient) var gameClient
+        let budget = await gameClient.budget(.actions)
+        return BrainLimits(
+            actionsRemaining: budget.remaining,
+            actionsLimit: budget.limit,
+            actionsFloor: CommandGovernorClient.actionFloor,
+            hubStock: hubFootprint?.resources,
+            spendFloor: BrainCeiling.aggregateSpendFloor,
+            rateLimitedAt: budget.rateLimitedAt
+        )
+    }
+
     /// One consistent read: the galaxy the brain ranks over, the directive
     /// rows that say which of it is already spoken for, and the timelines the
     /// retry budget is derived from. Read in ONE transaction on purpose — a
@@ -214,6 +292,11 @@ struct Brain: Sendable {
         /// Timeline entries, oldest first, for each brain-managed stall — and
         /// for nothing else.
         let log: [String: [DirectiveLogEntry]]
+        /// The print hub's census row, when there is a hub and the census has
+        /// one for it. Read for the why-view's reserve-floor line only — the
+        /// rail itself is still enforced by `RelayRun`, on that mission's own
+        /// snapshot, at the moment it would print.
+        let hubFootprint: LocationFootprint?
     }
 
     // MARK: - The greedy pass
@@ -222,7 +305,12 @@ struct Brain: Sendable {
     /// `evaluateOnce` so the whole judgement is a PURE function of the
     /// snapshot — no clock, no database, no dependencies.
     enum Plan {
-        case idle(reason: String)
+        /// Nothing to launch. `ranked` is still the whole field this pass saw
+        /// — usually empty (there was nothing to rank), but NOT always: a tick
+        /// that idles because "every grow candidate is already in flight"
+        /// ranked a full field and chose none of it, and an operator reading
+        /// that gate needs to see what "every candidate" means.
+        case idle(reason: String, ranked: [GrowCandidate])
         /// Launch a Relay Run for `goal` on `carrier`, which stands at `hub`
         /// and so sets off from `origin` (the hub's system). `ranked` is the
         /// whole field the choice was made against, carried through for the
@@ -235,6 +323,16 @@ struct Brain: Sendable {
         /// the system and re-widening the test to it would let a vessel that
         /// had crossed to another location in the same system confirm as free.
         case grow(goal: Goal, ranked: [GrowCandidate], carrier: String, hub: String, origin: String)
+
+        /// The field this pass ranked, whichever way it went — the why-view's
+        /// candidate list. One accessor rather than two matches at the call
+        /// site, so the two arms can never be read inconsistently.
+        var ranked: [GrowCandidate] {
+            switch self {
+            case let .idle(_, ranked): ranked
+            case let .grow(_, ranked, _, _, _): ranked
+            }
+        }
     }
 
     /// The greedy pass, grow-only.
@@ -255,28 +353,30 @@ struct Brain: Sendable {
     /// reaching" and "nothing free to send" are genuinely different states and
     /// an operator needs to be told which one they are in.
     static func plan(view: WorldView, directives: [Directive]) -> Plan {
-        guard !view.meshSystems.isEmpty else { return .idle(reason: "no mesh yet") }
+        guard !view.meshSystems.isEmpty else { return .idle(reason: "no mesh yet", ranked: []) }
 
         let graph = MeshGraph(positions: view.starPositions)
         let ranked = GrowRanking.rank(view: view, graph: graph)
         guard !ranked.isEmpty else {
             // Prune is a later task, so "no grow work" is the whole of it.
-            return .idle(reason: "no grow or prune work")
+            return .idle(reason: "no grow or prune work", ranked: [])
         }
 
         let inFlight = inFlightTargets(directives)
         guard let candidate = ranked.first(where: { !inFlight.contains($0.firstHop) }) else {
-            return .idle(reason: "every grow candidate is already in flight")
+            return .idle(reason: "every grow candidate is already in flight", ranked: ranked)
         }
 
         // The relay has to come from somewhere. `WorldView.hubLocation` is
         // already nil for an OFF-MESH hub, so this one guard covers both "no
         // printer" and "a printer we cannot reach".
-        guard let hub = view.hubLocation else { return .idle(reason: "no print hub on the mesh") }
+        guard let hub = view.hubLocation else {
+            return .idle(reason: "no print hub on the mesh", ranked: ranked)
+        }
 
         let reserved = reservedDevices(directives: directives, devices: view.devices)
         guard let carrier = freeCarrier(at: hub, devices: view.devices, reserved: reserved) else {
-            return .idle(reason: "no free carrier at \(hub)")
+            return .idle(reason: "no free carrier at \(hub)", ranked: ranked)
         }
 
         return .grow(
@@ -789,41 +889,15 @@ struct Brain: Sendable {
     /// The served-systems clause names where the VALUE is when it is not at
     /// the hop itself. Without it a two-hop grow reads as "meshing POLARISUM"
     /// — a hop toward nothing, at a system with no value of its own.
+    ///
+    /// Composed from `GrowCandidate`'s own vocabulary (`magnitudeSummary`,
+    /// `hopSummary`, `targetsBeyondFirstHop`) rather than restating it, so
+    /// this sentence and the why-view's per-candidate rows describe the same
+    /// candidate the same way by construction.
     static func rationale(for candidate: GrowCandidate) -> String {
-        let hops = "\(candidate.relaysRemaining) hop\(candidate.relaysRemaining == 1 ? "" : "s")"
-        let beyond = candidate.servedTargets.filter { $0 != candidate.firstHop }
+        let beyond = candidate.targetsBeyondFirstHop
         let served = beyond.isEmpty ? "" : " at \(list(beyond))"
-        return "meshing \(candidate.firstHop) — \(magnitude(of: candidate))\(served), \(hops)"
-    }
-
-    /// The winning tier's magnitude in ITS OWN units — belts as belts, events
-    /// as events, salvage as units. `GrowRanking.magnitude(at:over:)` defines
-    /// each of these; rendering a belt count as "units" would be a fact the
-    /// operator could not check.
-    private static func magnitude(of candidate: GrowCandidate) -> String {
-        switch candidate.bestTier {
-        case .salvage: return counted(candidate.magnitudeAtTier, "unit")
-        case .event: return counted(candidate.magnitudeAtTier, "live event")
-        case .richBelt: return counted(candidate.magnitudeAtTier, "rich belt")
-        case .moderateBelt: return counted(candidate.magnitudeAtTier, "moderate belt")
-        case .sparseBelt: return counted(candidate.magnitudeAtTier, "sparse belt")
-        }
-    }
-
-    /// `3200, "unit"` → `"3,200 units"`. Grouping is pinned to `en_US` rather
-    /// than taken from the current locale: the surrounding sentence is a
-    /// hard-coded English string, and a locale-dependent separator would make
-    /// this line — and its test — read differently on different machines for
-    /// no gain.
-    private static func counted(_ value: Double, _ noun: String) -> String {
-        // `Int(_: Double)` TRAPS on NaN, infinity, and anything past `Int.max`,
-        // and this value is summed straight out of server-supplied assay
-        // totals. A trap here would take the whole process down from inside a
-        // 5-second background loop, over a log line — so a nonsense magnitude
-        // degrades to a nonsense-looking number instead.
-        let rounded = value.rounded()
-        let whole = rounded.isFinite && rounded.magnitude < Double(Int.max) ? Int(rounded) : Int.max
-        return "\(whole.formatted(.number.locale(Locale(identifier: "en_US")))) \(noun)\(whole == 1 ? "" : "s")"
+        return "meshing \(candidate.firstHop) — \(candidate.magnitudeSummary)\(served), \(candidate.hopSummary)"
     }
 
     /// Names the first two and counts the rest. A hop can serve a large group
@@ -900,7 +974,7 @@ struct Brain: Sendable {
             // failed" line above, and for the same reason — the condition is
             // itself the fault, not chatter about a healthy world.
             logger.error("confirm-read of carrier \(carrier, privacy: .public) failed — deferring launch")
-            return .deferred(reason: "deferred — carrier \(carrier) could not be confirmed")
+            return .deferred(reason: "\(BrainDecision.deferralPrefix)carrier \(carrier) could not be confirmed")
         }
         return .proceed(carrier: fresh)
     }
@@ -941,10 +1015,10 @@ struct Brain: Sendable {
         fleet[carrier.deviceCode] = carrier
         let reserved = reservedDevices(directives: directives, devices: fleet)
         guard isFreeCarrier(carrier, at: hub, reserved: reserved) else {
-            return "deferred — carrier \(carrier.deviceCode) unavailable on confirm"
+            return "\(BrainDecision.deferralPrefix)carrier \(carrier.deviceCode) unavailable on confirm"
         }
         guard !inFlightTargets(directives).contains(target) else {
-            return "deferred — \(target) already in flight on confirm"
+            return "\(BrainDecision.deferralPrefix)\(target) already in flight on confirm"
         }
         return nil
     }

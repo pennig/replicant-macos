@@ -58,4 +58,20 @@ public enum BrainDecision: Equatable, Sendable {
     case dispatch(Goal, ranked: [GrowCandidate])
     /// A directive needs operator attention before the brain can proceed.
     case stall(DirectiveAttentionReason)
+
+    /// How a DEFERRED tick names itself inside `.idle`'s reason.
+    ///
+    /// A deferral is folded into `.idle` on purpose (Task 18: a deferred tick
+    /// did nothing, so it idled), but it is a distinct state to an operator —
+    /// "we chose not to, and here is what changed under us" reads nothing
+    /// like "there was nothing to do". The why-view needs to tell them apart,
+    /// and the only honest signal is this prefix, so it is a shared constant
+    /// both sides reference rather than a magic string the UI sniffs for.
+    public static let deferralPrefix = "deferred — "
+
+    /// Whether this decision is a deferral rather than an ordinary idle.
+    public var isDeferral: Bool {
+        guard case let .idle(reason) = self else { return false }
+        return reason.hasPrefix(Self.deferralPrefix)
+    }
 }

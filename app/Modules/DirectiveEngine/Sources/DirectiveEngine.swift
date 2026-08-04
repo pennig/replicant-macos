@@ -22,6 +22,7 @@ import Foundation
 import GameModels
 import GameServices
 import OSLog
+import Sharing
 import SQLiteData
 import UniverseModels
 
@@ -141,17 +142,25 @@ actor DirectiveEngineCore {
     /// directly, the same seam `reconcileExecutors()` and
     /// `evaluateOnce(directiveID:)` already use.
     ///
-    /// The decision is REPORTED, not acted on: `Brain.evaluateOnce()` already
+    /// The decision is REPORTED, not acted on: `Brain.report()` already
     /// committed whatever it decided to do, through the sanctioned
     /// create-directive rail and nothing else. Nothing here writes a row, and
     /// nothing here should — a bespoke write at this layer would be outside
-    /// the brain's audited enactment surface. (Task 19 wires this decision to
-    /// the why-view; until then it is logged and dropped.)
+    /// the brain's audited enactment surface.
+    ///
+    /// Reporting means publishing the tick's `BrainReport` to
+    /// `@Shared(.brainReport)`, which `DirectivesFeature` renders as the
+    /// why-view (`brain-robustness-bar` clause 8). This actor keeps NO copy:
+    /// the report is handed to Sharing's in-memory store and forgotten, so
+    /// the engine holds no UI state and the next tick's `Brain` — stateless
+    /// by clause 2 — has nothing here to read back.
     func tickBrain() async {
         brainTickCount += 1
         @Dependency(\.date) var date
-        let decision = await Brain(now: date.now).evaluateOnce()
-        brainLogger.debug("tick: \(String(describing: decision), privacy: .public)")
+        let report = await Brain(now: date.now).report()
+        @Shared(.brainReport) var published: BrainReport?
+        $published.withLock { $0 = report }
+        brainLogger.debug("tick: \(String(describing: report.decision), privacy: .public)")
     }
 
     /// Spawn an executor for each running directive that lacks one, and retire

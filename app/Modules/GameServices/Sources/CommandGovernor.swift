@@ -54,10 +54,17 @@ actor CommandGovernor {
     /// `PollCoordinator`'s reads floor (12 of 120/min) against the 60/min
     /// actions limit, leaving headroom for manual UI commands and the CLI.
     private let actionFloor: Int
+    /// The floor the process-shared governor is actually built with. Named
+    /// rather than left as a literal default because the brain's why-view
+    /// reports it to the operator — "we stopped ourselves here" is only a
+    /// legible fact if the number shown is the number enforced, and
+    /// re-typing `6` in the feature is exactly how those two drift apart.
+    /// Re-exported publicly as `CommandGovernorClient.actionFloor`.
+    static let defaultActionFloor = 6
     /// Devices with a command in flight right now.
     private var inFlight: Set<String> = []
 
-    init(actionFloor: Int = 6) {
+    init(actionFloor: Int = CommandGovernor.defaultActionFloor) {
         self.actionFloor = actionFloor
     }
 

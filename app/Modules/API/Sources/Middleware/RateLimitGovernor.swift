@@ -29,15 +29,29 @@ public actor RateLimitGovernor {
     }
 
     /// A read-only view, e.g. for showing budget in a debug HUD.
-    public struct Snapshot: Sendable {
+    public struct Snapshot: Sendable, Equatable {
         public let limit: Int
         public let remaining: Int
         public let resetAt: Date?
+        /// When the SERVER last answered 429 for this bucket, or nil if it
+        /// never has this session.
+        ///
+        /// Deliberately a separate fact from `remaining`/`resetAt`, not
+        /// something to be inferred from them. `penalize` zeroes `remaining`
+        /// and sets `resetAt`, so a reader could *guess* a 429 from that
+        /// shape — but so can an ordinary window that the server's own
+        /// headers reported as spent (`record`), and self-throttling
+        /// (`acquire` refusing to spend below `reserve`) looks similar
+        /// again. Being rate-limited BY the server and pacing ourselves are
+        /// different operational facts with different fixes, and the one
+        /// that matters is the one an inference would hide.
+        public let rateLimitedAt: Date?
 
-        public init(limit: Int, remaining: Int, resetAt: Date?) {
+        public init(limit: Int, remaining: Int, resetAt: Date?, rateLimitedAt: Date? = nil) {
             self.limit = limit
             self.remaining = remaining
             self.resetAt = resetAt
+            self.rateLimitedAt = rateLimitedAt
         }
     }
 
@@ -45,6 +59,8 @@ public actor RateLimitGovernor {
         var limit: Int
         var remaining: Int
         var resetAt: Date?
+        /// Set only by `penalize` — i.e. only by a real 429.
+        var rateLimitedAt: Date?
     }
 
     private var states: [Bucket: State]
@@ -56,11 +72,11 @@ public actor RateLimitGovernor {
 
     public init(readLimit: Int = 120, actionLimit: Int = 60, reserve: Int = 3) {
         self.states = [
-            .reads: State(limit: readLimit, remaining: readLimit, resetAt: nil),
-            .actions: State(limit: actionLimit, remaining: actionLimit, resetAt: nil),
+            .reads: State(limit: readLimit, remaining: readLimit, resetAt: nil, rateLimitedAt: nil),
+            .actions: State(limit: actionLimit, remaining: actionLimit, resetAt: nil, rateLimitedAt: nil),
             // Only ever reconciled from response headers / read for its reset; the
             // optimistic defaults are never consulted since `stars` isn't gated.
-            .stars: State(limit: 1, remaining: 1, resetAt: nil),
+            .stars: State(limit: 1, remaining: 1, resetAt: nil, rateLimitedAt: nil),
         ]
         self.reserve = max(0, reserve)
     }
@@ -114,11 +130,20 @@ public actor RateLimitGovernor {
         var state = states[bucket]!
         state.remaining = 0
         state.resetAt = Date().addingTimeInterval(max(1, retryAfter))
+        // The one place a 429 is recorded as a 429. Everything else that
+        // lowers `remaining` is either our own spending or the server's
+        // header telling us what it has already counted.
+        state.rateLimitedAt = Date()
         states[bucket] = state
     }
 
     public func snapshot(_ bucket: Bucket) -> Snapshot {
         let state = states[bucket]!
-        return Snapshot(limit: state.limit, remaining: state.remaining, resetAt: state.resetAt)
+        return Snapshot(
+            limit: state.limit,
+            remaining: state.remaining,
+            resetAt: state.resetAt,
+            rateLimitedAt: state.rateLimitedAt
+        )
     }
 }
