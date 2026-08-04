@@ -183,7 +183,12 @@ struct BrainGrowTests {
 
         let second = await decide(database, uuid: uuid)
         #expect(
-            second == .idle(reason: "no free carrier at SOL-3"),
+            second == .idle(
+                reason: """
+                    no free carrier at SOL-3 — V1 is held by relay run \
+                    00000000-0000-0000-0000-000000000000 (running)
+                    """
+            ),
             "ALTAIR is unclaimed and still ranked — only the carrier being reserved can stop this tick"
         )
         #expect(try await relayRuns(database).count == 1)
@@ -230,7 +235,10 @@ struct BrainGrowTests {
             try seedDirective(db, id: "OTHER", deviceCode: "SOMEVESSEL", controllerCode: "V1")
         }
 
-        #expect(await decide(database, uuid: uuid) == .idle(reason: "no free carrier at SOL-3"))
+        #expect(
+            await decide(database, uuid: uuid)
+                == .idle(reason: "no free carrier at SOL-3 — V1 is held by salvage run OTHER (running)")
+        )
         #expect(try await relayRuns(database).isEmpty)
     }
 
@@ -246,7 +254,10 @@ struct BrainGrowTests {
             try seedDirective(db, id: "HAUL", kind: .haulRun, deviceCode: "SOMEVESSEL", fleetTag: "auto:haul")
         }
 
-        #expect(await decide(database, uuid: uuid) == .idle(reason: "no free carrier at SOL-3"))
+        #expect(
+            await decide(database, uuid: uuid)
+                == .idle(reason: "no free carrier at SOL-3 — V1 is held by haul run HAUL (running)")
+        )
         #expect(try await relayRuns(database).isEmpty)
     }
 
@@ -269,7 +280,12 @@ struct BrainGrowTests {
             try seedDirective(db, id: "SALVAGE", deviceCode: "KIT")
         }
 
-        #expect(await decide(database, uuid: uuid) == .idle(reason: "no free carrier at SOL-3"))
+        // The sentence names the run that actually owns the hull — reached
+        // through the upward stow edge, not through any column pointing at V1.
+        #expect(
+            await decide(database, uuid: uuid)
+                == .idle(reason: "no free carrier at SOL-3 — V1 is held by salvage run SALVAGE (running)")
+        )
         #expect(try await relayRuns(database).isEmpty)
     }
 
@@ -331,7 +347,10 @@ struct BrainGrowTests {
             try seedDevice(db, code: "V1", location: growHubLocation, status: "travelling")
         }
 
-        #expect(await decide(database, uuid: uuid) == .idle(reason: "no free carrier at SOL-3"))
+        #expect(
+            await decide(database, uuid: uuid)
+                == .idle(reason: "no free carrier at SOL-3 — V1 is travelling")
+        )
         #expect(try await relayRuns(database).isEmpty)
     }
 
@@ -652,5 +671,120 @@ struct BrainRationaleTests {
         #expect(Brain.rationale(for: candidate(magnitude: .nan)).contains("units"))
         #expect(Brain.rationale(for: candidate(magnitude: .infinity)).contains("units"))
         #expect(Brain.rationale(for: candidate(magnitude: 1e30)).contains("units"))
+    }
+}
+
+@Suite("Brain — why there is no free carrier")
+struct BrainCarrierBlockerTests {
+    /// **The clause-6 pair, and the reason this function exists.** A carrier
+    /// held for three minutes by a healthy run and a carrier held FOREVER by a
+    /// stalled mission the brain may not touch used to produce one identical
+    /// sentence — "no free carrier at SOL-3" — rendered identically as calm.
+    /// The two worlds here differ in exactly one field, the holder's status,
+    /// and the gate an operator reads must not be the same string.
+    ///
+    /// The second world is the live fleet's, in shape: the only
+    /// `heaven_vessel` at the print hub is owned by a `salvageRun` sitting in
+    /// `.needsAttention` on `awaitingRelayRestock` — waiting for a relay that
+    /// only a grow could supply, while holding the carrier that grow needs.
+    /// `brainManagedStall` admits `relayRun` rows only, so nothing in the brain
+    /// will ever clear it, and the sentence has to say so.
+    @Test func aStalledHolderReadsDifferentlyFromAHealthyOne() async throws {
+        let healthy = try await gateWithHolder(status: .running, reason: nil)
+        let stalled = try await gateWithHolder(status: .needsAttention, reason: .awaitingRelayRestock)
+
+        #expect(healthy == .idle(reason: "no free carrier at SOL-3 — V1 is held by salvage run HOLD (running)"))
+        #expect(
+            stalled == .idle(
+                reason: """
+                    no free carrier at SOL-3 — V1 is held by salvage run HOLD \
+                    (needs attention — Out of FTL relays, not the brain's to resolve)
+                    """
+            )
+        )
+        #expect(healthy != stalled, "an indefinite growth halt must not read as a three-minute wait")
+    }
+
+    /// A halted Relay Run is the brain's OWN, and the sentence must not tell an
+    /// operator to go and fix something the stall-response layer is already
+    /// working through. Same status, same reason, different kind — and the
+    /// "not the brain's to resolve" clause is gone.
+    @Test func aBrainManagedStallIsNotBlamedOnTheOperator() async throws {
+        let held = try await gateWithHolder(
+            status: .needsAttention, reason: .printStockShort, kind: .relayRun
+        )
+        #expect(
+            held == .idle(
+                reason: """
+                    no free carrier at SOL-3 — V1 is held by relay run HOLD \
+                    (needs attention — Resource stock too low to print)
+                    """
+            )
+        )
+    }
+
+    /// A paused run holds its carrier for exactly as long as the operator
+    /// leaves it paused, which is its own indefinite state and is named.
+    @Test func aPausedHolderIsNamedAsPaused() async throws {
+        let held = try await gateWithHolder(status: .paused, reason: nil)
+        #expect(held == .idle(reason: "no free carrier at SOL-3 — V1 is held by salvage run HOLD (paused)"))
+    }
+
+    /// With no carrier standing at the hub there is no holder to name and no
+    /// two states to tell apart, so the bare sentence stays the whole fact.
+    /// This is the calm case, and it must not acquire a clause it cannot fill.
+    @Test func noCandidateAtTheHubKeepsTheBareSentence() throws {
+        #expect(
+            Brain.carrierBlocker(at: "SOL-3", devices: [:], reserved: [], directives: [])
+                == "no free carrier at SOL-3"
+        )
+    }
+
+    /// Several blocked carriers are named two-at-a-time and the rest counted —
+    /// the judgement `Brain.list` makes about served systems, for the same
+    /// reason: an unbounded list in a one-line gate helps nobody.
+    @Test func extraBlockedCarriersAreCountedNotListed() throws {
+        let fleet = ["V1", "V2", "V3", "V4"].map {
+            deviceFixture(code: $0, location: "SOL-3", status: "travelling")
+        }
+        #expect(
+            Brain.carrierBlocker(
+                at: "SOL-3",
+                devices: Dictionary(fleet.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
+                reserved: [],
+                directives: []
+            ) == "no free carrier at SOL-3 — V1 is travelling; V2 is travelling +2 more"
+        )
+    }
+
+    /// One growable world with a single carrier the named directive owns.
+    ///
+    /// `retry` is a no-op stub rather than `unimplemented` because a
+    /// brain-MANAGED stall is genuinely due one on its first tick — that is the
+    /// whole difference these tests are about. The other four verbs stay
+    /// `unimplemented`, so the operator-only rule is still armed here.
+    private func gateWithHolder(
+        status: DirectiveStatus,
+        reason: DirectiveAttentionReason?,
+        kind: DirectiveKind = .salvageRun
+    ) async throws -> BrainDecision {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try seedGrowableWorld(db)
+            var holder = directiveFixture(id: "HOLD", kind: kind, status: status, deviceCode: "V1")
+            holder.attentionReason = reason
+            try Directive.insert { holder }.execute(db)
+        }
+        var resolution = DirectiveResolutionClient.testValue
+        resolution.retry = { _ in }
+        return await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(tickTime)
+            $0.uuid = .incrementing
+            $0.deviceRefresher = confirmingRefresher(database)
+            $0.directiveResolution = resolution
+        } operation: {
+            await Brain(now: tickTime).evaluateOnce()
+        }
     }
 }
