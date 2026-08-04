@@ -31,6 +31,15 @@
 //  the grow decision is identical in every world here and only the SOURCING
 //  differs.
 //
+//  **`seedReclaimWorld` is a ONE-HOP world, and that is why the strand guard
+//  never fires in it.** VEGA is 5 ly from SOL, so SOL survives as a mesh link
+//  however many spares get reclaimed — `nearestOfSeveralInRangeIsChosen` really
+//  does reclaim PROXIMA's relay while grow's own chain exits at PROXIMA, and it
+//  is harmless only because SOL is in range too. Do not read these worlds as
+//  evidence the guard is inert: the hazard needs a MULTI-hop grow, where the
+//  plant site can have exactly one mesh neighbour, and it has its own world in
+//  `aSourceTheNewRelayNeedsToLinkToIsNotReclaimed` at the bottom of the file.
+//
 
 import Dependencies
 import Foundation
@@ -341,8 +350,99 @@ struct BrainReclaimSourcingTests {
     /// graph's own unit — two relay hops. Pinned as a value because it is a
     /// calibration an operator may need to find, and because a silent change to
     /// it changes which relays the fleet tears down.
+    ///
+    /// A calibration lock, NOT behavioural evidence: it restates the constant
+    /// and can only fail by editing the line it guards. What proves the cutoff
+    /// actually bounds anything is `printFallbackWhenNoReclaimableInRange`,
+    /// which is killed by widening it to infinity.
     @Test func theCutoffIsTwoRelayHops() {
         #expect(Brain.reclaimRangeLY == 15.0)
         #expect(Brain.reclaimRangeLY == 2 * SalvageTargetPlanner.relayRangeLY)
+    }
+
+    /// **The source must not be the plant site's own way onto the mesh.**
+    ///
+    /// Grow and prune read one graph from two roots, and on a relay-count tie
+    /// they can leave the mesh by different exits — `reach` takes the exit
+    /// nearest the target, `pathUnion` the exit cheapest from the hub. This
+    /// world forces exactly that split (every figure below is the real
+    /// geometry, hop range 7.5 ly):
+    ///
+    ///     SOL     (0,   0, 0)  meshed — anchor, print hub at SOL-3, carrier V1
+    ///     SPUR    (7,   0, 0)  meshed — 7.000 ly from SOL
+    ///     MIDWAY  (7,   5, 0)  unmeshed — 5.000 from SPUR, 8.602 from SOL (NO link)
+    ///     FARSIDE (7,  10, 0)  unmeshed — the value: 3,200 units of salvage
+    ///     BYPASS  (3.5, 5, 0)  unmeshed — 6.103 from SOL, 6.103 from FARSIDE
+    ///
+    ///   - **Grow** (sources = every mesh system, keyed on distance FROM THE
+    ///     MESH) takes `SPUR → MIDWAY → FARSIDE` at 10.000 ly over
+    ///     `SOL → BYPASS → FARSIDE` at 12.207. Both cost 2 relays, so distance
+    ///     decides. `firstHop == MIDWAY`.
+    ///   - **Prune** (source = the anchor alone, distance accumulating FROM THE
+    ///     HUB, mesh systems free) takes `SOL → BYPASS → FARSIDE` at 12.207
+    ///     over `SOL → SPUR → MIDWAY → FARSIDE` at 17.000 — the free
+    ///     `SOL → SPUR` leg costs no relay but its 7 ly still count. So the
+    ///     union is `{SOL, BYPASS, FARSIDE}` and **`SPUR`'s relay is genuinely
+    ///     spare** — correctly so, on the question prune was asked.
+    ///
+    /// It is then 5.000 ly from the plant site, the nearest thing there is, and
+    /// well inside the 15 ly cutoff — so nearest-first selection points
+    /// straight at it. But `MIDWAY`'s ONLY meshed neighbour is `SPUR` (`SOL` is
+    /// 8.602 ly away, past the hop range). Reclaim it and the relay we fly to
+    /// `MIDWAY` meshes nothing: the run stalls at `settling`, and the fleet is
+    /// one node down having gained none.
+    ///
+    /// Remove `sourceWouldStrandTheHop` and this test sees `REL_SPUR`.
+    @Test func aSourceTheNewRelayNeedsToLinkToIsNotReclaimed() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try seedRelay(db, code: "REL_SOL", location: "SOL")
+            try seedRelay(db, code: "REL_SPUR", location: "SPUR-1")
+            try seedPrintHub(db, code: "HUB1", location: growHubLocation)
+            try seedDevice(db, code: "V1", type: "heaven_vessel", location: growHubLocation)
+            try seedReplicant(db, code: "REP0", star: "SOL", hostedDeviceCode: "V1")
+            try seedStar(db, designation: "SOL", x: 0, y: 0, z: 0)
+            try seedStar(db, designation: "SPUR", x: 7, y: 0, z: 0)
+            try seedStar(db, designation: "MIDWAY", x: 7, y: 5, z: 0)
+            try seedStar(db, designation: "FARSIDE", x: 7, y: 10, z: 0)
+            try seedStar(db, designation: "BYPASS", x: 3.5, y: 5, z: 0)
+            // Both meshed systems surveyed and valueless — an unsurveyed meshed
+            // system is a prune target, which would pin SPUR and make this test
+            // pass without the guard.
+            try seedSystemDetail(db, system: "SOL", scanned: true)
+            try seedSystemDetail(db, system: "SPUR", scanned: true)
+            try seedSalvageAssay(
+                db, id: "SITE-FARSIDE", system: "FARSIDE", totals: ["metal": 3_200]
+            )
+        }
+
+        // The premises, asserted rather than assumed — this test is worthless if
+        // the world does not actually produce the grow/prune split it describes.
+        let (analysis, hopLinks) = try await database.read { db -> (PruneAnalysis, Set<String>) in
+            let view = try WorldView.read(from: db, now: tickTime)
+            let graph = MeshGraph(positions: view.starPositions)
+            return (
+                PrunePredicate.analyse(view: view, graph: graph),
+                Brain.meshNeighbours(of: "MIDWAY", view: view, graph: graph)
+            )
+        }
+        #expect(analysis.declined == nil)
+        #expect(
+            analysis.reclaimable == [ReclaimableRelay(deviceCode: "REL_SPUR", system: "SPUR")],
+            "prune really does offer SPUR up — the guard is not covering for a pinned relay"
+        )
+        #expect(
+            hopLinks == ["SPUR"],
+            "and SPUR really is MIDWAY's only way onto the mesh — SOL is 8.6 ly away"
+        )
+
+        let decision = await tick(database, uuid: .incrementing)
+        let row = try await launchedRun(database, decision)
+
+        #expect(row.targets == ["MIDWAY"], "grow's chain exits the mesh at SPUR, so the hop is MIDWAY")
+        #expect(
+            row.sourceRelayCode == nil,
+            "REL_SPUR is 5 ly away and spare, but it is the only thing MIDWAY can link to — print"
+        )
     }
 }

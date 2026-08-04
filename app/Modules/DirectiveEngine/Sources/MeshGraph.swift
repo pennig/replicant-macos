@@ -93,6 +93,16 @@ public struct MeshGraph: Sendable {
     /// union quietly shrank. Asking the GRAPH closes it: the check now reads
     /// the very dictionary `search` and `backtrack` read, so the two cannot
     /// disagree however the graph was built.
+    ///
+    /// **What it catches is a graph that is a SUBSET of the caller's census,
+    /// not a superset.** A graph carrying stars the view does not list would
+    /// pass every check and could still reroute the union through a system the
+    /// caller has never heard of. That is unreachable today — `Brain.plan` is
+    /// the only production site that builds a `MeshGraph`, and it builds it
+    /// from the same `view.starPositions` it then hands to both readings — and
+    /// the shrink direction is the one that offers up load-bearing relays,
+    /// which is why it is the direction closed. Stated rather than guarded, so
+    /// a second construction site knows what this does not promise.
     func canPlace(_ system: String) -> Bool { positions[system] != nil }
 
     /// Straight-line distance between two systems in light-years, or nil if

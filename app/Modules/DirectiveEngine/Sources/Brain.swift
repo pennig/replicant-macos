@@ -518,11 +518,25 @@ struct Brain: Sendable {
     ///      the list and a second carrier is sent to deactivate the same relay.
     ///      The exact mirror of `inFlightTargets` on the sourcing side, and it
     ///      is re-checked at commit time for the same reason that one is.
+    ///   4. **The source must not be the plant site's own way onto the mesh.**
+    ///      See `sourceWouldStrandTheHop` — this is the one hazard `PrunePredicate`
+    ///      structurally cannot see, and the cutoff aims selection straight at it.
     ///
     /// Ties break on device code after distance, so the same world produces the
     /// same choice every tick — the reproducibility a stateless brain that
     /// re-decides from scratch depends on (`freeCarrier`'s `min(by:)` records
     /// the argument).
+    ///
+    /// **The carrier-host fact is SNAPSHOT-ONLY and nothing re-confirms it.**
+    /// `confirmCarrier` spends its `.high` read on the DEVICE row; nothing
+    /// re-reads `replicants`, and the executor's own authority gate
+    /// (`RelayRun.carrierRetainsAuthority`) only fires AFTER the `deactivate`.
+    /// A replicant that changed hulls between the last account sync and this
+    /// launch therefore produces exactly the case gate 1 exists to prevent. It
+    /// needs an operator action to arise, and it is recoverable — the source is
+    /// by construction load-bearing for nothing, so the stall costs a run and a
+    /// carrier's time rather than authority — but it is not closed, and a
+    /// second `.high` read per launching tick is not obviously the right price.
     static func reclaimSource(
         view: WorldView, graph: MeshGraph, target: String, carrier: Device, directives: [Directive]
     ) -> ReclaimChoice? {
@@ -532,8 +546,10 @@ struct Brain: Sendable {
         guard analysis.declined == nil else { return nil }
 
         let claimed = inFlightSources(directives)
+        let meshLinks = meshNeighbours(of: target, view: view, graph: graph)
         return analysis.reclaimable
             .filter { !claimed.contains($0.deviceCode) }
+            .filter { !sourceWouldStrandTheHop($0, meshLinksAtHop: meshLinks) }
             .compactMap { relay -> ReclaimChoice? in
                 guard let distance = graph.separation(relay.system, target),
                       distance <= reclaimRangeLY
@@ -541,6 +557,58 @@ struct Brain: Sendable {
                 return ReclaimChoice(relay: relay, distanceLY: distance)
             }
             .min { ($0.distanceLY, $0.relay.deviceCode) < ($1.distanceLY, $1.relay.deviceCode) }
+    }
+
+    /// The meshed systems the plant site could link to — every mesh system
+    /// within one relay hop of it.
+    static func meshNeighbours(
+        of hop: String, view: WorldView, graph: MeshGraph
+    ) -> Set<String> {
+        Set(graph.neighbours(of: hop)).intersection(view.meshSystems)
+    }
+
+    /// Would reclaiming this relay take away the very mesh node the new relay
+    /// is about to link to?
+    ///
+    /// **The one hazard `PrunePredicate` structurally cannot see, and the
+    /// cutoff aims selection straight at it.** Grow and prune read the same
+    /// graph with different roots: `MeshGraph.reach` seeds EVERY mesh system at
+    /// zero cost and keys on distance-from-the-mesh, while `pathUnion` seeds the
+    /// ANCHOR alone and keys on distance-from-the-hub. When two chains to a
+    /// target tie on relay count — which is the common case, since relay count
+    /// is the primary key and the distances only break ties — the two searches
+    /// can leave the mesh by DIFFERENT exits: grow takes the exit nearest the
+    /// target, prune the exit cheapest from the hub. A relay standing at grow's
+    /// exit that prune routed around is genuinely on no anchor→target path, so
+    /// prune correctly calls it spare — and then the plant site's only way onto
+    /// the mesh is the thing we are about to tear down.
+    ///
+    /// Worse, `reclaimRangeLY` points at it: the relays nearest the plant site
+    /// are precisely its candidate links, and the nearest-first rule prefers
+    /// them. The failure is silent and expensive — the run deactivates the
+    /// source, stows it, flies to the hop, deploys, and the new relay meshes
+    /// nothing; the run stalls at `settling` and the fleet is one node down for
+    /// nothing gained.
+    ///
+    /// **The test is local and exact:** the hop must retain at least one meshed
+    /// neighbour after the source's system leaves the mesh. One extra 27-cell
+    /// grid probe on a launching tick, no new state, no second search.
+    ///
+    /// **It subtracts the whole SYSTEM, not the one relay**, which is
+    /// deliberately conservative: two relays standing in one system would keep
+    /// it meshed after one is reclaimed, and this rejects the source anyway.
+    /// The error costs a print; the other direction costs the grow AND a mesh
+    /// node.
+    ///
+    /// **One-hop grows are safe by construction** and this simply never fires
+    /// for them: a 1-relay prune path must enter the target from a mesh node
+    /// within `hopRange`, so that node is on the union, pinned, and never
+    /// offered — leaving a second link alive. This bites on frontier-extending
+    /// MULTI-hop grows, which is exactly where the mesh is thinnest.
+    static func sourceWouldStrandTheHop(
+        _ relay: ReclaimableRelay, meshLinksAtHop: Set<String>
+    ) -> Bool {
+        meshLinksAtHop.subtracting([relay.system]).isEmpty
     }
 
     /// Every relay an in-force directive has already been told to reclaim.
