@@ -43,12 +43,23 @@ import UniverseModels
 
 private let tickTime = Date(timeIntervalSince1970: 1_000)
 
-/// Drive one brain tick through the engine's own seam.
-private func tick(_ database: any DatabaseWriter, core: DirectiveEngineCore) async {
+/// **`uuid` is threaded explicitly, and neither helper defaults it, on
+/// purpose.** `UUIDGenerator.incrementing` is a COMPUTED property: every
+/// access constructs a fresh generator starting again at
+/// `00000000-0000-0000-0000-000000000000`. A helper that re-entered
+/// `withDependencies { $0.uuid = .incrementing }` per call would therefore
+/// mint the same id on every tick — and since `directives.id` is a `TEXT
+/// PRIMARY KEY`, a genuine second launch would hit a constraint failure,
+/// land in `Brain`'s catch, and return `.idle(reason: "launch failed")` with
+/// the row count unchanged. Every "did not double-launch" assertion in this
+/// file would then be incapable of failing no matter which guard was removed
+/// (review found exactly that). One generator per TEST, shared across its
+/// ticks, is what makes a second launch produce a second row.
+private func tick(_ database: any DatabaseWriter, core: DirectiveEngineCore, uuid: UUIDGenerator) async {
     await withDependencies {
         $0.defaultDatabase = database
         $0.date = .constant(tickTime)
-        $0.uuid = .incrementing
+        $0.uuid = uuid
     } operation: {
         await core.tickBrain()
     }
@@ -56,8 +67,8 @@ private func tick(_ database: any DatabaseWriter, core: DirectiveEngineCore) asy
 
 /// Drive one brain tick and keep its decision — the same call `tickBrain()`
 /// makes, one layer down, for the assertions that are about WHY a tick did
-/// what it did rather than about the row it wrote.
-private func decide(_ database: any DatabaseWriter, uuid: UUIDGenerator = .incrementing) async -> BrainDecision {
+/// what it did rather than about the row it wrote. See `tick` on `uuid`.
+private func decide(_ database: any DatabaseWriter, uuid: UUIDGenerator) async -> BrainDecision {
     await withDependencies {
         $0.defaultDatabase = database
         $0.date = .constant(tickTime)
@@ -100,10 +111,11 @@ struct BrainGrowTests {
     /// below isolates reservation itself.
     @Test func brainLaunchesRelayRunForTheTopGrowCandidate() async throws {
         let database = try GameDatabase.bootstrap()
+        let uuid = UUIDGenerator.incrementing
         try await database.write { db in try seedGrowableWorld(db) }
         let core = DirectiveEngineCore(machines: MissionRegistry.machines, tick: .seconds(5))
 
-        await tick(database, core: core)
+        await tick(database, core: core, uuid: uuid)
 
         let launched = try await relayRuns(database)
         #expect(launched.count == 1)
@@ -123,7 +135,7 @@ struct BrainGrowTests {
         #expect(row.stepStartedAt == tickTime)
         #expect(row.createdAt == tickTime)
 
-        await tick(database, core: core)
+        await tick(database, core: core, uuid: uuid)
 
         let afterSecondTick = try await relayRuns(database)
         #expect(afterSecondTick.count == 1, "a second tick must not double-launch")
@@ -142,11 +154,12 @@ struct BrainGrowTests {
     /// Relay Run on V1 — verified by mutation, not assumed.
     @Test func aRunningRunReservesItsCarrierEvenForADifferentTarget() async throws {
         let database = try GameDatabase.bootstrap()
+        let uuid = UUIDGenerator.incrementing
         try await database.write { db in
             try seedGrowableWorld(db, carriers: ["V1"], salvage: ["VEGA": 3_200, "ALTAIR": 100])
         }
 
-        let first = await decide(database)
+        let first = await decide(database, uuid: uuid)
         guard case let .dispatch(goal, ranked) = first else {
             Issue.record("expected a dispatch, got \(first)")
             return
@@ -155,7 +168,7 @@ struct BrainGrowTests {
         #expect(goal.target == "VEGA", "equidistant candidates tie through the cheapest-chain fields, so magnitude decides")
         #expect(ranked.map(\.firstHop) == ["VEGA", "ALTAIR"], "the whole ranked field rides along for the why-view")
 
-        let second = await decide(database)
+        let second = await decide(database, uuid: uuid)
         #expect(
             second == .idle(reason: "no free carrier at SOL-3"),
             "ALTAIR is unclaimed and still ranked — only the carrier being reserved can stop this tick"
@@ -174,17 +187,18 @@ struct BrainGrowTests {
     /// rows.
     @Test func anInFlightTargetIsNotLaunchedTwiceEvenWithASpareCarrier() async throws {
         let database = try GameDatabase.bootstrap()
+        let uuid = UUIDGenerator.incrementing
         try await database.write { db in
             try seedGrowableWorld(db, carriers: ["V1", "V2"], salvage: ["VEGA": 3_200])
         }
 
-        let first = await decide(database)
+        let first = await decide(database, uuid: uuid)
         guard case .dispatch = first else {
             Issue.record("expected a dispatch, got \(first)")
             return
         }
 
-        let second = await decide(database)
+        let second = await decide(database, uuid: uuid)
         #expect(second == .idle(reason: "every grow candidate is already in flight"))
         let launched = try await relayRuns(database)
         #expect(launched.count == 1)
@@ -197,12 +211,13 @@ struct BrainGrowTests {
     /// carrying it as its `deviceCode`.
     @Test func aCarrierNamedAsAnotherRunsControllerIsNotFree() async throws {
         let database = try GameDatabase.bootstrap()
+        let uuid = UUIDGenerator.incrementing
         try await database.write { db in
             try seedGrowableWorld(db)
             try seedDirective(db, id: "OTHER", deviceCode: "SOMEVESSEL", controllerCode: "V1")
         }
 
-        #expect(await decide(database) == .idle(reason: "no free carrier at SOL-3"))
+        #expect(await decide(database, uuid: uuid) == .idle(reason: "no free carrier at SOL-3"))
         #expect(try await relayRuns(database).isEmpty)
     }
 
@@ -211,13 +226,37 @@ struct BrainGrowTests {
     /// already committed even though no column points at it.
     @Test func aCarrierCarryingARunningRunsFleetTagIsNotFree() async throws {
         let database = try GameDatabase.bootstrap()
+        let uuid = UUIDGenerator.incrementing
         try await database.write { db in
             try seedGrowableWorld(db, carriers: [])
             try seedDevice(db, code: "V1", location: growHubLocation, tags: ["auto:haul"])
             try seedDirective(db, id: "HAUL", kind: .haulRun, deviceCode: "SOMEVESSEL", fleetTag: "auto:haul")
         }
 
-        #expect(await decide(database) == .idle(reason: "no free carrier at SOL-3"))
+        #expect(await decide(database, uuid: uuid) == .idle(reason: "no free carrier at SOL-3"))
+        #expect(try await relayRuns(database).isEmpty)
+    }
+
+    /// **A hull holding another run's cargo is not free.** V1 is named by no
+    /// directive at all — right type, at the hub, idle — but a running Salvage
+    /// Run owns `KIT`, and `KIT` is stowed inside V1. Flying V1 away takes
+    /// somebody else's device with it, which is the bounded-blast-radius
+    /// clause, so V1 must not be picked.
+    ///
+    /// This is the gap review found: a downward-only stow walk returns
+    /// `{KIT}` and leaves the hull around it allocatable. The shape is normal
+    /// in this codebase — `reservesTheControllerAndEveryDeviceWearingTheFleetTag`
+    /// seeds a stowed tagged device for the same reason.
+    @Test func aVesselHoldingAnotherRunsDeviceIsNotFree() async throws {
+        let database = try GameDatabase.bootstrap()
+        let uuid = UUIDGenerator.incrementing
+        try await database.write { db in
+            try seedGrowableWorld(db)
+            try seedDevice(db, code: "KIT", type: "mining_drone", stowedIn: "V1")
+            try seedDirective(db, id: "SALVAGE", deviceCode: "KIT")
+        }
+
+        #expect(await decide(database, uuid: uuid) == .idle(reason: "no free carrier at SOL-3"))
         #expect(try await relayRuns(database).isEmpty)
     }
 
@@ -228,12 +267,13 @@ struct BrainGrowTests {
     /// every status, which would freeze the brain permanently after one run.
     @Test func aCompletedRunReleasesItsCarrier() async throws {
         let database = try GameDatabase.bootstrap()
+        let uuid = UUIDGenerator.incrementing
         try await database.write { db in
             try seedGrowableWorld(db)
             try seedDirective(db, id: "DONE", status: .completed, deviceCode: "V1")
         }
 
-        guard case let .dispatch(goal, _) = await decide(database) else {
+        guard case let .dispatch(goal, _) = await decide(database, uuid: uuid) else {
             Issue.record("a completed run must not reserve its carrier")
             return
         }
@@ -246,9 +286,10 @@ struct BrainGrowTests {
     /// worth reaching — and the tick idles, writing nothing.
     @Test func idlesWhenThereIsNoUnmeshedValue() async throws {
         let database = try GameDatabase.bootstrap()
+        let uuid = UUIDGenerator.incrementing
         try await database.write { db in try seedGrowableWorld(db, salvage: [:]) }
 
-        #expect(await decide(database) == .idle(reason: "no grow or prune work"))
+        #expect(await decide(database, uuid: uuid) == .idle(reason: "no grow or prune work"))
         #expect(try await relayRuns(database).isEmpty)
     }
 
@@ -258,9 +299,10 @@ struct BrainGrowTests {
     /// exist.
     @Test func idlesWhenValueIsInReachButNoCarrierIsFree() async throws {
         let database = try GameDatabase.bootstrap()
+        let uuid = UUIDGenerator.incrementing
         try await database.write { db in try seedGrowableWorld(db, carriers: []) }
 
-        #expect(await decide(database) == .idle(reason: "no free carrier at SOL-3"))
+        #expect(await decide(database, uuid: uuid) == .idle(reason: "no free carrier at SOL-3"))
         #expect(try await relayRuns(database).isEmpty)
     }
 
@@ -270,12 +312,13 @@ struct BrainGrowTests {
     /// print a relay at a hub the carrier is leaving.
     @Test func aBusyCarrierIsNotFree() async throws {
         let database = try GameDatabase.bootstrap()
+        let uuid = UUIDGenerator.incrementing
         try await database.write { db in
             try seedGrowableWorld(db, carriers: [])
             try seedDevice(db, code: "V1", location: growHubLocation, status: "travelling")
         }
 
-        #expect(await decide(database) == .idle(reason: "no free carrier at SOL-3"))
+        #expect(await decide(database, uuid: uuid) == .idle(reason: "no free carrier at SOL-3"))
         #expect(try await relayRuns(database).isEmpty)
     }
 
@@ -286,12 +329,13 @@ struct BrainGrowTests {
     /// evaluation.
     @Test func aCarrierParkedAwayFromTheHubIsNotFree() async throws {
         let database = try GameDatabase.bootstrap()
+        let uuid = UUIDGenerator.incrementing
         try await database.write { db in
             try seedGrowableWorld(db, carriers: [])
             try seedDevice(db, code: "V1", location: "SOL-4")
         }
 
-        #expect(await decide(database) == .idle(reason: "no free carrier at SOL-3"))
+        #expect(await decide(database, uuid: uuid) == .idle(reason: "no free carrier at SOL-3"))
         #expect(try await relayRuns(database).isEmpty)
     }
 
@@ -301,12 +345,13 @@ struct BrainGrowTests {
     /// meshed.)
     @Test func idlesWithNoPrintHubOnTheMesh() async throws {
         let database = try GameDatabase.bootstrap()
+        let uuid = UUIDGenerator.incrementing
         try await database.write { db in
             try seedGrowableWorld(db)
             try Device.delete().where { $0.deviceCode.eq("HUB1") }.execute(db)
         }
 
-        #expect(await decide(database) == .idle(reason: "no print hub on the mesh"))
+        #expect(await decide(database, uuid: uuid) == .idle(reason: "no print hub on the mesh"))
         #expect(try await relayRuns(database).isEmpty)
     }
 
@@ -318,13 +363,14 @@ struct BrainGrowTests {
     /// emptiness for the tables a launch or a mission step would have written.
     @Test func anIdlingBrainWritesNothingAtAll() async throws {
         let database = try GameDatabase.bootstrap()
+        let uuid = UUIDGenerator.incrementing
         try await database.write { db in try seedGrowableWorld(db, salvage: [:]) }
         let devicesBefore = try await database.read { db in try Device.all.order { $0.deviceCode }.fetchAll(db) }
         let starsBefore = try await database.read { db in try Star.all.order { $0.designation }.fetchAll(db) }
 
         let core = DirectiveEngineCore(machines: MissionRegistry.machines, tick: .seconds(5))
-        await tick(database, core: core)
-        await tick(database, core: core)
+        await tick(database, core: core, uuid: uuid)
+        await tick(database, core: core, uuid: uuid)
 
         let counts = try await database.read { db in
             Counts(
@@ -350,11 +396,14 @@ struct BrainGrowTests {
     /// brain must not do the executor's job on the way past.
     @Test func aLaunchingBrainWritesTheDirectiveRowAndNothingElse() async throws {
         let database = try GameDatabase.bootstrap()
+        let uuid = UUIDGenerator.incrementing
         try await database.write { db in try seedGrowableWorld(db) }
         let devicesBefore = try await database.read { db in try Device.all.order { $0.deviceCode }.fetchAll(db) }
+        let assaysBefore = try await database.read { db in try SiteAssay.all.order { $0.id }.fetchAll(db) }
+        let starsBefore = try await database.read { db in try Star.all.order { $0.designation }.fetchAll(db) }
 
         let core = DirectiveEngineCore(machines: MissionRegistry.machines, tick: .seconds(5))
-        await tick(database, core: core)
+        await tick(database, core: core, uuid: uuid)
 
         let counts = try await database.read { db in
             Counts(
@@ -367,8 +416,16 @@ struct BrainGrowTests {
         #expect(counts.directives == 1)
         #expect(counts.logEntries == 0, "the timeline is the executor's to write, not the brain's")
         #expect(counts.operations == 0, "the brain never commands a device — only the executor does")
+        // The wider net matters MORE on this path than on the idle one: this
+        // is the tick that actually writes, so it is the tick that could write
+        // something extra.
+        #expect(counts.assays == 1, "…and must not consume, deplete, or invent a value row")
         let devicesAfter = try await database.read { db in try Device.all.order { $0.deviceCode }.fetchAll(db) }
         #expect(devicesAfter == devicesBefore, "launching must not stamp anything onto the carrier")
+        let assaysAfter = try await database.read { db in try SiteAssay.all.order { $0.id }.fetchAll(db) }
+        #expect(assaysAfter == assaysBefore, "…row-for-row, not merely the same count")
+        let starsAfter = try await database.read { db in try Star.all.order { $0.designation }.fetchAll(db) }
+        #expect(starsAfter == starsBefore, "…nor a census row")
     }
 }
 
@@ -400,6 +457,57 @@ struct BrainReservationTests {
             directives: [directiveFixture(id: "D1", deviceCode: "V1")], devices: devices
         )
         #expect(reserved == ["V1", "CTRL", "DRONE"])
+    }
+
+    /// The UPWARD closure: an owned device reserves the hull it rides in, and
+    /// (through the downward edge, from that hull) everything else aboard it.
+    ///
+    /// `V` is named by no directive; only `X` inside it is owned. A
+    /// downward-only walk returns `{X}`, leaving `V` allocatable — which is
+    /// exactly how a Relay Run would fly away with another mission's device in
+    /// the hold. `SIBLING` proves the closure keeps going rather than stopping
+    /// at the hull: whatever `V` carries goes where `V` goes.
+    @Test func anOwnedDeviceReservesTheHullItRidesInAndItsOtherCargo() {
+        let devices = fleet([
+            deviceFixture(code: "V", location: "SOL-3"),
+            deviceFixture(code: "X", type: "mining_drone", stowedIn: "V"),
+            deviceFixture(code: "SIBLING", type: "survey_drone", stowedIn: "V"),
+            deviceFixture(code: "UNRELATED", location: "SOL-3"),
+        ])
+        let reserved = Brain.reservedDevices(
+            directives: [directiveFixture(id: "D1", deviceCode: "X")], devices: devices
+        )
+        #expect(reserved == ["X", "V", "SIBLING"])
+    }
+
+    /// Adoption, read from BOTH ends — the shape `AMIFleet.adoptedDrones`
+    /// already uses, and for the recorded reason: `controlled_devices` ships
+    /// only in the single-device payload and a routine fleet sync erases it
+    /// (`controlled-devices-detail-only`), so the drone's own
+    /// `controllerDeviceCode` column is the reliable end and the controller's
+    /// list is the bonus. A DEPLOYED drone (stowed nowhere, so invisible to
+    /// the stow walk) adopted by a reserved controller is still owned.
+    @Test func aReservedControllerReservesTheDronesItHasAdopted() {
+        var controller = deviceFixture(code: "AMI1", type: "ami_controller", location: "SOL-3")
+        controller.detail = .object(["controlled_devices": .array([.object(["device_code": .string("BLOB-ONLY")])])])
+        let devices = fleet([
+            deviceFixture(code: "V1", location: "SOL-3"),
+            controller,
+            deviceFixture(code: "DEPLOYED", type: "survey_drone", location: "SOL-3-1"),
+            deviceFixture(code: "BLOB-ONLY", type: "survey_drone", location: "SOL-3-2"),
+            deviceFixture(code: "SOMEONE-ELSES", type: "survey_drone", location: "SOL-3-3"),
+        ])
+        // The column end, which is the one that survives a fleet sync.
+        var adopted = devices["DEPLOYED"]!
+        adopted.controllerDeviceCode = "AMI1"
+        var byCode = devices
+        byCode["DEPLOYED"] = adopted
+
+        let reserved = Brain.reservedDevices(
+            directives: [directiveFixture(id: "D1", deviceCode: "V1", controllerCode: "AMI1")],
+            devices: byCode
+        )
+        #expect(reserved == ["V1", "AMI1", "DEPLOYED", "BLOB-ONLY"])
     }
 
     /// Rules 3 and 4: the controller the mission drives, and every device

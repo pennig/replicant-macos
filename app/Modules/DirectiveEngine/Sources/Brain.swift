@@ -203,28 +203,64 @@ struct Brain: Sendable {
     ///
     /// The running directive ROWS are the lease ledger (`brain-executor-seam`,
     /// ticket 04); there is no separate lease table and this task deliberately
-    /// does not add one. Four rules, all of them from that ticket:
+    /// does not add one. Four rules from that ticket seed the set:
     ///
     ///   1. `deviceCode` — the mission's carrier.
-    ///   2. Everything TRANSITIVELY stowed inside it. A relay aboard a
-    ///      carrier, a drone aboard a controller aboard a carrier: the whole
-    ///      subtree travels with the mission and is as owned as the hull
-    ///      around it. Walked through each child's own `stowedInDeviceCode`
-    ///      column and never through the parent's `stowed_devices` blob — the
-    ///      blob is not a reliable inverse (a live vessel's listed one
-    ///      unrelated device while six drones claimed to be aboard), which is
-    ///      the same reason `RelayRun.confirmStow` reads the child end.
+    ///   2. Everything transitively stowed inside it (see the closure below).
     ///   3. `controllerCode` — the AMI the mission is driving.
     ///   4. `fleetTag` — every device wearing it, because a tag is how a Haul
-    ///      Run names a working set no column points at.
+    ///      Run names a working set no column points at. This is why the
+    ///      caller must pass an UNFILTERED fleet: a tagged device is usually
+    ///      stowed, and `WorldView.read`'s `Device.all` is what makes it
+    ///      visible here at all.
+    ///
+    /// Then a **closure** to a fixpoint over three containment relations. The
+    /// seed alone is not "every device an in-force directive owns", which is
+    /// what this function claims and what its one consumer needs:
+    ///
+    ///   - **Stow, downward** (`parent → children`). A relay aboard a carrier,
+    ///     a drone aboard a controller aboard a carrier: the whole subtree
+    ///     travels with the mission.
+    ///   - **Stow, upward** (`child → its hull`). The one review found, and
+    ///     the reachable one: directive D owns device X, X is stowed inside
+    ///     vessel V, and V is named by no directive. Without this edge V reads
+    ///     as free, `freeCarrier` picks it, and the Relay Run flies away with
+    ///     another mission's device in the hold. The hull is as reserved as
+    ///     its cargo. (Reserving V then re-reserves V's other contents through
+    ///     the downward edge, which is correct for the same reason: they all
+    ///     go where V goes.)
+    ///   - **Adoption** (`controller → adopted drones`), read from BOTH ends
+    ///     exactly as `AMIFleet.adoptedDrones(of:in:)` does — the drone's
+    ///     `controllerDeviceCode` column AND the controller's
+    ///     `controlledDeviceCodes`. The two-ended read is not belt-and-braces:
+    ///     `controlled_devices` ships only in the single-device payload and a
+    ///     routine fleet sync ERASES it (`controlled-devices-detail-only`), so
+    ///     the column is the reliable end and the blob is the bonus. A
+    ///     deployed drone adopted by a reserved controller is owned even
+    ///     though it is stowed nowhere.
+    ///
+    /// Every stow read is through the CHILD's own `stowedInDeviceCode` column,
+    /// never the parent's `stowed_devices` blob — the blob is not a reliable
+    /// inverse (a live vessel's listed one unrelated device while six drones
+    /// claimed to be aboard), the same reason `RelayRun.confirmStow` reads the
+    /// child end.
+    ///
+    /// **Deliberately over-reserving rather than under-.** The closure spreads
+    /// through a containment component, so one owned drone can reserve a hull
+    /// and its other contents. That direction of error costs a tick of
+    /// patience; the other direction strands somebody's fleet.
+    ///
+    /// **Terminates** on any input, including corrupt ones: a code joins the
+    /// frontier only on the pass that first inserts it into `reserved`, so a
+    /// stow cycle (A aboard B aboard A) closes instead of looping.
     ///
     /// Nothing existing computed this: `DirectiveRow.owningStatuses`
     /// (DirectivesFeature) is a display-side join over `controllerCode` only,
-    /// covers neither the carrier, the stow subtree, nor the tag, and lives in
+    /// covers neither the carrier, the stow tree, nor the tag, and lives in
     /// a module that depends on this one — so reusing it is impossible in the
     /// only direction that matters, and widening it would leave the display
     /// join answering a question it was not asked. This is the one place the
-    /// four rules are spelled out.
+    /// rules are spelled out.
     static func reservedDevices(directives: [Directive], devices: [String: Device]) -> Set<String> {
         let owning = directives.filter { owningStatuses.contains($0.status) }
         guard !owning.isEmpty else { return [] }
@@ -240,19 +276,37 @@ struct Brain: Sendable {
             }
         }
 
-        // The stow walk, done once over the whole owned set rather than once
-        // per directive: `children` is built a single time, and the frontier
-        // expansion below is bounded by the fleet size because a code only
-        // enters it on the tick that first inserts it into `reserved`.
-        var children: [String: [String]] = [:]
-        for device in devices.values {
-            guard let parent = device.stowedInDeviceCode else { continue }
-            children[parent, default: []].append(device.deviceCode)
+        // `code → everything reserving `code` also reserves`. Built once over
+        // the whole fleet rather than once per directive, and walked once from
+        // the whole seed set.
+        //
+        // Every edge TARGET is required to be a device the fleet actually
+        // holds. A dangling reference — a hull we have no row for, an adoption
+        // list naming a device a sync has not brought in — names nothing this
+        // brain could allocate anyway, and admitting it would put phantom
+        // codes in a set whose whole meaning is "real devices, spoken for".
+        var drags: [String: [String]] = [:]
+        func link(_ from: String, _ to: String) {
+            guard devices[to] != nil else { return }
+            drags[from, default: []].append(to)
         }
+        for device in devices.values {
+            if let hull = device.stowedInDeviceCode {
+                link(hull, device.deviceCode)   // downward: the cargo aboard it
+                link(device.deviceCode, hull)   // upward: the hull it rides in
+            }
+            if let controller = device.controllerDeviceCode {
+                link(controller, device.deviceCode)
+            }
+            for adopted in device.controlledDeviceCodes {
+                link(device.deviceCode, adopted)
+            }
+        }
+
         var frontier = Array(reserved)
-        while let parent = frontier.popLast() {
-            for child in children[parent] ?? [] where reserved.insert(child).inserted {
-                frontier.append(child)
+        while let code = frontier.popLast() {
+            for next in drags[code] ?? [] where reserved.insert(next).inserted {
+                frontier.append(next)
             }
         }
         return reserved
