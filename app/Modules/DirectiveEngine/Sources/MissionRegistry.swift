@@ -13,7 +13,7 @@ import GameModels
 
 public enum MissionRegistry {
     /// Every mission the app can run.
-    public static let machines: [any MissionStepMachine] = [SurveyRun(), SalvageRun(), HaulRun(), RelayRun()]
+    public static let machines: [any MissionStepMachine] = [SurveyRun(), SalvageRun(), HaulRun(), RelayRun(), RestockRun()]
 
     public static func machine(for kind: DirectiveKind) -> (any MissionStepMachine)? {
         machines.first { $0.kind == kind }

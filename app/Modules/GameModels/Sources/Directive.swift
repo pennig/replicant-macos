@@ -22,6 +22,9 @@ public enum DirectiveKind: String, Codable, Equatable, Sendable, CaseIterable, Q
     case relayRun
     case salvageRun
     case haulRun
+    /// Keeps idle FTL relays standing at the print hub, ahead of demand.
+    /// Owned by the HUB device, not a carrier — a print needs no vessel.
+    case restockRun
 
     /// The list row's label, e.g. "Survey Run".
     public var title: String {
@@ -30,6 +33,7 @@ public enum DirectiveKind: String, Codable, Equatable, Sendable, CaseIterable, Q
         case .relayRun: "Relay Run"
         case .salvageRun: "Salvage Run"
         case .haulRun: "Haul Run"
+        case .restockRun: "Relay Restock"
         }
     }
 }

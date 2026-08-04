@@ -142,7 +142,7 @@ struct BrainGrowTests {
         #expect(row.controllerCode == nil)
         #expect(row.fleetTag == nil, "ownership is the carrier alone — a Relay Run leases no fleet")
         #expect(row.roamCentre == nil, "a Relay Run is one-shot; a roam centre would ask it to extend its queue")
-        #expect(row.returnToOrigin == false)
+        #expect(row.returnToOrigin, "the carrier comes home so the next run can use it")
         #expect(row.originDesignation == "SOL")
         #expect(row.attentionReason == nil)
         #expect(row.stepStartedAt == tickTime)

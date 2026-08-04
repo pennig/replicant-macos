@@ -151,6 +151,14 @@ public enum DirectiveRow: Equatable, Identifiable, Sendable {
             if directive.kind == .haulRun {
                 return haulTarget == nil ? "Nothing reachable" : "Hauling"
             }
+            // Restock has no queue to walk either: its `targets` are the DEMAND
+            // it is printing against, not a route, and `targetIndex` never
+            // advances — so the m/n readout below would sit at "0/7" forever.
+            // Say what it is stocking for instead.
+            if directive.kind == .restockRun {
+                let wanted = directive.targets.count
+                return wanted == 0 ? "Stocked" : "Stocking for \(wanted) target\(wanted == 1 ? "" : "s")"
+            }
             // A continuous run EXTENDS its queue instead of completing it, so
             // `targetIndex == targets.count` for the whole window between
             // finishing one system and planning the next — and "n/n" reads as a
@@ -163,8 +171,8 @@ public enum DirectiveRow: Equatable, Identifiable, Sendable {
                     return "\(count) system\(count == 1 ? "" : "s") drained"
                 case .surveyRun, .relayRun:
                     return "\(directive.targetIndex) surveyed"
-                case .haulRun:
-                    // Handled above, before the queue readouts.
+                case .haulRun, .restockRun:
+                    // Both handled above, before the queue readouts.
                     return nil
                 }
             }

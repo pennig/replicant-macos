@@ -144,6 +144,9 @@ public struct RelayRun: MissionStepMachine {
         public static let confirmingRelay = "confirmingRelay"
         /// Confirm the run's actual deliverable: the TARGET SYSTEM is meshed.
         public static let settling = "settling"
+        /// Fly the carrier back to the hub so the next run can use it. Entered
+        /// from `settling` only when the run carries `returnToOrigin`.
+        public static let returning = "returning"
     }
 
     // MARK: - Constants
@@ -227,6 +230,7 @@ public struct RelayRun: MissionStepMachine {
         case Step.activating: return activate(directive, carrier, world)
         case Step.confirmingRelay: return confirmRelay(directive, carrier, world)
         case Step.settling: return settle(directive, world)
+        case Step.returning: return returnHome(directive, carrier, world)
         default:
             // An unrecognised step must never dispatch. Waiting is inert and
             // recoverable — the user can cancel, or the step ships.
@@ -1477,6 +1481,62 @@ public struct RelayRun: MissionStepMachine {
             return .stall(.relayActivationFailed)
         }
         logger.info("relay run \(directive.id, privacy: .public): \(target, privacy: .public) is meshed")
-        return .done
+        guard directive.returnToOrigin else { return .done }
+        return .advanceStep(nextStep: Step.returning)
+    }
+
+    /// Fly the carrier back to the hub, so the next run can use it without a
+    /// human ferrying it home.
+    ///
+    /// **The destination is the hub LOCATION, re-derived here — deliberately not
+    /// `directive.originDesignation`.** That field is `SiteAssay.system(of: hub)`
+    /// (see `Brain.launch`), a lossy projection: it reads `AINALRAM` where the
+    /// hub is `AINALRAM-BELT-1`. A bare system designation travels to the
+    /// system's ENTRY POINT, which is an L4 — so returning to it would land the
+    /// carrier in the right system but not co-located with the autofactory, and
+    /// `Brain.freeCarrier` demands an exact location match. The manual step
+    /// would have moved rather than disappeared.
+    ///
+    /// Re-deriving rather than remembering also means the carrier follows the
+    /// hub if the hub ever moves, and it reuses `WorldView.hubLocation` — the
+    /// SAME recognition rule the brain launches on, so the place this run flies
+    /// to and the place the next run launches from cannot disagree.
+    ///
+    /// No hub to fly to is `.done`, not a stall: the relay is planted, the run's
+    /// deliverable is met, and a carrier parked at the target is exactly where
+    /// it would have been before this step existed.
+    private func returnHome(_ directive: Directive, _ carrier: Device, _ world: WorldSnapshot) -> MissionAction {
+        guard let hub = Self.hubLocation(in: world) else {
+            logger.notice("relay run \(directive.id, privacy: .public): no hub to return to — leaving the carrier where it stands")
+            return .done
+        }
+        if carrier.location == hub { return .done }
+        // The outbound leg's shape, reused rather than re-derived: an open op
+        // means the trip is under way (and is the guard that stops a second
+        // travel landing on top of the first), and `travelPositionUnconfirmed`
+        // covers the gap between that op closing and the arrival's location
+        // write landing — the window in which the check above says "not there
+        // yet" about a carrier that already is.
+        if world.openOperation(for: carrier.deviceCode) != nil { return .wait }
+        if let unconfirmed = SalvageRun.travelPositionUnconfirmed(carrier, world) { return unconfirmed }
+        return .dispatch(
+            kind: .travel, deviceCode: carrier.deviceCode,
+            params: CommandParams(destination: hub), nextStep: Step.returning
+        )
+    }
+
+    /// The hub as the BRAIN recognises it, read off a mission's snapshot.
+    ///
+    /// One rule, two callers: `WorldView.hubLocation` is the definition (a
+    /// print-capable device at a meshed location the census shows holding
+    /// resources), and this adapts a `WorldSnapshot` to it. A second copy of the
+    /// rule here is exactly how the return leg would drift from the launch site.
+    static func hubLocation(in world: WorldSnapshot) -> String? {
+        let devices = Array(world.devices.values)
+        return WorldView.hubLocation(
+            in: devices,
+            meshSystems: SalvageTargetPlanner.meshSystems(in: devices),
+            stockByLocation: world.footprints.mapValues(\.resources)
+        )
     }
 }

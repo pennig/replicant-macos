@@ -295,6 +295,7 @@ struct Brain: Sendable {
         let escalated = await respondToStalls(snapshot)
         let plan = Self.plan(view: snapshot.view, directives: snapshot.directives)
         let decision = await decide(plan, escalated: escalated, database: database)
+        await tendRestock(plan: plan, snapshot: snapshot, decision: decision, database: database)
 
         return await BrainReport(
             decision: decision,
@@ -306,6 +307,115 @@ struct Brain: Sendable {
             ),
             observedAt: now
         )
+    }
+
+    /// Keep exactly one restock run alive at the hub, printing against current
+    /// demand.
+    ///
+    /// **Restock is the production half of the relay pool.** `RelayRun` claims a
+    /// standing spare and only prints when the pool cannot cover it, so without
+    /// something stocking the hub the pool drains once and every run afterwards
+    /// waits out a print. Printing is the fleet's bottleneck, so the printer
+    /// should be busy whenever there is work for what it makes.
+    ///
+    /// **The brain writes the DEMAND, the run does the printing.** That split is
+    /// forced rather than chosen: demand is a galaxy-wide judgement over
+    /// `GrowRanking`, which needs a `WorldView`, and a mission only ever gets a
+    /// target-scoped `WorldSnapshot` (see `RestockRun.desiredIdle`). Writing the
+    /// list onto the row it owns is bookkeeping, not enactment — the print
+    /// command still comes from the executor, so `brain-robustness-bar` clause 1
+    /// holds.
+    ///
+    /// **Never hosted on a carrier.** A persistent directive RESERVES its device
+    /// (`reservedDevices`), so putting this on a print-capable HEAVEN vessel
+    /// would park that vessel out of the fleet forever and no grow could ever
+    /// launch. With no dedicated printer at the hub there is simply no restock.
+    private func tendRestock(
+        plan: Plan, snapshot: Snapshot, decision: BrainDecision, database: any DatabaseWriter
+    ) async {
+        guard !Task.isCancelled else { return }
+        guard let host = Self.restockHost(in: snapshot.view) else { return }
+
+        // Targets the brain still wants meshed and nothing is already flying to.
+        let inFlight = Self.inFlightTargets(snapshot.directives)
+        let demand = plan.ranked.map(\.firstHop).filter { !inFlight.contains($0) }
+
+        let existing = snapshot.directives.first {
+            $0.kind == .restockRun && Self.owningStatuses.contains($0.status)
+        }
+        // No targets, nothing to print FOR — so no run is created. An existing
+        // one is left alone rather than cancelled: demand comes and goes as
+        // systems mesh and new value is surveyed, and a row that deleted itself
+        // every quiet tick would churn the list and lose its timeline.
+        guard existing != nil || !demand.isEmpty else { return }
+        // **One action per tick**, the discipline `plan` and `respondToStalls`
+        // already keep. Creating this row is an action, so a tick that has just
+        // committed a launch does not also take it — the brain re-reads the
+        // world five seconds later against a ledger that now contains the
+        // launch, and creates restock then. Updating an EXISTING row's demand
+        // below is bookkeeping, not an action, and is not deferred.
+        if existing == nil, case .dispatch = decision { return }
+        if let existing {
+            // Only write when the list actually moved — a directive row rewritten
+            // every five seconds would churn the timeline and every `@FetchAll`
+            // observing it.
+            guard existing.targets != demand else { return }
+            do {
+                try await database.write { db in
+                    guard var row = try Directive.where({ $0.id.eq(existing.id) }).fetchOne(db) else { return }
+                    row.targets = demand
+                    row.updatedAt = self.now
+                    try Directive.upsert { row }.execute(db)
+                }
+            } catch {
+                logger.error("restock demand update failed: \(error)")
+            }
+            return
+        }
+
+        @Dependency(\.uuid) var uuid
+        let directive = Directive(
+            id: uuid().uuidString,
+            kind: .restockRun,
+            status: .running,
+            deviceCode: host.deviceCode,
+            controllerCode: nil, roamCentre: nil, fleetTag: nil, sourceRelayCode: nil,
+            targets: demand, targetIndex: 0,
+            step: RestockRun().firstStep,
+            stepStartedAt: now,
+            returnToOrigin: false,
+            originDesignation: host.location.map { SiteAssay.system(of: $0) },
+            attentionReason: nil,
+            createdAt: now, updatedAt: now
+        )
+        do {
+            try await database.write { db in
+                // Re-check inside the transaction: `report()` reads and writes in
+                // separate steps, so a restock created by the previous tick could
+                // have landed in between. The directive rows are the ledger.
+                let live = try Directive
+                    .where { $0.kind.eq(DirectiveKind.restockRun) }
+                    .fetchAll(db)
+                    .contains { Self.owningStatuses.contains($0.status) }
+                guard !live else { return }
+                try Directive.insert { directive }.execute(db)
+                logger.info(
+                    "restock \(directive.id, privacy: .public) launched on \(host.deviceCode, privacy: .public)"
+                )
+            }
+        } catch {
+            logger.error("restock launch failed: \(error)")
+        }
+    }
+
+    /// The device a restock run may be hosted on: a print-capable device at the
+    /// hub that is NOT a carrier. See `tendRestock` for why the exclusion is
+    /// load-bearing rather than tidy.
+    static func restockHost(in view: WorldView) -> Device? {
+        guard let hub = view.hubLocation else { return nil }
+        return view.devices.values
+            .filter { $0.isPrintHub && $0.location == hub && $0.deviceType != carrierDeviceType }
+            .min { $0.deviceCode < $1.deviceCode }
     }
 
     /// The prune half of the report: what the predicate found, and which of it
@@ -1655,13 +1765,22 @@ struct Brain: Sendable {
             targetIndex: 0,
             step: RelayRun().firstStep,
             stepStartedAt: now,
-            returnToOrigin: false,
+            // The carrier comes home. This was false, on the reasoning that a
+            // Relay Run "chains onward rather than coming home" — true only
+            // with a fleet big enough that another target is always in reach.
+            // With one carrier it meant the run planted a relay and left the
+            // vessel parked at the target until a human flew it back, which is
+            // where the live fleet spent most of 2026-08-04.
+            returnToOrigin: true,
             // Where the run set off from, for the row's own record. Read off
             // the same snapshot the carrier was chosen from rather than a
             // second database read, which would open a gap between the two.
-            // `returnToOrigin` is false — a Relay Run chains onward rather
-            // than coming home — so nothing steers off this; it exists so the
-            // row reads honestly in the UI and the timeline.
+            //
+            // **Not the return leg's destination.** This is
+            // `SiteAssay.system(of: hub)` — a lossy projection that names the
+            // SYSTEM, and travelling to a bare designation lands at the entry
+            // point (an L4), not at the hub's own location. `RelayRun.returnHome`
+            // re-derives the hub location instead; this stays a record.
             originDesignation: origin,
             attentionReason: nil,
             createdAt: now,
