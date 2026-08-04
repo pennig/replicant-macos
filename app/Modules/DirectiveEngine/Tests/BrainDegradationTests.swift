@@ -882,9 +882,26 @@ struct BrainSafeDegradationTests {
             },
             "every tick defers, with the reason that says the read failed rather than that VDEG1 was taken"
         )
-        #expect(deferred.allSatisfy { $0.directiveIDs.isEmpty }, "a deferred tick writes nothing")
-        #expect(deferred.allSatisfy { $0.logIDs.isEmpty }, "…including no timeline entry")
-        #expect(await seam.commands.isEmpty, "…and spends nothing")
+        // **Scoped to the GROW decision, and it has to be.** A deferred tick
+        // launches no Relay Run and gives no order to the carrier it could not
+        // confirm — that is the clause. It is NOT "the tick writes nothing at
+        // all" any more, because restock lives on the hub and prints against
+        // demand whether or not a carrier is available. That decoupling is the
+        // point of restock rather than a leak in this rail: the printer being
+        // idle was the second thing standing between the brain and an
+        // unattended mesh, and a carrier the API cannot confirm is exactly when
+        // you want the spares already made.
+        #expect(try await relayRuns(database).isEmpty, "a deferred tick launches no run")
+        #expect(
+            deferred.allSatisfy { $0.attentionReason == nil },
+            "…and leaves nothing for a human to answer"
+        )
+        let carrierCommands = await seam.commands.filter { $0.deviceCode == "VDEG1" }
+        #expect(carrierCommands.isEmpty, "…and gives the unconfirmed carrier no orders")
+        #expect(
+            await seam.commands.allSatisfy { $0.verb == OperationKind.print.rawValue },
+            "the only thing moving is the hub's printer, which needs no carrier"
+        )
         // Implied by the exact-equality check above as far as the STRING goes —
         // kept because it pins something that equality cannot: that the reason
         // the brain emits is one `BrainDecision.isDeferral` actually recognises.

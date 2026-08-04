@@ -110,16 +110,28 @@ reading as calm.
 
 ## Three findings that are not in the plan text
 
-1. **`returnToOrigin: false` is a capability gap, not a bug.** A Relay Run is
-   deliberately allowed to chain onward rather than come home
-   (`Brain.swift:1457-1463`). The carrier is not stranded and degradation is
-   safe and legible (`.idle("no free carrier at …")`, surfaced not escalated).
-   But on today's **single-carrier fleet the brain plants exactly one relay and
-   then idles forever** until a human flies the carrier home — one-shot mesh
-   growth with a manual crank. `theNextGrowGoesToTheNextCandidateNotTheMeshedOne`
-   hand-flies the carrier back to get a second launch, and the e2e headline
-   asserts the idle reason verbatim. **Whoever teaches the brain to recall its
-   carrier must change those assertions — they are not a regression.**
+1. ~~**`returnToOrigin: false` is a capability gap, not a bug.**~~ **CLOSED
+   2026-08-04** by the return leg + restock branch (spec:
+   `docs/superpowers/specs/2026-08-04-relay-return-and-restock-design.md`).
+   Recorded here as it stood, because the e2e's shape only makes sense against it:
+
+   A Relay Run *was* deliberately allowed to chain onward rather than come home,
+   so on the single-carrier fleet the brain planted exactly one relay and then
+   idled forever until a human flew the carrier home — one-shot mesh growth with
+   a manual crank. `theNextGrowGoesToTheNextCandidateNotTheMeshedOne` hand-flew
+   the carrier back (`server.place`) to get a second launch, and the e2e headline
+   asserted `.idle("no free carrier at SOL-3")` verbatim as the converged state.
+
+   **Both assertions have now been changed, deliberately and not as a
+   regression.** `RelayRun.Step.returning` flies the carrier back to the hub
+   LOCATION re-derived through `WorldView.hubLocation` — never
+   `directive.originDesignation`, which is `SiteAssay.system(of: hub)` and would
+   land it at the system's entry-point L4 rather than beside the printer, where
+   `Brain.freeCarrier`'s exact-match test would still refuse it. The e2e now runs
+   from a standing start to a mesh containing BOTH candidate systems on one
+   carrier with no `place` call anywhere in it, and the converged sentence is
+   `.idle("no grow or prune work")` — a fleet out of work rather than one that
+   cannot act.
 2. **The reclaim sequence is safe only because the carrier hosts a replicant.**
    Once the source relay is deactivated, authority survives via FTL rule (1)
    (a replicant physically present), never via the mesh. The executor now gates

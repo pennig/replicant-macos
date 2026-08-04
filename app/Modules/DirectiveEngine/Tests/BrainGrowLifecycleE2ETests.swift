@@ -119,7 +119,14 @@ private func seedGrowWorld(_ db: Database) throws {
     // `emplacing` reads the target's catalogue blob for its Lagrange point.
     // Every system's entry point IS an L4 live, which is also where a
     // bare-designation travel lands the carrier — so the emplace hop is free.
+    //
+    // BOTH systems are seeded, not just the first. Now that the carrier flies
+    // itself home the runner-up is genuinely grown inside one run of this file,
+    // and a runner-up with no catalogue blob would park that second run in
+    // `emplacing` re-asking for a system nothing ever answers for — a fixture
+    // hole reading as a mission defect.
     try seedSystemWithEntryPoint(db, designation: target)
+    try seedSystemWithEntryPoint(db, designation: runnerUp)
 }
 
 private func seedFootprint(
@@ -406,17 +413,14 @@ private actor ScriptedServer {
         }
     }
 
-    /// Move a device by hand — the operator flying the carrier home, say. Not
-    /// a command, so it is deliberately not recorded as one.
-    func place(_ deviceCode: String, at location: String, now: Date) async {
-        await mutate(deviceCode, at: now) { $0.location = location }
-    }
-
-    /// An ordinary background device read landing (`PollCoordinator`'s job in
-    /// production) — the row is unchanged but no longer stale.
-    func touch(_ deviceCode: String, now: Date) async {
-        await mutate(deviceCode, at: now) { _ in }
-    }
+    // There is deliberately NO `place(_:at:)` here any more.
+    //
+    // It existed to fly the carrier home by hand — the operator's manual crank
+    // that `theNextGrowGoesToTheNextCandidateNotTheMeshedOne` needed before the
+    // Relay Run had a return leg. Nothing in this file moves a device except
+    // through a command now, which is the property the file is asserting, so
+    // the helper is gone rather than left lying around for the next person to
+    // reach for when a run does not come home on its own.
 
     /// The `GET /v1/locations` holdings overlay, as the server would answer it.
     ///
@@ -457,9 +461,20 @@ private actor ScriptedServer {
 
 /// One virtual tick's worth of observation: where the run stands, and what the
 /// brain published about the same instant.
+///
+/// `step`/`status` follow the FIRST relay run — the lifecycle this file is
+/// about. Since the carrier now flies itself home, a second run launches inside
+/// the same window, and reading "the latest row" would splice two runs' steps
+/// into one path that describes neither.
 private struct Tick: Sendable {
     let step: String?
     let status: DirectiveStatus?
+    /// How many relay runs exist yet, so "the next one launched" is observable
+    /// on the tick it happens rather than only at the end.
+    let relayRunCount: Int
+    /// The restock run's step, or nil while none exists. Restock is created on
+    /// a later tick than the first launch by design (one action per tick).
+    let restockStep: String?
     let decision: BrainDecision?
     let ranked: [String]
 }
@@ -524,20 +539,27 @@ private func drive(
         } operation: { () -> Tick in
             @Shared(.brainReport) var report: BrainReport?
             await core.tickBrain()
+            // EVERY running row, not just the relay runs — `start()`'s
+            // supervisor spawns an executor per running directive regardless of
+            // kind, and restock is a running directive the brain writes. A
+            // driver that skipped it would leave the printer inert here and
+            // nowhere else, which is precisely the coupling this branch removes.
             let running = (
                 try? await database.read { db in
                     try Directive
-                        .where { $0.kind.eq(DirectiveKind.relayRun) && $0.status.eq(DirectiveStatus.running) }
-                        .order { $0.id }
+                        .where { $0.status.eq(DirectiveStatus.running) }
+                        .order { $0.createdAt }
                         .fetchAll(db)
                 }
             ) ?? []
             for directive in running { await core.evaluateOnce(directiveID: directive.id) }
-            let row = try? await database.read { db in
-                try Directive.where { $0.kind.eq(DirectiveKind.relayRun) }.order { $0.id }.fetchAll(db).last
+            let rows = (try? await relayRuns(database)) ?? []
+            let restock = try? await database.read { db in
+                try Directive.where { $0.kind.eq(DirectiveKind.restockRun) }.fetchAll(db).first
             }
             return Tick(
-                step: row?.step, status: row?.status,
+                step: rows.first?.step, status: rows.first?.status,
+                relayRunCount: rows.count, restockStep: restock?.step,
                 decision: report?.decision, ranked: report?.ranked.map(\.firstHop) ?? []
             )
         }
@@ -575,8 +597,17 @@ struct BrainGrowLifecycleE2ETests {
 
     /// The headline. From a standing start the brain ranks, gates, and launches
     /// a Relay Run; the executor prints, stows, travels, emplaces, activates;
-    /// the world reflects `relaying`; the target joins `meshSystems`; and the
-    /// next brain tick no longer ranks it.
+    /// the world reflects `relaying`; the target joins `meshSystems`; **the
+    /// carrier flies itself home**; and the brain launches the next target
+    /// without a human touching anything.
+    ///
+    /// **This test used to END at the stranded carrier**, and said so: the run
+    /// planted its relay, `returnToOrigin` was false, and the closing assertion
+    /// pinned `.idle("no free carrier at SOL-3")` as the brain's converged
+    /// state. `brain-tendmesh-build` recorded that the e2e ENCODED that
+    /// limitation and that changing it would not be a regression. This is that
+    /// change: the loop now closes, so the assertions describe a fleet that
+    /// keeps going rather than one that stops.
     ///
     /// Every one of those is asserted as an OUTCOME, not as a step visited:
     /// the exact command sequence (so a run that skipped `activate` fails), the
@@ -594,9 +625,13 @@ struct BrainGrowLifecycleE2ETests {
         // vacuously (`BrainGrowTests` records the same trap).
         let uuid = UUIDGenerator.incrementing
 
+        // Long enough for the first run to finish its return leg (tick 32) and
+        // for the brain to launch the next target off the freed carrier (tick
+        // 33), and no longer — the SECOND run's own lifecycle is
+        // `theNextGrowGoesToTheNextCandidateNotTheMeshedOne`'s subject.
         let ticks = await drive(
             database, core: core, server: server, uuid: uuid, reads: reads,
-            storage: InMemoryStorage(), from: liftoff, ticks: 60
+            storage: InMemoryStorage(), from: liftoff, ticks: 36
         )
 
         // 1. THE COMMANDS. The whole point of driving the real seam: this is
@@ -610,7 +645,33 @@ struct BrainGrowLifecycleE2ETests {
             SeamCommand(verb: "travel", deviceCode: "V1", destination: target),
             SeamCommand(verb: "deploy", deviceCode: firstClone),
             SeamCommand(verb: "activate", deviceCode: firstClone),
+            // The return leg — the command this whole branch exists to add.
+            SeamCommand(verb: "travel", deviceCode: "V1", destination: hubLocation),
+            // …and the next target's print, launched off the carrier that just
+            // came home.
+            SeamCommand(verb: "print", deviceCode: "HUB1", deviceType: SalvageRun.relayDeviceType),
         ], "the run's command sequence, as the governor saw it")
+
+        // 1a. THE RETURN LEG'S DESTINATION, called out on its own because it is
+        //     the one thing in this branch that a plausible implementation gets
+        //     WRONG while still looking finished. `directive.originDesignation`
+        //     is `SOL` — `SiteAssay.system(of:)` of the hub, a lossy projection
+        //     — and a bare system designation travels to the system's ENTRY
+        //     POINT, an L4. The carrier would come home to `SOL-1-L4`, not to
+        //     `SOL-3` where the autofactory stands, and `Brain.freeCarrier`
+        //     demands an exact location match — so the manual step would have
+        //     moved rather than disappeared, and every other assertion here
+        //     except the second launch would still pass.
+        let run = try #require(await relayRuns(database).first)
+        #expect(run.originDesignation == "SOL", "the lossy projection is still what the row carries")
+        #expect(
+            commands.contains(SeamCommand(verb: "travel", deviceCode: "V1", destination: hubLocation)),
+            "the carrier is recalled to the hub LOCATION"
+        )
+        #expect(
+            !commands.contains(SeamCommand(verb: "travel", deviceCode: "V1", destination: run.originDesignation)),
+            "and never to the origin SYSTEM, which would land it at an L4 away from the printer"
+        )
 
         // 2. THE STEPS, in order and each exactly once — the `.simple` verbs
         //    split into dispatch + poll, so a machine that collapsed one of
@@ -624,15 +685,16 @@ struct BrainGrowLifecycleE2ETests {
             RelayRun.Step.activating,
             RelayRun.Step.confirmingRelay,
             RelayRun.Step.settling,
+            RelayRun.Step.returning,
         ])
 
-        // 3. THE RUN. One row, launched by the brain, finished by the executor.
+        // 3. THE RUN. One row for one target, launched by the brain, finished
+        //    by the executor — and it does not complete until it is home.
         let runs = try await relayRuns(database)
-        #expect(runs.count == 1, "one launch for one target, however many ticks ran")
-        let run = try #require(runs.first)
         #expect(run.status == .completed)
         #expect(run.targets == [target])
         #expect(run.deviceCode == "V1")
+        #expect(run.returnToOrigin, "the brain now asks for the carrier back")
         #expect(run.sourceRelayCode == nil, "nothing is reclaimable and no replicant rides V1 — so this grow prints")
         #expect(run.attentionReason == nil, "a clean lifecycle stalls nowhere")
 
@@ -651,7 +713,19 @@ struct BrainGrowLifecycleE2ETests {
         let view = try await worldView(database, now: liftoff.addingTimeInterval(600))
         #expect(view.meshSystems == ["SOL", target], "the mesh is one system bigger than it started")
 
-        // 5. THE BRAIN CONVERGED. The last tick ranked ALTAIR and nothing else:
+        // 5. THE CARRIER CAME HOME, asserted as the thing that DEPENDS on it
+        //    rather than as a location read: the brain launched a second run on
+        //    the SAME vessel. `Brain.freeCarrier` only returns a carrier whose
+        //    `location` equals the hub exactly, so a second run on V1 is proof
+        //    V1 is standing at `SOL-3` — and proof no human put it there, since
+        //    nothing in this test moves a device by hand.
+        #expect(runs.count == 2, "the freed carrier is immediately spent on the next target")
+        let second = try #require(runs.last)
+        #expect(second.targets == [runnerUp], "the meshed system must not be grown at twice")
+        #expect(second.deviceCode == "V1", "the same vessel, home and re-tasked")
+        #expect(second.status == .running)
+
+        // 6. THE BRAIN CONVERGED. The last tick ranked ALTAIR and nothing else:
         //    VEGA is meshed, so `ValueCatalog` no longer offers it. This is the
         //    assertion that fails if the mesh read and the ranking ever stop
         //    agreeing — a run that "completed" without meshing would leave VEGA
@@ -659,21 +733,39 @@ struct BrainGrowLifecycleE2ETests {
         let last = try #require(ticks.last)
         #expect(last.ranked == [runnerUp], "the meshed target is no longer a grow candidate")
         #expect(
-            last.decision == .idle(reason: "no free carrier at \(hubLocation)"),
-            "V1 ended the run at \(target), so the next grow waits for a carrier — not for a target"
+            last.decision == .idle(reason: "every grow candidate is already in flight"),
+            """
+            the fleet is now BUSY rather than blocked: every candidate the brain \
+            can see is being flown to. This is the sentence that used to read \
+            "no free carrier at SOL-3" — the stranding this branch removes.
+            """
         )
 
-        // 6. THE CONFIRM-FRESH GATE actually fired, exactly once, at `.high`.
+        // 7. THE CONFIRM-FRESH GATE actually fired, at `.high`, once per launch.
         //    `DeviceRefreshClient.testValue` is INERT (nil, not unimplemented),
         //    so a brain that had lost its gate would defer silently and every
         //    assertion above would still pass on a run that never launched —
         //    except this one.
-        #expect(reads.value == [ConfirmRead(deviceCode: "V1", isHigh: true)])
+        #expect(reads.value == [
+            ConfirmRead(deviceCode: "V1", isHigh: true),
+            ConfirmRead(deviceCode: "V1", isHigh: true),
+        ], "one gated launch each for VEGA and ALTAIR")
     }
 
     /// The other half of convergence: the brain does not merely stop, it moves
-    /// on. With the carrier back at the hub the next tick launches a run for
-    /// the runner-up — and never a second one for the system it already meshed.
+    /// on — **and it does so with no hand on the wheel.**
+    ///
+    /// This test used to reach here by flying the carrier home itself
+    /// (`server.place`) and calling that the operator's manual crank. It no
+    /// longer touches a device: the world runs from a standing start to a mesh
+    /// containing BOTH candidate systems, with the same single carrier making
+    /// both trips. That is the whole capability this branch adds, so the
+    /// absence of `place` in this test body is load-bearing rather than tidy.
+    ///
+    /// It also still exercises `acquire`'s stale-census branch for real. Five
+    /// virtual minutes elapse before the second run needs stock, so the census
+    /// IS stale by then and the second print has to buy a refresh through the
+    /// engine's `resolveFootprintRefresh`.
     @Test func theNextGrowGoesToTheNextCandidateNotTheMeshedOne() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in try seedGrowWorld(db) }
@@ -681,43 +773,38 @@ struct BrainGrowLifecycleE2ETests {
         let core = DirectiveEngineCore(machines: MissionRegistry.machines, tick: .seconds(5))
         let reads = LockIsolated<[ConfirmRead]>([])
         let uuid = UUIDGenerator.incrementing
-        let storage = InMemoryStorage()
-
-        _ = await drive(
-            database, core: core, server: server, uuid: uuid, reads: reads,
-            storage: storage, from: liftoff, ticks: 60
-        )
-        #expect(try await relayRuns(database).count == 1)
-
-        // The carrier flies home, and the fleet's ordinary background reads land
-        // on the hub — neither is a command, so neither is recorded as one. The
-        // hub touch matters: `acquire` will not spend resources on a row older
-        // than `RelayRun.hubFreshness`, and five virtual minutes have passed.
-        let resumed = liftoff.addingTimeInterval(60 * tickSeconds)
-        await server.place("V1", at: hubLocation, now: resumed)
-        await server.touch("HUB1", now: resumed)
-
-        // The census, by contrast, IS stale by now — and that is the point:
-        // this second launch exercises `acquire`'s stale-census branch and the
-        // engine's `resolveFootprintRefresh` for real, ending in a print.
         let censusReads = LockIsolated(0)
-        let after = await drive(
-            database, core: core, server: server, uuid: uuid, reads: reads,
-            censusReads: censusReads, storage: storage, from: resumed, ticks: 2
-        )
-        #expect(censusReads.value == 1, "one census refresh bought the print, and only one")
 
+        let ticks = await drive(
+            database, core: core, server: server, uuid: uuid, reads: reads,
+            censusReads: censusReads, storage: InMemoryStorage(), from: liftoff, ticks: 80
+        )
+
+        // BOTH runs launched, each for its own target, both on the one carrier.
         let runs = try await relayRuns(database)
-        #expect(runs.count == 2)
-        let second = try #require(runs.last)
-        #expect(second.targets == [runnerUp], "the meshed system must not be grown at twice")
-        #expect(second.status == .running)
-        guard case let .dispatch(goal, _)? = after.first?.decision else {
-            Issue.record("expected the freed carrier to produce a dispatch, got \(String(describing: after.first?.decision))")
-            return
-        }
-        #expect(goal.kind == .tendMesh)
-        #expect(goal.target == runnerUp)
+        #expect(runs.count == 2, "one run per candidate, and never a second for the meshed one")
+        #expect(runs.map(\.targets) == [[target], [runnerUp]], "richest first, then the runner-up")
+        #expect(runs.allSatisfy { $0.deviceCode == "V1" }, "one vessel did both trips")
+        #expect(runs.allSatisfy { $0.attentionReason == nil }, "neither run needed an operator")
+
+        // The deliverable: a mesh three systems wide, grown from one.
+        let view = try await worldView(database, now: liftoff.addingTimeInterval(80 * tickSeconds))
+        #expect(view.meshSystems == ["SOL", runnerUp, target], "both candidates are meshed")
+
+        // The census refresh the second run had to buy. `acquire` will not spend
+        // resources on a reading older than `hubFreshness`, and the first run
+        // took longer than that, so this is the stale-census branch running for
+        // real rather than a fixture kept artificially fresh.
+        #expect(censusReads.value >= 1, "the second print bought a census refresh")
+
+        // And the brain stops cleanly: nothing left worth meshing, so it idles
+        // on an EMPTY field rather than on a blocked one. The distinction is
+        // the point — "no work" and "cannot act" are different sentences
+        // (`brain-robustness-bar` clause 6), and before this branch a converged
+        // fleet reported the second one because its carrier was stranded.
+        let last = try #require(ticks.last)
+        #expect(last.ranked.isEmpty, "every candidate has been meshed")
+        #expect(last.decision == .idle(reason: "no grow or prune work"))
     }
 
     /// **The failure this file has to be able to see.** Same world, same stack
@@ -798,9 +885,15 @@ struct BrainGrowLifecycleE2ETests {
             await core.start()
             await core.tickBrain()
             await core.reconcileExecutors()
+            // TWO rows, and the second one is the interesting one. `start()`
+            // ticks the brain once on its way up and the explicit `tickBrain()`
+            // above ticks it again; the first tick spends its one action on the
+            // grow launch and defers restock, the second creates restock. So
+            // this asserts the supervisor adopts a brain-written row of EITHER
+            // kind — a carrier-owned mission and a hub-owned persistent one.
             #expect(
-                await core.executorCount == 1,
-                "the supervisor must spawn an executor for the directive the brain just wrote"
+                await core.executorCount == 2,
+                "the supervisor must spawn an executor for every directive the brain wrote"
             )
             await core.stop()
         }
@@ -808,5 +901,15 @@ struct BrainGrowLifecycleE2ETests {
         let runs = try await relayRuns(database)
         #expect(runs.count == 1)
         #expect(runs.first?.targets == [target])
+
+        // The restock row the second tick wrote: owned by the HUB, never by the
+        // carrier. Hosting a persistent directive on a print-capable vessel
+        // would reserve that vessel out of the fleet forever, so this is a
+        // safety property rather than bookkeeping.
+        let restock = try await database.read { db in
+            try Directive.where { $0.kind.eq(DirectiveKind.restockRun) }.fetchAll(db)
+        }
+        #expect(restock.count == 1, "exactly one restock run, and it is idempotent")
+        #expect(restock.first?.deviceCode == "HUB1", "owned by the autofactory, not by V1")
     }
 }
