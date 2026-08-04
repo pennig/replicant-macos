@@ -59,8 +59,17 @@ private func device(
 
 /// The carrier this run leases — a HEAVEN vessel parked at the hub's location,
 /// which is what makes the autofactory-carrier composition work at all.
-private func carrier(location: String? = hubLocation, updatedAt: Date = fixtureNow) -> Device {
-    device("V1", type: "heaven_vessel", location: location, updatedAt: updatedAt)
+private func carrier(
+    location: String? = hubLocation,
+    updatedAt: Date = fixtureNow,
+    controlRange: Bool? = nil
+) -> Device {
+    var vessel = device("V1", type: "heaven_vessel", location: location, updatedAt: updatedAt)
+    // `in_control_range` lives in the device's detail tail, which is where
+    // `Device.inControlRange` reads it from. Absent by default, matching the
+    // payloads that do not report it.
+    if let controlRange { vessel.detail = .object(["in_control_range": .bool(controlRange)]) }
+    return vessel
 }
 
 /// The autofactory. `Device.isPrintHub` keys off `enqueue_print` in
@@ -692,6 +701,88 @@ struct RelayRunReclaimTests {
             stepStartedAt: fixtureNow.addingTimeInterval(-RelayRun.reclaimDeadline - 1)
         )
         #expect(RelayRun().nextAction(directive: overdue, world: up) == .stall(.unreachableDevice))
+    }
+
+    /// **The safety precondition the whole reclaim path rests on, made
+    /// checkable.** Deactivating the source de-meshes its system `S`, so the
+    /// authority to then issue `stow` at `S` comes from the CARRIER being
+    /// there — and only because the carrier hosts a replicant (authority rule
+    /// (1), a replicant physically present). Nothing in `Directive`,
+    /// `WorldSnapshot` or `WorldView` carries replicants, so that precondition
+    /// cannot be asserted directly. `in_control_range` is the server's own
+    /// answer to the same question and IS on every device row, so the gate
+    /// reads that instead — the shape `brain-primitive-contracts` already
+    /// mandates for `deliver`'s tail.
+    @Test func refusesToStowWhenTheCarrierIsOutOfControlRangeAfterTheDeactivate() {
+        let idle = running(step: RelayRun.Step.confirmingIdle, sourceRelayCode: "R9")
+        let down = Self.source(status: "inactive")
+
+        // Out of range: `stow` would be dispatched into the void, stranding
+        // both the relay and the carrier. Refuse, loudly.
+        #expect(RelayRun().nextAction(
+            directive: idle,
+            world: world(devices: [down, carrier(location: "DEAD-1-L4", controlRange: false)])
+        ) == .stall(.unreachableDevice))
+
+        // In range: proceed.
+        #expect(RelayRun().nextAction(
+            directive: idle,
+            world: world(devices: [down, carrier(location: "DEAD-1-L4", controlRange: true)])
+        ) == .advanceStep(nextStep: RelayRun.Step.stowing))
+
+        // Field absent: `Device.isOutOfControlRange` treats a missing field as
+        // "not out of range" — a device type that never reports it must not be
+        // read as stranded — so the gate is permissive here by construction.
+        #expect(RelayRun().nextAction(
+            directive: idle, world: world(devices: [down, carrier(location: "DEAD-1-L4")])
+        ) == .advanceStep(nextStep: RelayRun.Step.stowing))
+    }
+
+    /// The gate is only worth as much as the row behind it, and this is the
+    /// last moment before a command issued at a system the mesh no longer
+    /// reaches. A carrier row nobody has looked at recently buys ONE
+    /// authoritative read, carrying a stall so a read that keeps failing
+    /// surfaces instead of re-firing.
+    @Test func readsAStaleCarrierRowBeforeTrustingTheAuthorityGate() {
+        let snapshot = world(devices: [
+            Self.source(status: "inactive"),
+            carrier(
+                location: "DEAD-1-L4",
+                updatedAt: fixtureNow.addingTimeInterval(-(RelayRun.reclaimFreshness + 1)),
+                controlRange: true
+            ),
+        ])
+        #expect(RelayRun().nextAction(
+            directive: running(step: RelayRun.Step.confirmingIdle, sourceRelayCode: "R9"),
+            world: snapshot
+        ) == .refreshDevices(deviceCodes: ["V1"], thenStall: .unreachableDevice))
+    }
+
+    /// **The mesh race, which costs a RECLAIM run something it costs a print
+    /// run nothing.** If the target gets meshed by somebody else while the
+    /// carrier is in flight, `travelling` skips straight to `settling` and the
+    /// run reports `.done`. On the print path that is a pure saving. On the
+    /// reclaim path the run has ALREADY de-meshed the source's system, so
+    /// finishing here leaves the fleet one mesh node down and calls it success.
+    /// It stays `.done` — the deliverable really is met and the relay is
+    /// preserved in the hold for the next run — but it must not be silent.
+    @Test func aReclaimThatLosesTheMeshRaceIsNotReportedAsAPlainSuccess() {
+        // VEGA is meshed by somebody else's relay; ours is aboard the carrier.
+        let snapshot = world(devices: [
+            carrier(location: "VEGA"),
+            Self.source(location: nil, status: "inactive", stowedIn: "V1"),
+            relay("OTHER", location: "VEGA-1-L4", status: "relaying"),
+        ])
+        #expect(RelayRun().nextAction(
+            directive: running(step: RelayRun.Step.travelling, sourceRelayCode: "R9"), world: snapshot
+        ) == .advanceStep(nextStep: RelayRun.Step.settling))
+
+        // The outcome is named rather than passed over…
+        let loss = RelayRun.meshRaceLoss(running(sourceRelayCode: "R9"), target: "VEGA")
+        #expect(loss?.contains("VEGA") == true)
+        #expect(loss?.contains("net") == true)
+        // …and a PRINT-sourced run, which loses nothing at all, says nothing.
+        #expect(RelayRun.meshRaceLoss(running(sourceRelayCode: nil), target: "VEGA") == nil)
     }
 
     /// Re-entering `acquire` after the relay is already aboard must not start

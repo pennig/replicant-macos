@@ -17,6 +17,21 @@
 //  it where it stands, and takes it aboard, for no resources at all. The two
 //  branches converge at `stowing` and share every step from there on.
 //
+//  **CARRIER PRECONDITION — the reclaim path is only safe with a carrier that
+//  HOSTS A REPLICANT, and nothing in these types can say so.** Deactivating the
+//  source takes its system off the mesh, so authority to then issue `stow`
+//  there comes only from `ftl-authority-rule` (1): a replicant physically
+//  present. It holds today because the carrier this run uses (`C7836770`) hosts
+//  `pennig-salvage`. It is not expressible here — `Directive` has no such
+//  field, and neither `WorldSnapshot` nor `WorldView` carries replicants at all
+//  — so it is enforced indirectly, by asking the SERVER: `carrierRetainsAuthority`
+//  gates the `stow` on the carrier's own `in_control_range` after the
+//  deactivate. Anything choosing a carrier for a reclaim-sourced run must
+//  honour the precondition regardless; the gate turns a permanent strand into a
+//  loud stall, it does not make an unhosted carrier workable. (The fleet's
+//  other `heaven_vessel`s include the one hosting `pennig-1`, the mesh ANCHOR,
+//  which must never travel — see the authority note.)
+//
 //  **Composition (print source): autofactory + co-located carrier.** The relay is printed
 //  AT the hub (`enqueue_print` on the autofactory) and taken aboard a HEAVEN
 //  vessel that is already parked at the hub's location. Verified against the
@@ -620,6 +635,31 @@ public struct RelayRun: MissionStepMachine {
         return .wait
     }
 
+    /// Non-nil when finishing the run here would be a NET LOSS to the mesh
+    /// rather than the pure saving the print path's identical shortcut is.
+    ///
+    /// `travel`'s "somebody meshed this system while we were in flight" branch
+    /// skips to `settling` and the run reports `.done`. On the PRINT path that
+    /// is free money: the relay was never planted, it stays aboard, and nothing
+    /// was torn down to get it. On the RECLAIM path the run has already
+    /// deactivated the source and de-meshed ITS system, so finishing here
+    /// leaves the fleet one mesh node down and calls it success.
+    ///
+    /// It still finishes — the run's stated deliverable (the target is meshed)
+    /// genuinely is met, and the relay is preserved in the hold, where the next
+    /// Relay Run's `acquire` picks it up for free instead of printing. What it
+    /// must not be is SILENT, which is what this exists to prevent. A pure
+    /// function rather than a bare log line for the reason `printDiagnosis` and
+    /// `reclaimDiagnosis` are: `os.Logger` output is not readable from a test.
+    static func meshRaceLoss(_ directive: Directive, target: String) -> String? {
+        guard let source = directive.sourceRelayCode else { return nil }
+        return """
+            \(target) was meshed by something else while \(source) was in flight — the run finishes, \
+            but it already de-meshed \(source)'s own system to get here, so the fleet is net one relay \
+            down until \(source) (still aboard) is planted somewhere
+            """
+    }
+
     // MARK: - Reclaim
 
     /// The outcome of the confirm-read that must precede anything irreversible
@@ -704,12 +744,25 @@ public struct RelayRun: MissionStepMachine {
     /// one prune assessed, which is how a load-bearing relay gets torn out and
     /// its system's authority with it; falling back to the print would spend
     /// 370 units the plan explicitly decided not to spend, on the strength of
-    /// evidence that the plan was WRONG. `.unreachableDevice` carries
-    /// `BrainDisposition.retry` (bounded auto-retry, then escalate), and the
-    /// brain re-derives its whole prune analysis every tick, so the ordinary
-    /// resolution is that the next directive names a different source — no
-    /// operator required — while a source that stays disqualified escalates
-    /// instead of silently churning.
+    /// evidence that the plan was WRONG.
+    ///
+    /// **What the stall actually costs, stated plainly because an earlier
+    /// version of this comment got it wrong.** `.unreachableDevice` carries
+    /// `BrainDisposition.retry`, and `Brain` retries the SAME directive with
+    /// the SAME `sourceRelayCode` — it does not re-plan the source. The budget
+    /// is `Brain.retryBudget` (3) spread over a `Brain.retryInterval` (15 min)
+    /// floor, so a PERMANENTLY disqualified source (the plan named a mining
+    /// drone; the relay is already inactive) costs three futile retries over at
+    /// least 45 minutes and then an operator escalation — with the carrier
+    /// leased throughout, and, since `tendMesh` runs one Relay Run at a time,
+    /// with all mesh growth blocked until somebody looks. That is an acceptable
+    /// failure mode for a case that should be rare and is always the result of
+    /// a bad plan hint, and it is strictly better than either alternative
+    /// (tearing down a relay on stale evidence, or spending 370 units the plan
+    /// declined to spend). It is NOT self-healing, and must not be described as
+    /// though it were. Making it self-healing means giving the disqualification
+    /// its own attention reason with an `escalate`-or-replan disposition, which
+    /// belongs with the brain-side source selection that produces the hint.
     static func confirmSource(
         _ directive: Directive, _ code: String, _ world: WorldSnapshot
     ) -> SourceConfirmation {
@@ -873,7 +926,11 @@ public struct RelayRun: MissionStepMachine {
         // `SalvageTargetPlanner.meshSystems`, both keyed on exactly `relaying`)
         // rather than as a fresh status string of its own: what `stow` needs is
         // a relay that has stopped relaying, which is that predicate negated.
-        if source.statusBase != "relaying" { return .advanceStep(nextStep: Step.stowing) }
+        //
+        // The deactivate has taken, which means this system is now OFF the
+        // mesh — so the very next command must clear the authority gate before
+        // it is issued. See `carrierRetainsAuthority`.
+        if source.statusBase != "relaying" { return carrierRetainsAuthority(directive, carrier, world) }
         // Deadline BEFORE the read (see `confirm-steps-need-fresh-evidence`,
         // half two): the read below only advances on success, so a
         // staleness-first ordering would never reach the backstop while reads
@@ -890,6 +947,57 @@ public struct RelayRun: MissionStepMachine {
             return .refreshDevices(deviceCodes: [code], thenStall: nil)
         }
         return .wait
+    }
+
+    /// The gate between the deactivate and the `stow` that follows it: can we
+    /// still command anything at this system at all?
+    ///
+    /// **This is the check the reclaim path's safety actually rests on, and
+    /// until now nothing in the code made it.** Deactivating the source relay
+    /// takes its system `S` off the mesh. Per the `ftl-authority-rule` note,
+    /// authority to issue a command at `S` then comes only from rule (1) — a
+    /// replicant PHYSICALLY PRESENT there — since rule (2), membership of a
+    /// mesh subgraph holding a stationary replicant, is exactly what the
+    /// deactivate just destroyed. It works today because the one carrier this
+    /// run uses (`C7836770`) hosts the replicant `pennig-salvage`, so flying it
+    /// to `S` satisfies rule (1). That is a precondition on the CARRIER, and it
+    /// is nowhere in the types: `Directive` has no such field, and neither
+    /// `WorldSnapshot` nor `WorldView` carries replicants at all. A Relay Run
+    /// handed a carrier without a hosted replicant — a second `heaven_vessel`,
+    /// anything a later `growFleet` builds — would issue `deactivate`, lose
+    /// authority at `S`, and never be able to issue the `stow`: relay and
+    /// carrier both stranded, permanently.
+    ///
+    /// So the gate asks the SERVER instead of asserting the precondition it
+    /// cannot express. `in_control_range` is on every device row and is the
+    /// server's own authoritative answer to "can this be commanded", which the
+    /// authority note says to prefer over any geometry the app computes, and
+    /// which `brain-primitive-contracts` already mandates in exactly this shape
+    /// for `deliver`'s tail ("confirm `relaying` AND authoritative
+    /// `in_control_range` — never a recomputed mesh view"). This is the first
+    /// place in `DirectiveEngine` to read it.
+    ///
+    /// Permissive on a MISSING field, deliberately: `Device.isOutOfControlRange`
+    /// is `inControlRange == false`, so a device type that never reports the
+    /// field is not read as stranded. The gate catches the state the server
+    /// affirmatively reports, and the file header states the precondition for
+    /// the case it cannot see.
+    ///
+    /// The freshness read comes first for the reason `acquire` reads the hub
+    /// before trusting its stock: this is the last moment before a command
+    /// issued into a system the mesh no longer reaches, and a stale row is not
+    /// evidence. `thenStall` bounds it to exactly one round.
+    private func carrierRetainsAuthority(
+        _ directive: Directive, _ carrier: Device, _ world: WorldSnapshot
+    ) -> MissionAction {
+        if world.now.timeIntervalSince(carrier.updatedAt) > Self.reclaimFreshness {
+            return .refreshDevices(deviceCodes: [carrier.deviceCode], thenStall: .unreachableDevice)
+        }
+        guard !carrier.isOutOfControlRange else {
+            logger.notice("relay run \(directive.id, privacy: .public): \(carrier.deviceCode, privacy: .public) reports out of control range at \(carrier.location ?? "nowhere", privacy: .public) — the deactivate took this system off the mesh and nothing here can be commanded, so the stow is not dispatched")
+            return .stall(.unreachableDevice)
+        }
+        return .advanceStep(nextStep: Step.stowing)
     }
 
     // MARK: - Stowing
@@ -964,6 +1072,13 @@ public struct RelayRun: MissionStepMachine {
             // Read off DEVICE rows, never `ftlLinks`: a just-activated relay
             // produces no link rows at all.
             let meshed = SalvageTargetPlanner.meshSystems(in: Array(world.devices.values)).contains(target)
+            // …but the paragraph above is only true of a PRINTED relay. A
+            // reclaim reached this branch having already torn its source's
+            // system off the mesh, so finishing here is a net loss dressed as a
+            // success. It still finishes; it does not do so quietly.
+            if meshed, let loss = Self.meshRaceLoss(directive, target: target) {
+                logger.warning("relay run \(directive.id, privacy: .public): \(loss, privacy: .public)")
+            }
             return .advanceStep(nextStep: meshed ? Step.settling : Step.emplacing)
         }
         // An open op means the trip is under way — expected, and the guard that
