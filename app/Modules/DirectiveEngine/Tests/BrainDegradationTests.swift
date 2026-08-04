@@ -106,12 +106,12 @@ private func seedDegradationWorld(
     _ db: Database,
     hubStock: Int = belowFloorStock,
     salvage: Double? = 3_200,
-    carriers: [String] = ["V1"]
+    carriers: [String] = ["VDEG1"]
 ) throws {
-    try seedRelay(db, code: "REL1", location: "SOL", updatedAt: liftoff)
+    try seedRelay(db, code: "RELDEG_1", location: "SOL", updatedAt: liftoff)
     try seedStar(db, designation: "SOL", x: 0, y: 0, z: 0)
     try seedSystemDetail(db, system: "SOL", scanned: true)
-    try seedPrintHub(db, code: "HUB1", location: hubLocation, updatedAt: liftoff)
+    try seedPrintHub(db, code: "HUBDEG", location: hubLocation, updatedAt: liftoff)
     for code in carriers {
         try seedDevice(db, code: code, type: "heaven_vessel", location: hubLocation, updatedAt: liftoff)
     }
@@ -372,11 +372,23 @@ private func tickReport(
 
 // MARK: - Clause 7: the reserve rail
 
-/// `.serialized` throughout: these suites install `CommandGovernorClient
-/// .liveValue`, one process-shared governor with a per-device in-flight claim.
-/// Two of them running concurrently could hand each other a
-/// `.deferred(.commandInFlight)` on the same device code and make "nothing was
-/// dispatched" true for the wrong reason.
+/// **On concurrency, and what `.serialized` does and does not buy.** These
+/// suites install `CommandGovernorClient.liveValue` — ONE process-shared
+/// governor whose in-flight claim is a bare `Set<String>` keyed on device code
+/// (`CommandGovernor.inFlight`). A concurrent dispatch on the same code gets
+/// `.deferred(.commandInFlight)`, which for a file whose assertions are mostly
+/// "nothing reached the wire" is the dangerous direction: it would make them
+/// pass for entirely the wrong reason.
+///
+/// `.serialized` orders tests WITHIN a suite. It does not order these three
+/// suites against each other, and it certainly does not order them against
+/// `BrainGrowLifecycleE2ETests`, which installs the same live governor. So it
+/// is not what closes the hole, and an earlier draft of this comment claimed it
+/// was. What closes it is that **every device code in this file is unique to
+/// this file** — `HUBDEG`, `VDEG1`, `VDEG2`, `RELDEG_1`, `RELDEG_S`, `RDEG_A`,
+/// none of which appears in any other suite — so no other test can hold a claim
+/// on a code these tests dispatch at. `.serialized` is kept for the narrower
+/// property it does provide: a stable order within each suite.
 @Suite("Brain — bounded blast radius: the reserve rail", .serialized)
 struct BrainReserveRailDegradationTests {
 
@@ -445,9 +457,17 @@ struct BrainReserveRailDegradationTests {
         // 3. NO BUDGET BURN. Both live-API counters, exactly — and the exact
         //    figures are the evidence, not a ceiling somebody guessed at.
         //
-        //    FOUR authoritative reads and TWO census refreshes for fifty
+        //    THREE authoritative reads and TWO census refreshes for fifty
         //    virtual minutes of ticking. A rail that re-judged per tick would
         //    show six hundred of each.
+        //
+        //    Both are LIST/VALUE equalities over the whole run, not ceilings:
+        //    a 601st read, a `.low` poll sneaking in, or a read of a device
+        //    nobody named all fail. And because they cover the whole run, the
+        //    ~450 ticks that follow the third retry's escalation are pinned
+        //    too — zero further reads, zero further commands, on a run that is
+        //    now permanently escalated. That tail is the actual proof that the
+        //    cost tracks the retry budget rather than the clock.
         //
         //    The `.high` reads are the brain's one confirm of the carrier at
         //    launch, plus one hub read for each of the SECOND and THIRD
@@ -464,9 +484,9 @@ struct BrainReserveRailDegradationTests {
         //    That is the shape a bounded degradation should have: the cost
         //    tracks the RETRY BUDGET, never the clock.
         #expect(
-            reads.value == [ConfirmRead(deviceCode: "V1", isHigh: true)]
+            reads.value == [ConfirmRead(deviceCode: "VDEG1", isHigh: true)]
                 + Array(
-                    repeating: ConfirmRead(deviceCode: "HUB1", isHigh: true),
+                    repeating: ConfirmRead(deviceCode: "HUBDEG", isHigh: true),
                     count: Brain.retryBudget - 1
                 ),
             "one confirm-read for the launch, one hub read per SPACED retry — and nothing per-tick"
@@ -506,24 +526,32 @@ struct BrainReserveRailDegradationTests {
         )
 
         #expect(
-            await seam.commands == [SeamCommand(verb: "print", deviceCode: "HUB1")],
+            await seam.commands == [SeamCommand(verb: "print", deviceCode: "HUBDEG")],
             "above the floor the identical stack prints — so the veto above is the rail, not the fixture"
         )
         let run = try #require(try await relayRuns(database).first)
         #expect(run.attentionReason == nil, "nothing stalls on a funded world")
     }
 
-    /// The rail's veto, as the operator sees it in the why-view's feed. The
-    /// brain's own report says the stock is BELOW FLOOR on the same tick the
-    /// mission refuses to print — so the card and the rail cannot tell an
-    /// operator two different stories about the same world.
+    /// The rail's veto, as the operator sees it in the why-view's feed: on the
+    /// same world the test above drove to a real veto, the brain's own report
+    /// reads BELOW FLOOR — so the card and the rail cannot tell an operator two
+    /// different stories about the same world.
+    ///
+    /// **This test does not drive the rail**, and its name says so: it reads the
+    /// MIRROR (`BrainLimits.hubStockStanding`) on a world the test above proved
+    /// the rail vetoes. The mirror↔rail agreement itself — every combination of
+    /// stock and age, including the exact `hubFreshness` boundary — is pinned
+    /// separately by `BrainCeilingTests.hubStockStandingAgreesWithTheRailItMirrors`.
+    /// What is added here is that the two are pointed at the same WORLD, which
+    /// neither of those tests establishes on its own.
     ///
     /// `BrainLimits.hubStockStanding` is a deliberate mirror of
     /// `RelayRun.printStockIsShort` (they read different shapes and so cannot
     /// share an implementation); `hubStockStandingAgreesWithTheRailItMirrors`
     /// pins the two against each other, and this pins the mirror against a world
     /// the rail really did veto.
-    @Test func theWhyViewFeedReportsTheSameVetoTheRailApplied() async throws {
+    @Test func theWhyViewFeedReadsBelowFloorOnTheWorldTheRailVetoes() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in try seedDegradationWorld(db, hubStock: belowFloorStock) }
 
@@ -540,6 +568,8 @@ struct BrainReserveRailDegradationTests {
 
 // MARK: - Clause 7: bounded blast radius
 
+/// `.serialized`, and unique device codes — see the concurrency note on
+/// `BrainReserveRailDegradationTests` above for which of the two is load-bearing.
 @Suite("Brain — bounded blast radius: commitments and writes", .serialized)
 struct BrainBlastRadiusTests {
 
@@ -551,8 +581,8 @@ struct BrainBlastRadiusTests {
     /// never at commit time.
     ///
     /// The race is the one the guard is written for: the brain has ranked, has
-    /// chosen `R_A` as its reclaim source, and has taken its `.high` confirm-read
-    /// — and a second Relay Run claiming `R_A` lands before the insert opens.
+    /// chosen `RDEG_A` as its reclaim source, and has taken its `.high` confirm-read
+    /// — and a second Relay Run claiming `RDEG_A` lands before the insert opens.
     /// The racing row is driven off the `uuid` generator, the one deterministic
     /// seam between the confirm-read and the write transaction; `DatabaseWriter`
     /// commits it there and then, so by the time the brain's own transaction
@@ -564,6 +594,17 @@ struct BrainBlastRadiusTests {
     /// lost a node for one grow instead of two. The gate DEFERS the whole tick
     /// rather than falling back to a print — its contract is to let the tick's
     /// decision through or stop it, never to substitute a resource-spending one.
+    ///
+    /// **Scope, stated so nobody reads more into it.** This pins the guard's
+    /// LOGIC, not its PLACEMENT. The racing row commits at `uuid()`, which is
+    /// strictly before `database.write` opens, so a re-check hoisted just
+    /// outside the transaction would pass this test too. The in-transaction
+    /// placement — the thing `launch`'s doc argues for at length — is not
+    /// pinned here, and arguably cannot be pinned deterministically: it would
+    /// need a writer that interleaves INSIDE GRDB's serialized write queue,
+    /// which is precisely what that queue exists to prevent. The same limit
+    /// applies to `BrainConfirmFreshTests.anOperatorLaunchAfterTheConfirmReadIs`
+    /// `StillCaught`, which races the same seam for the carrier arm.
     @Test func aRacingClaimOnTheSameSpareRelayIsRefusedAtCommitTime() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in try seedReclaimableWorld(db) }
@@ -573,7 +614,7 @@ struct BrainBlastRadiusTests {
                 // `commitBlocker`'s other two guards can fire: the only thing
                 // this row collides on is `sourceRelayCode`.
                 try seedRelayRun(
-                    db, id: "OTHER", deviceCode: "V2", targets: ["ELSEWHERE"], sourceRelayCode: "R_A"
+                    db, id: "OTHER", deviceCode: "VDEG2", targets: ["ELSEWHERE"], sourceRelayCode: "RDEG_A"
                 )
             }
             return UUID(uuidString: "00000000-0000-0000-0000-0000000000FD")!
@@ -582,11 +623,11 @@ struct BrainBlastRadiusTests {
         let report = await tickReport(database, at: liftoff, uuid: racing)
 
         #expect(
-            report.decision == .idle(reason: "deferred — relay R_A already claimed on confirm"),
+            report.decision == .idle(reason: "deferred — relay RDEG_A already claimed on confirm"),
             "the tick must defer wholesale, not fall back to a 370-unit print"
         )
         let runs = try await relayRuns(database)
-        #expect(runs.map(\.id) == ["OTHER"], "no second run may claim R_A")
+        #expect(runs.map(\.id) == ["OTHER"], "no second run may claim RDEG_A")
         #expect(
             report.prune?.reclaimed == nil,
             "a deferred tick reclaimed nothing, so the why-view must not say it did"
@@ -594,7 +635,7 @@ struct BrainBlastRadiusTests {
     }
 
     /// The positive control for the guard above: the identical world with no
-    /// racing claim launches, and sources itself from `R_A`.
+    /// racing claim launches, and sources itself from `RDEG_A`.
     ///
     /// Without it, "no second run was written" is equally satisfied by a world
     /// in which the brain would never have reclaimed anything.
@@ -609,13 +650,13 @@ struct BrainBlastRadiusTests {
             return
         }
         let run = try #require(try await relayRuns(database).first)
-        #expect(run.sourceRelayCode == "R_A", "unraced, this world really does source from R_A")
-        #expect(report.prune?.reclaimed?.deviceCode == "R_A")
+        #expect(run.sourceRelayCode == "RDEG_A", "unraced, this world really does source from RDEG_A")
+        #expect(report.prune?.reclaimed?.deviceCode == "RDEG_A")
     }
 
     /// **Reclaim never strands live value, and the guard is the confirm-read.**
     ///
-    /// The brain plans off a best-effort `WorldView`: here it names `R_A` as a
+    /// The brain plans off a best-effort `WorldView`: here it names `RDEG_A` as a
     /// spare relay to reclaim, on the strength of a device row that is a full
     /// day old. By the time the run evaluates, the authoritative read says the
     /// relay is no longer the deployed, `relaying` relay prune assessed —
@@ -647,7 +688,7 @@ struct BrainBlastRadiusTests {
         let refresher: @Sendable (any DatabaseWriter, LockIsolated<[ConfirmRead]>) -> DeviceRefreshClient = {
             db, reads in
             reconcilingRefresher(db, reads: reads) { device in
-                guard device.deviceCode == "R_A" else { return device }
+                guard device.deviceCode == "RDEG_A" else { return device }
                 var down = device
                 down.status = "inactive"
                 return down
@@ -665,11 +706,11 @@ struct BrainBlastRadiusTests {
             "no deactivate, no travel, no print — the run refuses to act on a stale row"
         )
         let run = try #require(try await relayRuns(database).first)
-        #expect(run.sourceRelayCode == "R_A", "the plan hint is left intact for the operator to judge")
+        #expect(run.sourceRelayCode == "RDEG_A", "the plan hint is left intact for the operator to judge")
         #expect(run.status == .needsAttention, "an operator-resolvable stall is the worst case")
         #expect(run.attentionReason == .unreachableDevice)
         #expect(
-            reads.value.contains(ConfirmRead(deviceCode: "R_A", isHigh: true)),
+            reads.value.contains(ConfirmRead(deviceCode: "RDEG_A", isHigh: true)),
             "the refusal is EARNED by an authoritative read, not assumed from the row's age"
         )
         // The run did nothing TO the relay. Its row now reads `inactive`
@@ -678,7 +719,7 @@ struct BrainBlastRadiusTests {
         // it — but it is stowed aboard nothing and standing exactly where it
         // was. Nothing was stranded, and nothing was torn down.
         let relay = try #require(
-            await database.read { db in try Device.where { $0.deviceCode.eq("R_A") }.fetchOne(db) }
+            await database.read { db in try Device.where { $0.deviceCode.eq("RDEG_A") }.fetchOne(db) }
         )
         #expect(relay.stowedInDeviceCode == nil, "no stow — the reclaim never got that far")
         #expect(relay.location == "DEADEND-1", "and it never moved")
@@ -731,6 +772,8 @@ struct BrainBlastRadiusTests {
 
 // MARK: - Clause 6: safe degradation
 
+/// `.serialized`, and unique device codes — see the concurrency note on
+/// `BrainReserveRailDegradationTests` above for which of the two is load-bearing.
 @Suite("Brain — safe degradation", .serialized)
 struct BrainSafeDegradationTests {
 
@@ -791,6 +834,29 @@ struct BrainSafeDegradationTests {
     /// dispatches NO command. Then the read starts landing and the very next
     /// tick launches, exactly once — the deferral was never remembered, which is
     /// clause 2 and is what makes this degradation SAFE rather than sticky.
+    ///
+    /// **What this proves about SPEND, stated exactly, because the obvious
+    /// reading of it is too generous.** A deferred tick writes nothing and
+    /// dispatches nothing — that is proven outright. It does NOT prove the
+    /// deferral path is cheap: the read count below is one `.high` read per
+    /// tick, which at the engine's 5-second cadence is **12 authoritative reads
+    /// per minute, sustained for as long as the API stays down**, with no
+    /// backoff and — by clause 2 — no memory of the last refusal.
+    ///
+    /// That is a deliberate, documented trade (`Brain.confirmCarrier`'s own doc:
+    /// "the ceiling is one `.high` read per tick (12/min, for ONE device) …
+    /// the alternative is remembering the refusal, which is state between ticks
+    /// (clause 2), and the same window would otherwise have the brain
+    /// committing blind"). The assertion below pins that ceiling rather than
+    /// endorsing it: a build that started reading twice per tick, or polling
+    /// `.low` beside it, fails here.
+    ///
+    /// **So bounded read cost is proven for the STALL-RETRY path only** — by
+    /// `theReserveRailVetoesThePrintAndTheBrainIdlesInsteadOfThrashing` (three
+    /// reads for six hundred ticks) and `autoRetriesAreSpacedByTheRetryInterval`
+    /// (the 15-minute floor between attempts). The transient-deferral path has
+    /// no backoff at all, and nothing in this file should be read as claiming
+    /// otherwise.
     @Test func aTransientConfirmFailureDefersEveryTickAndWritesNothingUntilItClears() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in try seedDegradationWorld(db, hubStock: aboveFloorStock) }
@@ -811,19 +877,26 @@ struct BrainSafeDegradationTests {
 
         #expect(
             deferred.allSatisfy {
-                $0.report?.decision == .idle(reason: "deferred — carrier V1 could not be confirmed")
+                $0.report?.decision == .idle(reason: "deferred — carrier VDEG1 could not be confirmed")
             },
-            "every tick defers, with the reason that says the read failed rather than that V1 was taken"
+            "every tick defers, with the reason that says the read failed rather than that VDEG1 was taken"
         )
         #expect(deferred.allSatisfy { $0.directiveIDs.isEmpty }, "a deferred tick writes nothing")
         #expect(deferred.allSatisfy { $0.logIDs.isEmpty }, "…including no timeline entry")
         #expect(await seam.commands.isEmpty, "…and spends nothing")
+        // Implied by the exact-equality check above as far as the STRING goes —
+        // kept because it pins something that equality cannot: that the reason
+        // the brain emits is one `BrainDecision.isDeferral` actually recognises.
+        // Those are two separate pieces of production (`deferralPrefix` and the
+        // accessor), and the why-view's whole idle/deferred split hangs off the
+        // accessor, so a drift between them must fail here rather than in a
+        // screenshot.
         #expect(
             deferred.allSatisfy { $0.report?.decision.isDeferral == true },
             "a deferral is its own state — it must not read as idle-with-nothing-to-do"
         )
         #expect(
-            reads.value == Array(repeating: ConfirmRead(deviceCode: "V1", isHigh: true), count: 20),
+            reads.value == Array(repeating: ConfirmRead(deviceCode: "VDEG1", isHigh: true), count: 20),
             "one confirm-read per tick and nothing else: the gate fires on commitment, not on a poll"
         )
 
@@ -852,9 +925,10 @@ struct BrainSafeDegradationTests {
     ///   1. **The decision the brain publishes.** `.idle` vs `.stall`, which is
     ///      the exact discriminator `BrainWhy.from`'s exhaustive switch reads —
     ///      `isEscalated` is false for `.idle`/`.dispatch` and true for `.stall`
-    ///      alone, pinned by `BrainWhyViewTests.everyGateReadsDistinctly` over
-    ///      all four gate shapes. That test drives synthetic reports; this one
-    ///      proves the real brain produces the two inputs it distinguishes.
+    ///      alone, pinned by `BrainWhyViewTests.theFourGateStatesAllReadDifferently`
+    ///      over all four gate shapes (and `aDeferralReadsAsItsOwnGateNotAsAn`
+    ///      `OrdinaryIdle` for the third). Those drive SYNTHETIC reports; this
+    ///      one proves the real brain produces the two inputs they distinguish.
     ///   2. **Neither is a DEFERRAL.** A deferred tick is normal operation and
     ///      must not creep into either bucket.
     ///   3. **The ledger.** The idle world surfaces NOTHING — no
@@ -967,34 +1041,34 @@ private func needingAttention(_ database: any DatabaseReader) async throws -> [D
 
 /// A world in which the brain will source its grow from a RECLAIM rather than a
 /// print: `SOL` meshed and hosting the hub, `VEGA` 5 ly out holding the value,
-/// and a spare relay `R_A` at `DEADEND` 7.07 ly from the plant site — inside
+/// and a spare relay `RDEG_A` at `DEADEND` 7.07 ly from the plant site — inside
 /// `Brain.reclaimRangeLY` (15 ly).
 ///
 /// `DEADEND` is genuinely spare rather than declared so: a meshed, SURVEYED
 /// system with no value, no fleet and no replicant, so the anchor→target
-/// path-union misses it. `V1` hosts a replicant, without which the brain
+/// path-union misses it. `VDEG1` hosts a replicant, without which the brain
 /// refuses to send it on a reclaim at all (`ftl-authority-rule` rule 1) and
 /// every test here would pass by printing.
 ///
-/// `V2` exists so the racing row can name a carrier that is not the one under
+/// `VDEG2` exists so the racing row can name a carrier that is not the one under
 /// test — the point of that test is that ONLY `sourceRelayCode` collides.
 private func seedReclaimableWorld(
     _ db: Database, sourceUpdatedAt: Date = liftoff
 ) throws {
-    try seedRelay(db, code: "REL_SOL", location: "SOL", updatedAt: liftoff)
+    try seedRelay(db, code: "RELDEG_S", location: "SOL", updatedAt: liftoff)
     try seedStar(db, designation: "SOL", x: 0, y: 0, z: 0)
     try seedSystemDetail(db, system: "SOL", scanned: true)
-    try seedPrintHub(db, code: "HUB1", location: hubLocation, updatedAt: liftoff)
-    try seedDevice(db, code: "V1", type: "heaven_vessel", location: hubLocation, updatedAt: liftoff)
-    try seedDevice(db, code: "V2", type: "heaven_vessel", location: hubLocation, updatedAt: liftoff)
-    try seedReplicant(db, code: "REP0", star: "SOL", hostedDeviceCode: "V1")
+    try seedPrintHub(db, code: "HUBDEG", location: hubLocation, updatedAt: liftoff)
+    try seedDevice(db, code: "VDEG1", type: "heaven_vessel", location: hubLocation, updatedAt: liftoff)
+    try seedDevice(db, code: "VDEG2", type: "heaven_vessel", location: hubLocation, updatedAt: liftoff)
+    try seedReplicant(db, code: "REP0", star: "SOL", hostedDeviceCode: "VDEG1")
 
     try seedStar(db, designation: target, x: 5, y: 0, z: 0)
     try seedSalvageAssay(db, id: "SITE-\(target)", system: target, totals: ["structural": 3_200])
 
     try seedStar(db, designation: "DEADEND", x: 0, y: 0, z: -5)
     try seedSystemDetail(db, system: "DEADEND", scanned: true)
-    try seedRelay(db, code: "R_A", location: "DEADEND-1", updatedAt: sourceUpdatedAt)
+    try seedRelay(db, code: "RDEG_A", location: "DEADEND-1", updatedAt: sourceUpdatedAt)
 
     try seedFootprint(db, location: hubLocation, resources: aboveFloorStock, fetchedAt: liftoff)
 }
