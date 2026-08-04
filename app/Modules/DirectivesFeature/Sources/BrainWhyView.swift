@@ -33,8 +33,9 @@ public struct BrainWhy: Equatable, Sendable {
     /// The decision's headline, e.g. "idle — no grow or prune work" or
     /// "stalled — Relay didn't come up".
     public var topGoalGate: String
-    /// Ranked candidates under consideration. Always empty until `.dispatch`
-    /// exists on `BrainDecision` (Task 12) and a later task populates this.
+    /// Ranked candidates under consideration. Still always empty: `.dispatch`
+    /// now carries the ranked field, but rendering it (the runners-up a
+    /// launch was chosen against) is Task 19's job, not this projection's.
     public var candidates: [BrainWhyRow]
     /// Spend-ceiling facts constraining the brain's choices, e.g. an idle
     /// relay cap. Always empty until a task that produces limit pressure.
@@ -52,15 +53,20 @@ public struct BrainWhy: Equatable, Sendable {
     }
 
     /// Projects the brain's tick result into the why-view's shape. `view` is
-    /// unused while only `.idle`/`.stall` exist — later phases (`.dispatch`)
-    /// read it to explain a candidate's rationale against the galaxy state.
+    /// unused — the goal's own `rationale` is already a graph fact, and
+    /// explaining the ranked field against the galaxy state is Task 19.
     ///
-    /// Exhaustive over `BrainDecision`'s current two cases, no `default:` —
-    /// adding `.dispatch` must force this switch open again.
+    /// Exhaustive over `BrainDecision`, no `default:` — a case added later
+    /// must force this switch open again, exactly as `.dispatch` just did.
     public static func from(decision: BrainDecision, view: WorldView?) -> BrainWhy {
         switch decision {
         case let .idle(reason):
             BrainWhy(topGoalGate: "idle — \(reason)", candidates: [], limitPressure: [], isEscalated: false)
+        case let .dispatch(goal, _):
+            // The gate only. `ranked` is deliberately dropped here: rendering
+            // the candidate list is Task 19, and half-rendering it now would
+            // ship a surface nobody has specified.
+            BrainWhy(topGoalGate: "launched — \(goal.rationale)", candidates: [], limitPressure: [], isEscalated: false)
         case let .stall(reason):
             BrainWhy(topGoalGate: "stalled — \(reason.displayName)", candidates: [], limitPressure: [], isEscalated: true)
         }

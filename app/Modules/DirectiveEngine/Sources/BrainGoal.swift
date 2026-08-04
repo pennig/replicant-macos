@@ -43,15 +43,19 @@ public struct Goal: Equatable, Sendable {
 }
 
 /// What the brain's plan loop hands back for a single tick.
-///
-/// Only `.idle` and `.stall` exist in this build. `.dispatch(Goal, ranked:
-/// [GrowCandidate])` is defined in Task 12 once `GrowCandidate` (the grow
-/// ranking's own type) exists — adding it is a deliberate forcing function
-/// that revisits every switch over this enum, not something to stub around.
 public enum BrainDecision: Equatable, Sendable {
     /// Nothing worth doing this tick. Surfaced, not escalated — see the
     /// robustness bar's safe-degradation clause.
     case idle(reason: String)
+    /// A directive was launched for `Goal`, chosen from `ranked` (the whole
+    /// ranked field, best first, so the why-view can show the runners-up the
+    /// choice was made against — Task 19).
+    ///
+    /// Reports what the tick DID, not what it intends to do: `Brain
+    /// .evaluateOnce()` only answers this once the row is committed, so a
+    /// failed write degrades to `.idle` rather than claiming a launch that
+    /// never happened.
+    case dispatch(Goal, ranked: [GrowCandidate])
     /// A directive needs operator attention before the brain can proceed.
     case stall(DirectiveAttentionReason)
 }

@@ -8,10 +8,10 @@
 //  per the list-row-preview-crash rule: a row struct beside a `#Preview`
 //  crashes the Xcode 26 preview JIT.
 //
-//  Deliberately minimal: `.dispatch` doesn't exist on `BrainDecision` yet
-//  (Task 12), so nothing populates `candidates` this build. Task 19 drives
-//  this type's real shape against `GrowCandidate` — don't grow it ahead of
-//  that need.
+//  Deliberately minimal: `.dispatch` now carries the ranked field, but
+//  `BrainWhy.from` still leaves `candidates` empty — Task 19 drives this
+//  type's real shape against `GrowCandidate`. Don't grow it ahead of that
+//  need.
 //
 
 /// A single candidate the brain considered, as the operator would read it on

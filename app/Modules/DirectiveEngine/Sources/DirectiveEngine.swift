@@ -65,8 +65,9 @@ actor DirectiveEngineCore {
     private var executors: [String: Task<Void, Never>] = [:]
     /// The automation brain's plan loop — reads a `WorldView` and decides
     /// what's worth doing every tick, beside (never inside) the supervisor
-    /// loop above. Phase A (this build) is inert: it reads and idles, never
-    /// writes. See `Brain.swift`.
+    /// loop above. It now LAUNCHES: a tick that finds a grow worth making
+    /// creates a `relayRun` row, which the supervisor above then picks up like
+    /// any other. See `Brain.swift`.
     private var brain: Task<Void, Never>?
 
     /// Test seam: how many executors are alive.
@@ -104,7 +105,7 @@ actor DirectiveEngineCore {
                 }
             }
         }
-        brainLogger.info("starting — brain online, calm, inert")
+        brainLogger.info("starting — brain online")
         do {
             // A separate local read of the same dependencies as the
             // supervisor above, rather than sharing its `clock`/`tick` —
@@ -135,17 +136,21 @@ actor DirectiveEngineCore {
     }
 
     /// One brain tick: bridge the clock's `now` in via `@Dependency(\.date)`
-    /// (never `Date()`, so `TestClock` determinism holds), ask `Brain` for a
-    /// decision, and — Phase A only — do nothing with it. Internal rather
-    /// than `private` so tests can drive it directly, the same seam
-    /// `reconcileExecutors()` and `evaluateOnce(directiveID:)` already use.
+    /// (never `Date()`, so `TestClock` determinism holds), and ask `Brain` for
+    /// a decision. Internal rather than `private` so tests can drive it
+    /// directly, the same seam `reconcileExecutors()` and
+    /// `evaluateOnce(directiveID:)` already use.
+    ///
+    /// The decision is REPORTED, not acted on: `Brain.evaluateOnce()` already
+    /// committed whatever it decided to do, through the sanctioned
+    /// create-directive rail and nothing else. Nothing here writes a row, and
+    /// nothing here should — a bespoke write at this layer would be outside
+    /// the brain's audited enactment surface. (Task 19 wires this decision to
+    /// the why-view; until then it is logged and dropped.)
     func tickBrain() async {
         brainTickCount += 1
         @Dependency(\.date) var date
         let decision = await Brain(now: date.now).evaluateOnce()
-        // Phase A: idle/stall only — nothing to enact yet. Later tasks act on
-        // `decision` through the same create/cancel/retry rails
-        // `DirectiveExecutor` already uses, never by writing a row here.
         brainLogger.debug("tick: \(String(describing: decision), privacy: .public)")
     }
 

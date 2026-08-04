@@ -2,12 +2,13 @@
 //  BrainLoopTests.swift
 //  Replicould — DirectiveEngine
 //
-//  Task 4: the brain's plan loop is online, calm, and inert. `Brain.
-//  evaluateOnce()` reads a `WorldView` and always answers `.idle` (Phase A),
-//  and `DirectiveEngineCore` ticks it every 5s beside the existing
-//  supervisor. Every assertion here is chosen to catch a brain that WROTE
-//  something, not merely to show the loop ran — see each test's doc comment
-//  for what it would catch.
+//  Task 4: the brain's plan loop is online and wired to the clock —
+//  `DirectiveEngineCore` ticks `Brain.evaluateOnce()` every 5s beside the
+//  existing supervisor. Every world here is one with nothing to do, so every
+//  assertion is chosen to catch a brain that WROTE something anyway, not
+//  merely to show the loop ran — see each test's doc comment for what it
+//  would catch. The brain's LAUNCHING path (Task 16) is exercised in
+//  `BrainGrowTests`, against worlds that actually offer it work.
 //
 
 import Dependencies
@@ -38,9 +39,10 @@ struct BrainEvaluationTests {
         #expect(directives.isEmpty)
     }
 
-    /// A galaxy with a meshed relay and salvage nearby — plenty for a later,
-    /// non-inert brain to act on — still idles in this Phase A build, and
-    /// leaves every row exactly as it found it.
+    /// A galaxy with a meshed relay and salvage IN THAT SAME MESHED SYSTEM:
+    /// there is nothing to grow toward (`ValueCatalog` excludes a meshed
+    /// system — the mesh already reaches it), no print hub, and no carrier.
+    /// The brain idles and leaves every row exactly as it found it.
     ///
     /// The row-for-row equality below is the test that would actually catch a
     /// brain that mutated something while deciding: a naive implementation

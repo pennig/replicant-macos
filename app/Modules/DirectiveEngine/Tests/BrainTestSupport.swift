@@ -23,6 +23,27 @@ import UniverseModels
 
 /// A minimal device row. Defaults read as an idle, undeployed device; override
 /// only what a test cares about.
+func deviceFixture(
+    code: String,
+    type: String = "heaven_vessel",
+    location: String? = nil,
+    status: String = "idle",
+    features: [String] = [],
+    availableCommands: [String] = [],
+    tags: [String] = [],
+    stowedIn: String? = nil
+) -> Device {
+    Device(
+        deviceCode: code, deviceType: type, replicantCode: "R1", status: status,
+        location: location, locationName: nil, operationalCapacity: 100, queueSize: 0,
+        stowedInDeviceCode: stowedIn, controllerDeviceCode: nil, attachedToDeviceCode: nil,
+        createdAt: Date(timeIntervalSince1970: 0), availableCommands: availableCommands,
+        features: features, tags: tags, detail: .object([:]),
+        updatedAt: Date(timeIntervalSince1970: 0), firstSeenAt: Date(timeIntervalSince1970: 0)
+    )
+}
+
+/// `deviceFixture`, inserted.
 func seedDevice(
     _ db: Database,
     code: String,
@@ -30,16 +51,14 @@ func seedDevice(
     location: String? = nil,
     status: String = "idle",
     features: [String] = [],
-    availableCommands: [String] = []
+    availableCommands: [String] = [],
+    tags: [String] = [],
+    stowedIn: String? = nil
 ) throws {
     try Device.insert {
-        Device(
-            deviceCode: code, deviceType: type, replicantCode: "R1", status: status,
-            location: location, locationName: nil, operationalCapacity: 100, queueSize: 0,
-            stowedInDeviceCode: nil, controllerDeviceCode: nil, attachedToDeviceCode: nil,
-            createdAt: Date(timeIntervalSince1970: 0), availableCommands: availableCommands,
-            features: features, tags: [], detail: .object([:]),
-            updatedAt: Date(timeIntervalSince1970: 0), firstSeenAt: Date(timeIntervalSince1970: 0)
+        deviceFixture(
+            code: code, type: type, location: location, status: status, features: features,
+            availableCommands: availableCommands, tags: tags, stowedIn: stowedIn
         )
     }.execute(db)
 }
@@ -58,6 +77,49 @@ func seedPrintHub(_ db: Database, code: String, location: String) throws {
         db, code: code, type: "autofactory", location: location,
         availableCommands: ["enqueue_print"]
     )
+}
+
+// MARK: - Directive seeds
+
+/// A directive row as a value, for tests that reason over directives without a
+/// database (the reservation rules). Defaults read as a running Salvage Run
+/// owning one vessel and nothing else; override only what a test cares about.
+func directiveFixture(
+    id: String,
+    kind: DirectiveKind = .salvageRun,
+    status: DirectiveStatus = .running,
+    deviceCode: String,
+    controllerCode: String? = nil,
+    fleetTag: String? = nil,
+    targets: [String] = []
+) -> Directive {
+    Directive(
+        id: id, kind: kind, status: status, deviceCode: deviceCode,
+        controllerCode: controllerCode, roamCentre: nil, fleetTag: fleetTag,
+        sourceRelayCode: nil, targets: targets, targetIndex: 0,
+        step: "step", stepStartedAt: Date(timeIntervalSince1970: 0),
+        returnToOrigin: false, originDesignation: nil, attentionReason: nil,
+        createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0)
+    )
+}
+
+/// `directiveFixture`, inserted.
+func seedDirective(
+    _ db: Database,
+    id: String,
+    kind: DirectiveKind = .salvageRun,
+    status: DirectiveStatus = .running,
+    deviceCode: String,
+    controllerCode: String? = nil,
+    fleetTag: String? = nil,
+    targets: [String] = []
+) throws {
+    try Directive.insert {
+        directiveFixture(
+            id: id, kind: kind, status: status, deviceCode: deviceCode,
+            controllerCode: controllerCode, fleetTag: fleetTag, targets: targets
+        )
+    }.execute(db)
 }
 
 // MARK: - Star seeds
@@ -126,6 +188,50 @@ func seedMalformedSystemDetail(_ db: Database, system: String) throws {
             systemScanned: true, hydratedAt: Date(timeIntervalSince1970: 0)
         )
     }.execute(db)
+}
+
+// MARK: - Whole-world seeds
+
+/// Where the growable world's print hub and its carriers stand. A location
+/// inside the meshed `SOL` system (`SiteAssay.system(of:)` reads everything
+/// before the first hyphen), which is what makes `WorldView.hubLocation`
+/// non-nil — an off-mesh hub is deliberately invisible to the brain.
+let growHubLocation = "SOL-3"
+
+/// The smallest world the brain can actually grow from: `SOL` meshed by a live
+/// relay, a print hub with `carriers` HEAVEN vessels parked alongside it, and
+/// one unmeshed salvage system per entry in `salvage`.
+///
+/// **Every salvage system sits at exactly 5 ly from SOL**, on a different axis.
+/// That is load-bearing, not decoration: `GrowRanking`'s key compares
+/// `relaysRemaining` and then `hopDistance` BEFORE it ever looks at value, so
+/// a test that expects the richest pile to rank first would otherwise be
+/// decided by whichever system happened to be nearest. With the distances tied
+/// exactly (each is a single axis offset of 5, so `sqrt(25)` with no floating
+/// point residue) the sort is forced down to field 3 — magnitude — which is
+/// what those tests mean to exercise. At most six systems; a seventh would
+/// have no equidistant axis left and is not supported.
+func seedGrowableWorld(
+    _ db: Database,
+    carriers: [String] = ["V1"],
+    salvage: [String: Double] = ["VEGA": 3_200]
+) throws {
+    try seedRelay(db, code: "REL1", location: "SOL")
+    try seedStar(db, designation: "SOL", x: 0, y: 0, z: 0)
+    try seedPrintHub(db, code: "HUB1", location: growHubLocation)
+    for code in carriers {
+        try seedDevice(db, code: code, type: "heaven_vessel", location: growHubLocation)
+    }
+    let offsets: [(Double, Double, Double)] = [
+        (5, 0, 0), (0, 5, 0), (0, 0, 5), (-5, 0, 0), (0, -5, 0), (0, 0, -5),
+    ]
+    for (index, entry) in salvage.sorted(by: { $0.key < $1.key }).enumerated() {
+        let offset = offsets[index]
+        try seedStar(db, designation: entry.key, x: offset.0, y: offset.1, z: offset.2)
+        try seedSalvageAssay(
+            db, id: "SITE-\(entry.key)", system: entry.key, totals: ["metal": entry.value]
+        )
+    }
 }
 
 // MARK: - LocationEvent seeds
