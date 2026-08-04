@@ -119,7 +119,7 @@ public struct NewSalvageRunFeature {
             let drones = SalvageRun.adoptedDrones(of: controller, aboard: vessel, in: world)
             var fleet = [vessel, controller] + drones
             if let relay = SalvageRun.relay(aboard: vessel, in: world) { fleet.append(relay) }
-            return fleet.allSatisfy { $0.tags.contains(SalvageRun.defaultFleetTag) }
+            return fleet.allSatisfy { $0.hasTag(SalvageRun.defaultFleetTag) }
         }
 
         /// The chosen vessel's current system — a Salvage Run's roam centre,

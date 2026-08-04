@@ -52,7 +52,7 @@ public struct NewHaulRunFeature {
         public var untaggedController: Device? {
             devices
                 .filter { $0.availableDirectives.contains(HaulTargetPlanner.ferry) }
-                .first { !$0.tags.contains(HaulRun.defaultFleetTag) }
+                .first { !$0.hasTag(HaulRun.defaultFleetTag) }
         }
 
         /// The row's required anchor device. Lowest code for determinism.

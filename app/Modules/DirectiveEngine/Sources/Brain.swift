@@ -98,7 +98,14 @@ struct Brain: Sendable {
     /// (`carrierBlocker`) rather than idling silently — the distinction
     /// `brain-robustness-bar` clause 6 requires. That is the safe direction: a
     /// fleet the operator has not opted in stays untouched.
-    static let carrierTag = "auto:tendMesh"
+    ///
+    /// **Spelled lowercase because that is what the fleet actually carries** —
+    /// the server normalises tags, so a vessel tagged `auto:tendMesh` reads
+    /// back `auto:tendmesh`. Every comparison still goes through
+    /// `Device.hasTag`, which normalises both sides; the spelling here is what
+    /// the operator sees quoted back at them in `carrierBlocker`, so it should
+    /// match what they will see in the device inspector.
+    static let carrierTag = "auto:tendmesh"
 
     /// How far off its road the brain will send a carrier to fetch a spare
     /// relay it could otherwise print — measured from the PLANT SITE (the grow
@@ -1172,7 +1179,7 @@ struct Brain: Sendable {
             reserved.insert(directive.deviceCode)
             if let controller = directive.controllerCode { reserved.insert(controller) }
             if let tag = directive.fleetTag {
-                for device in devices.values where device.tags.contains(tag) {
+                for device in devices.values where device.hasTag(tag) {
                     reserved.insert(device.deviceCode)
                 }
             }
@@ -1284,7 +1291,7 @@ struct Brain: Sendable {
         // unavailable, and "the operator has not opted this fleet in" is a
         // different fact with a different remedy — one the operator can act on
         // immediately, and which would otherwise read as "all busy".
-        let candidates = hulls.filter { $0.tags.contains(carrierTag) }
+        let candidates = hulls.filter { $0.hasTag(carrierTag) }
         guard !candidates.isEmpty else {
             let names = hulls.prefix(2).map(\.deviceCode).joined(separator: ", ")
             let rest = hulls.count > 2 ? " +\(hulls.count - 2) more" : ""
@@ -1391,7 +1398,7 @@ struct Brain: Sendable {
     /// four-clause predicate is exactly how that drift starts, so there is one.
     static func isFreeCarrier(_ device: Device, at hub: String, reserved: Set<String>) -> Bool {
         device.deviceType == carrierDeviceType
-            && device.tags.contains(carrierTag)
+            && device.hasTag(carrierTag)
             && device.location == hub
             && !device.isBusy
             && !reserved.contains(device.deviceCode)

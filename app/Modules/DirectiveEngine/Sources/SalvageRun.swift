@@ -714,7 +714,7 @@ public struct SalvageRun: MissionStepMachine {
     /// infrastructure.
     private func settle(_ directive: Directive, _ relay: Device) -> MissionAction {
         let tag = Self.fleetTag(directive)
-        guard relay.tags.contains(tag) else {
+        guard relay.hasTag(tag) else {
             return .advanceStep(nextStep: Step.positioning)
         }
         return .setDeviceTags(

@@ -200,7 +200,7 @@ public struct HaulRun: MissionStepMachine {
     /// the same controller keeps the same rank across evaluations.
     public static func controllers(in world: WorldSnapshot, tag: String) -> [Device] {
         world.devices.values
-            .filter { $0.tags.contains(tag) }
+            .filter { $0.hasTag(tag) }
             .filter { $0.availableDirectives.contains(requiredDirective) }
             .sorted { $0.deviceCode < $1.deviceCode }
     }
@@ -229,7 +229,7 @@ public struct HaulRun: MissionStepMachine {
     /// summarising N of them would be inventing UI the spec declines to offer.
     public static func currentHaulTarget(devices: [Device], tag: String) -> String? {
         devices
-            .filter { $0.tags.contains(tag) }
+            .filter { $0.hasTag(tag) }
             .sorted { $0.deviceCode < $1.deviceCode }
             .lazy
             .compactMap { device -> String? in
