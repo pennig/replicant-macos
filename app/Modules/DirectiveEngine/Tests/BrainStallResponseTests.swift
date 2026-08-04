@@ -175,7 +175,7 @@ struct BrainStallResponseTests {
         // never what stops a retry here — this test is about the BUDGET.
         // `aRecentlyRetriedStallWaitsInsteadOfRetryingAgain` owns spacing.
         for attempt in 0..<5 {
-            let now = t(Double(attempt) * 120)
+            let now = t(Double(attempt) * 1_200)
             decisions.append(await decide(database, at: now, uuid: uuid, resolutions: resolutions))
             if try await reStallIfRetried(
                 database, "D1", reason: .printStockShort,
@@ -221,7 +221,7 @@ struct BrainStallResponseTests {
 
         for tick in 0..<4 {
             #expect(
-                await decide(database, at: t(Double(tick) * 120), uuid: uuid, resolutions: resolutions)
+                await decide(database, at: t(Double(tick) * 1_200), uuid: uuid, resolutions: resolutions)
                     == .stall(.noRelayCoLocated)
             )
         }
@@ -262,7 +262,7 @@ struct BrainStallResponseTests {
         // Well past the budget, so the retry arm is driven through spend AND
         // exhaustion while the three forbidden verbs are armed.
         for tick in 0..<8 {
-            let now = t(Double(tick) * 120)
+            let now = t(Double(tick) * 1_200)
             _ = await decide(database, at: now, uuid: uuid, resolutions: resolutions)
             try await reStallIfRetried(
                 database, "D1", reason: .relayActivationFailed,
@@ -357,9 +357,16 @@ struct BrainStallResponseTests {
     /// one action and re-reads the world five seconds later.
     ///
     /// Three identical fresh stalls, so nothing but the one-per-tick rule can
-    /// explain a single retry — all three are eligible on the first tick. The
-    /// second half proves the rule is a bound and not a freeze: successive
-    /// ticks work through the pile in a deterministic order.
+    /// explain a single retry — all three are eligible on the first tick.
+    ///
+    /// **Each retried run is re-stalled before the next tick**, which is what
+    /// makes the second half test its own message: without that, a retried run
+    /// goes `.running` and drops out of candidacy on its own, so successive
+    /// ticks would pick the next id whatever the ordering rule was. With the
+    /// pile kept PERSISTENT — all three rows halted at the start of every tick
+    /// — D2-before-D3 is a real ordering assertion (both have never been
+    /// attempted, so the directive-id tie-break decides), and D1 not being
+    /// picked again is the spacing floor doing its job.
     @Test func atMostOneAutoRetryLandsPerTick() async throws {
         let database = try GameDatabase.bootstrap()
         let uuid = UUIDGenerator.incrementing
@@ -373,13 +380,64 @@ struct BrainStallResponseTests {
 
         _ = await decide(database, at: t(10), uuid: uuid, resolutions: resolutions)
         #expect(resolutions.retried.value == ["D1"], "three eligible stalls, one action")
+        #expect(
+            try await reStallIfRetried(database, "D1", reason: .printStockShort, entryID: "S-D1-b", at: t(11)),
+            "D1 must really have gone .running, or the pile below isn't persistent"
+        )
 
         _ = await decide(database, at: t(20), uuid: uuid, resolutions: resolutions)
+        #expect(
+            resolutions.retried.value == ["D1", "D2"],
+            "D1 is inside its spacing floor and D2 has never been attempted, so D2 is next"
+        )
+        try await reStallIfRetried(database, "D2", reason: .printStockShort, entryID: "S-D2-b", at: t(21))
+
         _ = await decide(database, at: t(30), uuid: uuid, resolutions: resolutions)
         #expect(
             resolutions.retried.value == ["D1", "D2", "D3"],
-            "…and the pile is worked through, lowest id first, one per tick"
+            "…and the pile is worked through one per tick, never two"
         )
+    }
+
+    /// **Starvation guard.** When several stalls are eligible at once the
+    /// tick's one retry goes to whichever has WAITED LONGEST, not to the lowest
+    /// id — here D2, despite D1 sorting first.
+    ///
+    /// Ordering by id alone starves the tail: with a 5-second tick and a
+    /// `retryInterval`-long floor, a low-id directive that has just become
+    /// eligible again always outranks a high-id one, which is then never
+    /// retried, never spends budget, and so never reaches `.escalated` either —
+    /// held silently and reported to nobody. Both directives below are past the
+    /// floor, so eligibility cannot explain the choice; only the wait can.
+    @Test func theLongestWaitingEligibleStallIsRetriedFirst() async throws {
+        let database = try GameDatabase.bootstrap()
+        let uuid = UUIDGenerator.incrementing
+        let resolutions = Resolutions()
+        try await database.write { db in
+            // D1 sorts first by id but was attended to recently.
+            try seedRelayRun(db, id: "D1", deviceCode: "V1")
+            try stallDirective(db, id: "D1", reason: .printStockShort, entryID: "A0", at: t(0))
+            try seedLogEntry(
+                db, id: "R-D1", directiveID: "D1", kind: .resolved,
+                summary: "Retried", step: RelayRun().firstStep, at: t(3_000)
+            )
+            try stallDirective(db, id: "D1", reason: .printStockShort, entryID: "A1", at: t(3_001))
+
+            // D2 sorts last but has been waiting since long before that.
+            try seedRelayRun(db, id: "D2", deviceCode: "V2")
+            try stallDirective(db, id: "D2", reason: .printStockShort, entryID: "B0", at: t(0))
+            try seedLogEntry(
+                db, id: "R-D2", directiveID: "D2", kind: .resolved,
+                summary: "Retried", step: RelayRun().firstStep, at: t(10)
+            )
+            try stallDirective(db, id: "D2", reason: .printStockShort, entryID: "B1", at: t(11))
+        }
+
+        // Both are past the floor at this instant (D1 by ~17 min, D2 by ~66).
+        _ = await decide(database, at: t(4_000), uuid: uuid, resolutions: resolutions)
+
+        #expect(resolutions.retried.value == ["D2"], "the longest wait wins, not the lowest id")
+        #expect(try await row(database, "D1")?.status == .needsAttention, "…and D1 keeps its place in the queue")
     }
 
     /// A stall retried moments ago is left alone this tick — and is NOT
@@ -389,7 +447,9 @@ struct BrainStallResponseTests {
     /// every 5-second tick, which for a pile-up of N carriers is N API-driving
     /// actions every five seconds against a condition that has had no time to
     /// change. The two ticks below differ ONLY in their clock, so the spacing
-    /// floor is the only thing that can explain the difference.
+    /// floor is the only thing that can explain the difference — and the
+    /// "too soon" one sits ten minutes out, so the floor's calibration is
+    /// pinned rather than just its existence.
     @Test func aRecentlyRetriedStallWaitsInsteadOfRetryingAgain() async throws {
         let database = try GameDatabase.bootstrap()
         let uuid = UUIDGenerator.incrementing
@@ -404,16 +464,45 @@ struct BrainStallResponseTests {
             try stallDirective(db, id: "D1", reason: .printStockShort, entryID: "S1", at: t(2))
         }
 
-        let tooSoon = await decide(database, at: t(11), uuid: uuid, resolutions: resolutions)
-        #expect(resolutions.retried.value.isEmpty, "ten seconds after the last attempt is not a fresh attempt")
+        // TEN MINUTES after the last attempt, and still too soon — the gap is
+        // chosen inside the domain's own range on purpose. A floor of seconds
+        // (or of one minute, which is what this shipped as before review)
+        // would retry here, so this assertion pins the CALIBRATION and not
+        // merely the existence of a floor.
+        let tooSoon = await decide(database, at: t(600), uuid: uuid, resolutions: resolutions)
+        #expect(resolutions.retried.value.isEmpty, "ten minutes after the last attempt is not a fresh attempt")
         #expect(
             tooSoon == .idle(reason: "no mesh yet"),
             "…and a stall the brain is still working is not escalated to the operator"
         )
 
-        let later = await decide(database, at: t(200), uuid: uuid, resolutions: resolutions)
+        let later = await decide(database, at: t(1_000), uuid: uuid, resolutions: resolutions)
         #expect(resolutions.retried.value == ["D1"], "once the floor has passed, the next attempt goes out")
         #expect(later == .idle(reason: "no mesh yet"))
+    }
+
+    /// **The floor must outlast the read it depends on.** `RelayRun.acquire`
+    /// believes the hub's row — and, through `footprintCensusIsStale`, the
+    /// resource census the reserve rail reads — for `RelayRun.hubFreshness`
+    /// before it refreshes either. A retry sooner than that re-reads numbers
+    /// the run itself considers current, so it is *structurally incapable* of
+    /// producing a different answer: it can only burn an attempt and bring the
+    /// escalation forward.
+    ///
+    /// This is the invariant, not the literal — it holds for any floor at or
+    /// beyond the staleness horizon, and it is what makes the three-attempt
+    /// budget spendable rather than decorative. It is asserted as a relation
+    /// between two constants rather than as `== 900` on purpose: pinning the
+    /// number would only restate the source, where this restates the *reason*
+    /// and fails if either side moves out from under the other.
+    @Test func theRetryFloorOutlastsTheHubReadItDependsOn() {
+        #expect(
+            Brain.retryInterval >= RelayRun.hubFreshness,
+            """
+            a floor shorter than RelayRun.hubFreshness (\(RelayRun.hubFreshness)s) retries against a \
+            snapshot the run has not re-read, so the attempt cannot change the answer
+            """
+        )
     }
 }
 
@@ -512,6 +601,39 @@ struct BrainRetryEpisodeTests {
         #expect(episode == Brain.RetryEpisode(attempts: 2, lastAttemptAt: t(20)))
     }
 
+    /// **The one that matters: an `.opCompleted` naming a FOREIGN step must
+    /// not refund the budget.**
+    ///
+    /// `DirectiveExecutor.recordCompletedOps` stamps the entry with the step
+    /// the command was ISSUED from and back-dates `occurredAt` to
+    /// `min(max(op.lastConfirmedAt, dispatch.occurredAt), now)` —
+    /// `lastConfirmedAt` advances on any later confirm-read of an
+    /// already-terminal op, so an audit entry naming `travelling` can
+    /// legitimately sort AFTER the move to `confirming`. Here it sits between
+    /// two spent resolutions on the current step: if it ended the walk, this
+    /// directive would read as having spent 1 instead of 2 and would be handed
+    /// an extra retry — every tick, for free, in the unsafe direction.
+    ///
+    /// The sibling test above only ever placed `.opCompleted` at the CURRENT
+    /// step, where the boundary never applies, so it read as coverage of a
+    /// claim it did not test. This is that claim.
+    @Test func anOpCompletedAtAForeignStepDoesNotRefundTheBudget() {
+        let episode = Brain.retryEpisode(
+            stalledRelayRun(step: "confirming"),
+            log: [
+                logEntry(.stepStarted, step: "confirming", at: 0),
+                logEntry(.resolved, step: "confirming", at: 10),
+                logEntry(.stalled, step: "confirming", at: 11),
+                // Back-dated audit for a travel op issued two steps ago, landing
+                // here because a later confirm-read moved its `lastConfirmedAt`.
+                logEntry(.opCompleted, step: "travelling", at: 15),
+                logEntry(.resolved, step: "confirming", at: 20),
+                logEntry(.stalled, step: "confirming", at: 21),
+            ]
+        )
+        #expect(episode == Brain.RetryEpisode(attempts: 2, lastAttemptAt: t(20)))
+    }
+
     /// An operator's own resolution counts against the budget too. It is a
     /// `.resolved` entry like any other, and the direction of that choice is
     /// the safe one: a person who has just retried this step by hand and
@@ -543,7 +665,7 @@ struct BrainStallDispositionTests {
         for reason in retryable {
             #expect(
                 Brain.stallResponse(for: stalledRelayRun(reason: reason), log: [], now: t(0))
-                    == .retry(directiveID: "D1", reason: reason, attempt: 1),
+                    == .retry(directiveID: "D1", reason: reason, attempt: 1, lastAttemptAt: nil),
                 "\(reason) is classified .retry and must be auto-retried"
             )
         }
