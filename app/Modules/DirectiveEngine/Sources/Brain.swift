@@ -772,9 +772,16 @@ struct Brain: Sendable {
     ///     mined, salvaged, and ferried in — is at least one delivery cycle of
     ///     the same order. One print cycle, rounded up, is 15 minutes.
     ///
-    /// So three attempts span ~45 minutes, which covers at least one full
+    /// So three attempts span ~30 minutes, which covers at least one full
     /// resupply cycle and sits inside `printDeadline`'s own 30-min-per-step
-    /// scale. A shortage still unresolved after that is not a lull — it is a
+    /// scale. **Thirty, not forty-five**: the FIRST attempt is unspaced, because
+    /// at the first stall there is no `.resolved` entry to measure an interval
+    /// from (`retryEpisode` returns `lastAttemptAt == nil`), so the attempts
+    /// land at roughly t, t+15 and t+30 with escalation following the third.
+    /// `RelayRun.confirmSource`'s doc already recorded this correction and
+    /// pointed here; `BrainDegradationTests.autoRetriesAreSpacedByTheRetryInterval`
+    /// now measures the gaps off the timeline the retries actually wrote.
+    /// A shortage still unresolved after that is not a lull — it is a
     /// supply-chain problem (nothing mining, no hauler tagged, a reserve floor
     /// set too high) that genuinely needs the operator, which is exactly what
     /// escalation says.

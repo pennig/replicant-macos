@@ -761,9 +761,10 @@ public struct RelayRun: MissionStepMachine {
     /// `.resolved` one), so the attempts land at roughly t, t+15 min and
     /// t+30 min, with escalation following the third at about t+30 — not
     /// t+45, which is the off-by-one-interval this comment carried in its
-    /// previous draft. (`Brain.swift`'s own comment on `retryInterval` states
-    /// the same arithmetic the same wrong way; correcting it is a one-line
-    /// change to another file and is left to whoever owns it.)
+    /// previous draft. (`Brain.swift`'s own comment on `retryInterval` carried
+    /// the same arithmetic the same wrong way; corrected 2026-08-04, and now
+    /// pinned by `BrainDegradationTests.autoRetriesAreSpacedByTheRetryInterval`,
+    /// which measures the gaps off a driven run's own timeline.)
     ///
     /// So a PERMANENTLY disqualified source (the plan named a mining drone; the
     /// relay is already inactive) costs three futile retries over ~30 minutes
