@@ -25,6 +25,12 @@ import UniverseModels
 
 /// A minimal device row. Defaults read as an idle, undeployed device; override
 /// only what a test cares about.
+///
+/// `updatedAt` defaults to the epoch, which reads as "arbitrarily stale" — the
+/// right default for the pure-ranking tests, which never judge a row's age. A
+/// test driving a MISSION must set it: `RelayRun.acquire` refuses to trust a
+/// hub row older than `hubFreshness`, so an epoch-stamped fleet spends its life
+/// in a refresh-then-stall loop rather than doing the thing under test.
 func deviceFixture(
     code: String,
     type: String = "heaven_vessel",
@@ -33,7 +39,8 @@ func deviceFixture(
     features: [String] = [],
     availableCommands: [String] = [],
     tags: [String] = [],
-    stowedIn: String? = nil
+    stowedIn: String? = nil,
+    updatedAt: Date = Date(timeIntervalSince1970: 0)
 ) -> Device {
     Device(
         deviceCode: code, deviceType: type, replicantCode: "R1", status: status,
@@ -41,7 +48,7 @@ func deviceFixture(
         stowedInDeviceCode: stowedIn, controllerDeviceCode: nil, attachedToDeviceCode: nil,
         createdAt: Date(timeIntervalSince1970: 0), availableCommands: availableCommands,
         features: features, tags: tags, detail: .object([:]),
-        updatedAt: Date(timeIntervalSince1970: 0), firstSeenAt: Date(timeIntervalSince1970: 0)
+        updatedAt: updatedAt, firstSeenAt: Date(timeIntervalSince1970: 0)
     )
 }
 
@@ -55,12 +62,14 @@ func seedDevice(
     features: [String] = [],
     availableCommands: [String] = [],
     tags: [String] = [],
-    stowedIn: String? = nil
+    stowedIn: String? = nil,
+    updatedAt: Date = Date(timeIntervalSince1970: 0)
 ) throws {
     try Device.insert {
         deviceFixture(
             code: code, type: type, location: location, status: status, features: features,
-            availableCommands: availableCommands, tags: tags, stowedIn: stowedIn
+            availableCommands: availableCommands, tags: tags, stowedIn: stowedIn,
+            updatedAt: updatedAt
         )
     }.execute(db)
 }
@@ -68,16 +77,25 @@ func seedDevice(
 /// An FTL relay meshing its system — `features: ["relay"]` + `statusBase ==
 /// "relaying"`, the exact predicate `SalvageTargetPlanner.meshSystems(in:)` and
 /// `Device.isActiveRelay` both key off.
-func seedRelay(_ db: Database, code: String, location: String, status: String = "relaying") throws {
-    try seedDevice(db, code: code, type: "ftl_relay", location: location, status: status, features: ["relay"])
+func seedRelay(
+    _ db: Database, code: String, location: String, status: String = "relaying",
+    updatedAt: Date = Date(timeIntervalSince1970: 0)
+) throws {
+    try seedDevice(
+        db, code: code, type: "ftl_relay", location: location, status: status,
+        features: ["relay"], updatedAt: updatedAt
+    )
 }
 
 /// A print-capable device — `Device.isPrintHub` keys off `enqueue_print` in
 /// `availableCommands`, not device type.
-func seedPrintHub(_ db: Database, code: String, location: String) throws {
+func seedPrintHub(
+    _ db: Database, code: String, location: String,
+    updatedAt: Date = Date(timeIntervalSince1970: 0)
+) throws {
     try seedDevice(
         db, code: code, type: "autofactory", location: location,
-        availableCommands: ["enqueue_print"]
+        availableCommands: ["enqueue_print"], updatedAt: updatedAt
     )
 }
 
