@@ -141,6 +141,12 @@ actor DirectiveEngineCore {
         //
         // Still not engine-retained state: this clears the shared store, it
         // does not read anything back.
+        //
+        // The clear only STAYS cleared because `tickBrain()` re-checks
+        // cancellation before it publishes: the `cancel()` above does not await
+        // the brain task, and a tick suspended inside `Brain.report()` resumes
+        // after this line. Without that check the paragraph above would be a
+        // claim rather than a property.
         @Shared(.brainReport) var published: BrainReport?
         $published.withLock { $0 = nil }
         for (_, task) in executors { task.cancel() }
@@ -166,10 +172,39 @@ actor DirectiveEngineCore {
     /// the report is handed to Sharing's in-memory store and forgotten, so
     /// the engine holds no UI state and the next tick's `Brain` — stateless
     /// by clause 2 — has nothing here to read back.
+    ///
+    /// **Cancellation is checked at both ends, and neither check is redundant.**
+    /// `stop()` cancels the brain task without awaiting it, and cancellation is
+    /// cooperative — the loop in `start()` only tests it between iterations. So:
+    ///
+    ///   - the ENTRY check catches a tick that began after `stop()`. The loop's
+    ///     own `!Task.isCancelled` can pass and the `await` hop onto this actor
+    ///     can then land after the cancel.
+    ///   - the EXIT check catches the tick that was already in flight. It is
+    ///     suspended across `Brain.report()`'s reads when `stop()` runs, so it
+    ///     resumes AFTER the feed was cleared and would republish the previous
+    ///     account's ranked systems and hub stock — surviving until the next
+    ///     login's first tick, which is exactly the session bleed `stop()`
+    ///     claims not to allow.
+    ///
+    /// `Task.isCancelled` rather than `brain != nil` (the shape
+    /// `reconcileExecutors()` pairs with its own): this body runs INSIDE the
+    /// task `stop()` cancels, so the flag is exact, and it is the only signal
+    /// that reaches the same suspension window from inside `Brain.report()` —
+    /// where the tick's other irreversible acts live, and where that file's
+    /// `report()` documents the matching checks.
     func tickBrain() async {
+        guard !Task.isCancelled else {
+            brainLogger.debug("tick skipped — engine already stopped")
+            return
+        }
         brainTickCount += 1
         @Dependency(\.date) var date
         let report = await Brain(now: date.now).report()
+        guard !Task.isCancelled else {
+            brainLogger.debug("tick discarded — engine stopped mid-tick")
+            return
+        }
         @Shared(.brainReport) var published: BrainReport?
         $published.withLock { $0 = report }
         brainLogger.debug("tick: \(String(describing: report.decision), privacy: .public)")

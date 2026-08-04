@@ -183,6 +183,30 @@ struct Brain: Sendable {
     /// (`Brain.evaluateOnce()`, the decision-only seam most of the test suite
     /// drives, lives in the test target — `BrainTestSupport.swift` — rather
     /// than here, so production source carries no test-only API.)
+    ///
+    /// **Cancellation: a tick can be torn down half-way through, and every act
+    /// it has left to take is re-guarded.** `DirectiveEngineCore.stop()` runs on
+    /// logout, immediately before the directive tables are wiped, and it cancels
+    /// the brain task WITHOUT awaiting it. Cancellation is cooperative, so a
+    /// tick suspended in any of the four `await`s below resumes inside a
+    /// stopped engine and finishes its work against the previous account. There
+    /// is nothing else to test: `Brain` is stateless and holds no engine
+    /// reference, and the task flag is exact because this code runs INSIDE the
+    /// very task `stop()` cancels.
+    ///
+    /// The check therefore sits immediately before each irreversible act rather
+    /// than once at the top, because each act has its own suspension in front of
+    /// it: the auto-`retry` (`respondToStalls`, behind the snapshot read), the
+    /// `.high` confirm-read and the directive insert (`decide`/`launch`, behind
+    /// each other), and — in `DirectiveEngineCore.tickBrain()` — the publish,
+    /// behind this whole function. Nothing downstream of a cancelled tick is
+    /// worth doing: `tickBrain()` discards the report, and the rows are about to
+    /// be wiped.
+    ///
+    /// Until this was written the two WRITES were held back only by GRDB
+    /// throwing `CancellationError` out of its async accessors — real, but
+    /// undocumented, unasserted, and a property of a dependency rather than of
+    /// this file.
     func report() async -> BrainReport {
         @Dependency(\.defaultDatabase) var database
 
@@ -340,6 +364,11 @@ struct Brain: Sendable {
             // half must happen inside the very transaction that inserts, or it
             // is advice rather than a guarantee. So: read the server, carry the
             // answer into `launch`, and re-check ownership there.
+            //
+            // Cancellation first: the confirm is a live `.high` read, and a
+            // logged-out session has no business spending one. See `report()`'s
+            // cancellation note.
+            guard !Task.isCancelled else { return .idle(reason: "engine stopped") }
             switch await confirmCarrier(carrier) {
             case let .deferred(reason):
                 // Same precedence as the idle arm above: a deferred tick did
@@ -550,7 +579,13 @@ struct Brain: Sendable {
 
         let reserved = reservedDevices(directives: directives, devices: view.devices)
         guard let carrier = freeCarrier(at: hub, devices: view.devices, reserved: reserved) else {
-            return .idle(reason: "no free carrier at \(hub)", ranked: ranked, prune: prune)
+            return .idle(
+                reason: carrierBlocker(
+                    at: hub, devices: view.devices, reserved: reserved, directives: directives
+                ),
+                ranked: ranked,
+                prune: prune
+            )
         }
 
         return .grow(
@@ -997,6 +1032,12 @@ struct Brain: Sendable {
     /// going to the Directives list anyway, where all three are surfaced;
     /// naming the lowest-id one keeps this reproducible rather than arbitrary.
     private func respondToStalls(_ snapshot: Snapshot) async -> DirectiveAttentionReason? {
+        // A `stop()` landing while `report()`'s snapshot read was in flight
+        // leaves this tick running against an account whose directive rows are
+        // about to be wiped — driving `retry` on one of them is a write with
+        // nothing left to write to. See `report()`'s cancellation note.
+        guard !Task.isCancelled else { return nil }
+
         let responses = snapshot.directives
             .sorted { $0.id < $1.id }
             .compactMap { Self.stallResponse(for: $0, log: snapshot.log[$0.id] ?? [], now: now) }
@@ -1181,6 +1222,116 @@ struct Brain: Sendable {
         devices.values
             .filter { isFreeCarrier($0, at: hub, reserved: reserved) }
             .min { $0.deviceCode < $1.deviceCode }
+    }
+
+    /// Why there is no free carrier at `hub` — the sentence the why-view shows
+    /// when `freeCarrier` comes back nil.
+    ///
+    /// **One sentence used to cover two operationally opposite worlds**, and
+    /// that is the whole reason this function exists. "no free carrier at
+    /// AINALRAM-BELT-1" is the truth when a healthy run has the vessel out for
+    /// three minutes, and it is equally the truth when a `needsAttention`
+    /// mission of a kind the brain may not touch (`brainManagedStall` admits
+    /// `relayRun` only) holds it FOREVER. Both rendered as calm idle, which is
+    /// exactly the confusion `brain-robustness-bar` clause 6 forbids: idle-calm
+    /// has to be distinguishable from a halt. The live fleet is in the second
+    /// state right now — one `heaven_vessel` at the print hub, owned by a
+    /// stalled `salvageRun` waiting on a relay the brain would have to grow the
+    /// mesh to supply — and the brain reports calm forever.
+    ///
+    /// **A legibility fix and nothing else.** The reservation rule is
+    /// untouched, and the brain still does not go near a non-`relayRun`
+    /// directive: this only says out loud what the existing rule already
+    /// decided. It also stays a graph fact in the file's established voice
+    /// (`rationale`, `sourcing`) — who holds what, and in what state — never a
+    /// recommendation.
+    ///
+    /// **No candidate at all keeps the bare sentence.** With nothing of the
+    /// carrier type standing at the hub there is no holder to name and no state
+    /// to disambiguate; "no free carrier at SOL-3" is then already the whole
+    /// fact, and inventing a clause for it would be noise.
+    ///
+    /// Candidates are named in device-code order, matching `freeCarrier`'s
+    /// `min(by:)`, so the sentence a stateless brain produces is the same every
+    /// tick. Two are named and the rest counted — the same judgement `list`
+    /// makes about served systems, for the same reason.
+    static func carrierBlocker(
+        at hub: String, devices: [String: Device], reserved: Set<String>, directives: [Directive]
+    ) -> String {
+        let candidates = devices.values
+            .filter { $0.deviceType == carrierDeviceType && $0.location == hub }
+            .sorted { $0.deviceCode < $1.deviceCode }
+        guard !candidates.isEmpty else { return "no free carrier at \(hub)" }
+
+        let clauses = candidates.map {
+            carrierClause($0, reserved: reserved, directives: directives, devices: devices)
+        }
+        let rest = clauses.count > 2 ? " +\(clauses.count - 2) more" : ""
+        return "no free carrier at \(hub) — \(clauses.prefix(2).joined(separator: "; "))\(rest)"
+    }
+
+    /// What is wrong with ONE candidate carrier. Ownership is tested before
+    /// business: a reserved vessel sitting idle at the hub is the case an
+    /// operator cannot otherwise explain, where "V1 is travelling" explains
+    /// itself.
+    private static func carrierClause(
+        _ device: Device, reserved: Set<String>, directives: [Directive], devices: [String: Device]
+    ) -> String {
+        if reserved.contains(device.deviceCode),
+           let holder = holdingDirective(of: device.deviceCode, directives: directives, devices: devices)
+        {
+            return """
+                \(device.deviceCode) is held by \(holder.kind.title.lowercased()) \
+                \(holder.id) (\(holdDescription(holder)))
+                """
+        }
+        if device.isBusy { return "\(device.deviceCode) is \(device.statusBase)" }
+        // Reserved by a directive the fleet no longer explains (its owner names
+        // a device we hold no row for). Rare, and still worth saying honestly
+        // rather than dressing up.
+        return "\(device.deviceCode) is spoken for"
+    }
+
+    /// The holder's state, and — when the brain has no power over it — the fact
+    /// that waiting will not help.
+    ///
+    /// `brainManagedStall` is the authority on that second half rather than a
+    /// re-typed `kind == .relayRun`: it is the same predicate that decides
+    /// whether the stall-response layer will ever look at this row, so the
+    /// sentence cannot promise something the brain will not do.
+    private static func holdDescription(_ holder: Directive) -> String {
+        switch holder.status {
+        case .needsAttention:
+            let reason = holder.attentionReason.map { " — \($0.displayName)" } ?? ""
+            let orphan = brainManagedStall(holder) == nil ? ", not the brain's to resolve" : ""
+            return "needs attention\(reason)\(orphan)"
+        case .paused:
+            return "paused"
+        default:
+            return "running"
+        }
+    }
+
+    /// Which in-force directive reserves `code`, by the SAME closure that
+    /// reserved it.
+    ///
+    /// Re-running `reservedDevices` per directive rather than teaching it to
+    /// return an owner map: this is the only caller that needs the owner, it
+    /// runs only on the already-blocked path, and the alternative would make
+    /// every tick's reservation pass carry a provenance dictionary it never
+    /// reads. The closure is what makes the answer right — a carrier holding
+    /// another run's cargo is reserved by that run through the upward stow
+    /// edge, and naming the directive that actually did it is the whole point.
+    ///
+    /// Lowest id wins when several own the same device, so the sentence is
+    /// reproducible tick to tick.
+    static func holdingDirective(
+        of code: String, directives: [Directive], devices: [String: Device]
+    ) -> Directive? {
+        directives
+            .filter { owningStatuses.contains($0.status) }
+            .sorted { $0.id < $1.id }
+            .first { reservedDevices(directives: [$0], devices: devices).contains(code) }
     }
 
     /// Every first hop a Relay Run in force is already flying to.
@@ -1443,6 +1594,13 @@ struct Brain: Sendable {
         goal: Goal, ranked: [GrowCandidate], carrier: Device, hub: String, origin: String,
         source: ReclaimChoice?, database: any DatabaseWriter
     ) async -> BrainDecision {
+        // A `stop()` can have landed while the confirm-read above was in
+        // flight. Inserting here would write a directive for an account that is
+        // logging out, on a carrier the next session may not even own — and the
+        // row would be wiped moments later, after the executor had possibly
+        // already dispatched off it. See `report()`'s cancellation note.
+        guard !Task.isCancelled else { return .idle(reason: "engine stopped") }
+
         // Resolved out here, never inside the write closure: GRDB runs that
         // closure on its own writer thread, where the task-local dependency
         // scope this tick is running in does not reach.

@@ -15,6 +15,7 @@ import Dependencies
 import Foundation
 import GameDatabase
 import GameModels
+import GameServices
 import Sharing
 import SQLiteData
 import Testing
@@ -265,5 +266,126 @@ struct BrainLoopTests {
         // it, "nil after stop" would pass on an engine that never published.
         #expect(afterTick != nil)
         #expect(afterStop == nil)
+    }
+
+    /// …and the clear STAYS cleared, which is a different claim.
+    ///
+    /// `stoppingClearsTheWhyViewsFeed` above awaits its tick before calling
+    /// `stop()`, so it can only ever see the tidy ordering. The real one is the
+    /// other way round: `stop()` cancels the brain task WITHOUT awaiting it, and
+    /// cancellation is cooperative, so a tick suspended mid-flight resumes
+    /// AFTER the feed was cleared. Without the guard in `tickBrain()` it then
+    /// republishes the previous account's ranked systems and hub stock, which
+    /// survives on the Directives surface until the next login's first tick —
+    /// the exact session bleed `stop()`'s comment says it prevents.
+    ///
+    /// The tick is held open at the confirm-read, which is a real suspension on
+    /// the launching path rather than a contrived one, and is the same window
+    /// that reaches `Brain.launch`'s insert. Both are asserted here: a stopped
+    /// engine publishes nothing and writes nothing.
+    ///
+    /// **Nothing is awaited before the teardown.** The in-flight tick is
+    /// cancelled exactly as `stop()` cancels `brain` (the private task is not
+    /// reachable from here), then `stop()` runs, and only then is the tick let
+    /// go — so `await inFlight.value` at the end is what makes "nothing was
+    /// published" a completed fact rather than a race.
+    @Test func aTickStoppedMidFlightPublishesNothingAndWritesNothing() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in try seedGrowableWorld(db) }
+        let storage = InMemoryStorage()
+        let core = DirectiveEngineCore(machines: [], tick: .seconds(5))
+        let confirming = Gate()
+        let resume = Gate()
+
+        let published: BrainReport? = await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.defaultInMemoryStorage = storage
+            $0.uuid = .incrementing
+            $0.deviceRefresher = confirmingRefresher(database) { device in
+                await confirming.open()
+                await resume.wait()
+                return device
+            }
+        } operation: {
+            @Shared(.brainReport) var report: BrainReport?
+            let inFlight = Task { await core.tickBrain() }
+            await confirming.wait()
+            inFlight.cancel()
+            await core.stop()
+            await resume.open()
+            await inFlight.value
+            return report
+        }
+
+        #expect(published == nil, "a tick that resumed after stop() must not republish the stopped session")
+
+        let directives = try await database.read { db in try Directive.all.fetchAll(db) }
+        #expect(directives.isEmpty, "and must not commit the launch it was half-way through")
+    }
+
+    /// The other end of the same window: a tick that BEGINS after `stop()`.
+    ///
+    /// The loop's own `!Task.isCancelled` can pass and the `await` hop onto the
+    /// actor can then land after the cancel, so cancellation has to be re-tested
+    /// inside `tickBrain()` as well as around it. `brainTickCount` is what makes
+    /// this checkable: the guard sits above the increment, so a tick that never
+    /// ran leaves it at 0 — where the "published nothing" assertion alone would
+    /// pass on a tick that ran fully and merely failed to publish.
+    @Test func aTickThatBeginsAfterStopNeverRunsAtAll() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in try seedGrowableWorld(db) }
+        let storage = InMemoryStorage()
+        let core = DirectiveEngineCore(machines: [], tick: .seconds(5))
+        let release = Gate()
+
+        let published: BrainReport? = await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.defaultInMemoryStorage = storage
+            $0.uuid = .incrementing
+            $0.deviceRefresher = DeviceRefreshClient { code, _ in
+                Issue.record("a stopped engine must not spend a confirm-read on \(code)")
+                return nil
+            }
+        } operation: {
+            @Shared(.brainReport) var report: BrainReport?
+            let late = Task {
+                await release.wait()
+                await core.tickBrain()
+            }
+            late.cancel()
+            await core.stop()
+            await release.open()
+            await late.value
+            return report
+        }
+
+        #expect(await core.brainTickCount == 0, "a tick entered after stop() must not run")
+        #expect(published == nil)
+    }
+}
+
+/// A one-shot async gate, for holding a brain tick open across a teardown.
+///
+/// Deliberately NOT cancellation-aware: these tests cancel the very task that
+/// is waiting, and a gate that resumed on cancellation would let the tick slip
+/// past the suspension the test exists to hold it in — turning a deterministic
+/// ordering back into the race it is meant to pin down.
+private actor Gate {
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func open() {
+        guard !isOpen else { return }
+        isOpen = true
+        let pending = waiters
+        waiters.removeAll()
+        for waiter in pending { waiter.resume() }
+    }
+
+    func wait() async {
+        guard !isOpen else { return }
+        await withCheckedContinuation { waiters.append($0) }
     }
 }
