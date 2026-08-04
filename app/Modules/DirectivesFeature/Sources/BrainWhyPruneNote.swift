@@ -34,7 +34,17 @@ public struct BrainWhyPruneNote: Equatable, Identifiable, Sendable {
         /// An action taken — and the only kind that can share a card with
         /// another.
         case reclaimed
-        /// Spare relays left where they stand. An observation, never a stall.
+        /// Spare relays an in-force Relay Run is already flying to collect.
+        ///
+        /// **Its own kind rather than folded into either neighbour**, because
+        /// both alternatives lie. Left in `spare` it reads "kept for the next
+        /// grow" about a relay that has already been taken — for the hundreds of
+        /// ticks that flight lasts. Merely suppressed, the card falls through to
+        /// `pinned` and claims "nothing spare" about a mesh that has a spare
+        /// relay in it. This says the true thing: spare, and already spoken for.
+        case claimed
+        /// Spare relays left where they stand, claimed by nobody. An
+        /// observation, never a stall.
         case spare
         /// Prune judged the mesh and found nothing spare — every relay is on a
         /// road the mesh needs.
@@ -56,9 +66,15 @@ public struct BrainWhyPruneNote: Equatable, Identifiable, Sendable {
     public var text: String { spans.text }
 
     /// Whether this note describes a mesh at rest rather than something the
-    /// brain did or could not do. The view's cue for rendering it a step back:
-    /// a spare relay is a fact about the fleet's shape, and a surface that gave
-    /// it the weight of a problem would be teaching the operator to act on it.
+    /// brain did, is doing, or could not do. The view's cue for rendering it a
+    /// step back: a spare relay is a fact about the fleet's shape, and a surface
+    /// that gave it the weight of a problem would be teaching the operator to
+    /// act on it.
+    ///
+    /// `.claimed` is deliberately NOT one. A reclaim in flight is the same
+    /// action `.reclaimed` announced, still under way, and it should keep the
+    /// weight it had on the tick it launched — that continuity is the whole
+    /// point of the kind existing.
     public var isObservation: Bool { kind == .spare || kind == .pinned }
 
     public init(kind: Kind, spans: [BrainWhySpan]) {

@@ -107,11 +107,15 @@ struct BrainWhyViewTests {
 
     static func pruneFacts(
         reclaimed: BrainReclaim? = nil,
+        claimed: [ReclaimableRelay] = [],
         spare: [ReclaimableRelay] = [],
         pinnedCount: Int = 4,
         declined: PruneDeclineReason? = nil
     ) -> BrainPrune {
-        BrainPrune(reclaimed: reclaimed, spare: spare, pinnedCount: pinnedCount, declined: declined)
+        BrainPrune(
+            reclaimed: reclaimed, claimed: claimed, spare: spare,
+            pinnedCount: pinnedCount, declined: declined
+        )
     }
 
     // MARK: - The gate
@@ -493,6 +497,66 @@ struct BrainWhyViewTests {
         #expect(!why.isEscalated)
     }
 
+    /// **The in-flight window.** A source relay stays deployed and `relaying`
+    /// for the whole outbound leg of the run coming to fetch it — hundreds of
+    /// 5-second ticks — and `PrunePredicate`, stateless, keeps returning it as
+    /// reclaimable the entire time. So the card must not describe prune's one
+    /// action correctly for the tick that launched it and wrongly for the rest
+    /// of its lifetime.
+    ///
+    /// Both wrong answers are asserted against, because both are tempting:
+    /// leaving it in `spare` says "kept for the next grow" about a relay
+    /// already taken, and merely suppressing it falls through to "nothing
+    /// spare" about a mesh that has a loose relay in it.
+    @Test func aRelayAlreadyBeingCollectedIsNotOfferedAsSpare() {
+        let why = BrainWhy.from(
+            report: Self.report(
+                .idle(reason: "no grow or prune work"),
+                prune: Self.pruneFacts(claimed: [Self.deadend])
+            )
+        )
+        #expect(why.pruneNotes.map(\.kind) == [.claimed])
+        #expect(
+            why.pruneNotes.first?.text
+                == "1 relay already claimed at DEADEND — collection already under way"
+        )
+        #expect(why.pruneNotes.first?.text.contains("kept for the next grow") == false)
+        // Not folded into either neighbour: the mesh is neither offering it
+        // nor tight.
+        #expect(!why.pruneNotes.contains { $0.kind == .spare || $0.kind == .pinned })
+        // It is the same action `.reclaimed` announced, still under way, so it
+        // keeps that weight rather than dropping to an observation.
+        #expect(why.pruneNotes.first?.isObservation == false)
+        #expect(!why.isEscalated)
+    }
+
+    /// A tick can be in all three prune states at once: one relay taken now,
+    /// one already on its way out from an earlier tick, one still loose. Each
+    /// gets its own line and none absorbs another.
+    @Test func aTickReportsWhatItTookWhatIsUnderWayAndWhatIsLeft() {
+        let goal = Goal(kind: .tendMesh, target: "VEGA", rationale: vegaRationale)
+        let why = BrainWhy.from(
+            report: Self.report(
+                .dispatch(goal, ranked: [Self.vega]),
+                ranked: [Self.vega],
+                prune: Self.pruneFacts(
+                    reclaimed: BrainReclaim(
+                        deviceCode: "R9", fromSystem: "DEADEND", toSystem: "VEGA", distanceLY: 7.071
+                    ),
+                    claimed: [ReclaimableRelay(deviceCode: "R2", system: "PROXIMA")],
+                    spare: [Self.outback]
+                )
+            )
+        )
+        #expect(why.pruneNotes.map(\.kind) == [.reclaimed, .claimed, .spare])
+        #expect(why.pruneNotes.map(\.text) == [
+            "reclaiming R9 from DEADEND — 7.1 ly to VEGA, no resources spent",
+            "1 relay already claimed at PROXIMA — collection already under way",
+            "1 relay spare at OUTBACK — on no road the mesh needs, kept for the next grow",
+        ])
+        #expect(!why.isEscalated)
+    }
+
     /// **The distinction a prior review called out.** `PrunePredicate` returns
     /// an all-pinned partition BOTH when the census cannot place the systems it
     /// depends on and when every relay is genuinely load-bearing — the two were
@@ -614,6 +678,7 @@ struct BrainWhyViewTests {
                     deviceCode: "R9", fromSystem: "DEADEND", toSystem: "VEGA", distanceLY: 7.071
                 )
             ),
+            Self.pruneFacts(claimed: [Self.deadend]),
             Self.pruneFacts(spare: [Self.deadend]),
             Self.pruneFacts(),
             Self.pruneFacts(declined: .noAnchor),
@@ -629,6 +694,25 @@ struct BrainWhyViewTests {
             seen.formUnion(why.pruneNotes.map(\.kind))
         }
         #expect(seen == Set(BrainWhyPruneNote.Kind.allCases))
+    }
+
+    /// The pairing the sweep above cannot make: prune never escalates, but it
+    /// must not SUPPRESS an escalation either, and its notes must still render
+    /// on a stalled tick.
+    ///
+    /// `noPruneStateEverEscalates` only ever drives `.idle`, so on its own it
+    /// is equally satisfied by a build where `isEscalated` is hard-wired false.
+    /// This is the other half: same prune facts, a `.stall` decision, and both
+    /// halves of the card still correct.
+    @Test func aStallStillEscalatesWithPruneNotesBesideIt() {
+        let why = BrainWhy.from(
+            report: Self.report(
+                .stall(.relayActivationFailed), prune: Self.pruneFacts(spare: [Self.deadend])
+            )
+        )
+        #expect(why.isEscalated, "the stall still escalates — prune does not calm it down")
+        #expect(why.pruneNotes.map(\.kind) == [.spare], "and prune still speaks on a stalled tick")
+        #expect(why.pruneNotes.first?.isObservation == true)
     }
 
     /// A tick that never got as far as judging — no mesh yet, or a world read

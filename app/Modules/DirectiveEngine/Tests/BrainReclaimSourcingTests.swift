@@ -487,6 +487,54 @@ struct BrainReclaimSourcingTests {
         #expect(prune.pinnedCount == 1, "REL_SOL carries the anchor's own road")
     }
 
+    /// **The in-flight window, through the real seam.** A source relay stays
+    /// deployed and `relaying` for the whole outbound leg of the run coming to
+    /// fetch it, so `PrunePredicate` — stateless, and answering a question
+    /// about the mesh rather than about the fleet's plans — keeps returning it
+    /// as reclaimable for every one of the hundreds of ticks that takes. The
+    /// report must not hand that to the why-view as an available relay, or
+    /// prune's one action is described correctly for a single tick and
+    /// misdescribed for the rest of its lifetime.
+    ///
+    /// One world exercising all three partitions at once: `R_B` (PROXIMA) is
+    /// already being fetched by a run in force, so this tick sources the next
+    /// nearest (`R_A`, DEADEND) and `R_C` (OUTBACK, 40 ly out) is left genuinely
+    /// spare. `inFlightSources` is the SAME authority the sourcing side uses,
+    /// which is why the two halves cannot disagree about who owns `R_B`.
+    @Test func aRelayAnotherRunIsFetchingIsReportedAsClaimedNotSpare() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try seedReclaimWorld(
+                db, carriers: ["V1", "V2"], hosts: ["V1", "V2"],
+                spares: [.deadend, .proxima, .outback]
+            )
+            try seedRelayRun(
+                db, id: "AAA-in-force", deviceCode: "V2", targets: ["ALTAIR"], sourceRelayCode: "R_B"
+            )
+        }
+
+        let report = await tickReport(database, uuid: .incrementing)
+        let prune = try #require(report.prune)
+
+        // The premise: prune itself still offers all three up. If it did not,
+        // this test would pass without the partition doing any work.
+        let analysis = try await database.read { db -> PruneAnalysis in
+            let view = try WorldView.read(from: db, now: tickTime)
+            return PrunePredicate.analyse(view: view, graph: MeshGraph(positions: view.starPositions))
+        }
+        #expect(analysis.reclaimable.map(\.deviceCode) == ["R_A", "R_B", "R_C"])
+
+        #expect(prune.reclaimed?.deviceCode == "R_A", "R_B is spoken for, so DEADEND is the nearest free spare")
+        #expect(
+            prune.claimed.map(\.deviceCode) == ["R_B"],
+            "the run in force is already flying to collect R_B"
+        )
+        #expect(
+            prune.spare.map(\.deviceCode) == ["R_C"],
+            "and only OUTBACK's relay is genuinely available to the next grow"
+        )
+    }
+
     /// The report is not a launch-only surface. A tick that reclaimed nothing
     /// must still say what prune saw, or an operator only ever learns the shape
     /// of their mesh on the ticks that change it — and "a spare relay sitting

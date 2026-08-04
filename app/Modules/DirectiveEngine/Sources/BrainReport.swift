@@ -183,8 +183,22 @@ public struct BrainPrune: Equatable, Sendable {
     /// the relay is still standing where it was, and the report says what
     /// HAPPENED, exactly as `.dispatch` does.
     public let reclaimed: BrainReclaim?
-    /// Spare relays the tick left where they stand, `reclaimed` excluded so
-    /// nothing is counted twice. Ordered by device code, as
+    /// Spare relays a Relay Run is ALREADY flying to collect — spoken for, and
+    /// so not available to anything else.
+    ///
+    /// **Split out of `spare` because a source relay stays deployed and
+    /// `relaying` for the whole outbound leg of the run coming to fetch it.**
+    /// `PrunePredicate` is stateless and keeps returning it as reclaimable for
+    /// every one of the hundreds of ticks that flight takes — correctly, on the
+    /// question prune was asked — so a surface that read `reclaimable` as
+    /// "available" would describe prune's one action correctly for a single
+    /// tick and misdescribe it for the rest of its lifetime. The claim is read
+    /// off `Brain.inFlightSources`, the same authority the SOURCING side uses
+    /// so it cannot offer one relay to two carriers.
+    public let claimed: [ReclaimableRelay]
+    /// Spare relays the tick left where they stand and nobody has claimed —
+    /// genuinely available to the next grow. `reclaimed` and `claimed` are both
+    /// excluded, so no relay is ever counted twice. Ordered by device code, as
     /// `PruneAnalysis.reclaimable` is.
     public let spare: [ReclaimableRelay]
     /// How many deployed relays the mesh needs — the count behind "nothing
@@ -195,11 +209,13 @@ public struct BrainPrune: Equatable, Sendable {
 
     public init(
         reclaimed: BrainReclaim?,
+        claimed: [ReclaimableRelay] = [],
         spare: [ReclaimableRelay],
         pinnedCount: Int,
         declined: PruneDeclineReason?
     ) {
         self.reclaimed = reclaimed
+        self.claimed = claimed
         self.spare = spare
         self.pinnedCount = pinnedCount
         self.declined = declined

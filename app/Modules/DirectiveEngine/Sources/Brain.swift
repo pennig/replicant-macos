@@ -254,7 +254,9 @@ struct Brain: Sendable {
             ranked: plan.ranked,
             hubLocation: snapshot.view.hubLocation,
             limits: Self.limits(hubFootprint: snapshot.hubFootprint),
-            prune: Self.pruneReport(plan: plan, decision: decision),
+            prune: Self.pruneReport(
+                plan: plan, decision: decision, directives: snapshot.directives
+            ),
             observedAt: now
         )
     }
@@ -269,9 +271,25 @@ struct Brain: Sendable {
     /// tick that reclaimed nothing. Same discipline as `launch`'s degrade-to
     /// -`.idle`: the report says what HAPPENED.
     ///
-    /// `spare` excludes whatever was reclaimed, so a relay is never both taken
-    /// and left behind in the same sentence.
-    static func pruneReport(plan: Plan, decision: BrainDecision) -> BrainPrune? {
+    /// **`reclaimable` is partitioned three ways, not read as one "available"
+    /// list.** A source relay stays deployed and `relaying` for the whole
+    /// outbound leg of the run coming to fetch it, and prune — stateless, and
+    /// answering a question about the mesh rather than about the fleet's plans
+    /// — keeps returning it for every one of the hundreds of ticks that takes.
+    /// So a relay already spoken for by an in-force run is reported as CLAIMED,
+    /// never as spare: `inFlightSources` is the same authority the sourcing side
+    /// consults before offering one relay to a second carrier, so the card and
+    /// the selection cannot disagree about who owns what.
+    ///
+    /// The tick's own `reclaimed` is subtracted from both, so no relay is ever
+    /// described twice. It cannot in fact appear in `inFlightSources` here —
+    /// `directives` was read before the launch that claims it — but the
+    /// subtraction is written over both lists rather than relying on that read
+    /// ordering, because the cost of being wrong is a card that says
+    /// "reclaiming R9" directly above "R9 is spoken for".
+    static func pruneReport(
+        plan: Plan, decision: BrainDecision, directives: [Directive]
+    ) -> BrainPrune? {
         guard let analysis = plan.prune else { return nil }
 
         var reclaimed: BrainReclaim?
@@ -283,9 +301,13 @@ struct Brain: Sendable {
                 distanceLY: choice.distanceLY
             )
         }
+
+        let claimedCodes = inFlightSources(directives)
+        let unreclaimed = analysis.reclaimable.filter { $0.deviceCode != reclaimed?.deviceCode }
         return BrainPrune(
             reclaimed: reclaimed,
-            spare: analysis.reclaimable.filter { $0.deviceCode != reclaimed?.deviceCode },
+            claimed: unreclaimed.filter { claimedCodes.contains($0.deviceCode) },
+            spare: unreclaimed.filter { !claimedCodes.contains($0.deviceCode) },
             pinnedCount: analysis.pinned.count,
             declined: analysis.declined
         )

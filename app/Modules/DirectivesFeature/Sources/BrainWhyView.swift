@@ -223,28 +223,27 @@ public struct BrainWhy: Equatable, Sendable {
     /// silently dropped, the same judgement `hiddenCandidates` makes.
     public static let maxNamedSystems = 3
 
-    /// What prune had to say, as at most two lines.
+    /// What prune had to say, in narrative order: what this tick did, what is
+    /// already under way, and what is left over.
     ///
     /// A refusal to judge is the WHOLE answer when it happens: a declined
     /// analysis pins everything as a consequence of the refusal, so pairing it
     /// with "nothing spare" would report a finding the predicate never made.
-    /// Otherwise a tick may both take a reclaim and leave others standing, and
-    /// both facts are reported — "nothing spare" only when there was genuinely
-    /// nothing left to say.
+    ///
+    /// **"Nothing spare" is a fallback, not a branch**, and that is what keeps
+    /// it honest. It is emitted only when there was nothing else to say at all —
+    /// so a mesh whose only loose relay is already being collected reports the
+    /// collection rather than claiming the mesh is tight, and a mesh with no
+    /// relays deployed reports nothing rather than congratulating itself.
     private static func pruneNotes(in report: BrainReport) -> [BrainWhyPruneNote] {
         guard let prune = report.prune else { return [] }
         if let declined = prune.declined { return [declinedNote(declined)] }
 
         var notes: [BrainWhyPruneNote] = []
         if let reclaimed = prune.reclaimed { notes.append(reclaimedNote(reclaimed)) }
-        if !prune.spare.isEmpty {
-            notes.append(spareNote(prune.spare))
-        } else if prune.reclaimed == nil, prune.pinnedCount > 0 {
-            // Only when the tick did nothing: "nothing spare" straight after
-            // "reclaiming R9" would read as a contradiction, and a mesh with no
-            // relays at all has nothing to report either way.
-            notes.append(pinnedNote(prune.pinnedCount))
-        }
+        if !prune.claimed.isEmpty { notes.append(claimedNote(prune.claimed)) }
+        if !prune.spare.isEmpty { notes.append(spareNote(prune.spare)) }
+        if notes.isEmpty, prune.pinnedCount > 0 { notes.append(pinnedNote(prune.pinnedCount)) }
         return notes
     }
 
@@ -273,6 +272,28 @@ public struct BrainWhy: Equatable, Sendable {
         )
     }
 
+    /// Spare relays an in-force run is already flying to collect.
+    ///
+    /// **The line that keeps a reclaim described for its whole lifetime**, not
+    /// just for the tick that launched it. A source relay stays deployed and
+    /// `relaying` through the entire travel/deactivate/stow sequence — hundreds
+    /// of 5-second ticks — and prune keeps calling it reclaimable the whole
+    /// time. Without this the card would say "kept for the next grow" about a
+    /// relay a carrier is already on its way to fetch, which is the one thing
+    /// this surface exists to stop it saying.
+    ///
+    /// The wording is invariant in the count on purpose: "collection already
+    /// under way" is true of one relay and of five, so there is no pluralised
+    /// second clause to keep in step with the first.
+    private static func claimedNote(_ claimed: [ReclaimableRelay]) -> BrainWhyPruneNote {
+        BrainWhyPruneNote(
+            kind: .claimed,
+            spans: [.prose("\(relays(claimed.count)) already claimed at ")]
+                + named(uniqueSystems(of: claimed))
+                + [.prose(" — collection already under way")]
+        )
+    }
+
     /// Spare relays left standing — an OBSERVATION, deliberately. The sentence
     /// says what the relays are not doing and what they are being kept for; it
     /// does not ask for anything, because there is nothing for an operator to
@@ -280,6 +301,9 @@ public struct BrainWhy: Equatable, Sendable {
     ///
     /// Counts RELAYS and names PLACES: two spares in one system name it once,
     /// since a repeated designation reads as a mistake.
+    ///
+    /// "The next grow" is only true because `BrainPrune.spare` has already had
+    /// the claimed relays taken out of it — see `claimedNote`.
     private static func spareNote(_ spare: [ReclaimableRelay]) -> BrainWhyPruneNote {
         BrainWhyPruneNote(
             kind: .spare,
@@ -316,11 +340,11 @@ public struct BrainWhy: Equatable, Sendable {
         )
     }
 
-    /// The systems a set of spare relays stands in, deduplicated but keeping
-    /// the list's own (device-code) order, so the line is stable tick to tick.
-    private static func uniqueSystems(of spare: [ReclaimableRelay]) -> [String] {
+    /// The systems a set of relays stands in, deduplicated but keeping the
+    /// list's own (device-code) order, so the line is stable tick to tick.
+    private static func uniqueSystems(of relays: [ReclaimableRelay]) -> [String] {
         var seen: Set<String> = []
-        return spare.map(\.system).filter { seen.insert($0).inserted }
+        return relays.map(\.system).filter { seen.insert($0).inserted }
     }
 
     /// The first `maxNamedSystems` designations, tagged for mono, with the
