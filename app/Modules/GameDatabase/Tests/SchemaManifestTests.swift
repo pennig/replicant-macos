@@ -50,6 +50,7 @@ import Testing
         "Add 'fleetTag' to 'directives'",
         "Add 'depleted' to 'siteAssays'",
         "Add link metrics to 'ftlLinks'",
+        "Add 'sourceRelayCode' to 'directives'",
     ]
 
     @Test func manifestMatchesTheFrozenList() {

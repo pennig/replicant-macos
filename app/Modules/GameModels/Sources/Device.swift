@@ -183,6 +183,20 @@ extension Device {
     public var isOutOfControlRange: Bool { inControlRange == false }
 }
 
+// MARK: - Mesh & print-hub predicates
+
+public extension Device {
+    /// The print hub predicate (06): a device that can accept `enqueue_print`.
+    /// Uses availableCommands (capability) rather than a deviceType string match,
+    /// which a print-vessel would otherwise miss. `system_hub` (mesh device) is a
+    /// DIFFERENT concept and is deliberately not matched here.
+    var isPrintHub: Bool { availableCommands.contains("enqueue_print") }
+
+    /// An FTL relay that is presently meshing its system. Capability, not type
+    /// (includes an integrated system_hub relay); status matched via statusBase.
+    var isActiveRelay: Bool { features.contains("relay") && statusBase == "relaying" }
+}
+
 // MARK: - Replication source capability
 
 extension Device {

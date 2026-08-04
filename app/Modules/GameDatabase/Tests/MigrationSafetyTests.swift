@@ -103,4 +103,57 @@ import UniverseModels
             try database.read { try Star.fetchCount($0) } == 1,
             "clearing the mesh took unrelated rows with it")
     }
+
+    /// `addSourceRelayCode` is an `ALTER TABLE` against `directives`, a table
+    /// that may already hold rows written before the column existed. A
+    /// round-trip test on a fresh `GameDatabase.bootstrap()` proves the
+    /// column exists, but not that the migration path itself is safe — this
+    /// migrates to the state just before the column shipped, seeds a row in
+    /// that pre-migration shape, then runs the rest of the manifest and
+    /// checks the row survived with the new column readable (and writable)
+    /// afterward.
+    @Test func sourceRelayCodeMigrationPreservesExistingDirectives() throws {
+        let priorManifest = GameDatabase.manifest.filter {
+            $0.identifier != "Add 'sourceRelayCode' to 'directives'"
+        }
+        #expect(
+            priorManifest.count == GameDatabase.manifest.count - 1,
+            "the migration under test is missing from the manifest")
+
+        let database = try DatabaseQueue()
+        try GameDatabase.migrator(priorManifest).migrate(database)
+
+        try database.write { db in
+            // Raw SQL, not `Directive.insert`: the model now declares
+            // `sourceRelayCode`, which by definition does not exist yet in
+            // the pre-migration schema. Writing the old shape is the whole
+            // point — this is the row a real upgrade would find sitting there.
+            try #sql(
+                """
+                INSERT INTO "directives"
+                  ("id", "kind", "status", "deviceCode", "targets", "targetIndex",
+                   "step", "stepStartedAt", "returnToOrigin", "createdAt", "updatedAt")
+                VALUES
+                  ('D1', 'relayRun', 'running', 'VESSEL1', '[]', 0,
+                   'preflight', '2026-08-01 00:00:00.000', 0,
+                   '2026-08-01 00:00:00.000', '2026-08-01 00:00:00.000')
+                """
+            )
+            .execute(db)
+        }
+
+        try GameDatabase.migrator().migrate(database)
+
+        let loaded = try database.read { try Directive.all.fetchAll($0) }
+        #expect(loaded.count == 1, "the pre-migration row did not survive the ALTER TABLE")
+        #expect(loaded.first?.sourceRelayCode == nil, "an existing row must default the new column to nil")
+
+        try database.write { db in
+            try Directive.update { $0.sourceRelayCode = #bind("RELAY9") }
+                .where { $0.id.eq("D1") }
+                .execute(db)
+        }
+        let updated = try database.read { try Directive.all.fetchAll($0) }
+        #expect(updated.first?.sourceRelayCode == "RELAY9", "the migrated column must be writable, not just readable")
+    }
 }

@@ -115,6 +115,11 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
     /// has nothing to drive. A configuration error rather than a lull — an empty
     /// *frontier* idles, but an empty *fleet* can never resolve itself.
     case noHaulControllerTagged
+    /// The brain's resource-reserve rail vetoed a print: some resource type at
+    /// the hub sits below its reserve floor, so the print never went out.
+    /// Self-supply (mine/salvage) refills the hub over time, so this clears on
+    /// its own as stock recovers — it never needs an operator.
+    case printStockShort
 
     /// The stall panel's headline.
     public var displayName: String {
@@ -135,6 +140,7 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
         case .salvageBodyNotDepleted: "Salvage body isn't draining"
         case .vesselPositionUnconfirmed: "Vessel position unconfirmed"
         case .noHaulControllerTagged: "No haul controller tagged"
+        case .printStockShort: "Resource stock too low to print"
         }
     }
 
@@ -175,6 +181,38 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
             "The vessel finished travelling but its position never refreshed. Retry to re-read it, or cancel the run."
         case .noHaulControllerTagged:
             "No AMI transport controller carries the \"auto:haul\" tag. Tag one from the device inspector, then retry."
+        case .printStockShort:
+            "The hub doesn't have enough of a resource to print without dropping below reserve. It clears on its own as stock recovers — retry once supply catches up."
+        }
+    }
+}
+
+/// How the brain (as an automated operator) responds to a directive that has
+/// halted-and-surfaced. The mission layer's halt matrix is unchanged; this is
+/// purely the brain's response classification (see brain-executor-seam.md).
+public enum BrainDisposition: String, Codable, Sendable, Equatable {
+    /// Self-corrects on a re-read — bounded auto-`retry`, budget timeline-derived, then escalate.
+    case retry
+    /// Needs a power the brain lacks (staging / adoption / replacement / tagging),
+    /// or an executor exhausted something it can't self-compose — surface to operator.
+    case escalate
+    /// An expected operator choice (the HITL seam) — surface as a decision request.
+    case decisionRequest
+}
+
+public extension DirectiveAttentionReason {
+    /// The brain never invents a response; it classifies the reason and drives
+    /// only `{retry, cancel}`. `skipTarget`/`pause`/`resume` stay operator-only.
+    var brainDisposition: BrainDisposition {
+        switch self {
+        case .surveyIncomplete, .unreachableDevice, .vesselPositionUnconfirmed,
+             .salvageSystemUnresolved, .salvageBodyNotDepleted, .commandRejected,
+             .relayActivationFailed, .printStockShort:
+            return .retry
+        case .noSurveyControllerAboard, .noSurveyDroneAboard, .noMiningControllerAboard,
+             .noMiningDroneAboard, .noRelayCoLocated, .dronesNotRecovered,
+             .launchDeployedNothing, .noHaulControllerTagged, .awaitingRelayRestock:
+            return .escalate
         }
     }
 }
@@ -215,6 +253,15 @@ public struct Directive: Identifiable, Equatable, Sendable {
     /// spends its whole life in. Nil for kinds that resolve their fleet some
     /// other way (Survey Run reads `stowedInDeviceCode` directly).
     public var fleetTag: String?
+    /// A plan hint written once at launch, read by the mission executor to
+    /// choose its acquisition branch: nil prints a fresh relay at the hub,
+    /// non-nil names the existing relay to reclaim and redeploy instead.
+    ///
+    /// Deliberately narrow — this is NOT a lease. It carries no ownership and
+    /// reserves nothing; the executor still leases only the carrier
+    /// `deviceCode`, as it always has. An earlier "committed-devices" lease
+    /// field was proposed and rejected — do not let this grow into one.
+    public var sourceRelayCode: String?
     /// The ordered queue of star-system designations still to visit.
     ///
     /// For a continuous run this is append-only HISTORY rather than a plan: the
@@ -256,6 +303,7 @@ public struct Directive: Identifiable, Equatable, Sendable {
         controllerCode: String? = nil,
         roamCentre: String? = nil,
         fleetTag: String? = nil,
+        sourceRelayCode: String? = nil,
         targets: [String],
         targetIndex: Int,
         step: String,
@@ -273,6 +321,7 @@ public struct Directive: Identifiable, Equatable, Sendable {
         self.controllerCode = controllerCode
         self.roamCentre = roamCentre
         self.fleetTag = fleetTag
+        self.sourceRelayCode = sourceRelayCode
         self.targets = targets
         self.targetIndex = targetIndex
         self.step = step
@@ -412,6 +461,18 @@ extension Directive {
         try #sql(
             """
             ALTER TABLE "directives" ADD COLUMN "fleetTag" TEXT
+            """
+        )
+        .execute(db)
+    }
+
+    /// A separate migration, not an edit to any above: all four have shipped
+    /// and are recorded in real databases, so editing one means it silently
+    /// never runs again.
+    public static let addSourceRelayCode = SchemaMigration("Add 'sourceRelayCode' to 'directives'") { db in
+        try #sql(
+            """
+            ALTER TABLE "directives" ADD COLUMN "sourceRelayCode" TEXT
             """
         )
         .execute(db)

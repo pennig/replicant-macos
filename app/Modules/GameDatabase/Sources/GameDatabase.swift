@@ -72,6 +72,7 @@ public enum GameDatabase {
         Directive.addFleetTag,
         SiteAssay.addDepleted,
         FTLLinkRecord.addLinkMetrics,
+        Directive.addSourceRelayCode,
     ]
 
     /// Builds a migrator from `entries`. The parameter exists so tests can

@@ -46,6 +46,12 @@ Each capability design must show how it clears every clause; review verifies eac
    a human uses); `skipTarget`/`pause`/`resume` stay operator-only (auto-skip remains rejected).
    *(Widened by the brain↔executor seam, `.scratch/automation-brain/issues/04-brain-executor-seam.md`;
    see [[brain-executor-seam]].)*
+   **One stated exception, found when `tendMesh` shipped:** the write list above is GAME-STATE writes.
+   The confirm-read gate (`Brain.confirmCarrier` → `DeviceRefreshClient.refresh(_, .high)` →
+   `PollCoordinator` → `Reconciler.ingest`) also upserts `Device` and inserts/upserts `Operation` rows
+   as a local-mirror sync — the shared path every feature uses, not a mutation the brain composes.
+   Audit clause 1 against that reading, not against a closed three-item list; see
+   [[brain-tendmesh-build]].
 2. **Stateless between ticks.** No execution state; each tick re-derives goals from the snapshot +
    running-directive rows. — *Check:* a tick is a pure function of (snapshot, running directives).
 3. **Selection is pure; the API vetoes, never chooses.** Ranking is pure over the `WorldView`

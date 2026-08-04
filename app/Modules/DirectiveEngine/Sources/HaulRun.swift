@@ -414,12 +414,21 @@ public struct HaulRun: MissionStepMachine {
     /// Refresh the stockpile census — one request that serves both discovery and
     /// drain detection. Gated on freshness so the engine's 5s tick cannot
     /// multiply into requests.
+    ///
+    /// `thenStall: nil` — deliberately never escalates. A stale census here is
+    /// a lull, not a fault: `assigning` still has whatever pile data it last
+    /// saw, this run is continuous, and the whole point of this action's
+    /// `nil`-fallback contract (`MissionAction.refreshFootprint`'s doc) is
+    /// that a transient failure costs this one cycle rather than stranding
+    /// the run. `nextStep` always names a DIFFERENT step (`assigning`), so
+    /// this was never at risk of the same-step self-loop the `thenStall`
+    /// escalation path exists to guard `RelayRun.acquire` against.
     private func survey(_ directive: Directive, _ world: WorldSnapshot) -> MissionAction {
         let newest = world.footprints.values.map(\.fetchedAt).max()
         if let newest, world.now.timeIntervalSince(newest) < Self.pollInterval {
             return .advanceStep(nextStep: Step.assigning)
         }
-        return .refreshFootprint(nextStep: Step.assigning)
+        return .refreshFootprint(nextStep: Step.assigning, thenStall: nil)
     }
 
     /// Pin ONE pending controller for `dispatching` to command, or move on when

@@ -34,6 +34,32 @@ import Testing
         #expect(elapsed > 0.9, "acquire should wait out the penalty window")
     }
 
+    /// `rateLimitedAt` records a 429 AND NOTHING ELSE.
+    ///
+    /// It is the one fact behind the brain's why-view distinguishing "the
+    /// server refused us" from "we paced ourselves", so the negative half is
+    /// the point: draining the bucket ourselves (`acquire`) and being told by
+    /// the server's own headers that it is drained (`record`, right down to
+    /// `remaining: 0`) must both leave it nil. If either stamped it, the
+    /// surface would report a rate limit that never happened.
+    @Test func onlyA429StampsRateLimitedAt() async {
+        let governor = RateLimitGovernor(readLimit: 10, actionLimit: 5, reserve: 0)
+
+        await governor.acquire(.actions)
+        await governor.record(bucket: .actions, limit: 5, remaining: 0, resetEpoch: nil)
+        #expect(await governor.snapshot(.actions).rateLimitedAt == nil)
+
+        let before = Date()
+        await governor.penalize(bucket: .actions, retryAfter: 1)
+        let stamped = await governor.snapshot(.actions).rateLimitedAt
+        #expect(stamped != nil)
+        #expect(stamped.map { $0 >= before && $0 <= Date() } == true)
+
+        // Buckets are stamped independently — a 429 on actions says nothing
+        // about reads.
+        #expect(await governor.snapshot(.reads).rateLimitedAt == nil)
+    }
+
     @Test func budgetRefillsAfterReset() async {
         let governor = RateLimitGovernor(readLimit: 2, actionLimit: 2, reserve: 0)
         // Drain, with a reset window slightly in the future.

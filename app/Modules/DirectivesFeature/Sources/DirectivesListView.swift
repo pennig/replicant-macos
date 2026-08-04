@@ -33,12 +33,7 @@ public struct DirectivesListView: View {
                 }
             }
         }
-        .safeAreaInset(edge: .top) {
-            if let message = store.errorMessage {
-                RCErrorBanner(message) { store.send(.dismissError) }
-                    .padding(Space.s)
-            }
-        }
+        .safeAreaInset(edge: .top) { header }
         .toolbar {
             ToolbarItem {
                 Menu {
@@ -62,5 +57,31 @@ public struct DirectivesListView: View {
             NewHaulRunSheet(store: newStore)
         }
         .navigationTitle("Directives")
+    }
+
+    /// The error banner and the brain's why-view, as ONE top inset.
+    ///
+    /// One inset rather than two stacked ones: each `safeAreaInset` on the
+    /// same edge reserves its own space, and the banner has to sit above the
+    /// brain card when both are present. Emitted conditionally so an empty
+    /// stack never reserves its own padding above the list — the card is
+    /// absent for the whole of a session before the brain's first tick.
+    @ViewBuilder
+    private var header: some View {
+        if store.errorMessage != nil || store.brainWhy != nil {
+            VStack(spacing: Space.s) {
+                if let message = store.errorMessage {
+                    RCErrorBanner(message) { store.send(.dismissError) }
+                }
+                // The brain's why-view (`brain-robustness-bar` clause 8),
+                // above the rows it is explaining. Read-only: everything the
+                // operator can DO about a mission already lives on the row
+                // and its detail pane.
+                if let why = store.brainWhy {
+                    BrainWhyView(why: why)
+                }
+            }
+            .padding(Space.s)
+        }
     }
 }

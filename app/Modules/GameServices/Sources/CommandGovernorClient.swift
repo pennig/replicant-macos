@@ -21,6 +21,12 @@ public struct CommandGovernorClient: Sendable {
         _ params: CommandParams
     ) async -> CommandDispatchResult
 
+    /// The actions-budget floor the shared governor defers at — the number
+    /// behind "we are pacing ourselves", surfaced so the brain's why-view can
+    /// state it rather than restate a literal that could drift from the one
+    /// `CommandGovernor` enforces.
+    public static let actionFloor = CommandGovernor.defaultActionFloor
+
     public init(
         dispatch: @escaping @Sendable (OperationKind, String, CommandParams) async -> CommandDispatchResult
     ) {
