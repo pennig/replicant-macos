@@ -212,7 +212,17 @@ public struct WorldView: Equatable, Sendable {
             events.filter(\.isActive).map { SiteAssay.system(of: $0.location) }
         )
 
-        let hub = Self.hubLocation(in: allDevices, meshSystems: mesh)
+        // The census rows for the print-capable locations, and only those — a
+        // handful of codes, never the whole 2,000-row table. Read in the SAME
+        // transaction as the devices, so the hub can never be recognised from a
+        // stockpile reading that belongs to a different instant than the
+        // printer that justifies it.
+        let printLocations = Set(allDevices.filter(\.isPrintHub).compactMap(\.location))
+        let hubStock: [String: Int] = printLocations.isEmpty ? [:] : try LocationFootprint
+            .where { $0.location.in(Array(printLocations)) }
+            .fetchAll(db)
+            .reduce(into: [:]) { $0[$1.location] = $1.resources }
+        let hub = Self.hubLocation(in: allDevices, meshSystems: mesh, stockByLocation: hubStock)
 
         // One fetch, two fields: SURVEY is the sole bound on the blob decode,
         // so the rows that define `surveyedSystems` are exactly the rows
@@ -300,11 +310,48 @@ public struct WorldView: Equatable, Sendable {
         return belts
     }
 
-    /// The single print hub this effort: the autofactory device's location,
-    /// but only if that system is meshed (an off-mesh hub is out of the
-    /// brain's reach until `tendMesh` brings it on — 06).
-    static func hubLocation(in devices: [Device], meshSystems: Set<String>) -> String? {
-        guard let hub = devices.first(where: { $0.isPrintHub })?.location else { return nil }
-        return meshSystems.contains(SiteAssay.system(of: hub)) ? hub : nil
+    /// The single print hub this effort: a print-capable device's location, but
+    /// only if that system is meshed (an off-mesh hub is out of the brain's
+    /// reach until `tendMesh` brings it on — 06) **and the census shows the
+    /// location actually holds resources.**
+    ///
+    /// **The stock clause is not an optimisation; without it the hub follows the
+    /// carrier around.** `Device.isPrintHub` is a CAPABILITY predicate
+    /// (`enqueue_print` in `availableCommands`) and a HEAVEN vessel advertises
+    /// that command — every one on the live fleet does. So a vessel satisfies
+    /// it, and the old `devices.first(where: \.isPrintHub)` named whichever
+    /// print-capable device the array happened to yield first. Live on
+    /// 2026-08-04: the carrier flew to RUGULUS-1-L4, became its own "hub", and
+    /// the whole brain relocated with it — grow launched there, prune anchored
+    /// there, and the reserve rail read RUGULUS-1-L4's stockpile, which is
+    /// genuinely zero. The run stalled `printStockShort` while the real hub held
+    /// 73,539 units, and the why-view reported no stock at all. Ticket 06 always
+    /// defined a hub as a commandable location with a print-capable device *and*
+    /// adequate stock; only the first half had been built.
+    ///
+    /// **`> 0`, not "above the reserve floor", and the difference matters.**
+    /// Recognition asks whether this is a stockpile at all; ADEQUACY is the
+    /// rail's judgement (`RelayRun.printStockIsShort`). Folding the floor in
+    /// here would make a hub that dips below it vanish entirely, turning the
+    /// designed "printStockShort → idle until supply recovers" degradation into
+    /// "there is no hub" — both wrong and unactionable.
+    ///
+    /// Richest location first, designation as tie-break: a total order, so a
+    /// stateless brain re-deriving this every tick names the same hub every
+    /// tick. The old `first(where:)` was not even deterministic.
+    static func hubLocation(
+        in devices: [Device], meshSystems: Set<String>, stockByLocation: [String: Int]
+    ) -> String? {
+        let candidates = Set(
+            devices
+                .filter(\.isPrintHub)
+                .compactMap(\.location)
+                .filter { meshSystems.contains(SiteAssay.system(of: $0)) }
+                .filter { (stockByLocation[$0] ?? 0) > 0 }
+        )
+        return candidates.max {
+            let (left, right) = (stockByLocation[$0] ?? 0, stockByLocation[$1] ?? 0)
+            return left == right ? $0 > $1 : left < right
+        }
     }
 }

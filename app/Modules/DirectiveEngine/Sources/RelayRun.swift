@@ -255,11 +255,25 @@ public struct RelayRun: MissionStepMachine {
     /// rather than on device type, which is what makes it match the live
     /// autofactory at a BELT location without this file knowing what an
     /// autofactory is.
+    ///
+    /// **The carrier is considered last, and that is deliberate.** A HEAVEN
+    /// vessel advertises `enqueue_print` too, so the carrier satisfies
+    /// `isPrintHub` and can legitimately print into its own hold. But it must
+    /// never SHADOW a dedicated printer standing beside it: the old
+    /// `min(by: deviceCode)` picked between the two on device code alone, and
+    /// only got the live autofactory (`43C9B54A`) instead of the co-located
+    /// vessel (`C7836770`) because `4` sorts before `C`. Preferring a device
+    /// other than the carrier makes that an intention rather than an accident,
+    /// while keeping the vessel as a genuine fallback where it is the only
+    /// printer present.
     static func hub(near carrier: Device, in world: WorldSnapshot) -> Device? {
         guard let location = carrier.location else { return nil }
-        return world.devices.values
+        let printers = world.devices.values
             .filter { $0.isPrintHub && $0.location == location }
+        return printers
+            .filter { $0.deviceCode != carrier.deviceCode }
             .min { $0.deviceCode < $1.deviceCode }
+            ?? printers.min { $0.deviceCode < $1.deviceCode }
     }
 
     /// The device code of the clone this run printed, from the completed

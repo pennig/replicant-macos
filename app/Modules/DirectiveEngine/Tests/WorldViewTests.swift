@@ -71,6 +71,7 @@ struct WorldViewTests {
         try await db.write { db in
             try seedRelay(db, code: "R1", location: "SOL-3-L4", status: "relaying")
             try seedPrintHub(db, code: "AF1", location: "SOL-3")
+            try seedHubStockpile(db, location: "SOL-3", resources: 50_000)
         }
         let meshed = try await db.read { try WorldView.read(from: $0, now: Date()) }
         #expect(meshed.hubLocation == "SOL-3")
@@ -78,9 +79,55 @@ struct WorldViewTests {
         let db2 = try GameDatabase.bootstrap()
         try await db2.write { db in
             try seedPrintHub(db, code: "AF1", location: "VEGA-3")
+            try seedHubStockpile(db, location: "VEGA-3", resources: 50_000)
         }
         let unmeshed = try await db2.read { try WorldView.read(from: $0, now: Date()) }
         #expect(unmeshed.hubLocation == nil)
+    }
+
+    /// **A print-capable device standing on nothing is not a hub.**
+    ///
+    /// `Device.isPrintHub` is a CAPABILITY predicate, and a HEAVEN vessel
+    /// advertises `enqueue_print` — so without the stock clause the carrier
+    /// becomes its own hub wherever it happens to park. That is exactly what
+    /// happened live on 2026-08-04: the carrier flew to RUGULUS-1-L4, the brain
+    /// relocated with it, and the reserve rail read that location's stockpile
+    /// (genuinely zero) while the real hub held 73,539 units.
+    @Test func aPrintCapableDeviceWithNoStockpileIsNotAHub() async throws {
+        let db = try GameDatabase.bootstrap()
+        try await db.write { db in
+            try seedRelay(db, code: "R1", location: "SOL-3-L4", status: "relaying")
+            // A carrier parked in the meshed system, print-capable like the real
+            // HEAVEN vessels, standing at a location holding nothing.
+            try seedDevice(
+                db, code: "V1", type: "heaven_vessel", location: "SOL-3-L4",
+                availableCommands: ["enqueue_print", "travel"]
+            )
+        }
+
+        let view = try await db.read { try WorldView.read(from: $0, now: Date()) }
+
+        #expect(view.hubLocation == nil)
+    }
+
+    /// …and when a real stockpile IS present, the richest one wins — a total
+    /// order, so a stateless brain names the same hub every tick.
+    @Test func theRichestStockpiledLocationWins() async throws {
+        let db = try GameDatabase.bootstrap()
+        try await db.write { db in
+            try seedRelay(db, code: "R1", location: "SOL-3-L4", status: "relaying")
+            try seedPrintHub(db, code: "AF1", location: "SOL-3")
+            try seedDevice(
+                db, code: "V1", type: "heaven_vessel", location: "SOL-3-L4",
+                availableCommands: ["enqueue_print"]
+            )
+            try seedHubStockpile(db, location: "SOL-3", resources: 50_000)
+            try seedHubStockpile(db, location: "SOL-3-L4", resources: 12)
+        }
+
+        let view = try await db.read { try WorldView.read(from: $0, now: Date()) }
+
+        #expect(view.hubLocation == "SOL-3", "the autofactory's stocked location, not the vessel's scraps")
     }
 
     /// Devices come back keyed by code, the whole fleet — the brain's ranking

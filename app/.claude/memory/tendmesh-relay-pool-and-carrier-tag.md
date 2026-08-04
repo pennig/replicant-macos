@@ -94,6 +94,48 @@ are quoted back at the operator and should match the inspector.
 
 **Never compare `device.tags.contains(...)` directly.**
 
+## A HEAVEN vessel satisfies `isPrintHub`, so the hub followed the carrier
+
+Reported as "printStockShort but there is definitely enough stock — the brain
+thinks inventory is zero". It was not an inventory bug at all. The executor log
+named the real cause:
+
+    print stock short at RUGULUS-1-L4 — stock 0 below floor 35078
+
+`Device.isPrintHub` is a CAPABILITY predicate (`enqueue_print` in
+`availableCommands`) and **every HEAVEN vessel advertises that command**. So the
+carrier satisfies it. `WorldView.hubLocation` was
+`devices.first(where: \.isPrintHub)?.location` — no stock clause, and not even
+deterministic. When the carrier flew to RUGULUS-1-L4 to plant its relay it
+became its own hub and the whole brain relocated with it: grow launched there,
+prune anchored there, and the reserve rail read RUGULUS-1-L4's stockpile, which
+is genuinely 0, while the real hub held 73,539.
+
+At `AINALRAM-BELT-1` it was masked purely by luck — `RelayRun.hub(near:)` used
+`min(by: deviceCode)` and `43C9B54A` (autofactory) sorts below `C7836770`
+(vessel).
+
+Ticket 06 always defined a hub as *a commandable location with a print-capable
+device **and adequate stock***; only the first half had been built. Now:
+`hubLocation` requires the census to show `resources > 0` at the location, picks
+the richest with a designation tie-break (a total order — stateless brain, same
+answer every tick), and reads those census rows in the SAME transaction as the
+devices. `RelayRun.hub(near:)` prefers any printer OTHER than the carrier, so a
+vessel can still print into its own hold but can never shadow a real autofactory.
+
+**`> 0`, not "above the reserve floor"** — recognition asks *is this a
+stockpile*; adequacy stays the rail's judgement. Folding the floor in would make
+a temporarily-drained hub vanish, turning the designed "printStockShort → idle
+until supply recovers" into "there is no hub".
+
+**Test-fixture consequence, and it cost a full suite run to find:** a print hub
+fixture now needs a stockpile row (`seedHubStockpile`) or the brain recognises no
+hub and every grow test silently stops testing growth. Worse, it does not FAIL —
+`BrainLoopTests.aTickStoppedMidFlightPublishesNothingAndWritesNothing` waits on a
+`Gate` that only opens on the launching path, so a brain that declines to launch
+**hangs the whole suite** with no timeout. If the engine suite deadlocks after a
+brain change, suspect a fixture whose premise no longer holds.
+
 ## Things to know before touching this again
 
 - **`noRelayCoLocated` maps to `BrainDisposition.escalate`**, so the brain does

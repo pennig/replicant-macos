@@ -376,6 +376,11 @@ func seedMalformedSystemDetail(_ db: Database, system: String) throws {
 /// non-nil — an off-mesh hub is deliberately invisible to the brain.
 let growHubLocation = "SOL-3"
 
+/// The fixtures' census timestamp. Matches the `now` the pure-ranking helpers
+/// below use, so a seeded stockpile never reads as stale to anything that does
+/// check.
+let fixtureCensusFetchedAt = Date(timeIntervalSince1970: 0)
+
 /// The smallest world the brain can actually grow from: `SOL` meshed by a live
 /// relay, a print hub with `carriers` HEAVEN vessels parked alongside it, and
 /// one unmeshed salvage system per entry in `salvage`.
@@ -397,6 +402,13 @@ func seedGrowableWorld(
     try seedRelay(db, code: "REL1", location: "SOL")
     try seedStar(db, designation: "SOL", x: 0, y: 0, z: 0)
     try seedPrintHub(db, code: "HUB1", location: growHubLocation)
+    // A hub is a print-capable device at a location the census shows holding
+    // resources — BOTH halves (`WorldView.hubLocation`). Without the stockpile
+    // row `HUB1` is just a printer standing somewhere, the brain recognises no
+    // hub, and every grow test here silently stops testing growth. Stocked well
+    // clear of the reserve floor so the rail is never what a test trips over;
+    // `BrainCeilingTests` owns the rail's own thresholds.
+    try seedHubStockpile(db, location: growHubLocation, resources: BrainCeiling.aggregateSpendFloor * 2)
     for code in carriers {
         try seedDevice(db, code: code, type: "heaven_vessel", location: growHubLocation)
     }
@@ -410,6 +422,33 @@ func seedGrowableWorld(
             db, id: "SITE-\(entry.key)", system: entry.key, totals: ["metal": entry.value]
         )
     }
+}
+
+/// A census row — what makes a location a STOCKPILE, and so what makes a
+/// print-capable device standing on it a hub (`WorldView.hubLocation`).
+///
+/// `fetchedAt` defaults to the fixtures' own clock reading. Hub RECOGNITION
+/// ignores a row's age entirely — it asks only whether the location holds
+/// anything — so the default is only ever load-bearing for a test that also
+/// drives a mission through the census staleness gates, and such a test seeds
+/// its own row with its own timestamp.
+///
+/// Named apart from the file-private `seedFootprint` helpers in
+/// `BrainGrowLifecycleE2ETests` / `BrainDegradationTests`, which carry their own
+/// `liftoff` clocks, so neither shadows the other.
+func seedHubStockpile(
+    _ db: Database,
+    location: String,
+    resources: Int,
+    fetchedAt: Date = fixtureCensusFetchedAt
+) throws {
+    try LocationFootprint.insert {
+        LocationFootprint(
+            location: location, devices: 1, resources: resources, resourceSites: 0,
+            locationEvents: 0, replicants: 0, fetchedAt: fetchedAt
+        )
+    }
+    .execute(db)
 }
 
 // MARK: - Prune worlds
