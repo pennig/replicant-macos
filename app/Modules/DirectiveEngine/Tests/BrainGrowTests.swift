@@ -250,7 +250,12 @@ struct BrainGrowTests {
         let uuid = UUIDGenerator.incrementing
         try await database.write { db in
             try seedGrowableWorld(db, carriers: [])
-            try seedDevice(db, code: "V1", location: growHubLocation, tags: ["auto:haul"])
+            // BOTH tags: `auto:tendMesh` is what makes V1 a carrier the brain
+            // would otherwise fly, which is the only way this test can prove the
+            // fleet-tag reservation is what stops it. Tagged for tendMesh alone
+            // it would be free; tagged for haul alone it would never be a
+            // candidate, and the assertion would pass for the wrong reason.
+            try seedDevice(db, code: "V1", location: growHubLocation, tags: ["auto:haul", Brain.carrierTag])
             try seedDirective(db, id: "HAUL", kind: .haulRun, deviceCode: "SOMEVESSEL", fleetTag: "auto:haul")
         }
 

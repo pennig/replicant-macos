@@ -216,7 +216,7 @@ public struct RelayRun: MissionStepMachine {
         }
         switch directive.step {
         case Step.acquire: return acquire(directive, carrier, world)
-        case Step.printing: return printing(directive, world)
+        case Step.printing: return printing(directive, carrier, world)
         case Step.fetching: return fetch(directive, carrier, world)
         case Step.deactivating: return deactivateSource(directive, carrier, world)
         case Step.confirmingIdle: return confirmIdle(directive, carrier, world)
@@ -310,6 +310,123 @@ public struct RelayRun: MissionStepMachine {
         return device
     }
 
+    /// The status a printed-but-unplanted relay wears. Live-confirmed: the three
+    /// spare relays at `AINALRAM-BELT-1` read `inactive`, a planted one reads
+    /// `relaying`.
+    static let idleRelayStatus = "inactive"
+
+    /// Relays standing at `location` that belong to nobody: the right type, at
+    /// rest, in nothing's hold.
+    ///
+    /// **This is the pool the whole capability now draws from**, and adopting it
+    /// reversed an explicit earlier decision worth restating. `printedRelayCode`
+    /// detects a print by its OPERATION RESULT and this file used to warn that a
+    /// presence check would mistake one of the hub's pre-existing spares for
+    /// "our clone" and fly away with a relay the run never acquired. That was
+    /// right about the mechanism and wrong about the goal: an idle relay parked
+    /// at the printer IS free stock, and refusing to see it meant a hub holding
+    /// three of them printed a fourth — or, worse, stalled `noRelayCoLocated`
+    /// standing next to all three, which is exactly what the live fleet did.
+    ///
+    /// Ownership is now decided by the claim (`isNextInLine`) rather than by
+    /// provenance, so the run no longer needs to prove a relay is *its* clone —
+    /// only that nobody else has taken it. That is what makes a superseded print
+    /// op survivable: the relay still arrives at the hub, and whoever is next in
+    /// line takes it.
+    ///
+    /// `stowedInDeviceCode == nil` is the "unclaimed" test and it is sufficient:
+    /// a run claims by STOWING, so anything already spoken for is already in a
+    /// hold. `!isBusy` keeps a relay mid-command out of the pool.
+    static func idleRelays(at location: String, in world: WorldSnapshot) -> [Device] {
+        world.devices.values
+            .filter {
+                $0.deviceType == relayDeviceType
+                    && $0.location == location
+                    && $0.stowedInDeviceCode == nil
+                    && $0.statusBase == idleRelayStatus
+                    && !$0.isBusy
+            }
+            .sorted { $0.deviceCode < $1.deviceCode }
+    }
+
+    /// Where `directive` stands in the line of Relay Runs waiting for stock at
+    /// `location` (0 = next) — **the FIFO rule, and the whole of the claim's
+    /// safety.**
+    ///
+    /// Relay Runs evaluate as independent `Task`s on independent five-second
+    /// clocks (`DirectiveEngine.makeExecutor`), so two runs waiting at one hub
+    /// genuinely can ask "is there a spare relay?" at the same instant. Nothing
+    /// above them serialises it: the brain allocates at LAUNCH, and this claim
+    /// happens later — often much later, after a print completes. Without an
+    /// ordering rule both would `stow` the same relay and one would lose to a
+    /// server rejection.
+    ///
+    /// So each run computes the same queue from the same snapshot and takes the
+    /// relay at its own position (`claimableRelay`). Ordering is by `createdAt`
+    /// with the id as tie-break: **the run that has waited longest gets the
+    /// first relay**, which is precisely what went wrong on the live fleet —
+    /// three runs launched within seven minutes, the two oldest lost their print
+    /// ops to supersession, and the YOUNGEST was the one that delivered. A
+    /// stable, total order also keeps the decision reproducible, the property
+    /// `Brain.freeCarrier`'s `min(by:)` protects for the same reason.
+    ///
+    /// Peers are counted only if they are (a) Relay Runs, (b) still moving —
+    /// see below, (c) actually waiting for stock, no relay aboard yet, and (d)
+    /// waiting at THIS hub. A run that already has its relay is out of the queue
+    /// even though its row is still in force, which is what lets the line
+    /// advance.
+    ///
+    /// **`.paused` holds no place in line**, which is the one status where
+    /// `Brain.owningStatuses` and this queue deliberately disagree. A paused run
+    /// still OWNS its carrier — reservation is right to keep it out of the
+    /// brain's hands — but it is stopped by operator choice and may be stopped
+    /// indefinitely, so counting it here would let one paused run at the head of
+    /// the queue starve every other run at that hub for as long as it stays
+    /// paused. `.needsAttention` is the opposite case and IS counted: it is
+    /// halted but live, one `retry` from moving, and the two runs this whole
+    /// change exists to rescue were sitting in exactly that state.
+    static func queuePosition(_ directive: Directive, at location: String, in world: WorldSnapshot) -> Int {
+        let waiting = world.peers
+            .filter { peer in
+                guard peer.kind == .relayRun else { return false }
+                guard peer.status == .running || peer.status == .needsAttention else { return false }
+                guard let carrier = world.device(peer.deviceCode), carrier.location == location else { return false }
+                return SalvageRun.relay(aboard: carrier, in: world) == nil
+            }
+            .sorted { ($0.createdAt, $0.id) < ($1.createdAt, $1.id) }
+        // Not in the list means nothing to defer to: either this run is alone,
+        // or `peers` is empty because the snapshot was built without it (every
+        // pure-function test). Head of a queue of one.
+        return waiting.firstIndex { $0.id == directive.id } ?? 0
+    }
+
+    /// The relay this run may take off the pool right now, if any.
+    ///
+    /// **Claims by queue POSITION, not "the first one"** — the oldest waiting run
+    /// takes the lowest-code relay, the second-oldest takes the next, and so on.
+    /// Two things fall out of that, both of which the naive "everyone eyes the
+    /// first spare" version gets wrong:
+    ///
+    ///   - **Race-free by construction.** Concurrent runs claim DISJOINT relays,
+    ///     so two `stow` commands issued in the same instant cannot contend. No
+    ///     lock, no lease, no serialising authority — just an ordering both runs
+    ///     compute identically from the same snapshot.
+    ///   - **No queueing behind stock that is already there.** A second run does
+    ///     not have to wait for the first to finish stowing before it can see
+    ///     its own relay, so three spares at the hub serve three runs on the
+    ///     same tick.
+    ///
+    /// Returning nil means "no stock for me" — the caller prints. That is the
+    /// only condition under which this capability spends resources now: the pool
+    /// is genuinely too shallow for this run's place in line.
+    static func claimableRelay(
+        _ directive: Directive, at location: String, in world: WorldSnapshot
+    ) -> Device? {
+        let pool = idleRelays(at: location, in: world)
+        let position = queuePosition(directive, at: location, in: world)
+        return position < pool.count ? pool[position] : nil
+    }
+
     /// Whether a print this directive dispatched is still in flight. `print` is a
     /// TRACKED kind (`.enqueued`), so unlike the `.simple` verbs it genuinely has
     /// a row to ask about.
@@ -380,8 +497,21 @@ public struct RelayRun: MissionStepMachine {
             return source
         }
         if let printed = printedRelay(in: world) { return printed }
-        return SalvageRun.relay(aboard: carrier, in: world)
-            ?? SalvageRun.deployedRelay(near: carrier, in: world)
+        // Aboard BEFORE the pool: once a relay is in the hold it is settled, and
+        // asking the pool first at a hub that still has spares standing on it
+        // would resolve a DIFFERENT relay than the one this run is carrying.
+        if let aboard = SalvageRun.relay(aboard: carrier, in: world) { return aboard }
+        // The pool claim, so `stowing` issues its command at exactly the relay
+        // `acquire`/`printing` decided to take. Stable across the two steps: the
+        // run holds its place in line until it actually has a relay aboard, and
+        // the pool is ordered by device code, so re-deriving it yields the same
+        // device. Queue-checked, unlike the co-location fallback below, which is
+        // why it sits above it.
+        if let location = carrier.location,
+           let claimed = claimableRelay(directive, at: location, in: world) {
+            return claimed
+        }
+        return SalvageRun.deployedRelay(near: carrier, in: world)
     }
 
     /// Whether the stockpile CENSUS — the whole `LocationFootprint` table,
@@ -542,6 +672,16 @@ public struct RelayRun: MissionStepMachine {
         if SalvageRun.relay(aboard: carrier, in: world) != nil {
             return .advanceStep(nextStep: Step.travelling)
         }
+        // A spare relay already standing here is a relay this run does not have
+        // to print — the same saving as one already aboard, one step earlier.
+        // Checked BEFORE the hub lookup so it holds even at a location whose
+        // printer has gone away, and before the reserve rail because taking
+        // existing stock spends nothing the rail exists to protect.
+        if let location = carrier.location,
+           let spare = Self.claimableRelay(directive, at: location, in: world) {
+            logger.notice("relay run \(directive.id, privacy: .public): claiming idle relay \(spare.deviceCode, privacy: .public) at \(location, privacy: .public) — no print needed")
+            return .advanceStep(nextStep: Step.stowing)
+        }
         guard let hub = Self.hub(near: carrier, in: world) else {
             // Nothing print-capable where the carrier stands. The composition
             // cannot proceed and guessing at another location would be a
@@ -606,11 +746,23 @@ public struct RelayRun: MissionStepMachine {
     /// Split from `acquire` even though `print` is a tracked kind, because the
     /// completion this waits for is not the operation closing but the CLONE
     /// arriving — two facts that land in separate transactions.
-    private func printing(_ directive: Directive, _ world: WorldSnapshot) -> MissionAction {
+    private func printing(_ directive: Directive, _ carrier: Device, _ world: WorldSnapshot) -> MissionAction {
         // The positive first: a clone that is IN the fleet and IS a relay. The
         // type check is what stops a shared-queue mix-up being adopted — see
         // `printedRelay(in:)`.
         if Self.printedRelay(in: world) != nil {
+            return .advanceStep(nextStep: Step.stowing)
+        }
+        // Our own op is not the only way a relay arrives. The hub's print queue
+        // is shared and `CommandClient` supersedes any other open op on it, so a
+        // run whose print was superseded can never resolve a clone by code even
+        // though the server printed it and it is standing right there. Claiming
+        // off the pool is what makes that survivable — and it is also how a run
+        // picks up a relay some OTHER run's print produced, which is the point
+        // of a pool. Ordered by `isNextInLine`, so this cannot jump the queue.
+        if let location = carrier.location,
+           let spare = Self.claimableRelay(directive, at: location, in: world) {
+            logger.notice("relay run \(directive.id, privacy: .public): claiming relay \(spare.deviceCode, privacy: .public) from the hub pool at \(location, privacy: .public)")
             return .advanceStep(nextStep: Step.stowing)
         }
         // Deadline BEFORE the read (see `confirm-steps-need-fresh-evidence`,

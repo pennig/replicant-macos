@@ -69,6 +69,29 @@ public struct WorldSnapshot: Equatable, Sendable {
     /// needs `fetchedAt` too: `surveying` gates its refresh on how stale the
     /// census is, and a bare `[String: Int]` could not answer that.
     public let footprints: [String: LocationFootprint]
+    /// The other in-force directives, INCLUDING this one — the rows a mission
+    /// needs to see to know what its siblings already own.
+    ///
+    /// **Every other field here answers "what is the world like?"; this one
+    /// answers "who else is competing for it?"** A mission is otherwise blind
+    /// to its peers, and for most steps that is right — the directive row is
+    /// the lease ledger and `Brain.reservedDevices` does the allocating, so a
+    /// mission never needs to arbitrate.
+    ///
+    /// The exception is claiming shared stock that no lease covers yet. Idle
+    /// relays standing at a print hub belong to nobody: they are not stowed, no
+    /// directive names them, and the brain cannot pre-assign them because it
+    /// allocates only at LAUNCH while a run claims one much later (after a
+    /// print completes). Two Relay Runs are independent `Task`s on independent
+    /// five-second clocks (`DirectiveEngine.makeExecutor`), so "whoever asks
+    /// first" is a genuine race with no serialising authority above it. Peers
+    /// let a run answer "am I the oldest waiting run at this hub?" itself,
+    /// which is what makes the claim both race-free and FIFO — see
+    /// `RelayRun.isNextInLine`.
+    ///
+    /// Read in the SAME transaction as the devices, so a run can never see a
+    /// peer's row from one instant against a fleet from another.
+    public let peers: [Directive]
     /// The moment this snapshot was taken. Every time comparison in a mission
     /// uses this rather than `Date()`, so step machines stay pure and their
     /// tests deterministic.
@@ -82,6 +105,7 @@ public struct WorldSnapshot: Equatable, Sendable {
         systems: [String: StarSystem] = [:],
         siteAssays: [String: [String: Double]] = [:],
         footprints: [String: LocationFootprint] = [:],
+        peers: [Directive] = [],
         now: Date
     ) {
         self.devices = devices
@@ -91,6 +115,7 @@ public struct WorldSnapshot: Equatable, Sendable {
         self.systems = systems
         self.siteAssays = siteAssays
         self.footprints = footprints
+        self.peers = peers
         self.now = now
     }
 
@@ -132,6 +157,14 @@ public struct WorldSnapshot: Equatable, Sendable {
                 .where { $0.id.in(dispatchedIDs) }
                 .fetchAll(db)
 
+            // The in-force rows, this directive's own included — see `peers`.
+            // Status-scoped exactly like `Brain.owningStatuses`: a directive
+            // that still owns its carrier is still competing for stock, and one
+            // that has finished is not.
+            let peers = try Directive
+                .where { $0.status.in(Array(Brain.owningStatuses)) }
+                .fetchAll(db)
+
             var wanted = baseWanted
             if let vessel = devices.first(where: { $0.deviceCode == vesselCode }),
                let location = vessel.location {
@@ -171,6 +204,7 @@ public struct WorldSnapshot: Equatable, Sendable {
                 systems: systems,
                 siteAssays: siteAssays,
                 footprints: footprints,
+                peers: peers,
                 now: now
             )
         }
