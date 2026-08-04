@@ -118,18 +118,15 @@ struct Brain: Sendable {
     /// exhaustive projection for a state that is an ACTION taken rather than a
     /// plan formed. It is logged at `.notice` instead — the same level a
     /// launch gets, for the same reason.
-    func evaluateOnce() async -> BrainDecision {
-        await report().decision
-    }
-
-    /// `evaluateOnce()` plus everything the why-view needs to explain it: the
-    /// ranked field the decision was made against, the hub, and the rails
-    /// (`BrainReport`). Does exactly the same work and takes exactly the same
-    /// actions — the report is what the tick already knew, gathered rather
-    /// than discarded, so nothing here changes what the brain DOES.
     ///
-    /// `evaluateOnce()` remains the seam for tests that only care about the
-    /// decision; `DirectiveEngineCore.tickBrain()` calls this one.
+    /// **Why this returns a `BrainReport` and not just the `BrainDecision`.**
+    /// Everything the why-view needs to EXPLAIN the tick — the ranked field
+    /// the decision was made against, the hub, the rails — is already known
+    /// here and used to be discarded. Gathering it changes nothing about what
+    /// the brain DOES; the decision and the actions are identical either way.
+    /// (`Brain.evaluateOnce()`, the decision-only seam most of the test suite
+    /// drives, lives in the test target — `BrainTestSupport.swift` — rather
+    /// than here, so production source carries no test-only API.)
     func report() async -> BrainReport {
         @Dependency(\.defaultDatabase) var database
 
@@ -269,6 +266,10 @@ struct Brain: Sendable {
             actionsLimit: budget.limit,
             actionsFloor: CommandGovernorClient.actionFloor,
             hubStock: hubFootprint?.resources,
+            // Carried, not dropped: the rail vetoes on the reading's AGE as
+            // well as its value, so a figure without its timestamp cannot
+            // express what the rail is actually doing.
+            hubStockFetchedAt: hubFootprint?.fetchedAt,
             spendFloor: BrainCeiling.aggregateSpendFloor,
             rateLimitedAt: budget.rateLimitedAt
         )

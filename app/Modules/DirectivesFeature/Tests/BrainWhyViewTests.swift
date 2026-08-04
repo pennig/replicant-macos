@@ -64,14 +64,17 @@ struct BrainWhyViewTests {
         designation: "POLARISUM"
     )
 
-    /// Limits with plenty of room and no 429 — the "nothing to see here"
-    /// baseline every test that isn't about limits builds on.
+    /// Limits with plenty of room, a FRESH census reading, and no 429 — the
+    /// "nothing to see here" baseline every test that isn't about limits
+    /// builds on. `hubStockFetchedAt: now` matters: a nil or old timestamp
+    /// would make every one of those tests read a veto instead.
     static func calmLimits(rateLimitedAt: Date? = nil) -> BrainLimits {
         BrainLimits(
             actionsRemaining: 54,
             actionsLimit: 60,
             actionsFloor: 6,
             hubStock: 41_000,
+            hubStockFetchedAt: now,
             spendFloor: 35_078,
             rateLimitedAt: rateLimitedAt
         )
@@ -213,6 +216,59 @@ struct BrainWhyViewTests {
         #expect(why.hiddenCandidates == 7)
     }
 
+    /// The cap must never hide the row the gate is talking about.
+    ///
+    /// `Brain.plan` launches the best candidate NOT already in flight, which
+    /// need not be rank 1 — with five or more grows already flying it can sit
+    /// well down the field. A plain `prefix(5)` would then show five rows the
+    /// tick REJECTED under a headline reading "launched — meshing SYS9" and
+    /// never list SYS9, so the card would contradict itself. The chosen row
+    /// displaces the last visible one, keeping its true rank so the gap in the
+    /// numbering shows where the field was cut.
+    @Test func theCapNeverHidesTheLaunchedCandidate() {
+        let field = (1...12).map { index in
+            GrowCandidate(
+                firstHop: "SYS\(index)",
+                completesNow: false,
+                relaysRemaining: index,
+                bestTier: .salvage,
+                magnitudeAtTier: Double(index),
+                hopDistance: Double(index),
+                servedTargets: ["SYS\(index)"],
+                designation: "SYS\(index)"
+            )
+        }
+        // Ranks 1–8 are already in flight, so the brain launched rank 9.
+        let goal = Goal(kind: .tendMesh, target: "SYS9", rationale: "meshing SYS9 — 9 units, 9 hops")
+        let why = BrainWhy.from(report: Self.report(.dispatch(goal, ranked: field), ranked: field))
+
+        #expect(why.candidates.count == BrainWhy.maxCandidates)
+        #expect(why.candidates.map(\.target) == ["SYS1", "SYS2", "SYS3", "SYS4", "SYS9"])
+        #expect(why.candidates.map(\.rank) == [1, 2, 3, 4, 9], "the launched row keeps its true rank")
+        #expect(why.candidates.last?.isChosen == true)
+        #expect(why.hiddenCandidates == 7)
+        // The gate names it, and now so does a row.
+        #expect(why.gateText.contains("SYS9"))
+    }
+
+    /// The displacement only happens when it is needed — a chosen row already
+    /// inside the visible prefix must not be moved to the end.
+    @Test func aChosenRowInsideTheCapKeepsItsPlace() {
+        let field = (1...8).map { index in
+            GrowCandidate(
+                firstHop: "SYS\(index)", completesNow: false, relaysRemaining: index,
+                bestTier: .salvage, magnitudeAtTier: Double(index), hopDistance: Double(index),
+                servedTargets: ["SYS\(index)"], designation: "SYS\(index)"
+            )
+        }
+        let goal = Goal(kind: .tendMesh, target: "SYS2", rationale: "meshing SYS2 — 2 units, 2 hops")
+        let why = BrainWhy.from(report: Self.report(.dispatch(goal, ranked: field), ranked: field))
+
+        #expect(why.candidates.map(\.target) == ["SYS1", "SYS2", "SYS3", "SYS4", "SYS5"])
+        #expect(why.candidates.map(\.isChosen) == [false, true, false, false, false])
+        #expect(why.hiddenCandidates == 3)
+    }
+
     // MARK: - Limit pressure
 
     /// The design's "limits are signals" clause: a 429 is the SERVER refusing
@@ -224,7 +280,8 @@ struct BrainWhyViewTests {
                 .idle(reason: "no grow or prune work"),
                 limits: BrainLimits(
                     actionsRemaining: 4, actionsLimit: 60, actionsFloor: 6,
-                    hubStock: 41_000, spendFloor: 35_078, rateLimitedAt: nil
+                    hubStock: 41_000, hubStockFetchedAt: Self.now,
+                    spendFloor: 35_078, rateLimitedAt: nil
                 )
             )
         )
@@ -271,24 +328,69 @@ struct BrainWhyViewTests {
         #expect(governor?.detail == "commands — 54 of 60 left this minute, pacing ourselves below 6")
     }
 
-    /// Reserve-floor headroom, in the three states the rail itself has: above
-    /// the floor, below it, and unread. Unread must read as a VETO, not as
-    /// "fine" — `BrainCeiling.printPermitted` fails closed for the same reason.
-    @Test func theReserveFloorLineReportsHeadroomAndFailsClosedWhenUnread() {
-        func line(hubStock: Int?) -> String? {
+    /// The reserve-floor line reports ALL FOUR states the rail has — clear,
+    /// below floor, **stale**, and unread — not just the two a bare figure can
+    /// express.
+    ///
+    /// The staleness case is the one this test exists for. `RelayRun
+    /// .printStockIsShort` vetoes on a census row older than
+    /// `RelayRun.hubFreshness` regardless of how healthy the number looks, so
+    /// a card rendering an hour-old 41,000-unit reading as "against a 35,078
+    /// reserve floor" would be telling the operator there is headroom while
+    /// every print is in fact being refused. Silence must not read as
+    /// permission to spend — and neither must a stale reading, which is the
+    /// same failure wearing a number.
+    @Test func theReserveFloorLineReportsAllThreeVetoStatesNotJustTwo() {
+        func line(hubStock: Int?, fetchedAt: Date?) -> String? {
             BrainWhy.from(
                 report: Self.report(
                     .idle(reason: "no grow or prune work"),
                     limits: BrainLimits(
                         actionsRemaining: 54, actionsLimit: 60, actionsFloor: 6,
-                        hubStock: hubStock, spendFloor: 35_078, rateLimitedAt: nil
+                        hubStock: hubStock, hubStockFetchedAt: fetchedAt,
+                        spendFloor: 35_078, rateLimitedAt: nil
                     )
                 )
             ).limitPressure.first { $0.kind == .reserveFloor }?.detail
         }
-        #expect(line(hubStock: 41_000) == "hub stock — 41,000 units against a 35,078 reserve floor")
-        #expect(line(hubStock: 12_000) == "hub stock — 12,000 units, below the 35,078 reserve floor — printing vetoed")
-        #expect(line(hubStock: nil) == "hub stock — no census reading — printing vetoed until one lands")
+        let fresh = Self.now.addingTimeInterval(-60)
+        let stale = Self.now.addingTimeInterval(-3720) // 62 minutes — well past hubFreshness
+
+        #expect(
+            line(hubStock: 41_000, fetchedAt: fresh)
+                == "hub stock — 41,000 units against a 35,078 reserve floor"
+        )
+        #expect(
+            line(hubStock: 12_000, fetchedAt: fresh)
+                == "hub stock — 12,000 units, below the 35,078 reserve floor — printing vetoed"
+        )
+        // Comfortably ABOVE the floor and still vetoed — the whole point. The
+        // line names the AGE, not the figure, so the operator looks at the
+        // census rather than hunting a shortage that does not exist.
+        #expect(
+            line(hubStock: 41_000, fetchedAt: stale)
+                == "hub stock — 41,000 units, but the census reading is 1h old — printing vetoed until it refreshes"
+        )
+        #expect(
+            line(hubStock: nil, fetchedAt: nil)
+                == "hub stock — no census reading — printing vetoed until one lands"
+        )
+    }
+
+    /// The rail's own freshness bound is what decides, not a number retyped in
+    /// the feature — one second either side of `RelayRun.hubFreshness` flips
+    /// the verdict.
+    @Test func stalenessIsJudgedAgainstTheRailsOwnFreshnessBound() {
+        func standing(ageSeconds: TimeInterval) -> BrainLimits.HubStockStanding {
+            BrainLimits(
+                actionsRemaining: 54, actionsLimit: 60, actionsFloor: 6,
+                hubStock: 41_000, hubStockFetchedAt: Self.now.addingTimeInterval(-ageSeconds),
+                spendFloor: 35_078, rateLimitedAt: nil
+            ).hubStockStanding(at: Self.now)
+        }
+        #expect(standing(ageSeconds: RelayRun.hubFreshness - 1) == .clear)
+        #expect(standing(ageSeconds: RelayRun.hubFreshness) == .clear) // the bound itself is `>`, not `>=`
+        #expect(standing(ageSeconds: RelayRun.hubFreshness + 1) == .stale(age: RelayRun.hubFreshness + 1))
     }
 
     // MARK: - Monospace for embedded designations

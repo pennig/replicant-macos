@@ -131,6 +131,18 @@ actor DirectiveEngineCore {
         brainLogger.info("stopping")
         brain?.cancel()
         brain = nil
+        // Retire the why-view's feed with the brain that fed it. `stop()` runs
+        // on logout, immediately before the directive tables are wiped, and
+        // the composition root is deliberate about not letting one session
+        // bleed into the next (`ReplicantApp` resets domain freshness on the
+        // same path). A surviving report would show the PREVIOUS account's
+        // ranked systems and hub stock until the next login's first tick —
+        // stale by five seconds at best, and about the wrong galaxy at worst.
+        //
+        // Still not engine-retained state: this clears the shared store, it
+        // does not read anything back.
+        @Shared(.brainReport) var published: BrainReport?
+        $published.withLock { $0 = nil }
         for (_, task) in executors { task.cancel() }
         executors.removeAll()
         idlePlanUntil.removeAll()

@@ -57,6 +57,13 @@ public struct BrainLimits: Equatable, Sendable {
     /// told us", never "zero" — and `RelayRun` treats it as a veto for the
     /// same reason.
     public let hubStock: Int?
+    /// WHEN that reading was taken. Carried beside the figure rather than
+    /// dropped, because a reading's AGE is one of the three things that can
+    /// veto a print (`RelayRun.printStockIsShort`) and the other two are
+    /// useless without it: an hour-old row showing 41,000 units against a
+    /// 35,078 floor reads as comfortable headroom while the rail is in fact
+    /// refusing every print. See `hubStockStanding(at:)`.
+    public let hubStockFetchedAt: Date?
     /// `BrainCeiling.aggregateSpendFloor` — the reserve-floor rail the stock
     /// above is judged against.
     public let spendFloor: Int
@@ -71,6 +78,7 @@ public struct BrainLimits: Equatable, Sendable {
         actionsLimit: Int,
         actionsFloor: Int,
         hubStock: Int?,
+        hubStockFetchedAt: Date?,
         spendFloor: Int,
         rateLimitedAt: Date?
     ) {
@@ -78,8 +86,52 @@ public struct BrainLimits: Equatable, Sendable {
         self.actionsLimit = actionsLimit
         self.actionsFloor = actionsFloor
         self.hubStock = hubStock
+        self.hubStockFetchedAt = hubStockFetchedAt
         self.spendFloor = spendFloor
         self.rateLimitedAt = rateLimitedAt
+    }
+
+    /// Where the hub stock stands against the reserve-floor rail — ALL THREE
+    /// of the rail's veto conditions, not just the two a bare figure can
+    /// express.
+    ///
+    /// A deliberate mirror of `RelayRun.printStockIsShort`, in the same branch
+    /// order, judged against the same `RelayRun.hubFreshness` bound, so the
+    /// why-view cannot report headroom on a reading the rail is already
+    /// refusing to believe. That agreement is enforced by test
+    /// (`hubStockStandingAgreesWithTheRailItMirrors`) rather than by this
+    /// comment: the two cannot share an implementation because they read
+    /// different shapes (a `WorldSnapshot`'s footprint table vs. this report's
+    /// single figure), so the next best thing is a test that fails the moment
+    /// they disagree.
+    ///
+    /// Reports, never gates. `RelayRun` still owns the actual veto.
+    public func hubStockStanding(at now: Date) -> HubStockStanding {
+        // `hubStock` and `hubStockFetchedAt` are set together or not at all —
+        // both come from the same optional `LocationFootprint` — but the
+        // guard is written over both so a future caller that sets only one
+        // degrades to "unread" (fails closed) rather than to "clear".
+        guard let hubStock, let hubStockFetchedAt else { return .unread }
+        let age = now.timeIntervalSince(hubStockFetchedAt)
+        if age > RelayRun.hubFreshness { return .stale(age: age) }
+        return hubStock < spendFloor ? .belowFloor : .clear
+    }
+
+    /// The reserve-floor rail's four outcomes, as an operator needs them
+    /// distinguished. Three of them veto a print; only `.clear` permits one.
+    public enum HubStockStanding: Equatable, Sendable {
+        /// No census row for the hub at all — "nobody has told us", which is
+        /// not the same claim as "the stock is fine".
+        case unread
+        /// A reading older than `RelayRun.hubFreshness`. The figure may look
+        /// comfortable and still be worthless; `age` is what the operator
+        /// actually needs told.
+        case stale(age: TimeInterval)
+        /// A fresh reading that sits below the reserve floor.
+        case belowFloor
+        /// A fresh reading with real headroom — the only state that permits a
+        /// print.
+        case clear
     }
 }
 

@@ -422,3 +422,24 @@ extension WorldView {
         )
     }
 }
+
+// MARK: - Decision-only seam
+
+extension Brain {
+    /// The tick's `BrainDecision`, discarding the rest of its `BrainReport`.
+    ///
+    /// **Test-target API, deliberately.** Most of the brain suite asserts on
+    /// what a tick DECIDED and has no interest in the ranked field or the
+    /// rails, and `#expect(decision == .idle(reason:))` reads better than
+    /// `#expect(report.decision == …)` fifteen times over. But production has
+    /// exactly one caller of the plan loop — `DirectiveEngineCore.tickBrain()`
+    /// — and it wants the whole report, so leaving this one-liner in
+    /// `Sources/` would put a symbol there that only tests call.
+    ///
+    /// This is not a second implementation: it forwards to the real
+    /// `report()`, so every test driving it drives the identical production
+    /// path, database read and launch included.
+    func evaluateOnce() async -> BrainDecision {
+        await report().decision
+    }
+}

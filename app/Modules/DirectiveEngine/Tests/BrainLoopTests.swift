@@ -232,4 +232,38 @@ struct BrainLoopTests {
         }
         #expect(!tables.contains { $0.localizedCaseInsensitiveContains("brain") })
     }
+
+    /// `stop()` retires the feed with the brain that fed it.
+    ///
+    /// `stop()` runs on logout, immediately before the directive tables are
+    /// wiped. A surviving report would show the PREVIOUS account's ranked
+    /// systems and hub stock on the Directives surface until the next login's
+    /// first tick — the same session-bleed the composition root already avoids
+    /// by resetting domain freshness on this path.
+    @Test func stoppingClearsTheWhyViewsFeed() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try seedRelay(db, code: "REL1", location: "SOL")
+            try seedStar(db, designation: "SOL", x: 0, y: 0, z: 0)
+        }
+        let storage = InMemoryStorage()
+        let core = DirectiveEngineCore(machines: [], tick: .seconds(5))
+
+        let (afterTick, afterStop): (BrainReport?, BrainReport?) = await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.defaultInMemoryStorage = storage
+        } operation: {
+            @Shared(.brainReport) var report: BrainReport?
+            await core.tickBrain()
+            let published = report
+            await core.stop()
+            return (published, report)
+        }
+
+        // The first half is what makes the second half mean anything: without
+        // it, "nil after stop" would pass on an engine that never published.
+        #expect(afterTick != nil)
+        #expect(afterStop == nil)
+    }
 }

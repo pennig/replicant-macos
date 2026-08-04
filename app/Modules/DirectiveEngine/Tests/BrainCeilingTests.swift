@@ -17,7 +17,9 @@
 //  RELATIVE TO CONSUMPTION, not on either alone.
 //
 
+import Foundation
 import Testing
+import UniverseModels
 @testable import DirectiveEngine
 
 @Suite("BrainCeiling")
@@ -162,5 +164,93 @@ struct BrainCeilingTests {
     @Test func aggregateSpendFloorIsFarMoreConservativeThanTheNaiveSum() {
         let naiveSum = Int(BrainCeiling.reserveFloors.values.reduce(0, +))
         #expect(BrainCeiling.aggregateSpendFloor > naiveSum * 15)
+    }
+}
+
+/// The why-view's reserve-floor readout mirrors the rail it reports on.
+///
+/// `BrainLimits.hubStockStanding(at:)` (the why-view's four-state verdict) and
+/// `RelayRun.printStockIsShort(at:_:)` (the actual veto) cannot share an
+/// implementation — they read different shapes, a single figure on a report
+/// versus a footprint table on a `WorldSnapshot`. So the next best thing is a
+/// test that fails the moment the two disagree.
+///
+/// This exists because the first cut of the why-view reported only TWO of the
+/// rail's three veto conditions: it dropped `LocationFootprint.fetchedAt`, so
+/// an hour-old census row showing comfortable stock rendered as headroom while
+/// every print was in fact being refused. That is precisely the "print on stale
+/// abundance" hazard `printStockIsShort`'s freshness branch was added to close,
+/// reproduced on the surface whose whole job is to be trustworthy.
+@Suite("BrainLimits — hub stock standing")
+struct HubStockStandingTests {
+    static let now = Date(timeIntervalSince1970: 2_000_000)
+    static let floor = BrainCeiling.aggregateSpendFloor
+
+    static func limits(stock: Int?, fetchedAt: Date?) -> BrainLimits {
+        BrainLimits(
+            actionsRemaining: 54, actionsLimit: 60, actionsFloor: 6,
+            hubStock: stock, hubStockFetchedAt: fetchedAt,
+            spendFloor: floor, rateLimitedAt: nil
+        )
+    }
+
+    static func snapshot(stock: Int?, fetchedAt: Date?) -> WorldSnapshot {
+        var footprints: [String: LocationFootprint] = [:]
+        if let stock, let fetchedAt {
+            footprints["SOL-3"] = LocationFootprint(
+                location: "SOL-3", devices: 1, resources: stock, resourceSites: 0,
+                locationEvents: 0, replicants: 0, fetchedAt: fetchedAt
+            )
+        }
+        return WorldSnapshot(devices: [:], openOperations: [:], footprints: footprints, now: now)
+    }
+
+    /// Every combination of (stock, age) that can distinguish the branches —
+    /// including the exact `hubFreshness` boundary, where an off-by-one in
+    /// either direction would show up as a disagreement.
+    @Test func hubStockStandingAgreesWithTheRailItMirrors() {
+        let ages: [TimeInterval] = [
+            0,
+            RelayRun.hubFreshness - 1,
+            RelayRun.hubFreshness,
+            RelayRun.hubFreshness + 1,
+            3600,
+        ]
+        let stocks: [Int?] = [nil, 0, Self.floor - 1, Self.floor, Self.floor + 1, 500_000]
+        let run = RelayRun()
+
+        for stock in stocks {
+            for age in ages {
+                let fetchedAt = stock.map { _ in Self.now.addingTimeInterval(-age) }
+                let standing = Self.limits(stock: stock, fetchedAt: fetchedAt).hubStockStanding(at: Self.now)
+                let railVetoes = run.printStockIsShort(at: "SOL-3", Self.snapshot(stock: stock, fetchedAt: fetchedAt))
+                #expect(
+                    (standing != .clear) == railVetoes,
+                    "stock \(String(describing: stock)) at age \(age)s: report says \(standing), rail says \(railVetoes ? "veto" : "permit")"
+                )
+            }
+        }
+    }
+
+    /// The verdicts are not merely "veto or not" — each veto names its own
+    /// cause, because the operator's next action differs: refresh the census,
+    /// wait for one, or go find where the resources went.
+    @Test func eachVetoNamesItsOwnCause() {
+        #expect(Self.limits(stock: nil, fetchedAt: nil).hubStockStanding(at: Self.now) == .unread)
+        #expect(
+            Self.limits(stock: 500_000, fetchedAt: Self.now.addingTimeInterval(-3600))
+                .hubStockStanding(at: Self.now) == .stale(age: 3600)
+        )
+        #expect(
+            Self.limits(stock: Self.floor - 1, fetchedAt: Self.now).hubStockStanding(at: Self.now) == .belowFloor
+        )
+        #expect(Self.limits(stock: Self.floor, fetchedAt: Self.now).hubStockStanding(at: Self.now) == .clear)
+    }
+
+    /// A half-populated report fails CLOSED, matching the rail's own direction
+    /// on an unreadable stock — silence is never permission to spend.
+    @Test func aHalfPopulatedReadingFailsClosed() {
+        #expect(Self.limits(stock: 500_000, fetchedAt: nil).hubStockStanding(at: Self.now) == .unread)
+        #expect(Self.limits(stock: nil, fetchedAt: Self.now).hubStockStanding(at: Self.now) == .unread)
     }
 }

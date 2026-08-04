@@ -44,7 +44,15 @@ public struct BrainWhy: Equatable, Sendable {
     /// a card that sits ABOVE the Directives list into the whole pane. An
     /// operator needs to know the tail exists; they do not need to read it.
     public var hiddenCandidates: Int
-    /// The rails constraining the brain's choices right now.
+    /// Where the brain's two standing rails stand right now, plus a recent
+    /// 429 when there is one.
+    ///
+    /// **Never empty**: the governor and the reserve floor are reported on
+    /// every tick, healthy or not. That is deliberate — "54 of 60 left" is
+    /// headroom rather than pressure, and an operator who only ever sees these
+    /// lines when something is wrong cannot tell a healthy rail from a rail
+    /// that stopped being reported. `.rateLimited` is the only conditional
+    /// entry.
     public var limitPressure: [BrainWhyPressure]
     /// Distinguishes idle-calm from a stall (robustness bar clause 6): a
     /// brain with nothing to do is surfaced but calm; a stalled one is
@@ -99,13 +107,34 @@ public struct BrainWhy: Equatable, Sendable {
     public static func from(report: BrainReport) -> BrainWhy {
         let designations = knownDesignations(in: report)
         let rows = candidates(in: report)
+        let visible = visibleCandidates(rows)
         return BrainWhy(
             topGoalGate: .spans(in: gate(for: report.decision), designations: designations),
-            candidates: Array(rows.prefix(maxCandidates)),
-            hiddenCandidates: max(0, rows.count - maxCandidates),
+            candidates: visible,
+            hiddenCandidates: max(0, rows.count - visible.count),
             limitPressure: pressure(in: report),
             isEscalated: isEscalated(report.decision)
         )
+    }
+
+    /// The first `maxCandidates` rows — except that the LAUNCHED row is never
+    /// cut.
+    ///
+    /// `Brain.plan` picks the best candidate NOT already in flight, which is
+    /// not necessarily rank 1. With five or more grows already flying, a plain
+    /// prefix would show five rows the tick REJECTED under a gate reading
+    /// "launched — meshing X" and never list X at all — the card would be
+    /// contradicting its own headline. The chosen row displaces the last
+    /// visible one instead.
+    ///
+    /// Its true rank travels with it, so the gap in the numbering (1, 2, 3, 4,
+    /// 9) is itself the signal that the field was truncated between them.
+    private static func visibleCandidates(_ rows: [BrainWhyRow]) -> [BrainWhyRow] {
+        let head = Array(rows.prefix(maxCandidates))
+        guard let chosen = rows.first(where: \.isChosen), !head.contains(where: \.isChosen) else {
+            return head
+        }
+        return Array(head.prefix(maxCandidates - 1)) + [chosen]
     }
 
     // MARK: - The gate
@@ -185,17 +214,30 @@ public struct BrainWhy: Equatable, Sendable {
             )
         )
 
+        // ALL THREE of the rail's veto conditions, in its own branch order —
+        // `BrainLimits.hubStockStanding` mirrors `RelayRun.printStockIsShort`
+        // and is test-pinned against it. Rendering only two of them was a real
+        // defect: a fresh-looking figure on an hour-old census row would have
+        // read as headroom by contrast, while the rail refused every print.
+        // The general rule this surface follows is that silence must never
+        // read as permission to spend — which has to apply to ALL the ways
+        // the reading can be untrustworthy, not just the absent one.
         let floor = count(limits.spendFloor)
-        let stock: String = if let hubStock = limits.hubStock {
-            hubStock < limits.spendFloor
-                ? "\(count(hubStock)) units, below the \(floor) reserve floor — printing vetoed"
-                : "\(count(hubStock)) units against a \(floor) reserve floor"
-        } else {
-            // Unread is a VETO, not "fine" — the same direction
-            // `BrainCeiling.printPermitted` and `RelayRun.printStockIsShort`
-            // both fail. Saying nothing here would let silence read as
-            // permission to spend.
+        let stock: String = switch limits.hubStockStanding(at: report.observedAt) {
+        case .unread:
             "no census reading — printing vetoed until one lands"
+        case let .stale(age):
+            // Name the AGE, not the figure's size: an operator told a healthy
+            // -looking number is vetoed would go hunting for a shortage that
+            // does not exist. Same reasoning as `printStockShortDiagnosis`.
+            """
+            \(limits.hubStock.map(count) ?? "?") units, but the census reading is \(aged(age)) \
+            — printing vetoed until it refreshes
+            """
+        case .belowFloor:
+            "\(limits.hubStock.map(count) ?? "?") units, below the \(floor) reserve floor — printing vetoed"
+        case .clear:
+            "\(limits.hubStock.map(count) ?? "?") units against a \(floor) reserve floor"
         }
         lines.append(BrainWhyPressure(kind: .reserveFloor, detail: "hub stock — \(stock)"))
 
@@ -208,6 +250,14 @@ public struct BrainWhy: Equatable, Sendable {
     /// minutes can ever be produced.
     private static func elapsed(_ seconds: TimeInterval) -> String {
         seconds < 60 ? "just now" : "\(Int(seconds / 60))m ago"
+    }
+
+    /// How old a census reading is. Only ever called past
+    /// `RelayRun.hubFreshness` (5 minutes), so the sub-minute case cannot
+    /// arise; hours are spelled out because the whole point of the line is
+    /// that an operator notices the reading is ancient.
+    private static func aged(_ seconds: TimeInterval) -> String {
+        seconds >= 3600 ? "\(Int(seconds / 3600))h old" : "\(Int(seconds / 60))m old"
     }
 
     /// Grouping pinned to `en_US`, matching `GrowCandidate`'s own counting —
@@ -280,15 +330,16 @@ public struct BrainWhyView: View {
             .accessibilityElement(children: .combine)
             .accessibilityLabel(why.gateText)
 
-            if !why.limitPressure.isEmpty {
-                VStack(alignment: .leading, spacing: Space.xxs) {
-                    ForEach(why.limitPressure) { pressure in
-                        Text(pressure.detail)
-                            .font(.rcCaption)
-                            // A 429 was done TO us; the other two are choices
-                            // we made. They must not read alike.
-                            .foregroundStyle(pressure.isImposed ? .rcWarning : .rcTextSecondary)
-                    }
+            // Unconditional: `limitPressure` is never empty (see its doc — the
+            // two standing rails always report, healthy or not), so a guard
+            // here would be dead code.
+            VStack(alignment: .leading, spacing: Space.xxs) {
+                ForEach(why.limitPressure) { pressure in
+                    Text(pressure.detail)
+                        .font(.rcCaption)
+                        // A 429 was done TO us; the other two are choices we
+                        // made. They must not read alike.
+                        .foregroundStyle(pressure.isImposed ? .rcWarning : .rcTextSecondary)
                 }
             }
 
