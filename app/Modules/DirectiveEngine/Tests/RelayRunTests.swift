@@ -243,15 +243,19 @@ struct RelayRunAcquireTests {
 
     /// Once armed, a hub location with NO census row at all no longer vetoes
     /// immediately — it requests a refresh first (mirroring `HaulRun.survey`'s
-    /// gate on the same table), because "we couldn't read the stock" is not
-    /// evidence either way, and one GET may well clear it. Only once a
+    /// gate on the WHOLE table, not just this one row — see
+    /// `footprintCensusIsStale`'s doc), because "we couldn't read the stock"
+    /// is not evidence either way, and one GET may well clear it. Only once a
     /// reading is actually in hand does the rail form an opinion — see
-    /// `printStockShortStallsRetry` for the veto itself, and
+    /// `printStockShortStallsRetry` for the veto itself,
     /// `printStockIsShortFailsClosedOnAMissingFootprintDirectly` for why the
     /// old "missing → veto" behaviour still exists as the function's own
-    /// defense-in-depth contract. (An *unarmed* rail is a separate case,
-    /// covered by `unarmedRailNeverVetoesEvenOnUnknownStock` below — it has
-    /// no opinion at all, by design, so it does not even ask for a refresh.)
+    /// defense-in-depth contract, and
+    /// `persistentlyMissingFootprintEscalatesRatherThanRefreshingForever` for
+    /// the proof that a row which never arrives still terminates rather than
+    /// refreshing forever. (An *unarmed* rail is a separate case, covered by
+    /// `unarmedRailNeverVetoesEvenOnUnknownStock` below — it has no opinion
+    /// at all, by design, so it does not even ask for a refresh.)
     @Test func missingFootprintTriggersARefreshRatherThanAnImmediateVeto() {
         let snapshot = world(devices: [carrier(), hub()])
         #expect(RelayRun(reserveFloor: 500).nextAction(directive: running(), world: snapshot)
@@ -281,6 +285,36 @@ struct RelayRunAcquireTests {
     @Test func printStockIsShortFailsClosedOnAMissingFootprintDirectly() {
         let armed = RelayRun(reserveFloor: 500)
         #expect(armed.printStockIsShort(at: hubLocation, world(devices: [carrier(), hub()])))
+    }
+
+    /// **Termination proof for the table-wide gate.** A per-location gate
+    /// (the shape review round 2 caught) would issue `.refreshFootprint`
+    /// forever against a row that never arrives, at the engine's 5s tick —
+    /// unthrottled, since `.refreshFootprint(nextStep: .acquire)` self-loops
+    /// and `stepStartedAt` can never accumulate against it. Drives `acquire`
+    /// across several evaluations, applying the engine's real effect after
+    /// each `.refreshFootprint` — the census refresh lands for every OTHER
+    /// known location, never this hub's, the pathological case under test —
+    /// and asserts the run reaches the terminal `.stall(.printStockShort)`
+    /// (positive evidence: the census is fresh and STILL doesn't list the
+    /// hub) rather than refreshing without end.
+    @Test func persistentlyMissingFootprintEscalatesRatherThanRefreshingForever() {
+        var footprints: [String: LocationFootprint] = [:]
+        var action: MissionAction = .wait
+        for _ in 0..<5 {
+            let snapshot = world(devices: [carrier(), hub()], footprints: footprints)
+            action = RelayRun(reserveFloor: 500).nextAction(directive: running(), world: snapshot)
+            if case .stall = action { break }
+            guard case .refreshFootprint = action else {
+                Issue.record("expected a refresh or a terminal stall, got \(action)")
+                return
+            }
+            // The census refresh's real effect: EVERY OTHER location the API
+            // knows about goes fresh — never the hub's own, since that is
+            // exactly the pathological case this test drives.
+            footprints["SOME-OTHER-BELT-1"] = footprint("SOME-OTHER-BELT-1", resources: 1)
+        }
+        #expect(action == .stall(.printStockShort))
     }
 
     /// Production ships the rail ARMED with `BrainCeiling.aggregateSpendFloor`

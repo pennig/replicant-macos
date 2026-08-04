@@ -87,9 +87,9 @@ task; `printStockIsShort` is the one place that switches to calling
 `printPermitted` directly once it lands). The first-shipped proxy for this,
 `totalReserveFloor` (**the naive sum of the six per-type floors, ≈1,850**),
 was a real gap caught in review: the bill spends in fixed, skewed proportions
-while stock is skewed the OTHER way (structural's floor alone is 15× the naive
-sum), so a flat-sum floor cannot fire before the binding type (conductive) is
-already exhausted under any realistic mix — on the live account, conductive
+while STOCK is skewed the OTHER way (structural's stock ALONE, 27,436, is
+~15× the naive sum), so a flat-sum floor cannot fire before the binding type
+(conductive) is already exhausted under any realistic mix — on the live account, conductive
 hits its own floor at relay ≈107, by which point TOTAL stock is still
 ≈35,000, ~18× the naive sum. **`printPermitted` had no production caller** at
 that point — the entire per-type deliverable was dead code.
@@ -110,6 +110,17 @@ Still only a proxy — if the live mix drifts far from the reference snapshot,
 the guarantee weakens — which is exactly why it is named for what it is
 (`aggregateSpendFloor`) rather than `R`.
 
+**Operational-wall note.** 35,078 is ≈47% of the hub's live total (74,649).
+Because the check is TOTAL-only, ANY drawdown below that line vetoes ALL
+relay printing regardless of per-type health — including a non-print
+consumer moving stock around (e.g. a Haul Run relocating structural, which
+alone is 27,436, more than a third of the whole hub). This is the
+conservative direction on purpose (see above), but it is a real, plausible
+operational wall the brain can hit well before any single type is actually
+short, until the per-type stockpile record (ticket 06) lands and
+`printStockIsShort` can call `printPermitted(hubStock:)` directly instead of
+this proxy.
+
 ## Arming `RelayRun`
 
 `RelayRun.reserveFloor: Int?` defaults to `BrainCeiling.aggregateSpendFloor`
@@ -121,23 +132,52 @@ that need to isolate a different code path — see
 `RelayRun.printStockIsShort` fails closed on a MISSING footprint row for the
 hub's location, once armed (previously: absence read as "not short" and
 permitted the print) — but **in practice `acquire` no longer reaches that
-branch**: it now gates on `footprintIsStale(at:_:)` FIRST (mirroring
-`HaulRun.survey`'s freshness check on the same table, `world.now.
-timeIntervalSince(fetchedAt) > pollInterval`, added in review) and issues
-`.refreshFootprint(nextStep: Step.acquire)` on a missing OR stale row instead
-of an immediate veto — a hub whose census row simply hasn't been fetched yet
-gets one real chance to arrive before this one-shot run forms an opinion on
-it, rather than escalating what one GET would clear. The missing-row veto
-stays inside `printStockIsShort` as that function's OWN contract (defense in
-depth for a caller that doesn't gate on freshness first), covered directly by
-`printStockIsShortFailsClosedOnAMissingFootprintDirectly`. Trade-off accepted
-deliberately: a footprint that NEVER resolves (a genuinely broken read, not
-just "hasn't happened yet") now retries the refresh indefinitely (throttled to
-once per `pollInterval`, never hammering) rather than eventually escalating to
-a human via `.printStockShort`'s bounded-retry-then-escalate disposition —
-judged acceptable because (a) it's still fail-safe (never prints), (b) a hub
-location with a real print-capable device standing on it should always
-eventually appear in a full census refresh, so permanent absence is a
-theoretical edge rather than an expected production case, and (c) this
-mirrors `HaulRun.survey`'s already-shipped, already-reviewed acceptance of the
-same trade-off on the same table.
+branch as silence, only as positive evidence**: it gates on
+`footprintCensusIsStale(_:)` FIRST.
+
+**Round-2 correction — the freshness gate must be table-wide, not
+per-location.** The first fix gated on `world.footprints[location]?.fetchedAt`
+alone. Review round 2 found that unbounded: `.refreshFootprint(nextStep:
+.acquire)` self-loops (unlike `HaulRun.survey`, which always advances to a
+DIFFERENT step), `DirectiveExecutor.move` re-stamps `stepStartedAt`
+unconditionally on every re-entry with no same-step exception (the same trap
+`same-step-dispatch-needs-tracked-op` documents), and a row that is
+persistently absent — the actual case being guarded against — by construction
+never satisfies a per-location gate. That combination meant the engine's 5s
+tick would issue `.refreshFootprint` roughly every tick, forever (~12/min),
+for a hub location the API genuinely never lists — not the "throttled to
+once per 60s" behaviour the round-1 fix claimed. Fixed by gating on the WHOLE
+table's freshest read instead (`world.footprints.values.map(\.fetchedAt)
+.max()`), the exact shape `HaulRun.survey` uses. `refreshFootprint()` upserts
+every location the API returns in ONE request, so a genuinely-successful
+refresh advances every row together, including locations the hub isn't — so
+"the census is fresh and STILL doesn't list the hub" becomes POSITIVE
+EVIDENCE rather than more silence, and `acquire` falls through to
+`printStockIsShort` → veto → `.stall(.printStockShort)` →
+`BrainDisposition.retry`'s bounded-retry-then-escalate, rather than looping.
+Proven with a termination test
+(`persistentlyMissingFootprintEscalatesRatherThanRefreshingForever`) that
+drives `acquire` across repeated evaluations with a permanently-absent hub
+row while the rest of the census refreshes normally, and asserts a stall is
+reached rather than an unbounded refresh.
+
+The missing-row veto stays inside `printStockIsShort` as that function's OWN
+contract (defense in depth for a caller that doesn't gate on freshness
+first), covered directly by
+`printStockIsShortFailsClosedOnAMissingFootprintDirectly`. **The
+never-resolves case now correctly ESCALATES** (via `.printStockShort`'s
+bounded-retry-then-escalate disposition) rather than retrying forever — round
+1's "retries indefinitely, never hammering" trade-off was itself a defect
+(the retry WAS hammering, per the round-2 finding above), not a deliberate,
+acceptable choice; that framing has been retired. Residual gap, explicitly
+out of scope: if `refreshFootprint()` itself always fails/throws (not just
+"this one location is absent from an otherwise-successful census"), NO row's
+`fetchedAt` ever advances, the table-wide gate stays stale forever, and the
+same unthrottled 5s-tick loop recurs — an even more pathological failure than
+the one fixed here, and one `HaulRun.survey` is itself not fully immune to
+either (its own throttle comes from its `haul` step's dedicated wait
+elsewhere in that machine's cycle, a shape `RelayRun`'s single `acquire` step
+does not have). Not addressed here — a whole-API-down scenario is a
+different, larger failure than "one location's row is missing," and fixing
+it would need new state that the same-step re-stamp trap above already rules
+out at this layer.

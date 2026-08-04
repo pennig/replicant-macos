@@ -129,12 +129,13 @@ public enum BrainCeiling {
     /// **Deliberately NOT `reserveFloors.values.reduce(0, +)`** (the naive
     /// sum of the six per-type floors, ≈1,850). That undershoots by more
     /// than an order of magnitude: the bill spends in fixed, skewed
-    /// proportions (conductive 120 vs. volatiles 10) while live stock is
-    /// skewed the OTHER way (structural's floor alone is 15× the naive sum),
-    /// so a flat-sum floor cannot fire before the binding type (conductive)
-    /// is already exhausted under any realistic mix — checked against the
-    /// live account: conductive hits its own floor at relay ≈107, at which
-    /// point TOTAL stock is still ≈35,000, roughly 18× the naive sum.
+    /// proportions (conductive 120 vs. volatiles 10) while live STOCK is
+    /// skewed the OTHER way (structural's stock ALONE, 27,436, is ≈15× the
+    /// naive sum), so a flat-sum floor cannot fire before the binding type
+    /// (conductive) is already exhausted under any realistic mix — checked
+    /// against the live account: conductive hits its own floor at relay
+    /// ≈107, at which point TOTAL stock is still ≈35,000, roughly 18× the
+    /// naive sum.
     ///
     /// Instead: the TOTAL stock at the moment `referenceHubStock`'s binding
     /// type would hit ITS OWN floor — `totalReferenceStock −

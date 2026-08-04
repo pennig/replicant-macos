@@ -299,17 +299,34 @@ public struct RelayRun: MissionStepMachine {
             ?? SalvageRun.deployedRelay(near: carrier, in: world)
     }
 
-    /// Whether the stockpile census for `location` is too old — or entirely
-    /// absent — to trust for the reserve check.
+    /// Whether the stockpile CENSUS — the whole `LocationFootprint` table,
+    /// not just the hub's own row — is too old to trust for the reserve
+    /// check.
     ///
-    /// The same gate `HaulRun.survey` uses before trusting its own read of
-    /// this table (`world.footprints.values.map(\.fetchedAt).max()` there,
-    /// scoped to one location here), so a hub whose row simply hasn't been
-    /// fetched yet gets one real chance to arrive before this one-shot run
-    /// forms an opinion on it — see `acquire`'s use of this.
-    func footprintIsStale(at location: String, _ world: WorldSnapshot) -> Bool {
-        guard let fetchedAt = world.footprints[location]?.fetchedAt else { return true }
-        return world.now.timeIntervalSince(fetchedAt) > Self.pollInterval
+    /// **Deliberately the whole table, not `world.footprints[location]`
+    /// alone** — the exact shape `HaulRun.survey` gates on
+    /// (`world.footprints.values.map(\.fetchedAt).max()`), adopted literally
+    /// after review found the per-location version unbounded: `.refreshFootprint
+    /// (nextStep: Step.acquire)` self-loops (unlike `HaulRun.survey`, which
+    /// always advances to a DIFFERENT step), and `DirectiveExecutor.move`
+    /// re-stamps `stepStartedAt` on every re-entry with no same-step
+    /// exception — the same trap `same-step-dispatch-needs-tracked-op`
+    /// documents for `.simple` verb dispatches — so nothing could ever
+    /// accumulate a deadline against a row that, by construction, never
+    /// arrives on the per-location gate's failure path. `refreshFootprint()`
+    /// upserts every location the API returns in ONE request
+    /// (`LocationsClient.refreshFootprint`), so a genuinely-refreshing census
+    /// advances EVERY row's `fetchedAt` together, including any location the
+    /// hub isn't. Gating on the table's max therefore turns "the census
+    /// refreshed and still doesn't list the hub" into POSITIVE EVIDENCE
+    /// (the hub is absent from a fresh read) rather than into more silence to
+    /// keep refreshing against — `acquire` falls through to
+    /// `printStockIsShort` in that case, which vetoes and stalls rather than
+    /// looping. Bounded to at most one refresh per `pollInterval`, exactly
+    /// like `HaulRun.survey`'s own cadence on the same table.
+    func footprintCensusIsStale(_ world: WorldSnapshot) -> Bool {
+        guard let newest = world.footprints.values.map(\.fetchedAt).max() else { return true }
+        return world.now.timeIntervalSince(newest) > Self.pollInterval
     }
 
     /// Whether the reserve rail vetoes a print at `location`.
@@ -329,12 +346,15 @@ public struct RelayRun: MissionStepMachine {
     /// A stall here is not a dead end: `.printStockShort` already carries
     /// `BrainDisposition.retry` (bounded auto-retry, then escalate).
     ///
-    /// **In practice `acquire` never reaches the missing-row branch below**:
-    /// it calls `footprintIsStale` first and refreshes rather than asking
-    /// this function to judge stale data (see `acquire`). The branch stays as
-    /// this function's OWN contract — defense in depth for any caller that
-    /// doesn't gate on freshness first — rather than something only true by
-    /// convention at the one call site that exists today.
+    /// **In practice `acquire` reaches the missing-row branch below only as
+    /// POSITIVE EVIDENCE, never as silence**: it calls `footprintCensusIsStale`
+    /// first and refreshes on a genuinely stale census, so by the time this
+    /// function sees a missing row, the census itself was recently confirmed
+    /// fresh — the hub is absent from a fresh read, not merely un-asked-about
+    /// (see `acquire`). The branch stays as this function's OWN contract —
+    /// defense in depth for any caller that doesn't gate on freshness first —
+    /// rather than something only true by convention at the one call site
+    /// that exists today.
     ///
     /// Reads the location's TOTAL holdings, which is all `LocationFootprint`
     /// carries today. The rail is specified per RESOURCE TYPE
@@ -384,14 +404,15 @@ public struct RelayRun: MissionStepMachine {
         }
         // The reserve rail is a VETO, so it sits BEFORE the command it vetoes.
         // Checking after the dispatch would surface a stall about resources
-        // that were already committed. But an absent or stale census row is
-        // not evidence either way — refresh it first, exactly as
-        // `HaulRun.survey` does before trusting the same table, rather than
-        // letting an unlucky row that simply hasn't been fetched yet
-        // escalate what one GET would clear. Gated on the rail being armed:
-        // an unarmed rail has no opinion on stock at all, so there is
-        // nothing here worth the extra request.
-        if let location = hub.location, reserveFloor != nil, footprintIsStale(at: location, world) {
+        // that were already committed. But a stale CENSUS is not evidence
+        // either way — refresh it first, exactly as `HaulRun.survey` does
+        // before trusting the same table (gated on the WHOLE table's
+        // freshest read, not just the hub's own row — see
+        // `footprintCensusIsStale`'s doc for why the per-location version was
+        // unbounded). Gated on the rail being armed: an unarmed rail has no
+        // opinion on stock at all, so there is nothing here worth the extra
+        // request.
+        if reserveFloor != nil, footprintCensusIsStale(world) {
             return .refreshFootprint(nextStep: Step.acquire)
         }
         if let location = hub.location, printStockIsShort(at: location, world) {
