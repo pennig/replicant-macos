@@ -492,6 +492,11 @@ extension [BrainWhySpan] {
 /// A read-only card rendering a `BrainWhy`. Actions (launch/retire) already
 /// ride the `DirectiveLogEntry` timeline elsewhere in this feature, so this
 /// surface never dispatches anything — it only explains.
+///
+/// Every `fixedSize` line here is `lineLimit`ed, and that is load-bearing: the
+/// card renders in a `safeAreaInset`, where an unbounded one reports its
+/// zero-width wrap height as the WINDOW's minimum height (4,014pt, unresizable
+/// — see the chrome-min-height memory note).
 public struct BrainWhyView: View {
     let why: BrainWhy
 
@@ -508,6 +513,8 @@ public struct BrainWhyView: View {
                 why.topGoalGate
                     .styled(prose: .rcBodyEmph, designation: .rcBodyEmphMono)
                     .foregroundStyle(.rcTextPrimary)
+                    // Two lines at the column's narrowest, so three is headroom.
+                    .lineLimit(3)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
             }
@@ -541,6 +548,9 @@ public struct BrainWhyView: View {
                             // card's escalation colour, and prune has nothing to
                             // escalate.
                             .foregroundStyle(note.isObservation ? .rcTextTertiary : .rcTextSecondary)
+                            // The longest note (declined) is already bounded in
+                            // content by `maxNamedSystems`; three lines fits it.
+                            .lineLimit(3)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
