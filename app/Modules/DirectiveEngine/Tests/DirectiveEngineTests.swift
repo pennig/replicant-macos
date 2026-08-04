@@ -1905,3 +1905,352 @@ struct RefreshFootprintTests {
         #expect(row?.step == "surveying", "must not have advanced — it escalated instead")
     }
 }
+
+// MARK: - Chained refresh kinds
+
+/// A machine that asks for a DIFFERENT refresh kind every single time it is
+/// asked, cycling through all four forever and never settling — the adversary
+/// `reAsk`'s chain bound exists to survive.
+///
+/// It is deliberately insatiable. A machine that eventually answered something
+/// else would prove only that THIS fixture terminates; the bound being claimed
+/// is that the engine terminates *whatever the machine says*, which only an
+/// endlessly-demanding machine can demonstrate.
+private struct RefreshCarouselMachine: MissionStepMachine {
+    let kind: DirectiveKind = .surveyRun
+    let firstStep = "start"
+    /// How many times the machine has been asked, across the whole evaluation.
+    let asks = LockIsolated(0)
+
+    func nextAction(directive: Directive, world: WorldSnapshot) -> MissionAction {
+        let n = asks.withValue { $0 += 1; return $0 }
+        // Each kind carries a DISTINCT reason, so the stall that ends the chain
+        // also pins WHICH action's reason was honoured.
+        switch (n - 1) % 4 {
+        case 0: return .refreshDevices(deviceCodes: ["VES1"], thenStall: .unreachableDevice)
+        case 1: return .refreshFootprint(nextStep: "start", thenStall: .printStockShort)
+        case 2: return .refreshFleet(tag: "auto:survey", thenStall: .noSurveyDroneAboard)
+        default: return .refreshDevicesInSystem(designation: "SOL", thenStall: .noSurveyControllerAboard)
+        }
+    }
+
+    func plan(_ context: RoamContext) -> RoamPlan { .idle }
+}
+
+/// The engine's chain guard: a re-ask that raises a *different* refresh kind is
+/// paid for once, a re-ask that repeats a kind already paid for is collapsed —
+/// and the whole chain is bounded by the number of refresh kinds that exist.
+@Suite("DirectiveEngine — chained refresh kinds")
+struct RefreshChainTests {
+
+    // MARK: The bound
+
+    /// **The termination proof for chaining.** `paid` is a set over
+    /// `RefreshKind`, a closed four-case enum; every hop is guarded on
+    /// `!paid.contains(kind)` and inserts before recursing, so at most four
+    /// refresh rounds — one per kind — can ever happen in a single evaluation,
+    /// after which the chain must end in a non-refresh action.
+    ///
+    /// This drives the real `DirectiveEngineCore` with a machine that demands a
+    /// fresh kind every time it is asked, forever. Exactly one read of each of
+    /// the four kinds is performed, and then the fifth ask — the first repeat —
+    /// collapses to a stall rather than buying a fifth round.
+    @Test func aChainIsBoundedByOneRoundPerRefreshKind() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { mission(step: "start") }.execute(db)
+        }
+        let deviceReads = LockIsolated<[String]>([])
+        let footprintReads = LockIsolated(0)
+        let fleetReads = LockIsolated<[String]>([])
+        let systemReads = LockIsolated<[String]>([])
+        let machine = RefreshCarouselMachine()
+        let core = DirectiveEngineCore(machines: [machine], tick: .seconds(5))
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.deviceRefresher.refresh = { code, _ in
+                deviceReads.withValue { $0.append(code) }
+                return carrier(code)
+            }
+            $0.locationsClient.footprint = {
+                footprintReads.withValue { $0 += 1 }
+                return [:]
+            }
+            $0.devicesClient.fetchByTag = { tag in
+                fleetReads.withValue { $0.append(tag) }
+                return []
+            }
+            $0.devicesClient.fetchAtLocation = { designation in
+                systemReads.withValue { $0.append(designation) }
+                return []
+            }
+        } operation: {
+            await core.evaluateOnce(directiveID: "D1")
+            // A second full evaluation, to prove the stall STOPPED the chain
+            // rather than merely deferring the rest of it by one tick.
+            await core.evaluateOnce(directiveID: "D1")
+        }
+
+        #expect(deviceReads.value == ["VES1"], "at most one device-refresh round per evaluation")
+        #expect(footprintReads.value == 1, "at most one footprint-refresh round per evaluation")
+        #expect(fleetReads.value == ["auto:survey"], "at most one fleet-refresh round per evaluation")
+        #expect(systemReads.value == ["SOL"], "at most one system-refresh round per evaluation")
+        // Four resolved rounds plus the fifth ask that was refused: the chain
+        // cannot be longer than the number of refresh kinds that exist.
+        #expect(machine.asks.value == 5)
+
+        let row = try await database.read { db in
+            try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+        }
+        #expect(row?.status == .needsAttention)
+        // The FIFTH ask's own reason — `.refreshDevices`' `.unreachableDevice` —
+        // not whichever refresh happened to be paid for last (`.refreshDevicesInSystem`,
+        // carrying `.noSurveyControllerAboard`). A collapse honours the action it
+        // is collapsing, never the caller's.
+        #expect(row?.attentionReason == .unreachableDevice)
+    }
+
+    /// The other half of the guard, unchanged from before chaining existed: a
+    /// re-ask repeating the SAME kind buys nothing. Pinned separately from
+    /// `DirectiveRefreshDevicesTests.aConfirmedFindingStallsWithTheCarriedReason`
+    /// because that one predates `paid` and would still pass if kind-scoping
+    /// were the ONLY rule and repeats were allowed to chain.
+    @Test func aRepeatedKindIsRefusedEvenAfterAChain() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { mission(step: "start") }.execute(db)
+        }
+        let footprintReads = LockIsolated(0)
+        let deviceReads = LockIsolated(0)
+        // devices → footprint → devices: the third ask repeats a kind already
+        // paid for at the START of the chain, not the one just performed.
+        let core = DirectiveEngineCore(
+            machines: [ScriptedMachine([
+                .refreshDevices(deviceCodes: ["VES1"], thenStall: .unreachableDevice),
+                .refreshFootprint(nextStep: "start", thenStall: .printStockShort),
+                .refreshDevices(deviceCodes: ["VES1"], thenStall: .noSurveyDroneAboard),
+            ])],
+            tick: .seconds(5)
+        )
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.deviceRefresher.refresh = { code, _ in
+                deviceReads.withValue { $0 += 1 }
+                return carrier(code)
+            }
+            $0.locationsClient.footprint = {
+                footprintReads.withValue { $0 += 1 }
+                return [:]
+            }
+        } operation: {
+            await core.evaluateOnce(directiveID: "D1")
+        }
+
+        #expect(deviceReads.value == 1, "the repeat must not buy a second device round")
+        #expect(footprintReads.value == 1)
+        let row = try await database.read { db in
+            try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+        }
+        #expect(row?.status == .needsAttention)
+        // The refused action's own reason, again — the third script entry's
+        // `.noSurveyDroneAboard`, not the first's `.unreachableDevice`.
+        #expect(row?.attentionReason == .noSurveyDroneAboard)
+    }
+}
+
+// MARK: - RelayRun.acquire through the real engine
+
+/// `RelayRun.acquire`'s ordinary path, driven end to end through
+/// `DirectiveEngineCore` with the REAL `RelayRun` machine.
+///
+/// Every other `RelayRun` test is a pure-function table over a hand-built
+/// `WorldSnapshot`, and no test drove `RelayRun` through the engine at all —
+/// which is exactly why a defect living in the hand-off between the mission and
+/// the engine's refresh resolvers went unnoticed through a whole review round.
+@Suite("RelayRun — acquire through the engine")
+struct RelayRunEngineTests {
+
+    private static let hubLocation = "HUB-BELT-1"
+    private static let now = Date(timeIntervalSince1970: 1_000_000)
+
+    private func device(
+        _ code: String,
+        type: String,
+        availableCommands: [String] = [],
+        updatedAt: Date
+    ) -> Device {
+        Device(
+            deviceCode: code, deviceType: type, replicantCode: "R1", status: "idle",
+            location: Self.hubLocation, locationName: nil, operationalCapacity: 100, queueSize: 0,
+            stowedInDeviceCode: nil, controllerDeviceCode: nil, attachedToDeviceCode: nil,
+            createdAt: Date(timeIntervalSince1970: 0), availableCommands: availableCommands,
+            features: [], tags: [], detail: .object([:]),
+            updatedAt: updatedAt, firstSeenAt: Date(timeIntervalSince1970: 0)
+        )
+    }
+
+    private func relayDirective() -> Directive {
+        Directive(
+            id: "D1", kind: .relayRun, status: .running, deviceCode: "V1",
+            targets: ["VEGA"], targetIndex: 0, step: "acquire",
+            stepStartedAt: Date(timeIntervalSince1970: 0), returnToOrigin: false,
+            originDesignation: nil, attentionReason: nil,
+            createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0)
+        )
+    }
+
+    /// **The regression test for the round-3 wrong-stall defect.**
+    ///
+    /// The exact ordinary sequence `acquire` walks on a healthy run whose local
+    /// rows have simply gone quiet:
+    ///
+    /// 1. the hub DEVICE row is older than `hubFreshness`, so the machine asks
+    ///    for `.refreshDevices([AF1], thenStall: .unreachableDevice)`;
+    /// 2. that read succeeds and the hub row goes fresh — nothing is
+    ///    unreachable;
+    /// 3. the re-ask gets past the device gate and finds the stockpile CENSUS
+    ///    stale (empty here), so the machine asks for
+    ///    `.refreshFootprint(thenStall: .printStockShort)` — a different
+    ///    question, not a repeat of the one just answered.
+    ///
+    /// The engine must pay for that second question and let the reserve rail
+    /// run. Before this fix it collapsed step 3 onto step 1's carried reason and
+    /// stalled `.unreachableDevice` — halting the run, blaming a device that
+    /// was fine, and never reaching the rail at all; a human Retry re-entered
+    /// the same state and stalled again until the retry budget escalated.
+    @Test func aStaleHubRowThenAStaleCensusReachesTheReserveRail() async throws {
+        let database = try GameDatabase.bootstrap()
+        let now = Self.now
+        try await database.write { db in
+            try Directive.insert { relayDirective() }.execute(db)
+            // The carrier is fresh; only the HUB row has gone stale, which is
+            // what makes step 1 fire and step 3 reachable.
+            try Device.insert { device("V1", type: "heaven_vessel", updatedAt: now) }.execute(db)
+            try Device.insert {
+                device(
+                    "AF1", type: "autofactory", availableCommands: ["enqueue_print"],
+                    updatedAt: now.addingTimeInterval(-600)
+                )
+            }.execute(db)
+            // No `LocationFootprint` rows at all — the census is stale by
+            // `RelayRun.footprintCensusIsStale`'s "never read" branch.
+        }
+        let deviceReads = LockIsolated<[String]>([])
+        let footprintReads = LockIsolated(0)
+        let dispatched = LockIsolated<[OperationKind]>([])
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(now)
+            $0.uuid = .incrementing
+            $0.deviceRefresher.refresh = { code, _ in
+                deviceReads.withValue { $0.append(code) }
+                guard code == "AF1" else { return nil }
+                // A genuinely successful authoritative read: the row lands
+                // fresh, so the device gate is satisfied on the re-ask.
+                let fresh = self.device(
+                    "AF1", type: "autofactory", availableCommands: ["enqueue_print"], updatedAt: now
+                )
+                try? await database.write { db in try Device.upsert { fresh }.execute(db) }
+                return fresh
+            }
+            $0.locationsClient.footprint = {
+                footprintReads.withValue { $0 += 1 }
+                // Abundant, and far above `BrainCeiling.aggregateSpendFloor` —
+                // the rail must PERMIT here, so what is being proven is that
+                // the rail ran at all, not that it vetoed.
+                return [Self.hubLocation: LocationCounts(
+                    locationEvents: 0, devices: 2, resourceSites: 0,
+                    resources: 999_999, replicants: 0
+                )]
+            }
+            $0.commandGovernor.dispatch = { kind, _, _ in
+                dispatched.withValue { $0.append(kind) }
+                return .dispatched(.accepted(operationID: "OP1"))
+            }
+        } operation: {
+            let core = DirectiveEngineCore(machines: [RelayRun()], tick: .seconds(5))
+            await core.evaluateOnce(directiveID: "D1")
+        }
+
+        #expect(deviceReads.value == ["AF1"], "the stale hub row is what step 1 reads")
+        #expect(footprintReads.value == 1, "the census refresh step 3 asked for must actually be paid for")
+        #expect(dispatched.value == [.print], "the reserve rail ran and permitted the print")
+
+        let row = try await database.read { db in
+            try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+        }
+        #expect(row?.status == .running)
+        #expect(row?.attentionReason == nil, "nothing was unreachable and nothing was short")
+        #expect(row?.step == "printing")
+    }
+
+    /// The same first two steps, but the census refresh comes back without the
+    /// hub's own row — positive evidence the hub is genuinely absent from a
+    /// fresh read. The rail must now VETO, and it must do so under its OWN
+    /// reason (`.printStockShort`), never under the device refresh's
+    /// `.unreachableDevice`.
+    ///
+    /// The companion to the test above: together they pin that the chained
+    /// refresh reaches the rail AND that the rail's verdict — either way — is
+    /// what surfaces.
+    @Test func aChainedCensusRefreshStallsUnderTheRailsOwnReason() async throws {
+        let database = try GameDatabase.bootstrap()
+        let now = Self.now
+        try await database.write { db in
+            try Directive.insert { relayDirective() }.execute(db)
+            try Device.insert { device("V1", type: "heaven_vessel", updatedAt: now) }.execute(db)
+            try Device.insert {
+                device(
+                    "AF1", type: "autofactory", availableCommands: ["enqueue_print"],
+                    updatedAt: now.addingTimeInterval(-600)
+                )
+            }.execute(db)
+        }
+        let dispatched = LockIsolated(0)
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(now)
+            $0.uuid = .incrementing
+            $0.deviceRefresher.refresh = { code, _ in
+                guard code == "AF1" else { return nil }
+                let fresh = self.device(
+                    "AF1", type: "autofactory", availableCommands: ["enqueue_print"], updatedAt: now
+                )
+                try? await database.write { db in try Device.upsert { fresh }.execute(db) }
+                return fresh
+            }
+            // A successful census that simply does not list the hub: every
+            // OTHER location's row goes fresh, so the table-wide gate is
+            // satisfied and `printStockIsShort` fails closed on the absence.
+            $0.locationsClient.footprint = {
+                ["SOMEWHERE-ELSE-1": LocationCounts(
+                    locationEvents: 0, devices: 1, resourceSites: 0,
+                    resources: 999_999, replicants: 0
+                )]
+            }
+            $0.commandGovernor.dispatch = { _, _, _ in
+                dispatched.withValue { $0 += 1 }
+                return .dispatched(.accepted(operationID: "OP1"))
+            }
+        } operation: {
+            let core = DirectiveEngineCore(machines: [RelayRun()], tick: .seconds(5))
+            await core.evaluateOnce(directiveID: "D1")
+        }
+
+        #expect(dispatched.value == 0, "an irreversible spend must never happen on an unreadable census")
+        let row = try await database.read { db in
+            try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+        }
+        #expect(row?.status == .needsAttention)
+        #expect(row?.attentionReason == .printStockShort)
+        #expect(row?.step == "acquire")
+    }
+}

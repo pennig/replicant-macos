@@ -317,6 +317,54 @@ struct RelayRunAcquireTests {
         #expect(armed.printStockIsShort(at: hubLocation, world(devices: [carrier(), hub()])))
     }
 
+    /// The stall's log line must name the condition that ACTUALLY fired.
+    ///
+    /// It used to say `stock <n> below floor <f>` on all three branches, which
+    /// is false on two of them — most damagingly on the stale-row branch, where
+    /// it printed a reading (999,999) sitting far ABOVE the floor (35,078) as
+    /// though it were beneath it, pointing an operator at an imaginary resource
+    /// shortage instead of at a census that had stopped listing the hub.
+    ///
+    /// Asserted on the diagnosis string rather than on the emitted log line
+    /// because `os.Logger` output is not readable from a test; the branch
+    /// selection — the part that was wrong — is entirely in this function, and
+    /// it shares its branch order with `printStockIsShort` by construction.
+    @Test func theVetoLogNamesWhichConditionFired() {
+        let armed = RelayRun(reserveFloor: 500)
+
+        // Branch 1: no row at all — there is no reading to be "below" anything.
+        let missing = armed.printStockShortDiagnosis(at: hubLocation, world(devices: [carrier(), hub()]))
+        #expect(missing.contains("no census row"))
+        #expect(!missing.contains("below floor"))
+
+        // Branch 2: a present row, abundant, but too old to believe. The AGE is
+        // what vetoed, and the line must say so rather than claim a shortage.
+        let staleWorld = world(
+            devices: [carrier(), hub()],
+            footprints: [hubLocation: footprint(
+                hubLocation, resources: 999_999,
+                fetchedAt: fixtureNow.addingTimeInterval(-(RelayRun.hubFreshness + 60))
+            )]
+        )
+        let stale = armed.printStockShortDiagnosis(at: hubLocation, staleWorld)
+        #expect(stale.contains("freshness bound"))
+        #expect(stale.contains("360s old"))
+        #expect(!stale.contains("below floor"), "an abundant-but-stale reading is not a shortage")
+
+        // Branch 3: the genuine shortage — the only case the old line described
+        // correctly, and it must keep describing it.
+        let shortWorld = world(
+            devices: [carrier(), hub()],
+            footprints: [hubLocation: footprint(hubLocation, resources: 12)]
+        )
+        #expect(armed.printStockShortDiagnosis(at: hubLocation, shortWorld) == "stock 12 below floor 500")
+
+        // The three branches agree with the predicate they explain: each of
+        // these worlds really does veto.
+        #expect(armed.printStockIsShort(at: hubLocation, staleWorld))
+        #expect(armed.printStockIsShort(at: hubLocation, shortWorld))
+    }
+
     /// **Termination proof for the table-wide gate.** A per-location gate
     /// (the shape review round 2 caught) would issue `.refreshFootprint`
     /// forever against a row that never arrives, at the engine's 5s tick —

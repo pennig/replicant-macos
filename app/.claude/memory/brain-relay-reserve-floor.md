@@ -235,3 +235,62 @@ reused here for the identical reason, deliberately more generous than the
 60s refresh-trigger gate) fails closed rather than being trusted. This cannot
 reopen the self-loop risk — it is a veto decision, not another refresh
 request. Covered by `staleHubRowIsNotTrustedEvenWhenTheCensusAsAWholeLooksFresh`.
+
+**Round 4 — `reAsk` collapsed the WRONG stall reason; the collapse is now
+kind-scoped, with a bounded one-hop-per-kind chain.** Round 3's `thenStall`
+mechanism was right, but the shared `reAsk` helper it routed through collapsed
+**any** of the four refresh kinds onto the reason belonging to the refresh it
+had just performed. `RelayRun.acquire`'s ORDINARY path walks two different
+refreshes in one evaluation — stale hub DEVICE row → `.refreshDevices(thenStall:
+.unreachableDevice)`; that read succeeds, and the re-ask then finds the
+stockpile CENSUS stale → `.refreshFootprint(thenStall: .printStockShort)` — so
+round 3 turned a healthy run into `.stall(.unreachableDevice)`, blaming a
+perfectly reachable device, halting before the reserve rail ever ran, and
+re-stalling on every human Retry until the retry budget escalated. Under round
+2 the same case fell through `reAsk`'s `default:` and the executor performed the
+census refresh, so this was a regression round 3 introduced. Nothing caught it
+because every `RelayRun` test is a pure-function table and NO test drove
+`RelayRun` through `DirectiveEngineCore` at all.
+
+The fix, in `DirectiveEngineCore`:
+- `reAsk` takes `paid: Set<RefreshKind>` (a new private four-case discriminator
+  over the refresh actions, keyed on KIND alone, never on payload) instead of a
+  `thenStall`/`orElse` pair. A re-ask that repeats a kind already paid for
+  collapses; a re-ask raising a kind NOT yet paid for chains one hop into that
+  kind's own resolver.
+- The collapse reads its stall reason and its nil-fallback off the RE-ASKED
+  ACTION (`collapse(_:)`), never off the caller's — `.advanceStep(nextStep:)`
+  for `.refreshFootprint`, `.wait` for the three device-scoped reads. This is
+  what removes the wrong-reason coupling at the root, and it makes `reAsk`'s
+  `orElse:` parameter (round 3) unnecessary; `HaulRun.survey`'s nil-fallback
+  contract is preserved exactly because `.refreshFootprint`'s own case supplies
+  it.
+- Passing a differing kind through UNRESOLVED is not an option:
+  `DirectiveExecutor`'s refresh case is a bypass fallback that stalls on the
+  carried reason instead of performing the read.
+
+**The termination bound: at most ONE refresh round per kind — at most four in
+total — per evaluation.** `paid` is a set over a closed four-case enum; every
+hop is guarded on `!paid.contains(kind)` and inserts before recursing, so `paid`
+grows strictly and cannot exceed four. Termination depends on nothing else — not
+on any read succeeding, any row changing, or the mission being well-behaved.
+Today's machines chain at most two (`RelayRun.acquire`: devices → footprint).
+Proven by `RefreshChainTests.aChainIsBoundedByOneRoundPerRefreshKind`, which
+drives a machine that demands a *different* kind every time it is asked, forever,
+and asserts exactly one read of each kind then a stall.
+
+Blast radius outside `RelayRun`: the only other mission whose SINGLE step can
+name two different refresh kinds is `SalvageRun.awaitCompletion` (`.refreshFleet`
+and `.refreshDevices`, both `thenStall: nil`). There, a re-ask that raises the
+other kind now spends that one extra read in the same tick instead of silently
+waiting a tick — bounded, and what the mission actually asked for. `SurveyRun`
+uses one kind only; `HaulRun`'s three kinds are on three different steps.
+
+Round 4 also fixed a Minor: `RelayRun.acquire`'s veto log said `stock <n> below
+floor <f>` on all three of `printStockIsShort`'s branches, which is false on two
+of them — most damagingly on the stale-row branch, where it printed an abundant
+reading (999,999) as though it sat beneath the floor (35,078), pointing an
+operator at an imaginary shortage instead of at a census that had stopped
+listing the hub. `RelayRun.printStockShortDiagnosis(at:_:)` now names the
+condition that actually fired, in the same branch order `printStockIsShort`
+tests them.

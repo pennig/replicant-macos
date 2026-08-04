@@ -405,6 +405,37 @@ public struct RelayRun: MissionStepMachine {
         return footprint.resources < floor
     }
 
+    /// WHICH of `printStockIsShort`'s three conditions vetoed, for the one log
+    /// line the stall emits — in the same branch order that function tests
+    /// them, so the two can only ever agree.
+    ///
+    /// It exists because the line it replaced said `stock <n> below floor <f>`
+    /// unconditionally, which is a FALSE statement on two of the three
+    /// branches: a missing census row has no reading to be below anything, and
+    /// a stale row's reading may sit comfortably ABOVE the floor and still
+    /// veto — it is the reading's AGE that tripped the rail, and an operator
+    /// told "stock 999999 below floor 35078" would go looking for a resource
+    /// shortage that does not exist instead of at a census that stopped
+    /// listing the hub. Mirrors `printDiagnosis`, which exists for the same
+    /// reason on the `printing` step's stall.
+    func printStockShortDiagnosis(at location: String, _ world: WorldSnapshot) -> String {
+        let floorText = reserveFloor.map(String.init) ?? "unarmed"
+        guard let footprint = world.footprints[location] else {
+            return "no census row for it at all (floor \(floorText))"
+        }
+        // Compared unrounded — `printStockIsShort` compares the raw interval,
+        // and rounding before the comparison would disagree with it inside the
+        // half-second either side of the bound. Rounded only for display.
+        let age = world.now.timeIntervalSince(footprint.fetchedAt)
+        if age > Self.hubFreshness {
+            return """
+                its census row is \(Int(age.rounded()))s old, past the \(Int(Self.hubFreshness))s freshness bound \
+                — the reading it carries (\(footprint.resources)) is not trusted, whatever it says
+                """
+        }
+        return "stock \(footprint.resources) below floor \(floorText)"
+    }
+
     // MARK: - Acquire
 
     /// Where this run's relay comes from, and the command that starts it coming.
@@ -466,12 +497,13 @@ public struct RelayRun: MissionStepMachine {
         }
         if let location = hub.location, printStockIsShort(at: location, world) {
             // The most safety-relevant veto in this capability — unlike its
-            // neighbours above, it previously left no trace of the reading
-            // that tripped it. One line, no flood risk: a stall halts the
-            // run rather than re-entering this branch every tick.
-            let reading = world.footprints[location].map { String($0.resources) } ?? "no row"
-            let floorText = reserveFloor.map(String.init) ?? "unarmed"
-            logger.notice("relay run \(directive.id, privacy: .public): print stock short at \(location, privacy: .public) — stock \(reading, privacy: .public) below floor \(floorText, privacy: .public)")
+            // neighbours above, it once left no trace of the reading that
+            // tripped it, and then (round 3) a trace that named the wrong
+            // condition on two of the three branches. `printStockShortDiagnosis`
+            // says which one actually fired. One line, no flood risk: a stall
+            // halts the run rather than re-entering this branch every tick.
+            let why = printStockShortDiagnosis(at: location, world)
+            logger.notice("relay run \(directive.id, privacy: .public): print stock short at \(location, privacy: .public) — \(why, privacy: .public)")
             return .stall(.printStockShort)
         }
         // `enqueue_print` takes a device type and nothing else — no location,

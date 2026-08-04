@@ -241,22 +241,22 @@ actor DirectiveEngineCore {
         case let .refreshDevices(deviceCodes, thenStall):
             action = await resolveRefresh(
                 deviceCodes: deviceCodes, thenStall: thenStall,
-                directive: directive, machine: machine
+                directive: directive, machine: machine, paid: [.devices]
             )
         case let .refreshDevicesInSystem(designation, thenStall):
             action = await resolveSystemRefresh(
                 designation: designation, thenStall: thenStall,
-                directive: directive, machine: machine
+                directive: directive, machine: machine, paid: [.devicesInSystem]
             )
         case let .refreshFleet(tag, thenStall):
             action = await resolveFleetRefresh(
                 tag: tag, thenStall: thenStall,
-                directive: directive, machine: machine
+                directive: directive, machine: machine, paid: [.fleet]
             )
         case let .refreshFootprint(nextStep, thenStall):
             action = await resolveFootprintRefresh(
                 nextStep: nextStep, thenStall: thenStall,
-                directive: directive, machine: machine
+                directive: directive, machine: machine, paid: [.footprint]
             )
         case let .extendQueue(centre):
             let resolution = await resolveExtendQueue(
@@ -430,33 +430,34 @@ actor DirectiveEngineCore {
             return Resolution(action: .done, directive: extended)
 
         case let .refreshDevices(deviceCodes, thenStall):
-            // Bounded: `reAsk` collapses a repeat refresh into the carried stall,
-            // so this pays for exactly one read round — the same ceiling an
-            // evaluation that never extended is held to.
+            // Bounded: `reAsk` pays for each refresh KIND at most once per
+            // evaluation and collapses anything beyond that into the carried
+            // stall, so this pays for at most one round per kind — the same
+            // ceiling an evaluation that never extended is held to.
             let resolved = await resolveRefresh(
                 deviceCodes: deviceCodes, thenStall: thenStall,
-                directive: extended, machine: machine
+                directive: extended, machine: machine, paid: [.devices]
             )
             return Resolution(action: resolved, directive: extended)
 
         case let .refreshDevicesInSystem(designation, thenStall):
             let resolved = await resolveSystemRefresh(
                 designation: designation, thenStall: thenStall,
-                directive: extended, machine: machine
+                directive: extended, machine: machine, paid: [.devicesInSystem]
             )
             return Resolution(action: resolved, directive: extended)
 
         case let .refreshFleet(tag, thenStall):
             let resolved = await resolveFleetRefresh(
                 tag: tag, thenStall: thenStall,
-                directive: extended, machine: machine
+                directive: extended, machine: machine, paid: [.fleet]
             )
             return Resolution(action: resolved, directive: extended)
 
         case let .refreshFootprint(nextStep, thenStall):
             let resolved = await resolveFootprintRefresh(
                 nextStep: nextStep, thenStall: thenStall,
-                directive: extended, machine: machine
+                directive: extended, machine: machine, paid: [.footprint]
             )
             return Resolution(action: resolved, directive: extended)
 
@@ -476,14 +477,16 @@ actor DirectiveEngineCore {
     /// to the database, and threading re-evaluation through it would blur that.
     ///
     /// Bounded by construction: a second `.refreshDevices` becomes the carried
-    /// stall, so an evaluation issues at most one refresh round no matter what
-    /// the machine says, and a genuinely unstaged vessel still surfaces to the
-    /// user on this same tick.
+    /// stall, so an evaluation issues at most one DEVICE refresh round no matter
+    /// what the machine says, and a genuinely unstaged vessel still surfaces to
+    /// the user on this same tick. (`paid` carries the whole chain's ceiling —
+    /// see `reAsk`.)
     private func resolveRefresh(
         deviceCodes: [String],
         thenStall reason: DirectiveAttentionReason?,
         directive: Directive,
-        machine: any MissionStepMachine
+        machine: any MissionStepMachine,
+        paid: Set<RefreshKind>
     ) async -> MissionAction {
         @Dependency(\.deviceRefresher) var deviceRefresher
         @Dependency(\.defaultDatabase) var database
@@ -516,7 +519,7 @@ actor DirectiveEngineCore {
             return reason.map { .stall($0) } ?? .wait
         }
 
-        return reAsk(machine, directive, fresh, thenStall: reason)
+        return await reAsk(machine, directive, fresh, paid: paid)
     }
 
     /// The same contract as `resolveRefresh`, paid for with ONE scoped list
@@ -539,7 +542,8 @@ actor DirectiveEngineCore {
         designation: String,
         thenStall reason: DirectiveAttentionReason?,
         directive: Directive,
-        machine: any MissionStepMachine
+        machine: any MissionStepMachine,
+        paid: Set<RefreshKind>
     ) async -> MissionAction {
         @Dependency(\.devicesClient) var devicesClient
         @Dependency(\.defaultDatabase) var database
@@ -563,7 +567,7 @@ actor DirectiveEngineCore {
             logger.error("world snapshot after system refresh failed: \(error)")
             return reason.map { .stall($0) } ?? .wait
         }
-        return reAsk(machine, directive, fresh, thenStall: reason)
+        return await reAsk(machine, directive, fresh, paid: paid)
     }
 
     /// The same contract as `resolveSystemRefresh`, paid for with ONE tag-scoped
@@ -583,7 +587,8 @@ actor DirectiveEngineCore {
         tag: String,
         thenStall reason: DirectiveAttentionReason?,
         directive: Directive,
-        machine: any MissionStepMachine
+        machine: any MissionStepMachine,
+        paid: Set<RefreshKind>
     ) async -> MissionAction {
         @Dependency(\.devicesClient) var devicesClient
         @Dependency(\.defaultDatabase) var database
@@ -607,7 +612,7 @@ actor DirectiveEngineCore {
             logger.error("world snapshot after fleet refresh failed: \(error)")
             return reason.map { .stall($0) } ?? .wait
         }
-        return reAsk(machine, directive, fresh, thenStall: reason)
+        return await reAsk(machine, directive, fresh, paid: paid)
     }
 
     /// Spend one best-effort census refresh on a mission's `.refreshFootprint`
@@ -636,15 +641,15 @@ actor DirectiveEngineCore {
     /// cycle rather than stranding a continuous run" contract — it always
     /// names a DIFFERENT step as `nextStep`, so it was never at risk of the
     /// self-loop trap `.refreshFootprint`'s doc describes, and changing its
-    /// nil-fallback to `.wait` would be a real behaviour regression `reAsk`'s
-    /// hardcoded `.wait` cannot express. `reAsk` takes an `orElse:` fallback
-    /// for exactly this — its three existing callers all keep the implicit
-    /// `.wait` default, so their behaviour is unchanged.
+    /// nil-fallback to `.wait` would be a real behaviour regression. `reAsk`
+    /// reads that fallback off the RE-ASKED action itself (`collapse(_:)`),
+    /// so each kind's own contract applies wherever a chain ends.
     private func resolveFootprintRefresh(
         nextStep: String,
         thenStall reason: DirectiveAttentionReason?,
         directive: Directive,
-        machine: any MissionStepMachine
+        machine: any MissionStepMachine,
+        paid: Set<RefreshKind>
     ) async -> MissionAction {
         @Dependency(\.locationsClient) var locationsClient
         @Dependency(\.defaultDatabase) var database
@@ -663,41 +668,140 @@ actor DirectiveEngineCore {
             logger.error("world snapshot after footprint refresh failed: \(error)")
             return reason.map { .stall($0) } ?? .advanceStep(nextStep: nextStep)
         }
-        return reAsk(machine, directive, fresh, thenStall: reason, orElse: .advanceStep(nextStep: nextStep))
+        return await reAsk(machine, directive, fresh, paid: paid)
     }
 
-    /// Ask the machine once more against freshly-read rows, collapsing a repeat
-    /// refresh request into the carried fallback. Shared by all four refresh
-    /// paths: this is the one-round loop guard, and it must behave identically
+    /// The four refresh actions as a discriminator, and the whole basis of the
+    /// chain bound below.
+    ///
+    /// Deliberately keyed on the KIND alone, never on the payload: a repeat
+    /// `.refreshDevices` naming a different device is still the same read this
+    /// evaluation already paid for, and letting a changed payload buy another
+    /// round would put back the unbounded loop the whole `reAsk` guard exists
+    /// to prevent.
+    private enum RefreshKind: Hashable {
+        case devices, devicesInSystem, fleet, footprint
+
+        init?(_ action: MissionAction) {
+            switch action {
+            case .refreshDevices: self = .devices
+            case .refreshDevicesInSystem: self = .devicesInSystem
+            case .refreshFleet: self = .fleet
+            case .refreshFootprint: self = .footprint
+            default: return nil
+            }
+        }
+    }
+
+    /// What a refresh action becomes when the engine will not pay for it —
+    /// read off the ACTION ITSELF, never off whatever was carried in from an
+    /// earlier hop.
+    ///
+    /// That distinction is the round-3 regression this replaces. `reAsk` used
+    /// to collapse ANY of the four refresh kinds onto the reason belonging to
+    /// the refresh it had just performed, so `RelayRun.acquire`'s ordinary path
+    /// — refresh the stale hub DEVICE row, then discover the stockpile census
+    /// is stale too — stalled `.unreachableDevice` on a perfectly reachable
+    /// device, halting the run before the reserve rail ever ran. Each kind's
+    /// own `thenStall` (and each kind's own nil-fallback contract:
+    /// `.advanceStep` for `.refreshFootprint`, `.wait` for the three
+    /// device-scoped reads) is the only correct answer for that kind.
+    private static func collapse(_ action: MissionAction) -> MissionAction {
+        switch action {
+        case let .refreshDevices(_, reason), let .refreshDevicesInSystem(_, reason),
+             let .refreshFleet(_, reason):
+            // "The state being watched is expected to resolve on its own" —
+            // these three never advance a step of their own accord.
+            return reason.map { MissionAction.stall($0) } ?? .wait
+        case let .refreshFootprint(nextStep, reason):
+            // `HaulRun.survey`'s contract: a transient miss costs one cycle
+            // rather than stranding a continuous run.
+            return reason.map { MissionAction.stall($0) } ?? .advanceStep(nextStep: nextStep)
+        default:
+            return action
+        }
+    }
+
+    /// Ask the machine once more against freshly-read rows. Shared by all four
+    /// refresh paths: this is the loop guard, and it must behave identically
     /// however the reads were paid for.
     ///
-    /// `orElse` is what the mission gets back when it still wants the SAME
-    /// kind of refresh and no `thenStall` reason was given — `.wait` for the
-    /// three device-scoped refreshes (their nil-fallback contract: "the state
-    /// being watched is expected to resolve on its own"), but
-    /// `resolveFootprintRefresh` overrides it to `.advanceStep(nextStep:)` for
-    /// a caller whose own contract is "advance anyway on a transient miss."
+    /// Three outcomes, in the order they are tested:
+    ///
+    /// 1. **Not a refresh at all** — the reads settled the question. Return the
+    ///    machine's answer untouched; that is the entire point of re-asking.
+    /// 2. **A refresh of a kind this evaluation has ALREADY paid for** —
+    ///    including, in the common case, the very kind just performed. The
+    ///    reads happened and the mission still wants them, so more of the same
+    ///    would be a loop. Collapse to that action's own stall/fallback
+    ///    (`collapse(_:)`).
+    /// 3. **A refresh of a kind not yet paid for** — the reads answered the
+    ///    question that was asked and uncovered a genuinely DIFFERENT one
+    ///    (`RelayRun.acquire`: the hub device row was stale, and with it fresh
+    ///    the stockpile census turns out to be stale too). Chain one hop into
+    ///    that kind's own resolver. Passing it through unresolved is not an
+    ///    option: `DirectiveExecutor`'s refresh case is a bypass fallback that
+    ///    would stall on the carried reason rather than perform the read.
+    ///
+    /// **The bound.** `paid` is a set over `RefreshKind`, a closed four-case
+    /// enum. Every chain hop is guarded by `!paid.contains(kind)` and inserts
+    /// `kind` before recursing, so `paid` grows strictly on each hop and can
+    /// never exceed four entries. An evaluation therefore performs **at most
+    /// one refresh round per kind — at most four in total — and then always
+    /// terminates in a non-refresh action**, whatever the machine says and
+    /// whatever the world looks like. Termination does not depend on any read
+    /// succeeding, on any row changing, or on the mission being well-behaved;
+    /// it is a property of the recursion alone. (Today's machines chain at
+    /// most two: `RelayRun.acquire`'s devices → footprint.)
+    /// Takes no `thenStall` of its own, deliberately: the reason to stall on
+    /// belongs to the action being collapsed, and threading the *caller's*
+    /// reason in here is exactly what produced the wrong-stall regression
+    /// `collapse(_:)` documents.
     private func reAsk(
         _ machine: any MissionStepMachine,
         _ directive: Directive,
         _ fresh: WorldSnapshot,
-        thenStall reason: DirectiveAttentionReason?,
-        orElse fallback: MissionAction = .wait
-    ) -> MissionAction {
+        paid: Set<RefreshKind>
+    ) async -> MissionAction {
         let action = machine.nextAction(directive: directive, world: fresh)
-        switch action {
-        case .refreshDevices, .refreshDevicesInSystem, .refreshFleet, .refreshFootprint:
-            guard let reason else {
-                // The mission asked for a fallback rather than an escalation:
-                // either the state it is watching is expected to resolve on
-                // its own (`.wait`), or it has somewhere safe to go anyway
-                // (`.advanceStep`, `.refreshFootprint`'s callers only).
-                logger.debug("directive \(directive.id, privacy: .public): fresh reads still unresolved — \(String(describing: fallback), privacy: .public)")
-                return fallback
+        guard let kind = RefreshKind(action) else { return action }
+
+        guard !paid.contains(kind) else {
+            let collapsed = Self.collapse(action)
+            if case let .stall(confirmed) = collapsed {
+                logger.notice("directive \(directive.id, privacy: .public): fresh reads confirm \(confirmed.rawValue, privacy: .public)")
+            } else {
+                logger.debug("directive \(directive.id, privacy: .public): fresh reads still unresolved — \(String(describing: collapsed), privacy: .public)")
             }
-            logger.notice("directive \(directive.id, privacy: .public): fresh reads confirm \(reason.rawValue, privacy: .public)")
-            return .stall(reason)
+            return collapsed
+        }
+
+        let chained = paid.union([kind])
+        logger.debug("directive \(directive.id, privacy: .public): fresh reads raised a different question (\(String(describing: kind), privacy: .public)) — chaining once")
+        switch action {
+        case let .refreshDevices(deviceCodes, thenStall):
+            return await resolveRefresh(
+                deviceCodes: deviceCodes, thenStall: thenStall,
+                directive: directive, machine: machine, paid: chained
+            )
+        case let .refreshDevicesInSystem(designation, thenStall):
+            return await resolveSystemRefresh(
+                designation: designation, thenStall: thenStall,
+                directive: directive, machine: machine, paid: chained
+            )
+        case let .refreshFleet(tag, thenStall):
+            return await resolveFleetRefresh(
+                tag: tag, thenStall: thenStall,
+                directive: directive, machine: machine, paid: chained
+            )
+        case let .refreshFootprint(nextStep, thenStall):
+            return await resolveFootprintRefresh(
+                nextStep: nextStep, thenStall: thenStall,
+                directive: directive, machine: machine, paid: chained
+            )
         default:
+            // Unreachable: `RefreshKind.init` returned non-nil, so `action` is
+            // one of the four above. Kept total rather than force-unwrapped.
             return action
         }
     }
