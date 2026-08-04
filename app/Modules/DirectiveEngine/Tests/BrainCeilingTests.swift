@@ -9,6 +9,13 @@
 //  silicates, structural, volatiles. Real relay bill totals 370 across those
 //  six types (10–120 per type), never 370 per type.
 //
+//  Binding-type note: conductive — NOT volatiles — is the type that actually
+//  constrains `K` under the live mix (see `relaysUntilBindingTypeFloors`'s
+//  test below and `brain-relay-reserve-floor.md`'s corrected arithmetic).
+//  Volatiles is both the cheapest bill line and the scarcest live stock,
+//  which reads as "obviously bites first," but bind order depends on stock
+//  RELATIVE TO CONSUMPTION, not on either alone.
+//
 
 import Testing
 @testable import DirectiveEngine
@@ -23,11 +30,31 @@ struct BrainCeilingTests {
         #expect(BrainCeiling.printPermitted(hubStock: stock))
     }
 
-    /// The scarcest real type — volatiles, bill 10 — dropping below its floor
-    /// vetoes on its own, even with every other type flush. This is the type
-    /// that will bite first in practice (live hub stock 4,117 vs. 11k–27k for
-    /// the others), so it is the one worth pinning explicitly rather than
-    /// trusting a same-shaped stand-in.
+    /// A stock reading sitting EXACTLY on the floor still permits — the
+    /// comparison is `>=`, so the floor itself is spendable-down-to, not a
+    /// value that already trips the veto.
+    @Test func printPermittedWhenStockIsExactlyAtTheFloor() {
+        let stock = Dictionary(
+            uniqueKeysWithValues: BrainCeiling.resourceTypes.map { ($0, BrainCeiling.reserveFloor(for: $0)) }
+        )
+        #expect(BrainCeiling.printPermitted(hubStock: stock))
+    }
+
+    /// The type that actually binds first under the live mix — conductive,
+    /// NOT volatiles (see this file's header note) — dropping below its own
+    /// floor vetoes on its own, even with every other type flush.
+    @Test func printVetoedWhenConductiveAloneIsBelowFloor() {
+        var stock = Dictionary(
+            uniqueKeysWithValues: BrainCeiling.resourceTypes.map { ($0, 10_000.0) }
+        )
+        stock["conductive"] = BrainCeiling.reserveFloor(for: "conductive") - 1
+        #expect(!BrainCeiling.printPermitted(hubStock: stock))
+    }
+
+    /// The per-type veto is independent per type, not just true for the
+    /// binding one — volatiles alone below its floor vetoes too, even though
+    /// (per the corrected arithmetic) it is the LAST type to bind in
+    /// practice, not the first.
     @Test func printVetoedWhenVolatilesAloneIsBelowFloor() {
         var stock = Dictionary(
             uniqueKeysWithValues: BrainCeiling.resourceTypes.map { ($0, 10_000.0) }
@@ -61,6 +88,15 @@ struct BrainCeilingTests {
         ])
     }
 
+    /// `resourceTypes` is DERIVED from `relayBill`'s own keys, not a second,
+    /// independently-maintained literal — pins that invariant directly so a
+    /// future edit that reintroduces two separate lists (and can drift, or
+    /// silently create an unchecked, unbilled type) is caught here rather
+    /// than only by a fail-open hole nobody notices.
+    @Test func resourceTypesIsExactlyRelayBillsKeys() {
+        #expect(Set(BrainCeiling.resourceTypes) == Set(BrainCeiling.relayBill.keys))
+    }
+
     /// Each per-type floor is `K` relays' worth of that type's real blueprint
     /// bill — never a flat literal shared across types (370 would be 37× the
     /// volatiles bill and only 3× the conductive bill).
@@ -71,6 +107,17 @@ struct BrainCeilingTests {
         }
     }
 
+    /// `reserveFloors` (the dictionary form `printPermitted` is actually built
+    /// on) agrees with `reserveFloor(for:)` (the per-type function) for every
+    /// type — so the two can never quietly disagree, and `reserveFloors`
+    /// earns its keep as more than unread public API.
+    @Test func reserveFloorsAgreesWithReserveFloorForEveryType() {
+        for type in BrainCeiling.resourceTypes {
+            #expect(BrainCeiling.reserveFloors[type] == BrainCeiling.reserveFloor(for: type))
+        }
+        #expect(BrainCeiling.reserveFloors.count == BrainCeiling.resourceTypes.count)
+    }
+
     /// The relay bill sums to the verified total (370), and no single type's
     /// bill is anywhere near that total on its own — the fact that makes a
     /// flat 370-per-type floor incoherent.
@@ -78,5 +125,42 @@ struct BrainCeilingTests {
         #expect(BrainCeiling.relayBill.values.reduce(0, +) == 370)
         #expect(BrainCeiling.relayBill["volatiles"] == 10)
         #expect(BrainCeiling.relayBill["conductive"] == 120)
+    }
+
+    // MARK: - The aggregate proxy `RelayRun` actually arms
+
+    /// Conductive is the binding type under the live/reference mix — pinned
+    /// directly, since this is exactly the fact the earlier draft of this
+    /// note (and this file) got backwards. ~106.95 relays before conductive
+    /// hits its own floor, computed from the reference snapshot, not
+    /// hand-picked.
+    @Test func conductiveIsTheBindingTypeUnderTheReferenceMix() {
+        let conductiveHeadroom = (BrainCeiling.referenceHubStock["conductive"]! - BrainCeiling.reserveFloor(for: "conductive"))
+            / BrainCeiling.relayBill["conductive"]!
+        #expect(BrainCeiling.relaysUntilBindingTypeFloors == conductiveHeadroom)
+        // And volatiles — the type an uncorrected intuition names as
+        // "obviously first" — actually has roughly 4× the headroom.
+        let volatilesHeadroom = (BrainCeiling.referenceHubStock["volatiles"]! - BrainCeiling.reserveFloor(for: "volatiles"))
+            / BrainCeiling.relayBill["volatiles"]!
+        #expect(volatilesHeadroom > conductiveHeadroom * 3)
+    }
+
+    /// Absolute pin (not a comparison against itself): the exact aggregate
+    /// floor `RelayRun` arms with today, derived from the bill and the
+    /// reference mix. Marked so any future recalibration of `reserveRelays`
+    /// or `referenceHubStock` shows up as a diff here, which is the entire
+    /// point of `K` being marked `// CALIBRATE`.
+    @Test func aggregateSpendFloorIsPinnedToItsDerivedValue() {
+        #expect(BrainCeiling.aggregateSpendFloor == 35_078)
+    }
+
+    /// The whole reason `aggregateSpendFloor` exists instead of the naive
+    /// sum-of-floors: it must be MUCH larger, or it undershoots the true
+    /// per-type floor by more than an order of magnitude (the naive sum
+    /// permits printing all the way down to ~1,850 total stock, by which
+    /// point conductive alone has been at zero for a long time).
+    @Test func aggregateSpendFloorIsFarMoreConservativeThanTheNaiveSum() {
+        let naiveSum = Int(BrainCeiling.reserveFloors.values.reduce(0, +))
+        #expect(BrainCeiling.aggregateSpendFloor > naiveSum * 15)
     }
 }

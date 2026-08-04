@@ -124,10 +124,10 @@ private func world(
     )
 }
 
-private func footprint(_ location: String, resources: Int) -> LocationFootprint {
+private func footprint(_ location: String, resources: Int, fetchedAt: Date = fixtureNow) -> LocationFootprint {
     LocationFootprint(
         location: location, devices: 1, resources: resources, resourceSites: 0,
-        locationEvents: 0, replicants: 0, fetchedAt: fixtureNow
+        locationEvents: 0, replicants: 0, fetchedAt: fetchedAt
     )
 }
 
@@ -175,7 +175,7 @@ struct RelayRunAcquireTests {
     /// HEAVEN carrier then takes the clone aboard), so the dispatch names the
     /// hub's device code — not the carrier's.
     @Test func acquireStepEnqueuesAPrintAtTheHub() {
-        // The rail is armed by default (`BrainCeiling.totalReserveFloor`), so
+        // The rail is armed by default (`BrainCeiling.aggregateSpendFloor`), so
         // this fixture must clear it with real stock — otherwise the test
         // would be exercising the veto, not the dispatch shape it names.
         let action = RelayRun().nextAction(
@@ -241,25 +241,61 @@ struct RelayRunAcquireTests {
         }
     }
 
-    /// Deliberately the OPPOSITE of "unknown is never zero": once the rail is
-    /// armed, a hub location with no census row at all must VETO, not permit —
-    /// "we couldn't read the stock" is not the same claim as "the stock is
-    /// fine," and the print is a real, irreversible spend. (An *unarmed* rail
-    /// is a separate case, covered by `unarmedRailNeverVetoesEvenOnUnknownStock`
-    /// below — it has no opinion at all, by design.)
-    @Test func unknownStockVetoesThePrintWhenArmed() {
+    /// Once armed, a hub location with NO census row at all no longer vetoes
+    /// immediately — it requests a refresh first (mirroring `HaulRun.survey`'s
+    /// gate on the same table), because "we couldn't read the stock" is not
+    /// evidence either way, and one GET may well clear it. Only once a
+    /// reading is actually in hand does the rail form an opinion — see
+    /// `printStockShortStallsRetry` for the veto itself, and
+    /// `printStockIsShortFailsClosedOnAMissingFootprintDirectly` for why the
+    /// old "missing → veto" behaviour still exists as the function's own
+    /// defense-in-depth contract. (An *unarmed* rail is a separate case,
+    /// covered by `unarmedRailNeverVetoesEvenOnUnknownStock` below — it has
+    /// no opinion at all, by design, so it does not even ask for a refresh.)
+    @Test func missingFootprintTriggersARefreshRatherThanAnImmediateVeto() {
         let snapshot = world(devices: [carrier(), hub()])
         #expect(RelayRun(reserveFloor: 500).nextAction(directive: running(), world: snapshot)
-                == .stall(.printStockShort))
+                == .refreshFootprint(nextStep: RelayRun.Step.acquire))
     }
 
-    /// Production ships the rail ARMED with `BrainCeiling.totalReserveFloor` —
-    /// the sum of the six verified per-type floors, the closest today's
-    /// total-only `LocationFootprint` can get to the true per-type check. This
-    /// pins that as a deliberate, live state (not the earlier `nil`-unarmed
-    /// placeholder) and proves stock below it actually vetoes end to end.
+    /// A footprint that IS present but older than the shared poll interval is
+    /// treated the same as a missing one — refreshed, not trusted — even
+    /// though its stale reading looks comfortably abundant. Old evidence of
+    /// abundance is not current evidence of abundance.
+    @Test func staleFootprintTriggersARefreshEvenWhenItLooksAbundant() {
+        let snapshot = world(
+            devices: [carrier(), hub()],
+            footprints: [hubLocation: footprint(
+                hubLocation, resources: 999_999,
+                fetchedAt: fixtureNow.addingTimeInterval(-(RelayRun.pollInterval + 1))
+            )]
+        )
+        #expect(RelayRun(reserveFloor: 500).nextAction(directive: running(), world: snapshot)
+                == .refreshFootprint(nextStep: RelayRun.Step.acquire))
+    }
+
+    /// `printStockIsShort` fails closed on a missing footprint as ITS OWN
+    /// contract, independent of `acquire`'s freshness gate — called directly
+    /// here (bypassing `nextAction` entirely) so that guarantee stays covered
+    /// even though `acquire` no longer reaches it in practice.
+    @Test func printStockIsShortFailsClosedOnAMissingFootprintDirectly() {
+        let armed = RelayRun(reserveFloor: 500)
+        #expect(armed.printStockIsShort(at: hubLocation, world(devices: [carrier(), hub()])))
+    }
+
+    /// Production ships the rail ARMED with `BrainCeiling.aggregateSpendFloor`
+    /// — the conservative TOTAL-stock proxy, the closest today's total-only
+    /// `LocationFootprint` can get to the true per-type check. This pins that
+    /// as a deliberate, live state (not the earlier `nil`-unarmed placeholder)
+    /// and proves stock below it actually vetoes end to end, via a FRESH
+    /// footprint (a stale/missing one would refresh instead — see the tests
+    /// above).
     @Test func theReserveRailIsArmedWithTheCalibratedFloor() {
-        #expect(RelayRun().reserveFloor == BrainCeiling.totalReserveFloor)
+        // Absolute pin, not a comparison against itself: any future
+        // recalibration of `BrainCeiling`'s `K` or reference snapshot must
+        // show up here as a diff.
+        #expect(BrainCeiling.aggregateSpendFloor == 35_078)
+        #expect(RelayRun().reserveFloor == BrainCeiling.aggregateSpendFloor)
         let broke = world(
             devices: [carrier(), hub()],
             footprints: [hubLocation: footprint(hubLocation, resources: 0)]
@@ -271,8 +307,9 @@ struct RelayRunAcquireTests {
     /// a fixture that wants to isolate a different code path from the reserve
     /// check entirely) — and an explicitly unarmed rail keeps its original,
     /// permissive behaviour: no opinion at all, including on stock it never
-    /// even managed to read. This is the one place "unknown is never short"
-    /// still holds, and only because the rail itself is off.
+    /// even managed to read, and no freshness gate either (there is nothing
+    /// to refresh FOR). This is the one place "unknown is never short" still
+    /// holds, and only because the rail itself is off.
     @Test func unarmedRailNeverVetoesEvenOnUnknownStock() {
         let snapshot = world(devices: [carrier(), hub()])
         guard case .dispatch(.print, "AF1", _, RelayRun.Step.printing) =

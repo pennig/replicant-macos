@@ -44,27 +44,27 @@ public struct RelayRun: MissionStepMachine {
     public let kind: DirectiveKind = .relayRun
     public var firstStep: String { Step.acquire }
 
-    /// The resource reserve floor `R` — the rail that vetoes a print which
-    /// would drop the hub below the stock its other consumers need
-    /// (brain-goal-decision-policy, ticket 03's spend ceiling).
+    /// The resource ceiling this run's print step checks before spending —
+    /// **not** `BrainCeiling`'s true per-type `R` itself, which this field
+    /// cannot carry (see below).
     ///
-    /// **Armed in production** with `BrainCeiling.totalReserveFloor` — the sum
-    /// of `BrainCeiling`'s six verified per-type floors (`K` relays' worth of
-    /// each type's real blueprint bill; see `BrainCeiling` for the constant
-    /// and its justification). A SUM, not the true per-type check `R` is
-    /// specified as: today's `LocationFootprint` carries one TOTAL holdings
-    /// count, not a per-type breakdown, so the sum is the closest this file
-    /// can get until the per-type stockpile record lands
-    /// (brain-resource-hub-model, ticket 06) — when it does, `printStockIsShort`
-    /// is the one place that changes to call `BrainCeiling.printPermitted(hubStock:)`
-    /// directly.
+    /// **Armed in production** with `BrainCeiling.aggregateSpendFloor` — a
+    /// single TOTAL-stock proxy, deliberately NOT the sum of `BrainCeiling`'s
+    /// six per-type floors (that undershoots badly; see
+    /// `aggregateSpendFloor`'s doc for the worked arithmetic). It is a proxy
+    /// because today's `LocationFootprint` carries one TOTAL holdings count
+    /// and no per-type breakdown, so it is the closest this file can get
+    /// until the per-type stockpile record lands (brain-resource-hub-model,
+    /// ticket 06) — when it does, `printStockIsShort` is the one place that
+    /// changes to call `BrainCeiling.printPermitted(hubStock:)` directly, and
+    /// this field's name stops needing the disclaimer.
     ///
     /// Injectable rather than a `static let` so the veto's behaviour — and the
     /// unarmed (`nil`) edge case — stays provable under test without every
     /// caller depending on the calibrated constant.
     public let reserveFloor: Int?
 
-    public init(reserveFloor: Int? = BrainCeiling.totalReserveFloor) {
+    public init(reserveFloor: Int? = BrainCeiling.aggregateSpendFloor) {
         self.reserveFloor = reserveFloor
     }
 
@@ -299,6 +299,19 @@ public struct RelayRun: MissionStepMachine {
             ?? SalvageRun.deployedRelay(near: carrier, in: world)
     }
 
+    /// Whether the stockpile census for `location` is too old — or entirely
+    /// absent — to trust for the reserve check.
+    ///
+    /// The same gate `HaulRun.survey` uses before trusting its own read of
+    /// this table (`world.footprints.values.map(\.fetchedAt).max()` there,
+    /// scoped to one location here), so a hub whose row simply hasn't been
+    /// fetched yet gets one real chance to arrive before this one-shot run
+    /// forms an opinion on it — see `acquire`'s use of this.
+    func footprintIsStale(at location: String, _ world: WorldSnapshot) -> Bool {
+        guard let fetchedAt = world.footprints[location]?.fetchedAt else { return true }
+        return world.now.timeIntervalSince(fetchedAt) > Self.pollInterval
+    }
+
     /// Whether the reserve rail vetoes a print at `location`.
     ///
     /// **Fails CLOSED on unreadable stock once armed — deliberately not
@@ -314,10 +327,14 @@ public struct RelayRun: MissionStepMachine {
     /// protect against overstating depletion in the UI; this protects the
     /// fleet's actual resources, a different risk in the opposite direction.
     /// A stall here is not a dead end: `.printStockShort` already carries
-    /// `BrainDisposition.retry` (bounded auto-retry, then escalate), and the
-    /// census this reads is refreshed by other missions (e.g.
-    /// `HaulRun.survey`) and by the Locations feature, so the row this
-    /// mission itself never writes still arrives on its own.
+    /// `BrainDisposition.retry` (bounded auto-retry, then escalate).
+    ///
+    /// **In practice `acquire` never reaches the missing-row branch below**:
+    /// it calls `footprintIsStale` first and refreshes rather than asking
+    /// this function to judge stale data (see `acquire`). The branch stays as
+    /// this function's OWN contract — defense in depth for any caller that
+    /// doesn't gate on freshness first — rather than something only true by
+    /// convention at the one call site that exists today.
     ///
     /// Reads the location's TOTAL holdings, which is all `LocationFootprint`
     /// carries today. The rail is specified per RESOURCE TYPE
@@ -367,8 +384,24 @@ public struct RelayRun: MissionStepMachine {
         }
         // The reserve rail is a VETO, so it sits BEFORE the command it vetoes.
         // Checking after the dispatch would surface a stall about resources
-        // that were already committed.
+        // that were already committed. But an absent or stale census row is
+        // not evidence either way — refresh it first, exactly as
+        // `HaulRun.survey` does before trusting the same table, rather than
+        // letting an unlucky row that simply hasn't been fetched yet
+        // escalate what one GET would clear. Gated on the rail being armed:
+        // an unarmed rail has no opinion on stock at all, so there is
+        // nothing here worth the extra request.
+        if let location = hub.location, reserveFloor != nil, footprintIsStale(at: location, world) {
+            return .refreshFootprint(nextStep: Step.acquire)
+        }
         if let location = hub.location, printStockIsShort(at: location, world) {
+            // The most safety-relevant veto in this capability — unlike its
+            // neighbours above, it previously left no trace of the reading
+            // that tripped it. One line, no flood risk: a stall halts the
+            // run rather than re-entering this branch every tick.
+            let reading = world.footprints[location].map { String($0.resources) } ?? "no row"
+            let floorText = reserveFloor.map(String.init) ?? "unarmed"
+            logger.notice("relay run \(directive.id, privacy: .public): print stock short at \(location, privacy: .public) — stock \(reading, privacy: .public) below floor \(floorText, privacy: .public)")
             return .stall(.printStockShort)
         }
         // `enqueue_print` takes a device type and nothing else — no location,
