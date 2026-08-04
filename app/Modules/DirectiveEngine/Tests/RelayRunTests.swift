@@ -3,9 +3,10 @@
 //  Replicould — DirectiveEngine
 //
 //  The Relay Run step machine as a pure function table, following the same
-//  pattern as `SalvageRunTests`. The run acquires a relay (v1: prints one at the
-//  hub), gets it aboard the carrier, flies it to the target's Lagrange point,
-//  deploys it, activates it, and confirms the mesh actually grew.
+//  pattern as `SalvageRunTests`. The run acquires a relay — printing one at the
+//  hub, or reclaiming an existing useless one where it stands — gets it aboard
+//  the carrier, flies it to the target's Lagrange point, deploys it, activates
+//  it, and confirms the mesh actually grew.
 //
 //  Two things get specific attention here because they are where this machine
 //  can hurt a live account:
@@ -451,13 +452,313 @@ struct RelayRunAcquireTests {
                 == .advanceStep(nextStep: RelayRun.Step.travelling))
     }
 
-    /// The reclaim branch is a later task. A row carrying `sourceRelayCode`
-    /// must not fall through into the print path and silently print a relay the
-    /// plan intended to RECLAIM — it waits, inertly and recoverably, exactly as
-    /// an unhandled step does.
-    @Test func leavesTheReclaimBranchUnbuilt() {
-        let snapshot = world(devices: [carrier(), hub(), relay("OLD", location: "SOMEWHERE-1-L4", status: "relaying")])
-        #expect(RelayRun().nextAction(directive: running(sourceRelayCode: "OLD"), world: snapshot) == .wait)
+    /// A row carrying `sourceRelayCode` must never fall through into the print
+    /// path and silently spend 370 units printing a relay the plan intended to
+    /// RECLAIM for free — the mistake the field exists to prevent.
+    @Test func aReclaimSourcedRunNeverPrints() {
+        let snapshot = world(
+            devices: [carrier(), hub(), relay("OLD", location: "SOMEWHERE-1-L4", status: "relaying")],
+            footprints: [hubLocation: footprint(hubLocation, resources: 999_999)]
+        )
+        let action = RelayRun().nextAction(directive: running(sourceRelayCode: "OLD"), world: snapshot)
+        if case let .dispatch(kind, _, _, _) = action {
+            #expect(kind != .print, "a reclaim-sourced run must not enqueue a print")
+        }
+        // …and it is not merely inert either: it routes into the reclaim
+        // sub-sequence.
+        #expect(action == .advanceStep(nextStep: RelayRun.Step.fetching))
+    }
+}
+
+// MARK: - Acquire, reclaim source
+
+/// The second source a Relay Run may draw from: an existing, useless relay,
+/// deactivated where it stands and redeployed at the plant target. Costs no
+/// resources at all, which is why the reserve rail must not touch it.
+@Suite("Relay Run — reclaim source")
+struct RelayRunReclaimTests {
+    /// The source relay as the plan found it: deployed, relaying, at an L4 in
+    /// a system prune judged useless.
+    private static func source(
+        _ code: String = "R9",
+        location: String? = "DEAD-1-L4",
+        status: String = "relaying",
+        type: String = "ftl_relay",
+        stowedIn: String? = nil,
+        updatedAt: Date = fixtureNow
+    ) -> Device {
+        device(
+            code, type: type, location: location, stowedIn: stowedIn, status: status,
+            features: ["cruise", "relay", "stow"], updatedAt: updatedAt
+        )
+    }
+
+    /// **The brief's test, filled in.** Evidence before an irreversible act: a
+    /// stale row must never authorise tearing a relay down, so the FIRST thing
+    /// a reclaim-sourced `acquire` does is buy one authoritative read of the
+    /// source. Only once that read is in hand does the run commit — and what it
+    /// commits to is `deactivate` at the source, never `enqueue_print`.
+    @Test func reclaimSourceConfirmsThenDeactivates() {
+        // A row nobody has looked at since before the freshness bound.
+        let stale = world(
+            devices: [
+                Self.source(updatedAt: fixtureNow.addingTimeInterval(-(RelayRun.reclaimFreshness + 1))),
+                carrier(location: "DEAD-1-L4"),
+            ]
+        )
+        #expect(RelayRun().nextAction(directive: running(sourceRelayCode: "R9"), world: stale)
+                == .refreshDevices(deviceCodes: ["R9"], thenStall: .unreachableDevice))
+
+        // Once fresh, the run commits — through the fetch leg (the carrier is
+        // already standing with the relay here) to the `deactivate` dispatch.
+        let fresh = world(devices: [Self.source(), carrier(location: "DEAD-1-L4")])
+        #expect(RelayRun().nextAction(directive: running(sourceRelayCode: "R9"), world: fresh)
+                == .advanceStep(nextStep: RelayRun.Step.fetching))
+        #expect(RelayRun().nextAction(
+            directive: running(step: RelayRun.Step.fetching, sourceRelayCode: "R9"), world: fresh
+        ) == .advanceStep(nextStep: RelayRun.Step.deactivating))
+        #expect(RelayRun().nextAction(
+            directive: running(step: RelayRun.Step.deactivating, sourceRelayCode: "R9"), world: fresh
+        ) == .dispatch(
+            kind: OperationKind.simple("deactivate"), deviceCode: "R9",
+            params: CommandParams(), nextStep: RelayRun.Step.confirmingIdle
+        ))
+    }
+
+    /// `decommission` destroys the device for its blueprint with no refund
+    /// (automation-brain ticket 10). Reclaim must PRESERVE the relay, so the
+    /// verb is pinned rather than left to a later edit's judgement.
+    @Test func reclaimUsesDeactivateAndNeverDecommission() {
+        let fresh = world(devices: [Self.source(), carrier(location: "DEAD-1-L4")])
+        guard case let .dispatch(kind, _, _, _) = RelayRun().nextAction(
+            directive: running(step: RelayRun.Step.deactivating, sourceRelayCode: "R9"), world: fresh
+        ) else {
+            Issue.record("expected a dispatch")
+            return
+        }
+        #expect(kind.rawValue == "deactivate")
+        #expect(kind.rawValue != "decommission")
+    }
+
+    /// **The reserve rail must not veto a reclaim.** Reclaim spends nothing, so
+    /// a hub whose census reads bone dry — or is missing entirely — has no
+    /// bearing on it. Driven with the rail ARMED at its production floor and a
+    /// completely empty census, the worst case for the print path.
+    @Test func theReserveRailDoesNotVetoAReclaim() {
+        // The carrier stands at the hub, so the print path's own preconditions
+        // (a co-located, freshly-read hub) are all met — the ONLY thing left to
+        // stop it is the rail.
+        let broke = world(devices: [Self.source(), carrier(), hub()])
+        #expect(RelayRun().nextAction(directive: running(sourceRelayCode: "R9"), world: broke)
+                == .advanceStep(nextStep: RelayRun.Step.fetching))
+
+        // The SAME world, differing only in the plan hint, does veto — so the
+        // bypass above is the source's doing and not the fixture's.
+        #expect(RelayRun().nextAction(directive: running(sourceRelayCode: nil), world: broke)
+                == .refreshFootprint(nextStep: RelayRun.Step.acquire, thenStall: .printStockShort))
+    }
+
+    /// A source the confirm-read DISQUALIFIES must not proceed and must not
+    /// fall through to printing — it stalls, legibly. `.unreachableDevice`
+    /// carries `BrainDisposition.retry`, so the brain re-derives its prune
+    /// analysis and this clears itself when a different source is the answer.
+    @Test func aDisqualifiedSourceStallsRatherThanProceeding() {
+        let cases: [(String, Device)] = [
+            // Already inactive — somebody else got there first, or the plan
+            // read a stale row.
+            ("already inactive", Self.source(status: "inactive")),
+            // Stowed aboard something: another run has taken it.
+            ("taken aboard", Self.source(location: nil, stowedIn: "V7")),
+            // In transit — no location, so nothing to fly to and nothing to
+            // stand beside.
+            ("in transit", Self.source(location: nil)),
+            // The code names something that is not a relay at all.
+            ("not a relay", Self.source(type: "mining_drone")),
+            // …including one that happens to be stowed aboard our own carrier,
+            // which must NOT take the "already aboard" shortcut past the
+            // confirm and commit the run to hauling somebody's drone.
+            ("a non-relay aboard the carrier", Self.source(location: nil, type: "mining_drone", stowedIn: "V1")),
+        ]
+        for (label, device) in cases {
+            let snapshot = world(devices: [device, carrier(location: "DEAD-1-L4"), hub()])
+            let action = RelayRun().nextAction(directive: running(sourceRelayCode: "R9"), world: snapshot)
+            #expect(action == .stall(.unreachableDevice), Comment(rawValue: "\(label) must stall"))
+        }
+        // The same disqualification stops the DISPATCH step too — the gate
+        // immediately before the irreversible act, not only the one that
+        // committed the trip.
+        let moved = world(devices: [Self.source(status: "inactive"), carrier(location: "DEAD-1-L4")])
+        #expect(RelayRun().nextAction(
+            directive: running(step: RelayRun.Step.deactivating, sourceRelayCode: "R9"), world: moved
+        ) == .stall(.unreachableDevice))
+    }
+
+    /// A source whose row never arrived at all buys ONE authoritative read
+    /// carrying a stall, rather than looping or guessing.
+    @Test func anAbsentSourceRowIsReadOnceThenStalls() {
+        let snapshot = world(devices: [carrier(location: "DEAD-1-L4"), hub()])
+        #expect(RelayRun().nextAction(directive: running(sourceRelayCode: "R9"), world: snapshot)
+                == .refreshDevices(deviceCodes: ["R9"], thenStall: .unreachableDevice))
+    }
+
+    /// The stall's log line must name which condition disqualified the source —
+    /// the same rule `printDiagnosis` and `printStockShortDiagnosis` already
+    /// follow, and for the same reason: "Device unreachable" describes neither
+    /// cause nor remedy. Asserted on the pure diagnosis function, since
+    /// `os.Logger` output is not readable from a test.
+    @Test func theReclaimRefusalNamesWhichConditionFired() {
+        func diagnose(_ devices: [Device]) -> String {
+            RelayRun.reclaimDiagnosis("R9", world(devices: devices))
+        }
+        #expect(diagnose([]).contains("no row"))
+        #expect(diagnose([Self.source(type: "mining_drone")]).contains("mining_drone"))
+        #expect(diagnose([Self.source(location: nil, stowedIn: "V7")]).contains("V7"))
+        #expect(diagnose([Self.source(location: nil)]).contains("no location"))
+        #expect(diagnose([Self.source(status: "inactive")]).contains("inactive"))
+
+        // The diagnosis agrees with the predicate it explains: each of those
+        // really is disqualified, and the healthy one really is not.
+        #expect(RelayRun.sourceIsReclaimable(Self.source()))
+        #expect(!RelayRun.sourceIsReclaimable(Self.source(status: "inactive")))
+        #expect(!RelayRun.sourceIsReclaimable(Self.source(type: "mining_drone")))
+        #expect(!RelayRun.sourceIsReclaimable(Self.source(location: nil, stowedIn: "V7")))
+        #expect(!RelayRun.sourceIsReclaimable(Self.source(location: nil)))
+    }
+
+    /// **The carrier fetches the relay before anything is done to it.** A relay
+    /// deactivated out of reach cannot be stowed, and deactivating it drops its
+    /// system out of the mesh — which is how the reclaim's own subject becomes
+    /// uncommandable. So the trip happens first, and it is a TRACKED travel, so
+    /// re-entering its own step is the safe shape.
+    @Test func fliesToTheSourceRelayBeforeDeactivatingIt() {
+        let away = world(devices: [Self.source(), carrier(location: hubLocation)])
+        #expect(RelayRun().nextAction(
+            directive: running(step: RelayRun.Step.fetching, sourceRelayCode: "R9"), world: away
+        ) == .dispatch(
+            kind: .travel, deviceCode: "V1", params: CommandParams(destination: "DEAD-1-L4"),
+            nextStep: RelayRun.Step.fetching
+        ))
+        // And the dispatch step refuses to act on a relay the carrier is not
+        // standing with, whatever step it is entered from.
+        #expect(RelayRun().nextAction(
+            directive: running(step: RelayRun.Step.deactivating, sourceRelayCode: "R9"), world: away
+        ) == .advanceStep(nextStep: RelayRun.Step.fetching))
+    }
+
+    /// Travel is tracked, so the open op is the guard that stops a second trip
+    /// landing on top of the first.
+    @Test func waitsWhileTheFetchTripIsUnderWay() {
+        let trip = GameModels.Operation(
+            id: "OP-T", entityCode: "V1", kind: OperationKind.travel.rawValue,
+            status: .active, source: .optimistic, startedAt: Date(timeIntervalSince1970: 0),
+            completesAt: nil, lastConfirmedAt: Date(timeIntervalSince1970: 0), detail: .object([:])
+        )
+        let snapshot = world(
+            devices: [Self.source(), carrier(location: hubLocation)], openOperations: ["V1": trip]
+        )
+        #expect(RelayRun().nextAction(
+            directive: running(step: RelayRun.Step.fetching, sourceRelayCode: "R9"), world: snapshot
+        ) == .wait)
+    }
+
+    /// The poll half of the `deactivate` split. Nothing else moves this row —
+    /// `deactivate` emits no operation — so a bare wait would sit on a stale
+    /// row for the whole deadline and then stall on a relay that is actually
+    /// down. Throttled on the row's own `updatedAt`.
+    @Test func confirmingIdlePollsAdvancesAndBacksStops() {
+        let idle = running(step: RelayRun.Step.confirmingIdle, sourceRelayCode: "R9")
+
+        // Down: the relay has stopped relaying, so it may be stowed.
+        let down = world(devices: [Self.source(status: "inactive"), carrier(location: "DEAD-1-L4")])
+        #expect(RelayRun().nextAction(directive: idle, world: down)
+                == .advanceStep(nextStep: RelayRun.Step.stowing))
+
+        // Still relaying and the row is fresh: wait.
+        let up = world(devices: [Self.source(), carrier(location: "DEAD-1-L4")])
+        #expect(RelayRun().nextAction(directive: idle, world: up) == .wait)
+
+        // Still relaying and the row is old: force the read.
+        let unread = world(devices: [
+            Self.source(updatedAt: fixtureNow.addingTimeInterval(-(RelayRun.pollInterval + 1))),
+            carrier(location: "DEAD-1-L4"),
+        ])
+        #expect(RelayRun().nextAction(directive: idle, world: unread)
+                == .refreshDevices(deviceCodes: ["R9"], thenStall: nil))
+
+        // …and a `deactivate` that never takes is backstopped rather than
+        // waited on forever.
+        let overdue = running(
+            step: RelayRun.Step.confirmingIdle, sourceRelayCode: "R9",
+            stepStartedAt: fixtureNow.addingTimeInterval(-RelayRun.reclaimDeadline - 1)
+        )
+        #expect(RelayRun().nextAction(directive: overdue, world: up) == .stall(.unreachableDevice))
+    }
+
+    /// Re-entering `acquire` after the relay is already aboard must not start
+    /// the reclaim over — the same idempotence the print path gets from its
+    /// "a relay already aboard" check.
+    @Test func reEnteringAcquireWithTheRelayAboardSkipsStraightToTravel() {
+        let snapshot = world(devices: [Self.source(location: nil, stowedIn: "V1"), carrier()])
+        #expect(RelayRun().nextAction(directive: running(sourceRelayCode: "R9"), world: snapshot)
+                == .advanceStep(nextStep: RelayRun.Step.travelling))
+    }
+
+    /// **The shared tail is REUSED, not forked.** Every step after the stow is
+    /// the print path's own, which only works because the relay lookup resolves
+    /// the plan-named source by CODE — through stowed, in-transit, deployed and
+    /// relaying, exactly as the printed clone's code-first lookup does.
+    @Test func theSharedTailResolvesThePlanNamedRelayInEveryState() {
+        let reclaim = running(sourceRelayCode: "R9")
+        let states: [(String, Device)] = [
+            ("aboard", Self.source(location: nil, stowedIn: "V1")),
+            ("deployed", Self.source(location: "VEGA-1-L4", status: "inactive")),
+            ("relaying", Self.source(location: "VEGA-1-L4")),
+        ]
+        for (label, device) in states {
+            let snapshot = world(devices: [device, carrier(location: "VEGA-1-L4")])
+            #expect(
+                RelayRun.relay(for: reclaim, carrier: carrier(location: "VEGA-1-L4"), in: snapshot)?
+                    .deviceCode == "R9",
+                Comment(rawValue: "the \(label) source must stay resolvable")
+            )
+        }
+        // A `sourceRelayCode` naming something that is not a relay is never
+        // adopted — the same type filter every other lookup in this file applies,
+        // because whatever this returns gets a command issued at it.
+        let wrong = world(devices: [
+            Self.source(type: "mining_drone", stowedIn: "V1"), carrier(),
+        ])
+        #expect(RelayRun.relay(for: reclaim, carrier: carrier(), in: wrong) == nil)
+    }
+
+    /// A PRINT-sourced run is completely unaffected by any of this: the same
+    /// world that would resolve a reclaim's source leaves the print path
+    /// resolving its clone and enqueuing its print exactly as before.
+    @Test func aPrintSourcedRunIsUnaffected() {
+        let snapshot = world(
+            devices: [carrier(), hub(), Self.source()],
+            footprints: [hubLocation: footprint(hubLocation, resources: 999_999)]
+        )
+        #expect(RelayRun().nextAction(directive: running(sourceRelayCode: nil), world: snapshot)
+                == .dispatch(
+                    kind: .print, deviceCode: "AF1",
+                    params: CommandParams(deviceType: "ftl_relay"), nextStep: RelayRun.Step.printing
+                ))
+        // …and its relay lookup still ignores the deployed relay standing
+        // elsewhere, exactly as it did before the reclaim branch existed.
+        #expect(RelayRun.relay(for: running(), carrier: carrier(), in: snapshot) == nil)
+    }
+
+    /// The reclaim steps belong to a reclaim run. A row that reaches one with
+    /// no `sourceRelayCode` re-derives its branch from `acquire` rather than
+    /// acting on a source it does not have.
+    @Test func reclaimStepsWithoutASourceReturnToAcquire() {
+        let snapshot = world(devices: [carrier(), hub()])
+        for step in [RelayRun.Step.fetching, RelayRun.Step.deactivating, RelayRun.Step.confirmingIdle] {
+            #expect(RelayRun().nextAction(directive: running(step: step), world: snapshot)
+                    == .advanceStep(nextStep: RelayRun.Step.acquire),
+                    Comment(rawValue: "step \(step) without a source must return to acquire"))
+        }
     }
 }
 
@@ -916,26 +1217,37 @@ struct RelayRunSimpleVerbTests {
     /// rather than by care.
     @Test func everySimpleVerbDispatchAdvancesToADistinctPollStep() {
         let done = printOp()
-        let cases: [(String, WorldSnapshot)] = [
+        let cases: [(String, Directive, WorldSnapshot)] = [
+            // `deactivate` at the source relay, on the reclaim path. Verified
+            // against `CommandClient`: `deactivate` is absent from
+            // `deadlineCommands`, so `completion(for:)` classifies it
+            // `.immediate` and the dispatch returns `.accepted(operationID: nil)`
+            // — no `Operation` row at all.
+            (RelayRun.Step.deactivating, running(step: RelayRun.Step.deactivating, sourceRelayCode: "R9"), world(
+                devices: [
+                    carrier(location: "DEAD-1-L4"),
+                    relay("R9", location: "DEAD-1-L4", status: "relaying"),
+                ]
+            )),
             // `stow` at the printed relay, naming the carrier.
-            (RelayRun.Step.stowing, world(
+            (RelayRun.Step.stowing, running(step: RelayRun.Step.stowing), world(
                 devices: [carrier(), hub(), relay(location: hubLocation)],
                 dispatchedOperations: [done.id: done]
             )),
             // `deploy` at the relay, at the target's Lagrange point.
-            (RelayRun.Step.emplacing, world(
+            (RelayRun.Step.emplacing, running(step: RelayRun.Step.emplacing), world(
                 devices: [carrier(location: "VEGA-1-L4"), relay(stowedIn: "V1")],
                 systems: ["VEGA": targetSystem()]
             )),
             // `activate` at the just-deployed relay.
-            (RelayRun.Step.activating, world(
+            (RelayRun.Step.activating, running(step: RelayRun.Step.activating), world(
                 devices: [carrier(location: "VEGA-1-L4"), relay(location: "VEGA-1-L4")]
             )),
         ]
 
         var seen: [String] = []
-        for (step, snapshot) in cases {
-            let action = RelayRun().nextAction(directive: running(step: step), world: snapshot)
+        for (step, directive, snapshot) in cases {
+            let action = RelayRun().nextAction(directive: directive, world: snapshot)
             guard case let .dispatch(kind, _, _, next) = action else {
                 Issue.record("step \(step) was expected to dispatch, got \(action)")
                 continue
@@ -949,7 +1261,7 @@ struct RelayRunSimpleVerbTests {
         }
         // Pins the inventory itself: a new `.simple` dispatch added later has to
         // come here and be accounted for.
-        #expect(seen == ["stow", "deploy", "activate"])
+        #expect(seen == ["deactivate", "stow", "deploy", "activate"])
     }
 
     /// The other half of the same rule: a TRACKED kind may legitimately
@@ -1058,6 +1370,94 @@ struct RelayRunSequenceTests {
             RelayRun.Step.confirmingRelay,
             RelayRun.Step.settling,
         ])
+    }
+
+    /// The same walk down the RECLAIM path, and the test that proves the shared
+    /// tail is reused rather than forked: everything from `stowing` onward is
+    /// the print path's own steps, visited in the same order.
+    ///
+    /// Deliberately driven with the reserve rail ARMED (the default) and NO
+    /// census rows at all — the world in which the print path vetoes on its
+    /// first evaluation. A reclaim spends nothing, so it must walk the whole
+    /// sequence to `.done` regardless.
+    @Test func walksTheReclaimPathAndRejoinsTheSharedTail() {
+        var devices: [String: Device] = [
+            "V1": carrier(),
+            "R9": relay("R9", location: "DEAD-1-L4", status: "relaying"),
+        ]
+        var directive = running(sourceRelayCode: "R9")
+        var visited: [String] = []
+        var finished = false
+
+        for _ in 0..<24 {
+            let snapshot = world(
+                devices: Array(devices.values),
+                systems: ["VEGA": targetSystem()]
+            )
+            let action = RelayRun().nextAction(directive: directive, world: snapshot)
+            visited.append(directive.step)
+
+            switch action {
+            case let .dispatch(kind, deviceCode, params, next):
+                switch kind.rawValue {
+                case OperationKind.travel.rawValue:
+                    devices[deviceCode]?.location = params.destination
+                case "deactivate":
+                    devices[deviceCode]?.status = "inactive"
+                case OperationKind.stow.rawValue:
+                    devices[deviceCode]?.stowedInDeviceCode = params.target
+                    devices[deviceCode]?.location = nil
+                case "deploy":
+                    let carrierLocation = devices["V1"]?.location
+                    devices[deviceCode]?.stowedInDeviceCode = nil
+                    devices[deviceCode]?.location = carrierLocation
+                case "activate":
+                    devices[deviceCode]?.status = "relaying"
+                default:
+                    Issue.record("unexpected command \(kind.rawValue) on the reclaim path")
+                }
+                directive.step = next
+                directive.stepStartedAt = fixtureNow
+
+            case let .advanceStep(next):
+                directive.step = next
+                directive.stepStartedAt = fixtureNow
+
+            case .done:
+                finished = true
+
+            default:
+                Issue.record("the reclaim path produced \(action) at step \(directive.step)")
+            }
+            if finished { break }
+        }
+
+        #expect(finished, "the reclaim run never reached .done")
+        #expect(visited == [
+            RelayRun.Step.acquire,
+            // Two visits: the first dispatches the trip out to the source
+            // relay, the second sees the carrier standing with it.
+            RelayRun.Step.fetching,
+            RelayRun.Step.fetching,
+            RelayRun.Step.deactivating,
+            RelayRun.Step.confirmingIdle,
+            // From here on, every step is the print path's own — reused, not
+            // forked.
+            RelayRun.Step.stowing,
+            RelayRun.Step.confirmingStow,
+            RelayRun.Step.travelling,
+            RelayRun.Step.travelling,
+            RelayRun.Step.emplacing,
+            RelayRun.Step.emplacing,
+            RelayRun.Step.activating,
+            RelayRun.Step.confirmingRelay,
+            RelayRun.Step.settling,
+        ])
+        // The relay the run planted is the one it reclaimed — no print
+        // happened, and no second relay was created.
+        #expect(devices.count == 2)
+        #expect(devices["R9"]?.status == "relaying")
+        #expect(devices["R9"]?.location == "VEGA-1-L4")
     }
 
     /// A Relay Run is one-shot: the brain launches a fresh directive per target,

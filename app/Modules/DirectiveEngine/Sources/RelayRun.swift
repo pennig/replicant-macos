@@ -11,7 +11,13 @@
 //  brain launches a fresh directive for the next one, which is why `plan(_:)`
 //  never roams.
 //
-//  **Composition (v1): autofactory + co-located carrier.** The relay is printed
+//  **Two sources, one tail.** `Directive.sourceRelayCode` picks between them:
+//  nil PRINTS a fresh relay at the hub (370 units, ~800 s); non-nil RECLAIMS
+//  the existing, useless relay it names — the carrier flies to it, deactivates
+//  it where it stands, and takes it aboard, for no resources at all. The two
+//  branches converge at `stowing` and share every step from there on.
+//
+//  **Composition (print source): autofactory + co-located carrier.** The relay is printed
 //  AT the hub (`enqueue_print` on the autofactory) and taken aboard a HEAVEN
 //  vessel that is already parked at the hub's location. Verified against the
 //  live fleet on 2026-08-03: autofactory `43C9B54A` and heaven_vessel `C7836770`
@@ -71,17 +77,35 @@ public struct RelayRun: MissionStepMachine {
     /// This mission's step vocabulary. Plain strings because `Directive.step` is
     /// deliberately untyped — each kind owns its own vocabulary.
     ///
-    /// Read the pairs: `stowing`/`confirmingStow`, `emplacing`→`activating`,
-    /// `activating`/`confirmingRelay`. Every one of them is a DISPATCH step
-    /// whose command carries no `Operation` row, split from the step that polls
-    /// for it to take. See `trackedKinds` for why that split is mandatory.
+    /// Read the pairs: `deactivating`/`confirmingIdle`, `stowing`/`confirmingStow`,
+    /// `emplacing`→`activating`, `activating`/`confirmingRelay`. Every one of
+    /// them is a DISPATCH step whose command carries no `Operation` row, split
+    /// from the step that polls for it to take. See `trackedKinds` for why that
+    /// split is mandatory.
+    ///
+    /// The two sources meet at `stowing`: the print path arrives via
+    /// `printing`, the reclaim path via `confirmingIdle`, and everything from
+    /// there to `settling` is one shared tail. There is deliberately no second
+    /// copy of it — a duplicated tail is how the two paths drift.
     public enum Step {
         /// Decide where the relay comes from, and start it coming. Branches on
-        /// `Directive.sourceRelayCode`: nil prints a fresh one at the hub (built),
-        /// non-nil reclaims an existing one (a later task — see `acquire`).
+        /// `Directive.sourceRelayCode`: nil prints a fresh one at the hub,
+        /// non-nil reclaims the existing one it names.
         public static let acquire = "acquire"
         /// Poll for the printed clone to appear in the fleet.
         public static let printing = "printing"
+        /// RECLAIM PATH. Fly the carrier to where the source relay stands,
+        /// BEFORE anything irreversible happens to it. Travel is a tracked
+        /// kind, so this step may re-dispatch into itself.
+        public static let fetching = "fetching"
+        /// RECLAIM PATH. Dispatch `deactivate` at the source relay.
+        /// Dispatch-only.
+        public static let deactivating = "deactivating"
+        /// RECLAIM PATH. Poll for the source relay to stop relaying. Split
+        /// from `deactivating` because `deactivate` is classified `.immediate`
+        /// by `CommandClient` and carries no `Operation` row — the same reason
+        /// `confirmingStow` is split from `stowing`.
+        public static let confirmingIdle = "confirmingIdle"
         /// Dispatch `stow` at the relay, naming the carrier.
         public static let stowing = "stowing"
         /// Poll the relay's own `stowedInDeviceCode`. Split from `stowing`
@@ -112,8 +136,9 @@ public struct RelayRun: MissionStepMachine {
     /// The kinds this machine dispatches that DO create an `Operation` row.
     ///
     /// The distinction is the single most consequential thing in this file. A
-    /// `.simple` verb (`stow`, `deploy`, `activate`) is classified `.immediate`
-    /// by `CommandClient` and tracked with NO operation row at all, so
+    /// `.simple` verb (`deactivate`, `stow`, `deploy`, `activate` — none of
+    /// them in `CommandClient.deadlineCommands`, so `completion(for:)` returns
+    /// `.immediate` for each) is tracked with NO operation row at all, so
     /// `world.openOperation(for:)` is permanently nil for it — a guard that can
     /// never fire. And `DirectiveExecutor.apply` re-stamps `stepStartedAt` on
     /// every accepted dispatch, with no same-step exception. So a `.simple`
@@ -141,6 +166,23 @@ public struct RelayRun: MissionStepMachine {
     /// local row is worth only as much as the row.
     public static let hubFreshness: TimeInterval = 5 * 60
 
+    /// How long to let a `deactivate` take. Immediate server-side, exactly like
+    /// `stow`, so all this covers is the confirm-read that proves it — same
+    /// value and same reasoning as `stowDeadline`, restated under its own name
+    /// because a poll named after one verb backstopping another reads as a
+    /// copy-paste rather than as a decision.
+    public static let reclaimDeadline: TimeInterval = stowDeadline
+
+    /// How old the SOURCE relay's row may be and still authorise tearing that
+    /// relay down.
+    ///
+    /// Same value and same reasoning as `hubFreshness` — "how old may a
+    /// POSITIVE finding be and still be believed" — under its own name because
+    /// what it guards is not a hub and the two floors may reasonably diverge:
+    /// one gates a spend that can be re-earned, this one gates the teardown of
+    /// working infrastructure.
+    public static let reclaimFreshness: TimeInterval = hubFreshness
+
     /// Floor between confirm-reads while a poll step waits. Shared with
     /// `SalvageRun` rather than restated — the tick rate and the reason are
     /// identical.
@@ -155,6 +197,9 @@ public struct RelayRun: MissionStepMachine {
         switch directive.step {
         case Step.acquire: return acquire(directive, carrier, world)
         case Step.printing: return printing(directive, world)
+        case Step.fetching: return fetch(directive, carrier, world)
+        case Step.deactivating: return deactivateSource(directive, carrier, world)
+        case Step.confirmingIdle: return confirmIdle(directive, carrier, world)
         case Step.stowing: return stowing(directive, carrier, world)
         case Step.confirmingStow: return confirmStow(directive, carrier, world)
         case Step.travelling: return travel(directive, carrier, world)
@@ -294,6 +339,26 @@ public struct RelayRun: MissionStepMachine {
     /// returns, so a device of the wrong type reaching a caller is the bug, not
     /// an inefficiency.
     static func relay(for directive: Directive, carrier: Device, in world: WorldSnapshot) -> Device? {
+        // A RECLAIM run's relay is named by the plan itself, which makes it the
+        // strongest handle of the three and the reason the shared tail needs no
+        // reclaim-specific fork: `stowing`, `confirmingStow`, `emplacing`,
+        // `activating` and `confirmingRelay` all resolve the source relay
+        // through here, unchanged, in every state the run puts it through
+        // (deployed → inactive → stowed → in-transit → deployed again →
+        // relaying). Exactly the argument the printed clone's code-first lookup
+        // makes below, with a plan hint standing in for a print result.
+        //
+        // Type-filtered like the other two, and for the same reason: whatever
+        // this returns gets a command issued at it, so a `sourceRelayCode`
+        // naming a mining drone must resolve to nothing rather than to that
+        // drone. (`acquire` refuses such a source outright — see
+        // `sourceIsReclaimable` — so this is the second line of the same
+        // defence, not its only one.)
+        if let code = directive.sourceRelayCode,
+           let source = world.device(code),
+           source.deviceType == relayDeviceType {
+            return source
+        }
         if let printed = printedRelay(in: world) { return printed }
         return SalvageRun.relay(aboard: carrier, in: world)
             ?? SalvageRun.deployedRelay(near: carrier, in: world)
@@ -440,17 +505,17 @@ public struct RelayRun: MissionStepMachine {
 
     /// Where this run's relay comes from, and the command that starts it coming.
     ///
-    /// Two branches by `Directive.sourceRelayCode`, and only the first is built:
-    /// nil prints a fresh relay at the hub; non-nil names an existing, useless
-    /// relay to RECLAIM and redeploy (`tendMesh`'s prune half — a later task).
-    /// The unbuilt branch waits rather than falling through into the print path:
-    /// falling through would spend 370 units and ~800 s printing a relay the
-    /// plan had already decided to source for free, which is precisely the
-    /// mistake the field exists to prevent.
+    /// Two branches by `Directive.sourceRelayCode`: nil prints a fresh one at
+    /// the hub (370 units, ~800 s); non-nil names an existing, useless relay to
+    /// RECLAIM and redeploy (`tendMesh`'s prune half), which costs nothing at
+    /// all. The branches never fall through into one another — falling through
+    /// to the print would spend resources the plan had already decided to
+    /// source for free, which is precisely the mistake the field exists to
+    /// prevent, and it is also why the reserve rail below is unreachable from
+    /// the reclaim path: there is no spend for it to veto.
     private func acquire(_ directive: Directive, _ carrier: Device, _ world: WorldSnapshot) -> MissionAction {
         if let source = directive.sourceRelayCode {
-            logger.notice("relay run \(directive.id, privacy: .public): reclaim of \(source, privacy: .public) is not built yet — waiting")
-            return .wait
+            return reclaim(directive, carrier, world, source: source)
         }
         // A relay already aboard is a relay this run does not have to print.
         // Also what makes a relaunch mid-run idempotent.
@@ -551,6 +616,278 @@ public struct RelayRun: MissionStepMachine {
         // make it ours. That case falls through and waits out the deadline.
         if let code = Self.printedRelayCode(in: world), world.device(code) == nil {
             return .refreshDevices(deviceCodes: [code], thenStall: .noRelayCoLocated)
+        }
+        return .wait
+    }
+
+    // MARK: - Reclaim
+
+    /// The outcome of the confirm-read that must precede anything irreversible
+    /// on the reclaim path.
+    enum SourceConfirmation {
+        /// The row is fresh, and the relay it describes is still the deployed,
+        /// useless relay the plan named.
+        case confirmed(Device)
+        /// Do this instead — one authoritative read, or a stall.
+        case act(MissionAction)
+    }
+
+    /// Whether the relay the plan named is still a thing this run may reclaim.
+    ///
+    /// Four conditions, in the order `reclaimDiagnosis` explains them:
+    ///
+    /// - it is an `ftl_relay` — these are DISPATCH queries, and `deactivate`
+    ///   at a mining drone because the plan hint named one is not a thing this
+    ///   run may do (the same rule every other lookup in this file follows);
+    /// - it is stowed aboard nothing — a relay somebody else has taken aboard
+    ///   is theirs, not ours;
+    /// - it has a location — a relay in transit is somewhere unknowable, so
+    ///   there is nothing to fly to and nothing to stand beside;
+    /// - it is `relaying` — the deployed, active state prune actually judged.
+    ///   An already-inactive relay is evidence the plan read a stale row or
+    ///   somebody got there first, and either way it is no longer the thing
+    ///   that was assessed.
+    ///
+    /// `statusBase`, never `status`: the backend appends a parenthetical
+    /// parameter to some statuses, and a raw comparison would read a live relay
+    /// as dead — which here would mean tearing down infrastructure on a
+    /// misparse.
+    static func sourceIsReclaimable(_ source: Device) -> Bool {
+        source.deviceType == relayDeviceType
+            && source.stowedInDeviceCode == nil
+            && source.location != nil
+            && source.statusBase == "relaying"
+    }
+
+    /// WHICH condition disqualified the source, for the one log line the
+    /// refusal emits — in the same branch order `sourceIsReclaimable` tests
+    /// them, so the two can only ever agree.
+    ///
+    /// It exists for the reason `printDiagnosis` and `printStockShortDiagnosis`
+    /// do: the stall's own display name ("Device unreachable") names neither
+    /// the cause nor the remedy, and "the relay moved", "somebody else took
+    /// it", "the plan named a drone" and "it is already down" want four very
+    /// different responses from an operator.
+    static func reclaimDiagnosis(_ code: String, _ world: WorldSnapshot) -> String {
+        guard let source = world.device(code) else {
+            return "no row for \(code) ever arrived, even after an authoritative read"
+        }
+        if source.deviceType != relayDeviceType {
+            return "\(code) is a \(source.deviceType), not a \(relayDeviceType)"
+        }
+        if let holder = source.stowedInDeviceCode {
+            return "\(code) is stowed aboard \(holder) — something else has already taken it"
+        }
+        guard let location = source.location else {
+            return "\(code) has no location — it is in transit, so there is nothing to fly to"
+        }
+        if source.statusBase != "relaying" {
+            return "\(code) at \(location) reads \(source.statusBase), not relaying — it is no longer the deployed relay the plan judged useless"
+        }
+        return "\(code) at \(location) is reclaimable"
+    }
+
+    /// The confirm-read every irreversible step of the reclaim path passes
+    /// through: evidence before an irreversible act, the same rule the grow
+    /// path's own pre-print hub read follows (ticket 01).
+    ///
+    /// Three answers, and the ordering is the point. A row that is ABSENT or
+    /// too OLD is not evidence of anything — it buys ONE authoritative read,
+    /// carrying a stall so a read that keeps failing surfaces after a single
+    /// round instead of re-firing every tick (`.refreshDevices` is bounded to
+    /// one refresh-and-re-ask per evaluation by the engine). Only a row young
+    /// enough to mean something is then judged.
+    ///
+    /// **A judgement that disqualifies the source STALLS.** It does not
+    /// proceed, and — the more tempting mistake — it does not fall back to
+    /// printing. Proceeding would `deactivate` a relay that is no longer the
+    /// one prune assessed, which is how a load-bearing relay gets torn out and
+    /// its system's authority with it; falling back to the print would spend
+    /// 370 units the plan explicitly decided not to spend, on the strength of
+    /// evidence that the plan was WRONG. `.unreachableDevice` carries
+    /// `BrainDisposition.retry` (bounded auto-retry, then escalate), and the
+    /// brain re-derives its whole prune analysis every tick, so the ordinary
+    /// resolution is that the next directive names a different source — no
+    /// operator required — while a source that stays disqualified escalates
+    /// instead of silently churning.
+    static func confirmSource(
+        _ directive: Directive, _ code: String, _ world: WorldSnapshot
+    ) -> SourceConfirmation {
+        guard let source = world.device(code) else {
+            return .act(.refreshDevices(deviceCodes: [code], thenStall: .unreachableDevice))
+        }
+        if world.now.timeIntervalSince(source.updatedAt) > Self.reclaimFreshness {
+            return .act(.refreshDevices(deviceCodes: [code], thenStall: .unreachableDevice))
+        }
+        guard sourceIsReclaimable(source) else {
+            let why = reclaimDiagnosis(code, world)
+            logger.notice("relay run \(directive.id, privacy: .public): refusing to reclaim — \(why, privacy: .public)")
+            return .act(.stall(.unreachableDevice))
+        }
+        return .confirmed(source)
+    }
+
+    /// Route a reclaim-sourced run into its own sub-sequence.
+    ///
+    /// No `R` rail runs on this path and none should: reclaim consumes no
+    /// resources, so a hub census that would veto a print has nothing to say
+    /// about it. That is structural rather than a flag — this returns before
+    /// `acquire` reaches any footprint read at all.
+    private func reclaim(
+        _ directive: Directive, _ carrier: Device, _ world: WorldSnapshot, source code: String
+    ) -> MissionAction {
+        // Already aboard: the reclaim has happened and this is a re-entry (a
+        // relaunch, or a step move that was lost). Starting over would
+        // `deactivate` a relay that is currently cargo. The mirror of the print
+        // path's own "a relay already aboard" check.
+        //
+        // Type-filtered like every other lookup in this file — without it a
+        // plan hint naming, say, a mining drone that happens to be stowed
+        // aboard the carrier would skip the confirm entirely and commit the run
+        // to hauling that drone to the target, where only the eventual `deploy`
+        // rejection would stop it. Filtered, it falls through to `confirmSource`
+        // and is refused with a diagnosis instead.
+        if let aboard = world.device(code),
+           aboard.deviceType == Self.relayDeviceType,
+           aboard.stowedInDeviceCode == carrier.deviceCode {
+            return .advanceStep(nextStep: Step.travelling)
+        }
+        switch Self.confirmSource(directive, code, world) {
+        case let .act(action): return action
+        // Confirmed — but the carrier still has to be standing with it before
+        // anything is done to it, so the trip comes first. See `fetch`.
+        case .confirmed: return .advanceStep(nextStep: Step.fetching)
+        }
+    }
+
+    /// Fly the carrier to where the source relay stands, before anything
+    /// irreversible happens to it.
+    ///
+    /// **The order is a safety property, not a convenience.** `deactivate`
+    /// drops the relay's system out of the mesh, and per the ftl-authority-rule
+    /// note command authority reaches a device only through a mesh subgraph
+    /// holding a stationary replicant — so a relay deactivated from across the
+    /// galaxy can become uncommandable at the very moment the run needs to
+    /// `stow` it, stranding it AND having torn its system's link down for
+    /// nothing. Travelling first also happens to be what makes the shared
+    /// `stowing` step usable unchanged, since it requires the relay and the
+    /// carrier to share a location.
+    ///
+    /// (The brief for this task sequenced `deactivate` straight after the
+    /// confirm, with no fetch leg. That works only for a source the carrier is
+    /// already parked beside, which a reclaim source — chosen for its distance
+    /// from the plant target, not from the carrier — essentially never is.)
+    ///
+    /// Deliberately does NOT re-confirm the source's freshness on every pass:
+    /// this step is re-entered on every 5 s tick for the whole trip, and a
+    /// freshness gate here would issue `.high` reads at that rate for minutes.
+    /// The confirm sits at the two DECISION points instead — `acquire`, before
+    /// the trip is committed, and `deactivating`, immediately before the
+    /// irreversible act — which is where fresh evidence actually buys
+    /// something.
+    private func fetch(_ directive: Directive, _ carrier: Device, _ world: WorldSnapshot) -> MissionAction {
+        guard let code = directive.sourceRelayCode else {
+            // Not a reclaim run at all. Re-derive the branch rather than act on
+            // a source that does not exist — `acquire` is a pure function of
+            // the same row, so this settles in one extra evaluation.
+            return .advanceStep(nextStep: Step.acquire)
+        }
+        guard let source = world.device(code) else {
+            return .refreshDevices(deviceCodes: [code], thenStall: .unreachableDevice)
+        }
+        guard let point = source.location else {
+            logger.notice("relay run \(directive.id, privacy: .public): cannot fetch — \(Self.reclaimDiagnosis(code, world), privacy: .public)")
+            return .stall(.unreachableDevice)
+        }
+        if carrier.location == point { return .advanceStep(nextStep: Step.deactivating) }
+        // An open op means the trip is under way — expected, and the guard that
+        // stops a second travel landing on top of the first. Travel is a
+        // TRACKED kind, which is what makes re-dispatching into this same step
+        // safe (see `trackedKinds`).
+        if world.openOperation(for: carrier.deviceCode) != nil { return .wait }
+        // …and the guard for the gap between that op closing and the arrival's
+        // location write landing, in which the check above says "not there yet"
+        // about a carrier that already is.
+        if let unconfirmed = SalvageRun.travelPositionUnconfirmed(carrier, world) { return unconfirmed }
+        return .dispatch(
+            kind: .travel, deviceCode: carrier.deviceCode,
+            params: CommandParams(destination: point), nextStep: Step.fetching
+        )
+    }
+
+    /// Issue `deactivate` once, with the carrier standing alongside.
+    /// Dispatch-only, deliberately.
+    ///
+    /// `deactivate` is a `.simple` verb — `CommandClient.deadlineCommands` is
+    /// `["recall", "search", "compact", "unfurl", "repair"]` and does not
+    /// contain it, so `completion(for:)` classifies it `.immediate` and the
+    /// dispatch returns `.accepted(operationID: nil)` with NO `Operation` row.
+    /// It therefore gets the same split every other `.simple` verb in this file
+    /// gets: this step dispatches, `confirmingIdle` polls. Handing `nextStep`
+    /// back to this step would re-issue `deactivate` at the live API on every
+    /// tick forever, against a deadline that could never accumulate.
+    private func deactivateSource(
+        _ directive: Directive, _ carrier: Device, _ world: WorldSnapshot
+    ) -> MissionAction {
+        guard let code = directive.sourceRelayCode else { return .advanceStep(nextStep: Step.acquire) }
+        // Fresh evidence immediately before the irreversible act — the confirm
+        // `acquire` bought may be a whole interstellar trip old by now.
+        let source: Device
+        switch Self.confirmSource(directive, code, world) {
+        case let .act(action): return action
+        case let .confirmed(device): source = device
+        }
+        // `sourceIsReclaimable` has already proven the relay HAS a location, so
+        // this is genuinely "are they in the same place" and not a nil match.
+        guard source.location == carrier.location else {
+            // Re-entered without the carrier having made the trip (a directive
+            // relaunched at this step, a carrier sent elsewhere in between).
+            // Go and fetch it rather than deactivating something out of reach.
+            return .advanceStep(nextStep: Step.fetching)
+        }
+        return .dispatch(
+            kind: OperationKind.simple("deactivate"), deviceCode: source.deviceCode,
+            params: CommandParams(), nextStep: Step.confirmingIdle
+        )
+    }
+
+    /// Poll for the dispatched `deactivate` to take.
+    ///
+    /// Never dispatches, for the reason `confirmRelay` states about `activate`:
+    /// the verb carries no operation row, so an `openOperation` check here
+    /// could never be non-nil and could not stop a same-step redispatch — and a
+    /// redispatching poll step would reset the very clock `reclaimDeadline`
+    /// measures from.
+    private func confirmIdle(
+        _ directive: Directive, _ carrier: Device, _ world: WorldSnapshot
+    ) -> MissionAction {
+        guard let code = directive.sourceRelayCode else { return .advanceStep(nextStep: Step.acquire) }
+        guard let source = world.device(code) else { return .stall(.unreachableDevice) }
+        // The stow already took (a lost step move, a relaunch). Nothing left to
+        // confirm about a relay that is cargo.
+        if source.stowedInDeviceCode == carrier.deviceCode {
+            return .advanceStep(nextStep: Step.travelling)
+        }
+        // The success condition, stated as the inverse of the ONE mesh
+        // authority this file recognises (`Device.isActiveRelay` and
+        // `SalvageTargetPlanner.meshSystems`, both keyed on exactly `relaying`)
+        // rather than as a fresh status string of its own: what `stow` needs is
+        // a relay that has stopped relaying, which is that predicate negated.
+        if source.statusBase != "relaying" { return .advanceStep(nextStep: Step.stowing) }
+        // Deadline BEFORE the read (see `confirm-steps-need-fresh-evidence`,
+        // half two): the read below only advances on success, so a
+        // staleness-first ordering would never reach the backstop while reads
+        // keep failing.
+        if world.now.timeIntervalSince(directive.stepStartedAt) > Self.reclaimDeadline {
+            logger.notice("relay run \(directive.id, privacy: .public): \(code, privacy: .public) never stopped relaying after deactivate")
+            return .stall(.unreachableDevice)
+        }
+        // Nothing else moves this row: `deactivate` emits no operation, and the
+        // `relay.*` SSE route only invalidates FTL-mesh freshness rather than
+        // re-reading the device. A bare wait would sit on a stale row for the
+        // whole deadline and then stall on a relay that is actually down.
+        if world.now.timeIntervalSince(source.updatedAt) > Self.pollInterval {
+            return .refreshDevices(deviceCodes: [code], thenStall: nil)
         }
         return .wait
     }
