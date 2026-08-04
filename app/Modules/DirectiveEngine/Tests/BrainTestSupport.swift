@@ -42,12 +42,21 @@ func deviceFixture(
     stowedIn: String? = nil,
     updatedAt: Date = Date(timeIntervalSince1970: 0)
 ) -> Device {
-    Device(
+    // A carrier fixture wears `Brain.carrierTag` unless the test says otherwise.
+    //
+    // Every fixture here predates the tag and was written to mean "a vessel the
+    // brain may fly", which is now exactly what the tag says. Defaulting it
+    // keeps that meaning in one place instead of sprinkling the same tag across
+    // a hundred call sites, and leaves an explicit `tags:` free to express
+    // anything else — including the untagged fleet, which `BrainCarrierTagTests`
+    // builds directly so the gate is never proved by its own default.
+    let resolved = (type == Brain.carrierDeviceType && tags.isEmpty) ? [Brain.carrierTag] : tags
+    return Device(
         deviceCode: code, deviceType: type, replicantCode: "R1", status: status,
         location: location, locationName: nil, operationalCapacity: 100, queueSize: 0,
         stowedInDeviceCode: stowedIn, controllerDeviceCode: nil, attachedToDeviceCode: nil,
         createdAt: Date(timeIntervalSince1970: 0), availableCommands: availableCommands,
-        features: features, tags: tags, detail: .object([:]),
+        features: features, tags: resolved, detail: .object([:]),
         updatedAt: updatedAt, firstSeenAt: Date(timeIntervalSince1970: 0)
     )
 }

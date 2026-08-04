@@ -84,6 +84,22 @@ struct Brain: Sendable {
     /// vessel already standing there.
     static let carrierDeviceType = "heaven_vessel"
 
+    /// The tag a vessel must wear before the brain may fly it.
+    ///
+    /// **Opt-in, with no fallback to "any free vessel of the right type".** The
+    /// type check alone made every idle HEAVEN vessel standing at the hub fair
+    /// game, and the brain launched one run per vessel — three vessels, three
+    /// Relay Runs, all competing for one shared print queue. Which vessels the
+    /// automation may spend is an operator's decision, and there is no column
+    /// that records it; a tag is how this codebase already names a working set
+    /// no column points at (`Directive.fleetTag`, the Haul Run).
+    ///
+    /// Untagged therefore means the brain launches NOTHING, and says so
+    /// (`carrierBlocker`) rather than idling silently — the distinction
+    /// `brain-robustness-bar` clause 6 requires. That is the safe direction: a
+    /// fleet the operator has not opted in stays untouched.
+    static let carrierTag = "auto:tendMesh"
+
     /// How far off its road the brain will send a carrier to fetch a spare
     /// relay it could otherwise print — measured from the PLANT SITE (the grow
     /// candidate's first hop), not from the hub.
@@ -1258,10 +1274,22 @@ struct Brain: Sendable {
     static func carrierBlocker(
         at hub: String, devices: [String: Device], reserved: Set<String>, directives: [Directive]
     ) -> String {
-        let candidates = devices.values
+        let hulls = devices.values
             .filter { $0.deviceType == carrierDeviceType && $0.location == hub }
             .sorted { $0.deviceCode < $1.deviceCode }
-        guard !candidates.isEmpty else { return "no free carrier at \(hub)" }
+        guard !hulls.isEmpty else { return "no free carrier at \(hub)" }
+
+        // Untagged is reported as its own state, not folded into the per-vessel
+        // clauses below: those explain why a vessel the brain MAY fly is
+        // unavailable, and "the operator has not opted this fleet in" is a
+        // different fact with a different remedy — one the operator can act on
+        // immediately, and which would otherwise read as "all busy".
+        let candidates = hulls.filter { $0.tags.contains(carrierTag) }
+        guard !candidates.isEmpty else {
+            let names = hulls.prefix(2).map(\.deviceCode).joined(separator: ", ")
+            let rest = hulls.count > 2 ? " +\(hulls.count - 2) more" : ""
+            return "no vessel at \(hub) is tagged \(carrierTag) — \(names)\(rest) \(hulls.count == 1 ? "is" : "are") untagged"
+        }
 
         let clauses = candidates.map {
             carrierClause($0, reserved: reserved, directives: directives, devices: devices)
@@ -1363,6 +1391,7 @@ struct Brain: Sendable {
     /// four-clause predicate is exactly how that drift starts, so there is one.
     static func isFreeCarrier(_ device: Device, at hub: String, reserved: Set<String>) -> Bool {
         device.deviceType == carrierDeviceType
+            && device.tags.contains(carrierTag)
             && device.location == hub
             && !device.isBusy
             && !reserved.contains(device.deviceCode)

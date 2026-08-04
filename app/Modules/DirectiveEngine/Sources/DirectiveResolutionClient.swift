@@ -33,20 +33,39 @@ public struct DirectiveResolutionClient: Sendable {
     public var pause: @Sendable (_ directiveID: String) async -> Void
     /// Hand a paused directive back to the engine.
     public var resume: @Sendable (_ directiveID: String) async -> Void
+    /// Delete every finished run — `.completed` and `.cancelled` — and its
+    /// timeline. Returns how many rows went.
+    ///
+    /// Housekeeping rather than a resolution verb, but it lives here for the
+    /// reason the verbs do: this is the one type that owns writes to the
+    /// directive tables, and the alternative was giving a view-layer reducer its
+    /// own `defaultDatabase` handle.
+    ///
+    /// **Terminal statuses only, and that is a safety property, not a filter.**
+    /// `.running`, `.needsAttention` and `.paused` all still OWN devices
+    /// (`Brain.owningStatuses`), so deleting one would silently release its
+    /// carrier to the brain mid-flight.
+    public var clearFinished: @Sendable () async -> Int
 
     public init(
         retry: @escaping @Sendable (String) async -> Void,
         skipTarget: @escaping @Sendable (String) async -> Void,
         cancel: @escaping @Sendable (String) async -> Void,
         pause: @escaping @Sendable (String) async -> Void,
-        resume: @escaping @Sendable (String) async -> Void
+        resume: @escaping @Sendable (String) async -> Void,
+        clearFinished: @escaping @Sendable () async -> Int
     ) {
         self.retry = retry
         self.skipTarget = skipTarget
         self.cancel = cancel
         self.pause = pause
         self.resume = resume
+        self.clearFinished = clearFinished
     }
+
+    /// The statuses `clearFinished` deletes. Public so the UI can count exactly
+    /// what the verb would remove instead of re-deciding it.
+    public static let finishedStatuses: Set<DirectiveStatus> = [.completed, .cancelled]
 }
 
 extension DirectiveResolutionClient: DependencyKey {
@@ -98,6 +117,33 @@ extension DirectiveResolutionClient: DependencyKey {
                 directive.status = .running
                 directive.attentionReason = nil
                 directive.stepStartedAt = now
+            }
+        },
+        clearFinished: {
+            @Dependency(\.defaultDatabase) var database
+            do {
+                return try await database.write { db in
+                    let finished = try Directive
+                        .where { $0.status.in(Array(finishedStatuses)) }
+                        .fetchAll(db)
+                    guard !finished.isEmpty else { return 0 }
+                    let ids = finished.map(\.id)
+                    // The timeline entries first, then the rows they point at,
+                    // in ONE transaction — a half-applied clear would leave
+                    // orphan log rows that nothing can ever reach or prune,
+                    // since every timeline query is keyed by directive id.
+                    // `directiveID` is nullable (a log entry can be device-scoped
+                    // rather than run-scoped), so the operand list has to be
+                    // optional too for the comparison to type-check.
+                    let scoped = ids.map(Optional.some)
+                    try DirectiveLogEntry.where { $0.directiveID.in(scoped) }.delete().execute(db)
+                    try Directive.where { $0.id.in(ids) }.delete().execute(db)
+                    logger.info("cleared \(finished.count) finished directive(s)")
+                    return finished.count
+                }
+            } catch {
+                logger.error("clear finished failed: \(error)")
+                return 0
             }
         }
     )
@@ -152,12 +198,13 @@ extension DirectiveResolutionClient: DependencyKey {
         skipTarget: unimplemented("DirectiveResolutionClient.skipTarget"),
         cancel: unimplemented("DirectiveResolutionClient.cancel"),
         pause: unimplemented("DirectiveResolutionClient.pause"),
-        resume: unimplemented("DirectiveResolutionClient.resume")
+        resume: unimplemented("DirectiveResolutionClient.resume"),
+        clearFinished: unimplemented("DirectiveResolutionClient.clearFinished", placeholder: 0)
     )
 
     public static let previewValue = DirectiveResolutionClient(
         retry: { _ in }, skipTarget: { _ in }, cancel: { _ in },
-        pause: { _ in }, resume: { _ in }
+        pause: { _ in }, resume: { _ in }, clearFinished: { 0 }
     )
 }
 

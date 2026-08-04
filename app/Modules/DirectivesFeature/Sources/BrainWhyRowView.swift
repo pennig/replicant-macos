@@ -51,6 +51,10 @@ struct BrainWhyRowView: View {
                 row.servedSpans
                     .styled(prose: .rcCaption, designation: .rcMonoSmall)
                     .foregroundStyle(.rcTextTertiary)
+                    // Unbounded: these rows render only in `BrainWhyDetailView`,
+                    // inside a `ScrollView` that clamps their minimum height to
+                    // nothing. The cap they used to carry was there for the
+                    // pinned header, which no longer shows candidates at all.
                     .fixedSize(horizontal: false, vertical: true)
             }
 

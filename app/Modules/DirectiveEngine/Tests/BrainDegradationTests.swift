@@ -240,7 +240,8 @@ private struct Resolutions: Sendable {
             skipTarget: unimplemented("DirectiveResolutionClient.skipTarget"),
             cancel: { id in cancelled.withValue { $0.append(id) } },
             pause: unimplemented("DirectiveResolutionClient.pause"),
-            resume: unimplemented("DirectiveResolutionClient.resume")
+            resume: unimplemented("DirectiveResolutionClient.resume"),
+            clearFinished: unimplemented("DirectiveResolutionClient.clearFinished", placeholder: 0)
         )
     }
 }
