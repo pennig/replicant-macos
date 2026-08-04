@@ -7,7 +7,10 @@ robustness bar it answers is [brain-robustness-bar](brain-robustness-bar.md).
 evidence map.**
 
 Branch `worktree-tendmesh-grow-prune`, 47 commits (`5096568..d39a1f5`) over a
-27-task plan (`docs/superpowers/plans/2026-08-03-tendmesh-grow-prune.md`).
+27-task plan (`docs/superpowers/plans/2026-08-03-tendmesh-grow-prune.md`), plus
+the build record itself and a post-review fix wave (the teardown-race guards and
+the no-free-carrier sentence; everything else review found was triaged *carry*
+and is recorded below rather than changed).
 Additive except for **one** schema change: `Directive.addSourceRelayCode` (a
 nullable TEXT column; `CREATE TABLE` untouched, golden diff exactly one column).
 
@@ -87,6 +90,24 @@ wrong.
   source with nothing present and the follow-up `stow` is unissuable — the relay
   strands permanently inactive at an unreachable L4.
 
+## The one thing to know before running this on the live fleet
+
+**It ships INERT on today's fleet, and that is not a defect.** The `directives`
+table holds `BCC18F1C…`, a `salvageRun` in `.needsAttention` on
+`awaitingRelayRestock`, owning `C7836770` — the only `heaven_vessel` at the
+print hub `AINALRAM-BELT-1`. `.needsAttention` is in `Brain.owningStatuses`, so
+that carrier is reserved; `freeCarrier` returns nil every tick; the brain reports
+idle forever. The deadlock is circular: the stalled mission is waiting for a
+relay, and the capability that would grow the mesh to supply one is blocked by
+that mission holding the carrier.
+
+Nothing in the brain can break it (`brainManagedStall` admits `relayRun` rows
+only, permanently). An operator clears the `salvageRun`, or a second
+`heaven_vessel` reaches the hub — see the precondition gate below before doing
+the latter. The idle sentence now NAMES the holder and its state
+(`Brain.carrierBlocker`), so the condition is visible on the why-view instead of
+reading as calm.
+
 ## Three findings that are not in the plan text
 
 1. **`returnToOrigin: false` is a capability gap, not a bug.** A Relay Run is
@@ -107,10 +128,82 @@ wrong.
    source a reclaim for a carrier hosting no replicant. Live fleet has exactly
    one legal carrier: `C7836770` hosts `pennig-salvage`. The other heaven_vessel
    hosts `pennig-1`, the **anchor**, which must never travel.
+
+   **The symmetric precondition is unrecorded anywhere else, and it is the
+   dangerous half:** flying that carrier away must leave a STATIONARY replicant
+   behind on the mesh, or rule-(2) authority (a mesh subgraph containing a
+   stationary replicant) evaporates for the WHOLE mesh while the run is in
+   flight — not just for the run. Today it holds by accident:
+   `pennig-brain` sits on `matrix_container 831B5E49` at `AINALRAM-BELT-1`,
+   stationary. Nothing states it and nothing checks it. It is now expressible —
+   `WorldView` carries `replicantSystems` — so the check is cheap whenever
+   somebody wants it; until then it is a precondition on the fleet, not a
+   property of the code.
 3. **`view.meshSystems` is presence-based, not a connectivity closure** — any
    system holding a `relaying` relay. So "the hop retains a meshed neighbour" is
    necessary but not sufficient for authority. Both grow and prune read the same
    set. Pre-existing and brain-wide.
+
+## A SECOND CARRIER IS A GATE, not a convenience
+
+Three separately-deferred items are latent for the *same* reason — the live
+fleet has exactly one hub-co-located `heaven_vessel`, so no tick has ever had a
+choice to make. **All three go live in the same tick that a second carrier
+stands at the hub**, and two of them fail toward *silent* outcomes:
+
+1. **Task 16's adoption closure** (`Brain.reservedDevices`, the adoption edge) —
+   directed and crossing containment components, so one directive can
+   transitively reserve every carrier sharing a controller. Outcome: a permanent
+   phantom reservation. Silent — it looks exactly like "no free carrier".
+2. **Task 23's `meshLinks`/`claimed` gap** (`Brain.reclaimSource` →
+   `meshNeighbours`) — `meshLinks` is computed off the live mesh while `claimed`
+   is applied only to the candidate, so a relay another run is already fetching
+   still counts as the hop's way onto the mesh. Outcome: a relay that meshes
+   nothing. Silent — the run completes.
+3. **The escalated-run-holds-its-carrier item** (clause 6 (ii) below). Outcome:
+   growth stops. Loud, now that `Brain.carrierBlocker` names the holder.
+
+Adding a second carrier is therefore a change that **requires all three closed
+first**, not a fleet decision. Individually each is a "carry"; together, and
+armed simultaneously, they are not.
+
+## Clause 1's write enumeration is narrower than the brain's actual writes
+
+`brain-robustness-bar` clause 1 states the brain's writes as
+`{insert directive, cancel directive, drive the sanctioned retry/cancel verbs}`,
+and states them as exhaustive. They are not, as built.
+
+`Brain.confirmCarrier` → `DeviceRefreshClient.refresh(_, .high)` →
+`PollCoordinator.refresh` → `Reconciler.ingest` **upserts a `Device` row and
+inserts/upserts `Operation` rows** as a side effect of the confirm-read. This is
+a local-mirror sync of an authoritative read, through the shared path every
+feature in the app uses — not a game-state mutation, and not the brain
+composing anything — so the SPIRIT of clause 1 is intact. But the list is
+written as closed, and a reader auditing "did the brain write anything else?"
+against it would conclude wrongly. Read clause 1 as: *the brain's writes to
+GAME STATE are those three; reading through the shared refresh path also syncs
+the local mirror, exactly as any other caller of it does.*
+
+## The `RefreshKind` exhaustiveness note, correctly framed
+
+The chain bound (`DirectiveEngineCore.reAsk`, `paid: Set<RefreshKind>`) is
+recorded as safe over a "closed four-case enum", with the implied risk being
+*someone adding a fifth refresh action later*. That framing is wrong in a way
+worth fixing: **the family is already mixed.** `MissionAction.refreshSystem`
+(`MissionStepMachine.swift`) is a fifth refresh action TODAY. It is deliberately
+not in `RefreshKind`: it is executor-handled by design
+(`DirectiveExecutor.apply`'s `.refreshSystem` case — best-effort hydrate, then
+advance), never engine-resolved, so it is outside the `reAsk` bound rather than
+missing from it.
+
+That self-loop was traced: `RelayRun.unresolvedSystem` issues
+`.refreshSystem(nextStep: directive.step)` — a same-step re-entry, the shape
+`same-step-dispatch-needs-tracked-op` warns about — and it is genuinely bounded,
+by `unresolvedSystem`'s own deadline plus `SalvageRun.stepEntryCount`. **No
+defect.** The reason to want an exhaustive switch over the refresh family is
+therefore not that a fifth kind might arrive; it is that the family is already
+split across two handlers on a distinction (engine-resolved vs executor-handled)
+that only a comment records.
 
 ## Robustness — the eight-clause evidence map (verified 2026-08-04)
 
@@ -124,11 +217,11 @@ evidence is **narrower than the clause** say so.
 | 3 Pure selection; API vetoes | `aDeferredConfirmNeverFallsThroughToAnotherCandidateOrCarrier` • `theReserveRailVetoesThePrintAndTheBrainIdlesInsteadOfThrashing` paired with `aWorldAboveTheFloorPrintsWithTheIdenticalStack` • `printVetoedWhenConductiveAloneIsBelowFloor`, `emptyStockReadingVetoes` | No |
 | 4 Snapshot fidelity | (b) `depletedSalvageExcluded`, `readDerivesMeshFromRelayingRelays`, `hubLocationSurfacesOnlyWhenMeshed` • (c) `anOperatorLaunchInsideTheWindowIsCaughtByTheConfirm`, `anOperatorLaunchAfterTheConfirmReadIsStillCaught`, `aCarrierThatDriftedToASiblingLocationIsDeferred`, `aStaleSourceRowNeverAuthorisesTearingARelayDown`, and the e2e's `reads.value == [ConfirmRead("V1", isHigh: true)]` | **YES** — leg (a) "no new poller" has **no test**. It is structural: `Brain` resolves `@Dependency(\.deviceRefresher)` and nothing else, and no `Timer`/`PollCoordinator` appears in `Brain.swift`/`WorldView.swift`. Nearest proxies: `aTickWithNothingWorthLaunchingIssuesNoConfirmRead`, `aTickWithNoFreeCarrierIssuesNoConfirmRead`. |
 | 5 Determinism / e2e | `aGrowLaunchRunsAllTheWayToAGrownMesh`, `theSupervisorAdoptsTheRowTheBrainLaunched`, `theNextGrowGoesToTheNextCandidateNotTheMeshedOne`, and the in-suite negative twin `aRelayThatNeverComesUpGrowsNoMeshAndTheBrainKeepsRankingTheTarget` | **Evidence changed during the build.** The e2e file alone is blind to two rails it traverses: disarming the reserve rail, or making `commitBlocker` return nil, leaves it green. Covered separately by `BrainReserveRailDegradationTests` and `aRacingClaimOnTheSameSpareRelayIsRefusedAtCommitTime` — this clause is **not** clear on the e2e suite alone. |
-| 6 Safe degradation | `idlesWhenThereIsNoUnmeshedValue`, `idlesWhenValueIsInReachButNoCarrierIsFree`, `idlesWithNoPrintHubOnTheMesh` • `anIdleBrainAndAStuckBrainDoNotLookAlike` • `idleIsSurfacedButNotEscalated` / `stallIsSurfacedAndEscalated` / `aDeferralReadsAsItsOwnGateNotAsAnOrdinaryIdle` • `noPruneStateEverEscalates`, `aUselessRelayLeftInPlaceIsIdleCalmNotAStall` • `autoRetriesAreSpacedByTheRetryInterval` | **YES, twice.** (i) "degrades without burning budget" is proven for the **stall-retry** path only; the transient-deferral path writes and dispatches nothing (proven by exact equality over the whole read log) but spends **one `.high` read per tick, ~12/min, no backoff, no memory**. The test pins that ceiling rather than removing it — a documented trade (`Brain.swift:1310-1321`). (ii) An escalated `printStockShort` run **holds its carrier indefinitely** (`.needsAttention` ∈ `owningStatuses`); with N carriers in a resource-short world all N escalate and growth stops. The 15-min retry floor lengthens the fuse to ~45 min; it does not close it. |
+| 6 Safe degradation | `idlesWhenThereIsNoUnmeshedValue`, `idlesWhenValueIsInReachButNoCarrierIsFree`, `idlesWithNoPrintHubOnTheMesh` • `anIdleBrainAndAStuckBrainDoNotLookAlike` • `idleIsSurfacedButNotEscalated` / `stallIsSurfacedAndEscalated` / `aDeferralReadsAsItsOwnGateNotAsAnOrdinaryIdle` • `noPruneStateEverEscalates`, `aUselessRelayLeftInPlaceIsIdleCalmNotAStall` • `autoRetriesAreSpacedByTheRetryInterval` | **YES, twice.** (i) "degrades without burning budget" is proven for the **stall-retry** path only; the transient-deferral path writes and dispatches nothing (proven by exact equality over the whole read log) but spends **one `.high` read per tick, ~12/min, no backoff, no memory**. The test pins that ceiling rather than removing it — a documented trade (`Brain.swift:1310-1321`). (ii) An escalated `printStockShort` run **holds its carrier indefinitely** (`.needsAttention` ∈ `owningStatuses`); with N carriers in a resource-short world all N escalate and growth stops. The 15-min retry floor lengthens the fuse to ~45 min; it does not close it. **Post-review: the HOLD is unchanged, but it is no longer silent** — `Brain.carrierBlocker` names the holding directive and its state, so "a healthy run has the vessel for three minutes" and "a stall the brain may not touch holds it forever" are different sentences (`aStalledHolderReadsDifferentlyFromAHealthyOne`). Legibility, not policy. |
 | 7 Bounded blast radius | `allWritesAreAdditive` (60 ticks of superset checks, with a non-vacuity assertion) • `aRacingClaimOnTheSameSpareRelayIsRefusedAtCommitTime` + twin • prune pins `loadBearingRelayIsPinned`, `brandNewHopTowardUnreachedValueIsPinnedByConstruction`, `equalCostAlternativeChainsPinOneCompleteServingChain`, `censusHoleAnywhereInTheMeshPinsEveryRelay`, `anchorWithNoCensusPositionPinsEveryRelay`, `relaysOnTheRoadToAReplicantAwayFromTheHubArePinned`, `systemHoldingOurOwnDeployedDevicesIsPinned`, `meshedSystemNobodyHasSurveyedIsPinned` • rail `theReserveRailIsArmedWithTheCalibratedFloor`, `aggregateSpendFloorIsPinnedToItsDerivedValue` • authority `aCarrierHostingNoReplicantPrintsRatherThanReclaiming`, `aSourceTheNewRelayNeedsToLinkToIsNotReclaimed` | Residuals recorded, not closed: an *interior* census hole is structurally not enumerable before the search runs; `meshSystems` is presence-based (see finding 3); `Brain.swift:549` computes `meshLinks` off the live mesh while applying `claimed` only to the candidate. |
 | 8 Live why-view | `aPublishedReportReachesTheDirectivesFeaturesState`, `noReportMeansNoCard` • `candidatesRenderInRankOrderWithTheirGraphFacts`, `dispatchRendersTheTopCandidatesRationaleAsTheGate`, `theFourGateStatesAllReadDifferently` • `aRecent429SurfacesDistinctlyFromSelfThrottling`, `anOld429IsNotReportedAsCurrentPressure` • `theReserveFloorLineReportsAllThreeVetoStatesNotJustTwo`, `theCapNeverHidesTheLaunchedCandidate` | No. "No new table" holds — the feed is `@Shared(.inMemory)` and the branch's only schema change is one nullable column. |
 
-## Sign-off verification (2026-08-04)
+## Sign-off verification (2026-08-04, re-run after the post-review fix wave)
 
 `swift build --build-tests` clean; index store linked. Per-product event-stream
 runs (one output path per product — the multi-target truncation trap), all six
@@ -136,15 +229,17 @@ targets this branch touched:
 
 | Product | Test functions | Suites | Failed | Skipped | Crashed |
 | --- | --- | --- | --- | --- | --- |
-| DirectiveEngineTests | 607 | 84 | 0 | 0 | 0 |
+| DirectiveEngineTests | 614 | 85 | 0 | 0 | 0 |
 | GameServicesTests | 219 | 28 | 0 | 0 | 0 |
 | DirectivesFeatureTests | 129 | 12 | 0 | 0 | 0 |
 | GameModelsTests | 69 | 12 | 0 | 0 | 0 |
 | APITests | 38 | 9 | 0 | 0 | 0 |
 | GameDatabaseTests | 20 | 7 | 0 | 0 | 0 |
 
-**1,082 test functions across 152 suites, zero failures, zero crashed targets**
-(each stream carries exactly one module and one `runEnded`).
+**1,089 test functions across 153 suites, zero failures, zero crashed targets**
+(each stream carries exactly one module and one `runEnded`). The pre-fix-wave
+figures were 1,082 / 152, all in `DirectiveEngineTests`: +5 for the carrier
+-blocker sentence (one new suite) and +2 for the teardown race.
 
 > Counting note: `testStarted` fires for **suites as well as functions**, so a
 > raw `testStarted` count reads 691 for DirectiveEngine where the console says
@@ -156,9 +251,22 @@ targets this branch touched:
 - `DeviceRefreshClient.testValue` is `{ _, _ in nil }` — a live deviation from
   the "Loud test defaults" rule. An un-stubbed brain test defers *silently*.
   Durable fix: `unimplemented(…)`.
-- `DirectiveEngine.stop()` cancels the brain task but does not await it, so a
+- ~~`DirectiveEngine.stop()` cancels the brain task but does not await it, so a
   logout landing inside `tickBrain()`'s suspension can republish after the
-  clear. One-line fix: `guard !Task.isCancelled` before the publish.
+  clear.~~ **FIXED in the post-review fix wave, and it was wider than "one line
+  before the publish".** The same suspension window also reaches
+  `Brain.respondToStalls`' `resolution.retry` and `Brain.launch`'s
+  `Directive.insert`, which were held back only by GRDB throwing
+  `CancellationError` out of its async accessors — verified by mutation: with
+  `launch`'s new guard removed the insert still does not land, so the dependency
+  really was load-bearing, and undocumented. Guards now sit at four points, each
+  immediately before an irreversible act with its own suspension in front of it:
+  entry to `tickBrain()` (a tick that BEGINS after `stop()`), before the auto-
+  `retry`, before the `.high` confirm-read and again before the insert, and
+  before the publish. Pinned by `aTickStoppedMidFlightPublishesNothingAndWrites
+  Nothing` and `aTickThatBeginsAfterStopNeverRunsAtAll` — neither awaits the tick
+  before calling `stop()`, which is what the pre-existing
+  `stoppingClearsTheWhyViewsFeed` did and why it could not catch this.
 - `DirectiveLogEntry` has **no retention policy** while `WorldSnapshot.read`
   re-fetches a directive's entire log every tick — the amplifier behind a whole
   defect class found during this build.
@@ -174,3 +282,9 @@ targets this branch touched:
   relay in an unscanned system is pinned indefinitely, and waypoint systems are
   exactly the ones a survey run least likely scanned. Prune may fire far less
   often than ticket 10 assumes.
+- `WorldView.read` decodes the `systemJSON` blob of every surveyed system every
+  tick — 141 of 14,122 today, ~1,700 decodes/min, which is nothing. The header
+  now names the threshold at which the `belts` index-table escape hatch stops
+  being YAGNI: **a few thousand surveyed systems** (~36,000 decodes/min at
+  3,000). Another automation is actively growing survey coverage, so this is a
+  number to watch, not a hypothetical.

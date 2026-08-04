@@ -30,6 +30,17 @@
 //  documented escape hatch is a dedicated `belts` index table populated at
 //  hydrate time — not built now, YAGNI until the count actually demands it.
 //
+//  AND HERE IS THE COUNT AT WHICH IT STOPS BEING YAGNI, so nobody has to
+//  rediscover it: today 141 of the census's 14,122 systems are surveyed, so a
+//  tick decodes 141 blobs — about 1,700 decodes a minute, which is nothing. The
+//  filter is on SURVEYED systems, and a survey automation is actively growing
+//  that number, so it is not static. Call the threshold A FEW THOUSAND: at
+//  3,000 surveyed the same loop is ~36,000 decodes a minute of JSON that
+//  changes only when a system is scanned, and paying it every 5 seconds to
+//  re-derive an unchanged answer is the point at which the index table is worth
+//  building. Below that, measure before optimising; above it, don't bother
+//  measuring.
+//
 //  Task 21 widened that decode set by exactly one bound: it used to skip
 //  MESHED systems too ("a meshed system needs no grow-scoring"), which was
 //  true while grow was the only consumer. Prune is the other reading, and it
