@@ -283,3 +283,87 @@ struct MeshGraphReachTests {
         }
     }
 }
+
+/// Task 21: the second reading of the same search. `reach` answers Grow ("what
+/// must I still plant?") and throws the free systems away; `pathUnion` answers
+/// Prune ("what is already carrying weight?") and keeps them. These pin the
+/// difference at the graph level — `PruneTests` exercises the predicate built
+/// on top.
+@Suite("Mesh graph path union")
+struct MeshGraphPathUnionTests {
+    // Line world: ANCHOR(0) — W(6) — T(12), with FAR(40) out of everyone's reach.
+    let positions: [String: Position] = [
+        "ANCHOR": .init(x: 0, y: 0, z: 0),
+        "W": .init(x: 6, y: 0, z: 0),
+        "T": .init(x: 12, y: 0, z: 0),
+        "FAR": .init(x: 40, y: 0, z: 0),
+    ]
+
+    /// A free interior system is ON the returned path — the exact fact
+    /// `reach` cannot express, since it makes every free system a source and
+    /// then filters sources out of `Chain.waypoints`. Both calls are made
+    /// against the identical world so the contrast is the reading, not the
+    /// input.
+    @Test func freeInteriorSystemsAreOnThePathUnion() {
+        let g = MeshGraph(positions: positions)
+        #expect(
+            g.pathUnion(to: ["T"], from: ["ANCHOR"], free: ["ANCHOR", "W", "T"])
+                == ["ANCHOR", "W", "T"]
+        )
+        // The same world through Grow's reading: T is meshed, so there is
+        // nothing to plant and W appears nowhere at all.
+        #expect(g.reach(targets: ["T"], meshSystems: ["ANCHOR", "W", "T"]).isEmpty)
+    }
+
+    /// A path that must PLANT its way out still reports the systems it
+    /// crosses, free and unmeshed alike — the union is the whole route, not
+    /// just its new half.
+    @Test func unionSpansFreePrefixAndUnmeshedSuffix() {
+        let g = MeshGraph(positions: positions)
+        #expect(
+            g.pathUnion(to: ["T"], from: ["ANCHOR"], free: ["ANCHOR", "W"]) == ["ANCHOR", "W", "T"]
+        )
+    }
+
+    /// Traversing an existing free relay is strictly cheaper than planting
+    /// around it — and cost outranks both of the tiebreaks below it, which is
+    /// what this world isolates. The detour through `AA` is SHORTER (12 ly vs
+    /// 13.4) and its designation sorts FIRST, so it would win on distance or
+    /// on designation; it loses only because reaching T through it costs two
+    /// relays against W's one.
+    ///
+    /// This is the property `PruneTests`' tie case rests on: since any route
+    /// that must plant is strictly dearer than one that does not, an exact
+    /// tie can only ever arise between two ALREADY-FREE paths.
+    @Test func freeRouteBeatsAShorterRouteThatMustPlant() {
+        let g = MeshGraph(positions: [
+            "ANCHOR": .init(x: 0, y: 0, z: 0),
+            "W": .init(x: 3, y: 6, z: 0), // free, but the long way round
+            "AA": .init(x: 0, y: 6, z: 0), // shorter and lexicographically first — must still lose
+            "T": .init(x: 0, y: 12, z: 0),
+        ])
+        #expect(
+            g.pathUnion(to: ["T"], from: ["ANCHOR"], free: ["ANCHOR", "W"]) == ["ANCHOR", "W", "T"]
+        )
+    }
+
+    /// An unreachable target contributes nothing — never a partial path, and
+    /// never a crash. Proven beside a reachable target in the same call, so
+    /// the empty half is provably about FAR and not about the call failing.
+    @Test func unreachableTargetContributesNothing() {
+        let g = MeshGraph(positions: positions)
+        #expect(
+            g.pathUnion(to: ["T", "FAR"], from: ["ANCHOR"], free: ["ANCHOR", "W"])
+                == ["ANCHOR", "W", "T"]
+        )
+    }
+
+    /// No source in the graph, or no targets: an empty union. The predicate
+    /// above treats an empty union as "reclaim everything", so these two
+    /// degenerate cases are exactly the ones it must refuse to run at all.
+    @Test func absentSourceOrEmptyTargetsYieldsAnEmptyUnion() {
+        let g = MeshGraph(positions: positions)
+        #expect(g.pathUnion(to: ["T"], from: ["NOWHERE"], free: ["W"]).isEmpty)
+        #expect(g.pathUnion(to: [], from: ["ANCHOR"], free: ["ANCHOR"]).isEmpty)
+    }
+}

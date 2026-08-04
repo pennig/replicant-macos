@@ -21,6 +21,15 @@
 //  this one computation, so correctness here is load-bearing for the whole
 //  brain.
 //
+//  Task 21: that promise made structural. The search itself moved into a
+//  private `search(sources:free:targets:)` with TWO public readings over it —
+//  `reach` (Grow: cheapest chain from the mesh toward value) and `pathUnion`
+//  (Prune: every system lying on a cheapest anchor→value path). Splitting
+//  `sources` from `free` is what lets Prune root at the anchor while still
+//  traversing deployed relays for nothing, which is the only way a relay can
+//  appear inside a returned path at all. Grow's behaviour is unchanged: it
+//  passes the mesh as both.
+//
 
 import Foundation
 import UniverseModels
@@ -192,9 +201,62 @@ extension MeshGraph {
         }
     }
 
-    /// Walks `pred` links from `target` back to its zero-cost mesh source,
-    /// returning the full path in source-to-target order (mesh source
-    /// first, `target` last).
+    /// The one search. `sources` are the zero-cost starting points; entering
+    /// a system in `free` adds no relay, entering anything else adds one.
+    /// Returns the settled cost/predecessor map, which the two public
+    /// readings below interpret differently — `reach` turns it into per-
+    /// target chains for Grow, `pathUnion` backtracks it into the set of
+    /// systems Prune must not reclaim.
+    ///
+    /// `sources` and `free` are separate parameters even though `reach`
+    /// passes the same set for both, because Prune needs them to differ: it
+    /// roots the search at the ANCHOR alone while still letting every
+    /// deployed relay be traversed for free. That distinction is the whole
+    /// reason a relay can appear INSIDE a returned path at all — see
+    /// `PrunePredicate`'s header for why a mesh-rooted search structurally
+    /// cannot answer the prune question.
+    private func search(
+        sources: Set<String>, free: Set<String>, targets: Set<String>
+    ) -> [String: DijkstraState] {
+        guard !targets.isEmpty, !sources.isEmpty else { return [:] }
+
+        var best: [String: DijkstraState] = [:]
+        var frontier = Heap<Frontier>()
+        for source in sources where positions[source] != nil {
+            best[source] = DijkstraState(relays: 0, dist: 0, pred: nil)
+            frontier.insert(Frontier(system: source, relays: 0, dist: 0))
+        }
+
+        var settled: Set<String> = []
+        var remaining = targets
+        while !remaining.isEmpty, let node = frontier.popMin() {
+            guard !settled.contains(node.system) else { continue }
+            settled.insert(node.system)
+            remaining.remove(node.system)
+
+            guard let origin = positions[node.system] else { continue }
+            for neighbour in neighbours(of: node.system) {
+                guard !settled.contains(neighbour), let neighbourPosition = positions[neighbour] else { continue }
+                let stepDist = origin.distance(to: neighbourPosition)
+                let addedRelay = free.contains(neighbour) ? 0 : 1
+                let candidate = DijkstraState(
+                    relays: node.relays + addedRelay,
+                    dist: node.dist + stepDist,
+                    pred: node.system
+                )
+                if let current = best[neighbour], (current.relays, current.dist) <= (candidate.relays, candidate.dist) {
+                    continue
+                }
+                best[neighbour] = candidate
+                frontier.insert(Frontier(system: neighbour, relays: candidate.relays, dist: candidate.dist))
+            }
+        }
+        return best
+    }
+
+    /// Walks `pred` links from `target` back to its zero-cost source,
+    /// returning the full path in source-to-target order (source first,
+    /// `target` last).
     private static func backtrack(to target: String, best: [String: DijkstraState]) -> [String] {
         var path: [String] = []
         var current: String? = target
@@ -238,39 +300,9 @@ public extension MeshGraph {
     /// comfortably inside the 5-second tick budget: ~14k pops × ≤27-cell
     /// probes plus an O(n log n) heap is single-digit milliseconds.
     func reach(targets: Set<String>, meshSystems: Set<String>) -> [String: Chain] {
-        guard !targets.isEmpty, !meshSystems.isEmpty else { return [:] }
-
-        var best: [String: DijkstraState] = [:]
-        var frontier = Heap<Frontier>()
-        for m in meshSystems where positions[m] != nil {
-            best[m] = DijkstraState(relays: 0, dist: 0, pred: nil)
-            frontier.insert(Frontier(system: m, relays: 0, dist: 0))
-        }
-
-        var settled: Set<String> = []
-        var remaining = targets
-        while !remaining.isEmpty, let node = frontier.popMin() {
-            guard !settled.contains(node.system) else { continue }
-            settled.insert(node.system)
-            remaining.remove(node.system)
-
-            guard let origin = positions[node.system] else { continue }
-            for neighbour in neighbours(of: node.system) {
-                guard !settled.contains(neighbour), let neighbourPosition = positions[neighbour] else { continue }
-                let stepDist = origin.distance(to: neighbourPosition)
-                let addedRelay = meshSystems.contains(neighbour) ? 0 : 1
-                let candidate = DijkstraState(
-                    relays: node.relays + addedRelay,
-                    dist: node.dist + stepDist,
-                    pred: node.system
-                )
-                if let current = best[neighbour], (current.relays, current.dist) <= (candidate.relays, candidate.dist) {
-                    continue
-                }
-                best[neighbour] = candidate
-                frontier.insert(Frontier(system: neighbour, relays: candidate.relays, dist: candidate.dist))
-            }
-        }
+        // Grow's reading: every mesh system is both a source and free, which
+        // is what makes this "the cheapest chain from ANYWHERE on the mesh".
+        let best = search(sources: meshSystems, free: meshSystems, targets: targets)
 
         var chains: [String: Chain] = [:]
         for target in targets {
@@ -289,5 +321,34 @@ public extension MeshGraph {
             )
         }
         return chains
+    }
+
+    /// Prune's reading of the same search: every system lying on a cheapest
+    /// path from `sources` to any of `targets`, unioned — free systems and
+    /// sources included, which is exactly what `reach` throws away.
+    ///
+    /// The two readings differ in one deliberate way. `reach` seeds sources
+    /// AT the mesh, so a mesh system is always a path's origin and never an
+    /// interior node; Prune instead seeds one anchor and marks the mesh
+    /// `free`, so the returned paths run THROUGH the deployed relays that
+    /// carry authority outward. Same graph, same cost model, same total
+    /// order — see `search`.
+    ///
+    /// A target with no path from any source contributes nothing (it is
+    /// simply absent, never a partial path). Ties resolve exactly as `reach`
+    /// resolves them, on `(relays, dist, designation)`, so the union is the
+    /// same set on every tick given the same world.
+    ///
+    /// The union is a SERVING SUBGRAPH, and that property is what makes it
+    /// safe to read as a keep-list: it is the pointwise union of complete
+    /// source→target paths, so discarding everything outside it leaves every
+    /// one of those paths intact. That holds however the ties fell.
+    func pathUnion(to targets: Set<String>, from sources: Set<String>, free: Set<String>) -> Set<String> {
+        let best = search(sources: sources, free: free, targets: targets)
+        var union: Set<String> = []
+        for target in targets where best[target] != nil {
+            union.formUnion(Self.backtrack(to: target, best: best))
+        }
+        return union
     }
 }

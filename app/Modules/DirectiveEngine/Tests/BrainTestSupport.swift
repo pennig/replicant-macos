@@ -361,6 +361,48 @@ func seedGrowableWorld(
     }
 }
 
+// MARK: - Prune worlds
+
+/// A hub-anchored `WorldView` for prune analysis.
+///
+/// `meshSystems` is DERIVED from the relay device rows via the production
+/// predicate (`SalvageTargetPlanner.meshSystems(in:)`), never hand-set: a
+/// fixture that could claim a system is meshed with no relay standing in it
+/// would let a prune test pass against a world production cannot produce —
+/// and prune's whole job is to judge relay device rows against the mesh they
+/// create.
+///
+/// `hub` names the hub's SYSTEM. The resulting `hubLocation` follows
+/// `WorldView.hubLocation`'s own rule: a location inside that system, but only
+/// when the system is genuinely meshed — `nil` otherwise, which is exactly how
+/// an off-mesh hub reaches the brain.
+func prunableWorld(
+    positions: [String: Position],
+    relays: [String: String],
+    hub: String? = "SOL",
+    salvage: [String: Double] = [:],
+    belts: [String: [BeltInfo]] = [:],
+    events: Set<String> = []
+) -> WorldView {
+    let devices = relays.sorted { $0.key < $1.key }.map { code, system in
+        deviceFixture(
+            code: code, type: "ftl_relay", location: "\(system)-1",
+            status: "relaying", features: ["relay"]
+        )
+    }
+    let mesh = SalvageTargetPlanner.meshSystems(in: devices)
+    return WorldView(
+        devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
+        starPositions: positions,
+        meshSystems: mesh,
+        salvageUnits: salvage,
+        eventSystems: events,
+        hubLocation: hub.flatMap { mesh.contains($0) ? "\($0)-3" : nil },
+        beltsBySystem: belts,
+        now: Date(timeIntervalSince1970: 0)
+    )
+}
+
 // MARK: - LocationEvent seeds
 
 /// A live location event ("quest") sited at a location. `status` defaults to

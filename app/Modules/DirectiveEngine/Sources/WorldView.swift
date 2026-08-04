@@ -19,18 +19,28 @@
 //  other field above comes from a cheap table; belt richness only exists
 //  inside the per-system `StarSystem` JSON blob (`SystemDetail.systemJSON`),
 //  and decoding all ~14,000 census systems every 5-second tick would be the
-//  most expensive thing the brain does. Bounded two ways before a single
-//  blob is touched: SURVEYED — `SystemDetail.systemScanned` filters in SQL,
-//  since belt richness is only known once a system has been through its full
-//  system scan (see the field's doc below for why this is the right signal
-//  over `recon == .scanned`) — and UNMESHED — a meshed system needs no
-//  grow-scoring, so its blob is skipped in Swift before `.system()` is ever
-//  called. A single malformed blob degrades to "no belt data for this
+//  most expensive thing the brain does. Bounded by SURVEYED —
+//  `SystemDetail.systemScanned` filters in SQL, since belt richness is only
+//  known once a system has been through its full system scan (see the field's
+//  doc below for why this is the right signal over `recon == .scanned`).
+//  A single malformed blob degrades to "no belt data for this
 //  system" rather than failing the whole read (mirrors the same-shaped
 //  decode-failure handling in the sibling `WorldSnapshot` read). If this
 //  decode set ever grows past what's comfortable on a 5-second tick, the
 //  documented escape hatch is a dedicated `belts` index table populated at
 //  hydrate time — not built now, YAGNI until the count actually demands it.
+//
+//  Task 21 widened that decode set by exactly one bound: it used to skip
+//  MESHED systems too ("a meshed system needs no grow-scoring"), which was
+//  true while grow was the only consumer. Prune is the other reading, and it
+//  needs the belts of systems already REACHED — a perpetual mine belt is a
+//  live-value target forever, and the relay standing in it must never fall
+//  off the path-union. Without those belts a reached mine's own relay reads
+//  as useless, which is the one direction prune must never err in. The cost
+//  is negligible: the meshed set is tens of systems against a surveyed set
+//  in the hundreds, and SURVEYED — the bound that actually keeps ~14,000
+//  blobs out of the loop — is untouched. Grow is unaffected:
+//  `ValueCatalog.build` subtracts meshed systems itself.
 //
 
 import Foundation
@@ -64,11 +74,12 @@ public struct WorldView: Equatable, Sendable {
     /// off-mesh hub is a later concern (escalate/unsupported per the 06
     /// design), not something the brain can route a `deliver` toward yet.
     public let hubLocation: String?
-    /// System → its belts, classified. Populated only for systems that are
-    /// both surveyed (`SystemDetail.systemScanned`) and unmeshed — see the
-    /// module doc above for why. A system with belts in its blob that all
-    /// fail to classify (`BeltClass.classify` returns `nil`) is simply
-    /// absent here, same as a system with no belts at all.
+    /// System → its belts, classified. Populated for every SURVEYED
+    /// (`SystemDetail.systemScanned`) system, meshed or not — see the module
+    /// doc above for why survey is the bound and why mesh status no longer
+    /// is. A system with belts in its blob that all fail to classify
+    /// (`BeltClass.classify` returns `nil`) is simply absent here, same as a
+    /// system with no belts at all.
     public let beltsBySystem: [String: [BeltInfo]]
     /// The moment this snapshot was taken. Brain logic compares against this
     /// rather than `Date()`, keeping ranking passes pure and their tests
@@ -132,7 +143,7 @@ public struct WorldView: Equatable, Sendable {
 
         let hub = Self.hubLocation(in: allDevices, meshSystems: mesh)
 
-        let belts = try Self.beltsBySystem(in: db, meshSystems: mesh)
+        let belts = try Self.beltsBySystem(in: db)
 
         return WorldView(
             devices: devicesByCode,
@@ -149,17 +160,11 @@ public struct WorldView: Equatable, Sendable {
     /// The bounded belt decode (see the module doc for why it must be
     /// bounded at all). SQL narrows to the surveyed subset before any row's
     /// `systemJSON` even leaves the database — the expensive direction to
-    /// filter, since most of the census is never scanned. `meshSystems` is
-    /// Swift-derived from device rows (`SalvageTargetPlanner.meshSystems`
-    /// has no SQL-expressible equivalent to push down), so the unmeshed
-    /// filter runs here, over that already-small surveyed set, and — this is
-    /// the point — strictly BEFORE `.system()` decodes anything, so a meshed
-    /// system's blob is never touched at all, not decoded-then-discarded.
-    private static func beltsBySystem(
-        in db: Database, meshSystems: Set<String>
-    ) throws -> [String: [BeltInfo]] {
-        let surveyed = try SystemDetail.where { $0.systemScanned }.fetchAll(db)
-        let candidates = surveyed.filter { !meshSystems.contains($0.designation) }
+    /// filter, and the only one that matters, since most of the census is
+    /// never scanned. Both consumers then narrow further on their own terms:
+    /// grow drops meshed systems in `ValueCatalog.build`, prune keeps them.
+    private static func beltsBySystem(in db: Database) throws -> [String: [BeltInfo]] {
+        let candidates = try SystemDetail.where { $0.systemScanned }.fetchAll(db)
 
         var belts: [String: [BeltInfo]] = [:]
         // Failures are tallied, not logged per-row: this loop runs every
@@ -196,13 +201,13 @@ public struct WorldView: Equatable, Sendable {
         if let firstFailure {
             logger.debug(
                 """
-                belts: decoded \(candidates.count - failures, privacy: .public) surveyed/unmeshed \
+                belts: decoded \(candidates.count - failures, privacy: .public) surveyed \
                 system blob(s), \(failures, privacy: .public) failed (first: \(firstFailure, privacy: .public))
                 """
             )
         } else {
             logger.debug(
-                "belts: decoded \(candidates.count, privacy: .public) surveyed/unmeshed system blob(s)"
+                "belts: decoded \(candidates.count, privacy: .public) surveyed system blob(s)"
             )
         }
         return belts

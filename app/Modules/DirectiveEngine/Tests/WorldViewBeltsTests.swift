@@ -3,8 +3,9 @@
 //  Replicould — DirectiveEngine
 //
 //  Task 11: `WorldView.beltsBySystem` hydrated from decoded belt data,
-//  bounded to surveyed (`SystemDetail.systemScanned`) and unmeshed systems —
-//  the one blob-decode boundary in the whole galaxy-wide read.
+//  bounded to surveyed (`SystemDetail.systemScanned`) systems — the one
+//  blob-decode boundary in the whole galaxy-wide read. Task 21 removed the
+//  second bound (unmeshed); see `meshedSurveyedSystemBeltsAreIncluded`.
 //
 
 import Foundation
@@ -33,15 +34,22 @@ struct WorldViewBeltsTests {
         #expect(view.beltsBySystem["CERES"]?.first?.designation == "CERES-2-BELT")
     }
 
-    /// The cost-control guarantee, proven by ISOLATING the mesh variable: two
-    /// systems carry the exact same classifiable belt and are both surveyed —
-    /// the only difference is mesh status. If exclusion tracked anything else
-    /// (a broken survey filter, decode always failing), both would come out
-    /// the same way; only a real mesh-conditioned skip produces one belt and
-    /// not the other. This is what makes it observable proof of SKIPPED work
-    /// rather than a bare "key absent" assertion, which an unsurveyed system
-    /// would produce identically for an unrelated reason.
-    @Test func meshedSurveyedSystemBeltsAreExcluded() async throws {
+    /// Mesh status does NOT gate the decode (Task 21 — it used to).
+    ///
+    /// Prune is the second reader of this field and needs the belts of
+    /// systems already REACHED: a perpetual mine belt is a live-value target
+    /// forever, and the relay standing in it must stay on the path-union. A
+    /// meshed system whose belts were invisible here would have its own relay
+    /// read as useless — the one direction prune must never err in. Grow is
+    /// unaffected, since `ValueCatalog.build` subtracts meshed systems itself
+    /// (`ValueCatalogTests.meshedSystemsAreNotTargets`).
+    ///
+    /// Proven by ISOLATING the mesh variable: two systems carry the exact
+    /// same classifiable belt and are both surveyed — the only difference is
+    /// mesh status, and both now come through. `unsurveyedSystemExcluded`
+    /// below is the sibling that proves the bound which DOES still gate the
+    /// decode, so this pair together says "survey gates, mesh does not."
+    @Test func meshedSurveyedSystemBeltsAreIncluded() async throws {
         let db = try GameDatabase.bootstrap()
         try await db.write { db in
             try seedStar(db, designation: "PALLAS", x: 1, y: 0, z: 0)
@@ -60,7 +68,7 @@ struct WorldViewBeltsTests {
         let view = try await db.read { try WorldView.read(from: $0, now: Date()) }
         #expect(view.meshSystems.contains("VESTA"))
         #expect(view.beltsBySystem["PALLAS"]?.first?.beltClass == .rich)
-        #expect(view.beltsBySystem["VESTA"] == nil)
+        #expect(view.beltsBySystem["VESTA"]?.first?.beltClass == .rich)
     }
 
     /// Belt richness is only known post-survey — an unsurveyed system's belt
