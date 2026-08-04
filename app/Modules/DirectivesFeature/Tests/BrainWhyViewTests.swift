@@ -85,6 +85,7 @@ struct BrainWhyViewTests {
         ranked: [GrowCandidate] = [],
         hubLocation: String? = "SOL-3",
         limits: BrainLimits = calmLimits(),
+        prune: BrainPrune? = nil,
         observedAt: Date = now
     ) -> BrainReport {
         BrainReport(
@@ -92,8 +93,25 @@ struct BrainWhyViewTests {
             ranked: ranked,
             hubLocation: hubLocation,
             limits: limits,
+            prune: prune,
             observedAt: observedAt
         )
+    }
+
+    /// A spare relay standing 7.07 ly from the plant site — the one the brain's
+    /// own reclaim fixtures use, so the wording pinned below is the wording an
+    /// operator would really see.
+    static let deadend = ReclaimableRelay(deviceCode: "R9", system: "DEADEND")
+    /// A second spare, far enough out that no grow will ever fetch it.
+    static let outback = ReclaimableRelay(deviceCode: "R4", system: "OUTBACK")
+
+    static func pruneFacts(
+        reclaimed: BrainReclaim? = nil,
+        spare: [ReclaimableRelay] = [],
+        pinnedCount: Int = 4,
+        declined: PruneDeclineReason? = nil
+    ) -> BrainPrune {
+        BrainPrune(reclaimed: reclaimed, spare: spare, pinnedCount: pinnedCount, declined: declined)
     }
 
     // MARK: - The gate
@@ -391,6 +409,234 @@ struct BrainWhyViewTests {
         #expect(standing(ageSeconds: RelayRun.hubFreshness - 1) == .clear)
         #expect(standing(ageSeconds: RelayRun.hubFreshness) == .clear) // the bound itself is `>`, not `>=`
         #expect(standing(ageSeconds: RelayRun.hubFreshness + 1) == .stale(age: RelayRun.hubFreshness + 1))
+    }
+
+    // MARK: - Prune
+
+    /// The brief's step 1, first half. A reclaim is a GRAPH FACT, in the same
+    /// voice the gate and the candidate rows already speak: which relay, where
+    /// it stands, how far that is from the system it is going to, and what it
+    /// costs. Never a score, and checkable against the map.
+    ///
+    /// The span split is asserted too, because it carries the house monospace
+    /// rule: `DEADEND` and `VEGA` are designations and render mono, while `R9`
+    /// — a DEVICE code, which the rule does not govern (`BrainWhySpan`'s
+    /// header) — stays prose.
+    @Test func aReclaimRendersAsANonEscalatedGraphFact() {
+        let goal = Goal(kind: .tendMesh, target: "VEGA", rationale: vegaRationale)
+        let why = BrainWhy.from(
+            report: Self.report(
+                .dispatch(goal, ranked: [Self.vega]),
+                ranked: [Self.vega],
+                prune: Self.pruneFacts(
+                    reclaimed: BrainReclaim(
+                        deviceCode: "R9", fromSystem: "DEADEND", toSystem: "VEGA", distanceLY: 7.071
+                    )
+                )
+            )
+        )
+        #expect(why.pruneNotes.map(\.kind) == [.reclaimed])
+        #expect(
+            why.pruneNotes.first?.text
+                == "reclaiming R9 from DEADEND — 7.1 ly to VEGA, no resources spent"
+        )
+        #expect(why.pruneNotes.first?.spans == [
+            .prose("reclaiming R9 from "),
+            .designation("DEADEND"),
+            .prose(" — 7.1 ly to "),
+            .designation("VEGA"),
+            .prose(", no resources spent"),
+        ])
+        #expect(!why.isEscalated)
+    }
+
+    /// Clause 6 on the prune side. A useless relay the brain has NOT reclaimed
+    /// is surfaced-CALM: there is no prune stall path at all, because "there is
+    /// a spare relay I haven't reused yet" is never a problem needing an
+    /// operator. So the note reads as an observation, and `isEscalated` stays
+    /// false.
+    @Test func aUselessRelayLeftInPlaceIsIdleCalmNotAStall() {
+        let why = BrainWhy.from(
+            report: Self.report(
+                .idle(reason: "no grow or prune work"),
+                prune: Self.pruneFacts(spare: [Self.deadend])
+            )
+        )
+        #expect(why.isEscalated == false)
+        #expect(why.pruneNotes.map(\.kind) == [.spare])
+        #expect(why.pruneNotes.first?.isObservation == true)
+        #expect(
+            why.pruneNotes.first?.text
+                == "1 relay spare at DEADEND — on no road the mesh needs, kept for the next grow"
+        )
+        #expect(why.pruneNotes.first?.spans.contains(.designation("DEADEND")) == true)
+    }
+
+    /// A tick can do both, and the two facts must not swallow each other: the
+    /// reclaim it took, and the spares it left standing.
+    @Test func aReclaimAndTheSparesLeftBehindAreBothReported() {
+        let goal = Goal(kind: .tendMesh, target: "VEGA", rationale: vegaRationale)
+        let why = BrainWhy.from(
+            report: Self.report(
+                .dispatch(goal, ranked: [Self.vega]),
+                ranked: [Self.vega],
+                prune: Self.pruneFacts(
+                    reclaimed: BrainReclaim(
+                        deviceCode: "R9", fromSystem: "DEADEND", toSystem: "VEGA", distanceLY: 7.071
+                    ),
+                    spare: [Self.outback]
+                )
+            )
+        )
+        #expect(why.pruneNotes.map(\.kind) == [.reclaimed, .spare])
+        #expect(why.pruneNotes.last?.text.contains("OUTBACK") == true)
+        #expect(!why.isEscalated)
+    }
+
+    /// **The distinction a prior review called out.** `PrunePredicate` returns
+    /// an all-pinned partition BOTH when the census cannot place the systems it
+    /// depends on and when every relay is genuinely load-bearing — the two were
+    /// byte-identical before `declined` was added. "I can't judge right now"
+    /// and "nothing is spare" are different facts with different fixes, and
+    /// this surface must not conflate them.
+    ///
+    /// Asserted on the typed KIND as well as the wording, the same discipline
+    /// `BrainWhyPressure` uses: a build that rendered both as one kind of line
+    /// fails here rather than in a screenshot.
+    @Test func decliningToJudgeReadsDifferentlyFromNothingBeingSpare() {
+        let declined = BrainWhy.from(
+            report: Self.report(
+                .idle(reason: "no grow or prune work"),
+                prune: Self.pruneFacts(declined: .censusIncomplete(systems: ["GHOST"]))
+            )
+        )
+        let judged = BrainWhy.from(
+            report: Self.report(.idle(reason: "no grow or prune work"), prune: Self.pruneFacts())
+        )
+
+        #expect(declined.pruneNotes.map(\.kind) == [.declined])
+        #expect(judged.pruneNotes.map(\.kind) == [.pinned])
+        #expect(declined.pruneNotes.first?.text != judged.pruneNotes.first?.text)
+        #expect(
+            declined.pruneNotes.first?.text
+                == "prune stood down — the census cannot place GHOST, so every relay stays pinned"
+        )
+        #expect(
+            judged.pruneNotes.first?.text == "nothing spare — 4 relays pinned on the roads the mesh needs"
+        )
+        // Neither is a problem an operator must fix, so neither escalates.
+        #expect(!declined.isEscalated)
+        #expect(!judged.isEscalated)
+    }
+
+    /// The two decline reasons have different fixes — mesh the hub, versus wait
+    /// for the census to catch up — so they must not collapse into one line.
+    @Test func theTwoDeclineReasonsReadDifferently() {
+        func text(_ reason: PruneDeclineReason) -> String? {
+            BrainWhy.from(
+                report: Self.report(
+                    .idle(reason: "no grow or prune work"), prune: Self.pruneFacts(declined: reason)
+                )
+            ).pruneNotes.first?.text
+        }
+        #expect(
+            text(.noAnchor)
+                == "prune stood down — no print hub on the mesh to judge from, so every relay stays pinned"
+        )
+        #expect(text(.noAnchor) != text(.censusIncomplete(systems: ["GHOST"])))
+    }
+
+    /// `censusIncomplete(systems:)` is UNBOUNDED — after a database reset it can
+    /// carry every mesh and target system at once — so the note names a few and
+    /// counts the rest rather than turning a one-line observation into the whole
+    /// card. Same judgement `hiddenCandidates` makes about the ranked field.
+    @Test func aLongCensusIncompleteListIsCappedAndTheRemainderCounted() {
+        let why = BrainWhy.from(
+            report: Self.report(
+                .idle(reason: "no grow or prune work"),
+                prune: Self.pruneFacts(declined: .censusIncomplete(systems: (1...40).map { "SYS\($0)" }))
+            )
+        )
+        let note = why.pruneNotes.first
+        #expect(note?.kind == .declined)
+        #expect(note?.spans.filter(\.isDesignation).count == BrainWhy.maxNamedSystems)
+        #expect(
+            note?.text == """
+                prune stood down — the census cannot place SYS1, SYS2, SYS3 +37 more, \
+                so every relay stays pinned
+                """
+        )
+    }
+
+    /// The spare list is unbounded for the same reason and gets the same cap.
+    @Test func aLongSpareListIsCappedAndTheRemainderCounted() {
+        let spares = (1...9).map { ReclaimableRelay(deviceCode: "R\($0)", system: "SYS\($0)") }
+        let why = BrainWhy.from(
+            report: Self.report(.idle(reason: "no grow or prune work"), prune: Self.pruneFacts(spare: spares))
+        )
+        #expect(why.pruneNotes.first?.spans.filter(\.isDesignation).count == BrainWhy.maxNamedSystems)
+        #expect(
+            why.pruneNotes.first?.text == """
+                9 relays spare at SYS1, SYS2, SYS3 +6 more — on no road the mesh needs, \
+                kept for the next grow
+                """
+        )
+    }
+
+    /// Two spares in one system name it once. The count is of RELAYS and the
+    /// list is of PLACES — repeating a designation would read as a mistake.
+    @Test func twoSparesInOneSystemNameThatSystemOnce() {
+        let why = BrainWhy.from(
+            report: Self.report(
+                .idle(reason: "no grow or prune work"),
+                prune: Self.pruneFacts(
+                    spare: [
+                        ReclaimableRelay(deviceCode: "R1", system: "DEADEND"),
+                        ReclaimableRelay(deviceCode: "R2", system: "DEADEND"),
+                    ]
+                )
+            )
+        )
+        #expect(
+            why.pruneNotes.first?.text
+                == "2 relays spare at DEADEND — on no road the mesh needs, kept for the next grow"
+        )
+    }
+
+    /// **Prune has no stall path, in any state it can be in.** Growth can halt
+    /// and need an operator; prune cannot. Swept over every note kind at once,
+    /// with the coverage of the sweep itself asserted, so a kind added later
+    /// cannot quietly escape it.
+    @Test func noPruneStateEverEscalates() {
+        let states: [BrainPrune] = [
+            Self.pruneFacts(
+                reclaimed: BrainReclaim(
+                    deviceCode: "R9", fromSystem: "DEADEND", toSystem: "VEGA", distanceLY: 7.071
+                )
+            ),
+            Self.pruneFacts(spare: [Self.deadend]),
+            Self.pruneFacts(),
+            Self.pruneFacts(declined: .noAnchor),
+            Self.pruneFacts(declined: .censusIncomplete(systems: ["GHOST"])),
+        ]
+        var seen: Set<BrainWhyPruneNote.Kind> = []
+        for state in states {
+            let why = BrainWhy.from(
+                report: Self.report(.idle(reason: "no grow or prune work"), prune: state)
+            )
+            #expect(!why.isEscalated, "prune must never escalate — \(state)")
+            #expect(!why.pruneNotes.isEmpty, "every prune state says something — \(state)")
+            seen.formUnion(why.pruneNotes.map(\.kind))
+        }
+        #expect(seen == Set(BrainWhyPruneNote.Kind.allCases))
+    }
+
+    /// A tick that never got as far as judging — no mesh yet, or a world read
+    /// that failed — says NOTHING about prune. Silence is honest there; a
+    /// "nothing spare" line would claim a tidy mesh nobody looked at.
+    @Test func aTickThatDidNotJudgeSaysNothingAboutPrune() {
+        let why = BrainWhy.from(report: Self.report(.idle(reason: "no mesh yet")))
+        #expect(why.pruneNotes.isEmpty)
     }
 
     // MARK: - Monospace for embedded designations

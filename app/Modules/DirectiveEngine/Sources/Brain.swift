@@ -254,7 +254,40 @@ struct Brain: Sendable {
             ranked: plan.ranked,
             hubLocation: snapshot.view.hubLocation,
             limits: Self.limits(hubFootprint: snapshot.hubFootprint),
+            prune: Self.pruneReport(plan: plan, decision: decision),
             observedAt: now
+        )
+    }
+
+    /// The prune half of the report: what the predicate found, and which of it
+    /// the tick actually acted on.
+    ///
+    /// **The reclaim is reported only on a tick that COMMITTED.** `plan` chooses
+    /// a source before the confirm-fresh gate runs, and a gate that defers
+    /// leaves the relay standing exactly where it was — so reporting the choice
+    /// unconditionally would put "reclaiming R9" in front of an operator on a
+    /// tick that reclaimed nothing. Same discipline as `launch`'s degrade-to
+    /// -`.idle`: the report says what HAPPENED.
+    ///
+    /// `spare` excludes whatever was reclaimed, so a relay is never both taken
+    /// and left behind in the same sentence.
+    static func pruneReport(plan: Plan, decision: BrainDecision) -> BrainPrune? {
+        guard let analysis = plan.prune else { return nil }
+
+        var reclaimed: BrainReclaim?
+        if case let .dispatch(goal, _) = decision, let choice = plan.reclaim {
+            reclaimed = BrainReclaim(
+                deviceCode: choice.relay.deviceCode,
+                fromSystem: choice.relay.system,
+                toSystem: goal.target,
+                distanceLY: choice.distanceLY
+            )
+        }
+        return BrainPrune(
+            reclaimed: reclaimed,
+            spare: analysis.reclaimable.filter { $0.deviceCode != reclaimed?.deviceCode },
+            pinnedCount: analysis.pinned.count,
+            declined: analysis.declined
         )
     }
 
@@ -268,7 +301,7 @@ struct Brain: Sendable {
         database: any DatabaseWriter
     ) async -> BrainDecision {
         switch plan {
-        case let .idle(reason, _):
+        case let .idle(reason, _, _):
             // `respondToStalls` has already logged the escalation (with the
             // directive id, which is the part worth having); a second line for
             // the same fact here would just double the per-tick noise.
@@ -278,7 +311,7 @@ struct Brain: Sendable {
             logger.debug("idle — \(reason, privacy: .public)")
             return .idle(reason: reason)
 
-        case let .grow(goal, ranked, carrier, hub, origin, source):
+        case let .grow(goal, ranked, carrier, hub, origin, source, _):
             // The confirm-fresh gate (clause 4c), in two halves that cannot be
             // collapsed into one: the AUTHORITATIVE half is a network read and
             // so cannot happen inside a database transaction, and the LOCAL
@@ -367,7 +400,12 @@ struct Brain: Sendable {
         /// that idles because "every grow candidate is already in flight"
         /// ranked a full field and chose none of it, and an operator reading
         /// that gate needs to see what "every candidate" means.
-        case idle(reason: String, ranked: [GrowCandidate])
+        ///
+        /// `prune` rides on the IDLE arm as well as the grow one, and that is
+        /// the point of carrying it here at all: the ticks on which an operator
+        /// most needs to know a relay is standing idle are the ticks that did
+        /// nothing about it.
+        case idle(reason: String, ranked: [GrowCandidate], prune: PruneAnalysis?)
         /// Launch a Relay Run for `goal` on `carrier`, which stands at `hub`
         /// and so sets off from `origin` (the hub's system). `ranked` is the
         /// whole field the choice was made against, carried through for the
@@ -385,7 +423,7 @@ struct Brain: Sendable {
         /// nothing at all. See `reclaimSource`.
         case grow(
             goal: Goal, ranked: [GrowCandidate], carrier: String, hub: String, origin: String,
-            source: ReclaimChoice?
+            source: ReclaimChoice?, prune: PruneAnalysis?
         )
 
         /// The field this pass ranked, whichever way it went — the why-view's
@@ -393,8 +431,26 @@ struct Brain: Sendable {
         /// site, so the two arms can never be read inconsistently.
         var ranked: [GrowCandidate] {
             switch self {
-            case let .idle(_, ranked): ranked
-            case let .grow(_, ranked, _, _, _, _): ranked
+            case let .idle(_, ranked, _): ranked
+            case let .grow(_, ranked, _, _, _, _, _): ranked
+            }
+        }
+
+        /// What `PrunePredicate` made of this world, or nil if the pass never
+        /// got far enough to ask (no mesh, so no graph and nothing deployed).
+        var prune: PruneAnalysis? {
+            switch self {
+            case let .idle(_, _, prune): prune
+            case let .grow(_, _, _, _, _, _, prune): prune
+            }
+        }
+
+        /// The reclaim this pass CHOSE — not necessarily one that happened; the
+        /// confirm-fresh gate runs after this. See `pruneReport`.
+        var reclaim: ReclaimChoice? {
+            switch self {
+            case .idle: nil
+            case let .grow(_, _, _, _, _, source, _): source
             }
         }
     }
@@ -431,30 +487,48 @@ struct Brain: Sendable {
     /// reaching" and "nothing free to send" are genuinely different states and
     /// an operator needs to be told which one they are in.
     static func plan(view: WorldView, directives: [Directive]) -> Plan {
-        guard !view.meshSystems.isEmpty else { return .idle(reason: "no mesh yet", ranked: []) }
+        guard !view.meshSystems.isEmpty else {
+            // No mesh means no graph and nothing deployed to judge, so prune
+            // has not declined — it has not been asked. Nil, not an empty
+            // partition: the why-view must say nothing rather than claim a
+            // tidy mesh.
+            return .idle(reason: "no mesh yet", ranked: [], prune: nil)
+        }
 
         let graph = MeshGraph(positions: view.starPositions)
+        // ONCE per tick, and BEFORE the gates below, so every arm of this pass
+        // carries it. Hoisted out of `reclaimSource` (which used to run it, and
+        // only on a launching tick) for the why-view's sake: a spare relay is
+        // most worth surfacing precisely on the ticks that do nothing with it,
+        // and reporting the mesh's shape only when it changes would leave an
+        // idling brain unexplained. The cost is one more multi-source Dijkstra
+        // over the census per tick — the same order as `GrowRanking.rank`
+        // beside it, single-digit milliseconds at full census scale
+        // (`MeshGraph.reach`) against a 5-second budget. `reclaimSource` is
+        // handed the result rather than recomputing it, so the SOURCING
+        // judgement is byte-identical to what it was.
+        let prune = PrunePredicate.analyse(view: view, graph: graph)
+
         let ranked = GrowRanking.rank(view: view, graph: graph)
         guard !ranked.isEmpty else {
-            // Prune is a later task, so "no grow work" is the whole of it.
-            return .idle(reason: "no grow or prune work", ranked: [])
+            return .idle(reason: "no grow or prune work", ranked: [], prune: prune)
         }
 
         let inFlight = inFlightTargets(directives)
         guard let candidate = ranked.first(where: { !inFlight.contains($0.firstHop) }) else {
-            return .idle(reason: "every grow candidate is already in flight", ranked: ranked)
+            return .idle(reason: "every grow candidate is already in flight", ranked: ranked, prune: prune)
         }
 
         // The relay has to come from somewhere. `WorldView.hubLocation` is
         // already nil for an OFF-MESH hub, so this one guard covers both "no
         // printer" and "a printer we cannot reach".
         guard let hub = view.hubLocation else {
-            return .idle(reason: "no print hub on the mesh", ranked: ranked)
+            return .idle(reason: "no print hub on the mesh", ranked: ranked, prune: prune)
         }
 
         let reserved = reservedDevices(directives: directives, devices: view.devices)
         guard let carrier = freeCarrier(at: hub, devices: view.devices, reserved: reserved) else {
-            return .idle(reason: "no free carrier at \(hub)", ranked: ranked)
+            return .idle(reason: "no free carrier at \(hub)", ranked: ranked, prune: prune)
         }
 
         return .grow(
@@ -463,14 +537,11 @@ struct Brain: Sendable {
             carrier: carrier.deviceCode,
             hub: hub,
             origin: SiteAssay.system(of: hub),
-            // LAST, and only on a tick that is actually going to launch:
-            // `PrunePredicate.analyse` runs a second Dijkstra over the census,
-            // and there is nothing to source for a tick that has already
-            // decided to idle.
             source: reclaimSource(
-                view: view, graph: graph, target: candidate.firstHop,
+                analysis: prune, view: view, graph: graph, target: candidate.firstHop,
                 carrier: carrier, directives: directives
-            )
+            ),
+            prune: prune
         )
     }
 
@@ -501,10 +572,10 @@ struct Brain: Sendable {
     ///      without one into a loud stall rather than a permanent strand, but a
     ///      stall is still a wasted run and a carrier held out of the fleet
     ///      through three retries and an escalation. So the brain does not send
-    ///      one. This is checked FIRST, before the pathfinding, because it can
-    ///      veto the whole question for free. (It does not pick a DIFFERENT
-    ///      carrier: carrier selection is `freeCarrier`'s job and print works
-    ///      on any hull, so the fallback is simply to print.)
+    ///      one. Checked first here because it vetoes the whole question in one
+    ///      set lookup. (It does not pick a DIFFERENT carrier: carrier selection
+    ///      is `freeCarrier`'s job and print works on any hull, so the fallback
+    ///      is simply to print.)
     ///   2. **A declined analysis sources a print, never a guess.** `declined`
     ///      means the predicate refused to judge this world, and its
     ///      `reclaimable` list is empty as a consequence of the refusal rather
@@ -537,12 +608,16 @@ struct Brain: Sendable {
     /// by construction load-bearing for nothing, so the stall costs a run and a
     /// carrier's time rather than authority — but it is not closed, and a
     /// second `.high` read per launching tick is not obviously the right price.
+    ///
+    /// `analysis` is computed once per tick by `plan` and handed in, rather
+    /// than run here, so the why-view can report what prune saw on ticks that
+    /// source nothing. The judgement below is unchanged by that: it reads the
+    /// same partition it used to compute for itself.
     static func reclaimSource(
-        view: WorldView, graph: MeshGraph, target: String, carrier: Device, directives: [Directive]
+        analysis: PruneAnalysis, view: WorldView, graph: MeshGraph, target: String,
+        carrier: Device, directives: [Directive]
     ) -> ReclaimChoice? {
         guard view.replicantHostDevices.contains(carrier.deviceCode) else { return nil }
-
-        let analysis = PrunePredicate.analyse(view: view, graph: graph)
         guard analysis.declined == nil else { return nil }
 
         let claimed = inFlightSources(directives)

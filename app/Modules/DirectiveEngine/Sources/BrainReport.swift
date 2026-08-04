@@ -135,6 +135,77 @@ public struct BrainLimits: Equatable, Sendable {
     }
 }
 
+/// A reclaim the tick actually took: the spare relay it is sourcing a grow
+/// from, where that relay stands, and where it is going.
+///
+/// A GRAPH FACT rather than a device code, for the reason `Goal.rationale` is
+/// one — "R9, at DEADEND, 7.1 ly from VEGA" is a statement an operator can hold
+/// against the map, where `sourceRelayCode = R9` is one they must take on
+/// trust. The same three fields `Brain.sourcing` already puts in the launch log
+/// line, carried as data so the why-view can render the designations in
+/// monospace without taking a sentence apart again (`BrainWhySpan`).
+public struct BrainReclaim: Equatable, Sendable {
+    /// The relay being reclaimed. A DEVICE code, not a designation — the
+    /// monospace rule does not govern it.
+    public let deviceCode: String
+    /// The system it is standing in, and leaving.
+    public let fromSystem: String
+    /// The plant site it is going to — the grow's first hop.
+    public let toSystem: String
+    /// Straight-line light-years between the two.
+    public let distanceLY: Double
+
+    public init(deviceCode: String, fromSystem: String, toSystem: String, distanceLY: Double) {
+        self.deviceCode = deviceCode
+        self.fromSystem = fromSystem
+        self.toSystem = toSystem
+        self.distanceLY = distanceLY
+    }
+}
+
+/// What prune saw this tick, and what the tick did about it — the prune half of
+/// the why-view (`brain-robustness-bar` clause 8).
+///
+/// **Prune has no stall path, and this type has no way to express one.** A
+/// useless relay left standing is an observation, never an escalation: "there
+/// is a spare relay I have not reused yet" is not a problem an operator must
+/// fix. Growth can halt and need a human; prune cannot, by construction.
+///
+/// **`declined` is carried through rather than flattened into an empty
+/// `spare`.** `PrunePredicate` returns an all-pinned partition BOTH when it
+/// cannot judge the world and when every relay is genuinely load-bearing, and
+/// the two were byte-identical before `PruneDeclineReason` existed. "I can't
+/// judge right now" and "nothing is spare" are different facts with different
+/// fixes, so the feed keeps them apart and the why-view renders them apart.
+public struct BrainPrune: Equatable, Sendable {
+    /// The reclaim this tick took — present ONLY when the launch actually
+    /// committed. A tick that chose a source and then deferred reports none:
+    /// the relay is still standing where it was, and the report says what
+    /// HAPPENED, exactly as `.dispatch` does.
+    public let reclaimed: BrainReclaim?
+    /// Spare relays the tick left where they stand, `reclaimed` excluded so
+    /// nothing is counted twice. Ordered by device code, as
+    /// `PruneAnalysis.reclaimable` is.
+    public let spare: [ReclaimableRelay]
+    /// How many deployed relays the mesh needs — the count behind "nothing
+    /// spare", which is meaningless without a scale.
+    public let pinnedCount: Int
+    /// Why prune refused to judge, when it did. See the type's own header.
+    public let declined: PruneDeclineReason?
+
+    public init(
+        reclaimed: BrainReclaim?,
+        spare: [ReclaimableRelay],
+        pinnedCount: Int,
+        declined: PruneDeclineReason?
+    ) {
+        self.reclaimed = reclaimed
+        self.spare = spare
+        self.pinnedCount = pinnedCount
+        self.declined = declined
+    }
+}
+
 /// One brain tick, as reported to the operator: what it decided, the ranked
 /// field it decided against, and the limits it decided under.
 public struct BrainReport: Equatable, Sendable {
@@ -157,6 +228,11 @@ public struct BrainReport: Equatable, Sendable {
     public let hubLocation: String?
     /// The rails, as read this tick.
     public let limits: BrainLimits
+    /// What prune saw, or nil on a tick that never got as far as judging — no
+    /// mesh yet, or a world read that failed. Nil is "nobody looked", never
+    /// "the mesh is tidy", and the why-view renders it as silence rather than
+    /// as reassurance.
+    public let prune: BrainPrune?
     /// The tick's clock reading (`@Dependency(\.date)`, never `Date()`), so a
     /// "recent 429" window is judged against the same instant everything else
     /// on this report was.
@@ -167,12 +243,14 @@ public struct BrainReport: Equatable, Sendable {
         ranked: [GrowCandidate],
         hubLocation: String?,
         limits: BrainLimits,
+        prune: BrainPrune? = nil,
         observedAt: Date
     ) {
         self.decision = decision
         self.ranked = ranked
         self.hubLocation = hubLocation
         self.limits = limits
+        self.prune = prune
         self.observedAt = observedAt
     }
 }

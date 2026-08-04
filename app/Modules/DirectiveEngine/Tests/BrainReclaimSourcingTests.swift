@@ -45,6 +45,7 @@ import Dependencies
 import Foundation
 import GameDatabase
 import GameModels
+import GameServices
 import SQLiteData
 import Testing
 import UniverseModels
@@ -110,13 +111,24 @@ private func seedReclaimWorld(
 /// One brain tick against `database`, with the confirm-fresh gate answering
 /// from the local fleet table (nothing moved between ranking and the commit).
 private func tick(_ database: any DatabaseWriter, uuid: UUIDGenerator) async -> BrainDecision {
+    await tickReport(database, uuid: uuid).decision
+}
+
+/// The same tick, keeping the WHOLE report — the why-view's feed, not just the
+/// decision. `refresher` defaults to the local-fleet stand-in every test above
+/// uses; a test about a DEFERRED launch overrides it.
+private func tickReport(
+    _ database: any DatabaseWriter,
+    uuid: UUIDGenerator,
+    refresher: DeviceRefreshClient? = nil
+) async -> BrainReport {
     await withDependencies {
         $0.defaultDatabase = database
         $0.date = .constant(tickTime)
         $0.uuid = uuid
-        $0.deviceRefresher = confirmingRefresher(database)
+        $0.deviceRefresher = refresher ?? confirmingRefresher(database)
     } operation: {
-        await Brain(now: tickTime).evaluateOnce()
+        await Brain(now: tickTime).report()
     }
 }
 
@@ -444,5 +456,98 @@ struct BrainReclaimSourcingTests {
             row.sourceRelayCode == nil,
             "REL_SPUR is 5 ly away and spare, but it is the only thing MIDWAY can link to — print"
         )
+    }
+
+    // MARK: - What the tick TELLS the operator
+
+    /// The why-view's feed (`brain-robustness-bar` clause 8). Everything above
+    /// asserts on the ROW the brain writes; this asserts on what it SAYS, which
+    /// is a separate surface with its own way of being silently empty — `BrainWhy`
+    /// renders prune out of `BrainReport.prune`, so a report that never carried
+    /// it would leave the whole prune surface dark while every test above stayed
+    /// green.
+    @Test func theReportCarriesTheReclaimTakenAndTheSpareLeftStanding() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try seedReclaimWorld(db, spares: [.deadend, .outback])
+        }
+
+        let report = await tickReport(database, uuid: .incrementing)
+        let prune = try #require(report.prune)
+
+        #expect(prune.declined == nil)
+        #expect(prune.reclaimed?.deviceCode == "R_A")
+        #expect(prune.reclaimed?.fromSystem == "DEADEND")
+        #expect(prune.reclaimed?.toSystem == "VEGA", "the plant site the relay is going to")
+        #expect(prune.reclaimed.map { ($0.distanceLY * 100).rounded() / 100 } == 7.07)
+        // OUTBACK's relay is spare too and was left where it stands — the
+        // surfaced-calm half of clause 6, and the reclaimed one is NOT
+        // double-counted here.
+        #expect(prune.spare.map(\.deviceCode) == ["R_C"])
+        #expect(prune.pinnedCount == 1, "REL_SOL carries the anchor's own road")
+    }
+
+    /// The report is not a launch-only surface. A tick that reclaimed nothing
+    /// must still say what prune saw, or an operator only ever learns the shape
+    /// of their mesh on the ticks that change it — and "a spare relay sitting
+    /// there" is precisely the fact that has no other surface.
+    @Test func anIdleTickStillReportsWhatPruneSaw() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            // No carrier at the hub, so the tick idles rather than launching.
+            try seedReclaimWorld(db, carriers: [], hosts: [], spares: [.deadend, .outback])
+        }
+
+        let report = await tickReport(database, uuid: .incrementing)
+        #expect(report.decision == .idle(reason: "no free carrier at \(growHubLocation)"))
+
+        let prune = try #require(report.prune)
+        #expect(prune.declined == nil)
+        #expect(prune.reclaimed == nil)
+        #expect(prune.spare.map(\.deviceCode) == ["R_A", "R_C"])
+    }
+
+    /// A tick that CHOSE a reclaim and then deferred must not report one. The
+    /// note an operator reads is a statement about what HAPPENED — the relay is
+    /// still standing exactly where it was — and the same discipline that makes
+    /// a failed write degrade to `.idle` rather than `.dispatch` applies to the
+    /// prune half of the report.
+    @Test func aDeferredLaunchReportsNoReclaim() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try seedReclaimWorld(db, spares: [.deadend])
+        }
+
+        let report = await tickReport(
+            database, uuid: .incrementing,
+            // The authoritative confirm-read does not land, so the launch defers.
+            refresher: DeviceRefreshClient { _, _ in nil }
+        )
+        #expect(report.decision.isDeferral, "got \(report.decision)")
+
+        let prune = try #require(report.prune)
+        #expect(prune.reclaimed == nil, "nothing was reclaimed — nothing launched")
+        #expect(prune.spare.map(\.deviceCode) == ["R_A"], "and the spare is still standing")
+    }
+
+    /// A world prune cannot judge reports the REFUSAL, not an empty spare list.
+    /// The two are byte-identical in `PruneAnalysis.reclaimable`, which is the
+    /// whole reason `declined` exists — and the report has to carry it through
+    /// or the why-view is back to guessing.
+    @Test func aDeclinedAnalysisReachesTheReportAsADecline() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try seedReclaimWorld(db, spares: [.deadend])
+            // A meshed system the census cannot place — the same hole
+            // `declinedPruneAnalysisSourcesAPrintRatherThanAGuess` drills.
+            try seedRelay(db, code: "R_GHOST", location: "GHOST-1")
+        }
+
+        let report = await tickReport(database, uuid: .incrementing)
+        let prune = try #require(report.prune)
+
+        #expect(prune.declined == .censusIncomplete(systems: ["GHOST"]))
+        #expect(prune.spare.isEmpty, "a refusal offers nothing up")
+        #expect(prune.reclaimed == nil)
     }
 }

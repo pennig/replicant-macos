@@ -44,6 +44,18 @@ public struct BrainWhy: Equatable, Sendable {
     /// a card that sits ABOVE the Directives list into the whole pane. An
     /// operator needs to know the tail exists; they do not need to read it.
     public var hiddenCandidates: Int
+    /// What prune made of the mesh this tick: a reclaim taken, spare relays
+    /// left standing, nothing spare at all, or a refusal to judge.
+    ///
+    /// **Empty only when prune did not run** (no mesh yet, or a world read that
+    /// failed) — not when the mesh is healthy. A surface that spoke up only
+    /// when something was spare would leave an operator unable to tell a tidy
+    /// mesh from a prune that stopped reporting, which is the same argument
+    /// `limitPressure` makes about a healthy rail.
+    ///
+    /// **Never escalates.** See `BrainWhyPruneNote`'s header: growth can halt
+    /// and need an operator, prune cannot.
+    public var pruneNotes: [BrainWhyPruneNote]
     /// Where the brain's two standing rails stand right now, plus a recent
     /// 429 when there is one.
     ///
@@ -65,12 +77,14 @@ public struct BrainWhy: Equatable, Sendable {
         topGoalGate: [BrainWhySpan],
         candidates: [BrainWhyRow],
         hiddenCandidates: Int = 0,
+        pruneNotes: [BrainWhyPruneNote] = [],
         limitPressure: [BrainWhyPressure],
         isEscalated: Bool
     ) {
         self.topGoalGate = topGoalGate
         self.candidates = candidates
         self.hiddenCandidates = hiddenCandidates
+        self.pruneNotes = pruneNotes
         self.limitPressure = limitPressure
         self.isEscalated = isEscalated
     }
@@ -112,6 +126,7 @@ public struct BrainWhy: Equatable, Sendable {
             topGoalGate: .spans(in: gate(for: report.decision), designations: designations),
             candidates: visible,
             hiddenCandidates: max(0, rows.count - visible.count),
+            pruneNotes: pruneNotes(in: report),
             limitPressure: pressure(in: report),
             isEscalated: isEscalated(report.decision)
         )
@@ -158,6 +173,11 @@ public struct BrainWhy: Equatable, Sendable {
         }
     }
 
+    /// Reads the DECISION and nothing else — in particular, nothing prune
+    /// found can reach it. That is the whole of "prune never escalates": a
+    /// useless relay left in place is surfaced by `pruneNotes` and cannot
+    /// change the card's temperature, because there is no prune stall path to
+    /// escalate to.
     private static func isEscalated(_ decision: BrainDecision) -> Bool {
         switch decision {
         case .idle, .dispatch: false
@@ -181,6 +201,146 @@ public struct BrainWhy: Equatable, Sendable {
                 isChosen: candidate.firstHop == chosen
             )
         }
+    }
+
+    // MARK: - Prune
+
+    /// How many designations a prune note names before it starts counting the
+    /// rest.
+    ///
+    /// **Three, and the cap is not cosmetic.**
+    /// `PruneDeclineReason.censusIncomplete(systems:)` is UNBOUNDED — it names
+    /// every system the judgement depended on that the census could not place,
+    /// which after a database reset is every mesh system AND every target
+    /// system at once. Rendered whole it would push a one-line observation past
+    /// the Directives list this card sits above. The spare list has the same
+    /// shape and gets the same treatment.
+    ///
+    /// Three rather than one because a single name reads as THE problem when it
+    /// is one of many, and rather than five because past about three the
+    /// operator has already learned the only thing this line can teach them —
+    /// which neighbourhood to go and look at. The remainder is counted, never
+    /// silently dropped, the same judgement `hiddenCandidates` makes.
+    public static let maxNamedSystems = 3
+
+    /// What prune had to say, as at most two lines.
+    ///
+    /// A refusal to judge is the WHOLE answer when it happens: a declined
+    /// analysis pins everything as a consequence of the refusal, so pairing it
+    /// with "nothing spare" would report a finding the predicate never made.
+    /// Otherwise a tick may both take a reclaim and leave others standing, and
+    /// both facts are reported — "nothing spare" only when there was genuinely
+    /// nothing left to say.
+    private static func pruneNotes(in report: BrainReport) -> [BrainWhyPruneNote] {
+        guard let prune = report.prune else { return [] }
+        if let declined = prune.declined { return [declinedNote(declined)] }
+
+        var notes: [BrainWhyPruneNote] = []
+        if let reclaimed = prune.reclaimed { notes.append(reclaimedNote(reclaimed)) }
+        if !prune.spare.isEmpty {
+            notes.append(spareNote(prune.spare))
+        } else if prune.reclaimed == nil, prune.pinnedCount > 0 {
+            // Only when the tick did nothing: "nothing spare" straight after
+            // "reclaiming R9" would read as a contradiction, and a mesh with no
+            // relays at all has nothing to report either way.
+            notes.append(pinnedNote(prune.pinnedCount))
+        }
+        return notes
+    }
+
+    /// The reclaim, as a graph fact in the surface's established voice — the
+    /// same shape `Goal.rationale` gives a grow ("meshing VEGA — 3,200 units,
+    /// 1 hop"): what is happening, an em-dash, and the facts that make it
+    /// checkable against the map.
+    ///
+    /// The device code stays PROSE. The house monospace rule governs system and
+    /// location designations; a device code is neither (`BrainWhySpan`'s
+    /// header), and monospacing it here would teach the operator that the two
+    /// kinds of code are the same kind of thing.
+    private static func reclaimedNote(_ reclaim: BrainReclaim) -> BrainWhyPruneNote {
+        BrainWhyPruneNote(
+            kind: .reclaimed,
+            spans: [
+                .prose("reclaiming \(reclaim.deviceCode) from "),
+                .designation(reclaim.fromSystem),
+                // One decimal, matching `Brain.sourcing`'s own formatting of
+                // the same number, so the card and the launch log line cannot
+                // quote different distances for one flight.
+                .prose(" — \(String(format: "%.1f", reclaim.distanceLY)) ly to "),
+                .designation(reclaim.toSystem),
+                .prose(", no resources spent"),
+            ]
+        )
+    }
+
+    /// Spare relays left standing — an OBSERVATION, deliberately. The sentence
+    /// says what the relays are not doing and what they are being kept for; it
+    /// does not ask for anything, because there is nothing for an operator to
+    /// do about a relay the next grow will pick up for free.
+    ///
+    /// Counts RELAYS and names PLACES: two spares in one system name it once,
+    /// since a repeated designation reads as a mistake.
+    private static func spareNote(_ spare: [ReclaimableRelay]) -> BrainWhyPruneNote {
+        BrainWhyPruneNote(
+            kind: .spare,
+            spans: [.prose("\(relays(spare.count)) spare at ")]
+                + named(uniqueSystems(of: spare))
+                + [.prose(" — on no road the mesh needs, kept for the next grow")]
+        )
+    }
+
+    /// Prune judged and found nothing spare. Reported rather than left silent
+    /// for the reason `limitPressure` reports a healthy rail: an operator who
+    /// only ever sees prune when something is loose cannot tell a tidy mesh
+    /// from a prune that stopped answering.
+    private static func pinnedNote(_ pinned: Int) -> BrainWhyPruneNote {
+        BrainWhyPruneNote(
+            kind: .pinned,
+            spans: [.prose("nothing spare — \(relays(pinned)) pinned on the roads the mesh needs")]
+        )
+    }
+
+    /// Prune declined to judge. Leads with "stood down" so it can never be read
+    /// as a finding — the sentence's whole job is to say that the all-pinned
+    /// answer below it was not earned.
+    private static func declinedNote(_ reason: PruneDeclineReason) -> BrainWhyPruneNote {
+        let cause: [BrainWhySpan] = switch reason {
+        case .noAnchor:
+            [.prose("no print hub on the mesh to judge from")]
+        case let .censusIncomplete(systems):
+            [.prose("the census cannot place ")] + named(systems)
+        }
+        return BrainWhyPruneNote(
+            kind: .declined,
+            spans: [.prose("prune stood down — ")] + cause + [.prose(", so every relay stays pinned")]
+        )
+    }
+
+    /// The systems a set of spare relays stands in, deduplicated but keeping
+    /// the list's own (device-code) order, so the line is stable tick to tick.
+    private static func uniqueSystems(of spare: [ReclaimableRelay]) -> [String] {
+        var seen: Set<String> = []
+        return spare.map(\.system).filter { seen.insert($0).inserted }
+    }
+
+    /// The first `maxNamedSystems` designations, tagged for mono, with the
+    /// remainder counted.
+    private static func named(_ systems: [String]) -> [BrainWhySpan] {
+        var spans: [BrainWhySpan] = []
+        for (offset, system) in systems.prefix(maxNamedSystems).enumerated() {
+            if offset > 0 { spans.append(.prose(", ")) }
+            spans.append(.designation(system))
+        }
+        if systems.count > maxNamedSystems {
+            spans.append(.prose(" +\(systems.count - maxNamedSystems) more"))
+        }
+        return spans
+    }
+
+    /// "1 relay" / "14 relays" — the one place this surface pluralises, so the
+    /// prune lines read as sentences at either end.
+    private static func relays(_ count: Int) -> String {
+        "\(self.count(count)) relay\(count == 1 ? "" : "s")"
     }
 
     // MARK: - Limit pressure
@@ -340,6 +500,25 @@ public struct BrainWhyView: View {
                         // A 429 was done TO us; the other two are choices we
                         // made. They must not read alike.
                         .foregroundStyle(pressure.isImposed ? .rcWarning : .rcTextSecondary)
+                }
+            }
+
+            // Prune sits beside the rails rather than among the candidates: the
+            // candidate rows are the grow field this tick ranked, and the mesh's
+            // standing shape is not one of them. Empty only when prune did not
+            // run at all.
+            if !why.pruneNotes.isEmpty {
+                VStack(alignment: .leading, spacing: Space.xxs) {
+                    ForEach(why.pruneNotes) { note in
+                        note.spans
+                            .styled(prose: .rcCaption, designation: .rcMonoSmall)
+                            // A step back for the states that merely describe a
+                            // mesh at rest. Never `.rcWarning`: that is this
+                            // card's escalation colour, and prune has nothing to
+                            // escalate.
+                            .foregroundStyle(note.isObservation ? .rcTextTertiary : .rcTextSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
             }
 
