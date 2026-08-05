@@ -15,14 +15,33 @@ extension DeviceListLayout {
     public static let damagedCapacityThreshold: Double = 50
 
     /// Statuses whose out-of-range reading is expected, not actionable, so
-    /// `.outOfControlRange` is suppressed for them. `surging` is a device
-    /// mid-surge-plate FTL jump: it has left the relay mesh *on purpose* and
-    /// will rejoin on arrival, so the flag carries no information and would
-    /// only put a healthy in-transit device into the operator's triage list.
+    /// `.outOfControlRange` is suppressed for them. As a category: a device
+    /// in transit on an FTL route it will complete, which has left the relay
+    /// mesh *on purpose* and will rejoin on arrival, so the flag carries no
+    /// information and would only put a healthy in-transit device into the
+    /// operator's triage list.
+    ///
+    /// `travelling` and `surging` are the confirmed members — the app's
+    /// owner confirmed `travelling` directly, and `surging` was the original
+    /// status this constant was introduced for. `cruising` is an inference
+    /// from the same mechanic, not separately confirmed: `travelling` is the
+    /// whole-route status while `cruising` and `surging` are the *per-leg*
+    /// statuses of that same trip (`device_cruise_arrived` and
+    /// `device_surge_hop_arrived` each fire once per leg; `device_travel_arrived`
+    /// fires only at the final destination). With `travelling` and `surging`
+    /// both exempt, leaving `cruising` in would make a device mid-route
+    /// appear and disappear from the triage list as its legs change — exactly
+    /// the noise this constant exists to remove.
+    ///
+    /// `recalling` (a drone returning to its controller) is deliberately
+    /// excluded — it's a different mechanic from FTL travel, and there is no
+    /// live evidence it goes out of range; a genuinely cut-off recalling
+    /// drone is worth surfacing.
+    ///
     /// A `Set` so a future transit status can join without restructuring the
     /// check — but don't add one speculatively; confirm live evidence first
     /// (see the note this constant was introduced against).
-    public static let rangeCheckExemptStatuses: Set<String> = ["surging"]
+    public static let rangeCheckExemptStatuses: Set<String> = ["surging", "travelling", "cruising"]
 
     /// Every reason `device` needs attention, in display order.
     ///

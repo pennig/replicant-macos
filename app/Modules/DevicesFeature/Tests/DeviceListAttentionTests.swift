@@ -87,6 +87,69 @@ import Utils
         )
     }
 
+    /// The owner confirmed `travelling` directly: a device mid-FTL-route has
+    /// left the relay mesh on purpose and will rejoin at the final leg, so the
+    /// flag carries no information — same rationale as `surging`.
+    @Test func travellingOutOfRangeDeviceIsNotFlagged() {
+        let travelling = makeDevice(
+            "T001",
+            type: "cargo_freighter",
+            status: "travelling",
+            detail: .object(["in_control_range": .bool(false)])
+        )
+        expectNoDifference(DeviceListLayout.attentionFlags(for: travelling, directives: []), [])
+    }
+
+    /// `cruising` is the per-leg status of the same whole-route trip
+    /// `travelling` names (`device_cruise_arrived` fires once per leg,
+    /// `device_travel_arrived` once at the final destination). With
+    /// `travelling` and `surging` both exempt, leaving `cruising` flagged
+    /// would make a mid-route device flicker in and out of the triage list
+    /// as its legs change — exactly the noise this constant removes.
+    @Test func cruisingOutOfRangeDeviceIsNotFlagged() {
+        let cruising = makeDevice(
+            "C001",
+            type: "cargo_freighter",
+            status: "cruising",
+            detail: .object(["in_control_range": .bool(false)])
+        )
+        expectNoDifference(DeviceListLayout.attentionFlags(for: cruising, directives: []), [])
+    }
+
+    /// `recalling` is a drone returning to its controller — a different
+    /// mechanic from FTL travel — and there is no live evidence it goes
+    /// out of range. Pinned deliberately excluded: if a future author adds
+    /// `recalling` to `rangeCheckExemptStatuses`, this test breaks and forces
+    /// them to read why it wasn't included in the first place.
+    @Test func recallingOutOfRangeDeviceStillFlags() {
+        let recalling = makeDevice(
+            "R001",
+            type: "survey_drone",
+            status: "recalling",
+            detail: .object(["in_control_range": .bool(false)])
+        )
+        expectNoDifference(
+            DeviceListLayout.attentionFlags(for: recalling, directives: []),
+            [.outOfControlRange]
+        )
+    }
+
+    /// The suppression is surgical to `.outOfControlRange` — a travelling
+    /// device that is *also* damaged must still report `.damaged`, proving
+    /// this isn't a blanket "ignore travelling devices" rule.
+    @Test func travellingDamagedDeviceStillFlagsDamaged() {
+        let travellingAndHurt = makeDevice(
+            "T002",
+            status: "travelling",
+            capacity: 10,
+            detail: .object(["in_control_range": .bool(false)])
+        )
+        expectNoDifference(
+            DeviceListLayout.attentionFlags(for: travellingAndHurt, directives: []),
+            [.damaged(capacity: 10)]
+        )
+    }
+
     @Test func directiveJoinsOnDeviceCode() {
         let device = makeDevice("A1")
         let directive = makeDirective(deviceCode: "A1", reason: .commandRejected)
