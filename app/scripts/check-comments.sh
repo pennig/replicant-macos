@@ -8,8 +8,9 @@ DEFAULT_PATH="app/Modules/DirectiveEngine/Sources"
 paths=("${@:-$DEFAULT_PATH}")
 
 # Patterns that are objectively history, never in-situ explanation.
-patterns=(
-  '\b(19|20)[0-9]{2}\b'
+# Matched case-insensitively.
+ci_patterns=(
+  '\b(19|20)[0-9]{2}-[0-9]{2}-[0-9]{2}\b'
   '\bas of\b'
   '\bused to\b'
   '\bpreviously\b'
@@ -19,18 +20,33 @@ patterns=(
   '\bthe alternative\b'
   '\bturned out\b'
   '\bthis (used|shipped) '
-  '\b[0-9A-F]{8}\b'
 )
 
-joined=$(IFS='|'; echo "${patterns[*]}")
+# Live-fleet device codes: an uppercase 8-char alphanumeric token. Matched
+# case-SENSITIVELY (not folded into ci_patterns) so it doesn't also catch
+# lowercase hex — e.g. a commit SHA in a provenance-pointer comment, which
+# CLAUDE.md explicitly allows. Excludes a token immediately preceded by
+# '#' (hex-color literal), '0x' (hex literal, caught via the 'x'), or '/'
+# (URL/path segment) — none of those are device codes.
+code_pattern='(^|[^#/A-Za-z0-9])[0-9A-F]{8}\b'
+
+ci_joined=$(IFS='|'; echo "${ci_patterns[*]}")
 status=0
 
 while IFS= read -r file; do
   # Comment lines only: whole-line // and /* */ block bodies.
-  if grep -nE '^[[:space:]]*(//|/\*|\*)' "$file" \
-     | grep -inE "$joined" \
-     | sed "s|^|${file}:|" \
-     | grep . ; then
+  comments=$(grep -nE '^[[:space:]]*(//|/\*|\*)' "$file")
+  [ -z "$comments" ] && continue
+
+  hits=$(
+    {
+      printf '%s\n' "$comments" | grep -iE "$ci_joined"
+      printf '%s\n' "$comments" | grep -E "$code_pattern"
+    } | sort -t: -k1,1n -u
+  )
+
+  if [ -n "$hits" ]; then
+    printf '%s\n' "$hits" | sed "s|^|${file}:|"
     status=1
   fi
 done < <(find "${paths[@]}" -name '*.swift' -type f)
