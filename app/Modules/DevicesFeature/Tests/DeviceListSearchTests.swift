@@ -89,11 +89,23 @@ import Testing
         expectNoDifference(entries.map(\.id), ["VESSEL", "CTRL", "DRONEA"])
     }
 
-    /// The reveal is transient: `expandedHosts` is an input and is never written.
-    @Test func revealDoesNotMutateExpandedHosts() {
-        let expanded: Set<String> = []
-        _ = sections("survey_drone", expanded: expanded)
-        expectNoDifference(expanded, [])
+    /// The reveal is transient. `expandedHosts` is an input, so a query cannot
+    /// leave the operator's disclosure state changed behind it: clearing the
+    /// query with the same (empty) collapse set must return to that same
+    /// collapsed tree, not the one the query revealed. Asserting the input
+    /// set is "still empty" afterwards would prove nothing — `Set` is a value
+    /// type, so no implementation could ever fail that; this instead checks
+    /// the actual before/after shape of the rendered rows.
+    @Test func revealIsTransientAndLeavesCollapseStateIntact() {
+        let revealed = sections("survey_drone").flatMap(\.entries).map(\.id)
+        let afterClearing = sections("").flatMap(\.entries).map(\.id)
+
+        expectNoDifference(revealed, ["VESSEL", "CTRL", "DRONEA"])
+        // No query and an empty `expandedHosts`: both roots are present but
+        // collapsed. "FTL Relay" < "HEAVEN Vessel" lexicographically, so RELAY
+        // precedes VESSEL; VESSEL's children stay hidden since nothing forces
+        // them open once the query is gone.
+        expectNoDifference(afterClearing, ["RELAY", "VESSEL"])
     }
 
     /// A host that matches on its own keeps its own collapse state — its
