@@ -3,70 +3,28 @@
 //  Replicould — DirectiveEngine
 //
 //  The galaxy as the automation brain sees it: one consistent read of every
-//  meshed system, every census star position, every non-depleted salvage
-//  assay, every live location event, and the print hub — the single input
-//  every later brain task (pathfinding, value ranking, prune analysis)
+//  meshed system, every census star position, every non-depleted salvage assay,
+//  every live location event, the account's replicants and the print hub — the
+//  single input every brain pass (pathfinding, value ranking, prune analysis)
 //  consumes.
 //
-//  A sibling to `WorldSnapshot`, but wider on purpose: `WorldSnapshot` scopes
-//  systems to one directive's `wanted` set because decoding thousands of
-//  `StarSystem` blobs per tick would be real cost; the brain instead needs
-//  galaxy scope to rank ACROSS the whole census, so this reads only the cheap
-//  tables — devices, `stars`, `siteAssays`, `locationEvents` — and touches no
-//  blob.
+//  A sibling to `WorldSnapshot`, but wider: `WorldSnapshot` scopes systems to
+//  one directive's `wanted` set because decoding thousands of `StarSystem`
+//  blobs per tick is real cost, while the brain must rank ACROSS the whole
+//  census. So this reads the cheap tables — devices, `stars`, `siteAssays`,
+//  `locationEvents`, `replicants` — and touches exactly one blob field.
 //
-//  `beltsBySystem` (Task 11): the one blob decode in this whole read. Every
-//  other field above comes from a cheap table; belt richness only exists
-//  inside the per-system `StarSystem` JSON blob (`SystemDetail.systemJSON`),
-//  and decoding all ~14,000 census systems every 5-second tick would be the
-//  most expensive thing the brain does. Bounded by SURVEYED —
-//  `SystemDetail.systemScanned` filters in SQL, since belt richness is only
-//  known once a system has been through its full system scan (see the field's
-//  doc below for why this is the right signal over `recon == .scanned`).
-//  A single malformed blob degrades to "no belt data for this
-//  system" rather than failing the whole read (mirrors the same-shaped
-//  decode-failure handling in the sibling `WorldSnapshot` read). If this
-//  decode set ever grows past what's comfortable on a 5-second tick, the
-//  documented escape hatch is a dedicated `belts` index table populated at
-//  hydrate time — not built now, YAGNI until the count actually demands it.
+//  That field is `beltsBySystem`. Belt richness exists only inside the
+//  per-system `StarSystem` JSON (`SystemDetail.systemJSON`), and decoding all
+//  ~14,000 census systems every 5-second tick would be the most expensive thing
+//  the brain does. SURVEY is the SOLE bound holding that off —
+//  `SystemDetail.systemScanned`, applied in SQL before any blob leaves the
+//  database — so widen it only against a measurement. A single malformed blob
+//  degrades to "no belt data for that system" rather than failing the read,
+//  mirroring the sibling `WorldSnapshot` read.
 //
-//  AND HERE IS THE COUNT AT WHICH IT STOPS BEING YAGNI, so nobody has to
-//  rediscover it: today 141 of the census's 14,122 systems are surveyed, so a
-//  tick decodes 141 blobs — about 1,700 decodes a minute, which is nothing. The
-//  filter is on SURVEYED systems, and a survey automation is actively growing
-//  that number, so it is not static. Call the threshold A FEW THOUSAND: at
-//  3,000 surveyed the same loop is ~36,000 decodes a minute of JSON that
-//  changes only when a system is scanned, and paying it every 5 seconds to
-//  re-derive an unchanged answer is the point at which the index table is worth
-//  building. Below that, measure before optimising; above it, don't bother
-//  measuring.
-//
-//  Task 21 widened that decode set by exactly one bound: it used to skip
-//  MESHED systems too ("a meshed system needs no grow-scoring"), which was
-//  true while grow was the only consumer. Prune is the other reading, and it
-//  needs the belts of systems already REACHED — a perpetual mine belt is a
-//  live-value target forever, and the relay standing in it must never fall
-//  off the path-union. Without those belts a reached mine's own relay reads
-//  as useless, which is the one direction prune must never err in. The cost
-//  is negligible: the meshed set is tens of systems against a surveyed set
-//  in the hundreds, and SURVEYED — the bound that actually keeps ~14,000
-//  blobs out of the loop — is untouched. Grow is unaffected:
-//  `ValueCatalog.build` subtracts meshed systems itself.
-//
-//  Task 23 added the `replicants` read, and it closes a hole rather than
-//  widening a feature: authority in this game comes from a replicant (see the
-//  ftl-authority-rule note), and until now the brain's whole model of the world
-//  contained none — prune anchored on the print HUB as a proxy and the reclaim
-//  path's carrier precondition was unexpressible. Two projections come out of
-//  it (`replicantSystems`, `replicantHostDevices`); the rows themselves stay
-//  out, since nothing here reasons about a replicant's name or XP.
-//
-//  SURVEY IS THEREFORE NOW THE SOLE BOUND on the decode set, and the only
-//  observable proof of it left is `unsurveyedSystemExcluded` — the widening
-//  retired the other one. That same bound is also published as
-//  `surveyedSystems` (below) rather than left implicit, because "we have
-//  never looked at this system" and "we looked and found nothing" are
-//  different facts to prune and identical in `beltsBySystem`.
+//  Only projections of the replicant rows are carried (`replicantSystems`,
+//  `replicantHostDevices`): nothing here reasons about a replicant's name or XP.
 //
 
 import Foundation
@@ -77,6 +35,9 @@ import UniverseModels
 
 private let logger = Logger(subsystem: "name.pennig.replicould", category: "Brain")
 
+/// One tick's galaxy-wide read, as `read(from:now:)` takes it. Inert and
+/// value-typed: a brain pass ranks over this and writes nothing back, so every
+/// pass in a tick sees the same instant.
 public struct WorldView: Equatable, Sendable {
     /// The whole fleet, by device code — the brain ranks across every
     /// device, not a directive-scoped subset.
@@ -96,55 +57,63 @@ public struct WorldView: Equatable, Sendable {
     /// Systems holding at least one live (`LocationEvent.isActive`) location
     /// event.
     public let eventSystems: Set<String>
-    /// The print hub's location, but only when its system is meshed — an
-    /// off-mesh hub is a later concern (escalate/unsupported per the 06
-    /// design), not something the brain can route a `deliver` toward yet.
+    /// The print hub's LOCATION (`SOL-3-1`, not the bare system `SOL`), present
+    /// only when its system is meshed; an off-mesh hub is unsupported and
+    /// escalates rather than being routed toward.
+    ///
+    /// **This is the one hub recognition rule, and anything needing the hub
+    /// re-derives it from here** rather than reading a remembered
+    /// `Directive.originDesignation`, which is `SiteAssay.system(of:)` of this —
+    /// a bare system designation, and a bare designation travels to the
+    /// system's ENTRY POINT, an L4 away from the printer, where an
+    /// exact-location match refuses the carrier that lands there.
     public let hubLocation: String?
     /// System → its belts, classified. Populated for every SURVEYED
-    /// (`SystemDetail.systemScanned`) system, meshed or not — see the module
-    /// doc above for why survey is the bound and why mesh status no longer
-    /// is. A system with belts in its blob that all fail to classify
-    /// (`BeltClass.classify` returns `nil`) is simply absent here, same as a
-    /// system with no belts at all.
+    /// (`SystemDetail.systemScanned`) system, meshed or not: prune needs the
+    /// belts of systems already REACHED, since a perpetual mine belt is a
+    /// live-value target forever and without its belts a reached mine's own
+    /// relay reads as useless — the one direction prune must never err in. Grow
+    /// subtracts meshed systems itself, in `ValueCatalog.build`.
+    ///
+    /// A system whose belts all fail to classify (`BeltClass.classify` returns
+    /// `nil`) is absent here, exactly as a system with no belts at all is; read
+    /// `surveyedSystems` to tell those apart from "never looked".
     public let beltsBySystem: [String: [BeltInfo]]
-    /// Every system holding one of the account's replicants.
+    /// Every system holding one of the account's replicants — **where command
+    /// authority comes from.**
     ///
-    /// **This is where command authority comes from**, and until Task 23 the
-    /// brain could not see it at all (a review confirmed `WorldView` carried no
-    /// replicant anywhere). Per `ftl-authority-rule`, a command reaches a
-    /// device either because a replicant is physically present or because the
-    /// target shares a mesh subgraph with a STATIONARY one — so the systems
-    /// listed here are the roots the whole mesh hangs off, and `PrunePredicate`
-    /// must never offer up the relays that connect them.
+    /// Per `ftl-authority-rule` a command reaches a device either because a
+    /// replicant is physically present or because the target shares a mesh
+    /// subgraph with a STATIONARY one, so these systems are the roots the whole
+    /// mesh hangs off and `PrunePredicate` must never offer up the relays that
+    /// connect them.
     ///
-    /// Read off `Replicant.currentStar` and passed through
-    /// `SiteAssay.system(of:)` so a value that arrives as a location
-    /// (`SOL-3`) reduces to its system the same way every other designation in
-    /// this file does. A replicant mid-flight is NOT filtered out: whichever
-    /// end of the trip `currentStar` names, treating it as authority-bearing
-    /// only ever ADDS a pin, and over-pinning is the safe direction (the
-    /// consumer, `PrunePredicate.servedSystems`, is monotone in its targets).
+    /// Read off `Replicant.currentStar` through `SiteAssay.system(of:)`, so a
+    /// value arriving as a location (`SOL-3`) reduces to its system the way
+    /// every other designation in this file does. A replicant mid-flight is NOT
+    /// filtered out: whichever end of the trip `currentStar` names, treating it
+    /// as authority-bearing only ever ADDS a pin, and over-pinning is the safe
+    /// direction (the consumer, `PrunePredicate.servedSystems`, is monotone in
+    /// its targets).
     public let replicantSystems: Set<String>
     /// The device codes that HOST a replicant (`Replicant.hostedDeviceCode`).
     ///
-    /// The brain's answer to a question the executor can only ask the server
-    /// afterwards: `RelayRun`'s reclaim path deactivates the source relay,
-    /// which takes its system off the mesh, so authority to then issue the
-    /// `stow` comes only from `ftl-authority-rule` rule (1) — a replicant
-    /// physically present. That makes "does this carrier host a replicant?" a
-    /// precondition on choosing a reclaim source at all, and this is the field
-    /// that lets `Brain` check it before committing rather than discovering it
-    /// as a stall (`RelayRun.carrierRetainsAuthority`).
+    /// A carrier absent from this set must never be chosen as a reclaim source:
+    /// `RelayRun`'s reclaim path deactivates the source relay, taking its system
+    /// off the mesh, so authority to then issue the `stow` comes only from
+    /// `ftl-authority-rule` rule (1), a replicant physically present. Checking
+    /// it at selection is what makes the shortfall a choice not taken rather
+    /// than a stall discovered mid-run (`RelayRun.carrierRetainsAuthority`).
     public let replicantHostDevices: Set<String>
     /// Systems that have been through a full system scan
     /// (`SystemDetail.systemScanned`) — the very rows `beltsBySystem` decodes.
     ///
     /// Carried separately because `beltsBySystem` alone cannot tell "surveyed,
-    /// and genuinely holds no belt" from "never looked": both are simply
-    /// absent from it. Prune needs exactly that distinction — an unsurveyed
-    /// system's value is UNKNOWN, and unknown must read as pinned, never as
-    /// reclaimable. Grow has no use for it (an unsurveyed system yields no
-    /// `ValueTarget` either way).
+    /// and genuinely holds no belt" from "never looked": both are simply absent
+    /// from it. Prune needs exactly that distinction — an unsurveyed system's
+    /// value is UNKNOWN, and unknown reads as pinned, never as reclaimable.
+    /// Grow has no use for it, an unsurveyed system yielding no `ValueTarget`
+    /// either way.
     public let surveyedSystems: Set<String>
     /// The moment this snapshot was taken. Brain logic compares against this
     /// rather than `Date()`, keeping ranking passes pure and their tests
@@ -177,10 +146,11 @@ public struct WorldView: Equatable, Sendable {
         self.now = now
     }
 
-    /// One consistent, galaxy-wide read of everything the brain reasons over.
-    /// Called from inside a `database.read { db in … }` block, mirroring how
-    /// `DirectiveEngine`'s roam-context read composes several `@Table` reads
-    /// in a single transaction.
+    /// One consistent, galaxy-wide read of everything the brain reasons over,
+    /// taken from `db` and stamped `now`. Call it from inside a
+    /// `database.read { db in … }` block: every table below must be read in ONE
+    /// transaction, or the brain ranks a fleet from one instant against a census
+    /// from another.
     public static func read(from db: Database, now: Date) throws -> WorldView {
         let allDevices = try Device.all.fetchAll(db)
         let devicesByCode = Dictionary(
@@ -202,21 +172,20 @@ public struct WorldView: Equatable, Sendable {
             salvage[assay.system, default: 0] += assay.totals.values.reduce(0, +)
         }
 
-        // `locationEvents` is a small quest ledger (tens of rows, not
-        // thousands), so filtering through `isActive` in Swift after a
-        // whole-table read is cheap and guarantees exact parity with that
-        // property's case-insensitive semantics — a SQL `= 'active'` would
-        // silently miss a differently-cased status.
+        // `locationEvents` is a small quest ledger, so filtering through
+        // `isActive` in Swift after a whole-table read is cheap and keeps exact
+        // parity with that property's case-insensitive semantics — a SQL
+        // `= 'active'` silently misses a differently-cased status.
         let events = try LocationEvent.all.fetchAll(db)
         let eventSystems = Set(
             events.filter(\.isActive).map { SiteAssay.system(of: $0.location) }
         )
 
         // The census rows for the print-capable locations, and only those — a
-        // handful of codes, never the whole 2,000-row table. Read in the SAME
-        // transaction as the devices, so the hub can never be recognised from a
-        // stockpile reading that belongs to a different instant than the
-        // printer that justifies it.
+        // handful of codes, never the whole table. Read in the SAME transaction
+        // as the devices, so the hub can never be recognised from a stockpile
+        // reading belonging to a different instant than the printer that
+        // justifies it.
         let printLocations = Set(allDevices.filter(\.isPrintHub).compactMap(\.location))
         let hubStock: [String: Int] = printLocations.isEmpty ? [:] : try LocationFootprint
             .where { $0.location.in(Array(printLocations)) }
@@ -231,11 +200,8 @@ public struct WorldView: Equatable, Sendable {
         let surveyed = try SystemDetail.where { $0.systemScanned }.fetchAll(db)
         let belts = Self.beltsBySystem(in: surveyed)
 
-        // The account's own roster — four rows on the live account, so the
-        // whole-table read is as cheap as the `locationEvents` one above and
-        // needs no scoping. Two fields come out of it, projected here rather
-        // than carried whole: the brain reasons about WHERE authority is and
-        // WHICH hull carries it, never about a replicant's XP or name.
+        // The account's own roster — a handful of rows, so the whole-table read
+        // is as cheap as the `locationEvents` one above and needs no scoping.
         let replicants = try Replicant.all.fetchAll(db)
 
         return WorldView(
@@ -255,20 +221,17 @@ public struct WorldView: Equatable, Sendable {
         )
     }
 
-    /// The bounded belt decode (see the module doc for why it must be
-    /// bounded at all). SURVEY is now the SOLE bound, applied in SQL by the
-    /// caller before any row's `systemJSON` leaves the database — the
-    /// expensive direction to filter, and the only one that matters, since
-    /// most of the census is never scanned. Both consumers then narrow
-    /// further on their own terms: grow drops meshed systems in
-    /// `ValueCatalog.build`, prune keeps them.
+    /// The bounded belt decode: `candidates`' `systemJSON` blobs, classified
+    /// per system. Pass only rows the caller has already narrowed in SQL —
+    /// SURVEY is the sole bound (see the module doc), and it must be applied
+    /// before any blob leaves the database or the bound buys nothing. Both
+    /// consumers narrow further on their own terms afterwards: grow drops
+    /// meshed systems in `ValueCatalog.build`, prune keeps them.
     private static func beltsBySystem(in candidates: [SystemDetail]) -> [String: [BeltInfo]] {
         var belts: [String: [BeltInfo]] = [:]
         // Failures are tallied, not logged per-row: this loop runs every
-        // 5-second tick, and a permanently-malformed row would otherwise
-        // flood the log forever (once per read × however many bad rows).
-        // `firstFailure` keeps one breadcrumb for diagnosability without
-        // per-row volume.
+        // 5-second tick, so a permanently-malformed row would flood the log
+        // forever. `firstFailure` keeps one breadcrumb without per-row volume.
         var failures = 0
         var firstFailure: String?
         for detail in candidates {
@@ -276,10 +239,10 @@ public struct WorldView: Equatable, Sendable {
             do {
                 system = try detail.system()
             } catch {
-                // One bad row must not take the whole galaxy-wide read down —
-                // degrade to "no belt data for this system" and keep going,
-                // the same direction `WorldSnapshot`'s per-directive blob
-                // read already degrades a failed decode.
+                // One bad row must not take the whole galaxy-wide read down:
+                // degrade to "no belt data for this system" and keep going, the
+                // direction `WorldSnapshot`'s per-directive blob read degrades a
+                // failed decode in.
                 failures += 1
                 if firstFailure == nil { firstFailure = detail.designation }
                 continue
@@ -293,8 +256,7 @@ public struct WorldView: Equatable, Sendable {
             }
         }
 
-        // One line per read, regardless of candidate count or failure count
-        // — the performance guard the module doc promises.
+        // One line per read, whatever the candidate or failure count.
         if let firstFailure {
             logger.debug(
                 """
@@ -310,35 +272,29 @@ public struct WorldView: Equatable, Sendable {
         return belts
     }
 
-    /// The single print hub this effort: a print-capable device's location, but
-    /// only if that system is meshed (an off-mesh hub is out of the brain's
-    /// reach until `tendMesh` brings it on — 06) **and the census shows the
-    /// location actually holds resources.**
+    /// The single print hub: a print-capable device's location among `devices`,
+    /// kept only if its system is in `meshSystems` (an off-mesh hub is out of
+    /// the brain's reach until `tendMesh` brings it on) **and `stockByLocation`
+    /// shows that location actually holding resources.**
     ///
     /// **The stock clause is not an optimisation; without it the hub follows the
     /// carrier around.** `Device.isPrintHub` is a CAPABILITY predicate
-    /// (`enqueue_print` in `availableCommands`) and a HEAVEN vessel advertises
-    /// that command — every one on the live fleet does. So a vessel satisfies
-    /// it, and the old `devices.first(where: \.isPrintHub)` named whichever
-    /// print-capable device the array happened to yield first. Live on
-    /// 2026-08-04: the carrier flew to RUGULUS-1-L4, became its own "hub", and
-    /// the whole brain relocated with it — grow launched there, prune anchored
-    /// there, and the reserve rail read RUGULUS-1-L4's stockpile, which is
-    /// genuinely zero. The run stalled `printStockShort` while the real hub held
-    /// 73,539 units, and the why-view reported no stock at all. Ticket 06 always
-    /// defined a hub as a commandable location with a print-capable device *and*
-    /// adequate stock; only the first half had been built.
+    /// (`enqueue_print` in `availableCommands`) that every HEAVEN vessel
+    /// satisfies too, so a carrier that flies off to plant a relay becomes its
+    /// own "hub" and the whole brain relocates with it: grow launches there,
+    /// prune anchors there, and the reserve rail reads that location's empty
+    /// stockpile and stalls `printStockShort` while the real hub is full.
     ///
     /// **`> 0`, not "above the reserve floor", and the difference matters.**
     /// Recognition asks whether this is a stockpile at all; ADEQUACY is the
     /// rail's judgement (`RelayRun.printStockIsShort`). Folding the floor in
-    /// here would make a hub that dips below it vanish entirely, turning the
-    /// designed "printStockShort → idle until supply recovers" degradation into
-    /// "there is no hub" — both wrong and unactionable.
+    /// here makes a hub that dips below it vanish entirely, turning the designed
+    /// "printStockShort → idle until supply recovers" degradation into "there is
+    /// no hub" — both wrong and unactionable.
     ///
-    /// Richest location first, designation as tie-break: a total order, so a
+    /// Richest location first, designation as tie-break: a TOTAL order, so a
     /// stateless brain re-deriving this every tick names the same hub every
-    /// tick. The old `first(where:)` was not even deterministic.
+    /// tick.
     static func hubLocation(
         in devices: [Device], meshSystems: Set<String>, stockByLocation: [String: Int]
     ) -> String? {

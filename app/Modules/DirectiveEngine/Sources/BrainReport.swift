@@ -6,34 +6,18 @@
 //  (`brain-robustness-bar` clause 8: the brain must be explainable, in graph
 //  facts, while it is running). Every tick `DirectiveEngineCore.tickBrain()`
 //  publishes one `BrainReport`; `DirectivesFeature` reads it and projects it
-//  into `BrainWhy`. Before this existed the decision was logged and dropped,
-//  which left `BrainWhy`/`BrainWhyView` (Task 5) with no production caller at
-//  all.
+//  into `BrainWhy`.
 //
-//  **Why `@Shared(.inMemory)` and not a table, a client closure, or engine
-//  state.** The why-view is DERIVED state — it restates what the brain just
-//  worked out from rows that are already persisted — so the plan's robustness
-//  clause forbids giving it a table or a migration. That rules the
-//  `@FetchAll`/`@Fetch` route out. The remaining house conventions for moving
-//  a value from a service into a feature are a `@Dependency`-vended client and
-//  the Sharing library; between them:
-//
-//    • Sharing is what this codebase already uses for cross-module state that
-//      is NOT database-backed (`@Shared(.account)`, `@Shared(.appStorage(…))`),
-//      and `.inMemory` is its own strategy for exactly "shared for the
-//      lifetime of the process, persisted nowhere".
-//    • The value lives in Sharing's in-memory store, NOT in
-//      `DirectiveEngineCore`. The actor writes the tick's report and forgets
-//      it — no field, no last-decision cache, nothing for the engine to hold
-//      UI state in, and nothing for the *brain* to read back on the next tick
-//      (clause 2: stateless between ticks).
-//    • It is safe across the actor/main-actor boundary by construction:
-//      `BrainReport` is `Sendable`, and `Shared` mutation goes through the
-//      library's own lock. The engine writes off-main; the feature observes
-//      on-main.
-//    • It is testable without any of the plumbing an `AsyncStream` client
-//      would need: `defaultInMemoryStorage` is a dependency, so a test scopes
-//      its own store and asserts on what the engine published.
+//  The feed is `@Shared(.inMemory)` and must stay so. The why-view is DERIVED
+//  state — it restates what the brain just worked out from rows already
+//  persisted — so it gets no table and no migration. The report lives in
+//  Sharing's in-memory store rather than on `DirectiveEngineCore`: the actor
+//  writes the tick's report and forgets it, leaving the brain nothing to read
+//  back on the next tick (clause 2: stateless between ticks). The boundary is
+//  safe by construction — `BrainReport` is `Sendable` and `Shared` mutation
+//  goes through the library's own lock, so the engine writes off-main while the
+//  feature observes on-main — and `defaultInMemoryStorage` being a dependency
+//  lets a test scope its own store.
 //
 
 import Foundation
@@ -41,13 +25,14 @@ import GameModels
 import Sharing
 
 /// What the brain's rails had to say this tick — the "limit pressure" half of
-/// the why-view (`brain-robustness-bar` clause 8, and ticket 03's spend
-/// ceiling). Facts only; the wording an operator reads is the feature's job.
+/// the why-view: the actions budget, the hub's stock reading and its age, the
+/// spend floor they are judged against, and the last 429. Facts only; the
+/// wording an operator reads is the feature's job.
 public struct BrainLimits: Equatable, Sendable {
     /// Actions-bucket tokens the shared `RateLimitGovernor` believes are left
     /// in this minute's window.
     public let actionsRemaining: Int
-    /// That bucket's own limit (60/min for a game token).
+    /// That bucket's own per-minute limit.
     public let actionsLimit: Int
     /// The token count at or below which `CommandGovernor` defers a dispatch
     /// of its own accord — i.e. where SELF-throttling begins.
@@ -57,12 +42,11 @@ public struct BrainLimits: Equatable, Sendable {
     /// told us", never "zero" — and `RelayRun` treats it as a veto for the
     /// same reason.
     public let hubStock: Int?
-    /// WHEN that reading was taken. Carried beside the figure rather than
-    /// dropped, because a reading's AGE is one of the three things that can
-    /// veto a print (`RelayRun.printStockIsShort`) and the other two are
-    /// useless without it: an hour-old row showing 41,000 units against a
-    /// 35,078 floor reads as comfortable headroom while the rail is in fact
-    /// refusing every print. See `hubStockStanding(at:)`.
+    /// WHEN that reading was taken. It must be carried beside the figure, never
+    /// dropped: a reading's AGE is one of the three conditions that veto a print
+    /// (`RelayRun.printStockIsShort`), so an old row sitting well above the
+    /// floor reads as comfortable headroom while the rail refuses every print.
+    /// See `hubStockStanding(at:)`.
     public let hubStockFetchedAt: Date?
     /// `BrainCeiling.aggregateSpendFloor` — the reserve-floor rail the stock
     /// above is judged against.
@@ -91,21 +75,19 @@ public struct BrainLimits: Equatable, Sendable {
         self.rateLimitedAt = rateLimitedAt
     }
 
-    /// Where the hub stock stands against the reserve-floor rail — ALL THREE
-    /// of the rail's veto conditions, not just the two a bare figure can
-    /// express.
+    /// Where the hub stock stands against the reserve-floor rail at the instant
+    /// `now` — ALL THREE of the rail's veto conditions, not just the two a bare
+    /// figure can express.
     ///
-    /// A deliberate mirror of `RelayRun.printStockIsShort`, in the same branch
-    /// order, judged against the same `RelayRun.hubFreshness` bound, so the
-    /// why-view cannot report headroom on a reading the rail is already
-    /// refusing to believe. That agreement is enforced by test
-    /// (`hubStockStandingAgreesWithTheRailItMirrors`) rather than by this
-    /// comment: the two cannot share an implementation because they read
-    /// different shapes (a `WorldSnapshot`'s footprint table vs. this report's
-    /// single figure), so the next best thing is a test that fails the moment
-    /// they disagree.
+    /// A mirror of `RelayRun.printStockIsShort`, in the same branch order and
+    /// against the same `RelayRun.hubFreshness` bound, so the why-view cannot
+    /// report headroom on a reading the rail already refuses to believe. The two
+    /// read different shapes — a `WorldSnapshot`'s footprint table against this
+    /// report's single figure — so they cannot share an implementation; change
+    /// either branch order and `hubStockStandingAgreesWithTheRailItMirrors`
+    /// fails.
     ///
-    /// Reports, never gates. `RelayRun` still owns the actual veto.
+    /// Reports, never gates. `RelayRun` owns the actual veto.
     public func hubStockStanding(at now: Date) -> HubStockStanding {
         // `hubStock` and `hubStockFetchedAt` are set together or not at all —
         // both come from the same optional `LocationFootprint` — but the
@@ -136,14 +118,15 @@ public struct BrainLimits: Equatable, Sendable {
 }
 
 /// A reclaim the tick actually took: the spare relay it is sourcing a grow
-/// from, where that relay stands, and where it is going.
+/// from (`deviceCode`), the system that relay stands in (`fromSystem`), the
+/// plant site it is going to (`toSystem`), and the `distanceLY` between them.
 ///
-/// A GRAPH FACT rather than a device code, for the reason `Goal.rationale` is
-/// one — "R9, at DEADEND, 7.1 ly from VEGA" is a statement an operator can hold
-/// against the map, where `sourceRelayCode = R9` is one they must take on
-/// trust. The same three fields `Brain.sourcing` already puts in the launch log
-/// line, carried as data so the why-view can render the designations in
-/// monospace without taking a sentence apart again (`BrainWhySpan`).
+/// A GRAPH FACT rather than a bare device code, for the reason
+/// `Goal.rationale` is one — "R9, at DEADEND, 7.1 ly from VEGA" is a statement
+/// an operator can hold against the map, where `sourceRelayCode = R9` is one
+/// they must take on trust. Carried as separate fields, not a sentence, so the
+/// why-view can render the designations in monospace without taking prose apart
+/// (`BrainWhySpan`).
 public struct BrainReclaim: Equatable, Sendable {
     /// The relay being reclaimed. A DEVICE code, not a designation — the
     /// monospace rule does not govern it.
@@ -171,12 +154,11 @@ public struct BrainReclaim: Equatable, Sendable {
 /// is a spare relay I have not reused yet" is not a problem an operator must
 /// fix. Growth can halt and need a human; prune cannot, by construction.
 ///
-/// **`declined` is carried through rather than flattened into an empty
-/// `spare`.** `PrunePredicate` returns an all-pinned partition BOTH when it
-/// cannot judge the world and when every relay is genuinely load-bearing, and
-/// the two were byte-identical before `PruneDeclineReason` existed. "I can't
-/// judge right now" and "nothing is spare" are different facts with different
-/// fixes, so the feed keeps them apart and the why-view renders them apart.
+/// **Never flatten `declined` into an empty `spare`.** `PrunePredicate` returns
+/// an all-pinned partition BOTH when it cannot judge the world and when every
+/// relay is genuinely load-bearing; "I can't judge right now" and "nothing is
+/// spare" are different facts with different fixes, and only `declined` tells
+/// them apart.
 public struct BrainPrune: Equatable, Sendable {
     /// The reclaim this tick took — present ONLY when the launch actually
     /// committed. A tick that chose a source and then deferred reports none:
@@ -184,17 +166,16 @@ public struct BrainPrune: Equatable, Sendable {
     /// HAPPENED, exactly as `.dispatch` does.
     public let reclaimed: BrainReclaim?
     /// Spare relays a Relay Run is ALREADY flying to collect — spoken for, and
-    /// so not available to anything else.
+    /// so unavailable to anything else.
     ///
-    /// **Split out of `spare` because a source relay stays deployed and
-    /// `relaying` for the whole outbound leg of the run coming to fetch it.**
-    /// `PrunePredicate` is stateless and keeps returning it as reclaimable for
-    /// every one of the hundreds of ticks that flight takes — correctly, on the
-    /// question prune was asked — so a surface that read `reclaimable` as
-    /// "available" would describe prune's one action correctly for a single
-    /// tick and misdescribe it for the rest of its lifetime. The claim is read
-    /// off `Brain.inFlightSources`, the same authority the SOURCING side uses
-    /// so it cannot offer one relay to two carriers.
+    /// **Never present `PruneAnalysis.reclaimable` as "available" without
+    /// subtracting these.** A source relay stays deployed and `relaying` for the
+    /// whole outbound leg of the run fetching it, and stateless prune keeps
+    /// returning it as reclaimable for every one of the hundreds of ticks that
+    /// flight takes — correct on the question prune was asked, and wrong for
+    /// every tick but the first as a claim about availability. Read off
+    /// `Brain.inFlightSources`, the same authority the SOURCING side uses, so
+    /// one relay cannot be offered to two carriers.
     public let claimed: [ReclaimableRelay]
     /// Spare relays the tick left where they stand and nobody has claimed —
     /// genuinely available to the next grow. `reclaimed` and `claimed` are both
@@ -222,19 +203,19 @@ public struct BrainPrune: Equatable, Sendable {
     }
 }
 
-/// One brain tick, as reported to the operator: what it decided, the ranked
-/// field it decided against, and the limits it decided under.
+/// One brain tick, as reported to the operator: the `decision` it reached, the
+/// `ranked` field it decided against, the `hubLocation` and `limits` it decided
+/// under, what `prune` saw, and the `observedAt` instant all of that was read.
 public struct BrainReport: Equatable, Sendable {
     /// What the tick did — already committed by the time this is published.
     public let decision: BrainDecision
     /// The whole grow field this tick ranked, best first.
     ///
     /// Carried here as well as inside `.dispatch(_, ranked:)` because the
-    /// interesting ticks for an operator are the ones that DIDN'T launch:
-    /// "deferred — carrier unavailable on confirm" is only legible next to
-    /// the candidate it was deferred for. `.dispatch`'s own `ranked` is the
-    /// decision-time contract Task 16 defined and stays untouched; on a
-    /// dispatch tick the two are the same list by construction.
+    /// interesting ticks for an operator are the ones that did NOT launch:
+    /// "deferred — carrier unavailable on confirm" is only legible next to the
+    /// candidate it was deferred for, and `.dispatch` carries no field on those
+    /// ticks. On a dispatch tick the two are the same list by construction.
     public let ranked: [GrowCandidate]
     /// The print hub's location this tick, when there is one on the mesh.
     /// Present so the why-view can render the designations embedded in a gate

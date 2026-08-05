@@ -2,115 +2,88 @@
 //  BrainCeiling.swift
 //  Replicould — DirectiveEngine
 //
-//  The `R` reserve-floor rail: the hard limit on the brain's spending. Printing
-//  an FTL relay consumes real resources from the hub's shared stock — the same
-//  pool the rest of the fleet draws from — so this is the single most
-//  safety-relevant constant in the whole capability (brain-goal-decision-policy,
-//  ticket 03's spend ceiling; brain-resource-hub-model, ticket 06's `R`).
+//  The `R` reserve-floor rail: the ceiling on the brain's relay-print spending.
+//  Printing an FTL relay draws real resources from the hub stock the rest of the
+//  fleet shares, so this rail vetoes a print that would leave the hub short.
 //
 //  Pure by contract, like every mission primitive: no I/O, no clock, nothing
 //  but a table lookup and a comparison, so its behaviour is provable under
-//  test without a live account.
+//  test without a live account. The full record — the probed bill, the
+//  binding-type analysis and `K`'s calibration — is
+//  `app/.claude/memory/brain-relay-reserve-floor.md`.
 //
 
-/// The reserve-floor rail. `printPermitted(hubStock:)` is the true, per-type
-/// `R` check: vetoes a print whenever ANY resource type at the hub would drop
-/// below `K` relays' worth of that type's real blueprint bill. `RelayRun`
-/// cannot feed it real per-type data yet (see `aggregateSpendFloor`'s doc), so
-/// today it is armed with a conservative TOTAL-only proxy instead — a
-/// distinction this type's naming and docs are deliberately explicit about.
+/// The reserve-floor rail. `printPermitted(hubStock:)` is the true per-type `R`
+/// check — it vetoes a print whenever ANY resource type at the hub would drop
+/// below `K` relays' worth of that type's blueprint bill. `aggregateSpendFloor`
+/// is the conservative TOTAL-only proxy `RelayRun` arms in its place, having no
+/// per-type stock reading to feed the real check.
 public enum BrainCeiling {
-    /// The FTL relay's real per-type blueprint bill (`GET blueprints`,
-    /// `device_type: ftl_relay`, verified live 2026-08-03). Sums to 370
-    /// **total across all six types** — this is NOT 370 per type, and a flat
-    /// per-type floor of 370 would be incoherent: 37× the volatiles bill and
-    /// only 3× the conductive bill, so it would veto on volatiles long before
-    /// conductive ever mattered, for no principled reason. `print_time` was
-    /// 800s, irrelevant here.
+    /// The FTL relay's per-type blueprint bill (`GET blueprints`,
+    /// `device_type: ftl_relay`). It sums to 370 units TOTAL across all six
+    /// types; reading it as 370 PER type, and flooring on that, vetoes on
+    /// volatiles — 37× its real bill — long before conductive, 3× its own,
+    /// ever binds.
     public static let relayBill: [String: Double] = [
         "carbon": 20, "conductive": 120, "rares": 40,
         "silicates": 100, "structural": 80, "volatiles": 10,
     ]
 
-    /// The six resource types the game actually speaks in, verified live
-    /// 2026-08-03 three separate ways (a fresh `GET blueprints` bill, a fresh
-    /// `GET locations/<hub>` inventory read, and `belt-value-vocabulary`'s
-    /// independent 141-system aggregate). **Not** `metal`/`silicon` — those
-    /// never appeared in any live response and must not be encoded anywhere
-    /// near this rail.
+    /// The six resource types the rail speaks in, DERIVED from `relayBill`'s
+    /// own keys and sorted for a stable order.
     ///
-    /// Derived from `relayBill`'s own keys (sorted for a stable order) rather
-    /// than restated as a second, parallel literal: a seventh type added to
-    /// the bill without a matching entry here would otherwise floor to zero
-    /// in `reserveFloor(for:)`, and `printPermitted` would then silently
-    /// PERMIT that type at any stock level — a fail-open hole inside a
-    /// fail-closed predicate. Deriving both from one source closes that hole
-    /// by construction instead of relying on the two lists staying in sync.
+    /// Never restate this as a second, parallel literal: a type billed above
+    /// with no matching entry here floors to zero in `reserveFloor(for:)`, and
+    /// `printPermitted` then silently PERMITS that type at any stock level — a
+    /// fail-open hole inside a fail-closed predicate.
     public static let resourceTypes: [String] = relayBill.keys.sorted()
 
-    /// **CALIBRATE.** How many relays' worth of each resource type the hub
-    /// must keep in reserve before a print is allowed to touch it. This is
-    /// the one knob a later tuning pass may reasonably revisit; every other
-    /// constant on this type is a verified game fact, not a guess.
+    /// **CALIBRATE.** How many relays' worth of each resource type the hub must
+    /// keep in reserve before a print may touch it — the one knob on this type;
+    /// every other constant here is a verified game fact.
     ///
-    /// Chosen as 5, anchored on conductive — the type that actually binds
-    /// first under the live mix (see `relaysUntilBindingTypeFloors`'s doc;
-    /// volatiles, despite being both the cheapest line in the bill and the
-    /// scarcest live stock, is in fact the LAST type to bind, because bind
-    /// order depends on stock relative to consumption, not on either alone).
-    /// 5 relays' worth of conductive is 600 units against a measured stock of
-    /// 13,434 (≈4.5%) — a real reserve, not a rounding error, while staying
-    /// far below the live hub's actual holdings across every type (measured
-    /// 2026-08-03: carbon 11,368 / conductive 13,434 / rares 5,069 /
-    /// silicates 13,225 / structural 27,436 / volatiles 4,117), so the rail
-    /// protects the floor without becoming a wall the brain trips over during
-    /// ordinary operation. A flat 370 was rejected for the reason above; a
-    /// per-type multiple of the real bill is the only shape that is coherent
-    /// across all six types at once.
+    /// Anchored on conductive, the type `relaysUntilBindingTypeFloors` finds
+    /// binds first: a `K` calibrated against any other type guards a floor that
+    /// never fires. Recalibrating means re-deriving the two-sided trade recorded
+    /// in `brain-relay-reserve-floor`, not picking a percentage.
     public static let reserveRelays: Double = 5 // CALIBRATE: surfaced in why-view
 
-    /// The reserve floor for one resource type: `K` relays' worth of that
-    /// type's real bill. A type absent from `relayBill` cannot occur —
-    /// `resourceTypes` is derived from `relayBill`'s own keys — but floors to
-    /// zero rather than trapping if it somehow did.
+    /// The reserve floor for one resource type: `reserveRelays` relays' worth of
+    /// `type`'s bill. A type absent from `relayBill` floors to zero rather than
+    /// trapping, and cannot occur while `resourceTypes` derives from those keys.
     public static func reserveFloor(for type: String) -> Double {
         (relayBill[type] ?? 0) * reserveRelays
     }
 
-    /// Every type's floor, keyed the same way `printPermitted(hubStock:)`
-    /// expects its stock reading. `printPermitted` is built directly on this
-    /// rather than recomputing per type, so the two can never disagree.
+    /// Every type's floor, keyed the way `printPermitted(hubStock:)` keys its
+    /// stock reading. `printPermitted` reads this rather than recomputing per
+    /// type, so the two cannot disagree.
     public static var reserveFloors: [String: Double] {
         Dictionary(uniqueKeysWithValues: resourceTypes.map { ($0, reserveFloor(for: $0)) })
     }
 
     // MARK: - The aggregate proxy `RelayRun` actually arms
 
-    /// The hub stock as measured live 2026-08-03
-    /// (`app/.claude/memory/brain-relay-reserve-floor.md`). Used ONLY to
-    /// calibrate `aggregateSpendFloor` below — never read at check time,
-    /// since `RelayRun`'s only live signal is a single TOTAL count with no
-    /// per-type breakdown to recover a live mix from. A future recalibration
-    /// pass may refresh this snapshot; `aggregateSpendFloor` recomputes from
-    /// whatever is here.
+    /// The measured hub-stock snapshot `aggregateSpendFloor` is calibrated
+    /// against, and the only per-type mix this type knows.
+    ///
+    /// Never read at check time: `RelayRun`'s live signal is a single TOTAL
+    /// count carrying no mix to compare against. `aggregateSpendFloor`
+    /// recomputes from whatever stands here, so refreshing the snapshot moves
+    /// the floor.
     static let referenceHubStock: [String: Double] = [
         "carbon": 11368, "conductive": 13434, "rares": 5069,
         "silicates": 13225, "structural": 27436, "volatiles": 4117,
     ]
 
-    /// How many relays, printed at the fixed `relayBill` cost against
-    /// `referenceHubStock`, before the FIRST type to constrain `K` (by real
-    /// per-type floor) would hit its own floor — the reference mix's
-    /// "binding type" headroom. Computed, not hand-picked, so recalibrating
-    /// `reserveRelays` or refreshing `referenceHubStock` updates it too.
+    /// How many relays, billed at `relayBill` against `referenceHubStock`, the
+    /// FIRST type to reach its own `reserveFloor(for:)` survives — the reference
+    /// mix's binding-type headroom. Computed rather than hand-picked, so
+    /// recalibrating `reserveRelays` or refreshing `referenceHubStock` moves it.
     ///
-    /// Under today's constants this is **conductive**, at ≈107 relays — NOT
-    /// volatiles. Volatiles is both the cheapest line in the bill (10) and
-    /// the scarcest live stock (4,117), which reads as "obviously bites
-    /// first," but that conflates absolute scarcity with scarcity RELATIVE
-    /// TO CONSUMPTION: volatiles actually survives ≈407 relays, the LAST
-    /// type to bind (full ordering: conductive ≈107, rares ≈122, silicates
-    /// ≈127, structural ≈338, volatiles ≈407, carbon ≈563).
+    /// Never shortcut this by naming a type. Which one binds is neither the
+    /// cheapest line in the bill nor the scarcest stock but the smallest ratio
+    /// of the two, and reading it off either alone picks the wrong type.
     static var relaysUntilBindingTypeFloors: Double {
         resourceTypes.compactMap { type -> Double? in
             guard let bill = relayBill[type], bill > 0 else { return nil }
@@ -119,39 +92,26 @@ public enum BrainCeiling {
         }.min() ?? 0
     }
 
-    /// The single number `RelayRun` actually arms `reserveFloor: Int?` with —
-    /// the only shape today's `LocationFootprint` can be checked against,
-    /// since it carries one TOTAL holdings count and no per-type breakdown
-    /// (the per-type stockpile record is a later task, brain-resource-hub-model
-    /// ticket 06; when it lands, `RelayRun.printStockIsShort` switches to
-    /// calling `printPermitted(hubStock:)` directly and this proxy retires).
+    /// The single number `RelayRun` arms `reserveFloor: Int?` with: the TOTAL
+    /// hub reading at which `referenceHubStock`'s binding type sits exactly at
+    /// its own floor, rounded UP. It is the only shape `LocationFootprint` can
+    /// be checked against, that row carrying one total holdings count and no
+    /// per-type breakdown; once the per-type stockpile record lands
+    /// (brain-resource-hub-model), `RelayRun.printStockIsShort` calls
+    /// `printPermitted(hubStock:)` directly and this retires.
     ///
-    /// **Deliberately NOT `reserveFloors.values.reduce(0, +)`** (the naive
-    /// sum of the six per-type floors, ≈1,850). That undershoots by more
-    /// than an order of magnitude: the bill spends in fixed, skewed
-    /// proportions (conductive 120 vs. volatiles 10) while live STOCK is
-    /// skewed the OTHER way (structural's stock ALONE, 27,436, is ≈15× the
-    /// naive sum), so a flat-sum floor cannot fire before the binding type
-    /// (conductive) is already exhausted under any realistic mix — checked
-    /// against the live account: conductive hits its own floor at relay
-    /// ≈107, at which point TOTAL stock is still ≈35,000, roughly 18× the
-    /// naive sum.
+    /// **Never redefine this as `reserveFloors.values.reduce(0, +)`.** The bill
+    /// spends in fixed, skewed proportions while hub stock is skewed the OTHER
+    /// way, so a flat sum of the six per-type floors cannot fire until the
+    /// binding type is already exhausted: it undershoots by more than an order
+    /// of magnitude, leaving the rail nominally armed and never firing.
     ///
-    /// Instead: the TOTAL stock at the moment `referenceHubStock`'s binding
-    /// type would hit ITS OWN floor — `totalReferenceStock −
-    /// relaysUntilBindingTypeFloors × totalBill`, rounded UP (the
-    /// conservative direction: a higher floor vetoes SOONER, at more stock
-    /// remaining). Total stock drains by exactly `totalBill` per print
-    /// regardless of mix, so this is the total reading at which the binding
-    /// type is provably AT its own floor under the reference snapshot — the
-    /// coarse rail fires no LATER than the true per-type rail would, which is
-    /// the safe direction for a proxy to be wrong in.
-    ///
-    /// Still only a proxy — if the live mix drifts far from the reference
-    /// snapshot (other consumers spending disproportionately on one type),
-    /// the "no later than true" guarantee weakens — which is exactly why
-    /// this is named for what it is rather than claiming to be `R` itself.
-    /// The real per-type `R` is `printPermitted(hubStock:)` below.
+    /// Rounding UP is the conservative direction — a higher floor vetoes
+    /// SOONER, at more stock remaining. Total stock drains by exactly
+    /// `totalBill` per print whatever the mix, so the coarse rail fires no LATER
+    /// than the true per-type rail does under the reference snapshot, and only
+    /// under it: a live mix drifting far from that snapshot weakens the
+    /// guarantee. This is a proxy for `R`, never `R` itself.
     public static var aggregateSpendFloor: Int {
         let totalReferenceStock = referenceHubStock.values.reduce(0, +)
         let totalBill = relayBill.values.reduce(0, +)
@@ -161,21 +121,20 @@ public enum BrainCeiling {
 
     // MARK: - The true per-type check
 
-    /// Whether printing a relay is permitted given the hub's per-type stock.
-    /// This is `R` as specified (brain-resource-hub-model, ticket 06) — the
-    /// per-type check `aggregateSpendFloor` above exists only because
-    /// `RelayRun` cannot feed this function real per-type data yet.
+    /// Whether printing a relay is permitted given `hubStock`, the hub's
+    /// per-type stock reading. This is `R` as specified
+    /// (brain-resource-hub-model): the true per-type check, which
+    /// `aggregateSpendFloor` stands in for only until `RelayRun` can supply
+    /// per-type data.
     ///
     /// **Fails CLOSED on unreadable stock.** A resource type absent from
     /// `hubStock` — including every type, for a wholly empty or unfetched
-    /// reading — is read as zero, which sits below every real floor and
-    /// therefore vetoes. This is a deliberate reversal of the general "unknown
-    /// is never zero" display convention used elsewhere in this codebase
-    /// (salvage percentages, scan completeness): those are UI-legibility
-    /// rules about not overstating depletion, not spend-safety rules. Here
-    /// the print is a real, irreversible resource commitment, and "we
-    /// couldn't read the stock" is not the same claim as "the stock is
-    /// fine" — silence must not be read as permission to spend.
+    /// reading — reads as zero, which sits below every floor and vetoes. The
+    /// "unknown is never zero" convention elsewhere in this codebase (salvage
+    /// percentages, scan completeness) governs DISPLAY, where the hazard is
+    /// overstating depletion; here the print is an irreversible resource
+    /// commitment, and "we could not read the stock" must never be spent as
+    /// permission.
     public static func printPermitted(hubStock: [String: Double]) -> Bool {
         reserveFloors.allSatisfy { type, floor in hubStock[type, default: 0] >= floor }
     }
