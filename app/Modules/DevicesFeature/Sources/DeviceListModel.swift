@@ -33,3 +33,34 @@ public enum AttentionFlag: Equatable, Sendable {
         }
     }
 }
+
+/// How a device relates to its host device. The row badges the relationship
+/// that did *not* determine its position in the tree, so nothing is lost.
+public enum HostRelation: Equatable, Sendable {
+    case controlled(by: String)
+    case stowed(in: String)
+    case attached(to: String)
+
+    public var hostCode: String {
+        switch self {
+        case let .controlled(code), let .stowed(code), let .attached(code): code
+        }
+    }
+
+    /// SF Symbol for the badge glyph.
+    public var symbol: String {
+        switch self {
+        case .controlled: "dot.radiowaves.left.and.right"
+        case .stowed:     "shippingbox"
+        case .attached:   "paperclip"
+        }
+    }
+
+    public var label: String {
+        switch self {
+        case let .controlled(code): "Controlled by \(code)"
+        case let .stowed(code):     "Stowed in \(code)"
+        case let .attached(code):   "Attached to \(code)"
+        }
+    }
+}
