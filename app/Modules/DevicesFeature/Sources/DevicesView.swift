@@ -22,30 +22,55 @@ public struct DevicesListView: View {
     }
 
     public var body: some View {
+        // Bound once: `sections` is derived on access, so reading it from the
+        // list, the overlay, and the subtitle would recompute the whole layout
+        // three times per body evaluation.
+        let sections = store.sections
+
         SelectableList(
-            store.devices,
-            id: \.deviceCode,
             selection: $store.selectedDeviceCode,
-            style: .inline
-        ) { device, isSelected in
-            DeviceRow(device: device).rcSidebarRow(isSelected: isSelected)
-        }
-        .background(.rcContentBackground)
-        .overlay {
-            if store.devices.isEmpty {
-                if store.isLoading {
-                    ProgressView()
-                } else {
-                    ContentUnavailableView(
-                        "No Devices",
-                        systemImage: SidebarSymbol.devices,
-                        description: Text("Your fleet will appear here once it loads.")
-                    )
+            orderedIDs: sections.flatMap(\.entries).map(\.id),
+            style: .inline,
+            pinnedViews: [.sectionHeaders]
+        ) {
+            ForEach(sections) { section in
+                Section {
+                    ForEach(section.entries) { entry in
+                        SelectableRow(id: entry.id) { isSelected in
+                            DeviceRow(entry: entry) {
+                                store.send(.hostDisclosureToggled(entry.id))
+                            }
+                            .rcSidebarRow(isSelected: isSelected)
+                        }
+                    }
+                } header: {
+                    if let header = section.header {
+                        RCReadoutSectionHeader(
+                            title: header.title,
+                            count: header.count,
+                            isCollapsed: header.isCollapsed,
+                            isWarning: header.hasDamaged,
+                            shares: header.statusShares.map {
+                                RCReadoutSectionHeader.Share(
+                                    label: $0.status,
+                                    count: $0.count,
+                                    color: DeviceStatus.tone(for: $0.status).color
+                                )
+                            }
+                        ) {
+                            store.send(.groupDisclosureToggled(section.id))
+                        }
+                    }
                 }
             }
         }
+        .background(.rcContentBackground)
+        .overlay {
+            if sections.isEmpty { emptyState }
+        }
         .navigationTitle("Devices")
-        .navigationSubtitle(store.devices.isEmpty ? Text("") : Text("^[\(store.devices.count) device](inflect: true)"))
+        .navigationSubtitle(subtitle)
+        .searchable(text: $store.searchText, placement: .sidebar, prompt: "Search devices")
         .safeAreaInset(edge: .top, spacing: 0) {
             if let errorMessage = store.errorMessage {
                 RCErrorBanner(errorMessage) { store.send(.dismissError) }
@@ -65,63 +90,30 @@ public struct DevicesListView: View {
         .task { store.send(.task) }
     }
 
-}
-
-// MARK: - Row
-
-private struct DeviceRow: View {
-    let device: Device
-
-    var body: some View {
-        HStack(spacing: Space.s) {
-            VStack(spacing: Space.xs) {
-                RCGlyphTile(Image.rcSymbol("device.\(device.deviceType)"))
-                capacityBar
-            }
-            VStack(alignment: .leading, spacing: Space.xs) {
-                HStack(spacing: Space.s) {
-                    Text(DevicePresentation.displayName(device.deviceType))
-                        .font(.rcBodyEmph)
-                        .foregroundStyle(.rcTextPrimary)
-                        .lineLimit(1)
-                    Text(device.deviceCode)
-                        .font(.rcMonoSmall)
-                        .foregroundStyle(.rcTextTertiary)
-                    Spacer(minLength: Space.xs)
-                }
-                HStack(spacing: Space.s) {
-                    StatusBadge(device.statusBase)
-                    if let location = device.location {
-                        Text(location)
-                            .font(.rcMonoSmall)
-                            .foregroundStyle(.rcTextTertiary)
-                            .lineLimit(1)
-                    } else if let destination = travelDestination {
-                        Label(destination, systemImage: "location.north.line")
-                            .labelStyle(.titleAndIcon)
-                            .font(.rcMonoSmall)
-                            .foregroundStyle(.rcTextTertiary)
-                            .lineLimit(1)
-                    }
-                    Spacer(minLength: Space.xs)
-                }
-            }
+    /// "N of M devices" while a query is active, the plain inflected count
+    /// otherwise. N counts *matches across the whole fleet*, not visible rows —
+    /// a revealed ancestor is visible without being a match.
+    private var subtitle: Text {
+        let total = store.devices.count
+        guard total > 0 else { return Text("") }
+        guard !store.searchText.isEmpty else {
+            return Text("^[\(total) device](inflect: true)")
         }
-        .padding(.vertical, Space.xs)
+        return Text("\(store.matchCount) of ^[\(total) device](inflect: true)")
     }
 
-    /// The trip's destination code while the device is en route — surfaced only
-    /// when there's no settled `location` to show instead. Prefers the whole
-    /// route's `final_destination` over the active leg's `destination`.
-    private var travelDestination: String? {
-        guard device.derivedActivity?.kind == .travel else { return nil }
-        return device.detail["travel"]?["final_destination"]?.stringValue
-            ?? device.detail["travel"]?["destination"]?.stringValue
-    }
-
-
-    private var capacityBar: some View {
-        RCMeterBar(fraction: device.operationalCapacity / 100)
-            .frame(width: 30)
+    @ViewBuilder
+    private var emptyState: some View {
+        if !store.searchText.isEmpty {
+            ContentUnavailableView.search(text: store.searchText)
+        } else if store.isLoading {
+            ProgressView()
+        } else {
+            ContentUnavailableView(
+                "No Devices",
+                systemImage: SidebarSymbol.devices,
+                description: Text("Your fleet will appear here once it loads.")
+            )
+        }
     }
 }
