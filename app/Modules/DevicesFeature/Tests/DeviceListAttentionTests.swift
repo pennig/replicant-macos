@@ -42,6 +42,51 @@ import Utils
         expectNoDifference(DeviceListLayout.attentionFlags(for: unknown, directives: []), [])
     }
 
+    /// Modeled on the live fleet's `E992E400` (`cargo_freighter`, `surging`,
+    /// out of range mid-surge-plate jump): the flag must be fully suppressed,
+    /// not merely reordered.
+    @Test func surgingOutOfRangeDeviceIsNotFlagged() {
+        let surging = makeDevice(
+            "E992E400",
+            type: "cargo_freighter",
+            status: "surging",
+            controlledBy: "7D1569BF",
+            detail: .object(["in_control_range": .bool(false)])
+        )
+        expectNoDifference(DeviceListLayout.attentionFlags(for: surging, directives: []), [])
+    }
+
+    /// Modeled on the live fleet's `1F63E913` (`ftl_beacon`, `monitoring`, out
+    /// of range): a non-surging status must keep the flag exactly as before.
+    @Test func nonSurgingOutOfRangeDeviceStillFlags() {
+        let monitoring = makeDevice(
+            "1F63E913",
+            type: "ftl_beacon",
+            status: "monitoring",
+            detail: .object(["in_control_range": .bool(false)])
+        )
+        expectNoDifference(
+            DeviceListLayout.attentionFlags(for: monitoring, directives: []),
+            [.outOfControlRange]
+        )
+    }
+
+    /// The suppression is surgical to `.outOfControlRange` — a surging device
+    /// that is *also* damaged must still report `.damaged`, proving this isn't
+    /// a blanket "ignore surging devices" rule.
+    @Test func surgingDamagedDeviceStillFlagsDamaged() {
+        let surgingAndHurt = makeDevice(
+            "A1",
+            status: "surging",
+            capacity: 10,
+            detail: .object(["in_control_range": .bool(false)])
+        )
+        expectNoDifference(
+            DeviceListLayout.attentionFlags(for: surgingAndHurt, directives: []),
+            [.damaged(capacity: 10)]
+        )
+    }
+
     @Test func directiveJoinsOnDeviceCode() {
         let device = makeDevice("A1")
         let directive = makeDirective(deviceCode: "A1", reason: .commandRejected)

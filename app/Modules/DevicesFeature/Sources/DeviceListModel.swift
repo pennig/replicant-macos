@@ -78,6 +78,12 @@ public struct DeviceEntry: Identifiable, Equatable, Sendable {
     /// The relationship badge — the containment relation that did not decide
     /// this row's position.
     public var host: HostRelation?
+    /// The device type of the host named by `host` — e.g. `ami_transport_controller`
+    /// for a device controlled by one. Nil when `host` is nil, or when the host
+    /// is unresolved (a promoted device badging a host that isn't in the
+    /// fleet). Resolved by `DeviceListLayout.flatten` from a code→type map, not
+    /// looked up here — this type stays a pure value, no fleet to walk.
+    public var hostDeviceType: String?
     public var attention: [AttentionFlag]
 
     public var id: String { device.deviceCode }
@@ -88,6 +94,7 @@ public struct DeviceEntry: Identifiable, Equatable, Sendable {
         childCount: Int,
         isExpanded: Bool,
         host: HostRelation?,
+        hostDeviceType: String?,
         attention: [AttentionFlag]
     ) {
         self.device = device
@@ -95,6 +102,7 @@ public struct DeviceEntry: Identifiable, Equatable, Sendable {
         self.childCount = childCount
         self.isExpanded = isExpanded
         self.host = host
+        self.hostDeviceType = hostDeviceType
         self.attention = attention
     }
 }

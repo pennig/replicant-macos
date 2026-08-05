@@ -136,6 +136,24 @@ import Testing
         expectNoDifference(result[0].entries.map(\.id), ["CTRL", "DRONEA"])
     }
 
+    /// End-to-end: a flagged device promoted into the Needs Attention section
+    /// still resolves `hostDeviceType` for its controller, even though the
+    /// promotion re-roots it away from its original position in the fleet
+    /// forest (where a resolved controller would otherwise nest it with no
+    /// badge at all). `sections(...)` builds the code→type map from the whole
+    /// fleet, not just the promoted subforest, so the controller's type is
+    /// still found.
+    @Test func promotedDeviceStillResolvesItsControllersType() throws {
+        let fleet = [
+            makeDevice("CTRL", type: "ami_transport_controller"),
+            makeDevice("DRONEA", capacity: 10, controlledBy: "CTRL"),
+        ]
+        let result = sections(fleet: fleet)
+        let drone = try #require(result[0].entries.first { $0.id == "DRONEA" })
+        expectNoDifference(drone.host, .controlled(by: "CTRL"))
+        expectNoDifference(drone.hostDeviceType, "ami_transport_controller")
+    }
+
     @Test func orderedIDsAreTheVisibleOrderExactly() {
         let fleet = [
             makeDevice("VESSEL", type: "heaven_vessel"),

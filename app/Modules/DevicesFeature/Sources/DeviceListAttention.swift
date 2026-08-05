@@ -14,6 +14,16 @@ extension DeviceListLayout {
     /// devices on the 2026-08-05 fleet; 100 would flag 17 and be noise.
     public static let damagedCapacityThreshold: Double = 50
 
+    /// Statuses whose out-of-range reading is expected, not actionable, so
+    /// `.outOfControlRange` is suppressed for them. `surging` is a device
+    /// mid-surge-plate FTL jump: it has left the relay mesh *on purpose* and
+    /// will rejoin on arrival, so the flag carries no information and would
+    /// only put a healthy in-transit device into the operator's triage list.
+    /// A `Set` so a future transit status can join without restructuring the
+    /// check — but don't add one speculatively; confirm live evidence first
+    /// (see the note this constant was introduced against).
+    public static let rangeCheckExemptStatuses: Set<String> = ["surging"]
+
     /// Every reason `device` needs attention, in display order.
     ///
     /// `directives` must already be filtered to `DirectiveStatus.needsAttention`
@@ -24,7 +34,7 @@ extension DeviceListLayout {
         directives: [Directive]
     ) -> [AttentionFlag] {
         var flags: [AttentionFlag] = []
-        if device.isOutOfControlRange {
+        if device.isOutOfControlRange && !rangeCheckExemptStatuses.contains(device.statusBase) {
             flags.append(.outOfControlRange)
         }
         if device.operationalCapacity < damagedCapacityThreshold {

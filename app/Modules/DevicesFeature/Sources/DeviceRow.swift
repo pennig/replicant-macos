@@ -94,12 +94,14 @@ struct DeviceRow: View {
                     .lineLimit(1)
             }
             if let host = entry.host {
-                Label(host.hostCode, systemImage: host.symbol)
-                    .labelStyle(.titleAndIcon)
-                    .font(.rcMonoSmall)
-                    .foregroundStyle(.rcTextTertiary)
-                    .lineLimit(1)
-                    .help(host.label)
+                HStack(spacing: Space.xs) {
+                    hostBadgeIcon(for: host)
+                    Text(host.hostCode)
+                }
+                .font(.rcMonoSmall)
+                .foregroundStyle(.rcTextTertiary)
+                .lineLimit(1)
+                .help(host.label)
             }
             ForEach(tagChips, id: \.self) { tag in
                 Text(tag)
@@ -110,6 +112,22 @@ struct DeviceRow: View {
                     .background(Capsule().fill(.rcSurfaceRaised))
             }
             Spacer(minLength: Space.xs)
+        }
+    }
+
+    /// The host badge's leading glyph. For `.controlled`, the controller's own
+    /// kind is what the operator needs — the relationship is already implied
+    /// by the badge's position — so this shows the controller's own device
+    /// symbol (`device.ami_transport_controller`, etc.) rather than the generic
+    /// radio-waves relay glyph. `.stowed` and `.attached` keep their SF Symbol:
+    /// for those the *relationship* is the information worth showing.
+    /// `Image.rcSymbol` falls back to the SF Symbol itself when the asset is
+    /// missing, so an unrecognised controller type degrades safely.
+    private func hostBadgeIcon(for host: HostRelation) -> Image {
+        if case .controlled = host, let hostDeviceType = entry.hostDeviceType {
+            Image.rcSymbol("device.\(hostDeviceType)", fallback: host.symbol)
+        } else {
+            Image(systemName: host.symbol)
         }
     }
 

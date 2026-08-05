@@ -124,26 +124,33 @@ extension DeviceListLayout {
     /// `expandedHosts` is the operator's own disclosure state; `forcedOpen` is
     /// the transient reveal a search query applies to a match's ancestors, and
     /// never writes back.
+    /// `hostTypes` is a code→deviceType map over the whole fleet, built once by
+    /// `sections(...)` — the same shape as `attention` — so a badged host's own
+    /// device type can be resolved without this pure function ever walking the
+    /// fleet itself.
     static func flatten(
         _ nodes: [Node],
         depth: Int = 0,
         parentCode: String? = nil,
         expandedHosts: Set<String>,
         forcedOpen: Set<String>,
-        attention: [String: [AttentionFlag]]
+        attention: [String: [AttentionFlag]],
+        hostTypes: [String: String]
     ) -> [DeviceEntry] {
         var entries: [DeviceEntry] = []
         for node in nodes {
             let code = node.device.deviceCode
             let isOpen = !node.children.isEmpty
                 && (expandedHosts.contains(code) || forcedOpen.contains(code))
+            let host = badge(for: node.device, parentCode: parentCode)
             entries.append(
                 DeviceEntry(
                     device: node.device,
                     depth: min(depth, maxIndentDepth),
                     childCount: node.children.count,
                     isExpanded: isOpen,
-                    host: badge(for: node.device, parentCode: parentCode),
+                    host: host,
+                    hostDeviceType: host.flatMap { hostTypes[$0.hostCode] },
                     attention: attention[code] ?? []
                 )
             )
@@ -155,7 +162,8 @@ extension DeviceListLayout {
                         parentCode: code,
                         expandedHosts: expandedHosts,
                         forcedOpen: forcedOpen,
-                        attention: attention
+                        attention: attention,
+                        hostTypes: hostTypes
                     )
                 )
             }
@@ -221,6 +229,10 @@ extension DeviceListLayout {
             uniquingKeysWith: { first, _ in first }
         )
         let flagged = Set(attention.filter { !$0.value.isEmpty }.keys)
+        let hostTypes = Dictionary(
+            fleet.map { ($0.deviceCode, $0.deviceType) },
+            uniquingKeysWith: { first, _ in first }
+        )
 
         let query = Query(searchText)
         let split = promote(forest(fleet: fleet), flagged: flagged)
@@ -250,7 +262,8 @@ extension DeviceListLayout {
                         attentionRoots,
                         expandedHosts: expandedHosts,
                         forcedOpen: attentionPruned.forcedOpen,
-                        attention: attention
+                        attention: attention,
+                        hostTypes: hostTypes
                     )
                 )
             )
@@ -260,7 +273,8 @@ extension DeviceListLayout {
             fleetPruned.nodes,
             expandedHosts: expandedHosts,
             forcedOpen: fleetPruned.forcedOpen,
-            attention: attention
+            attention: attention,
+            hostTypes: hostTypes
         )
         if !fleetEntries.isEmpty {
             sections.append(
