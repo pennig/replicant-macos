@@ -287,6 +287,16 @@ public enum Control {
     public static let height: CGFloat = 34
 }
 
+/// Width reserved for a list row's leading disclosure control (chevron +
+/// child count). Reserved for every row at a given depth, whether or not that
+/// row actually has children, so a leaf row's glyph lines up flush with an
+/// expandable host row's one column over — the fixed gutter is what keeps
+/// depth-aligned rows visually aligned, not just the rows that use it.
+/// Consumed by `DeviceRow`.
+public enum RowGutter {
+    public static let disclosure: CGFloat = 22
+}
+
 public extension Font {
     static let rcTitle        = Font.system(size: 20, weight: .bold)            // inspector / list title
     static let rcHeadline     = Font.system(size: 15, weight: .semibold)

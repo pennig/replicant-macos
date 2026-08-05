@@ -20,9 +20,6 @@ struct DeviceRow: View {
 
     private var device: Device { entry.device }
 
-    /// Reserved so a leaf's glyph lines up with a host's, one indent per depth.
-    private static let disclosureWidth: CGFloat = 22
-
     var body: some View {
         HStack(spacing: Space.s) {
             disclosure
@@ -52,13 +49,13 @@ struct DeviceRow: View {
                         .font(.rcMicroMono)
                 }
                 .foregroundStyle(.rcTextTertiary)
-                .frame(width: Self.disclosureWidth)
+                .frame(width: RowGutter.disclosure)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .help(entry.isExpanded ? "Collapse" : "Expand")
         } else {
-            Color.clear.frame(width: Self.disclosureWidth, height: 1)
+            Color.clear.frame(width: RowGutter.disclosure, height: 1)
         }
     }
 
