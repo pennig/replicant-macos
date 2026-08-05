@@ -26,10 +26,11 @@ public enum MissionAction: Equatable, Sendable {
     /// Move to `nextStep` with no command — this step's work was already done.
     case advanceStep(nextStep: String)
     /// Record the AMI controller this run is driving in `Directive.controllerCode`,
-    /// then move on. That badges and locks the controller's built-in row.
+    /// then move to `nextStep`. That badges and locks the controller's built-in row.
     case assignController(deviceCode: String, nextStep: String)
-    /// Re-read `locations/{star}`, persist it, then move to `nextStep`. The engine
-    /// owns the I/O; the machine sees the fresh counts on its next evaluation.
+    /// Re-read `locations/{star}`, persist it, then move to `nextStep`. Best-effort:
+    /// the endpoint 403s for a system the census has never marked explored, and the
+    /// engine swallows that — a stale cache only costs the machine one evaluation.
     case refreshSystem(designation: String, nextStep: String)
     /// Re-read the whole stockpile census, persist it, then ask the machine
     /// again against the fresh `world.footprints`. Resolved by the engine.
@@ -56,6 +57,8 @@ public enum MissionAction: Equatable, Sendable {
     /// It answers PRESENCE only. Stowing clears a device's location, dropping it
     /// out of the location index entirely, so this cannot see a stowed device and
     /// must never gate on one. Use `.refreshDevices` for containment.
+    ///
+    /// - `thenStall` nil: an unresolved re-ask waits instead of stalling.
     case refreshDevicesInSystem(designation: String, thenStall: DirectiveAttentionReason?)
     /// The same demand scoped to a TAG: `GET devices/tags/{tag}` in ONE request,
     /// reconciled, then the machine is asked again. One request whatever the fleet
@@ -66,6 +69,8 @@ public enum MissionAction: Equatable, Sendable {
     ///
     /// **Never follow this with a prune.** Only devices carrying `tag` appear in
     /// the response, so treating that absence as "device gone" deletes the fleet.
+    ///
+    /// - `thenStall` nil: an unresolved re-ask waits instead of stalling.
     case refreshFleet(tag: String, thenStall: DirectiveAttentionReason?)
     /// Replace `deviceCode`'s ENTIRE tag set with `tags`, then move to `nextStep`
     /// regardless of outcome — best-effort I/O and a plain step move, never a
@@ -79,7 +84,7 @@ public enum MissionAction: Equatable, Sendable {
     /// and stops evaluating until the user resolves it. Never auto-retried.
     case stall(DirectiveAttentionReason)
     /// The queue is empty and this is a CONTINUOUS run: pick the next system from
-    /// the census, append it to `targets`, and carry on. Resolved by
+    /// the census around `centre`, append it to `targets`, and carry on. Resolved by
     /// `DirectiveEngineCore`, which owns the read and the write.
     ///
     /// This one changes the directive ROW, so its re-asked action must be applied
@@ -108,7 +113,7 @@ public struct RoamContext: Equatable, Sendable {
     /// ORIGINAL units; the catalogue blob never carries them.
     public let assays: [SiteAssay]
     /// Every device row. Mesh membership is derived from these (see
-    /// `SalvageTargetPlanner.meshSystems(in:)`).
+    /// `SalvageTargetPlanner.meshSystems(in:)`), never from `ftlLinks`.
     public let devices: [Device]
     /// Every system this run has already aimed at — `Directive.targets`, append-only.
     public let attempted: Set<String>
