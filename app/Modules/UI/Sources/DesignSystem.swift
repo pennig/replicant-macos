@@ -264,6 +264,13 @@ public enum Hairline {
     public static let regular: CGFloat = 1
 }
 
+/// Thickness for a readout's stacked composition bar (`RCReadoutSectionHeader`).
+/// Kept separate from `Hairline` — that token means a 0.5/1pt separator stroke,
+/// while this is a deliberately thicker, visible bar segment.
+public enum BarThickness {
+    public static let readout: CGFloat = 3
+}
+
 /// Square dimensions for the icon/glyph tiles used in list rows (small) and
 /// detail headers (large). Owned here so the two recurring magic numbers live in
 /// one place; consumed by `RCGlyphTile`.
