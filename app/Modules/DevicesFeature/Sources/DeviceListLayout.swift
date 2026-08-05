@@ -113,3 +113,53 @@ extension DeviceListLayout {
         return roots.sorted(by: precedes).map(node(for:))
     }
 }
+
+extension DeviceListLayout {
+
+    /// Walks the forest in render order, emitting a node's children only when it
+    /// is open. A collapsed host contributes no entries, so
+    /// `sections.flatMap(\.entries).map(\.id)` — the list's `orderedIDs` — skips
+    /// hidden rows by construction.
+    ///
+    /// `expandedHosts` is the operator's own disclosure state; `forcedOpen` is
+    /// the transient reveal a search query applies to a match's ancestors, and
+    /// never writes back.
+    static func flatten(
+        _ nodes: [Node],
+        depth: Int = 0,
+        parentCode: String? = nil,
+        expandedHosts: Set<String>,
+        forcedOpen: Set<String>,
+        attention: [String: [AttentionFlag]]
+    ) -> [DeviceEntry] {
+        var entries: [DeviceEntry] = []
+        for node in nodes {
+            let code = node.device.deviceCode
+            let isOpen = !node.children.isEmpty
+                && (expandedHosts.contains(code) || forcedOpen.contains(code))
+            entries.append(
+                DeviceEntry(
+                    device: node.device,
+                    depth: min(depth, maxIndentDepth),
+                    childCount: node.children.count,
+                    isExpanded: isOpen,
+                    host: badge(for: node.device, parentCode: parentCode),
+                    attention: attention[code] ?? []
+                )
+            )
+            if isOpen {
+                entries.append(
+                    contentsOf: flatten(
+                        node.children,
+                        depth: depth + 1,
+                        parentCode: code,
+                        expandedHosts: expandedHosts,
+                        forcedOpen: forcedOpen,
+                        attention: attention
+                    )
+                )
+            }
+        }
+        return entries
+    }
+}

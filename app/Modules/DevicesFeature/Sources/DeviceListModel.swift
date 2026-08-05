@@ -64,3 +64,37 @@ public enum HostRelation: Equatable, Sendable {
         }
     }
 }
+
+/// One visible row. `depth` is a rendering hint on an already-flattened array —
+/// nothing recurses in the view.
+public struct DeviceEntry: Identifiable, Equatable, Sendable {
+    public var device: Device
+    /// Indent level, clamped at `DeviceListLayout.maxIndentDepth`.
+    public var depth: Int
+    /// Number of children this row hosts. 0 ⇒ not a host, so no chevron.
+    /// While a search query is active this counts *retained* children only.
+    public var childCount: Int
+    public var isExpanded: Bool
+    /// The relationship badge — the containment relation that did not decide
+    /// this row's position.
+    public var host: HostRelation?
+    public var attention: [AttentionFlag]
+
+    public var id: String { device.deviceCode }
+
+    public init(
+        device: Device,
+        depth: Int,
+        childCount: Int,
+        isExpanded: Bool,
+        host: HostRelation?,
+        attention: [AttentionFlag]
+    ) {
+        self.device = device
+        self.depth = depth
+        self.childCount = childCount
+        self.isExpanded = isExpanded
+        self.host = host
+        self.attention = attention
+    }
+}
