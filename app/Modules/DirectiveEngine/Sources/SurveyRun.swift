@@ -6,15 +6,13 @@
 //  stowed AMI controller's `survey_system` directive, launch it (which deploys
 //  its adopted stowed drones), wait for completion, move on.
 //
-//  **Staging is the player's job.** The run uses an AMI survey controller that
-//  is ALREADY stowed aboard the vessel and drones that controller has ALREADY
-//  adopted. It never stows and never adopts — adoption is persistent state that
-//  would outlive the mission, and re-parenting someone's fleet behind their back
-//  is not the engine's call. Missing either is a stall with a reason naming it.
+//  **Staging is the player's job.** The run uses an AMI survey controller
+//  ALREADY stowed aboard the vessel and drones it has ALREADY adopted; it never
+//  stows and never adopts, because adoption is persistent state that outlives
+//  the mission. Missing either is a stall with a reason naming it.
 //
 //  Pure by contract: no I/O, no clock reads (time comes from `world.now`), no
-//  randomness. Every effect is the returned `MissionAction`. That is what makes
-//  the stall matrix a table of plain function calls over fixtures.
+//  randomness. Every effect is the returned `MissionAction`.
 //
 
 import Foundation
@@ -35,13 +33,21 @@ public struct SurveyRun: MissionStepMachine {
     /// This mission's step vocabulary. Plain strings because `Directive.step` is
     /// deliberately untyped — each kind owns its own vocabulary.
     public enum Step {
+        /// Prove the staging aboard the vessel before committing to a target.
         public static let preflight = "preflight"
+        /// Fly the vessel to the current target system.
         public static let travelling = "travelling"
+        /// Put `surveyConfig` in force on the stowed controller.
         public static let configuring = "configuring"
+        /// Launch the controller, which deploys its adopted drones.
         public static let launching = "launching"
+        /// Wait out the survey itself.
         public static let awaiting = "awaiting"
+        /// Check the target's scan counts against the claimed completion.
         public static let confirming = "confirming"
+        /// Hold the vessel until every recalled drone is back aboard.
         public static let recovering = "recovering"
+        /// Fly the vessel back to the run's origin.
         public static let returning = "returning"
     }
 
@@ -56,33 +62,36 @@ public struct SurveyRun: MissionStepMachine {
     public static let recallProbeInterval: TimeInterval = 30
 
     /// The hard cap on a recall before the run surfaces `dronesNotRecovered`.
-    /// Generous, because it is now a genuine backstop rather than the primary
-    /// timer: the ETA-driven wait below handles the honest cases, so reaching
-    /// this means the recall really is not happening.
+    /// Generous because it is a backstop, not the primary timer: `recover`'s
+    /// ETA-driven wait handles the honest cases, so reaching this means the
+    /// recall really is not happening.
     public static let recallDeadline: TimeInterval = 20 * 60
 
     /// How old a row backing a POSITIVE staging finding may be and still be
     /// believed without an authoritative re-read.
     ///
-    /// Staging is judged from `stowedInDeviceCode` columns, and survey drones
-    /// emit no events at all — so a drone abandoned in another system keeps
-    /// claiming it is aboard until something reads it. The existing
-    /// `.refreshDevices` net guards only the *negative* direction ("we see
-    /// nothing, but have we been allowed to look?"); this is the same doubt
-    /// applied to a positive, which is the direction that actually loses a
-    /// fleet. Costs at most one read round per target.
+    /// Staging is judged from `stowedInDeviceCode` columns and survey drones emit
+    /// no events at all, so a drone abandoned in another system keeps claiming it
+    /// is aboard until something reads it. The `.refreshDevices` net guards only
+    /// the NEGATIVE direction; the positive is the one that loses a fleet. Costs
+    /// at most one read round per target.
     public static let stagingFreshness: TimeInterval = 5 * 60
 
     /// The survey configuration this mission insists on: a FULL survey with the
-    /// drones recalled when done, so the vessel can move on to the next target
-    /// (spec §4 step 4). Deliberately different from the composer's manual
-    /// default (`moons: none`) — a Survey Run means the whole system.
+    /// drones recalled when done, so the vessel can move on to the next target.
+    /// Deliberately different from the composer's manual default (`moons: none`)
+    /// — a Survey Run means the whole system.
     public static let surveyConfig: [String: JSONValue] = [
         "planets": .string("all"),
         "moons": .string("all"),
         "recall": .bool(true),
     ]
 
+    /// Route `directive`'s current step against `world`, stalling if the vessel
+    /// `directive.deviceCode` names has left the fleet.
+    ///
+    /// An unrecognised step waits rather than dispatching: waiting is inert and
+    /// the operator can cancel, where guessing would command the fleet.
     public func nextAction(directive: Directive, world: WorldSnapshot) -> MissionAction {
         guard let vessel = world.device(directive.deviceCode) else {
             return .stall(.unreachableDevice)
@@ -97,8 +106,6 @@ public struct SurveyRun: MissionStepMachine {
         case Step.recovering: return recover(directive, vessel, world)
         case Step.returning: return returnHome(directive, vessel, world)
         default:
-            // An unrecognised step must never dispatch. Waiting is inert and
-            // recoverable; the user can cancel or the row can be repaired.
             logger.notice("survey run \(directive.id, privacy: .public): unknown step \(directive.step, privacy: .public) — waiting")
             return .wait
         }
@@ -106,54 +113,53 @@ public struct SurveyRun: MissionStepMachine {
 
     // MARK: - Fleet queries
 
-    /// The AMI survey controller stowed aboard this vessel, if any. Forwards to
-    /// the shared `AMIFleet` query (extracted 2026-07-30 so `SalvageRun` can
-    /// share the identical two-ended read) — see there for the full "why".
+    /// The AMI survey controller stowed aboard `vessel` in `world`, if any.
+    /// Forwards to the shared `AMIFleet` query — see there for the full "why".
     public static func controller(aboard vessel: Device, in world: WorldSnapshot) -> Device? {
         AMIFleet.stowed(aboard: vessel, in: world, offering: "survey_system")
     }
 
-    /// The controller's adopted drones that are also aboard the vessel. Forwards
-    /// to `AMIFleet` — see there for why adoption is read from both ends of the
-    /// controller/drone link.
+    /// The drones `controller` has adopted that are also aboard `vessel` in
+    /// `world`. Forwards to `AMIFleet` — see there for why adoption is read from
+    /// both ends of the controller/drone link.
     public static func adoptedDrones(
         of controller: Device, aboard vessel: Device, in world: WorldSnapshot
     ) -> [Device] {
         AMIFleet.adoptedDrones(of: controller, aboard: vessel, in: world)
     }
 
-    /// Every device this controller has adopted, wherever it currently is —
-    /// including the ones still deployed. Forwards to `AMIFleet` — see there for
-    /// why the recall gate needs the whole set rather than just the ones aboard.
+    /// Every device `controller` has adopted anywhere in `world`, including the
+    /// ones still deployed. Forwards to `AMIFleet` — see there for why the recall
+    /// gate needs the whole set rather than just the ones aboard.
     public static func adoptedDrones(of controller: Device, in world: WorldSnapshot) -> [Device] {
         AMIFleet.adoptedDrones(of: controller, in: world)
     }
 
-    /// Whether any row backing a staging finding is too old to act on.
+    /// Whether any of `devices` backs a staging finding with a row too old, by
+    /// `world`'s clock, to act on.
     ///
-    /// One stale row is enough: the claim "everything needed is aboard" is a
-    /// conjunction, so its weakest member decides how much it is worth.
+    /// One stale row is enough: "everything needed is aboard" is a conjunction,
+    /// so its weakest member decides how much the claim is worth.
     static func stagingIsStale(_ devices: [Device], _ world: WorldSnapshot) -> Bool {
         devices.contains { world.now.timeIntervalSince($0.updatedAt) > stagingFreshness }
     }
 
-    /// Whether a system's scan counts say it is completely surveyed.
+    /// Whether `system`'s scan counts say it is completely surveyed.
     ///
-    /// Forwards to `StarSystem.isFullyScanned`, which is the one definition —
-    /// shared with the persistence layer that stamps `stars.fullyScannedAt`, so
-    /// the picker, the engine, and the catalog can never disagree about whether
-    /// a system is done. The `nil`-tolerance stays here: a system we hold no
-    /// blob for is not evidence of completeness.
+    /// Forwards to `StarSystem.isFullyScanned`, the one definition — shared with
+    /// the persistence layer that stamps `stars.fullyScannedAt`, so the picker,
+    /// the engine and the catalog can never disagree. The `nil`-tolerance stays
+    /// here: a system we hold no blob for is not evidence of completeness.
     public static func isFullyScanned(_ system: StarSystem?) -> Bool {
         system?.isFullyScanned ?? false
     }
 
-    /// The star system a device is currently in, or nil in transit / stowed.
+    /// The star system `device` is currently in, or nil in transit or stowed.
     static func system(of device: Device) -> String? {
         device.location.map { SiteAssay.system(of: $0) }
     }
 
-    // MARK: - Completion detection (spec §5)
+    // MARK: - Completion detection
 
     /// How long to wait on the `directive.completed` fast path before polling
     /// the counts anyway. A dropped SSE frame must not strand a run forever, and
@@ -164,27 +170,29 @@ public struct SurveyRun: MissionStepMachine {
     /// Same value and reasoning as `Reconciler.eventTimeSkewTolerance`.
     static let eventTimeSkewTolerance: TimeInterval = 5
 
-    /// Whether a completion for THIS step has landed in the timeline.
+    /// Whether a completion for `directive`'s CURRENT step has landed in
+    /// `world`'s timeline.
     ///
     /// Issue-time relative, not wall-clock: a completion delivered by catch-up
     /// after the app was closed still counts, while one predating this step is a
-    /// replay and does not. Same guard shape as
-    /// `Reconciler.completeOpenOperation` and the `directive.*` route.
+    /// replay and does not.
     public static func completionSeen(_ directive: Directive, _ world: WorldSnapshot) -> Bool {
         saw(.directiveCompleted, directive, world)
     }
 
-    /// Whether a launch reporting zero deployed devices landed in THIS step.
+    /// Whether a launch reporting zero deployed devices landed in `directive`'s
+    /// current step, per `world`'s timeline.
     ///
     /// A launch that deployed nothing cannot produce the completion `awaiting`
-    /// is waiting for, so this turns a permanent wait into a named stall. Same
-    /// issue-time guard as completions, and for the same reason in reverse: a
-    /// Retry must not re-stall on the very launch it was retrying.
+    /// waits for, so this turns a permanent wait into a named stall. Same
+    /// issue-time guard as completions, for the same reason in reverse: a Retry
+    /// must not re-stall on the very launch it was retrying.
     public static func emptyLaunchSeen(_ directive: Directive, _ world: WorldSnapshot) -> Bool {
         saw(.launchDeployedNothing, directive, world)
     }
 
-    /// Whether an entry of `kind` belongs to the directive's current step.
+    /// Whether an entry of `kind` in `world`'s log belongs to `directive`'s
+    /// current step.
     private static func saw(
         _ kind: DirectiveLogKind, _ directive: Directive, _ world: WorldSnapshot
     ) -> Bool {
@@ -198,17 +206,18 @@ public struct SurveyRun: MissionStepMachine {
     // MARK: - Target planning
 
     /// Where a continuous survey goes next: the cheapest hop inside an expanding
-    /// band of unsurveyed systems around the run's centre (`SurveyRoamPlanner`).
+    /// band of unsurveyed systems around `context`'s centre
+    /// (`SurveyRoamPlanner`).
     ///
     /// `.exhausted` rather than `.idle` for both empty answers, and that is the
     /// honest one here: the candidate set is "stars this account has not fully
-    /// scanned", which only ever shrinks as the run works. Nothing a survey does
-    /// puts a star back into it, so an empty census really is a finish line —
-    /// unlike a Salvage Run's frontier, which the survey itself keeps growing.
+    /// scanned", which only ever shrinks as the run works, so an empty census
+    /// really is a finish line — unlike a Salvage Run's frontier, which the
+    /// survey itself keeps growing.
     public func plan(_ context: RoamContext) -> RoamPlan {
         // No census row for the centre means the band has no anchor to measure
-        // from. Nothing this run can do about it, and it is not a transient — the
-        // designation is stamped on the row at launch.
+        // from, and it is not a transient — the designation is stamped on the row
+        // at launch.
         guard let centre = context.centre else { return .exhausted }
         guard let next = SurveyRoamPlanner.nextTarget(
             centre: centre.position,
@@ -225,12 +234,22 @@ public struct SurveyRun: MissionStepMachine {
 
     // MARK: - Steps
 
+    /// Prove `vessel`'s staging in `world` before committing `directive` to its
+    /// current target, or resolve an exhausted queue.
+    ///
+    /// Both staging checks are NEGATIVE findings over local rows, and a local row
+    /// is silent for two different reasons: nothing is aboard, or nobody has been
+    /// allowed to look lately (the confirm-read that would say so is `.low` and
+    /// the read budget may have deferred it for minutes). Only the first is worth
+    /// stopping a run for, so each demands an authoritative look before
+    /// surfacing — the engine re-asks once against fresh rows and stalls with the
+    /// carried reason if the answer holds.
     private func preflight(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
         guard let target = directive.currentTarget else {
             // A CONTINUOUS run never exhausts its queue — it extends it. Checked
             // before the return leg so the two stay independently expressible:
-            // nothing sets both today, but "roam, then come home" should remain a
-            // matter of setting both flags rather than needing new code.
+            // "roam, then come home" must remain a matter of setting both flags
+            // rather than needing new code.
             if let centre = directive.roamCentre {
                 return .extendQueue(centre: centre)
             }
@@ -242,13 +261,6 @@ public struct SurveyRun: MissionStepMachine {
             else { return .done }
             return .advanceStep(nextStep: Step.returning)
         }
-        // Both staging checks are NEGATIVE findings over local rows, and a local
-        // row can be silent for two very different reasons: nothing is aboard, or
-        // nobody has been allowed to look lately (the confirm-read that would say
-        // so is `.low` and the read budget may have deferred it for minutes).
-        // Only the first is worth stopping a run for, so demand an authoritative
-        // look before surfacing either — the engine re-asks once against fresh
-        // rows and stalls with the carried reason if the answer holds.
         guard let controller = Self.controller(aboard: vessel, in: world) else {
             return .refreshDevices(
                 deviceCodes: [vessel.deviceCode], thenStall: .noSurveyControllerAboard
@@ -256,10 +268,9 @@ public struct SurveyRun: MissionStepMachine {
         }
         let drones = Self.adoptedDrones(of: controller, aboard: vessel, in: world)
         guard !drones.isEmpty else {
-            // The controller too: `controlled_devices` is detail-only, so a
+            // Name the controller too: `controlled_devices` is detail-only, so a
             // list-synced controller under-reports adoption and the drones' own
-            // `controller_device_code` is the half that survives — reading both
-            // ends is what makes this answer trustworthy.
+            // `controller_device_code` is the half that survives.
             return .refreshDevices(
                 deviceCodes: [vessel.deviceCode, controller.deviceCode],
                 thenStall: .noSurveyDroneAboard
@@ -271,21 +282,15 @@ public struct SurveyRun: MissionStepMachine {
         // skipped is never departed for, so its staging cannot strand anything
         // and must not cost a read round.
         if Self.isFullyScanned(world.system(target)) { return .advanceTarget }
-        // The staging answer is positive — but it rests on rows that only a
-        // read can correct, and believing a stale one is how six drones were
-        // left in POLARISUM. Demand an authoritative look before committing the
-        // vessel to a departure. After a successful refresh these rows are
-        // fresh and this is inert; the engine only stalls here if the reads
-        // themselves could not be had, which `.unreachableDevice` names
-        // honestly.
+        // The staging answer is positive, and only a read can correct the rows it
+        // rests on. Inert once a refresh lands; the engine stalls here only if
+        // the reads could not be had, which `.unreachableDevice` names honestly.
         if Self.stagingIsStale([vessel, controller] + drones, world) {
             // Name every row the check covers, drones included. The engine's
             // carrier expansion reads the VESSEL's `stowed_devices` blob, which
             // is not a reliable inverse of the drones' own `stowedInDeviceCode`
-            // columns — a live vessel listed one unrelated matrix while six
-            // drones claimed to be aboard it. Naming only the vessel left the
-            // drone rows exactly as stale as before, so the check could never
-            // be satisfied and the run stalled for five and a half hours.
+            // columns, so naming only the vessel leaves the drone rows exactly as
+            // stale as before and the check can never be satisfied.
             return .refreshDevices(
                 deviceCodes: [vessel.deviceCode, controller.deviceCode] + drones.map(\.deviceCode),
                 thenStall: .unreachableDevice
@@ -294,10 +299,10 @@ public struct SurveyRun: MissionStepMachine {
         return .assignController(deviceCode: controller.deviceCode, nextStep: Step.travelling)
     }
 
-    /// The riskiest wait in the design: the controller drives its drones
-    /// server-side, so there is no operation the app created to key off. Two
-    /// tiers — the completion entry the `directive.*` route writes, and a
-    /// counts poll as the lost-event backstop.
+    /// Wait out `directive`'s survey against `world`. The controller drives its
+    /// drones server-side, so there is no operation the app created to key off:
+    /// the completion entry the `directive.*` route writes is the fast path, and
+    /// a counts poll after `backstopInterval` is the lost-event backstop.
     private func awaitCompletion(_ directive: Directive, _ world: WorldSnapshot) -> MissionAction {
         guard let target = directive.currentTarget else {
             return .advanceStep(nextStep: Step.preflight)
@@ -315,13 +320,15 @@ public struct SurveyRun: MissionStepMachine {
         return .wait
     }
 
+    /// Judge `directive`'s current target against `world`'s freshly-read scan
+    /// counts: done, contradicted, or still running.
     private func confirm(_ directive: Directive, _ world: WorldSnapshot) -> MissionAction {
         guard let target = directive.currentTarget else {
             return .advanceStep(nextStep: Step.preflight)
         }
-        // Confirmed done — but NOT free to leave. `recall: true` means the AMI
-        // is only now flying its drones home, so departing on this evidence
-        // strands them (see `recover`).
+        // Confirmed done, but NOT free to leave. `recall: true` means the AMI is
+        // only now flying its drones home, so departing on this evidence strands
+        // them (see `recover`).
         if Self.isFullyScanned(world.system(target)) {
             return .advanceStep(nextStep: Step.recovering)
         }
@@ -333,21 +340,16 @@ public struct SurveyRun: MissionStepMachine {
         return .advanceStep(nextStep: Step.awaiting)
     }
 
-    /// Hold the vessel until the AMI's recall has actually landed every adopted
-    /// drone back aboard.
+    /// Hold `vessel` until `world` shows the AMI's recall has landed every drone
+    /// `directive`'s controller adopted back aboard.
     ///
-    /// This gate is the whole reason the step exists. `directive.completed`
-    /// means *the survey* finished, NOT *the recall* — verified live on
-    /// 2026-07-26, where the completion event and the controller's own
-    /// `device.stowed` arrived in the same second while the digest showed all
-    /// six drones had only just departed for the rendezvous. The run read that
-    /// as clearance and dispatched the vessel 16 seconds later; the drones were
-    /// left in POLARISUM, and the next launch deployed nothing.
+    /// **`directive.completed` means the SURVEY finished, NOT the recall**, so a
+    /// run that treats a completion as clearance dispatches the vessel while its
+    /// drones are still flying to the rendezvous and strands them.
     ///
-    /// Placed BEFORE `.advanceTarget` on purpose, so it covers both ways a
-    /// vessel leaves: the next target's travel leg, and the queue-exhausted leg
-    /// home. The latter is where the drones were actually lost, and preflight's
-    /// staging checks never run on it.
+    /// Sits BEFORE `.advanceTarget` so it covers both ways a vessel leaves: the
+    /// next target's travel leg, and the queue-exhausted leg home — preflight's
+    /// staging checks never run on the latter.
     private func recover(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
         guard let controller = claimedController(directive, vessel, world) else {
             // Nothing to recall, and a vanished controller is preflight's
@@ -376,24 +378,18 @@ public struct SurveyRun: MissionStepMachine {
         // reports no travel block and would otherwise be re-probed every tick.
         let lastLook = stranded.map(\.updatedAt).min() ?? .distantPast
         if world.now.timeIntervalSince(lastLook) < Self.recallProbeInterval { return .wait }
-        // Name the drones whose own rows decide this gate — never a location
-        // scope. Stowing a device CLEARS its location, so a location-scoped list
-        // cannot report the very state this step waits for: the success
-        // condition erases the evidence. Live on 2026-07-29,
-        // `GET devices?location=ESELLUSAU` returned exactly ONE row (the vessel)
-        // while all six drones sat stowed aboard it reporting `location: null`.
-        // Their rows never moved, so `lastLook` never advanced either and the
-        // probe re-fired on every tick until the deadline surfaced
-        // `dronesNotRecovered` over a fully recovered fleet.
+        // Name the drones whose own rows decide this gate, never a location
+        // scope: stowing a device CLEARS its location, so a location-scoped list
+        // cannot report the very state this step waits for — the success
+        // condition erases the evidence, `lastLook` never advances off rows the
+        // probe never writes, and the probe re-fires every tick until the
+        // deadline surfaces `dronesNotRecovered` over a recovered fleet.
         //
-        // `resolveRefresh` reads each named code directly, which reports a
-        // stowed drone wherever it is and an in-transit one with its travel
-        // block — the carrier expansion is an addition to that, not the
-        // mechanism, which is what the old "a named probe could miss the rows it
-        // judges" reasoning conflated. Naming the DRONES also sidesteps the
-        // vessel's `stowed_devices` blob, which is not a reliable inverse of
-        // these columns (see preflight). Costs one read per drone still out —
-        // the price preflight already pays per target, and it shrinks as they
+        // `resolveRefresh` reads each named code directly, which reports a stowed
+        // drone wherever it is and an in-transit one with its travel block; the
+        // carrier expansion is an addition to that, not the mechanism, so naming
+        // the DRONES also sidesteps the vessel's `stowed_devices` blob (see
+        // `preflight`). Costs one read per drone still out, shrinking as they
         // come home.
         //
         // `thenStall: nil`: drones still flying is the expected answer, not a
@@ -409,6 +405,11 @@ public struct SurveyRun: MissionStepMachine {
         stranded.compactMap(\.activityDeadline).max()
     }
 
+    /// Fly `vessel` back to `directive`'s origin, finishing once `world` puts it
+    /// in that system.
+    ///
+    /// Carries the same open-op-only dispatch guard `travel` does, and the same
+    /// exposure it documents.
     private func returnHome(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
         guard let origin = directive.originDesignation else { return .done }
         if Self.system(of: vessel) == origin { return .done }
@@ -419,9 +420,10 @@ public struct SurveyRun: MissionStepMachine {
         )
     }
 
-    /// The controller this run claimed, re-resolved from the fleet on every
-    /// evaluation — the row is the checkpoint, and a controller since released
-    /// or decommissioned must surface rather than be dispatched at.
+    /// The controller `directive` claimed, re-resolved from `world` on every
+    /// evaluation and falling back to whatever is stowed aboard `vessel` when the
+    /// row names none — the row is the checkpoint, and a controller since
+    /// released or decommissioned must surface rather than be dispatched at.
     private func claimedController(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> Device? {
         guard let code = directive.controllerCode else {
             return Self.controller(aboard: vessel, in: world)
@@ -429,6 +431,8 @@ public struct SurveyRun: MissionStepMachine {
         return world.device(code)
     }
 
+    /// Put `surveyConfig` in force on the controller `directive` claimed aboard
+    /// `vessel`, skipping the command when `world` already shows it running.
     private func configure(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
         guard let controller = claimedController(directive, vessel, world) else {
             return .stall(.noSurveyControllerAboard)
@@ -444,6 +448,8 @@ public struct SurveyRun: MissionStepMachine {
         )
     }
 
+    /// Launch the controller `directive` claimed aboard `vessel`, resolved
+    /// through `world`, which deploys its adopted drones.
     private func launch(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
         guard let controller = claimedController(directive, vessel, world) else {
             return .stall(.noSurveyControllerAboard)
@@ -465,13 +471,20 @@ public struct SurveyRun: MissionStepMachine {
             && config["recall"]?.boolValue == true
     }
 
+    /// Fly `vessel` to `directive`'s current target, or advance once `world`
+    /// already places it there.
+    ///
+    /// The open-op guard proves only that the last travel's operation row is
+    /// closed. An arrival closes that row and writes `device.location` in two
+    /// separate transactions, so a tick landing between them re-commands travel
+    /// at a vessel already parked on the destination: a dispatch step's watermark
+    /// must be the ARRIVAL, which this one does not carry
+    /// (`confirm-steps-need-fresh-evidence`).
     private func travel(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
         guard let target = directive.currentTarget else {
             return .advanceStep(nextStep: Step.preflight)
         }
         if Self.system(of: vessel) == target { return .advanceStep(nextStep: Step.configuring) }
-        // An open op means the trip is under way. Expected, not a stall — and
-        // the guard that stops a second travel landing on top of the first.
         if world.openOperation(for: vessel.deviceCode) != nil { return .wait }
         return .dispatch(
             kind: .travel, deviceCode: vessel.deviceCode,

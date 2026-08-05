@@ -2,23 +2,16 @@
 //  RestockRun.swift
 //  Replicould — DirectiveEngine
 //
-//  Keeps idle FTL relays standing at the print hub, ahead of demand.
+//  Keeps idle FTL relays standing at the print hub, ahead of demand: something
+//  has to PUT spares in the Relay Run pool (`RelayRun.idleRelays`), or it only
+//  drains and every run pays a print's wait before it can leave.
 //
-//  The Relay Run pool (see `RelayRun.idleRelays`) made a spare relay claimable
-//  the moment a carrier lands. This is the other half: something has to PUT
-//  spares there, or the pool only ever drains and every run pays a print's wait
-//  before it can leave. Printing is the fleet's bottleneck and stays so as
-//  carriers are added, so the printer should run whenever there is unmet demand
-//  and the reserve allows.
+//  **Owned by the HUB device, not a carrier.** The hub's print queue is shared
+//  and never leased, so holding the autofactory in a directive costs the fleet
+//  no capacity — no carrier, no drone, nothing another mission wants.
 //
-//  **Owned by the HUB device, not a carrier.** `enqueue_print` takes a device
-//  type and nothing else; the hub's queue is shared and never leased (ticket
-//  05), so holding the autofactory in a directive costs the fleet no capacity —
-//  no carrier, no drone, nothing that another mission wants.
-//
-//  **Persistent.** It idles rather than completing, the shape
-//  `brain-resource-hub-model` gives the per-site Haul Run: one row an operator
-//  can see and cancel, instead of a new directive per relay.
+//  **Persistent.** It idles rather than completing, so an operator sees and
+//  cancels one row instead of a directive per relay.
 //
 
 import Foundation
@@ -37,10 +30,14 @@ public struct RestockRun: MissionStepMachine {
     /// cannot disagree about what "too poor to print" means.
     public let reserveFloor: Int?
 
+    /// Build a run whose print veto reads `reserveFloor`, the rail's aggregate
+    /// stock floor unless a caller overrides it.
     public init(reserveFloor: Int? = BrainCeiling.aggregateSpendFloor) {
         self.reserveFloor = reserveFloor
     }
 
+    /// This mission's step vocabulary. Plain strings because `Directive.step` is
+    /// deliberately untyped — each kind owns its own vocabulary.
     public enum Step {
         /// Decide whether to print, and start one if so.
         public static let stocking = "stocking"
@@ -52,26 +49,28 @@ public struct RestockRun: MissionStepMachine {
 
     /// The most idle relays this will leave parked at the hub.
     ///
-    /// **Ten, as a practical ceiling on capital sitting in inventory rather than
-    /// held as reserve** — a relay is 370 units across six types, so ten is
-    /// 3,700 units parked. It is not a throttle on throughput: demand is the
-    /// binding limit long before this is, and the reserve floor binds before
-    /// either. It exists so that a world with dozens of reachable targets cannot
-    /// turn the whole stockpile into relays nobody is flying yet.
+    /// A ceiling on capital held as inventory rather than reserve, never a
+    /// throttle on throughput — demand and then the reserve floor both bind
+    /// before it, so re-tuning it as a throughput knob moves nothing.
     public static let idleCap = 10
 
     /// How long a print may go unclaimed before the run gives up waiting and
     /// re-decides. Matches `RelayRun.printDeadline` — the same server-side job.
     public static let printDeadline: TimeInterval = RelayRun.printDeadline
 
-    /// How stale the census may be before a print is vetoed for lack of a
-    /// trustworthy reading. Matches `RelayRun.hubFreshness`.
+    /// How stale the TABLE-WIDE census may be before `stocking` buys a refresh
+    /// rather than trusting it. Matches `RelayRun.pollInterval`, the bound
+    /// `footprintCensusIsStale` reads it through — not the more generous
+    /// `hubFreshness`, which is `printStockIsShort`'s separate read-time veto.
     public static let pollInterval: TimeInterval = RelayRun.pollInterval
 
+    /// Route `directive`'s current step against `world`.
+    ///
+    /// Stalls when the hub row `directive.deviceCode` names has left the fleet:
+    /// substituting another printer would be a fabrication, since the row names
+    /// the one hub this run owns.
     public func nextAction(directive: Directive, world: WorldSnapshot) -> MissionAction {
         guard let hub = world.device(directive.deviceCode) else {
-            // The hub row is gone from the fleet. Nothing to print with, and
-            // guessing at another printer would be a fabrication.
             return .stall(.unreachableDevice)
         }
         switch directive.step {
@@ -82,14 +81,13 @@ public struct RestockRun: MissionStepMachine {
 
     // MARK: - Deciding
 
-    /// Print one relay, or wait.
+    /// Print one relay at `hub`'s location, or wait, judging `directive`'s demand
+    /// against `world`'s idle pool and census.
     ///
-    /// **Every branch that declines is a `.wait`, never a `.stall`.** A restock
-    /// that cannot print right now is the system working: demand is met, or the
-    /// cap is reached, or the reserve says not yet. None of those need an
-    /// operator, and `brain-robustness-bar` clause 6 is explicit that idle-calm
-    /// must not be dressed up as a halt. The only stall here is a hub that has
-    /// left the fleet.
+    /// **Every branch that declines is a `.wait`, never a `.stall`** — demand
+    /// met, cap reached, or the reserve saying not yet are all the system
+    /// working, and dressing idle calm up as a halt spends an operator's
+    /// attention on nothing. The one stall is a hub with no location.
     private func stocking(_ directive: Directive, _ hub: Device, _ world: WorldSnapshot) -> MissionAction {
         guard let location = hub.location else { return .stall(.unreachableDevice) }
 
@@ -97,44 +95,27 @@ public struct RestockRun: MissionStepMachine {
         let desired = Self.desiredIdle(for: directive)
         guard idle < desired else { return .wait }
 
-        // One print in flight at a time. NOT a throttle — one autofactory prints
-        // one relay at a time regardless — but a correctness guard:
+        // One print in flight at a time. A correctness guard, not a throttle:
         // `CommandClient` supersedes any other open op on a device, so a second
-        // dispatch would silently orphan the first's row, which is exactly what
-        // stranded two Relay Runs on 2026-08-04.
+        // dispatch silently orphans the first's row and strands the run waiting
+        // on it.
         if world.openOperation(for: hub.deviceCode) != nil { return .wait }
 
         // The rail, read through `RelayRun`'s own veto so the two cannot drift.
         //
-        // **A stale census buys a refresh rather than waiting it out.** An
-        // earlier version waited, on the reasoning that no carrier is standing
-        // by for the answer and "the census refreshes on its own cadence".
-        // **There is no such cadence**: `LocationsClient.refreshFootprint()` has
-        // exactly two production callers — a mission's own `.refreshFootprint`
-        // action and the Locations screen when a human opens it. Nothing polls
-        // it. So waiting meant restock could only ever print inside the ≤60s
-        // window after some OTHER mission happened to refresh, which made every
-        // individual decision correct and the whole run inert.
-        //
-        // The read is bought only once every guard above has said this run
-        // genuinely wants to print — unmet demand, a pool below it, no print
-        // already in flight. A fleet with nothing to print for spends nothing,
-        // which is the bound that matters: the cost is proportional to wanting
-        // stock, not to existing.
-        //
-        // Bounded three ways beyond that. (1) `reAsk`'s `paid: Set<RefreshKind>`
-        // allows at most ONE footprint round per evaluation. (2) The gate is
-        // TABLE-WIDE (`footprintCensusIsStale` reads the newest `fetchedAt` of
-        // any row), so one SUCCESSFUL refresh satisfies it for a whole
-        // `pollInterval` — and a refresh that succeeds while still not listing
-        // the hub is positive evidence, falling through to `printStockIsShort`,
-        // which fails closed. That is the per-location self-loop
-        // `brain-relay-reserve-floor` round 2 had to remove, and it stays
-        // removed. (3) `thenStall: nil` because restock must never escalate a
-        // top-up (see this method's doc) — so a persistently FAILING refresh
-        // costs one census read per tick while demand is unmet, the same
-        // documented ceiling `Brain.confirmCarrier` carries and for the same
-        // reason: the alternative is remembering the refusal, which is state.
+        // A stale census buys a refresh rather than waiting it out, because
+        // **nothing polls `LocationFootprint`** — `refreshFootprint()`'s only
+        // production callers are a mission's own `.refreshFootprint` action and
+        // the Locations screen — so waiting confines printing to the window
+        // after some OTHER mission happens to refresh, and widening the
+        // freshness bound only moves that dead line. The read is bought only
+        // once every guard above has said this run wants to print, so its cost
+        // tracks wanting stock rather than existing. The gate must stay
+        // TABLE-WIDE: a per-location one self-loops, whereas a refresh that
+        // succeeds while still omitting the hub is positive evidence and falls
+        // through to the fail-closed `printStockIsShort`. `thenStall: nil`
+        // because restock must never escalate a top-up nobody is waiting on —
+        // the price is one census read per tick while demand is unmet.
         let rail = RelayRun(reserveFloor: reserveFloor)
         if rail.footprintCensusIsStale(world) {
             return .refreshFootprint(nextStep: Step.stocking, thenStall: nil)
@@ -155,52 +136,43 @@ public struct RestockRun: MissionStepMachine {
         )
     }
 
-    /// How many idle relays the hub should be holding: unmet demand, capped.
+    /// How many idle relays the hub should hold for `directive`: its own
+    /// `targets` count, capped at `idleCap`.
     ///
-    /// **Demand is grow targets, not a fixed buffer** — the rule is "churn them
-    /// out as long as there are targets to emplace them", so the stopping
-    /// condition is the work running out.
-    ///
-    /// **Read off the directive's own `targets`, and it has to be.** Demand is a
-    /// galaxy-wide judgement over `ValueCatalog`/`GrowRanking`, which run on a
-    /// `WorldView`; a mission gets a `WorldSnapshot`, whose `systems` and
-    /// `siteAssays` are deliberately SCOPED to the directive's own targets so a
-    /// run never decodes the whole catalogue. So the mission cannot compute this
-    /// and must be told. The brain — restock's only planner — keeps the list
-    /// current (`Brain.tendRestock`), which also makes the row read honestly:
-    /// the systems it lists are exactly the ones it is printing for.
+    /// **Read off `targets` because the mission cannot compute demand.** Demand
+    /// is a galaxy-wide judgement over `ValueCatalog`/`GrowRanking`, which run on
+    /// a `WorldView`, while a mission's `WorldSnapshot` scopes `systems` and
+    /// `siteAssays` to this directive's own targets — so deriving it here would
+    /// only ever see what the row already names. `Brain.tendRestock` keeps the
+    /// list current.
     static func desiredIdle(for directive: Directive) -> Int {
         min(idleCap, directive.targets.count)
     }
 
     // MARK: - Waiting on the clone
 
-    /// Wait for the printed relay to land in the fleet, then go back to
-    /// deciding.
+    /// Wait for a printed relay to reach `world`'s idle pool at `hub`'s
+    /// location, then hand `directive` back to `stocking` to decide again.
     ///
     /// **It does not care WHICH relay arrived**, unlike `RelayRun.printing`,
-    /// which has to identify its own clone to fly it somewhere. This run only
-    /// tops up a pool: any relay reaching the hub's idle stock satisfies it, so
-    /// a superseded op — the failure that stranded two runs — cannot strand this
-    /// one. It re-decides from the pool count and prints again if still short.
+    /// which must identify its own clone to fly it somewhere: any relay reaching
+    /// the hub's idle stock tops the pool up, so a superseded print op cannot
+    /// strand this run.
     private func printing(_ directive: Directive, _ hub: Device, _ world: WorldSnapshot) -> MissionAction {
         guard let location = hub.location else { return .stall(.unreachableDevice) }
-        // The pool grew, or demand fell, or the cap was reached — whatever the
-        // reason, there is nothing to wait for.
         if RelayRun.idleRelays(at: location, in: world).count >= Self.desiredIdle(for: directive) {
             return .advanceStep(nextStep: Step.stocking)
         }
         if world.openOperation(for: hub.deviceCode) != nil { return .wait }
-        // No open op and the pool is still short: either the clone landed and
-        // demand moved, or the print failed. Either way the answer is the same —
-        // go back and decide again. The deadline is what stops a silent
-        // never-arriving print from parking this step forever.
+        // No open op and the pool still short: the clone landed and demand moved,
+        // or the print failed — either way, re-decide. The deadline exists only
+        // so a silently never-arriving print cannot park this step forever.
         if world.now.timeIntervalSince(directive.stepStartedAt) > Self.printDeadline {
             logger.notice("restock \(directive.id, privacy: .public): print produced no relay within the deadline — re-deciding")
         }
         return .advanceStep(nextStep: Step.stocking)
     }
 
-    /// Restock never plans targets — it has none. Required by the protocol.
+    /// Restock never roams: it plans no targets, so `context` is unread.
     public func plan(_ context: RoamContext) -> RoamPlan { .exhausted }
 }
