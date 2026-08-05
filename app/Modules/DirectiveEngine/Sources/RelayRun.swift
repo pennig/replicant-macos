@@ -149,8 +149,10 @@ public struct RelayRun: MissionStepMachine {
     /// Route `directive`'s current step against `world`, stalling if the carrier
     /// `directive.deviceCode` names has left the fleet.
     ///
-    /// The carrier is the run's only lease, so no substitute exists: every step
-    /// commands that one device or a relay it is physically carrying.
+    /// The carrier is the run's only lease, so no substitute exists. The other
+    /// devices this run commands — the print hub, the source relay it reclaims,
+    /// the relay it plants — are re-derived from `world` each evaluation, but
+    /// `directive.deviceCode` is not, and several steps command nothing at all.
     ///
     /// An unrecognised step waits rather than dispatching: waiting is inert and
     /// the operator can cancel, where guessing would command the fleet.

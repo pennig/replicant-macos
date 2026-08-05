@@ -105,9 +105,10 @@ minutes, not ~45.** `Brain.stallResponse` tests `episode.attempts < retryBudget`
 BEFORE the `retryInterval` wait, so once the third attempt is spent escalation
 lands on the very next tick rather than one more interval later; `Brain.swift`'s
 own doc on `retryInterval` agrees ("`retryBudget` attempts span ~30 minutes").
-[[brain-tendmesh-build]]'s clause-6 row says ~45 min, counting the first attempt
-as spaced — **that figure is 15 minutes too long**; the clause's real point, that
-the fuse lengthens but does not close the carrier hold, still stands.
+The easy way to get this wrong is to count the first attempt as spaced, which
+inflates the fuse to ~45 min; [[brain-tendmesh-build]]'s clause-6 row made exactly
+that error and is corrected. The clause's real point, that the fuse lengthens but
+does not close the carrier hold, is unaffected either way.
 
 Related: [[brain-tendmesh-worthiness]], [[brain-relay-reserve-floor]],
 [[brain-tendmesh-build]], [[travel-is-cheap-vs-survey]], [[brain-executor-seam]].

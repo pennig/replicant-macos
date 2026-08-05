@@ -47,10 +47,8 @@ against the Delete list below.
 **Keep:**
 - **A file header** — what the file is, what it does, and invariants true of the
   code itself (purity, one-shot lifecycle, what owns what). No line ceiling: one
-  sentence per invariant, and nothing that is not one. Most headers land near ten
-  lines; a file carrying many invariants (`PrunePredicate`, `Brain`) runs to
-  thirty and is right to. A header fails on a sentence that states no invariant,
-  never on its length.
+  sentence per invariant, and nothing that is not one. A header fails on a
+  sentence that states no invariant, never on its length.
 - **`///` on public/internal API** — what it does, what each parameter means, what
   a caller must guarantee. Bare contract.
 - **Inline `//`** — only where intent is not recoverable by reading the code: a
