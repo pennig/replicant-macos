@@ -76,6 +76,34 @@ thenStall: nil)`. Four things make that safe, and all four are load-bearing:
 bound** — with nothing polling the table the census goes stale forever
 regardless, so that only moves the dead line from 60s to 300s.
 
+## `RestockRun.idleCap` = 10 — the arithmetic
+
+Hand-tuned at build time; the calibration lived only in the source comment on the
+constant, and is recorded here so a re-calibration has somewhere to start. The
+comment now carries only the *rule* (it is a capital ceiling, not a throughput
+throttle); the *number* is this:
+
+**It is a ceiling on capital sitting in inventory rather than held as reserve.**
+A relay is **370 units across six types** (`carbon 20, silicates 100,
+structural 80, rares 40, conductive 120, volatiles 10` — 370 TOTAL, never per
+type; see [[brain-relay-reserve-floor]]), so ten idle relays is **3,700 units
+parked** in a pool nobody is flying yet.
+
+**It is not a throttle on throughput, and must not be re-tuned as if it were.**
+Two other limits bind first, in this order:
+
+1. **Demand** — `desiredIdle = min(idleCap, directive.targets.count)`, and the
+   brain writes `targets` from live grow demand, so on today's world the target
+   count is the binding term and the cap is slack.
+2. **The reserve floor** — `RelayRun.printStockIsShort` vetoes against
+   `BrainCeiling.aggregateSpendFloor` (35,078, ~47% of live hub stock), which
+   fires long before 3,700 units of parked stock is the fleet's problem.
+
+So the cap exists for one case only: a world with dozens of reachable grow
+targets, where demand would otherwise turn the whole stockpile into relays
+ahead of any carrier able to fly them. If the relay bill or the reserve floor
+moves materially, re-derive from the units-parked side, not from throughput.
+
 Proven at the engine, not just on the pure function (`RestockEngineTests`), for
 the reason round 4 records: the last bug of this shape was in the engine's
 re-ask collapse rather than in any machine, and every `RelayRun` test at the time
