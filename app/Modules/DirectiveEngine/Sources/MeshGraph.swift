@@ -2,33 +2,23 @@
 //  MeshGraph.swift
 //  Replicould — DirectiveEngine
 //
-//  Task 7: the spatial grid + hop adjacency. A pure graph over census star
-//  systems where two systems are adjacent iff they are within FTL relay
-//  range (SalvageTargetPlanner.relayRangeLY). No I/O, no clock, no mutable
-//  state — the brain rebuilds this from a fresh WorldView on every 5-second
-//  tick, so `neighbours(of:)` must stay far from O(n²) even at the full
-//  ~14,000-system census. A uniform spatial grid (cell size == hopRange)
-//  gets a query down to scanning the 27 cells around the point, since no
-//  system within hopRange of a query point can ever land outside them (see
-//  the reasoning on `cell(for:hopRange:)` below).
+//  The spatial grid, hop adjacency, and the one search over them. A pure graph
+//  over census star systems where two systems are adjacent iff they are within
+//  FTL relay range (`SalvageTargetPlanner.relayRangeLY`). No I/O, no clock, no
+//  mutable state — the brain rebuilds this from a fresh `WorldView` on every
+//  5-second tick, so `neighbours(of:)` must stay far from O(n²) over the whole
+//  census; a uniform spatial grid (cell size == hopRange) gets a query down to
+//  the 27 cells around the point.
 //
-//  Task 8: multi-source Dijkstra over that adjacency — `reach(targets:
-//  meshSystems:)`, the cheapest new-relay chain from the live mesh to each
-//  target. Node cost model: a mesh system is a zero-cost source; entering
-//  any other system costs +1 relay. Primary key is relay count; ties break
-//  on accumulated hop distance, then (to stay deterministic tick-to-tick —
-//  see `Frontier` below) on system designation. Both Grow and Prune read
-//  this one computation, so correctness here is load-bearing for the whole
-//  brain.
-//
-//  Task 21: that promise made structural. The search itself moved into a
-//  private `search(sources:free:targets:)` with TWO public readings over it —
-//  `reach` (Grow: cheapest chain from the mesh toward value) and `pathUnion`
-//  (Prune: every system lying on a cheapest anchor→value path). Splitting
-//  `sources` from `free` is what lets Prune root at the anchor while still
-//  traversing deployed relays for nothing, which is the only way a relay can
-//  appear inside a returned path at all. Grow's behaviour is unchanged: it
-//  passes the mesh as both.
+//  One multi-source Dijkstra, `search(sources:free:targets:)`, carries two
+//  public readings: `reach` (Grow — the cheapest new-relay chain from the mesh
+//  toward value) and `pathUnion` (Prune — every system on a cheapest
+//  anchor→value path). Cost model: a source is zero-cost, entering a `free`
+//  system adds no relay, entering anything else adds one, and the key is
+//  `(relays, distance, designation)`. Splitting `sources` from `free` is what
+//  lets Prune root at the anchor while traversing deployed relays for nothing,
+//  and it is the only way a relay can appear inside a returned path at all.
+//  Grow passes the mesh as both. Correctness here is load-bearing for both.
 //
 
 import Foundation
@@ -44,12 +34,17 @@ public struct MeshGraph: Sendable {
     private let hopRange: Double
     private let cells: [Cell: [String]]
 
+    /// One grid bucket, addressed by its integer `x`/`y`/`z` cell indices.
     struct Cell: Hashable {
         let x: Int
         let y: Int
         let z: Int
     }
 
+    /// Builds the grid from `positions` (system designation → position), with
+    /// `hopRange` serving as both the adjacency radius and the grid's cell
+    /// size. A system absent from `positions` is invisible to every query on
+    /// this graph — see `canPlace`.
     public init(positions: [String: Position], hopRange: Double = SalvageTargetPlanner.relayRangeLY) {
         self.positions = positions
         self.hopRange = hopRange
@@ -60,16 +55,11 @@ public struct MeshGraph: Sendable {
         self.cells = cells
     }
 
-    /// Buckets a position into the grid cell containing it, cell size ==
-    /// `hopRange`. Uses `.rounded(.down)` (floor), not truncation: floor
-    /// gives every cell the same width on both sides of zero, which is what
-    /// keeps the galaxy's negative-coordinate half exactly as fast as its
-    /// positive half. (Truncation toward zero would still be *correct* here —
-    /// the 27-cell coverage argument below only needs adjacent-cell-index
-    /// deltas bounded by 1, which truncation also happens to satisfy — but it
-    /// would double the width of the single cell straddling zero on each
-    /// axis, concentrating points there and locally degrading the grid's
-    /// flat per-cell cost. Floor avoids that degenerate cell entirely.)
+    /// Buckets position `p` into the grid cell containing it, cell size ==
+    /// `hopRange`. Uses `.rounded(.down)` (floor), not truncation toward zero:
+    /// floor gives every cell the same width on both sides of the origin, where
+    /// truncation would double the width of the single cell straddling zero on
+    /// each axis and concentrate points in it.
     static func cell(for p: Position, hopRange: Double) -> Cell {
         Cell(
             x: Int((p.x / hopRange).rounded(.down)),
@@ -78,41 +68,30 @@ public struct MeshGraph: Sendable {
         )
     }
 
-    /// Whether this graph can place `system` at all — i.e. whether the search
-    /// can ever reach it, settle it, or return it inside a path.
+    /// Whether this graph can place `system` at all — whether the search can
+    /// ever reach it, settle it, or return it inside a path.
     ///
-    /// **Task 23: this exists so a precondition can be enforced instead of
-    /// merely documented.** `PrunePredicate.analyse` has to prove that every
-    /// system its judgement depends on is one the search can place, because a
-    /// system the graph has never heard of drops silently out of the union —
-    /// taking with it every pin it was the sole source of, and offering up
-    /// load-bearing relays. It used to prove that against `WorldView
-    /// .starPositions` and a header comment saying the graph must be built from
-    /// the same census. Nothing enforced the comment, so a caller passing a
-    /// filtered or older graph made the whole precondition vacuous while the
-    /// union quietly shrank. Asking the GRAPH closes it: the check now reads
-    /// the very dictionary `search` and `backtrack` read, so the two cannot
-    /// disagree however the graph was built.
+    /// `PrunePredicate.analyse` proves this of every system its judgement
+    /// depends on before judging anything: a system the graph has never heard
+    /// of drops silently out of the union, taking with it every pin it was the
+    /// sole source of and offering up load-bearing relays. Ask the GRAPH and
+    /// not a caller's own census, because this reads the very dictionary
+    /// `search` and `backtrack` read, so the two cannot disagree however the
+    /// graph was built.
     ///
-    /// **What it catches is a graph that is a SUBSET of the caller's census,
-    /// not a superset.** A graph carrying stars the view does not list would
-    /// pass every check and could still reroute the union through a system the
-    /// caller has never heard of. That is unreachable today — `Brain.plan` is
-    /// the only production site that builds a `MeshGraph`, and it builds it
-    /// from the same `view.starPositions` it then hands to both readings — and
-    /// the shrink direction is the one that offers up load-bearing relays,
-    /// which is why it is the direction closed. Stated rather than guarded, so
-    /// a second construction site knows what this does not promise.
+    /// What it catches is a graph that is a SUBSET of the caller's census, not
+    /// a superset: a graph carrying stars the caller does not list passes every
+    /// check and can still reroute the union through a system the caller has
+    /// never heard of.
     func canPlace(_ system: String) -> Bool { positions[system] != nil }
 
-    /// Straight-line distance between two systems in light-years, or nil if
-    /// this graph cannot place either of them.
+    /// Straight-line distance between systems `a` and `b` in light-years, or
+    /// nil if this graph cannot place either of them.
     ///
     /// Read off the graph rather than off a caller's own census dictionary for
     /// the reason `canPlace` exists: distance and reachability must be answered
     /// from one set of positions, or a system can be "3 ly away" and
-    /// simultaneously unreachable. This is what bounds `Brain
-    /// .reclaimRangeLY` — the detour a reclaim adds over a print.
+    /// simultaneously unreachable.
     ///
     /// Deliberately NOT a graph distance: it is the geometry, not a path cost,
     /// and it answers "how far out of the way is this?" rather than "how many
@@ -125,18 +104,12 @@ public struct MeshGraph: Sendable {
     /// The systems within `hopRange` of `system`. Empty (not an error) if
     /// `system` isn't in the graph at all.
     ///
-    /// Correctness of the 27-cell scan: bucketing uses `floor(coord /
-    /// hopRange)` per axis, so each cell spans exactly one unit of
-    /// `coord / hopRange`. For any two positions p, q with distance(p, q) <=
-    /// hopRange, each axis individually satisfies |p.axis - q.axis| <=
-    /// hopRange (an axis delta can never exceed the full 3D distance), i.e.
-    /// |a - b| <= 1 where a = p.axis / hopRange, b = q.axis / hopRange. Since
-    /// floor(a) <= a and floor(b) > b - 1, floor(a) - floor(b) < (a - b) + 1
-    /// <= 2, so the two floor values differ by at most 1 (they're integers,
-    /// and the bound is strict). That holds independently on x, y, and z, so
-    /// q's cell is always within {-1, 0, +1} of p's cell on every axis — i.e.
-    /// inside the 27-cell block scanned below. No in-range system can ever
-    /// fall outside it.
+    /// The 27-cell scan is exhaustive rather than approximate, so narrowing it
+    /// drops in-range systems and widening it gains none: cells span exactly
+    /// one unit of `coord / hopRange`, and for any two positions no further
+    /// apart than `hopRange` each axis delta is itself at most `hopRange` (an
+    /// axis delta can never exceed the full 3D distance), so their floor values
+    /// differ by at most 1 independently on x, y and z.
     public func neighbours(of system: String) -> [String] {
         guard let p = positions[system] else { return [] }
         let base = Self.cell(for: p, hopRange: hopRange)
@@ -180,8 +153,9 @@ public struct Chain: Equatable, Sendable {
 }
 
 extension MeshGraph {
-    /// One candidate path's running cost while it's still open. `pred ==
-    /// nil` marks a zero-cost mesh source (the search's starting point).
+    /// One candidate path's running cost while it's still open: its `relays`
+    /// count, accumulated `dist`, and predecessor `pred`. `pred == nil` marks a
+    /// zero-cost source, which is where `backtrack` stops.
     private struct DijkstraState {
         let relays: Int
         let dist: Double
@@ -190,11 +164,10 @@ extension MeshGraph {
 
     /// A frontier entry: a candidate (not-yet-settled) cost to reach
     /// `system`. Total order over `(relays, dist, system)` — the system
-    /// designation is a REQUIRED tie-break, not decoration: it's what makes
+    /// designation is a REQUIRED tie-break, not decoration: it is what makes
     /// pop order (and therefore which predecessor wins a cost tie)
-    /// independent of Dictionary/insertion-order incidentals, which is the
-    /// whole determinism guarantee `reach` relies on. See the header comment
-    /// and the exact-tie test in MeshGraphReachTests.
+    /// independent of Dictionary/insertion-order incidentals. Drop it and the
+    /// search stops answering the same way tick to tick.
     private struct Frontier: Comparable {
         let system: String
         let relays: Int
@@ -205,16 +178,15 @@ extension MeshGraph {
         }
     }
 
-    /// A minimal binary min-heap. For a strict total order (which `Frontier`
-    /// is, since designation makes every comparison decisive) the sequence
-    /// of `popMin()` results is independent of insertion order — only the
-    /// internal tree shape varies, never which element compares smallest at
-    /// each pop. That's what lets `reach` stay deterministic while still
-    /// scaling past a plain sorted-array frontier: see the header comment on
-    /// `reach` for the sizing rationale.
+    /// A minimal binary min-heap. Because `Frontier` is a strict total order,
+    /// the sequence of `popMin()` results is independent of insertion order —
+    /// only the internal tree shape varies, never which element compares
+    /// smallest at each pop — so the heap keeps insert/pop at O(log n) and
+    /// costs nothing in determinism against a plain sorted-array frontier.
     private struct Heap<Element: Comparable> {
         private var storage: [Element] = []
 
+        /// Adds `element`, sifting it up into place.
         mutating func insert(_ element: Element) {
             storage.append(element)
             var child = storage.count - 1
@@ -226,6 +198,7 @@ extension MeshGraph {
             }
         }
 
+        /// Removes and returns the smallest element, or `nil` when empty.
         mutating func popMin() -> Element? {
             guard !storage.isEmpty else { return nil }
             storage.swapAt(0, storage.count - 1)
@@ -246,8 +219,9 @@ extension MeshGraph {
     }
 
     /// The one search. `sources` are the zero-cost starting points; entering
-    /// a system in `free` adds no relay, entering anything else adds one.
-    /// Returns the settled cost/predecessor map, which the two public
+    /// a system in `free` adds no relay, entering anything else adds one; the
+    /// walk stops once every system in `targets` has settled or the frontier
+    /// empties. Returns the settled cost/predecessor map, which the two public
     /// readings below interpret differently — `reach` turns it into per-
     /// target chains for Grow, `pathUnion` backtracks it into the set of
     /// systems Prune must not reclaim.
@@ -255,10 +229,9 @@ extension MeshGraph {
     /// `sources` and `free` are separate parameters even though `reach`
     /// passes the same set for both, because Prune needs them to differ: it
     /// roots the search at the ANCHOR alone while still letting every
-    /// deployed relay be traversed for free. That distinction is the whole
-    /// reason a relay can appear INSIDE a returned path at all — see
-    /// `PrunePredicate`'s header for why a mesh-rooted search structurally
-    /// cannot answer the prune question.
+    /// deployed relay be traversed for free. Pass the mesh as `sources` and a
+    /// relay can never be an interior node of a returned path — see
+    /// `PrunePredicate`'s header for why that answers no prune question.
     private func search(
         sources: Set<String>, free: Set<String>, targets: Set<String>
     ) -> [String: DijkstraState] {
@@ -298,7 +271,7 @@ extension MeshGraph {
         return best
     }
 
-    /// Walks `pred` links from `target` back to its zero-cost source,
+    /// Walks `pred` links in `best` from `target` back to its zero-cost source,
     /// returning the full path in source-to-target order (source first,
     /// `target` last).
     private static func backtrack(to target: String, best: [String: DijkstraState]) -> [String] {
@@ -314,10 +287,8 @@ extension MeshGraph {
 
 public extension MeshGraph {
     /// Multi-source Dijkstra over the live mesh: the cheapest new-relay
-    /// chain from *any* mesh system to each target, all searched
-    /// simultaneously. This is the single computation both Grow (cheapest
-    /// chain to plant toward) and Prune (which relays lie on no such chain)
-    /// read — see the file header.
+    /// chain from *any* system in `meshSystems` to each of `targets`, all
+    /// searched simultaneously.
     ///
     /// Cost model: a system already in `meshSystems` is a zero-cost source;
     /// entering any other system costs +1 relay. Primary key is relay
@@ -325,24 +296,16 @@ public extension MeshGraph {
     /// frontier ordering itself, so predecessor selection is stable too —
     /// see `Frontier`) on system designation. A target already in
     /// `meshSystems` is omitted (nothing new to plant). A target with no
-    /// chain within `hopRange` of the mesh is simply absent.
+    /// chain within `hopRange` of the mesh is simply absent, never a partial
+    /// chain.
     ///
-    /// Frontier choice: a binary heap, not a sorted array. `neighbours(of:)`
-    /// bounds *fan-out per pop*, but a multi-source search over the full
-    /// ~14,000-system census can still push total frontier churn well past
-    /// what a sorted-array insert (O(n) per insert) stays comfortable at;
-    /// a heap keeps insert/pop at O(log n) with no added complexity risk,
-    /// and — because `Frontier` is a strict total order — costs nothing in
-    /// determinism versus the array.
-    ///
-    /// Cost bound: the early exit below only fires once every requested
-    /// target has settled, and for the intended caller (value-bearing
-    /// candidates scattered across the census) at least one target is
-    /// typically out of range of the mesh — so in practice the search runs
-    /// to exhaustion of the mesh's REACHABLE CONNECTED COMPONENT, not some
-    /// smaller early-terminated slice. At full census scale that's still
-    /// comfortably inside the 5-second tick budget: ~14k pops × ≤27-cell
-    /// probes plus an O(n log n) heap is single-digit milliseconds.
+    /// The early exit below fires only once every requested target has
+    /// settled, and for the intended caller (value-bearing candidates
+    /// scattered across the census) at least one target is typically out of
+    /// range of the mesh — so expect the search to run to exhaustion of the
+    /// mesh's REACHABLE CONNECTED COMPONENT rather than some smaller
+    /// early-terminated slice. That, not the early exit, is what the heap
+    /// frontier is sized for.
     func reach(targets: Set<String>, meshSystems: Set<String>) -> [String: Chain] {
         // Grow's reading: every mesh system is both a source and free, which
         // is what makes this "the cheapest chain from ANYWHERE on the mesh".
@@ -368,13 +331,14 @@ public extension MeshGraph {
     }
 
     /// Prune's reading of the same search: every system lying on a cheapest
-    /// path from `sources` to any of `targets`, unioned — free systems and
-    /// sources included, which is exactly what `reach` throws away.
+    /// path from `sources` to any of `targets`, unioned — systems in `free`
+    /// and the sources themselves INCLUDED, which is exactly what `reach`
+    /// throws away.
     ///
-    /// The two readings differ in one deliberate way. `reach` seeds sources
-    /// AT the mesh, so a mesh system is always a path's origin and never an
-    /// interior node; Prune instead seeds one anchor and marks the mesh
-    /// `free`, so the returned paths run THROUGH the deployed relays that
+    /// The asymmetry between the two readings is load-bearing. `reach` seeds
+    /// sources AT the mesh, so a mesh system is always a path's origin and
+    /// never an interior node; Prune instead seeds one anchor and marks the
+    /// mesh `free`, so the returned paths run THROUGH the deployed relays that
     /// carry authority outward. Same graph, same cost model, same total
     /// order — see `search`.
     ///

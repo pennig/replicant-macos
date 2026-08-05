@@ -2,29 +2,19 @@
 //  MeshValue.swift
 //  Replicould — DirectiveEngine
 //
-//  Task 9 (VERIFICATION): the belt-richness classification feeding the
-//  brain's value model. The tier ordering `Rich ▸ Moderate ▸ Sparse` was
-//  already locked by automation-brain ticket 10 — this only pins the
-//  concrete string vocabulary the live API actually emits onto that
-//  ordering.
-//
-//  Confirmed 2026-08-03 by probing the live API (`replicant raw GET
-//  locations/SOL`) plus aggregating the local synced `systemDetails` table
-//  across 141 scanned systems / 56 belts (see
-//  app/.claude/memory/belt-value-vocabulary.md for the full findings):
-//  `Belt.density` has EXACTLY three live values (`sparse`, `moderate`,
-//  `dense` — no `rich`/`abundant`/`medium`/`thin`), and `Belt.richness`
-//  qualifiers are `scarce`/`low`/`moderate`/`high`/`rich` (no `abundant`).
+//  Belt-richness classification plus the value model over `WorldView`'s
+//  known-value signals. Deliberately narrow: no pathfinding, no `MeshGraph`,
+//  no cost — this says only WHAT is worth reaching, never how to reach it or
+//  in what order.
 //
 
-/// Three-tier belt richness, ordered `sparse < moderate < rich` to match the
-/// locked automation-brain value tiers (Event ▸ Rich belt ▸ Moderate belt ▸
-/// salvage ▸ Sparse belt). `Comparable` by `rawValue` so a ranking pass can
-/// compare classes directly.
+/// Three-tier belt richness, ordered `sparse < moderate < rich`, `Comparable`
+/// by `rawValue` so a ranking pass can compare classes directly.
 ///
-/// Exactly these three cases — do not add a fourth or reorder the existing
-/// ones; the ordering is a locked design decision, not an implementation
-/// detail this task revisits.
+/// Inserting a fourth case or reordering these three silently re-ranks every
+/// grow candidate, since `ValueTier` is keyed off this order. The live
+/// `density`/`richness` vocabulary these map from is recorded in full in
+/// `app/.claude/memory/belt-value-vocabulary.md`.
 public enum BeltClass: Int, Comparable, CaseIterable, Sendable {
     case sparse = 0
     case moderate = 1
@@ -33,21 +23,12 @@ public enum BeltClass: Int, Comparable, CaseIterable, Sendable {
     public static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
 
     /// Classifies a belt from its raw `density` string, falling back to its
-    /// `richness` map (resource name → qualifier) when `density` is absent
-    /// or unrecognised. Returns `nil` — "unknown" — when neither field
-    /// resolves to a recognised value; unknown must be left unknown rather
-    /// than guessed at, so a belt with no legible value data contributes no
-    /// class and yields no target.
+    /// `richness` map (resource name → qualifier, richest entry wins) when
+    /// `density` is absent or unrecognised.
     ///
-    /// `density` mapping (VERIFIED live, the only three values ever
-    /// observed): `dense` → `.rich`, `moderate` → `.moderate`, `sparse` →
-    /// `.sparse`.
-    ///
-    /// `richness` fallback mapping (the five real qualifiers folded onto the
-    /// three classes, richest-per-resource wins when several are present):
-    /// `rich`/`high` → `.rich` (the top two observed qualifiers both read as
-    /// "abundant here"), `moderate` → `.moderate`, `low`/`scarce` → `.sparse`
-    /// (both read as "not much here" — the belt is present but thin).
+    /// Returns `nil` when neither field resolves: unknown must be left unknown
+    /// rather than guessed at, so a belt with no legible value data yields no
+    /// target instead of a `.sparse` one.
     public static func classify(density: String?, richness: [String: String]) -> BeltClass? {
         switch density?.lowercased() {
         case "dense": return .rich
@@ -59,9 +40,9 @@ public enum BeltClass: Int, Comparable, CaseIterable, Sendable {
         return ranks.max().flatMap(BeltClass.init(rawValue:))
     }
 
-    /// Maps one real `richness` qualifier to its class's `rawValue`, or
-    /// `nil` for an unrecognised string — an unrecognised qualifier must
-    /// never silently rank a belt in.
+    /// Maps one `richness` `qualifier` to its class's `rawValue`, or `nil` for
+    /// an unrecognised string — an unrecognised qualifier must never silently
+    /// rank a belt in.
     private static func rank(forRichnessQualifier qualifier: String) -> Int? {
         switch qualifier.lowercased() {
         case "rich", "high": return BeltClass.rich.rawValue
@@ -72,10 +53,9 @@ public enum BeltClass: Int, Comparable, CaseIterable, Sendable {
     }
 }
 
-/// A belt's designation plus its classified richness — the slice of `Belt`
-/// the brain's value model ranks on, decoupled from the full domain model
-/// (radii, sites, inventory, devices) that `Belt` (`UniverseModels`) carries
-/// for the Locations catalog.
+/// A belt's `designation` plus its classified `beltClass` — the slice of `Belt`
+/// (`UniverseModels`) the value model ranks on, decoupled from the radii,
+/// sites, inventory and devices `Belt` carries for the Locations catalog.
 public struct BeltInfo: Equatable, Sendable {
     public let designation: String
     public let beltClass: BeltClass
@@ -86,15 +66,10 @@ public struct BeltInfo: Equatable, Sendable {
     }
 }
 
-/// Task 10: the locked tier ordering the brain's `tendMesh` grow heuristic
-/// ranks known value on — `event(4) ▸ richBelt(3) ▸ moderateBelt(2) ▸
-/// salvage(1) ▸ sparseBelt(0)`. Note salvage sits BETWEEN the two belt
-/// tiers, not below both — a deliberate design decision (automation-brain
-/// ticket 10), not something later work should re-derive.
-///
-/// Exactly these five cases in this raw-value order — do not reorder or
-/// insert; `Comparable` is keyed directly off `rawValue` so a ranking pass
-/// can compare tiers with `<`/`>` and get the locked ordering for free.
+/// The tier ordering the brain's `tendMesh` grow heuristic ranks known value
+/// on, weakest first. `Comparable` is keyed directly off `rawValue`, so
+/// inserting or reordering a case re-ranks every grow candidate without any
+/// comparator changing.
 public enum ValueTier: Int, Comparable, Sendable {
     case sparseBelt = 0
     case salvage = 1
@@ -105,45 +80,41 @@ public enum ValueTier: Int, Comparable, Sendable {
     public static func < (l: Self, r: Self) -> Bool { l.rawValue < r.rawValue }
 }
 
-/// One unmeshed system holding known value, plus enough magnitude to rank
-/// among peers at the same `bestTier`. Every field is populated on its own
-/// terms — `salvageUnits`, `beltCount`, and `hasEvent` all report the
-/// system's real, independent totals regardless of which tier actually won
-/// `bestTier`, so a system whose best tier is `event` still carries its real
-/// salvage/belt magnitude for a later tie-break or display.
+/// One unmeshed `system` holding known value: the `bestTier` it reaches, plus
+/// the `salvageUnits`, `beltCount` and `hasEvent` magnitudes that rank it among
+/// peers at that same tier.
+///
+/// Every magnitude field reports the system's own real total regardless of
+/// which tier won `bestTier`, so a system whose best tier is `event` still
+/// carries its real salvage and belt magnitude for a later tie-break.
 public struct ValueTarget: Equatable, Sendable {
     public let system: String
     public let bestTier: ValueTier
-    /// Magnitude within the salvage tier: summed non-depleted assay units,
-    /// carried through from `WorldView.salvageUnits` unmodified. `0` when
-    /// the system holds no salvage.
+    /// Summed non-depleted assay units, carried through from
+    /// `WorldView.salvageUnits` unmodified. `0` when the system holds no
+    /// salvage.
     public let salvageUnits: Double
-    /// Magnitude within a belt tier: how many belts the system hosts AT
-    /// EACH class, not just the class that won `bestTier` — a system with
-    /// two rich belts and one moderate belt reports both entries, so a
-    /// later ranking pass can read the winning tier's own count via
-    /// `beltCount[bestBeltClass]` while still seeing the full picture.
-    /// Absent keys mean zero belts at that class (never an explicit `0`).
+    /// How many belts the system hosts AT EACH class, not just the class that
+    /// won `bestTier`. An absent key means zero belts at that class — never an
+    /// explicit `0`, so a caller must coalesce rather than subscript blindly.
     public let beltCount: [BeltClass: Int]
     /// Whether the system currently hosts a live location event.
     public let hasEvent: Bool
 }
 
-/// Task 10: the value model over `WorldView`'s known-value signals — the
-/// enumeration the next task's ranking pass sorts on. Deliberately narrow:
-/// no pathfinding, no `MeshGraph`, no cost — this only says WHAT is worth
-/// reaching, not how to reach it or in what order.
+/// The value model over `WorldView`'s known-value signals — the enumeration a
+/// ranking pass sorts on.
 public enum ValueCatalog {
-    /// Every unmeshed system holding known value (salvage assays, mine
-    /// belts, or a live event), each tiered on the richest signal it holds.
-    /// Survey frontier — a system with only a known position, no
-    /// salvage/belt/event — is EXCLUDED: growing toward unexplored space is
-    /// a different capability from chasing known value. Already-meshed
-    /// systems are excluded too — there's nothing left to grow toward.
+    /// Every unmeshed system in `view` holding known value (salvage assays,
+    /// mine belts, or a live event), each tiered on the richest signal it
+    /// holds and sorted by `system` for a stable order across calls.
     ///
-    /// Pure function of `view`: no I/O, no graph work, deterministic given
-    /// the same snapshot (results are sorted by `system` for a stable order
-    /// across calls, since dictionary/set iteration order isn't guaranteed).
+    /// Survey frontier — a system with a known position but no
+    /// salvage/belt/event — is EXCLUDED, as are already-meshed systems, so a
+    /// caller wanting unexplored space must not read this as the frontier.
+    ///
+    /// Pure function of `view`: no I/O, no graph work, deterministic given the
+    /// same snapshot.
     public static func build(from view: WorldView) -> [ValueTarget] {
         var candidateSystems = Set(view.salvageUnits.keys)
         candidateSystems.formUnion(view.beltsBySystem.keys)
@@ -159,10 +130,8 @@ public enum ValueCatalog {
                 beltCount[belt.beltClass, default: 0] += 1
             }
 
-            // Every signal the system actually holds is a candidate tier;
-            // `bestTier` is whichever ranks highest. A signal absent or at
-            // zero magnitude contributes no candidate — that's what keeps
-            // survey-only systems (no salvage/belt/event at all) out.
+            // A signal that is absent or at zero magnitude contributes no
+            // candidate tier, which is what keeps survey-only systems out.
             var candidateTiers: [ValueTier] = []
             if hasEvent { candidateTiers.append(.event) }
             if salvageUnits > 0 { candidateTiers.append(.salvage) }
@@ -181,16 +150,11 @@ public enum ValueCatalog {
 }
 
 extension BeltClass {
-    /// This class's place in the locked `ValueTier` ordering. Module-internal
-    /// (not `fileprivate`) rather than `public`: `ValueCatalog.build(from:)`
-    /// above is the only forward-direction caller, but `GrowRanking.swift`
-    /// (Task 12, same target) also needs this correspondence — in reverse,
-    /// to turn a winning `ValueTier` back into the `BeltClass` whose count it
-    /// should read — via `ValueTier.beltClass` there. That reverse accessor
-    /// is DERIVED from this one map (a search over `BeltClass.allCases`,
-    /// which is why `BeltClass` is `CaseIterable`), so this switch stays the
-    /// single source of truth for the tier↔class correspondence rather than
-    /// two switches drifting apart.
+    /// This class's place in the `ValueTier` ordering, and the single source of
+    /// truth for the tier↔class correspondence. `ValueTier.beltClass`
+    /// (`GrowRanking.swift`) derives the reverse direction by searching
+    /// `BeltClass.allCases` against this switch, so a second hand-written
+    /// switch would let the two directions drift apart.
     var valueTier: ValueTier {
         switch self {
         case .sparse: return .sparseBelt
