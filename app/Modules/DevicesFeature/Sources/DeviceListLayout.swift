@@ -203,6 +203,12 @@ extension DeviceListLayout {
     /// anything is flagged) above one unheadered Carrier section. Empty sections
     /// are dropped, except a *collapsed* Needs Attention, which keeps its header
     /// so the operator can open it again.
+    ///
+    /// `collapsedGroups` is honoured for the Needs Attention section only — the
+    /// fleet section is unheadered (Stage 1 has no gesture that could add
+    /// `DeviceListSection.fleetID` to the set), so it never checks membership. A
+    /// headered fleet section, if Stage 2 ever adds one, would need that check
+    /// added here rather than assuming it already holds.
     public static func sections(
         fleet: [Device],
         attentionDirectives: [Directive],
@@ -235,7 +241,7 @@ extension DeviceListLayout {
                     id: DeviceListSection.attentionID,
                     header: DeviceListHeader(
                         title: "Needs Attention",
-                        count: attentionRoots.count,
+                        count: members.count,
                         isCollapsed: isCollapsed,
                         statusShares: statusShares(members),
                         hasDamaged: members.contains { $0.operationalCapacity < damagedCapacityThreshold }

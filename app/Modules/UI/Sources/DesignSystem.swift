@@ -298,9 +298,9 @@ public enum RowGutter {
 }
 
 /// Diameter of a small filled-circle status marker — e.g. the dot that flags
-/// a fleet row carrying an unresolved `AttentionFlag`. Kept distinct from
-/// `TileSize` — that token sizes icon/glyph tiles, this one sizes a plain
-/// marker dot. Consumed by `DeviceRow`.
+/// a fleet row flagged for attention. Kept distinct from `TileSize` — that
+/// token sizes icon/glyph tiles, this one sizes a plain marker dot. Consumed
+/// by `DeviceRow`.
 public enum MarkerSize {
     public static let attentionDot: CGFloat = 6
 }

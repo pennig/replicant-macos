@@ -119,7 +119,7 @@ public struct DevicesFeature {
         /// so hidden rows are absent by construction rather than by a second
         /// rule that could drift out of step with the renderer.
         public var orderedIDs: [String] {
-            sections.flatMap(\.entries).map(\.id)
+            sections.orderedIDs
         }
 
         /// Devices matching the active query across the *whole* fleet — the "N"

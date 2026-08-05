@@ -118,6 +118,24 @@ import Testing
         expectNoDifference(result[1].entries.map(\.id), ["AAAA"])
     }
 
+    /// The header's `count` is the whole population under it — the flagged
+    /// root plus every non-flagged descendant carried along with it — not the
+    /// number of promoted roots. Every other fixture in this suite is flat, so
+    /// roots happen to equal members; this one has a flagged host with an
+    /// *unflagged* child, which is the case that would let a regression back
+    /// to `attentionRoots.count` (one root, but two devices and rows under the
+    /// header) slip through unnoticed.
+    @Test func headerCountIsTheWholeSectionNotJustThePromotedRoots() throws {
+        let fleet = [
+            makeDevice("CTRL", type: "ami_survey_controller", capacity: 10),
+            makeDevice("DRONEA", controlledBy: "CTRL"),
+        ]
+        let result = sections(fleet: fleet, expanded: ["CTRL"])
+        let header = try #require(result[0].header)
+        expectNoDifference(header.count, 2)
+        expectNoDifference(result[0].entries.map(\.id), ["CTRL", "DRONEA"])
+    }
+
     @Test func orderedIDsAreTheVisibleOrderExactly() {
         let fleet = [
             makeDevice("VESSEL", type: "heaven_vessel"),

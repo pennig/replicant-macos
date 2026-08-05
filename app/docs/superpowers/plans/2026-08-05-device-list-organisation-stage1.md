@@ -1556,7 +1556,7 @@ extension DeviceListLayout {
                     id: DeviceListSection.attentionID,
                     header: DeviceListHeader(
                         title: "Needs Attention",
-                        count: attentionRoots.count,
+                        count: members.count,
                         isCollapsed: isCollapsed,
                         statusShares: statusShares(members),
                         hasDamaged: members.contains { $0.operationalCapacity < damagedCapacityThreshold }
@@ -1588,10 +1588,12 @@ extension DeviceListLayout {
 }
 ```
 
-Note `header.count` is the number of promoted **roots**, matching the "N of M"
-reading of the section as a triage list rather than a subtree census. The status
-bar, by contrast, covers every member including promoted subtrees — a collapsed
-section should describe everything it hides.
+Note `header.count` is `members.count` — the whole population under the header,
+roots and every carried-along descendant alike — not `attentionRoots.count`. The
+header's count, the composition bar, and the rows a reader sees on opening the
+section must all describe the same population: a flagged AMI controller with six
+stowed drones is seven devices under that header, not one, and the count has to
+say so or it visibly disagrees with the bar sitting right beside it.
 
 - [ ] **Step 5: Run the test to verify it passes**
 
@@ -1658,11 +1660,23 @@ Append to `app/Modules/DevicesFeature/Tests/DeviceListSearchTests.swift`:
         expectNoDifference(entries.map(\.id), ["VESSEL", "CTRL", "DRONEA"])
     }
 
-    /// The reveal is transient: `expandedHosts` is an input and is never written.
-    @Test func revealDoesNotMutateExpandedHosts() {
-        let expanded: Set<String> = []
-        _ = sections("survey_drone", expanded: expanded)
-        expectNoDifference(expanded, [])
+    /// The reveal is transient. `expandedHosts` is an input, so a query cannot
+    /// leave the operator's disclosure state changed behind it: clearing the
+    /// query with the same (empty) collapse set must return to that same
+    /// collapsed tree, not the one the query revealed. Asserting the input
+    /// set is "still empty" afterwards would prove nothing — `Set` is a value
+    /// type, so no implementation could ever fail that; this instead checks
+    /// the actual before/after shape of the rendered rows.
+    @Test func revealIsTransientAndLeavesCollapseStateIntact() {
+        let revealed = sections("survey_drone").flatMap(\.entries).map(\.id)
+        let afterClearing = sections("").flatMap(\.entries).map(\.id)
+
+        expectNoDifference(revealed, ["VESSEL", "CTRL", "DRONEA"])
+        // No query and an empty `expandedHosts`: both roots are present but
+        // collapsed. "FTL Relay" < "HEAVEN Vessel" lexicographically, so RELAY
+        // precedes VESSEL; VESSEL's children stay hidden since nothing forces
+        // them open once the query is gone.
+        expectNoDifference(afterClearing, ["RELAY", "VESSEL"])
     }
 
     /// A host that matches on its own keeps its own collapse state — its
@@ -1775,7 +1789,7 @@ with:
                     id: DeviceListSection.attentionID,
                     header: DeviceListHeader(
                         title: "Needs Attention",
-                        count: attentionRoots.count,
+                        count: members.count,
                         isCollapsed: isCollapsed,
                         statusShares: statusShares(members),
                         hasDamaged: members.contains { $0.operationalCapacity < damagedCapacityThreshold }
@@ -2281,16 +2295,13 @@ struct DeviceRow: View {
 
     private var device: Device { entry.device }
 
-    /// Reserved so a leaf's glyph lines up with a host's, one indent per depth.
-    private static let disclosureWidth: CGFloat = 22
-
     var body: some View {
         HStack(spacing: Space.s) {
             disclosure
             VStack(spacing: Space.xs) {
                 RCGlyphTile(Image.rcSymbol("device.\(device.deviceType)"))
                 RCMeterBar(fraction: device.operationalCapacity / 100)
-                    .frame(width: 30)
+                    .frame(width: TileSize.small)
             }
             VStack(alignment: .leading, spacing: Space.xs) {
                 titleLine
@@ -2313,13 +2324,13 @@ struct DeviceRow: View {
                         .font(.rcMicroMono)
                 }
                 .foregroundStyle(.rcTextTertiary)
-                .frame(width: Self.disclosureWidth)
+                .frame(width: RowGutter.disclosure)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .help(entry.isExpanded ? "Collapse" : "Expand")
         } else {
-            Color.clear.frame(width: Self.disclosureWidth, height: 1)
+            Color.clear.frame(width: RowGutter.disclosure, height: 1)
         }
     }
 
@@ -2328,7 +2339,7 @@ struct DeviceRow: View {
             if !entry.attention.isEmpty {
                 Circle()
                     .fill(.rcDanger)
-                    .frame(width: 6, height: 6)
+                    .frame(width: MarkerSize.attentionDot, height: MarkerSize.attentionDot)
                     .help(entry.attention.map(\.label).joined(separator: " · "))
             }
             Text(DevicePresentation.displayName(device.deviceType))
@@ -2365,7 +2376,7 @@ struct DeviceRow: View {
                     .lineLimit(1)
                     .help(host.label)
             }
-            ForEach(device.tags, id: \.self) { tag in
+            ForEach(tagChips, id: \.self) { tag in
                 Text(tag)
                     .font(.rcMicro)
                     .foregroundStyle(.rcTextSecondary)
@@ -2385,25 +2396,40 @@ struct DeviceRow: View {
         return device.detail["travel"]?["final_destination"]?.stringValue
             ?? device.detail["travel"]?["destination"]?.stringValue
     }
+
+    /// `device.tags` deduplicated, keeping the first occurrence of each
+    /// repeated value. `Device.tags` is a plain `[String]` with nothing
+    /// enforcing uniqueness, and `ForEach(id: \.self)` over a raw array
+    /// containing a duplicate crashes at render time (SwiftUI requires
+    /// unique IDs). A repeated tag is data noise, not information worth
+    /// rendering twice, so dropping the repeat — rather than re-sorting —
+    /// keeps the server's own ordering intact.
+    private var tagChips: [String] {
+        var seen = Set<String>()
+        return device.tags.filter { seen.insert($0).inserted }
+    }
 }
 ```
 
 - [ ] **Step 2: Delete the old row from `DevicesView.swift`**
 
 Remove the entire `// MARK: - Row` section and the `private struct DeviceRow`
-below it from `app/Modules/DevicesFeature/Sources/DevicesView.swift`. Leave the
-`DevicesListView` struct alone for now — Task 10 rewrites it, and it will not
-compile between these two tasks.
+below it from `app/Modules/DevicesFeature/Sources/DevicesView.swift`. As
+executed, this step and Task 10's rewrite of `DevicesListView` were done
+together in the same pass rather than as two separately-committed tasks, so
+the build was never left red in between.
 
 - [ ] **Step 3: Commit**
 
-The build is red between Tasks 9 and 10 by construction (the old view still calls
-`DeviceRow(device:)`), so commit the row on its own and let Task 10 close the loop:
+As executed, Tasks 9 and 10 landed as a single commit rather than two: extracting
+`DeviceRow` and wiring the sectioned, searchable list into `DevicesView.swift`
+were done together, so the build was never red between them. Commit once, after
+Task 10's wiring is also in place:
 
 ```bash
 git add app/Modules/DevicesFeature/Sources/DeviceRow.swift \
         app/Modules/DevicesFeature/Sources/DevicesView.swift
-git commit -m "refactor(devices): extract DeviceRow and give it indent, disclosure, badges"
+git commit -m "feat(devices): extract DeviceRow and wire the sectioned, searchable fleet list"
 ```
 
 ---

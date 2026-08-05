@@ -481,4 +481,32 @@ private func device(_ code: String, status: String = "idle") -> Device {
         // The ancestor is revealed but is not itself a match.
         #expect(store.state.orderedIDs == ["VESSEL", "DRONEA"])
     }
+
+    /// The design spec's Search guarantee: a filtered-out selection keeps its
+    /// detail pane. `selectedDevice` resolves against the whole `devices`
+    /// array, never the filtered `sections`, so it stays correct by
+    /// construction — but the spec calls it out by name, so it earns its own
+    /// assertion rather than riding on some other test's coincidence.
+    @Test func filteredOutSelectionKeepsItsDetailPane() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Device.insert {
+                makeDevice("KEEP", type: "heaven_vessel")
+                makeDevice("HIDDEN", type: "survey_drone")
+            }
+            .execute(db)
+        }
+
+        let store = TestStore(initialState: DevicesFeature.State(selectedDeviceCode: "HIDDEN")) {
+            DevicesFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
+        }
+        store.exhaustivity = .off
+
+        await store.send(\.binding.searchText, "heaven_vessel")
+
+        #expect(store.state.selectedDevice?.deviceCode == "HIDDEN")
+        #expect(!store.state.orderedIDs.contains("HIDDEN"))
+    }
 }

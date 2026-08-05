@@ -29,7 +29,7 @@ public struct DevicesListView: View {
 
         SelectableList(
             selection: $store.selectedDeviceCode,
-            orderedIDs: sections.flatMap(\.entries).map(\.id),
+            orderedIDs: sections.orderedIDs,
             style: .inline,
             pinnedViews: [.sectionHeaders]
         ) {

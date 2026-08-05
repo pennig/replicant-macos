@@ -115,6 +115,11 @@ public struct StatusShare: Identifiable, Equatable, Sendable {
 /// A section's readout header. Nil on an unheadered section.
 public struct DeviceListHeader: Equatable, Sendable {
     public var title: String
+    /// The whole population this header describes — every device under it,
+    /// roots and carried-along descendants alike. Matches `statusShares`'
+    /// total and the row count a reader sees on opening the section, so the
+    /// header and the composition bar it sits beside never disagree about
+    /// what's being summarised.
     public var count: Int
     public var isCollapsed: Bool
     /// The section's status distribution, count descending then status name —
@@ -156,4 +161,11 @@ public struct DeviceListSection: Identifiable, Equatable, Sendable {
         self.header = header
         self.entries = entries
     }
+}
+
+extension Array where Element == DeviceListSection {
+    /// The list's flat, top-to-bottom row order — what drives arrow-key
+    /// navigation. A collapsed host contributes no entries, so hidden rows are
+    /// absent by construction rather than by a second rule that could drift.
+    public var orderedIDs: [String] { flatMap(\.entries).map(\.id) }
 }

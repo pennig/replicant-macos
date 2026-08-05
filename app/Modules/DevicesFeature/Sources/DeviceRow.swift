@@ -26,7 +26,7 @@ struct DeviceRow: View {
             VStack(spacing: Space.xs) {
                 RCGlyphTile(Image.rcSymbol("device.\(device.deviceType)"))
                 RCMeterBar(fraction: device.operationalCapacity / 100)
-                    .frame(width: 30)
+                    .frame(width: TileSize.small)
             }
             VStack(alignment: .leading, spacing: Space.xs) {
                 titleLine

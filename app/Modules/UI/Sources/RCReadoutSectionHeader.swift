@@ -87,7 +87,12 @@ public struct RCReadoutSectionHeader: View {
             .glassEffect(.regular, in: Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(Text("\(title), \(count) items"))
+        .accessibilityLabel(
+            isWarning
+                ? Text("\(title), ^[\(count) item](inflect: true), needs attention")
+                : Text("\(title), ^[\(count) item](inflect: true)")
+        )
+        .accessibilityValue(isCollapsed ? Text("Collapsed") : Text("Expanded"))
         .accessibilityAddTraits(.isHeader)
     }
 
