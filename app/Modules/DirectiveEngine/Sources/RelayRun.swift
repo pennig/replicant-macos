@@ -333,6 +333,13 @@ public struct RelayRun: MissionStepMachine {
     /// `relaying`.
     static let idleRelayStatus = "inactive"
 
+    /// The status a planted, live relay wears — the sibling of
+    /// `idleRelayStatus` and the one thing `activate` and `confirmRelay` must
+    /// agree about. They are a dispatch/poll pair over the same command: if the
+    /// step that decides "already up, hand off" and the step that decides
+    /// "up, move on" could ever disagree, a run would bounce between them.
+    static let relayingStatus = "relaying"
+
     /// Relays standing at `location` that belong to nobody: the right type, at
     /// rest, in nothing's hold.
     ///
@@ -1429,6 +1436,38 @@ public struct RelayRun: MissionStepMachine {
             logger.notice("relay run \(directive.id, privacy: .public): \(relay.deviceCode, privacy: .public) is still aboard \(carrier.deviceCode, privacy: .public) — deploy never took")
             return .stall(.relayActivationFailed)
         }
+        // **Already up? Then hand off rather than command it again.** This is
+        // the same guard `emplace` keeps one command earlier, and its absence
+        // here stalled a live run for seven hours on 2026-08-05: the `activate`
+        // reached the server, the network dropped before the answer came back,
+        // and every retry re-dispatched into a correct "Relay is already
+        // active" rejection that the executor can only read as
+        // `commandRejected`. Retry → dispatch → reject → stall → retry, beside
+        // a relay that was `relaying` the entire time.
+        //
+        // A rejection meaning "the thing you asked for is already true" is this
+        // run's own work being reported back to it, so the state is what to
+        // read — not the command's answer, and emphatically not the server's
+        // prose, which would make the fix a string match on a message the
+        // backend is free to reword.
+        //
+        // `statusBase`, not `status`, for the reason `confirmRelay` states: the
+        // backend appends a parenthetical parameter to some statuses.
+        if relay.statusBase == Self.relayingStatus {
+            logger.info("relay run \(directive.id, privacy: .public): \(relay.deviceCode, privacy: .public) is already relaying — confirming rather than re-activating")
+            return .advanceStep(nextStep: Step.confirmingRelay)
+        }
+        // The status check above can only be as good as the row it reads, and
+        // the window that caused the incident is exactly the one where the row
+        // is WRONG: the command landed, the client never learned, and nothing
+        // has re-read the relay since. So a row too old to trust buys a read
+        // before it buys a command — a stale read is free to be wrong, a
+        // duplicate `activate` is not. Bounded to one devices-refresh round per
+        // evaluation by `reAsk`'s `paid` set, after which this step either
+        // hands off above or dispatches below.
+        if world.now.timeIntervalSince(relay.updatedAt) > Self.pollInterval {
+            return .refreshDevices(deviceCodes: [relay.deviceCode], thenStall: nil)
+        }
         return .dispatch(
             kind: OperationKind.simple("activate"), deviceCode: relay.deviceCode,
             params: CommandParams(), nextStep: Step.confirmingRelay
@@ -1449,7 +1488,7 @@ public struct RelayRun: MissionStepMachine {
         // `statusBase`, not `status`: the backend appends a parenthetical
         // parameter to some statuses, and a raw comparison would read a live
         // relay as dead.
-        if relay.statusBase == "relaying" { return .advanceStep(nextStep: Step.settling) }
+        if relay.statusBase == Self.relayingStatus { return .advanceStep(nextStep: Step.settling) }
         if world.now.timeIntervalSince(directive.stepStartedAt) > SalvageRun.activationDeadline {
             return .stall(.relayActivationFailed)
         }

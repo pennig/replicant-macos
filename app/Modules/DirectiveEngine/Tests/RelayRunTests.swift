@@ -1284,6 +1284,57 @@ struct RelayRunActivateTests {
                 == .stall(.relayActivationFailed))
     }
 
+    /// **The live stall of 2026-08-05, and the mirror of
+    /// `emplacingHandsOffWhenTheDeployAlreadyTook` that was missing.**
+    ///
+    /// A relay run to ACRUB dispatched `activate`; the network dropped before
+    /// the response came back, but the command had already reached the server.
+    /// The run stalled `commandRejected`, the brain retried, `activating`
+    /// re-dispatched blind, and the server answered — correctly — "Relay is
+    /// already active". That is not a failure: it is the run's own work,
+    /// reported back to it. The loop was closed and permanent: retry →
+    /// dispatch → reject → stall → retry, five times over seven hours, beside
+    /// a relay that was `relaying` at `ACRUB-3-L4` the whole time.
+    ///
+    /// `deploy` has had this guard since the emplace path was written. Its
+    /// twin one command later did not.
+    @Test func activatingHandsOffWhenTheRelayIsAlreadyUp() {
+        let snapshot = world(devices: [
+            carrier(location: "VEGA-1-L4"), relay(location: "VEGA-1-L4", status: "relaying"),
+        ])
+        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.activating), world: snapshot)
+                == .advanceStep(nextStep: RelayRun.Step.confirmingRelay),
+                "an active relay must be handed to the step that verifies it, never re-commanded")
+    }
+
+    /// `statusBase`, so the backend's parenthetical status tail cannot make a
+    /// live relay read as dead here any more than it can in `confirmingRelay`.
+    @Test func activatingReadsThroughTheStatusTail() {
+        let snapshot = world(devices: [
+            carrier(location: "VEGA-1-L4"), relay(location: "VEGA-1-L4", status: "relaying (ACRUB)"),
+        ])
+        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.activating), world: snapshot)
+                == .advanceStep(nextStep: RelayRun.Step.confirmingRelay))
+    }
+
+    /// **The race the status check alone cannot close.** The command lands, the
+    /// client never learns, and the local row still says `inactive` — so the
+    /// truth is only readable by asking. Reading beats re-commanding: a read is
+    /// free to be wrong, a duplicate `activate` is not.
+    ///
+    /// Bounded by `reAsk`'s `paid` set to one devices-refresh round per
+    /// evaluation, after which the fresh row either hands off above or falls
+    /// through to the dispatch below.
+    @Test func activatingReadsAStaleRowRatherThanCommandingBlind() {
+        let stale = fixtureNow.addingTimeInterval(-(RelayRun.pollInterval + 60))
+        let snapshot = world(devices: [
+            carrier(location: "VEGA-1-L4"),
+            relay(location: "VEGA-1-L4", status: "inactive", updatedAt: stale),
+        ])
+        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.activating), world: snapshot)
+                == .refreshDevices(deviceCodes: ["RLY1"], thenStall: nil))
+    }
+
     /// The mirror on the other side of the same command: a re-entered
     /// `emplacing` whose `deploy` already took must hand off rather than
     /// re-issue a command that has to be rejected.
