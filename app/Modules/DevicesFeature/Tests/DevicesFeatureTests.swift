@@ -381,3 +381,104 @@ private func device(_ code: String, status: String = "idle") -> Device {
         #expect(endedEditing.value == true)
     }
 }
+
+/// The list's organisation state: binding-driven search, the two disclosure
+/// gestures, and the derived sections the view renders.
+@MainActor
+@Suite struct DeviceListStateTests {
+
+    @Test func hostDisclosureTogglesOnAndOff() async throws {
+        let database = try GameDatabase.bootstrap()
+        let store = TestStore(initialState: DevicesFeature.State()) {
+            DevicesFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
+        }
+
+        await store.send(.hostDisclosureToggled("VESSEL")) {
+            $0.expandedHosts = ["VESSEL"]
+        }
+        await store.send(.hostDisclosureToggled("VESSEL")) {
+            $0.expandedHosts = []
+        }
+    }
+
+    @Test func groupDisclosureTogglesOnAndOff() async throws {
+        let database = try GameDatabase.bootstrap()
+        let store = TestStore(initialState: DevicesFeature.State()) {
+            DevicesFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
+        }
+
+        await store.send(.groupDisclosureToggled(DeviceListSection.attentionID)) {
+            $0.collapsedGroups = [DeviceListSection.attentionID]
+        }
+        await store.send(.groupDisclosureToggled(DeviceListSection.attentionID)) {
+            $0.collapsedGroups = []
+        }
+    }
+
+    @Test func searchTextIsDrivenByTheBindingReducer() async throws {
+        let database = try GameDatabase.bootstrap()
+        let store = TestStore(initialState: DevicesFeature.State()) {
+            DevicesFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
+        }
+
+        await store.send(\.binding.searchText, "survey") {
+            $0.searchText = "survey"
+        }
+    }
+
+    /// Hosts default collapsed, so the top level is roots only — and the
+    /// disclosure gesture opens exactly one level.
+    @Test func derivedSectionsCollapseHostsByDefault() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Device.insert {
+                makeDevice("VESSEL", type: "heaven_vessel")
+                makeDevice("CTRL", type: "ami_survey_controller", stowedIn: "VESSEL")
+            }
+            .execute(db)
+        }
+
+        let store = TestStore(initialState: DevicesFeature.State()) {
+            DevicesFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
+        }
+        store.exhaustivity = .off
+
+        #expect(store.state.orderedIDs == ["VESSEL"])
+        await store.send(.hostDisclosureToggled("VESSEL"))
+        #expect(store.state.orderedIDs == ["VESSEL", "CTRL"])
+    }
+
+    /// `matchCount` counts the whole fleet's matches, not the visible rows —
+    /// the "N" in the "N of M devices" subtitle.
+    @Test func matchCountCountsMatchesNotVisibleRows() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Device.insert {
+                makeDevice("VESSEL", type: "heaven_vessel")
+                makeDevice("DRONEA", type: "survey_drone", stowedIn: "VESSEL")
+            }
+            .execute(db)
+        }
+
+        let store = TestStore(initialState: DevicesFeature.State()) {
+            DevicesFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
+        }
+        store.exhaustivity = .off
+
+        #expect(store.state.matchCount == 2)
+        await store.send(\.binding.searchText, "survey_drone")
+        #expect(store.state.matchCount == 1)
+        // The ancestor is revealed but is not itself a match.
+        #expect(store.state.orderedIDs == ["VESSEL", "DRONEA"])
+    }
+}
