@@ -174,3 +174,37 @@ seam *between* a tested pure function and the engine that calls it.
   `system_hub` carries the feature (integrated relay) and genuinely meshes its system, but a dispatch
   query gets `deploy` issued at whatever it returns — so `relay(aboard:)` / `deployedRelay(near:)` are
   narrowed to `deviceType == "ftl_relay"`. Both `"relaying"` comparisons go through `Device.statusBase`.
+
+## Tunable calibrations (recovered from source comments, 2026-08-05)
+
+The arithmetic behind three hand-tuned `SalvageRun` constants, whose derivations lived only in the
+source comments the 2026-08-05 comment cleanup removed. The *rules* these constants enforce stay in
+source; only the numbers' justification is here. Sibling of [[brain-tunable-calibrations]].
+
+- **`arrivalConfirmDeadline` = 5 min** — how long the vessel row may lag the arrival it should reflect
+  before the run surfaces `.vesselPositionUnconfirmed`. The ordinary two-transaction gap
+  ([[confirm-steps-need-fresh-evidence]] half three) closes on its own within a tick or two, so what
+  actually reaches this deadline is a vessel whose **reads keep failing** — offline, rate-limited, a
+  device the server 404s — because the gate's own throttled `.high` read is the only thing that can
+  advance `vessel.updatedAt` once the event path has already had its chance. **5 min is roughly this
+  account's device-row refresh period** (the same figure measured in that note's half one), so a read
+  that has not landed by then is not merely late, and waiting longer will not produce it. Re-measure
+  the refresh period before re-calibrating.
+- **`reconcileInterval` = 2 min** — the floor between reconciling `.refreshFleet` reads while
+  `awaiting` waits out a mining cycle. A two-sided trade: long enough that a multi-minute mine cycle
+  costs only one read every couple of minutes, short enough to notice a DROPPED `directive.completed`
+  frame promptly (that frame is the loop's only positive terminator, so the cadence is the sole
+  backstop against waiting on one that will never arrive). The throttle is also what keeps a
+  persistently failing read from looping on every 5 s tick.
+- **`activationDeadline` = 10 min** — how long an `activate` may take before `confirmingRelay`
+  surfaces `.relayActivationFailed`. Deliberately generous: nothing local flips the relay's status,
+  so the step depends on its own throttled confirm-read landing, and that read is subject to the poll
+  budget. A tighter deadline false-stalls a relay that came up fine but whose read was deferred.
+  `systemResolutionDeadline` (10 min) is set to the same scale for the same reason — it backstops
+  `LocationsIngestion`'s passive rescan, not a read this mission controls.
+
+Two smaller floors need no note because their consequence is stated in source and is not arithmetic:
+`arrivalReadInterval` (30 s) and `relayPollInterval` (60 s) exist only because their steps are
+evaluated on the engine's 5 s tick, so without a floor each would read every tick;
+`systemRefreshAttempts` / `bodyProgressAttempts` are both 1 because the read they bound is
+authoritative, so a second one answers nothing a first did not.
