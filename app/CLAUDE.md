@@ -33,6 +33,36 @@ Look in the `Modules/UI` folder for the Swift package that represents the design
 - Keep data‑model names aligned with the backend payload (`device_code`, `device_type`, `replicant_code`, `available_commands`, `operational_capacity`, `status`).
 - **Database migrations are append-only.** A new schema change appends a `SchemaMigration` to `GameDatabase.manifest`; never edit, rename, or reorder one that has shipped — GRDB keys applied migrations by identifier, so an edit silently never runs and leaves the local schema stale. Adding a column to an existing table means a new `ALTER TABLE` migration, not a change to its `CREATE TABLE`. `SchemaManifestTests` freezes the identifier list and `GoldenSchemaTests` snapshots the resulting schema; regenerate the latter with `RC_REGENERATE_SCHEMA_FIXTURE=1` only when the change is intended. Wipe the local database deliberately via Tools ▸ "Reset Local Database…" or `RC_RESET_DATABASE=1`.
 
+## Comments
+
+**A comment may only explain the code as it exists in situ.** History — why it
+changed, what broke, what we rejected — goes to `.claude/memory/` and git, never
+into the source. Enforced by `scripts/check-comments.sh`.
+
+**Keep:**
+- **A file header** — what the file is, what it does, and invariants true of the
+  code itself (purity, one-shot lifecycle, what owns what). ~10 lines; ~20 is the
+  ceiling for the largest files.
+- **`///` on public/internal API** — what it does, what each parameter means, what
+  a caller must guarantee. Bare contract.
+- **Inline `//`** — only where intent is not recoverable by reading the code: a
+  non-obvious algorithm step, a deliberate deviation from the obvious approach, or
+  a workaround for an external constraint (server behaviour, SDK bug).
+
+**Delete:**
+- Dated history — "as of 2026-08-04", "before the fix", "this worked differently
+  before", round-N narratives
+- Rejected alternatives, "we considered X"
+- Product and design rationale — *why we chose this shape* belongs in memory
+- Live-fleet snapshots — device codes, replicant names, current stock figures
+- Incident narratives
+- Provenance pointers ("ticket 05 decided this"). A pointer survives only when it
+  names *where the full contract lives*, never who decided it.
+- Restatement of what the code plainly says
+
+When a fact you are deleting is load-bearing and not already in `.claude/memory/`,
+write the memory note first (with its `MEMORY.md` index line), then delete.
+
 ## Don't
 - Don't introduce new accent colors or gradients beyond the token set.
 - Don't add decorative imagery; this UI is data‑viz forward (gauges, dots, bars).
