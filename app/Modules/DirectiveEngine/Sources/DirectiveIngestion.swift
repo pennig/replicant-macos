@@ -3,12 +3,11 @@
 //  Replicould — DirectiveEngine
 //
 //  The `directive.*` ingestion policy, declared beside the engine that consumes
-//  its output (the `MessagesIngestion` / `LocationsIngestion` shape — the
-//  composition root only wires it up).
+//  its output; the composition root only wires it up.
 //
 //  Its ONLY job is writing one `DirectiveLogEntry`. It never advances a mission:
 //  the engine observes the row instead, which is what keeps
-//  observe-reconciled-state intact and makes the timeline entry free.
+//  observe-reconciled-state intact.
 //
 
 import API
@@ -21,6 +20,8 @@ import SQLiteData
 
 private let logger = Logger(subsystem: "name.pennig.replicould", category: "DirectiveEngine")
 
+/// The two event routes that feed the directive timeline, plus the single
+/// writer both share.
 public enum DirectiveIngestion {
     /// Tolerance when comparing an event's timestamp against a step's start —
     /// the same value and reasoning as `Reconciler.eventTimeSkewTolerance`:
@@ -28,13 +29,15 @@ public enum DirectiveIngestion {
     /// completion leak forward.
     static let eventTimeSkewTolerance: TimeInterval = 5
 
+    /// The `directive` category route: records one timeline entry per
+    /// `directive.completed` event carrying a device code, and announces any
+    /// other `directive.*` name rather than dropping it.
     public static var eventRoute: EventRoute {
         EventRoute(id: "directive", match: .category("directive")) { event in
             guard event.event == "directive.completed" else {
-                // A directive event we don't recognise. The router's generic
-                // unhandled-event notice can't fire (this route matched), so
-                // announce it here — adopting a new name is then a one-line
-                // edit once it shows up in live traffic.
+                // The router's generic unhandled-event notice cannot fire once
+                // this route has matched, so an unrecognised name has to be
+                // announced here or it goes by silently.
                 let keys = event.payload?.keys.sorted().joined(separator: ", ") ?? "none"
                 logger.notice("⚠️ unhandled directive event \(event.event, privacy: .public) — payload keys: [\(keys, privacy: .public)]")
                 return
@@ -59,16 +62,14 @@ public enum DirectiveIngestion {
     }
 
     /// The `ami.launched` route: the ONE piece of AMI telemetry a mission needs
-    /// to hear, kept off the `ami` category (which is otherwise a firehose of
-    /// per-device activity digests — hundreds an hour) by matching the exact
-    /// event name.
+    /// to hear, kept off the `ami` category (otherwise a firehose of per-device
+    /// activity digests — hundreds an hour) by matching the exact event name.
     ///
     /// `ami.launched` carries `devices_deployed`, the server saying plainly
     /// whether the launch did anything. A zero means the controller had nothing
     /// aboard to deploy, so the survey the mission is now waiting on can never
-    /// start. Recording that is what lets `SurveyRun` cut the wait short instead
-    /// of cycling its backstop forever — which is exactly what happened on
-    /// 2026-07-26, for ten hours, because nothing read this number.
+    /// start; recording it is what lets `SurveyRun` cut the wait short instead of
+    /// cycling its backstop forever.
     public static var amiLaunchRoute: EventRoute {
         EventRoute(id: "ami-launch", match: .event("ami.launched")) { event in
             guard let deviceCode = event.deviceCode, !deviceCode.isEmpty else {
@@ -90,10 +91,10 @@ public enum DirectiveIngestion {
         }
     }
 
-    /// Write one entry for an event, deduped and attributed. Shared by both
-    /// routes so the two guards that are easy to get subtly wrong — replay
-    /// idempotency and issue-time-relative ownership — have exactly one
-    /// implementation.
+    /// Write one `DirectiveLogEntry` of `kind` reading `summary`, attributed to
+    /// `deviceCode` and timestamped from `event`. Shared by both routes so the
+    /// two guards that are easy to get subtly wrong — replay idempotency and
+    /// issue-time-relative ownership — have exactly one implementation.
     private static func record(
         _ event: GameEventEnvelope,
         deviceCode: String,
@@ -127,7 +128,7 @@ public enum DirectiveIngestion {
                 // Issue-time relative, not wall-clock: an event delivered by
                 // catch-up after the app was closed still lands, while a
                 // replayed pre-step event does not close (or stall) a step it
-                // never belonged to (design spec §5).
+                // never belonged to.
                 let owner = try Directive
                     .where {
                         $0.controllerCode.eq(deviceCode)

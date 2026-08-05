@@ -2,14 +2,14 @@
 //  DirectiveResolutionClient.swift
 //  Replicould — DirectiveEngine
 //
-//  The player's side of "pause and surface" (design spec §8). The engine never
-//  improvises or auto-retries at the mission layer, so a stalled run waits for
-//  one of these verbs: retry the step, skip the target, or cancel the run —
-//  plus pause/resume for a run the player wants to hold.
+//  The player's side of "pause and surface". The engine never improvises or
+//  auto-retries at the mission layer, so a stalled run waits for one of these
+//  verbs: retry the step, skip the target, or cancel the run — plus pause/resume
+//  for a run the player wants to hold.
 //
-//  Lives here rather than in the feature because every verb is a transition on
-//  `Directive`, the row the executor owns, and because `skipTarget` needs the
-//  machine's `firstStep` — step vocabulary the feature must never name.
+//  Every verb is a transition on `Directive`, the row the executor owns, and
+//  `skipTarget` needs the machine's `firstStep` — step vocabulary the feature
+//  layer must never name.
 //
 //  Vended as `@Dependency(\.directiveResolution)`.
 //
@@ -22,24 +22,23 @@ import SQLiteData
 
 private let logger = Logger(subsystem: "name.pennig.replicould", category: "DirectiveEngine")
 
+/// The five stall-resolution verbs plus the finished-run sweep, each a closure
+/// so a feature can be tested without a database.
 public struct DirectiveResolutionClient: Sendable {
-    /// Clear a stall and hand the run back to the engine on the same step.
+    /// Clear `directiveID`'s stall and hand the run back to the engine on the
+    /// same step.
     public var retry: @Sendable (_ directiveID: String) async -> Void
-    /// Abandon the current target and restart the machine on the next one.
+    /// Abandon `directiveID`'s current target and restart the machine on the
+    /// next one.
     public var skipTarget: @Sendable (_ directiveID: String) async -> Void
-    /// End the run for good.
+    /// End `directiveID`'s run for good.
     public var cancel: @Sendable (_ directiveID: String) async -> Void
-    /// Take a running directive out of the engine's reach.
+    /// Take running directive `directiveID` out of the engine's reach.
     public var pause: @Sendable (_ directiveID: String) async -> Void
-    /// Hand a paused directive back to the engine.
+    /// Hand paused directive `directiveID` back to the engine.
     public var resume: @Sendable (_ directiveID: String) async -> Void
     /// Delete every finished run — `.completed` and `.cancelled` — and its
-    /// timeline. Returns how many rows went.
-    ///
-    /// Housekeeping rather than a resolution verb, but it lives here for the
-    /// reason the verbs do: this is the one type that owns writes to the
-    /// directive tables, and the alternative was giving a view-layer reducer its
-    /// own `defaultDatabase` handle.
+    /// timeline, returning how many rows went.
     ///
     /// **Terminal statuses only, and that is a safety property, not a filter.**
     /// `.running`, `.needsAttention` and `.paused` all still OWN devices
@@ -47,6 +46,9 @@ public struct DirectiveResolutionClient: Sendable {
     /// carrier to the brain mid-flight.
     public var clearFinished: @Sendable () async -> Int
 
+    /// Each closure implements the property of the same name — `retry`,
+    /// `skipTarget`, `cancel`, `pause`, `resume`, `clearFinished` — documented
+    /// above.
     public init(
         retry: @escaping @Sendable (String) async -> Void,
         skipTarget: @escaping @Sendable (String) async -> Void,
@@ -69,6 +71,7 @@ public struct DirectiveResolutionClient: Sendable {
 }
 
 extension DirectiveResolutionClient: DependencyKey {
+    /// The verbs as database transitions, each one transaction through `apply`.
     public static let liveValue = DirectiveResolutionClient(
         retry: { id in
             // Same step, fresh `stepStartedAt`. Re-stamping is what lets a
@@ -97,11 +100,10 @@ extension DirectiveResolutionClient: DependencyKey {
             }
         },
         cancel: { id in
-            // Deliberately does NOT clear the controller's AMI directive: that
-            // is a server command with its own failure modes, and cancelling
-            // releases ownership (`.cancelled` is outside the owning statuses),
-            // so the built-in row's Clear button becomes available for the user
-            // to do it deliberately.
+            // Does NOT clear the controller's AMI directive. `.cancelled` is
+            // outside the owning statuses, so cancelling releases ownership and
+            // the built-in row's Clear button becomes available for the user to
+            // do it deliberately.
             await apply(id, from: [.running, .needsAttention, .paused], summary: { _ in "Cancelled" }) { directive, _ in
                 directive.status = .cancelled
                 directive.attentionReason = nil
@@ -148,10 +150,12 @@ extension DirectiveResolutionClient: DependencyKey {
         }
     )
 
-    /// One transaction: the row change and its timeline entry land together or
-    /// neither does. A verb applied from a status it doesn't apply to is a
-    /// logged no-op — the UI shouldn't offer it, but a stale click must not
-    /// corrupt the row.
+    /// Apply `mutate` to directive `directiveID` and append a `.resolved`
+    /// timeline entry reading `summary`, in ONE transaction: the row change and
+    /// its entry land together or neither does.
+    ///
+    /// A verb applied from a status outside `allowed` is a logged no-op — the UI
+    /// shouldn't offer it, but a stale click must not corrupt the row.
     private static func apply(
         _ directiveID: String,
         from allowed: Set<DirectiveStatus>,
@@ -202,6 +206,7 @@ extension DirectiveResolutionClient: DependencyKey {
         clearFinished: unimplemented("DirectiveResolutionClient.clearFinished", placeholder: 0)
     )
 
+    /// Every verb inert, so a preview can offer the buttons without a database.
     public static let previewValue = DirectiveResolutionClient(
         retry: { _ in }, skipTarget: { _ in }, cancel: { _ in },
         pause: { _ in }, resume: { _ in }, clearFinished: { 0 }
@@ -209,6 +214,8 @@ extension DirectiveResolutionClient: DependencyKey {
 }
 
 extension DependencyValues {
+    /// The stall-resolution verbs, the one type that writes the directive tables
+    /// on the player's behalf.
     public var directiveResolution: DirectiveResolutionClient {
         get { self[DirectiveResolutionClient.self] }
         set { self[DirectiveResolutionClient.self] = newValue }

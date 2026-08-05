@@ -3,15 +3,13 @@
 //  Replicould — DirectiveEngine
 //
 //  One serial executor per RUNNING custom directive, off the event-dispatch hot
-//  path (directives design spec §6). Built-in directives get no executor — the
-//  server runs them.
+//  path. Built-in directives get no executor — the server runs them.
 //
-//  Evaluation is clock-driven rather than event-driven on purpose: an
-//  evaluation is a local SQLite read plus a pure function, and it only touches
-//  the network when the mission actually wants a command. That buys replay
-//  immunity for free (the engine never sees an event, so it cannot be spooked
-//  by its own command echo) and makes every test deterministic under
-//  `TestClock` — with no observation plumbing to get wrong.
+//  Evaluation is clock-driven, not event-driven: an evaluation is a local SQLite
+//  read plus a pure function, and it touches the network only when the mission
+//  actually wants a command. The engine therefore never sees an event and cannot
+//  be spooked by its own command echo, and every test is deterministic under
+//  `TestClock` with no observation plumbing.
 //
 //  Lifecycle is owned by the composition root: started with the sync engine on
 //  login, and stopped BEFORE the directive tables are wiped on logout.
@@ -29,6 +27,7 @@ import UniverseModels
 private let logger = Logger(subsystem: "name.pennig.replicould", category: "DirectiveEngine")
 private let brainLogger = Logger(subsystem: "name.pennig.replicould", category: "Brain")
 
+/// The engine's lifecycle, as two closures the composition root drives.
 public struct DirectiveEngine: Sendable {
     /// Begin supervising running directives. Idempotent.
     public var start: @Sendable () async -> Void
@@ -36,6 +35,8 @@ public struct DirectiveEngine: Sendable {
     /// directive tables are wiped.
     public var stop: @Sendable () async -> Void
 
+    /// `start` and `stop` are the implementations of the properties of the same
+    /// name.
     public init(
         start: @escaping @Sendable () async -> Void,
         stop: @escaping @Sendable () async -> Void
@@ -44,10 +45,10 @@ public struct DirectiveEngine: Sendable {
         self.stop = stop
     }
 
-    /// Machines come from `MissionRegistry` — the single registration point
-    /// resolution also consults. With no machine registered for a kind the
-    /// engine leaves those rows completely alone, so a `relayRun` directive is
-    /// inert rather than mishandled until Stage 5.
+    /// An engine driving `machines`, defaulting to `MissionRegistry` — the
+    /// single registration point resolution also consults. A directive whose
+    /// kind has no machine here is left completely alone, so it is inert rather
+    /// than mishandled.
     public static func makeLive(
         machines: [any MissionStepMachine] = MissionRegistry.machines
     ) -> DirectiveEngine {
@@ -59,37 +60,46 @@ public struct DirectiveEngine: Sendable {
     }
 }
 
+/// The engine's mutable half: the supervisor loop, one executor task per running
+/// directive, the brain's plan loop, and the resolvers for the actions a mission
+/// cannot apply by itself.
 actor DirectiveEngineCore {
+    /// The registered machines, one per kind; a kind absent here is never run.
     private let machines: [DirectiveKind: any MissionStepMachine]
+    /// The interval every loop in this actor sleeps for between iterations.
     private let tick: Duration
+    /// The supervisor loop, nil when stopped. Doubles as the "am I running?"
+    /// flag `reconcileExecutors()` re-checks after a suspension.
     private var supervisor: Task<Void, Never>?
+    /// One evaluation loop per running directive, keyed by directive id.
     private var executors: [String: Task<Void, Never>] = [:]
-    /// The automation brain's plan loop — reads a `WorldView` and decides
-    /// what's worth doing every tick, beside (never inside) the supervisor
-    /// loop above. It now LAUNCHES: a tick that finds a grow worth making
-    /// creates a `relayRun` row, which the supervisor above then picks up like
-    /// any other. See `Brain.swift`.
+    /// The automation brain's plan loop — reads a `WorldView` and decides what's
+    /// worth doing every tick, beside (never inside) the supervisor loop. It
+    /// LAUNCHES: a tick that finds a grow worth making creates a `relayRun` row,
+    /// which the supervisor then picks up like any other. See `Brain.swift`.
     private var brain: Task<Void, Never>?
 
     /// Test seam: how many executors are alive.
     var executorCount: Int { executors.count }
-    /// Test seam: how many times the brain has ticked. The only way to prove
-    /// the plan loop is genuinely wired to the clock (as opposed to
-    /// `brain` being a dead field) — the no-writes assertions elsewhere hold
-    /// identically whether the loop ticked once or a hundred times, so they
-    /// can't catch the wiring being removed. Incremented in `tickBrain()`.
+    /// Test seam: how many times the brain has ticked, incremented in
+    /// `tickBrain()`. The only way to prove the plan loop is wired to the clock
+    /// rather than a dead field — the no-writes assertions elsewhere hold
+    /// identically whether the loop ticked once or a hundred times.
     private(set) var brainTickCount = 0
 
+    /// Register `machines` by kind (first wins on a duplicate) and run every
+    /// loop at `tick`.
     init(machines: [any MissionStepMachine], tick: Duration) {
         self.machines = Dictionary(machines.map { ($0.kind, $0) }, uniquingKeysWith: { first, _ in first })
         self.tick = tick
     }
 
-    /// Claims `supervisor` (and `brain`) before any suspension, so a
-    /// concurrent `start()` can't double-supervise and a `stop()` can't
-    /// interleave between the guard and the claim (the `GameSyncEngine.start()`
-    /// shape). Nothing suspends between the guard and either claim, so both
-    /// happen atomically within this actor turn.
+    /// Start the supervisor and the brain. Idempotent.
+    ///
+    /// Claims `supervisor` (and `brain`) before any suspension, so a concurrent
+    /// `start()` can't double-supervise and a `stop()` can't interleave between
+    /// the guard and the claim. Nothing suspends between the guard and either
+    /// claim, so both happen atomically within this actor turn.
     func start() {
         guard supervisor == nil else {
             logger.debug("start ignored — already running")
@@ -108,11 +118,9 @@ actor DirectiveEngineCore {
         }
         brainLogger.info("starting — brain online")
         do {
-            // A separate local read of the same dependencies as the
-            // supervisor above, rather than sharing its `clock`/`tick` —
-            // mirrors `makeExecutor`'s own local read, and keeps two
-            // concurrently-running Task closures from capturing the same
-            // local variable.
+            // A separate local read of the same dependencies as the supervisor
+            // above rather than sharing its `clock`/`tick`: two concurrently
+            // running Task closures must not capture the same local variable.
             @Dependency(\.continuousClock) var clock
             let tick = self.tick
             brain = Task { [weak self] in
@@ -124,6 +132,8 @@ actor DirectiveEngineCore {
         }
     }
 
+    /// Cancel every loop and clear the why-view's feed. Must complete before the
+    /// directive tables are wiped.
     func stop() {
         logger.info("stopping")
         supervisor?.cancel()
@@ -131,22 +141,15 @@ actor DirectiveEngineCore {
         brainLogger.info("stopping")
         brain?.cancel()
         brain = nil
-        // Retire the why-view's feed with the brain that fed it. `stop()` runs
-        // on logout, immediately before the directive tables are wiped, and
-        // the composition root is deliberate about not letting one session
-        // bleed into the next (`ReplicantApp` resets domain freshness on the
-        // same path). A surviving report would show the PREVIOUS account's
-        // ranked systems and hub stock until the next login's first tick —
-        // stale by five seconds at best, and about the wrong galaxy at worst.
-        //
-        // Still not engine-retained state: this clears the shared store, it
-        // does not read anything back.
+        // Retire the why-view's feed with the brain that fed it: a surviving
+        // report would show the PREVIOUS account's ranked systems and hub stock
+        // until the next login's first tick. This clears the shared store and
+        // reads nothing back, so it retains no engine state.
         //
         // The clear only STAYS cleared because `tickBrain()` re-checks
-        // cancellation before it publishes: the `cancel()` above does not await
-        // the brain task, and a tick suspended inside `Brain.report()` resumes
-        // after this line. Without that check the paragraph above would be a
-        // claim rather than a property.
+        // cancellation before it publishes — `cancel()` above does not await the
+        // brain task, and a tick suspended inside `Brain.report()` resumes after
+        // this line.
         @Shared(.brainReport) var published: BrainReport?
         $published.withLock { $0 = nil }
         for (_, task) in executors { task.cancel() }
@@ -155,44 +158,35 @@ actor DirectiveEngineCore {
     }
 
     /// One brain tick: bridge the clock's `now` in via `@Dependency(\.date)`
-    /// (never `Date()`, so `TestClock` determinism holds), and ask `Brain` for
-    /// a decision. Internal rather than `private` so tests can drive it
-    /// directly, the same seam `reconcileExecutors()` and
-    /// `evaluateOnce(directiveID:)` already use.
+    /// (never `Date()`, so `TestClock` determinism holds), ask `Brain` for a
+    /// decision, and publish it.
     ///
-    /// The decision is REPORTED, not acted on: `Brain.report()` already
-    /// committed whatever it decided to do, through the sanctioned
-    /// create-directive rail and nothing else. Nothing here writes a row, and
-    /// nothing here should — a bespoke write at this layer would be outside
-    /// the brain's audited enactment surface.
+    /// The decision is REPORTED, not acted on: `Brain.report()` has already
+    /// committed whatever it decided through the sanctioned create-directive
+    /// rail. Nothing here writes a row, and nothing here may — a bespoke write at
+    /// this layer would sit outside the brain's audited enactment surface.
     ///
     /// Reporting means publishing the tick's `BrainReport` to
-    /// `@Shared(.brainReport)`, which `DirectivesFeature` renders as the
-    /// why-view (`brain-robustness-bar` clause 8). This actor keeps NO copy:
-    /// the report is handed to Sharing's in-memory store and forgotten, so
-    /// the engine holds no UI state and the next tick's `Brain` — stateless
-    /// by clause 2 — has nothing here to read back.
+    /// `@Shared(.brainReport)`, which `DirectivesFeature` renders as the why-view
+    /// (`brain-robustness-bar` clause 8). This actor keeps NO copy, so the engine
+    /// holds no UI state and the next tick's `Brain` — stateless by clause 2 —
+    /// has nothing here to read back.
     ///
     /// **Cancellation is checked at both ends, and neither check is redundant.**
     /// `stop()` cancels the brain task without awaiting it, and cancellation is
     /// cooperative — the loop in `start()` only tests it between iterations. So:
     ///
-    ///   - the ENTRY check catches a tick that began after `stop()`. The loop's
+    ///   - the ENTRY check catches a tick that began after `stop()`: the loop's
     ///     own `!Task.isCancelled` can pass and the `await` hop onto this actor
     ///     can then land after the cancel.
-    ///   - the EXIT check catches the tick that was already in flight. It is
-    ///     suspended across `Brain.report()`'s reads when `stop()` runs, so it
-    ///     resumes AFTER the feed was cleared and would republish the previous
-    ///     account's ranked systems and hub stock — surviving until the next
-    ///     login's first tick, which is exactly the session bleed `stop()`
-    ///     claims not to allow.
+    ///   - the EXIT check catches a tick already in flight: it is suspended
+    ///     across `Brain.report()`'s reads when `stop()` runs, so it resumes
+    ///     AFTER the feed was cleared and would republish the previous account's
+    ///     data, which is the session bleed `stop()` claims not to allow.
     ///
-    /// `Task.isCancelled` rather than `brain != nil` (the shape
-    /// `reconcileExecutors()` pairs with its own): this body runs INSIDE the
-    /// task `stop()` cancels, so the flag is exact, and it is the only signal
-    /// that reaches the same suspension window from inside `Brain.report()` —
-    /// where the tick's other irreversible acts live, and where that file's
-    /// `report()` documents the matching checks.
+    /// Both checks read `Task.isCancelled`, not `brain != nil`: this body runs
+    /// INSIDE the task `stop()` cancels, so the flag is exact where the field is
+    /// not yet cleared.
     func tickBrain() async {
         guard !Task.isCancelled else {
             brainLogger.debug("tick skipped — engine already stopped")
@@ -211,7 +205,7 @@ actor DirectiveEngineCore {
     }
 
     /// Spawn an executor for each running directive that lacks one, and retire
-    /// executors whose directive is no longer running.
+    /// executors whose directive has stopped running.
     func reconcileExecutors() async {
         @Dependency(\.defaultDatabase) var database
         let running: [Directive]
@@ -238,6 +232,7 @@ actor DirectiveEngineCore {
         }
     }
 
+    /// A loop evaluating directive `directiveID` once per `tick` until cancelled.
     private func makeExecutor(directiveID: String) -> Task<Void, Never> {
         @Dependency(\.continuousClock) var clock
         let tick = self.tick
@@ -249,10 +244,10 @@ actor DirectiveEngineCore {
         }
     }
 
-    /// One evaluation: re-read the row (it may have changed under us), ask the
-    /// machine for a single action, apply it. Re-reading every time is what
-    /// makes the directive row the checkpoint a relaunch resumes from (spec
-    /// §11), rather than any in-memory state that a restart would lose.
+    /// One evaluation of directive `directiveID`: re-read the row (it may have
+    /// changed under us), ask the machine for a single action, apply it.
+    /// Re-reading every time is what makes the directive row the checkpoint a
+    /// relaunch resumes from, rather than any in-memory state a restart loses.
     func evaluateOnce(directiveID: String) async {
         @Dependency(\.defaultDatabase) var database
         @Dependency(\.date) var date
@@ -270,8 +265,8 @@ actor DirectiveEngineCore {
         // user's to resolve — a tick must never resume one behind their back.
         guard let directive, directive.status == .running else { return }
         guard let machine = machines[directive.kind] else {
-            // Expected in Stage 3 for every real directive: no machines ship
-            // until Stage 4. Leave the row entirely alone.
+            // A kind with no registered machine is left entirely alone: the row
+            // is inert, never partially advanced.
             logger.debug("no machine for \(directive.kind.rawValue, privacy: .public) — directive \(directiveID, privacy: .public) left alone")
             return
         }
@@ -289,7 +284,7 @@ actor DirectiveEngineCore {
         // and touches nothing the machine reads to decide. Running it first means a
         // tick that also advances the step still records why the previous one
         // ended. `world` is the pre-write snapshot, so these rows are invisible to
-        // `nextAction` on this tick — mission behaviour is unchanged by design.
+        // `nextAction` on this tick — mission behaviour is unchanged.
         await DirectiveExecutor.recordCompletedOps(for: directive, world: world)
 
         var action = machine.nextAction(directive: directive, world: world)
@@ -330,7 +325,7 @@ actor DirectiveEngineCore {
         }
         let stillRunnable = await DirectiveExecutor.apply(action, to: current, machine: machine)
         if !stillRunnable {
-            // The row is no longer `.running`, so the supervisor would retire
+            // The row has left `.running`, so the supervisor would retire
             // this executor within a tick anyway; dropping it here stops it
             // spending one more evaluation first.
             executors[directiveID]?.cancel()
@@ -338,16 +333,15 @@ actor DirectiveEngineCore {
         }
     }
 
-    /// A resolved action plus the directive row it must be applied to.
+    /// A resolved `action` plus the `directive` row it must be applied to.
     ///
-    /// Only `.extendQueue` needs the second half. `resolveRefresh` and
-    /// `resolveSystemRefresh` re-ask with the SAME `Directive` value because a
-    /// device read cannot change the directive row — but an extend appends to
-    /// `targets`, and every executor path builds its write as
-    /// `var updated = directive`. Applying a post-extend action to the
-    /// pre-extend value therefore writes `targets` back and rolls the append
-    /// away. That is not an edge case: the action after a successful extend is
-    /// normally `.assignController`, which commits the whole row.
+    /// Only `.extendQueue` needs the second half. The refresh resolvers re-ask
+    /// with the SAME `Directive` value because a read cannot change the directive
+    /// row — but an extend appends to `targets`, and every executor path builds
+    /// its write as `var updated = directive`, so applying a post-extend action
+    /// to the pre-extend value writes `targets` back and rolls the append away.
+    /// That is not an edge case: the action after a successful extend is normally
+    /// `.assignController`, which commits the whole row.
     private struct Resolution {
         let action: MissionAction
         let directive: Directive
@@ -359,33 +353,26 @@ actor DirectiveEngineCore {
     /// Only `.idle` runs pay this. `.extendQueue` reads the whole census, which
     /// is affordable once per worked system (tens of minutes apart) and absurd on
     /// the 5 s tick — and a run whose frontier is momentarily empty would ask on
-    /// every single one. The backing state is deliberately in-memory: it is a
-    /// read-rate optimisation, and losing it on relaunch costs one extra census
-    /// read.
+    /// every single one.
     static let idlePlanBackoff: TimeInterval = 60
 
-    /// When each idling directive's planner may next be asked.
+    /// When each idling directive's planner may next be asked. In-memory
+    /// deliberately: it is a read-rate optimisation, and losing it on relaunch
+    /// costs one extra census read.
     private var idlePlanUntil: [String: Date] = [:]
 
-    /// Pick the next target for a continuous run, append it, and ask the machine
-    /// again against the EXTENDED row.
+    /// Pick the next target for the continuous run `directive` roaming around
+    /// `centre`, append it, and ask `machine` again against the EXTENDED row.
     ///
-    /// The engine gathers the data and owns the write; **which** system comes back
-    /// is the machine's own `plan(_:)`, so a survey roam's sliding bands and a
-    /// salvage run's mesh frontier each live with their mission. A `switch` on
+    /// The engine gathers the data and owns the write; **which** system comes
+    /// back is the machine's own `plan(_:)`, so a survey roam's sliding bands and
+    /// a salvage run's mesh frontier each live with their mission. A `switch` on
     /// `directive.kind` here would reintroduce exactly the coupling
-    /// `MissionRegistry` was built to remove — and, before this was a protocol
-    /// requirement, silently ran EVERY kind through `SurveyRoamPlanner`, whose
-    /// candidate filter (`fullyScannedAt == nil`) is the precise inverse of what
-    /// salvage needs.
+    /// `MissionRegistry` exists to remove.
     ///
     /// One census read per worked system — tens of minutes apart, not on the 5 s
     /// tick — so reading the whole table is affordable and each candidate filter
     /// stays in its own unit-tested planner.
-    ///
-    /// A bounding box around the centre was considered and rejected: the survey
-    /// band's outer edge is `inner + shellWidth`, and `inner` is only known after
-    /// scanning the candidates, so bounding needs the very scan it would save.
     private func resolveExtendQueue(
         centre: String,
         directive: Directive,
@@ -473,14 +460,12 @@ actor DirectiveEngineCore {
         }
 
         // The re-ask gets the SAME resolution the first ask would have got. An
-        // extend is not the end of the round: a mission that has just been handed
-        // a target may well need reads before it can act on one, and preflight
-        // always does — `stagingFreshness` is five minutes and a survey cycle is
-        // longer, so the rows backing staging are invariably past the bar by the
-        // time a queue is extended. Passing that request to the executor
-        // unresolved made it an immediate stall on its carried reason, which is
-        // how a healthy continuous run stopped at every single system with
-        // `unreachableDevice` and resumed, unchanged, on a Retry.
+        // extend is not the end of the round: a mission just handed a target may
+        // well need reads before it can act on one, and preflight always does —
+        // `stagingFreshness` is five minutes and a survey cycle is longer, so the
+        // rows backing staging are invariably past the bar by the time a queue is
+        // extended. Passing such a request to the executor unresolved makes it an
+        // immediate stall on its carried reason, at every single system.
         switch machine.nextAction(directive: extended, world: world) {
         case .extendQueue:
             // A target was just appended and the machine still wants one. Not
@@ -527,21 +512,17 @@ actor DirectiveEngineCore {
         }
     }
 
-    /// Spend authoritative reads on a mission's `.refreshDevices` request, then
-    /// ask it once more against the fresh world.
+    /// Spend authoritative reads on `directive`'s request for `deviceCodes`,
+    /// then ask `machine` once more against the fresh world, collapsing an
+    /// unresolved repeat onto `reason` (`paid` carries the chain's ceiling — see
+    /// `reAsk`).
     ///
     /// The re-ask is what makes the action worth having: the mission gets to
     /// distinguish "genuinely not staged" from "our rows were stale", which a
     /// `WorldSnapshot` alone cannot express. It happens here rather than in
     /// `DirectiveExecutor` because it needs a second snapshot read and a second
     /// call into the machine — the executor's job is applying ONE decided action
-    /// to the database, and threading re-evaluation through it would blur that.
-    ///
-    /// Bounded by construction: a second `.refreshDevices` becomes the carried
-    /// stall, so an evaluation issues at most one DEVICE refresh round no matter
-    /// what the machine says, and a genuinely unstaged vessel still surfaces to
-    /// the user on this same tick. (`paid` carries the whole chain's ceiling —
-    /// see `reAsk`.)
+    /// to the database.
     private func resolveRefresh(
         deviceCodes: [String],
         thenStall reason: DirectiveAttentionReason?,
@@ -583,12 +564,10 @@ actor DirectiveEngineCore {
         return await reAsk(machine, directive, fresh, paid: paid)
     }
 
-    /// The same contract as `resolveRefresh`, paid for with ONE scoped list
-    /// request instead of a read per device.
-    ///
-    /// Rate limit is the whole point: one request for everything at a place,
-    /// versus one each through `deviceRefresher`, and this one does not grow with
-    /// the fleet.
+    /// The same contract as `resolveRefresh` for `directive`, `machine`,
+    /// `reason` and `paid`, paid for with ONE list request scoped to
+    /// `designation` instead of a read per device — one request for everything
+    /// at a place, and it does not grow with the fleet.
     ///
     /// It answers PRESENCE only. A stowed device has no location and so is absent
     /// from the response entirely (see `MissionAction.refreshDevicesInSystem`),
@@ -631,8 +610,9 @@ actor DirectiveEngineCore {
         return await reAsk(machine, directive, fresh, paid: paid)
     }
 
-    /// The same contract as `resolveSystemRefresh`, paid for with ONE tag-scoped
-    /// request instead of a location-scoped one.
+    /// The same contract as `resolveSystemRefresh` for `directive`, `machine`,
+    /// `reason` and `paid`, paid for with ONE request scoped to `tag` instead of
+    /// to a location.
     ///
     /// This is the containment counterpart `.refreshDevicesInSystem` cannot
     /// serve: a tag filter never touches `location`, so stowing a device does
@@ -676,35 +656,20 @@ actor DirectiveEngineCore {
         return await reAsk(machine, directive, fresh, paid: paid)
     }
 
-    /// Spend one best-effort census refresh on a mission's `.refreshFootprint`
-    /// request, then ask it once more against the fresh world — the same
-    /// shape `resolveRefresh`/`resolveSystemRefresh`/`resolveFleetRefresh` use,
-    /// reusing the SAME `reAsk` collapse those three share.
+    /// The same contract as the three refresh resolvers above for `directive`,
+    /// `machine`, `reason` and `paid`, paid for with one stockpile-census
+    /// refresh, and falling back to `.advanceStep(nextStep:)` where they fall
+    /// back to `.wait`.
     ///
-    /// Best-effort by contract, matching `.refreshFootprint`'s original
-    /// reasoning: the request itself must never be the thing that strands a
-    /// mission over a transient GET, so a failure here is logged and the
-    /// re-ask proceeds against whatever `WorldSnapshot.footprints` already
-    /// holds rather than short-circuiting.
+    /// Best-effort by contract: the request must never be the thing that strands
+    /// a mission over a transient GET, so a failure is logged and the re-ask
+    /// proceeds against whatever `WorldSnapshot.footprints` already holds rather
+    /// than short-circuiting.
     ///
-    /// **Why this needed its own resolver instead of just adding
-    /// `.refreshFootprint` to `reAsk`'s existing case list as-is**: this
-    /// action serves two callers with genuinely different fallback needs when
-    /// the re-ask still wants a refresh. `RelayRun.acquire` passes a real
-    /// `thenStall` and must collapse to `.stall(reason)`, identically to the
-    /// device-refresh paths — a persistently-unreadable census sits in front
-    /// of an irreversible resource spend, so it has to escalate through
-    /// `BrainDisposition.retry`'s bounded-retry-then-escalate rather than
-    /// retry forever (the defect this whole resolver exists to close — see
-    /// `MissionAction.refreshFootprint`'s doc). `HaulRun.survey` passes `nil`
-    /// and needs `.advanceStep(nextStep:)` on that same branch, not `.wait`,
-    /// to preserve its already-documented "a transient failure must cost one
-    /// cycle rather than stranding a continuous run" contract — it always
-    /// names a DIFFERENT step as `nextStep`, so it was never at risk of the
-    /// self-loop trap `.refreshFootprint`'s doc describes, and changing its
-    /// nil-fallback to `.wait` would be a real behaviour regression. `reAsk`
-    /// reads that fallback off the RE-ASKED action itself (`collapse(_:)`),
-    /// so each kind's own contract applies wherever a chain ends.
+    /// It needs its own resolver, rather than a case in `reAsk`, because the
+    /// census sits in front of an irreversible resource spend for one caller and
+    /// in front of an ordinary continuous cycle for another; `collapse(_:)` is
+    /// what keeps each caller's fallback its own.
     private func resolveFootprintRefresh(
         nextStep: String,
         thenStall reason: DirectiveAttentionReason?,
@@ -738,11 +703,12 @@ actor DirectiveEngineCore {
     /// Deliberately keyed on the KIND alone, never on the payload: a repeat
     /// `.refreshDevices` naming a different device is still the same read this
     /// evaluation already paid for, and letting a changed payload buy another
-    /// round would put back the unbounded loop the whole `reAsk` guard exists
-    /// to prevent.
+    /// round would put back the unbounded loop the `reAsk` guard exists to
+    /// prevent.
     private enum RefreshKind: Hashable {
         case devices, devicesInSystem, fleet, footprint
 
+        /// The kind of refresh `action` asks for, or nil for anything else.
         init?(_ action: MissionAction) {
             switch action {
             case .refreshDevices: self = .devices
@@ -754,19 +720,15 @@ actor DirectiveEngineCore {
         }
     }
 
-    /// What a refresh action becomes when the engine will not pay for it —
-    /// read off the ACTION ITSELF, never off whatever was carried in from an
-    /// earlier hop.
+    /// What `action` becomes when the engine will not pay for it — its stall
+    /// reason and its nil-fallback read off `action` ITSELF, never off whatever
+    /// was carried in from an earlier hop.
     ///
-    /// That distinction is the round-3 regression this replaces. `reAsk` used
-    /// to collapse ANY of the four refresh kinds onto the reason belonging to
-    /// the refresh it had just performed, so `RelayRun.acquire`'s ordinary path
-    /// — refresh the stale hub DEVICE row, then discover the stockpile census
-    /// is stale too — stalled `.unreachableDevice` on a perfectly reachable
-    /// device, halting the run before the reserve rail ever ran. Each kind's
-    /// own `thenStall` (and each kind's own nil-fallback contract:
-    /// `.advanceStep` for `.refreshFootprint`, `.wait` for the three
-    /// device-scoped reads) is the only correct answer for that kind.
+    /// Each kind's own `thenStall` is the only correct answer for that kind:
+    /// collapsing a chained hop onto the reason belonging to the refresh already
+    /// performed blames the wrong thing — a run that refreshed a stale device row
+    /// and then found the census stale would stall `.unreachableDevice` on a
+    /// perfectly reachable device.
     private static func collapse(_ action: MissionAction) -> MissionAction {
         switch action {
         case let .refreshDevices(_, reason), let .refreshDevicesInSystem(_, reason),
@@ -783,7 +745,8 @@ actor DirectiveEngineCore {
         }
     }
 
-    /// Ask the machine once more against freshly-read rows. Shared by all four
+    /// Ask `machine` once more for `directive` against the freshly-read `fresh`
+    /// world, given the refresh kinds `paid` for so far. Shared by all four
     /// refresh paths: this is the loop guard, and it must behave identically
     /// however the reads were paid for.
     ///
@@ -797,12 +760,11 @@ actor DirectiveEngineCore {
     ///    would be a loop. Collapse to that action's own stall/fallback
     ///    (`collapse(_:)`).
     /// 3. **A refresh of a kind not yet paid for** — the reads answered the
-    ///    question that was asked and uncovered a genuinely DIFFERENT one
-    ///    (`RelayRun.acquire`: the hub device row was stale, and with it fresh
-    ///    the stockpile census turns out to be stale too). Chain one hop into
-    ///    that kind's own resolver. Passing it through unresolved is not an
-    ///    option: `DirectiveExecutor`'s refresh case is a bypass fallback that
-    ///    would stall on the carried reason rather than perform the read.
+    ///    question that was asked and uncovered a genuinely DIFFERENT one.
+    ///    Chain one hop into that kind's own resolver. Passing it through
+    ///    unresolved is not an option: `DirectiveExecutor`'s refresh case is a
+    ///    bypass fallback that would stall on the carried reason rather than
+    ///    perform the read.
     ///
     /// **The bound.** `paid` is a set over `RefreshKind`, a closed four-case
     /// enum. Every chain hop is guarded by `!paid.contains(kind)` and inserts
@@ -814,10 +776,6 @@ actor DirectiveEngineCore {
     /// succeeding, on any row changing, or on the mission being well-behaved;
     /// it is a property of the recursion alone. (Today's machines chain at
     /// most two: `RelayRun.acquire`'s devices → footprint.)
-    /// Takes no `thenStall` of its own, deliberately: the reason to stall on
-    /// belongs to the action being collapsed, and threading the *caller's*
-    /// reason in here is exactly what produced the wrong-stall regression
-    /// `collapse(_:)` documents.
     private func reAsk(
         _ machine: any MissionStepMachine,
         _ directive: Directive,
@@ -871,6 +829,7 @@ actor DirectiveEngineCore {
 // MARK: - Dependency
 
 extension DirectiveEngine: DependencyKey {
+    /// The one engine the app runs, over the registered machines.
     public static let liveValue = DirectiveEngine.makeLive()
 }
 
@@ -881,6 +840,7 @@ extension DirectiveEngine: TestDependencyKey {
 }
 
 extension DependencyValues {
+    /// The directive engine's lifecycle handles, for the composition root.
     public var directiveEngine: DirectiveEngine {
         get { self[DirectiveEngine.self] }
         set { self[DirectiveEngine.self] = newValue }
