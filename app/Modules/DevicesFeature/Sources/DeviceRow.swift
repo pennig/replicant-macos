@@ -21,9 +21,9 @@ struct DeviceRow: View {
     private var device: Device { entry.device }
 
     var body: some View {
-        HStack(spacing: Space.s) {
+        HStack(spacing: Space.xs) {
             disclosure
-            VStack(spacing: Space.xs) {
+            VStack(spacing: Space.xxs) {
                 RCGlyphTile(Image.rcSymbol("device.\(device.deviceType)"))
                 RCMeterBar(fraction: device.operationalCapacity / 100)
                     .frame(width: TileSize.small)
@@ -74,7 +74,7 @@ struct DeviceRow: View {
             Text(device.deviceCode)
                 .font(.rcMonoSmall)
                 .foregroundStyle(.rcTextTertiary)
-            Spacer(minLength: Space.xs)
+            Spacer(minLength: 0)
         }
     }
 
@@ -103,7 +103,7 @@ struct DeviceRow: View {
                 .lineLimit(1)
                 .help(host.label)
             }
-            Spacer(minLength: Space.xs)
+            Spacer(minLength: 0)
         }
     }
 
