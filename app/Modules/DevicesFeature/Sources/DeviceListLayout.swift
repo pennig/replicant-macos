@@ -163,3 +163,101 @@ extension DeviceListLayout {
         return entries
     }
 }
+
+extension DeviceListLayout {
+
+    /// Lifts every flagged node out of the forest — at whatever depth it sat,
+    /// taking its own subtree with it — and returns it alongside what's left.
+    /// A flagged node inside another flagged node's subtree travels with its
+    /// host rather than being lifted again, so it appears exactly once.
+    static func promote(_ nodes: [Node], flagged: Set<String>) -> (promoted: [Node], remaining: [Node]) {
+        var promoted: [Node] = []
+        var remaining: [Node] = []
+        for node in nodes {
+            if flagged.contains(node.device.deviceCode) {
+                promoted.append(node)
+            } else {
+                let split = promote(node.children, flagged: flagged)
+                promoted.append(contentsOf: split.promoted)
+                remaining.append(Node(device: node.device, children: split.remaining))
+            }
+        }
+        return (promoted, remaining)
+    }
+
+    /// Every device a forest holds, roots and descendants alike.
+    static func devices(in nodes: [Node]) -> [Device] {
+        nodes.flatMap { [$0.device] + devices(in: $0.children) }
+    }
+
+    /// The section's status distribution, count descending then status name.
+    static func statusShares(_ devices: [Device]) -> [StatusShare] {
+        Dictionary(grouping: devices, by: \.statusBase)
+            .map { StatusShare(status: $0.key, count: $0.value.count) }
+            .sorted {
+                $0.count != $1.count ? $0.count > $1.count : $0.status < $1.status
+            }
+    }
+
+    /// The list's one entry point. Returns a pinned Needs Attention section (when
+    /// anything is flagged) above one unheadered Carrier section. Empty sections
+    /// are dropped, except a *collapsed* Needs Attention, which keeps its header
+    /// so the operator can open it again.
+    public static func sections(
+        fleet: [Device],
+        attentionDirectives: [Directive],
+        searchText: String,
+        expandedHosts: Set<String>,
+        collapsedGroups: Set<String>
+    ) -> [DeviceListSection] {
+        let attention = Dictionary(
+            fleet.map { ($0.deviceCode, attentionFlags(for: $0, directives: attentionDirectives)) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let flagged = Set(attention.filter { !$0.value.isEmpty }.keys)
+
+        let split = promote(forest(fleet: fleet), flagged: flagged)
+        let attentionRoots = split.promoted.sorted {
+            attentionPrecedes($0.device, $1.device, attention: attention)
+        }
+
+        var sections: [DeviceListSection] = []
+
+        if !attentionRoots.isEmpty {
+            let isCollapsed = collapsedGroups.contains(DeviceListSection.attentionID)
+            let members = devices(in: attentionRoots)
+            sections.append(
+                DeviceListSection(
+                    id: DeviceListSection.attentionID,
+                    header: DeviceListHeader(
+                        title: "Needs Attention",
+                        count: attentionRoots.count,
+                        isCollapsed: isCollapsed,
+                        statusShares: statusShares(members),
+                        hasDamaged: members.contains { $0.operationalCapacity < damagedCapacityThreshold }
+                    ),
+                    entries: isCollapsed ? [] : flatten(
+                        attentionRoots,
+                        expandedHosts: expandedHosts,
+                        forcedOpen: [],
+                        attention: attention
+                    )
+                )
+            )
+        }
+
+        let fleetEntries = flatten(
+            split.remaining,
+            expandedHosts: expandedHosts,
+            forcedOpen: [],
+            attention: attention
+        )
+        if !fleetEntries.isEmpty {
+            sections.append(
+                DeviceListSection(id: DeviceListSection.fleetID, header: nil, entries: fleetEntries)
+            )
+        }
+
+        return sections
+    }
+}

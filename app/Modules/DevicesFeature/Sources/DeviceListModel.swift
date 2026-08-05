@@ -98,3 +98,62 @@ public struct DeviceEntry: Identifiable, Equatable, Sendable {
         self.attention = attention
     }
 }
+
+/// One segment of a section header's status-distribution bar.
+public struct StatusShare: Identifiable, Equatable, Sendable {
+    /// The raw `statusBase`, mapped to a colour by `DeviceStatus.tone(for:)`.
+    public var status: String
+    public var count: Int
+    public var id: String { status }
+
+    public init(status: String, count: Int) {
+        self.status = status
+        self.count = count
+    }
+}
+
+/// A section's readout header. Nil on an unheadered section.
+public struct DeviceListHeader: Equatable, Sendable {
+    public var title: String
+    public var count: Int
+    public var isCollapsed: Bool
+    /// The section's status distribution, count descending then status name —
+    /// what makes a collapsed section still worth reading.
+    public var statusShares: [StatusShare]
+    /// Any member below `DeviceListLayout.damagedCapacityThreshold`.
+    public var hasDamaged: Bool
+
+    public init(
+        title: String,
+        count: Int,
+        isCollapsed: Bool,
+        statusShares: [StatusShare],
+        hasDamaged: Bool
+    ) {
+        self.title = title
+        self.count = count
+        self.isCollapsed = isCollapsed
+        self.statusShares = statusShares
+        self.hasDamaged = hasDamaged
+    }
+}
+
+/// A section of already-flattened rows. Real `Section`s (rather than one wholly
+/// flat array) are what let the list keep `pinnedViews: [.sectionHeaders]` and
+/// its sticky Liquid Glass headers.
+public struct DeviceListSection: Identifiable, Equatable, Sendable {
+    public static let attentionID = "attention"
+    public static let fleetID = "all"
+
+    public var id: String
+    /// Nil ⇒ unheadered (the Carrier-mode fleet section).
+    public var header: DeviceListHeader?
+    /// Already flattened; empty when the section is collapsed.
+    public var entries: [DeviceEntry]
+
+    public init(id: String, header: DeviceListHeader?, entries: [DeviceEntry]) {
+        self.id = id
+        self.header = header
+        self.entries = entries
+    }
+}
