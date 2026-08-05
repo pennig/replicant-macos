@@ -37,12 +37,20 @@ Look in the `Modules/UI` folder for the Swift package that represents the design
 
 **A comment may only explain the code as it exists in situ.** History — why it
 changed, what broke, what we rejected — goes to `.claude/memory/` and git, never
-into the source. Enforced by `scripts/check-comments.sh`.
+into the source. `app/scripts/check-comments.sh` is available to check a tree for
+the mechanical half of this (dates, "used to", device codes) — run it from the
+repo root, `./app/scripts/check-comments.sh [paths…]`; its paths are repo-root
+relative. Nothing runs it automatically, and exit 0 is a floor, not proof: it is
+a handful of regexes with no notion of rationale, so judge the prose yourself
+against the Delete list below.
 
 **Keep:**
 - **A file header** — what the file is, what it does, and invariants true of the
-  code itself (purity, one-shot lifecycle, what owns what). ~10 lines; ~20 is the
-  ceiling for the largest files.
+  code itself (purity, one-shot lifecycle, what owns what). No line ceiling: one
+  sentence per invariant, and nothing that is not one. Most headers land near ten
+  lines; a file carrying many invariants (`PrunePredicate`, `Brain`) runs to
+  thirty and is right to. A header fails on a sentence that states no invariant,
+  never on its length.
 - **`///` on public/internal API** — what it does, what each parameter means, what
   a caller must guarantee. Bare contract.
 - **Inline `//`** — only where intent is not recoverable by reading the code: a

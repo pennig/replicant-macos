@@ -4,8 +4,24 @@
 # docs/superpowers/specs/2026-08-05-comment-policy-design.md
 set -uo pipefail
 
+# Repo-root-relative, so run this from the repo root (or pass explicit paths).
 DEFAULT_PATH="app/Modules/DirectiveEngine/Sources"
 paths=("${@:-$DEFAULT_PATH}")
+
+# Fail loudly on a path that does not exist. Without this the `find` below
+# fails, the read loop sees nothing, and a lint that scanned NOTHING reports
+# clean — a wrong cwd or a typo would silently pass every file in the repo.
+missing=0
+for path in "${paths[@]}"; do
+  if [ ! -e "$path" ]; then
+    echo "check-comments: no such path: $path (cwd: $PWD)" >&2
+    missing=1
+  fi
+done
+if [ "$missing" -ne 0 ]; then
+  echo "check-comments: paths are relative to the repo root; scanned nothing." >&2
+  exit 2
+fi
 
 # Patterns that are objectively history, never in-situ explanation.
 # Matched case-insensitively.
