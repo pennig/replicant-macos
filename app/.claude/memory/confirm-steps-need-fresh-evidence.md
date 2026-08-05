@@ -109,7 +109,8 @@ watermark.
 second-granularity). The op still closes, so the row reads **fresh-but-wrong** and the gate above
 *passes* — same stall, different door. The fix belongs in `applyEventFields`, not in a mission.
 
-**Sibling exposure:** `SurveyRun.swift:415` and `:475` still have the pre-fix shape.
+**Sibling exposure:** `SurveyRun.swift:416` (`returnHome`) and `:488` (`travel`) still have the
+pre-fix shape — both guard a travel dispatch on `world.openOperation` alone.
 
 ## Rules
 
