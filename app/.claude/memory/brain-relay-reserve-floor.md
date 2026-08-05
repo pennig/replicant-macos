@@ -69,6 +69,30 @@ restated as a second literal — a seventh billed type with no matching
 silently PERMIT it (a fail-open hole inside a fail-closed predicate, caught in
 review); deriving both from one source closes that by construction.
 
+### `K` = `BrainCeiling.reserveRelays` = 5 — the two-sided trade
+
+`K` is the ONE hand-tuned knob on this type; the full calibration argument was
+recovered from the source comment during the 2026-08-05 comment cleanup, where
+the comment now carries only the `// CALIBRATE` marker and the shape of the
+floor. Re-derive from this trade, not from a target percentage:
+
+- **Anchored on conductive**, the type that binds first (see the corrected
+  table above). A `K` calibrated against any other type protects a floor that
+  is not the one that actually fires.
+- **Lower bound — it must be a real reserve, not a rounding error.** Five
+  relays' worth of conductive is `5 × 120 = 600` units against a measured stock
+  of 13,434, i.e. ≈4.5% of the hub's conductive holdings.
+- **Upper bound — it must not become a wall the brain trips over in ordinary
+  operation.** At `K = 5` the six floors are carbon 100 / conductive 600 /
+  rares 200 / silicates 500 / structural 400 / volatiles 50, every one far
+  below the measured holdings listed above, so `printPermitted` permits the
+  ordinary case.
+- **A multiple of the real bill, never a flat literal** — see the incoherence
+  of a flat per-type 370 above; a per-type multiple is the only shape coherent
+  across all six types at once.
+
+Every other constant on `BrainCeiling` is a verified game fact, not a knob.
+
 `BrainCeiling.printPermitted(hubStock: [String: Double]) -> Bool` — **this is
 the real per-type `R`, as specified** — fails **CLOSED**: any of the six types
 missing from `hubStock`, including the wholly-empty case, reads as zero, which
