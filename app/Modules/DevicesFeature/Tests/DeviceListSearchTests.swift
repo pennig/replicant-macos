@@ -108,11 +108,16 @@ import Testing
         expectNoDifference(afterClearing, ["RELAY", "VESSEL"])
     }
 
-    /// A host that matches on its own keeps its own collapse state — its
-    /// children are pruned out, so it reports no children to disclose.
-    @Test func aHostMatchingAloneKeepsItsChildrenHidden() {
-        let entries = sections("POLARISUM").flatMap(\.entries)
-        expectNoDifference(entries.map(\.id), ["RELAY"])
+    /// Decision 2: a host matching on its own has its non-matching descendants
+    /// pruned away, so it reports no children to disclose. Distinct from
+    /// `nonMatchingBranchesAreDropped` — this host HAS children, and the point
+    /// is that they are gone from the retained node, not merely absent from
+    /// the fleet. "ATIANFU" matches only VESSEL's `location`: CTRL and DRONEA
+    /// carry no location at all, so neither is reachable through this query.
+    @Test func aMatchingHostWithNoMatchingDescendantsReportsNoChildren() {
+        let entries = sections("ATIANFU").flatMap(\.entries)
+        expectNoDifference(entries.map(\.id), ["VESSEL"])
+        expectNoDifference(entries.map(\.childCount), [0])
     }
 
     @Test func nonMatchingBranchesAreDropped() {
