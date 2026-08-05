@@ -11,7 +11,10 @@ Two constants in `Brain.swift` are hand-tuned numbers rather than derivations of
 something else. Their calibration arguments lived only in source comments until
 this note; the comments now carry the *rules* the constants must satisfy, and
 the *numbers* live here. See [[brain-relay-reserve-floor]] for the third
-(`BrainCeiling.aggregateSpendFloor` = 35,078), which already has its own record.
+(`BrainCeiling.reserveRelays` — `K` = 5, the one knob on that type, marked
+`// CALIBRATE`), which already has its own record. Note that
+`BrainCeiling.aggregateSpendFloor` (35,078) is NOT a fourth hand-tuned constant:
+it is DERIVED from `K` and the reference hub mix, and moves whenever `K` does.
 
 ## `Brain.reclaimRangeLY` = `2 * SalvageTargetPlanner.relayRangeLY` = 15 ly
 
@@ -97,9 +100,14 @@ census refresh, or a re-issued command), so the number is a direct budget of
 live-API spend per stalled directive per episode. With `retryInterval` at 15
 minutes the three attempts land at roughly t, t+15 and t+30 (the first is
 unspaced — at the first stall there is no `.resolved` entry to measure from),
-and escalation follows the third. Cross-check the ~45-minute fuse this gives an
-escalated `printStockShort` run against [[brain-tendmesh-build]]'s clause-6 row,
-which records that the fuse lengthens but does not close the carrier hold.
+and escalation follows the third. **The fuse to escalation is therefore ~30
+minutes, not ~45.** `Brain.stallResponse` tests `episode.attempts < retryBudget`
+BEFORE the `retryInterval` wait, so once the third attempt is spent escalation
+lands on the very next tick rather than one more interval later; `Brain.swift`'s
+own doc on `retryInterval` agrees ("`retryBudget` attempts span ~30 minutes").
+[[brain-tendmesh-build]]'s clause-6 row says ~45 min, counting the first attempt
+as spaced — **that figure is 15 minutes too long**; the clause's real point, that
+the fuse lengthens but does not close the carrier hold, still stands.
 
 Related: [[brain-tendmesh-worthiness]], [[brain-relay-reserve-floor]],
 [[brain-tendmesh-build]], [[travel-is-cheap-vs-survey]], [[brain-executor-seam]].

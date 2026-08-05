@@ -8,10 +8,9 @@ metadata:
 # Comment policy
 
 Derived from the DirectiveEngine comment-cleanup effort — ten reviewed tasks
-against `.superpowers/sdd/2026-08-05-comment-cleanup/standard.md`, which is the
-canonical statement and should be read in full before doing this work again.
-This note is the durable summary; the standard document itself may not survive
-past this effort.
+against `docs/superpowers/comment-cleanup-standard.md`, which is the canonical
+statement and should be read in full before doing this work again. This note is
+the durable summary.
 
 ## The rule
 
@@ -135,6 +134,6 @@ sanity check that replaced the line target: above ~1.9 comment lines per
 executable line, justify the file declaration by declaration; below that,
 the ratio isn't evidence of anything on its own.
 
-Related: `.superpowers/sdd/2026-08-05-comment-cleanup/standard.md` (full
-standard, evolved across the ten tasks), `app/CLAUDE.md` (`## Comments`
-section — the same rule stated as the always-on project rule).
+Related: `docs/superpowers/comment-cleanup-standard.md` (full standard, evolved
+across the ten tasks), `app/CLAUDE.md` (`## Comments` section — the same rule
+stated as the always-on project rule).
