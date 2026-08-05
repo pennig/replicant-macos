@@ -55,3 +55,25 @@ extension DeviceListLayout {
         }
     }
 }
+
+extension DeviceListLayout {
+
+    /// Prunes the forest to nodes that match, or that have a matching
+    /// descendant, and reports the ancestors to force open for the duration of
+    /// the query. A match is never unreachable behind a collapsed host, and the
+    /// operator's own `expandedHosts` is untouched.
+    static func pruned(_ nodes: [Node], query: Query) -> (nodes: [Node], forcedOpen: Set<String>) {
+        guard !query.isEmpty else { return (nodes, []) }
+
+        var kept: [Node] = []
+        var forcedOpen: Set<String> = []
+        for node in nodes {
+            let below = pruned(node.children, query: query)
+            guard matches(node.device, query: query) || !below.nodes.isEmpty else { continue }
+            kept.append(Node(device: node.device, children: below.nodes))
+            forcedOpen.formUnion(below.forcedOpen)
+            if !below.nodes.isEmpty { forcedOpen.insert(node.device.deviceCode) }
+        }
+        return (kept, forcedOpen)
+    }
+}

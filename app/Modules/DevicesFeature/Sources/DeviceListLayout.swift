@@ -216,10 +216,14 @@ extension DeviceListLayout {
         )
         let flagged = Set(attention.filter { !$0.value.isEmpty }.keys)
 
+        let query = Query(searchText)
         let split = promote(forest(fleet: fleet), flagged: flagged)
-        let attentionRoots = split.promoted.sorted {
+
+        let attentionPruned = pruned(split.promoted, query: query)
+        let attentionRoots = attentionPruned.nodes.sorted {
             attentionPrecedes($0.device, $1.device, attention: attention)
         }
+        let fleetPruned = pruned(split.remaining, query: query)
 
         var sections: [DeviceListSection] = []
 
@@ -239,7 +243,7 @@ extension DeviceListLayout {
                     entries: isCollapsed ? [] : flatten(
                         attentionRoots,
                         expandedHosts: expandedHosts,
-                        forcedOpen: [],
+                        forcedOpen: attentionPruned.forcedOpen,
                         attention: attention
                     )
                 )
@@ -247,9 +251,9 @@ extension DeviceListLayout {
         }
 
         let fleetEntries = flatten(
-            split.remaining,
+            fleetPruned.nodes,
             expandedHosts: expandedHosts,
-            forcedOpen: [],
+            forcedOpen: fleetPruned.forcedOpen,
             attention: attention
         )
         if !fleetEntries.isEmpty {
