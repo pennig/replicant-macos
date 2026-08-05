@@ -2,56 +2,18 @@
 //  RelayRun.swift
 //  Replicould — DirectiveEngine
 //
-//  Grow the FTL mesh by one system: acquire a relay, get it aboard the carrier,
-//  fly it to the target's Lagrange point, deploy it, activate it in-situ, and
-//  confirm the mesh actually grew. The `tendMesh` goal's hands — everything
-//  above this in the brain merely decides WHERE; this is what goes and does it.
+//  Grows the FTL mesh by one system: acquire a relay, stow it aboard the
+//  carrier, fly to the target's Lagrange point, deploy, activate in-situ,
+//  confirm the mesh grew. One-shot — a run meshes exactly one system and
+//  finishes.
 //
-//  One-shot by design. A Relay Run meshes exactly one system and finishes; the
-//  brain launches a fresh directive for the next one, which is why `plan(_:)`
-//  never roams.
+//  Two sources converge at `stowing`: `sourceRelayCode` nil PRINTS a fresh
+//  relay at the hub; non-nil RECLAIMS the named one. The reclaim path
+//  requires a carrier hosting a replicant — unexpressible in these types,
+//  so `carrierRetainsAuthority` gates the `stow` on the server's own
+//  `in_control_range`.
 //
-//  **Two sources, one tail.** `Directive.sourceRelayCode` picks between them:
-//  nil PRINTS a fresh relay at the hub (370 units, ~800 s); non-nil RECLAIMS
-//  the existing, useless relay it names — the carrier flies to it, deactivates
-//  it where it stands, and takes it aboard, for no resources at all. The two
-//  branches converge at `stowing` and share every step from there on.
-//
-//  **CARRIER PRECONDITION — the reclaim path is only safe with a carrier that
-//  HOSTS A REPLICANT, and nothing in these types can say so.** Deactivating the
-//  source takes its system off the mesh, so authority to then issue `stow`
-//  there comes only from `ftl-authority-rule` (1): a replicant physically
-//  present. It is not expressible here — `Directive` has no such field, and
-//  neither `WorldSnapshot` nor `WorldView` carries replicants at all — so it is
-//  enforced indirectly, by asking the SERVER: `carrierRetainsAuthority` gates
-//  the `stow` on the carrier's own `in_control_range` after the deactivate.
-//  Anything choosing a carrier for a reclaim-sourced run must honour the
-//  precondition regardless; the gate turns a permanent strand into a loud
-//  stall, it does not make an unhosted carrier workable.
-//
-//  As of 2026-08-04 the precondition holds FLEET-WIDE, not merely for the one
-//  carrier this run uses: all three `heaven_vessel`s host a replicant
-//  (`pennig-1`, `pennig-scan`, `pennig-salvage`), and `C7836770` — the vessel
-//  at the hub, hosting `pennig-salvage` — is the one a Relay Run actually
-//  takes. That is a fact about today's fleet and not a guarantee: `pennig-1`'s
-//  vessel is the mesh ANCHOR and must never travel at all (see the authority
-//  note), and anything a later `growFleet` builds starts out hosting nobody.
-//
-//  **Composition (print source): autofactory + co-located carrier.** The relay is printed
-//  AT the hub (`enqueue_print` on the autofactory) and taken aboard a HEAVEN
-//  vessel that is already parked at the hub's location. Verified against the
-//  live fleet on 2026-08-03: autofactory `43C9B54A` and heaven_vessel `C7836770`
-//  both sit at `AINALRAM-BELT-1`, so the co-location the composition assumes is
-//  real. The alternative — a print-VESSEL, collapsing printer and carrier into
-//  one device — is not built: this account has no such device, and the
-//  autofactory is the only print-capable thing in the fleet.
-//
-//  Ownership is the carrier `deviceCode` and nothing else (brain-primitive
-//  contracts, ticket 05): the relay is held by transitive stow rather than by
-//  any lease field, and the hub's print queue is shared and NEVER leased.
-//
-//  Pure by contract, like every mission: no I/O, no clock reads (time comes from
-//  `world.now`), no randomness. Every effect is the returned `MissionAction`.
+//  Pure: no I/O, no clock reads (time is `world.now`), no randomness.
 //
 
 import Foundation
@@ -61,33 +23,22 @@ import OSLog
 import UniverseModels
 import Utils
 
-// Category matches `SalvageRun`/`DirectiveExecutor` rather than the brain's
-// `Brain` category: this is a mission machine, and a run's log lines are read
-// alongside the engine's, not alongside the planner's.
 private let logger = Logger(subsystem: "name.pennig.replicould", category: "DirectiveEngine")
 
 public struct RelayRun: MissionStepMachine {
     public let kind: DirectiveKind = .relayRun
     public var firstStep: String { Step.acquire }
 
-    /// The resource ceiling this run's print step checks before spending —
-    /// **not** `BrainCeiling`'s true per-type `R` itself, which this field
-    /// cannot carry (see below).
+    /// The total-stock floor this run's print step checks before spending, or
+    /// nil to leave the rail unarmed — an unarmed rail has no opinion on stock
+    /// and never vetoes.
     ///
-    /// **Armed in production** with `BrainCeiling.aggregateSpendFloor` — a
-    /// single TOTAL-stock proxy, deliberately NOT the sum of `BrainCeiling`'s
-    /// six per-type floors (that undershoots badly; see
-    /// `aggregateSpendFloor`'s doc for the worked arithmetic). It is a proxy
-    /// because today's `LocationFootprint` carries one TOTAL holdings count
-    /// and no per-type breakdown, so it is the closest this file can get
-    /// until the per-type stockpile record lands (brain-resource-hub-model,
-    /// ticket 06) — when it does, `printStockIsShort` is the one place that
-    /// changes to call `BrainCeiling.printPermitted(hubStock:)` directly, and
-    /// this field's name stops needing the disclaimer.
-    ///
-    /// Injectable rather than a `static let` so the veto's behaviour — and the
-    /// unarmed (`nil`) edge case — stays provable under test without every
-    /// caller depending on the calibrated constant.
+    /// A PROXY for `BrainCeiling`'s true per-type reserve, not that reserve
+    /// itself: `LocationFootprint` carries one TOTAL holdings count and no
+    /// per-type breakdown, so `BrainCeiling.aggregateSpendFloor` stands in — and
+    /// it is deliberately NOT the sum of the six per-type floors, which
+    /// undershoots badly. `printStockIsShort` is the one place that changes when
+    /// a per-type stockpile record exists.
     public let reserveFloor: Int?
 
     public init(reserveFloor: Int? = BrainCeiling.aggregateSpendFloor) {
@@ -95,18 +46,17 @@ public struct RelayRun: MissionStepMachine {
     }
 
     /// This mission's step vocabulary. Plain strings because `Directive.step` is
-    /// deliberately untyped — each kind owns its own vocabulary.
+    /// untyped — each kind owns its own vocabulary.
     ///
-    /// Read the pairs: `deactivating`/`confirmingIdle`, `stowing`/`confirmingStow`,
-    /// `emplacing`→`activating`, `activating`/`confirmingRelay`. Every one of
-    /// them is a DISPATCH step whose command carries no `Operation` row, split
-    /// from the step that polls for it to take. See `trackedKinds` for why that
-    /// split is mandatory.
+    /// `deactivating`/`confirmingIdle`, `stowing`/`confirmingStow`,
+    /// `emplacing`→`activating` and `activating`/`confirmingRelay` are
+    /// dispatch/poll pairs: each command carries no `Operation` row, so the
+    /// dispatching step must hand off to a separate polling step. See
+    /// `trackedKinds` for why that split is mandatory.
     ///
-    /// The two sources meet at `stowing`: the print path arrives via
-    /// `printing`, the reclaim path via `confirmingIdle`, and everything from
-    /// there to `settling` is one shared tail. There is deliberately no second
-    /// copy of it — a duplicated tail is how the two paths drift.
+    /// The two sources meet at `stowing` — the print path arrives via
+    /// `printing`, the reclaim path via `confirmingIdle` — and everything from
+    /// there to `settling` is one shared tail.
     public enum Step {
         /// Decide where the relay comes from, and start it coming. Branches on
         /// `Directive.sourceRelayCode`: nil prints a fresh one at the hub,
@@ -121,10 +71,9 @@ public struct RelayRun: MissionStepMachine {
         /// RECLAIM PATH. Dispatch `deactivate` at the source relay.
         /// Dispatch-only.
         public static let deactivating = "deactivating"
-        /// RECLAIM PATH. Poll for the source relay to stop relaying. Split
-        /// from `deactivating` because `deactivate` is classified `.immediate`
-        /// by `CommandClient` and carries no `Operation` row — the same reason
-        /// `confirmingStow` is split from `stowing`.
+        /// RECLAIM PATH. Poll for the source relay to stop relaying. Split from
+        /// `deactivating` because `deactivate` is classified `.immediate` by
+        /// `CommandClient` and carries no `Operation` row.
         public static let confirmingIdle = "confirmingIdle"
         /// Dispatch `stow` at the relay, naming the carrier.
         public static let stowing = "stowing"
@@ -139,8 +88,8 @@ public struct RelayRun: MissionStepMachine {
         /// Dispatch `activate` at the just-deployed relay. Dispatch-only.
         public static let activating = "activating"
         /// Poll for `statusBase == "relaying"`, backstopped by
-        /// `SalvageRun.activationDeadline`. Split from `activating` for the same
-        /// reason `confirmingStow` is split from `stowing`.
+        /// `SalvageRun.activationDeadline`. Split from `activating` because
+        /// `activate` is immediate and carries no `Operation` row.
         public static let confirmingRelay = "confirmingRelay"
         /// Confirm the run's actual deliverable: the TARGET SYSTEM is meshed.
         public static let settling = "settling"
@@ -151,33 +100,26 @@ public struct RelayRun: MissionStepMachine {
 
     // MARK: - Constants
 
-    /// The device type this run plants. Verified live 2026-08-03: 17 `ftl_relay`
-    /// devices in the fleet, the deployed ones `status == "relaying"` with
-    /// `features == ["cruise","relay","stow"]`, parked at L4 points.
+    /// The device type this run plants.
     public static let relayDeviceType = SalvageRun.relayDeviceType
 
     /// The kinds this machine dispatches that DO create an `Operation` row.
     ///
-    /// The distinction is the single most consequential thing in this file. A
-    /// `.simple` verb (`deactivate`, `stow`, `deploy`, `activate` — none of
-    /// them in `CommandClient.deadlineCommands`, so `completion(for:)` returns
-    /// `.immediate` for each) is tracked with NO operation row at all, so
-    /// `world.openOperation(for:)` is permanently nil for it — a guard that can
-    /// never fire. And `DirectiveExecutor.apply` re-stamps `stepStartedAt` on
-    /// every accepted dispatch, with no same-step exception. So a `.simple`
-    /// dispatch whose `nextStep` is its OWN step re-issues the command on every
-    /// 5-second tick, forever, against a deadline that can never accumulate
-    /// because the step keeps resetting its own clock.
-    ///
-    /// A TRACKED kind has no such problem: its operation row IS the guard, which
-    /// is why `travelling`/`emplacing` may legitimately redispatch travel into
-    /// themselves. See the `same-step-dispatch-needs-tracked-op` note.
+    /// A `.simple` verb (`deactivate`, `stow`, `deploy`, `activate`) creates no
+    /// row, so `world.openOperation(for:)` is permanently nil for it — a guard
+    /// that can never fire — while `DirectiveExecutor.apply` re-stamps
+    /// `stepStartedAt` on every accepted dispatch. A `.simple` dispatch whose
+    /// `nextStep` is its OWN step therefore re-issues the command every tick
+    /// forever, against a deadline that can never accumulate. A TRACKED kind's
+    /// operation row IS that missing guard, so `travelling`/`emplacing` may
+    /// legitimately redispatch travel into themselves. See the
+    /// `same-step-dispatch-needs-tracked-op` note.
     public static let trackedKinds: Set<OperationKind> = [.travel, .print]
 
-    /// How long to let a print take before surfacing. The live relay print is
-    /// ~800 s, so this is generous by a wide margin — it exists for the print
-    /// that never happens (dropped `print.completed`, a job dequeued by hand,
-    /// a queue that never reached this job), not for a slow one.
+    /// How long to let a print take before surfacing. Generous by a wide margin:
+    /// it exists for the print that never happens (a dropped `print.completed`,
+    /// a job dequeued by hand, a queue that never reached this job), not for a
+    /// slow one.
     public static let printDeadline: TimeInterval = 30 * 60
 
     /// How long to let a `stow` take. Immediate server-side, so all this covers
@@ -189,26 +131,18 @@ public struct RelayRun: MissionStepMachine {
     /// local row is worth only as much as the row.
     public static let hubFreshness: TimeInterval = 5 * 60
 
-    /// How long to let a `deactivate` take. Immediate server-side, exactly like
-    /// `stow`, so all this covers is the confirm-read that proves it — same
-    /// value and same reasoning as `stowDeadline`, restated under its own name
-    /// because a poll named after one verb backstopping another reads as a
-    /// copy-paste rather than as a decision.
+    /// How long to let a `deactivate` take. Immediate server-side like `stow`,
+    /// so all this covers is the confirm-read that proves it.
     public static let reclaimDeadline: TimeInterval = stowDeadline
 
     /// How old the SOURCE relay's row may be and still authorise tearing that
-    /// relay down.
-    ///
-    /// Same value and same reasoning as `hubFreshness` — "how old may a
-    /// POSITIVE finding be and still be believed" — under its own name because
-    /// what it guards is not a hub and the two floors may reasonably diverge:
-    /// one gates a spend that can be re-earned, this one gates the teardown of
-    /// working infrastructure.
+    /// relay down — the same "how old may a POSITIVE finding be and still be
+    /// believed" bound as `hubFreshness`, under its own name because the two may
+    /// reasonably diverge: one gates a spend that can be re-earned, this one
+    /// gates the teardown of working infrastructure.
     public static let reclaimFreshness: TimeInterval = hubFreshness
 
-    /// Floor between confirm-reads while a poll step waits. Shared with
-    /// `SalvageRun` rather than restated — the tick rate and the reason are
-    /// identical.
+    /// Floor between confirm-reads while a poll step waits.
     public static let pollInterval: TimeInterval = SalvageRun.relayPollInterval
 
     // MARK: - Entry
@@ -240,36 +174,26 @@ public struct RelayRun: MissionStepMachine {
     }
 
     /// A Relay Run is one-shot: the brain launches a fresh directive per target,
-    /// so an emptied queue ends THIS run rather than cueing a roam. Answered
-    /// explicitly rather than left to a default because the protocol has none —
-    /// a machine that forgot to answer would silently idle every run of its kind.
+    /// so an emptied queue ends THIS run rather than cueing a roam, whatever
+    /// `context` holds.
     public func plan(_ context: RoamContext) -> RoamPlan { .exhausted }
 
     // MARK: - Fleet queries
 
-    /// The print hub this run may use: a print-capable device AT the carrier's
-    /// own location.
+    /// The print hub this run may use: a print-capable device in `world` at
+    /// `carrier`'s own location, or nil where the carrier stands beside none.
     ///
-    /// Co-location is the whole composition, not a convenience — the printed
-    /// clone materialises at the printer, and only a carrier already standing
-    /// there can take it aboard. A hub elsewhere in the galaxy is no more use
-    /// than no hub at all, so it deliberately does not match.
-    ///
-    /// `Device.isPrintHub` keys off `enqueue_print` in `availableCommands`
-    /// rather than on device type, which is what makes it match the live
-    /// autofactory at a BELT location without this file knowing what an
+    /// Co-location is the whole composition: the clone materialises at the
+    /// printer, and only a carrier already standing there can take it aboard, so
+    /// a hub elsewhere deliberately does not match. `Device.isPrintHub` keys off
+    /// `enqueue_print` in `availableCommands` rather than on device type, so it
+    /// matches a printer at a BELT location without this file knowing what an
     /// autofactory is.
     ///
-    /// **The carrier is considered last, and that is deliberate.** A HEAVEN
-    /// vessel advertises `enqueue_print` too, so the carrier satisfies
-    /// `isPrintHub` and can legitimately print into its own hold. But it must
-    /// never SHADOW a dedicated printer standing beside it: the old
-    /// `min(by: deviceCode)` picked between the two on device code alone, and
-    /// only got the live autofactory (`43C9B54A`) instead of the co-located
-    /// vessel (`C7836770`) because `4` sorts before `C`. Preferring a device
-    /// other than the carrier makes that an intention rather than an accident,
-    /// while keeping the vessel as a genuine fallback where it is the only
-    /// printer present.
+    /// **The carrier is considered last.** A HEAVEN vessel advertises
+    /// `enqueue_print` too and may legitimately print into its own hold, but it
+    /// must never SHADOW a dedicated printer standing beside it — which a
+    /// tie-break on device code alone cannot guarantee.
     static func hub(near carrier: Device, in world: WorldSnapshot) -> Device? {
         guard let location = carrier.location else { return nil }
         let printers = world.devices.values
@@ -280,22 +204,15 @@ public struct RelayRun: MissionStepMachine {
             ?? printers.min { $0.deviceCode < $1.deviceCode }
     }
 
-    /// The device code of the clone this run printed, from the completed
-    /// `enqueue_print` operation's result.
+    /// The device code of the clone this run printed, read off the completed
+    /// `enqueue_print` operation in `world`.
     ///
-    /// This — not "a relay appeared near the hub" — is how print completion is
-    /// detected, and the difference is not academic: the live hub already has
-    /// two idle relays parked at it (`B94C05A8`, `8B55ED07`), so a presence
-    /// check would read one of THOSE as this run's clone, skip the print, and
-    /// then try to fly away with a relay it never acquired.
-    ///
-    /// `new_device_code` is where the server names the clone; `GameSync.deviceRoute`
-    /// reads the same key off `print.completed` to fold the clone into the local
-    /// fleet with one `.high` read, and `Reconciler.completeOpenOperation` files
-    /// the event's payload under `detail.result` on the op this directive
-    /// dispatched. `WorldSnapshot.dispatchedOperations` is scoped to exactly the
-    /// ops this directive's own log names, so this can never pick up somebody
-    /// else's print.
+    /// Print completion is detected by OPERATION RESULT, never by "a relay
+    /// appeared near the hub": a hub holding idle spares would have one of THOSE
+    /// read as this run's clone, skipping the print and flying away with a relay
+    /// the run never acquired. `WorldSnapshot.dispatchedOperations` is scoped to
+    /// the ops this directive's own log names, so this can never pick up
+    /// somebody else's print.
     static func printedRelayCode(in world: WorldSnapshot) -> String? {
         world.dispatchedOperations.values
             .filter { $0.kind == OperationKind.print.rawValue && $0.status == .completed }
@@ -303,34 +220,23 @@ public struct RelayRun: MissionStepMachine {
             .detail["result"]?["new_device_code"]?.stringValue
     }
 
-    /// The device a completed print named, **only if it is actually a relay**.
+    /// The device a completed print in `world` named, **only if it is actually
+    /// a relay**.
     ///
-    /// The type check is not belt-and-braces; it is the whole safety of the
-    /// code-first lookup, and its absence was a live-account defect caught in
-    /// review. The hub's print queue is SHARED and never leased (ticket 05), and
-    /// `acquire` deliberately queues behind whatever is already in it. But
-    /// `Reconciler.completeOpenOperation` closes *the single open op on the hub
-    /// device* and files that event's `new_device_code` onto it, and
-    /// `CommandClient` supersedes any other open op on the hub when this run
-    /// dispatches. So when the job AHEAD of ours finishes, its `print.completed`
-    /// closes OUR operation row and stamps ITS device code as our clone.
-    ///
-    /// Unfiltered, that code was adopted wholesale: `stowing` would `stow` a
-    /// foreign live device — plausibly one another directive had staged — onto
-    /// our carrier, `travelling` would haul it to another system, and only the
-    /// eventual `deploy` rejection would stop it. `SalvageRun` states the rule
-    /// this restores: *"these are DISPATCH queries — whatever they return gets
-    /// `deploy` issued at it"*, which is why both fallback lookups below filter
-    /// on `deviceType` and why this one must too.
+    /// The type check is the whole safety of the code-first lookup. The hub's
+    /// print queue is SHARED and never leased, and `Reconciler.completeOpenOperation`
+    /// closes *the single open op on the hub device*, filing that event's
+    /// `new_device_code` onto it — so a job finishing AHEAD of ours closes OUR
+    /// operation row and stamps ITS device code as our clone. Unfiltered,
+    /// `stowing` would `stow` that foreign live device onto our carrier and
+    /// `travelling` would haul it to another system.
     static func printedRelay(in world: WorldSnapshot) -> Device? {
         guard let code = printedRelayCode(in: world), let device = world.device(code) else { return nil }
         guard device.deviceType == relayDeviceType else { return nil }
         return device
     }
 
-    /// The status a printed-but-unplanted relay wears. Live-confirmed: the three
-    /// spare relays at `AINALRAM-BELT-1` read `inactive`, a planted one reads
-    /// `relaying`.
+    /// The status a printed-but-unplanted relay wears.
     static let idleRelayStatus = "inactive"
 
     /// The status a planted, live relay wears — the sibling of
@@ -340,28 +246,16 @@ public struct RelayRun: MissionStepMachine {
     /// "up, move on" could ever disagree, a run would bounce between them.
     static let relayingStatus = "relaying"
 
-    /// Relays standing at `location` that belong to nobody: the right type, at
-    /// rest, in nothing's hold.
+    /// Relays in `world` standing at `location` that belong to nobody: the right
+    /// type, at rest, in nothing's hold — **the pool this capability draws its
+    /// stock from**, ordered by device code.
     ///
-    /// **This is the pool the whole capability now draws from**, and adopting it
-    /// reversed an explicit earlier decision worth restating. `printedRelayCode`
-    /// detects a print by its OPERATION RESULT and this file used to warn that a
-    /// presence check would mistake one of the hub's pre-existing spares for
-    /// "our clone" and fly away with a relay the run never acquired. That was
-    /// right about the mechanism and wrong about the goal: an idle relay parked
-    /// at the printer IS free stock, and refusing to see it meant a hub holding
-    /// three of them printed a fourth — or, worse, stalled `noRelayCoLocated`
-    /// standing next to all three, which is exactly what the live fleet did.
-    ///
-    /// Ownership is now decided by the claim (`isNextInLine`) rather than by
-    /// provenance, so the run no longer needs to prove a relay is *its* clone —
-    /// only that nobody else has taken it. That is what makes a superseded print
-    /// op survivable: the relay still arrives at the hub, and whoever is next in
-    /// line takes it.
-    ///
-    /// `stowedInDeviceCode == nil` is the "unclaimed" test and it is sufficient:
-    /// a run claims by STOWING, so anything already spoken for is already in a
-    /// hold. `!isBusy` keeps a relay mid-command out of the pool.
+    /// Ownership is decided by the CLAIM (`claimableRelay`) rather than by
+    /// provenance, so a run never has to prove a relay is *its* clone — only
+    /// that nobody else has taken it. That is what makes a superseded print op
+    /// survivable: the relay still arrives, and whoever is next in line takes
+    /// it. `stowedInDeviceCode == nil` is the "unclaimed" test, sufficient
+    /// because a run claims by STOWING; `!isBusy` keeps a relay mid-command out.
     static func idleRelays(at location: String, in world: WorldSnapshot) -> [Device] {
         world.devices.values
             .filter {
@@ -374,42 +268,30 @@ public struct RelayRun: MissionStepMachine {
             .sorted { $0.deviceCode < $1.deviceCode }
     }
 
-    /// Where `directive` stands in the line of Relay Runs waiting for stock at
-    /// `location` (0 = next) — **the FIFO rule, and the whole of the claim's
-    /// safety.**
+    /// Where `directive` stands in the line of Relay Runs, read off `world`,
+    /// waiting for stock at `location` (0 = next) — **the FIFO rule, and the
+    /// whole of the claim's safety.**
     ///
-    /// Relay Runs evaluate as independent `Task`s on independent five-second
-    /// clocks (`DirectiveEngine.makeExecutor`), so two runs waiting at one hub
-    /// genuinely can ask "is there a spare relay?" at the same instant. Nothing
-    /// above them serialises it: the brain allocates at LAUNCH, and this claim
-    /// happens later — often much later, after a print completes. Without an
-    /// ordering rule both would `stow` the same relay and one would lose to a
-    /// server rejection.
+    /// Relay Runs evaluate as independent `Task`s on independent clocks and
+    /// nothing above them serialises the claim, so without an ordering rule two
+    /// runs waiting at one hub would `stow` the same relay and one would lose to
+    /// a server rejection. Each run instead computes the same queue from the
+    /// same snapshot and takes the relay at its own position (`claimableRelay`).
+    /// Ordering is by `createdAt` with the id as tie-break — **the run that has
+    /// waited longest gets the first relay** — a stable total order, so
+    /// independent runs compute it identically.
     ///
-    /// So each run computes the same queue from the same snapshot and takes the
-    /// relay at its own position (`claimableRelay`). Ordering is by `createdAt`
-    /// with the id as tie-break: **the run that has waited longest gets the
-    /// first relay**, which is precisely what went wrong on the live fleet —
-    /// three runs launched within seven minutes, the two oldest lost their print
-    /// ops to supersession, and the YOUNGEST was the one that delivered. A
-    /// stable, total order also keeps the decision reproducible, the property
-    /// `Brain.freeCarrier`'s `min(by:)` protects for the same reason.
+    /// Peers count only if they are (a) Relay Runs, (b) still moving, (c)
+    /// actually waiting for stock, no relay aboard yet, and (d) waiting at THIS
+    /// hub. A run that already has its relay is out of the queue, which is what
+    /// lets the line advance.
     ///
-    /// Peers are counted only if they are (a) Relay Runs, (b) still moving —
-    /// see below, (c) actually waiting for stock, no relay aboard yet, and (d)
-    /// waiting at THIS hub. A run that already has its relay is out of the queue
-    /// even though its row is still in force, which is what lets the line
-    /// advance.
-    ///
-    /// **`.paused` holds no place in line**, which is the one status where
-    /// `Brain.owningStatuses` and this queue deliberately disagree. A paused run
-    /// still OWNS its carrier — reservation is right to keep it out of the
-    /// brain's hands — but it is stopped by operator choice and may be stopped
-    /// indefinitely, so counting it here would let one paused run at the head of
-    /// the queue starve every other run at that hub for as long as it stays
-    /// paused. `.needsAttention` is the opposite case and IS counted: it is
-    /// halted but live, one `retry` from moving, and the two runs this whole
-    /// change exists to rescue were sitting in exactly that state.
+    /// **`.paused` holds no place in line**, the one status where
+    /// `Brain.owningStatuses` and this queue deliberately disagree: a paused run
+    /// still OWNS its carrier, but it is stopped by operator choice and may be
+    /// stopped indefinitely, so counting it would let one paused run at the head
+    /// starve every other run at that hub. `.needsAttention` IS counted: halted
+    /// but live, one `retry` from moving.
     static func queuePosition(_ directive: Directive, at location: String, in world: WorldSnapshot) -> Int {
         let waiting = world.peers
             .filter { peer in
@@ -425,25 +307,17 @@ public struct RelayRun: MissionStepMachine {
         return waiting.firstIndex { $0.id == directive.id } ?? 0
     }
 
-    /// The relay this run may take off the pool right now, if any.
+    /// The relay `directive` may take off `location`'s pool in `world` right
+    /// now, if any.
     ///
     /// **Claims by queue POSITION, not "the first one"** — the oldest waiting run
-    /// takes the lowest-code relay, the second-oldest takes the next, and so on.
-    /// Two things fall out of that, both of which the naive "everyone eyes the
-    /// first spare" version gets wrong:
-    ///
-    ///   - **Race-free by construction.** Concurrent runs claim DISJOINT relays,
-    ///     so two `stow` commands issued in the same instant cannot contend. No
-    ///     lock, no lease, no serialising authority — just an ordering both runs
-    ///     compute identically from the same snapshot.
-    ///   - **No queueing behind stock that is already there.** A second run does
-    ///     not have to wait for the first to finish stowing before it can see
-    ///     its own relay, so three spares at the hub serve three runs on the
-    ///     same tick.
+    /// takes the lowest-code relay, the second-oldest the next. Concurrent runs
+    /// therefore claim DISJOINT relays and two `stow` commands issued in the same
+    /// instant cannot contend, and three spares at the hub serve three runs on
+    /// the same tick rather than queueing behind stock that is already there.
     ///
     /// Returning nil means "no stock for me" — the caller prints. That is the
-    /// only condition under which this capability spends resources now: the pool
-    /// is genuinely too shallow for this run's place in line.
+    /// only condition under which this capability spends resources.
     static func claimableRelay(
         _ directive: Directive, at location: String, in world: WorldSnapshot
     ) -> Device? {
@@ -452,23 +326,23 @@ public struct RelayRun: MissionStepMachine {
         return position < pool.count ? pool[position] : nil
     }
 
-    /// Whether a print this directive dispatched is still in flight. `print` is a
-    /// TRACKED kind (`.enqueued`), so unlike the `.simple` verbs it genuinely has
-    /// a row to ask about.
+    /// Whether a print this directive dispatched is still in flight, per
+    /// `world`'s operation rows. `print` is a TRACKED kind (`.enqueued`), so
+    /// unlike the `.simple` verbs it genuinely has a row to ask about.
     static func printInFlight(in world: WorldSnapshot) -> Bool {
         world.dispatchedOperations.values
             .contains { $0.kind == OperationKind.print.rawValue && $0.status.isOpen }
     }
 
-    /// Why `printing` never got a relay, for the one log line the stall emits.
+    /// Why `printing` never got a relay, judged off `world`, for the one log
+    /// line the stall emits.
     ///
-    /// The superseded case is the one that most needs naming: if anything else
-    /// dispatches a print at the shared hub after this run does, `CommandClient`
-    /// supersedes our row, and `.superseded` is neither `.completed` nor open —
-    /// so `printedRelayCode` stays nil and `printInFlight` reads false. That is
-    /// fail-safe (no loop, no spend) but it degrades to a silent 30-minute wait
-    /// and then a stall whose display name ("No relay aboard") describes neither
-    /// the cause nor the remedy.
+    /// The superseded case most needs naming: if anything else dispatches a
+    /// print at the shared hub after this run does, `CommandClient` supersedes
+    /// our row, and `.superseded` is neither `.completed` nor open — so
+    /// `printedRelayCode` stays nil and `printInFlight` reads false. Fail-safe
+    /// (no loop, no spend), but it degrades to a silent wait and then a stall
+    /// whose display name ("No relay aboard") names neither cause nor remedy.
     static func printDiagnosis(in world: WorldSnapshot) -> String {
         let prints = world.dispatchedOperations.values
             .filter { $0.kind == OperationKind.print.rawValue }
@@ -485,37 +359,22 @@ public struct RelayRun: MissionStepMachine {
         return "no print completed, and none is in flight"
     }
 
-    /// The relay this run is moving, wherever it currently is.
+    /// The relay `directive` is moving, wherever in `world` it currently is,
+    /// with `carrier` as the vessel hauling it.
     ///
-    /// Resolution order matters. The printed clone is named by code, so it stays
-    /// resolvable through every state change the run puts it through — stowed,
-    /// travelling (location nil), deployed, relaying — which the location- and
-    /// stow-based lookups each stop answering at some point in the sequence. The
-    /// fallbacks cover the run that never printed at all: a relay the operator
-    /// had already staged aboard the carrier, or (post-`deploy`, when
-    /// `stowedInDeviceCode` has just been cleared) one standing where the
-    /// carrier stands.
+    /// Resolution order matters. A relay named by CODE — `sourceRelayCode` on a
+    /// reclaim run, the print result on a print run — stays resolvable through
+    /// every state change the run puts it through (deployed, inactive, stowed,
+    /// in-transit with no location, deployed again, relaying), which the
+    /// location- and stow-based lookups each stop answering partway through;
+    /// that is why the shared tail needs no reclaim-specific fork. The fallbacks
+    /// cover the run that never printed: one already staged aboard the carrier,
+    /// one claimed off the hub pool, or one standing where the carrier stands.
     ///
-    /// All three lookups filter on `deviceType` — the code-first one via
-    /// `printedRelay(in:)`. Every caller of this issues a command at what it
-    /// returns, so a device of the wrong type reaching a caller is the bug, not
-    /// an inefficiency.
+    /// Every lookup filters on `deviceType`. Each caller issues a command at
+    /// what this returns, so a `sourceRelayCode` naming a mining drone must
+    /// resolve to nothing rather than to that drone.
     static func relay(for directive: Directive, carrier: Device, in world: WorldSnapshot) -> Device? {
-        // A RECLAIM run's relay is named by the plan itself, which makes it the
-        // strongest handle of the three and the reason the shared tail needs no
-        // reclaim-specific fork: `stowing`, `confirmingStow`, `emplacing`,
-        // `activating` and `confirmingRelay` all resolve the source relay
-        // through here, unchanged, in every state the run puts it through
-        // (deployed → inactive → stowed → in-transit → deployed again →
-        // relaying). Exactly the argument the printed clone's code-first lookup
-        // makes below, with a plan hint standing in for a print result.
-        //
-        // Type-filtered like the other two, and for the same reason: whatever
-        // this returns gets a command issued at it, so a `sourceRelayCode`
-        // naming a mining drone must resolve to nothing rather than to that
-        // drone. (`acquire` refuses such a source outright — see
-        // `sourceIsReclaimable` — so this is the second line of the same
-        // defence, not its only one.)
         if let code = directive.sourceRelayCode,
            let source = world.device(code),
            source.deviceType == relayDeviceType {
@@ -527,11 +386,10 @@ public struct RelayRun: MissionStepMachine {
         // would resolve a DIFFERENT relay than the one this run is carrying.
         if let aboard = SalvageRun.relay(aboard: carrier, in: world) { return aboard }
         // The pool claim, so `stowing` issues its command at exactly the relay
-        // `acquire`/`printing` decided to take. Stable across the two steps: the
-        // run holds its place in line until it actually has a relay aboard, and
-        // the pool is ordered by device code, so re-deriving it yields the same
-        // device. Queue-checked, unlike the co-location fallback below, which is
-        // why it sits above it.
+        // `acquire`/`printing` decided to take — stable across the two steps,
+        // since the run holds its place in line until it has a relay aboard and
+        // the pool is ordered by device code. Queue-checked, unlike the
+        // co-location fallback below it.
         if let location = carrier.location,
            let claimed = claimableRelay(directive, at: location, in: world) {
             return claimed
@@ -539,105 +397,52 @@ public struct RelayRun: MissionStepMachine {
         return SalvageRun.deployedRelay(near: carrier, in: world)
     }
 
-    /// Whether the stockpile CENSUS — the whole `LocationFootprint` table,
-    /// not just the hub's own row — is too old to trust for the reserve
-    /// check.
+    /// Whether `world`'s stockpile CENSUS — the whole `LocationFootprint` table,
+    /// not just the hub's own row — is too old to trust for the reserve check.
     ///
-    /// **Deliberately the whole table, not `world.footprints[location]`
-    /// alone** — the exact shape `HaulRun.survey` gates on
-    /// (`world.footprints.values.map(\.fetchedAt).max()`), adopted literally
-    /// after review found the per-location version unbounded: `.refreshFootprint
-    /// (nextStep: Step.acquire)` self-loops (unlike `HaulRun.survey`, which
-    /// always advances to a DIFFERENT step), and `DirectiveExecutor.move`
-    /// re-stamps `stepStartedAt` on every re-entry with no same-step
-    /// exception — the same trap `same-step-dispatch-needs-tracked-op`
-    /// documents for `.simple` verb dispatches — so nothing could ever
-    /// accumulate a deadline against a row that, by construction, never
-    /// arrives on the per-location gate's failure path. `refreshFootprint()`
-    /// upserts every location the API returns in ONE request
-    /// (`LocationsClient.refreshFootprint`), so a genuinely-refreshing census
-    /// advances EVERY row's `fetchedAt` together, including any location the
-    /// hub isn't. Gating on the table's max therefore turns "the census
-    /// refreshed and still doesn't list the hub" into POSITIVE EVIDENCE
-    /// (the hub is absent from a fresh read) rather than into more silence to
-    /// keep refreshing against — `acquire` falls through to
-    /// `printStockIsShort` in that case, which vetoes and stalls rather than
-    /// looping. Bounded to at most one refresh per `pollInterval`, exactly
-    /// like `HaulRun.survey`'s own cadence on the same table.
+    /// **Deliberately the whole table, never `world.footprints[location]`
+    /// alone.** `LocationsClient.refreshFootprint` upserts every location the
+    /// API returns in ONE request, so a genuinely-refreshing census advances
+    /// EVERY row's `fetchedAt` together. Gating on the table's max therefore
+    /// turns "the census refreshed and still doesn't list the hub" into POSITIVE
+    /// EVIDENCE: `acquire` falls through to `printStockIsShort`, which vetoes
+    /// and stalls. A per-location gate has no such terminating case —
+    /// `.refreshFootprint(nextStep: Step.acquire)` self-loops, and
+    /// `DirectiveExecutor.move` re-stamps `stepStartedAt` on every re-entry, so
+    /// a persistently-missing row is re-requested every tick forever.
     ///
-    /// **Trade-off, closed elsewhere rather than reopening this gate**: table
-    /// scope means a PRESENT hub row that simply stops being refreshed, while
-    /// some other location keeps the table looking fresh, would not retrigger
-    /// a refresh through this check alone — found in review round 3.
-    /// `.refreshFootprint` gaining `thenStall` (this same round) means a
-    /// per-location gate is no longer at risk of the original self-loop this
-    /// function's doc opens with (any repeat request now collapses to a
-    /// stall after exactly one round, regardless of gate scope), so reverting
-    /// to per-location scope here was considered — but that would silently
-    /// invalidate `persistentlyMissingFootprintEscalatesRatherThanRefreshingForever`'s
-    /// premise (it proves termination by hand-simulating OTHER locations
-    /// refreshing while the hub's never does, which requires table scope to
-    /// mean anything) and cost an extra refresh call on every evaluation
-    /// where only the hub's own row is stale, however healthy the rest of
-    /// the census is. Kept table-wide here and closed the narrower gap as a
-    /// read-time veto check instead — see `printStockIsShort`'s
-    /// `hubFreshness` bound.
+    /// It cannot see a PRESENT hub row that stops being refreshed while other
+    /// locations keep the table fresh; that gap is closed at READ time, by
+    /// `printStockIsShort`'s `hubFreshness` bound. Bounded to at most one
+    /// refresh per `pollInterval`.
     func footprintCensusIsStale(_ world: WorldSnapshot) -> Bool {
         guard let newest = world.footprints.values.map(\.fetchedAt).max() else { return true }
         return world.now.timeIntervalSince(newest) > Self.pollInterval
     }
 
-    /// Whether the reserve rail vetoes a print at `location`.
+    /// Whether the reserve rail vetoes a print at `location`, judged off
+    /// `world`'s census.
     ///
     /// **Fails CLOSED on unreadable stock once armed — deliberately not
     /// "unknown is never short."** An unarmed rail (`reserveFloor == nil`) has
-    /// no opinion and never vetoes, by design. But once armed, a MISSING
-    /// census row for the hub's location is not evidence the stock is fine —
-    /// it is evidence nobody has told us — so it vetoes too. This inverts what
-    /// an earlier version of this file did (treat absence as "not short"), on
-    /// review: the print is a real, irreversible resource spend, and "we
-    /// couldn't read the stock" must not be read as permission to spend it.
-    /// This is NOT the general "unknown is never zero" display convention
-    /// used elsewhere (salvage percentages, scan completeness) — those
-    /// protect against overstating depletion in the UI; this protects the
-    /// fleet's actual resources, a different risk in the opposite direction.
-    /// A stall here is not a dead end: `.printStockShort` already carries
-    /// `BrainDisposition.retry` (bounded auto-retry, then escalate).
+    /// no opinion and never vetoes. Once armed, a MISSING census row for
+    /// `location` is not evidence the stock is fine — it is evidence nobody has
+    /// told us — so it vetoes too: the print is a real, irreversible spend, and
+    /// "we couldn't read the stock" is not permission to make it. A stall here
+    /// is not a dead end: `.printStockShort` carries `BrainDisposition.retry`.
     ///
-    /// **In practice `acquire` reaches the missing-row branch below only as
-    /// POSITIVE EVIDENCE, never as silence**: it calls `footprintCensusIsStale`
-    /// first and refreshes on a genuinely stale census, so by the time this
-    /// function sees a missing row, the census itself was recently confirmed
-    /// fresh — the hub is absent from a fresh read, not merely un-asked-about
-    /// (see `acquire`). The branch stays as this function's OWN contract —
-    /// defense in depth for any caller that doesn't gate on freshness first —
-    /// rather than something only true by convention at the one call site
-    /// that exists today.
+    /// **A PRESENT-but-old row for `location` is caught too**, on the separate
+    /// and more generous `Self.hubFreshness`. `footprintCensusIsStale` is
+    /// table-wide, so it proves the census was refreshed SOMEWHERE recently,
+    /// never that THIS location was; without this check a hub that stops
+    /// appearing in later refreshes would have an arbitrarily old `resources`
+    /// reading trusted and permit a print on stale "abundance". It is a
+    /// read-time veto that never requests a refresh, so it cannot reopen the
+    /// self-loop `footprintCensusIsStale` describes.
     ///
-    /// **A PRESENT-but-old hub row is caught here too, on a separate,
-    /// deliberately more generous bound than `footprintCensusIsStale`'s
-    /// `pollInterval`.** That gate is table-wide (`footprintCensusIsStale`'s
-    /// doc explains why), which proves the census was refreshed SOMEWHERE
-    /// recently — never that THIS location specifically was. A hub that
-    /// simply stops appearing in later refreshes while some other location
-    /// keeps the table looking fresh would otherwise have its arbitrarily old
-    /// `resources` reading trusted at face value here, silently permitting a
-    /// print on stale "abundance." Found in review (round 3): the trade of
-    /// widening the refresh-trigger gate to table-scope (round 2, to bound
-    /// the self-loop that existed before `.refreshFootprint` gained
-    /// `thenStall`) opened this narrower gap as a side effect. Fixed WITHOUT
-    /// touching the refresh-trigger gate — this is a read-time veto check,
-    /// not another refresh request, so it cannot reopen the self-loop risk:
-    /// a hub row older than `Self.hubFreshness` (the same "how old may a
-    /// positive finding be and still be believed" bound already used for the
-    /// hub DEVICE row, reused here for the identical reason) fails closed
-    /// rather than being trusted.
-    ///
-    /// Reads the location's TOTAL holdings, which is all `LocationFootprint`
-    /// carries today. The rail is specified per RESOURCE TYPE
-    /// (brain-resource-hub-model, ticket 06; see `BrainCeiling`), and the
-    /// per-type stockpile record it needs is a later task; when it lands, this
-    /// is the one place that changes.
+    /// Reads the location's TOTAL holdings, all `LocationFootprint` carries. The
+    /// rail is specified per RESOURCE TYPE (see `BrainCeiling`), and this is the
+    /// one place that changes when the per-type stockpile record lands.
     func printStockIsShort(at location: String, _ world: WorldSnapshot) -> Bool {
         guard let floor = reserveFloor else { return false }
         guard let footprint = world.footprints[location] else { return true }
@@ -645,19 +450,15 @@ public struct RelayRun: MissionStepMachine {
         return footprint.resources < floor
     }
 
-    /// WHICH of `printStockIsShort`'s three conditions vetoed, for the one log
-    /// line the stall emits — in the same branch order that function tests
-    /// them, so the two can only ever agree.
+    /// WHICH of `printStockIsShort`'s three conditions vetoed a print at
+    /// `location` in `world`, for the one log line the stall emits — in the same
+    /// branch order that function tests them, so the two can only ever agree.
     ///
-    /// It exists because the line it replaced said `stock <n> below floor <f>`
-    /// unconditionally, which is a FALSE statement on two of the three
-    /// branches: a missing census row has no reading to be below anything, and
-    /// a stale row's reading may sit comfortably ABOVE the floor and still
-    /// veto — it is the reading's AGE that tripped the rail, and an operator
-    /// told "stock 999999 below floor 35078" would go looking for a resource
-    /// shortage that does not exist instead of at a census that stopped
-    /// listing the hub. Mirrors `printDiagnosis`, which exists for the same
-    /// reason on the `printing` step's stall.
+    /// A single "stock below floor" line would be FALSE on two of the three
+    /// branches: a missing census row has no reading to be below anything, and a
+    /// stale row's reading may sit comfortably ABOVE the floor and still veto on
+    /// its AGE alone — sending an operator after a shortage that does not exist
+    /// instead of at a census that stopped listing the hub.
     func printStockShortDiagnosis(at location: String, _ world: WorldSnapshot) -> String {
         let floorText = reserveFloor.map(String.init) ?? "unarmed"
         guard let footprint = world.footprints[location] else {
@@ -678,16 +479,16 @@ public struct RelayRun: MissionStepMachine {
 
     // MARK: - Acquire
 
-    /// Where this run's relay comes from, and the command that starts it coming.
+    /// Where `directive`'s relay comes from, and the command that starts it
+    /// coming, with `carrier` as the vessel that will hold it and `world` as the
+    /// snapshot every check reads.
     ///
-    /// Two branches by `Directive.sourceRelayCode`: nil prints a fresh one at
-    /// the hub (370 units, ~800 s); non-nil names an existing, useless relay to
-    /// RECLAIM and redeploy (`tendMesh`'s prune half), which costs nothing at
-    /// all. The branches never fall through into one another — falling through
-    /// to the print would spend resources the plan had already decided to
-    /// source for free, which is precisely the mistake the field exists to
-    /// prevent, and it is also why the reserve rail below is unreachable from
-    /// the reclaim path: there is no spend for it to veto.
+    /// Two branches by `Directive.sourceRelayCode`: nil PRINTS a fresh relay at
+    /// the hub; non-nil names an existing, useless relay to RECLAIM and
+    /// redeploy, which costs nothing. The branches never fall through into one
+    /// another — falling through to the print would spend resources the plan had
+    /// already decided to source for free — which is also why the reserve rail
+    /// below is unreachable from the reclaim path.
     private func acquire(_ directive: Directive, _ carrier: Device, _ world: WorldSnapshot) -> MissionAction {
         if let source = directive.sourceRelayCode {
             return reclaim(directive, carrier, world, source: source)
@@ -697,11 +498,10 @@ public struct RelayRun: MissionStepMachine {
         if SalvageRun.relay(aboard: carrier, in: world) != nil {
             return .advanceStep(nextStep: Step.travelling)
         }
-        // A spare relay already standing here is a relay this run does not have
-        // to print — the same saving as one already aboard, one step earlier.
-        // Checked BEFORE the hub lookup so it holds even at a location whose
-        // printer has gone away, and before the reserve rail because taking
-        // existing stock spends nothing the rail exists to protect.
+        // A spare standing here is a relay this run does not have to print.
+        // Checked BEFORE the hub lookup so it holds even where the printer has
+        // gone away, and before the reserve rail because taking existing stock
+        // spends nothing the rail exists to protect.
         if let location = carrier.location,
            let spare = Self.claimableRelay(directive, at: location, in: world) {
             logger.notice("relay run \(directive.id, privacy: .public): claiming idle relay \(spare.deviceCode, privacy: .public) at \(location, privacy: .public) — no print needed")
@@ -721,37 +521,25 @@ public struct RelayRun: MissionStepMachine {
         if world.now.timeIntervalSince(hub.updatedAt) > Self.hubFreshness {
             return .refreshDevices(deviceCodes: [hub.deviceCode], thenStall: .unreachableDevice)
         }
-        // The reserve rail is a VETO, so it sits BEFORE the command it vetoes.
-        // Checking after the dispatch would surface a stall about resources
-        // that were already committed. But a stale CENSUS is not evidence
-        // either way — refresh it first, exactly as `HaulRun.survey` does
-        // before trusting the same table (gated on the WHOLE table's
-        // freshest read, not just the hub's own row — see
-        // `footprintCensusIsStale`'s doc for why the per-location version was
-        // unbounded). Gated on the rail being armed: an unarmed rail has no
-        // opinion on stock at all, so there is nothing here worth the extra
-        // request.
+        // The reserve rail is a VETO, so it sits BEFORE the command it vetoes;
+        // checking after the dispatch would surface a stall about resources
+        // already committed. A stale CENSUS is not evidence either way, so
+        // refresh it first — and only when the rail is armed.
         //
-        // `thenStall: .printStockShort` — unlike `HaulRun.survey`'s `nil`,
-        // this MUST escalate on a persistently-unreadable census (the whole
-        // refresh request failing outright, not just this location being
-        // absent from an otherwise-successful one): the census gates a real,
+        // `thenStall: .printStockShort` — unlike `HaulRun.survey`'s `nil`, this
+        // MUST escalate on a persistently-unreadable census: it gates a real,
         // irreversible spend, so "we still can't read it" has to reach
         // `BrainDisposition.retry`'s bounded-retry-then-escalate rather than
-        // retry forever. `nextStep: Step.acquire` documents the shape (a
-        // successful re-ask naturally re-derives the right action by
-        // re-entering this same step) but is never actually reached as a
-        // fallback destination, because a `thenStall` is always given.
+        // retry forever. `nextStep: Step.acquire` documents the shape but is
+        // never reached, because a `thenStall` is always given.
         if reserveFloor != nil, footprintCensusIsStale(world) {
             return .refreshFootprint(nextStep: Step.acquire, thenStall: .printStockShort)
         }
         if let location = hub.location, printStockIsShort(at: location, world) {
-            // The most safety-relevant veto in this capability — unlike its
-            // neighbours above, it once left no trace of the reading that
-            // tripped it, and then (round 3) a trace that named the wrong
-            // condition on two of the three branches. `printStockShortDiagnosis`
-            // says which one actually fired. One line, no flood risk: a stall
-            // halts the run rather than re-entering this branch every tick.
+            // The most safety-relevant veto in this capability, so it leaves a
+            // trace naming the condition that actually fired. One line, no flood
+            // risk: a stall halts the run rather than re-entering this branch
+            // every tick.
             let why = printStockShortDiagnosis(at: location, world)
             logger.notice("relay run \(directive.id, privacy: .public): print stock short at \(location, privacy: .public) — \(why, privacy: .public)")
             return .stall(.printStockShort)
@@ -766,7 +554,8 @@ public struct RelayRun: MissionStepMachine {
         )
     }
 
-    /// Poll for the printed clone to become a device row.
+    /// Poll `world` for `directive`'s printed clone to become a device row, or
+    /// for a relay `carrier` may claim off the hub pool.
     ///
     /// Split from `acquire` even though `print` is a tracked kind, because the
     /// completion this waits for is not the operation closing but the CLONE
@@ -778,61 +567,47 @@ public struct RelayRun: MissionStepMachine {
         if Self.printedRelay(in: world) != nil {
             return .advanceStep(nextStep: Step.stowing)
         }
-        // Our own op is not the only way a relay arrives. The hub's print queue
-        // is shared and `CommandClient` supersedes any other open op on it, so a
-        // run whose print was superseded can never resolve a clone by code even
-        // though the server printed it and it is standing right there. Claiming
-        // off the pool is what makes that survivable — and it is also how a run
-        // picks up a relay some OTHER run's print produced, which is the point
-        // of a pool. Ordered by `isNextInLine`, so this cannot jump the queue.
+        // Our own op is not the only way a relay arrives. `CommandClient`
+        // supersedes any other open op on the shared hub, so a run whose print
+        // was superseded can never resolve a clone by code even though the
+        // server printed it and it is standing right there. Claiming off the
+        // pool makes that survivable. Queue-ordered, so it cannot jump the line.
         if let location = carrier.location,
            let spare = Self.claimableRelay(directive, at: location, in: world) {
             logger.notice("relay run \(directive.id, privacy: .public): claiming relay \(spare.deviceCode, privacy: .public) from the hub pool at \(location, privacy: .public)")
             return .advanceStep(nextStep: Step.stowing)
         }
-        // Deadline BEFORE the read (see `confirm-steps-need-fresh-evidence`,
-        // half two): the read below only advances on success, so a
-        // staleness-first ordering would never reach the backstop while reads
-        // keep failing. The diagnosis rides the stall because the reason's own
-        // display name ("No relay aboard") names neither cause nor remedy, and
-        // the superseded-op case in particular is otherwise invisible.
+        // Deadline BEFORE the read (`confirm-steps-need-fresh-evidence`): the
+        // read below only advances on success, so a staleness-first ordering
+        // would never reach the backstop while reads keep failing.
         if world.now.timeIntervalSince(directive.stepStartedAt) > Self.printDeadline {
             logger.notice("relay run \(directive.id, privacy: .public): print produced no relay — \(Self.printDiagnosis(in: world), privacy: .public)")
             return .stall(.noRelayCoLocated)
         }
         if Self.printInFlight(in: world) { return .wait }
-        // The completion named a device the fleet has not got. `GameSync` already
-        // spends a `.high` read on exactly this code off `print.completed`; this
-        // is the backstop for that read failing. One authoritative read of a
-        // named code is conclusive — a row it cannot produce will not appear by
-        // waiting — so it carries a stall rather than looping.
-        //
-        // Gated on the row being ABSENT, not merely on the code existing: a row
-        // that is present but of the wrong type is already as well-read as it
-        // will ever be, and re-reading it forever would neither change it nor
-        // make it ours. That case falls through and waits out the deadline.
+        // The completion named a device the fleet has not got — the backstop for
+        // `GameSync`'s own `.high` read off `print.completed` having failed. One
+        // authoritative read of a named code is conclusive, so it carries a
+        // stall rather than looping. Gated on the row being ABSENT, not merely
+        // on the code existing: a row present but of the wrong type is already
+        // as well-read as it will ever be, and falls through to the deadline.
         if let code = Self.printedRelayCode(in: world), world.device(code) == nil {
             return .refreshDevices(deviceCodes: [code], thenStall: .noRelayCoLocated)
         }
         return .wait
     }
 
-    /// Non-nil when finishing the run here would be a NET LOSS to the mesh
-    /// rather than the pure saving the print path's identical shortcut is.
+    /// The loss to report when `directive` finds `target` already meshed, or nil
+    /// when finishing there costs the mesh nothing.
     ///
     /// `travel`'s "somebody meshed this system while we were in flight" branch
     /// skips to `settling` and the run reports `.done`. On the PRINT path that
-    /// is free money: the relay was never planted, it stays aboard, and nothing
-    /// was torn down to get it. On the RECLAIM path the run has already
-    /// deactivated the source and de-meshed ITS system, so finishing here
-    /// leaves the fleet one mesh node down and calls it success.
-    ///
-    /// It still finishes — the run's stated deliverable (the target is meshed)
-    /// genuinely is met, and the relay is preserved in the hold, where the next
-    /// Relay Run's `acquire` picks it up for free instead of printing. What it
-    /// must not be is SILENT, which is what this exists to prevent. A pure
-    /// function rather than a bare log line for the reason `printDiagnosis` and
-    /// `reclaimDiagnosis` are: `os.Logger` output is not readable from a test.
+    /// is free money. On the RECLAIM path the run has already deactivated the
+    /// source and de-meshed ITS system, so finishing here leaves the fleet one
+    /// mesh node down and calls it success. It still finishes — the deliverable
+    /// is genuinely met and the relay is preserved in the hold — but it must not
+    /// be SILENT. A pure function rather than a bare log line, for the reason
+    /// the other diagnoses are: `os.Logger` output is unreadable from a test.
     static func meshRaceLoss(_ directive: Directive, target: String) -> String? {
         guard let source = directive.sourceRelayCode else { return nil }
         return """
@@ -854,26 +629,24 @@ public struct RelayRun: MissionStepMachine {
         case act(MissionAction)
     }
 
-    /// Whether the relay the plan named is still a thing this run may reclaim.
+    /// Whether `source` — the relay the plan named — is still a thing this run
+    /// may reclaim.
     ///
     /// Four conditions, in the order `reclaimDiagnosis` explains them:
     ///
-    /// - it is an `ftl_relay` — these are DISPATCH queries, and `deactivate`
-    ///   at a mining drone because the plan hint named one is not a thing this
-    ///   run may do (the same rule every other lookup in this file follows);
-    /// - it is stowed aboard nothing — a relay somebody else has taken aboard
-    ///   is theirs, not ours;
+    /// - it is an `ftl_relay` — these are DISPATCH queries, and `deactivate` at
+    ///   a mining drone because the plan hint named one is not a thing this run
+    ///   may do;
+    /// - it is stowed aboard nothing — a relay somebody else has taken aboard is
+    ///   theirs, not ours;
     /// - it has a location — a relay in transit is somewhere unknowable, so
     ///   there is nothing to fly to and nothing to stand beside;
-    /// - it is `relaying` — the deployed, active state prune actually judged.
-    ///   An already-inactive relay is evidence the plan read a stale row or
-    ///   somebody got there first, and either way it is no longer the thing
-    ///   that was assessed.
+    /// - it is `relaying` — the deployed, active state prune actually judged. An
+    ///   already-inactive relay is not the device that assessment covered.
     ///
     /// `statusBase`, never `status`: the backend appends a parenthetical
     /// parameter to some statuses, and a raw comparison would read a live relay
-    /// as dead — which here would mean tearing down infrastructure on a
-    /// misparse.
+    /// as dead — here, tearing down infrastructure on a misparse.
     static func sourceIsReclaimable(_ source: Device) -> Bool {
         source.deviceType == relayDeviceType
             && source.stowedInDeviceCode == nil
@@ -881,15 +654,13 @@ public struct RelayRun: MissionStepMachine {
             && source.statusBase == "relaying"
     }
 
-    /// WHICH condition disqualified the source, for the one log line the
-    /// refusal emits — in the same branch order `sourceIsReclaimable` tests
-    /// them, so the two can only ever agree.
+    /// WHICH condition disqualified the source relay `code` names in `world`,
+    /// for the one log line the refusal emits — in the same branch order
+    /// `sourceIsReclaimable` tests them, so the two can only ever agree.
     ///
-    /// It exists for the reason `printDiagnosis` and `printStockShortDiagnosis`
-    /// do: the stall's own display name ("Device unreachable") names neither
-    /// the cause nor the remedy, and "the relay moved", "somebody else took
-    /// it", "the plan named a drone" and "it is already down" want four very
-    /// different responses from an operator.
+    /// The stall's own display name ("Device unreachable") names neither cause
+    /// nor remedy, and the four conditions want four different responses from an
+    /// operator.
     static func reclaimDiagnosis(_ code: String, _ world: WorldSnapshot) -> String {
         guard let source = world.device(code) else {
             return "no row for \(code) ever arrived, even after an authoritative read"
@@ -910,56 +681,27 @@ public struct RelayRun: MissionStepMachine {
     }
 
     /// The confirm-read every irreversible step of the reclaim path passes
-    /// through: evidence before an irreversible act, the same rule the grow
-    /// path's own pre-print hub read follows (ticket 01).
+    /// through: fresh evidence about the relay `code` names in `world`, before
+    /// `directive` acts on it.
     ///
-    /// Three answers, and the ordering is the point. A row that is ABSENT or
-    /// too OLD is not evidence of anything — it buys ONE authoritative read,
+    /// Three answers, and the ordering is the point. A row that is ABSENT or too
+    /// OLD is not evidence of anything — it buys ONE authoritative read,
     /// carrying a stall so a read that keeps failing surfaces after a single
-    /// round instead of re-firing every tick (`.refreshDevices` is bounded to
-    /// one refresh-and-re-ask per evaluation by the engine). Only a row young
-    /// enough to mean something is then judged.
+    /// round instead of re-firing every tick. Only a row young enough to mean
+    /// something is then judged.
     ///
-    /// **A judgement that disqualifies the source STALLS.** It does not
-    /// proceed, and — the more tempting mistake — it does not fall back to
-    /// printing. Proceeding would `deactivate` a relay that is no longer the
-    /// one prune assessed, which is how a load-bearing relay gets torn out and
-    /// its system's authority with it; falling back to the print would spend
-    /// 370 units the plan explicitly decided not to spend, on the strength of
-    /// evidence that the plan was WRONG.
+    /// **A judgement that disqualifies the source STALLS.** It does not proceed,
+    /// and — the more tempting mistake — it does not fall back to printing.
+    /// Proceeding would `deactivate` a relay other than the one prune assessed,
+    /// which is how a load-bearing relay gets torn out and its system's
+    /// authority with it; falling back to the print would spend
+    /// resources the plan declined to spend, on evidence the plan was WRONG.
     ///
-    /// **What the stall actually costs, stated plainly because an earlier
-    /// version of this comment got it wrong.** `.unreachableDevice` carries
-    /// `BrainDisposition.retry`, and `Brain` retries the SAME directive with
-    /// the SAME `sourceRelayCode` — it does not re-plan the source. The budget
-    /// is `Brain.retryBudget` (3) against a `Brain.retryInterval` (15 min)
-    /// floor, and the FIRST retry fires immediately (`episode.lastAttemptAt` is
-    /// nil at the first stall, because a `.stalled` timeline entry is not a
-    /// `.resolved` one), so the attempts land at roughly t, t+15 min and
-    /// t+30 min, with escalation following the third at about t+30 — not
-    /// t+45, which is the off-by-one-interval this comment carried in its
-    /// previous draft. (`Brain.swift`'s own comment on `retryInterval` carried
-    /// the same arithmetic the same wrong way; corrected 2026-08-04, and now
-    /// pinned by `BrainDegradationTests.autoRetriesAreSpacedByTheRetryInterval`,
-    /// which measures the gaps off a driven run's own timeline.)
-    ///
-    /// So a PERMANENTLY disqualified source (the plan named a mining drone; the
-    /// relay is already inactive) costs three futile retries over ~30 minutes
-    /// and then an operator escalation, with the carrier leased throughout
-    /// (`.needsAttention` is in the brain's `owningStatuses`). Whether that
-    /// stops mesh growth is a FLEET fact, not a scheduler rule: `Brain.plan`
-    /// launches at most one Relay Run per TICK, not one at a time, and an
-    /// escalated run holds one carrier rather than the fleet — concurrency is
-    /// bounded by how many free carriers stand at the hub. It happens to stop
-    /// growth dead on today's fleet, where only `C7836770` is at
-    /// `AINALRAM-BELT-1`. That is an acceptable
-    /// failure mode for a case that should be rare and is always the result of
-    /// a bad plan hint, and it is strictly better than either alternative
-    /// (tearing down a relay on stale evidence, or spending 370 units the plan
-    /// declined to spend). It is NOT self-healing, and must not be described as
-    /// though it were. Making it self-healing means giving the disqualification
-    /// its own attention reason with an `escalate`-or-replan disposition, which
-    /// belongs with the brain-side source selection that produces the hint.
+    /// **The stall is NOT self-healing.** `.unreachableDevice` carries
+    /// `BrainDisposition.retry`, and the brain retries the SAME directive with
+    /// the SAME `sourceRelayCode` — it never re-plans the source, so a
+    /// permanently disqualified source costs the whole retry budget and then an
+    /// operator escalation, with the carrier leased throughout.
     static func confirmSource(
         _ directive: Directive, _ code: String, _ world: WorldSnapshot
     ) -> SourceConfirmation {
@@ -977,26 +719,21 @@ public struct RelayRun: MissionStepMachine {
         return .confirmed(source)
     }
 
-    /// Route a reclaim-sourced run into its own sub-sequence.
+    /// Route `directive` — a reclaim-sourced run taking the relay `code` names,
+    /// aboard `carrier` — into its own sub-sequence.
     ///
-    /// No `R` rail runs on this path and none should: reclaim consumes no
-    /// resources, so a hub census that would veto a print has nothing to say
-    /// about it. That is structural rather than a flag — this returns before
+    /// No reserve rail runs on this path and none should: reclaim consumes no
+    /// resources. That is structural rather than a flag — this returns before
     /// `acquire` reaches any footprint read at all.
     private func reclaim(
         _ directive: Directive, _ carrier: Device, _ world: WorldSnapshot, source code: String
     ) -> MissionAction {
-        // Already aboard: the reclaim has happened and this is a re-entry (a
-        // relaunch, or a step move that was lost). Starting over would
-        // `deactivate` a relay that is currently cargo. The mirror of the print
-        // path's own "a relay already aboard" check.
+        // Already aboard: the reclaim has happened and this is a re-entry.
+        // Starting over would `deactivate` a relay that is currently cargo.
         //
-        // Type-filtered like every other lookup in this file — without it a
-        // plan hint naming, say, a mining drone that happens to be stowed
-        // aboard the carrier would skip the confirm entirely and commit the run
-        // to hauling that drone to the target, where only the eventual `deploy`
-        // rejection would stop it. Filtered, it falls through to `confirmSource`
-        // and is refused with a diagnosis instead.
+        // Type-filtered like every other lookup here — without it a plan hint
+        // naming a mining drone stowed aboard the carrier would skip the confirm
+        // entirely and commit the run to hauling that drone to the target.
         if let aboard = world.device(code),
            aboard.deviceType == Self.relayDeviceType,
            aboard.stowedInDeviceCode == carrier.deviceCode {
@@ -1010,31 +747,21 @@ public struct RelayRun: MissionStepMachine {
         }
     }
 
-    /// Fly the carrier to where the source relay stands, before anything
-    /// irreversible happens to it.
+    /// Fly `carrier` to where `directive`'s source relay stands in `world`,
+    /// before anything irreversible happens to it.
     ///
-    /// **The order is a safety property, not a convenience.** `deactivate`
-    /// drops the relay's system out of the mesh, and per the ftl-authority-rule
-    /// note command authority reaches a device only through a mesh subgraph
-    /// holding a stationary replicant — so a relay deactivated from across the
-    /// galaxy can become uncommandable at the very moment the run needs to
-    /// `stow` it, stranding it AND having torn its system's link down for
-    /// nothing. Travelling first also happens to be what makes the shared
-    /// `stowing` step usable unchanged, since it requires the relay and the
-    /// carrier to share a location.
-    ///
-    /// (The brief for this task sequenced `deactivate` straight after the
-    /// confirm, with no fetch leg. That works only for a source the carrier is
-    /// already parked beside, which a reclaim source — chosen for its distance
-    /// from the plant target, not from the carrier — essentially never is.)
+    /// **The order is a safety property, not a convenience.** `deactivate` drops
+    /// the relay's system out of the mesh, and per the `ftl-authority-rule` note
+    /// command authority reaches a device only through a mesh subgraph holding a
+    /// stationary replicant — so a relay deactivated from across the galaxy can
+    /// become uncommandable at the very moment the run needs to `stow` it,
+    /// stranding it AND having torn its system's link down for nothing.
     ///
     /// Deliberately does NOT re-confirm the source's freshness on every pass:
-    /// this step is re-entered on every 5 s tick for the whole trip, and a
-    /// freshness gate here would issue `.high` reads at that rate for minutes.
-    /// The confirm sits at the two DECISION points instead — `acquire`, before
-    /// the trip is committed, and `deactivating`, immediately before the
-    /// irreversible act — which is where fresh evidence actually buys
-    /// something.
+    /// this step is re-entered on every tick for the whole trip, and a freshness
+    /// gate here would issue `.high` reads at that rate for minutes. The confirm
+    /// sits at the two DECISION points instead — `acquire`, before the trip is
+    /// committed, and `deactivating`, immediately before the irreversible act.
     private func fetch(_ directive: Directive, _ carrier: Device, _ world: WorldSnapshot) -> MissionAction {
         guard let code = directive.sourceRelayCode else {
             // Not a reclaim run at all. Re-derive the branch rather than act on
@@ -1050,10 +777,9 @@ public struct RelayRun: MissionStepMachine {
             return .stall(.unreachableDevice)
         }
         if carrier.location == point { return .advanceStep(nextStep: Step.deactivating) }
-        // An open op means the trip is under way — expected, and the guard that
-        // stops a second travel landing on top of the first. Travel is a
-        // TRACKED kind, which is what makes re-dispatching into this same step
-        // safe (see `trackedKinds`).
+        // An open op means the trip is under way — the guard that stops a second
+        // travel landing on top of the first. Travel is a TRACKED kind, which is
+        // what makes re-dispatching into this same step safe (`trackedKinds`).
         if world.openOperation(for: carrier.deviceCode) != nil { return .wait }
         // …and the guard for the gap between that op closing and the arrival's
         // location write landing, in which the check above says "not there yet"
@@ -1065,17 +791,15 @@ public struct RelayRun: MissionStepMachine {
         )
     }
 
-    /// Issue `deactivate` once, with the carrier standing alongside.
-    /// Dispatch-only, deliberately.
+    /// Issue `deactivate` once at `directive`'s source relay, with `carrier`
+    /// standing alongside it in `world`. Dispatch-only, deliberately.
     ///
-    /// `deactivate` is a `.simple` verb — `CommandClient.deadlineCommands` is
-    /// `["recall", "search", "compact", "unfurl", "repair"]` and does not
-    /// contain it, so `completion(for:)` classifies it `.immediate` and the
-    /// dispatch returns `.accepted(operationID: nil)` with NO `Operation` row.
-    /// It therefore gets the same split every other `.simple` verb in this file
-    /// gets: this step dispatches, `confirmingIdle` polls. Handing `nextStep`
-    /// back to this step would re-issue `deactivate` at the live API on every
-    /// tick forever, against a deadline that could never accumulate.
+    /// `deactivate` is a `.simple` verb, so the dispatch returns
+    /// `.accepted(operationID: nil)` with NO `Operation` row and gets the same
+    /// split every other `.simple` verb here gets: this step dispatches,
+    /// `confirmingIdle` polls. Handing `nextStep` back to this step would
+    /// re-issue `deactivate` at the live API every tick forever, against a
+    /// deadline that could never accumulate.
     private func deactivateSource(
         _ directive: Directive, _ carrier: Device, _ world: WorldSnapshot
     ) -> MissionAction {
@@ -1101,13 +825,13 @@ public struct RelayRun: MissionStepMachine {
         )
     }
 
-    /// Poll for the dispatched `deactivate` to take.
+    /// Poll `world` for the `deactivate` dispatched at `directive`'s source
+    /// relay to take, so `carrier` may then stow it.
     ///
-    /// Never dispatches, for the reason `confirmRelay` states about `activate`:
-    /// the verb carries no operation row, so an `openOperation` check here
-    /// could never be non-nil and could not stop a same-step redispatch — and a
-    /// redispatching poll step would reset the very clock `reclaimDeadline`
-    /// measures from.
+    /// Never dispatches: the verb carries no operation row, so an
+    /// `openOperation` check here could never be non-nil and could not stop a
+    /// same-step redispatch — and a redispatching poll step would reset the very
+    /// clock `reclaimDeadline` measures from.
     private func confirmIdle(
         _ directive: Directive, _ carrier: Device, _ world: WorldSnapshot
     ) -> MissionAction {
@@ -1118,101 +842,68 @@ public struct RelayRun: MissionStepMachine {
         if source.stowedInDeviceCode == carrier.deviceCode {
             return .advanceStep(nextStep: Step.travelling)
         }
-        // The success condition, stated as the inverse of the ONE mesh
-        // authority this file recognises (`Device.isActiveRelay` and
+        // The success condition, stated as the inverse of the ONE mesh authority
+        // this file recognises (`Device.isActiveRelay` and
         // `SalvageTargetPlanner.meshSystems`, both keyed on exactly `relaying`)
-        // rather than as a fresh status string of its own: what `stow` needs is
-        // a relay that has stopped relaying, which is that predicate negated.
-        //
-        // The deactivate has taken, which means this system is now OFF the
-        // mesh — so the very next command must clear the authority gate before
-        // it is issued. See `carrierRetainsAuthority`.
+        // rather than as a fresh status string of its own. The deactivate having
+        // taken means this system is now OFF the mesh, so the very next command
+        // must clear the authority gate first — `carrierRetainsAuthority`.
         if source.statusBase != "relaying" { return carrierRetainsAuthority(directive, carrier, world) }
-        // Deadline BEFORE the read (see `confirm-steps-need-fresh-evidence`,
-        // half two): the read below only advances on success, so a
-        // staleness-first ordering would never reach the backstop while reads
-        // keep failing.
+        // Deadline BEFORE the read (`confirm-steps-need-fresh-evidence`): the
+        // read below only advances on success, so a staleness-first ordering
+        // would never reach the backstop while reads keep failing.
         if world.now.timeIntervalSince(directive.stepStartedAt) > Self.reclaimDeadline {
             logger.notice("relay run \(directive.id, privacy: .public): \(code, privacy: .public) never stopped relaying after deactivate")
             return .stall(.unreachableDevice)
         }
         // Nothing else moves this row: `deactivate` emits no operation, and the
-        // `relay.*` SSE route only invalidates FTL-mesh freshness rather than
-        // re-reading the device. A bare wait would sit on a stale row for the
-        // whole deadline and then stall on a relay that is actually down.
+        // `relay.*` SSE route only invalidates FTL-mesh freshness. A bare wait
+        // would sit on a stale row for the whole deadline and then stall on a
+        // relay that is actually down.
         if world.now.timeIntervalSince(source.updatedAt) > Self.pollInterval {
             return .refreshDevices(deviceCodes: [code], thenStall: nil)
         }
         return .wait
     }
 
-    /// The gate between the deactivate and the `stow` that follows it: can we
-    /// still command anything at this system at all?
+    /// The gate between the deactivate and the `stow` that follows it: can
+    /// `carrier` still command anything at this system at all, per `world`?
     ///
-    /// **This is the check the reclaim path's safety actually rests on, and
-    /// until now nothing in the code made it.** Deactivating the source relay
-    /// takes its system `S` off the mesh. Per the `ftl-authority-rule` note,
-    /// authority to issue a command at `S` then comes only from rule (1) — a
-    /// replicant PHYSICALLY PRESENT there — since rule (2), membership of a
-    /// mesh subgraph holding a stationary replicant, is exactly what the
-    /// deactivate just destroyed. It works today because the one carrier this
-    /// run uses (`C7836770`) hosts the replicant `pennig-salvage`, so flying it
-    /// to `S` satisfies rule (1). That is a precondition on the CARRIER, and it
-    /// is nowhere in the types: `Directive` has no such field, and neither
-    /// `WorldSnapshot` nor `WorldView` carries replicants at all. A Relay Run
-    /// handed a carrier without a hosted replicant — a second `heaven_vessel`,
-    /// anything a later `growFleet` builds — would issue `deactivate`, lose
-    /// authority at `S`, and never be able to issue the `stow`: relay and
-    /// carrier both stranded, permanently.
+    /// **This is the check the reclaim path's safety rests on.** Deactivating
+    /// the source relay takes its system `S` off the mesh, so per the
+    /// `ftl-authority-rule` note authority at `S` then comes only from rule (1),
+    /// a replicant PHYSICALLY PRESENT — rule (2) being exactly what the
+    /// deactivate destroyed. **The carrier must therefore HOST A REPLICANT**, a
+    /// precondition nowhere in the types: `Directive` has no such field, and
+    /// neither `WorldSnapshot` nor `WorldView` carries replicants at all. A run
+    /// handed a carrier without one would issue `deactivate`, lose authority at
+    /// `S`, and never issue the `stow`: relay and carrier stranded, permanently.
     ///
-    /// So the gate asks the SERVER instead of asserting the precondition it
-    /// cannot express. `in_control_range` is on every device row and is the
-    /// server's own authoritative answer to "can this be commanded", which the
-    /// authority note says to prefer over any geometry the app computes, and
-    /// which `brain-primitive-contracts` already mandates in exactly this shape
-    /// for `deliver`'s tail ("confirm `relaying` AND authoritative
-    /// `in_control_range` — never a recomputed mesh view"). This is the first
-    /// place in `DirectiveEngine` to read it.
+    /// So the gate asks the SERVER instead. `in_control_range` is the server's
+    /// own authoritative answer to "can this be commanded", to be preferred over
+    /// any geometry the app computes, and is what `brain-primitive-contracts`
+    /// mandates for `deliver`'s tail. Permissive on a MISSING field, though:
+    /// `Device.isOutOfControlRange` is `inControlRange == false`, so a device
+    /// type that never reports it is not read as stranded — the gate catches
+    /// only what the server affirmatively reports, and the file header states
+    /// the precondition for the case it cannot see.
     ///
-    /// Permissive on a MISSING field, deliberately: `Device.isOutOfControlRange`
-    /// is `inControlRange == false`, so a device type that never reports the
-    /// field is not read as stranded. The gate catches the state the server
-    /// affirmatively reports, and the file header states the precondition for
-    /// the case it cannot see.
+    /// **Keyed on a WATERMARK, not on age — young is not the same as AFTER.** An
+    /// age bound alone reads the wrong row on the NORMAL timeline: `fetching`
+    /// writes the carrier's row on arrival while the mesh is still up, so it
+    /// reports `in_control_range: true` even for a carrier about to lose
+    /// authority; `deactivating` then dispatches at the RELAY, and
+    /// `CommandClient`'s `.immediate` path confirm-reads only the commanded
+    /// device. `confirmingIdle` therefore normally sees a carrier row seconds
+    /// old, far inside `reclaimFreshness`, and entirely PRE-deactivate.
     ///
-    /// **Keyed on a WATERMARK, not on age — young is not the same as AFTER.**
-    /// A wall-clock bound alone reads the wrong row on the NORMAL timeline, not
-    /// the exotic one. `fetching` writes the carrier's row on arrival, while
-    /// the mesh is still up, so it reports `in_control_range: true` even for a
-    /// carrier that will lose authority the instant the relay goes down.
-    /// `deactivating` then dispatches at the RELAY, and `CommandClient`'s
-    /// `.immediate` path confirm-reads only the commanded device — nothing
-    /// reads the carrier. `deactivate` is immediate server-side, so
-    /// `confirmingIdle` normally sees the relay non-relaying seconds later,
-    /// with a carrier row that is seconds old, far inside `reclaimFreshness`,
-    /// and entirely PRE-deactivate. An age-only gate would therefore obtain
-    /// genuinely post-deactivate evidence only on the SLOW path, which inverts
-    /// the intent exactly.
-    ///
-    /// So the row must post-date the command whose effect it is being asked
-    /// about: `carrier.updatedAt >= directive.stepStartedAt`. That watermark is
-    /// free — `DirectiveExecutor` re-stamps `stepStartedAt` on every accepted
-    /// dispatch, so for `confirmingIdle` it IS the deactivate dispatch instant.
-    /// It is also the rule `confirm-steps-need-fresh-evidence` states and that
-    /// this file already applies two lines above this function's call site; the
-    /// age bound is kept alongside it as the backstop for a row that post-dates
-    /// the dispatch but has since gone unread for minutes.
-    ///
-    /// **Damage bound, so this is calibrated rather than over-built:** the
-    /// strand is already committed by the deactivate, so the worst a wrong
-    /// answer here does is misclassify the follow-up. Failing open dispatches
-    /// `stow`, the server rejects it, and `DirectiveExecutor` stalls
-    /// `.commandRejected` — also `.retry`. The cost of getting this wrong is a
-    /// less precise stall, not a new hazard. It is fixed because the header and
-    /// this doc both claim the stronger property, and moving the code is
-    /// cheaper than weakening the claim.
-    ///
-    /// `thenStall` bounds the read to exactly one round.
+    /// The row must post-date the command whose effect it is asked about:
+    /// `carrier.updatedAt >= directive.stepStartedAt`, the rule
+    /// `confirm-steps-need-fresh-evidence` states, and free because
+    /// `DirectiveExecutor` re-stamps `stepStartedAt` on every accepted dispatch.
+    /// The age bound stays alongside as the backstop for a row that post-dates
+    /// the dispatch but has since gone unread for minutes. `thenStall` bounds
+    /// the read to exactly one round.
     private func carrierRetainsAuthority(
         _ directive: Directive, _ carrier: Device, _ world: WorldSnapshot
     ) -> MissionAction {
@@ -1229,18 +920,17 @@ public struct RelayRun: MissionStepMachine {
 
     // MARK: - Stowing
 
-    /// Put the relay aboard the carrier, so it travels as cargo.
+    /// Put `directive`'s relay aboard `carrier`, so it travels as cargo.
     ///
     /// The relay MUST ride aboard rather than fly itself: transport is gated by
-    /// don't-strand (brain-primitive-contracts), and a relay that flew itself to
-    /// an unmeshed system would be uncommandable the moment it got there.
+    /// don't-strand (`brain-primitive-contracts`), and a relay that flew itself
+    /// to an unmeshed system would be uncommandable the moment it got there.
     private func stowing(_ directive: Directive, _ carrier: Device, _ world: WorldSnapshot) -> MissionAction {
         guard let relay = Self.relay(for: directive, carrier: carrier, in: world) else {
             return .stall(.noRelayCoLocated)
         }
         // Already aboard — either the co-located carrier took the clone by
         // itself (the composition's premise) or this step is being re-entered.
-        // Either way, re-issuing `stow` would be a pointless POST.
         if relay.stowedInDeviceCode == carrier.deviceCode {
             return .advanceStep(nextStep: Step.travelling)
         }
@@ -1259,12 +949,11 @@ public struct RelayRun: MissionStepMachine {
         )
     }
 
-    /// Poll the relay's own `stowedInDeviceCode`.
+    /// Poll `world` for the relay's own `stowedInDeviceCode` to name `carrier`.
     ///
     /// The relay's column, never the carrier's `stowed_devices` blob: the blob
-    /// is not a reliable inverse of it — a real vessel's listed one unrelated
-    /// device while six drones claimed to be aboard — so a gate reading the
-    /// carrier end can be permanently unsatisfiable.
+    /// is not a reliable inverse of it, so a gate reading the carrier end can be
+    /// permanently unsatisfiable.
     private func confirmStow(_ directive: Directive, _ carrier: Device, _ world: WorldSnapshot) -> MissionAction {
         guard let relay = Self.relay(for: directive, carrier: carrier, in: world) else {
             return .stall(.noRelayCoLocated)
@@ -1276,10 +965,9 @@ public struct RelayRun: MissionStepMachine {
             return .stall(.noRelayCoLocated)
         }
         // Nothing else moves this row: `stow` emits no operation and the stow
-        // event's field application only lands if the event arrives at all. A
+        // event's field application lands only if the event arrives at all. A
         // bare wait would sit on a stale row for the whole deadline and then
-        // stall on a relay that is actually aboard. Throttled on the row's own
-        // `updatedAt`, which is what a successful read advances.
+        // stall on a relay that is actually aboard.
         if world.now.timeIntervalSince(relay.updatedAt) > Self.pollInterval {
             return .refreshDevices(deviceCodes: [relay.deviceCode], thenStall: nil)
         }
@@ -1288,13 +976,13 @@ public struct RelayRun: MissionStepMachine {
 
     // MARK: - Travel
 
+    /// Fly `carrier` to `directive`'s target system, per `world`.
     private func travel(_ directive: Directive, _ carrier: Device, _ world: WorldSnapshot) -> MissionAction {
         guard let target = directive.currentTarget else { return .done }
         if SalvageRun.system(of: carrier) == target {
-            // Somebody meshed this system while we were in flight (another run,
-            // a hub built here). Planting a second relay would spend one for
-            // nothing, so skip straight to the confirmation — the run's goal is
-            // already met and the relay stays aboard for the next errand.
+            // Somebody meshed this system while we were in flight. Planting a
+            // second relay would spend one for nothing, so skip straight to the
+            // confirmation and keep the relay aboard for the next errand.
             //
             // Read off DEVICE rows, never `ftlLinks`: a just-activated relay
             // produces no link rows at all.
@@ -1303,24 +991,14 @@ public struct RelayRun: MissionStepMachine {
             // reclaim reached this branch having already torn its source's
             // system off the mesh, so finishing here is a net loss dressed as a
             // success. It still finishes; it does not do so quietly.
-            //
-            // NOT COVERED BY A TEST, and deliberately recorded as such rather
-            // than left to look covered: `meshRaceLoss` is asserted directly
-            // (inputs and message), and the `.settling` advance is asserted
-            // directly, but the EMISSION between them cannot be observed from a
-            // test — `logger` is a file-private `os.Logger`, as it is in every
-            // mission machine, and there is no seam to intercept. Deleting
-            // these two lines leaves the suite green. Introducing a logger
-            // dependency for one call site would make this the only machine in
-            // the family with one, which is a worse trade than the gap.
             if meshed, let loss = Self.meshRaceLoss(directive, target: target) {
                 logger.warning("relay run \(directive.id, privacy: .public): \(loss, privacy: .public)")
             }
             return .advanceStep(nextStep: meshed ? Step.settling : Step.emplacing)
         }
-        // An open op means the trip is under way — expected, and the guard that
-        // stops a second travel landing on top of the first. This is exactly
-        // what a `.simple` verb cannot have.
+        // An open op means the trip is under way — the guard that stops a second
+        // travel landing on top of the first, which is exactly what a `.simple`
+        // verb cannot have.
         if world.openOperation(for: carrier.deviceCode) != nil { return .wait }
         // …and the guard for the gap between that op closing and the arrival's
         // location write landing, in which the check above says "not there yet"
@@ -1332,7 +1010,9 @@ public struct RelayRun: MissionStepMachine {
         )
     }
 
-    /// What to do about a target system whose catalogue blob still isn't cached.
+    /// What `directive` does about `target`, a system whose catalogue blob is
+    /// not cached in `world`: wait, buy a bounded number of refreshes, then
+    /// stall.
     ///
     /// Same shape and same ordering as `SalvageRun.unresolvedSystem`, and for
     /// the same reason: `.wait` is the only action that leaves `stepStartedAt`
@@ -1353,16 +1033,15 @@ public struct RelayRun: MissionStepMachine {
 
     // MARK: - Emplace
 
-    /// Fly the last hop to the target's Lagrange point, then deploy the relay
-    /// there.
+    /// Fly `carrier` the last hop to `directive`'s target Lagrange point in
+    /// `world`, then deploy the relay there.
     ///
     /// A relay needs a gravitationally stable point (an L4/L5) to mesh its
-    /// system, and every system's entry point is itself an L4 — which is where
-    /// a bare-designation travel already landed the carrier, so the hop is
-    /// usually free. `SalvageRun.lagrangePoint(in:)` is shared rather than
-    /// re-derived: it is a fact about the game, not about salvage, and it
-    /// carries a live-verified correction (the system-level locations endpoint
-    /// returns no per-planet Lagrange sites) that must not be forked.
+    /// system, and every system's entry point is itself an L4 — where a
+    /// bare-designation travel already landed the carrier, so the hop is usually
+    /// free. `SalvageRun.lagrangePoint(in:)` is shared rather than re-derived: it
+    /// is a fact about the game, not about salvage, and it encodes that the
+    /// system-level locations endpoint returns no per-planet Lagrange sites.
     ///
     /// An uncached catalogue blob and a system that genuinely has no stable
     /// point are split, because conflating them silently forfeits the mesh: the
@@ -1376,9 +1055,7 @@ public struct RelayRun: MissionStepMachine {
             // A cached system with no L4 anywhere can never be meshed, so unlike
             // a Salvage Run — which still has ore to take — this run has nothing
             // left to do. Surfaced under the nearest existing reason: the
-            // catalogue cannot tell us where to plant. (The reason set is closed
-            // by design; a `relayTargetUnemplaceable` of its own belongs with the
-            // brain wiring that would have to classify it.)
+            // catalogue cannot tell us where to plant.
             logger.notice("relay run \(directive.id, privacy: .public): \(target, privacy: .public) has no Lagrange point")
             return .stall(.salvageSystemUnresolved)
         }
@@ -1395,76 +1072,67 @@ public struct RelayRun: MissionStepMachine {
                 params: CommandParams(destination: point), nextStep: Step.emplacing
             )
         }
-        // The mirror of `activate`'s stow guard: code-first resolution can also
-        // hand back a relay that is ALREADY deployed here, if this step is
-        // re-entered after a `deploy` whose step move was lost. Re-issuing
-        // `deploy` at a deployed relay is a command that must be rejected —
-        // hand off to activation instead.
+        // Code-first resolution can hand back a relay ALREADY deployed here, if
+        // this step is re-entered after a `deploy` whose step move was lost.
+        // Re-issuing `deploy` at a deployed relay must be rejected — hand off to
+        // activation instead. The mirror of `activate`'s own already-up guard.
         if relay.stowedInDeviceCode == nil, relay.location == point {
             return .advanceStep(nextStep: Step.activating)
         }
         // No `openOperation` guard: `deploy` is untracked, so the lookup is
-        // always nil — a guard that can never fire is noise, not safety. The
-        // safety is that this hands off to a DIFFERENT step.
+        // always nil. The safety is that this hands off to a DIFFERENT step.
         return .dispatch(
             kind: OperationKind.simple("deploy"), deviceCode: relay.deviceCode,
             params: CommandParams(), nextStep: Step.activating
         )
     }
 
-    /// Issue `activate` once, in-situ. Dispatch-only, deliberately.
+    /// Issue `activate` once at `directive`'s relay, in-situ and with `carrier`
+    /// present, judged off `world`. Dispatch-only, deliberately.
     ///
     /// In-situ is not a preference: pre-activating a relay and then moving it
-    /// does NOT mesh (live-tested, brain-primitive-contracts). The relay comes
-    /// up where it is going to stay, with the carrier present.
+    /// does NOT mesh (`brain-primitive-contracts`). The relay comes up where it
+    /// is going to stay.
     private func activate(_ directive: Directive, _ carrier: Device, _ world: WorldSnapshot) -> MissionAction {
         // `deploy` cleared the relay's `stowedInDeviceCode` the moment it
         // landed, so the aboard-query stops finding it at exactly the point this
-        // step needs it. `relay(for:carrier:in:)` resolves by code first for
-        // that reason.
+        // step needs it — which is why `relay(for:carrier:in:)` resolves by code
+        // first.
         guard let relay = Self.relay(for: directive, carrier: carrier, in: world) else {
             return .stall(.relayActivationFailed)
         }
-        // Resolving by code is right for the reason above, but it costs a proof
-        // the cloned shape had for free: `SalvageRun.activate` goes through
-        // `deployedRelay(near:)`, which requires `relay.location ==
-        // vessel.location`, and a stowed device HAS no location — so a `deploy`
-        // that never took could not reach its dispatch. Code-first resolution
-        // happily returns a still-stowed relay, so restore the property
-        // explicitly: activating cargo is not a thing this run may do.
+        // Code-first resolution happily returns a STILL-STOWED relay, where a
+        // location-based lookup could not (a stowed device has no location), so
+        // the property that a failed `deploy` cannot reach the dispatch has to
+        // be restored explicitly: activating cargo is not a thing this run may
+        // do.
         guard relay.stowedInDeviceCode == nil else {
             logger.notice("relay run \(directive.id, privacy: .public): \(relay.deviceCode, privacy: .public) is still aboard \(carrier.deviceCode, privacy: .public) — deploy never took")
             return .stall(.relayActivationFailed)
         }
-        // **Already up? Then hand off rather than command it again.** This is
-        // the same guard `emplace` keeps one command earlier, and its absence
-        // here stalled a live run for seven hours on 2026-08-05: the `activate`
-        // reached the server, the network dropped before the answer came back,
-        // and every retry re-dispatched into a correct "Relay is already
-        // active" rejection that the executor can only read as
-        // `commandRejected`. Retry → dispatch → reject → stall → retry, beside
-        // a relay that was `relaying` the entire time.
+        // **Already up? Then hand off rather than command it again.** Without
+        // this, an `activate` that reached the server but whose answer never
+        // came back is retried into a correct "already active" rejection, which
+        // the executor can only read as `commandRejected`: retry → dispatch →
+        // reject → stall → retry, permanently, beside a relay that is `relaying`
+        // the whole time. A rejection meaning "what you asked for is already
+        // true" is this run's own work reported back to it, so the STATE is what
+        // to read — not the command's answer, and not the server's prose, which
+        // would make this a string match on a message the backend may reword.
         //
-        // A rejection meaning "the thing you asked for is already true" is this
-        // run's own work being reported back to it, so the state is what to
-        // read — not the command's answer, and emphatically not the server's
-        // prose, which would make the fix a string match on a message the
-        // backend is free to reword.
-        //
-        // `statusBase`, not `status`, for the reason `confirmRelay` states: the
-        // backend appends a parenthetical parameter to some statuses.
+        // `statusBase`, not `status`: the backend appends a parenthetical
+        // parameter to some statuses.
         if relay.statusBase == Self.relayingStatus {
             logger.info("relay run \(directive.id, privacy: .public): \(relay.deviceCode, privacy: .public) is already relaying — confirming rather than re-activating")
             return .advanceStep(nextStep: Step.confirmingRelay)
         }
-        // The status check above can only be as good as the row it reads, and
-        // the window that caused the incident is exactly the one where the row
-        // is WRONG: the command landed, the client never learned, and nothing
-        // has re-read the relay since. So a row too old to trust buys a read
-        // before it buys a command — a stale read is free to be wrong, a
-        // duplicate `activate` is not. Bounded to one devices-refresh round per
-        // evaluation by `reAsk`'s `paid` set, after which this step either
-        // hands off above or dispatches below.
+        // The check above is only as good as the row it reads, and the window it
+        // exists for is exactly the one where that row is WRONG: the command
+        // landed, the client never learned, nothing has re-read the relay since.
+        // So a row too old to trust buys a read before it buys a command — a
+        // stale read is free to be wrong, a duplicate `activate` is not.
+        // Bounded to one devices-refresh round per evaluation by `reAsk`'s
+        // `paid` set.
         if world.now.timeIntervalSince(relay.updatedAt) > Self.pollInterval {
             return .refreshDevices(deviceCodes: [relay.deviceCode], thenStall: nil)
         }
@@ -1474,13 +1142,14 @@ public struct RelayRun: MissionStepMachine {
         )
     }
 
-    /// Poll for the dispatched `activate` to take.
+    /// Poll `world` for the `activate` dispatched at `directive`'s relay,
+    /// resolved through `carrier`, to take.
     ///
     /// Never dispatches. `activate` carries no operation row, so an
     /// `openOperation` check here could never be non-nil and could not stop a
     /// same-step redispatch — and a redispatching poll step would reset the very
     /// clock `activationDeadline` measures from, leaving a relay that never came
-    /// up being `activate`d at the live API forever.
+    /// up being `activate`d forever.
     private func confirmRelay(_ directive: Directive, _ carrier: Device, _ world: WorldSnapshot) -> MissionAction {
         guard let relay = Self.relay(for: directive, carrier: carrier, in: world) else {
             return .stall(.relayActivationFailed)
@@ -1493,21 +1162,20 @@ public struct RelayRun: MissionStepMachine {
             return .stall(.relayActivationFailed)
         }
         // Nothing else moves this row — the `relay.*` SSE route only invalidates
-        // FTL-mesh freshness, it does not re-read the device — so a bare wait
-        // can sit on a stale row for the whole deadline and then stall on a
-        // relay that came up fine.
+        // FTL-mesh freshness — so a bare wait can sit on a stale row for the
+        // whole deadline and then stall on a relay that came up fine.
         if world.now.timeIntervalSince(relay.updatedAt) > Self.pollInterval {
             return .refreshDevices(deviceCodes: [relay.deviceCode], thenStall: nil)
         }
         return .wait
     }
 
-    /// Confirm the run's actual deliverable: the TARGET SYSTEM is meshed.
+    /// Confirm `directive`'s actual deliverable in `world`: the TARGET SYSTEM is
+    /// meshed.
     ///
-    /// Stated in terms of the goal rather than the device, which is a different
-    /// claim from `confirmingRelay`'s: a relay can report `relaying` at a
-    /// location in the wrong system (a mis-aimed emplacement, a stale row from a
-    /// previous errand) and grow nobody's frontier where this run was sent.
+    /// A different claim from `confirmingRelay`'s: a relay can report `relaying`
+    /// at a location in the wrong system and grow nobody's frontier where this
+    /// run was sent.
     ///
     /// Read through DEVICE rows — `SalvageTargetPlanner.meshSystems(in:)`, the
     /// same predicate `Device.isActiveRelay` uses — and never through
@@ -1524,38 +1192,31 @@ public struct RelayRun: MissionStepMachine {
         return .advanceStep(nextStep: Step.returning)
     }
 
-    /// Fly the carrier back to the hub, so the next run can use it without a
-    /// human ferrying it home.
+    /// Fly `carrier` back to the hub in `world`, so the next run can use it
+    /// without a human ferrying it home.
     ///
     /// **The destination is the hub LOCATION, re-derived here — deliberately not
     /// `directive.originDesignation`.** That field is `SiteAssay.system(of: hub)`
-    /// (see `Brain.launch`), a lossy projection: it reads `AINALRAM` where the
-    /// hub is `AINALRAM-BELT-1`. A bare system designation travels to the
-    /// system's ENTRY POINT, which is an L4 — so returning to it would land the
-    /// carrier in the right system but not co-located with the autofactory, and
-    /// `Brain.freeCarrier` demands an exact location match. The manual step
-    /// would have moved rather than disappeared.
+    /// (see `Brain.launch`), a lossy projection to a bare SYSTEM designation,
+    /// and a bare designation travels to the system's ENTRY POINT, an L4 — so
+    /// returning to it lands the carrier in the right system but not co-located
+    /// with the printer, while `Brain.freeCarrier` demands an exact match.
+    /// Re-deriving through `WorldView.hubLocation` uses the SAME recognition
+    /// rule the brain launches on, so the place this run flies to and the place
+    /// the next run launches from cannot disagree.
     ///
-    /// Re-deriving rather than remembering also means the carrier follows the
-    /// hub if the hub ever moves, and it reuses `WorldView.hubLocation` — the
-    /// SAME recognition rule the brain launches on, so the place this run flies
-    /// to and the place the next run launches from cannot disagree.
-    ///
-    /// No hub to fly to is `.done`, not a stall: the relay is planted, the run's
-    /// deliverable is met, and a carrier parked at the target is exactly where
-    /// it would have been before this step existed.
+    /// No hub to fly to is `.done`, not a stall: the relay is planted and the
+    /// run's deliverable is met.
     private func returnHome(_ directive: Directive, _ carrier: Device, _ world: WorldSnapshot) -> MissionAction {
         guard let hub = Self.hubLocation(in: world) else {
             logger.notice("relay run \(directive.id, privacy: .public): no hub to return to — leaving the carrier where it stands")
             return .done
         }
         if carrier.location == hub { return .done }
-        // The outbound leg's shape, reused rather than re-derived: an open op
-        // means the trip is under way (and is the guard that stops a second
-        // travel landing on top of the first), and `travelPositionUnconfirmed`
-        // covers the gap between that op closing and the arrival's location
-        // write landing — the window in which the check above says "not there
-        // yet" about a carrier that already is.
+        // The outbound leg's shape: an open op means the trip is under way and
+        // guards against a second travel landing on top of the first, and
+        // `travelPositionUnconfirmed` covers the gap between that op closing and
+        // the arrival's location write landing.
         if world.openOperation(for: carrier.deviceCode) != nil { return .wait }
         if let unconfirmed = SalvageRun.travelPositionUnconfirmed(carrier, world) { return unconfirmed }
         return .dispatch(
@@ -1564,7 +1225,8 @@ public struct RelayRun: MissionStepMachine {
         )
     }
 
-    /// The hub as the BRAIN recognises it, read off a mission's snapshot.
+    /// The hub as the BRAIN recognises it, read off `world`, a mission's own
+    /// snapshot.
     ///
     /// One rule, two callers: `WorldView.hubLocation` is the definition (a
     /// print-capable device at a meshed location the census shows holding
