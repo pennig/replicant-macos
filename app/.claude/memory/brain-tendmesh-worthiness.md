@@ -66,8 +66,9 @@ a grow needs a relay**: source it from the **nearest useless relay (reclaim→re
 printing** — this *is* 06's "prefer redeploy over print," and is how the destination's "recover rare
 resources" is realised (reuse avoids a fresh rare-bearing print; reclaim moves the relay with no
 refund, decommission refunds nothing either, so *reuse* is the only recovery). **Print is the
-fallback** — no useless relay reachably close (build-time distance cutoff) or hub stock short (`R`
-floor blocks it). **No temporal hysteresis** — a dwell timer would only force a rare-spending print
+fallback** — no useless relay reachably close (build-time distance cutoff — **now settled at 2 relay
+hops / 15 ly as `Brain.reclaimRangeLY`; the arithmetic is in [[brain-tunable-calibrations]]**) or hub
+stock short (`R` floor blocks it). **No temporal hysteresis** — a dwell timer would only force a rare-spending print
 while a good reclaimable relay waited out a clock; thrash is prevented structurally. Sole guard is
 **evidentiary, already mandated by 01**: reclaim only on a just-in-time `.high` confirm-read of the
 candidate's system (which repairs the row), never a stale `WorldView` belief. Residual churn (survey
