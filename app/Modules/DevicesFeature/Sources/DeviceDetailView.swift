@@ -51,6 +51,11 @@ public struct DeviceDetailView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: Space.xl) {
                         header(device)
+                        // Why the device needs a look, read before anything
+                        // else — the row's dot is only a pointer here.
+                        if !store.selectedDeviceAttention.isEmpty {
+                            attentionSection(store.selectedDeviceAttention)
+                        }
                         readouts(device)
                         details(device)
                         if device.features.contains("attach") {
@@ -258,6 +263,46 @@ public struct DeviceDetailView: View {
                     .foregroundStyle(.rcTextTertiary)
             }
             .fixedSize()
+        }
+    }
+
+    // MARK: Attention
+
+    /// Why this device is in the Needs Attention section — the explanation
+    /// the row's dot only points at via a `.help()` tooltip. Moved here
+    /// (rather than crowding the row) so it reads as the pane's first
+    /// content, above the readouts.
+    private func attentionSection(_ flags: [AttentionFlag]) -> some View {
+        RCReadoutCard("Needs Attention", count: flags.count) {
+            VStack(alignment: .leading, spacing: Space.m) {
+                ForEach(Array(flags.enumerated()), id: \.offset) { index, flag in
+                    if index > 0 { Divider().overlay(Color.rcSeparator) }
+                    attentionRow(flag)
+                }
+            }
+        }
+    }
+
+    /// One flag's label plus its guidance, when there is any (`.directive(nil)`
+    /// carries none). The marker mirrors the row's dot (`.rcDanger`,
+    /// `MarkerSize.attentionDot`) so the two readings clearly refer to the
+    /// same signal.
+    private func attentionRow(_ flag: AttentionFlag) -> some View {
+        HStack(alignment: .top, spacing: Space.s) {
+            Circle()
+                .fill(.rcDanger)
+                .frame(width: MarkerSize.attentionDot, height: MarkerSize.attentionDot)
+                .padding(.top, Space.xs)
+            VStack(alignment: .leading, spacing: Space.xxs) {
+                Text(flag.label)
+                    .font(.rcBodyEmph)
+                    .foregroundStyle(.rcTextPrimary)
+                if let guidance = flag.guidance {
+                    Text(guidance)
+                        .font(.rcCaption)
+                        .foregroundStyle(.rcTextSecondary)
+                }
+            }
         }
     }
 

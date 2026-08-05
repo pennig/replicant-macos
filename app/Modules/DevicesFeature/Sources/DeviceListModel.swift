@@ -32,6 +32,25 @@ public enum AttentionFlag: Equatable, Sendable {
             reason?.displayName ?? "Directive needs attention"
         }
     }
+
+    /// What to tell the operator beneath `label` in the inspector's attention
+    /// section — a fix for the directive case, an observable fact for the
+    /// other two (there's no "fix" for a low capacity reading or a range gap
+    /// the game itself will close). Nil when there's nothing more to say:
+    /// `.directive(nil)` is a directive flagged without a recorded reason, so
+    /// there's no stall text to show.
+    public var guidance: String? {
+        switch self {
+        case .damaged:
+            "Operational capacity has fallen below the \(Int(DeviceListLayout.damagedCapacityThreshold))% threshold that flags a device as damaged."
+        case .outOfControlRange:
+            "Commands can't be issued to this device while it's outside its controller's range."
+        case let .directive(reason):
+            // Reuse the existing stall copy rather than duplicating it — see
+            // `DirectiveAttentionReason.guidance`, which already names the fix.
+            reason?.guidance
+        }
+    }
 }
 
 /// How a device relates to its host device. The row badges the relationship

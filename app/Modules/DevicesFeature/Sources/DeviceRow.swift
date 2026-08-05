@@ -103,14 +103,6 @@ struct DeviceRow: View {
                 .lineLimit(1)
                 .help(host.label)
             }
-            ForEach(tagChips, id: \.self) { tag in
-                Text(tag)
-                    .font(.rcMicro)
-                    .foregroundStyle(.rcTextSecondary)
-                    .padding(.horizontal, Space.xs)
-                    .padding(.vertical, Space.xxs)
-                    .background(Capsule().fill(.rcSurfaceRaised))
-            }
             Spacer(minLength: Space.xs)
         }
     }
@@ -138,17 +130,5 @@ struct DeviceRow: View {
         guard device.derivedActivity?.kind == .travel else { return nil }
         return device.detail["travel"]?["final_destination"]?.stringValue
             ?? device.detail["travel"]?["destination"]?.stringValue
-    }
-
-    /// `device.tags` deduplicated, keeping the first occurrence of each
-    /// repeated value. `Device.tags` is a plain `[String]` with nothing
-    /// enforcing uniqueness, and `ForEach(id: \.self)` over a raw array
-    /// containing a duplicate crashes at render time (SwiftUI requires
-    /// unique IDs). A repeated tag is data noise, not information worth
-    /// rendering twice, so dropping the repeat — rather than re-sorting —
-    /// keeps the server's own ordering intact.
-    private var tagChips: [String] {
-        var seen = Set<String>()
-        return device.tags.filter { seen.insert($0).inserted }
     }
 }

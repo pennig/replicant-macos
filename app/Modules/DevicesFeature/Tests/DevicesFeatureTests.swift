@@ -509,4 +509,36 @@ private func device(_ code: String, status: String = "idle") -> Device {
         #expect(store.state.selectedDevice?.deviceCode == "HIDDEN")
         #expect(!store.state.orderedIDs.contains("HIDDEN"))
     }
+
+    /// `selectedDeviceAttention` feeds the inspector's attention section —
+    /// empty with no selection, empty for an unflagged device, and populated
+    /// (through the same `DeviceListLayout.attentionFlags` the row's dot
+    /// uses) for a flagged one. The database is seeded before the
+    /// `TestStore` exists, since `@FetchAll` needs the rows present when
+    /// state is first constructed.
+    @Test func selectedDeviceAttentionReflectsTheSelection() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Device.insert {
+                makeDevice("HURT", capacity: 10)
+                makeDevice("FINE", capacity: 100)
+            }
+            .execute(db)
+        }
+
+        let store = TestStore(initialState: DevicesFeature.State()) {
+            DevicesFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
+        }
+        store.exhaustivity = .off
+
+        #expect(store.state.selectedDeviceAttention == [])
+
+        await store.send(.binding(.set(\.selectedDeviceCode, "FINE")))
+        #expect(store.state.selectedDeviceAttention == [])
+
+        await store.send(.binding(.set(\.selectedDeviceCode, "HURT")))
+        #expect(store.state.selectedDeviceAttention == [.damaged(capacity: 10)])
+    }
 }

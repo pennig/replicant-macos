@@ -101,6 +101,16 @@ public struct DevicesFeature {
             return devices.first { $0.deviceCode == code }
         }
 
+        /// The selected device's Needs Attention flags, for the inspector's
+        /// attention section. Derived through the same
+        /// `DeviceListLayout.attentionFlags` the row's dot uses, so the
+        /// inspector can never disagree with why the row was flagged. Empty
+        /// when nothing is selected or the device carries no flag.
+        public var selectedDeviceAttention: [AttentionFlag] {
+            guard let device = selectedDevice else { return [] }
+            return DeviceListLayout.attentionFlags(for: device, directives: attentionDirectives)
+        }
+
         /// The organised list. `State` derives it, the view renders it — the
         /// established "list query in state, view is a pure renderer" standard.
         /// Recomputed on access, so a view body should bind it to a `let` once

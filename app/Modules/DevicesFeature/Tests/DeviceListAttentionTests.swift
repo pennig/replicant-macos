@@ -189,6 +189,33 @@ import Utils
         #expect(AttentionFlag.directive(nil).label == "Directive needs attention")
     }
 
+    /// Names the actual threshold rather than just asserting non-nil — a
+    /// stale literal (or the two cases' copy swapped) would still read
+    /// non-nil but wouldn't contain the real number.
+    @Test func damagedGuidanceNamesTheThreshold() {
+        let guidance = AttentionFlag.damaged(capacity: 42).guidance
+        #expect(guidance?.contains("\(Int(DeviceListLayout.damagedCapacityThreshold))") == true)
+    }
+
+    @Test func outOfControlRangeGuidanceNamesCommands() {
+        let guidance = AttentionFlag.outOfControlRange.guidance
+        #expect(guidance?.localizedCaseInsensitiveContains("command") == true)
+    }
+
+    /// `.directive(nil)` is a directive flagged with no recorded reason —
+    /// there's no stall text to show, so guidance is nil rather than a
+    /// placeholder.
+    @Test func directiveWithNoReasonYieldsNoGuidance() {
+        #expect(AttentionFlag.directive(nil).guidance == nil)
+    }
+
+    /// The directive case must reuse `DirectiveAttentionReason.guidance`
+    /// exactly, not a copy — a copy would silently drift the moment either
+    /// string changed.
+    @Test func directiveGuidanceReusesExistingCopy() {
+        #expect(AttentionFlag.directive(.commandRejected).guidance == DirectiveAttentionReason.commandRejected.guidance)
+    }
+
     @Test func flagsAccumulate() {
         let device = makeDevice("A1", capacity: 10, detail: .object(["in_control_range": .bool(false)]))
         let directive = makeDirective(deviceCode: "A1", reason: .commandRejected)
