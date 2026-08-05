@@ -84,6 +84,11 @@ struct Brain: Sendable {
     /// `needsAttention` keep ownership — the mission is still in force and a
     /// stall the operator is about to resolve must find its fleet intact — so
     /// only a finished mission (`completed`/`cancelled`) gives its devices back.
+    ///
+    /// `DirectiveRow.owningStatuses` (DirectivesFeature) is a verbatim second
+    /// copy of this set. `DirectivesFeature` depends on `DirectiveEngine` and
+    /// not the reverse, so neither can import the other's; changing one without
+    /// the other drifts the reservation pass from the list row's display join.
     static let owningStatuses: Set<DirectiveStatus> = [.running, .needsAttention, .paused]
 
     /// Read the world, decide what — if anything — is worth doing, and do it:
