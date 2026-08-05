@@ -70,6 +70,24 @@ import Testing
         expectNoDifference(shape(forest), ["ORPHAN(0)", "OTHER(0)"])
     }
 
+    /// Decision: an unresolved host promotes to top level rather than falling
+    /// through to the next declared relation. Without this test, a change that
+    /// made `hostCode(of:)` try `stowedInDeviceCode` after an absent controller
+    /// would pass the whole suite — every other unresolved-host case here uses
+    /// a device with only a single declared relation.
+    @Test func unresolvedHostDoesNotFallThroughToTheNextRelation() {
+        let vessel = makeDevice("VESSEL", type: "heaven_vessel")
+        let stray = makeDevice("STRAY", stowedIn: "VESSEL", controlledBy: "GONE")
+        let forest = DeviceListLayout.forest(fleet: [stray, vessel])
+        // "HEAVEN Vessel" < "Survey Drone" (STRAY's default type), so VESSEL sorts first.
+        expectNoDifference(shape(forest), ["VESSEL(0)", "STRAY(0)"])
+        // The unresolved (higher-precedence) relation is what stays visible as the badge.
+        expectNoDifference(
+            DeviceListLayout.badge(for: stray, parentCode: nil),
+            .controlled(by: "GONE")
+        )
+    }
+
     @Test func selfHostPromotesToTopLevel() {
         let looped = makeDevice("SELF", stowedIn: "SELF")
         expectNoDifference(shape(DeviceListLayout.forest(fleet: [looped])), ["SELF(0)"])
