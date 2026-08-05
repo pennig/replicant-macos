@@ -30,8 +30,7 @@ public struct SurveyRun: MissionStepMachine {
 
     public init() {}
 
-    /// This mission's step vocabulary. Plain strings because `Directive.step` is
-    /// deliberately untyped — each kind owns its own vocabulary.
+    /// This mission's step vocabulary, as the bare strings `Directive.step` holds.
     public enum Step {
         /// Prove the staging aboard the vessel before committing to a target.
         public static let preflight = "preflight"

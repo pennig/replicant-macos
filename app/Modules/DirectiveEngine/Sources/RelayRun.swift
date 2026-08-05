@@ -45,8 +45,7 @@ public struct RelayRun: MissionStepMachine {
         self.reserveFloor = reserveFloor
     }
 
-    /// This mission's step vocabulary. Plain strings because `Directive.step` is
-    /// untyped — each kind owns its own vocabulary.
+    /// This mission's step vocabulary, as the bare strings `Directive.step` holds.
     ///
     /// `deactivating`/`confirmingIdle`, `stowing`/`confirmingStow`,
     /// `emplacing`→`activating` and `activating`/`confirmingRelay` are
@@ -147,6 +146,14 @@ public struct RelayRun: MissionStepMachine {
 
     // MARK: - Entry
 
+    /// Route `directive`'s current step against `world`, stalling if the carrier
+    /// `directive.deviceCode` names has left the fleet.
+    ///
+    /// The carrier is the run's only lease, so no substitute exists: every step
+    /// commands that one device or a relay it is physically carrying.
+    ///
+    /// An unrecognised step waits rather than dispatching: waiting is inert and
+    /// the operator can cancel, where guessing would command the fleet.
     public func nextAction(directive: Directive, world: WorldSnapshot) -> MissionAction {
         guard let carrier = world.device(directive.deviceCode) else {
             return .stall(.unreachableDevice)

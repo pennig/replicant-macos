@@ -150,8 +150,7 @@ public protocol MissionStepMachine: Sendable {
     /// The directive kind this machine runs.
     var kind: DirectiveKind { get }
     /// The step a freshly-started target begins on. The engine writes it when
-    /// advancing the queue, so the machine owns its own step vocabulary — which
-    /// is why `Directive.step` is a bare `String`.
+    /// advancing the queue, so the machine owns its own step vocabulary.
     var firstStep: String { get }
     /// The single next action. MUST be pure: no I/O, no clock reads (use
     /// `world.now`), no randomness.

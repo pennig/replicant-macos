@@ -36,8 +36,7 @@ public struct RestockRun: MissionStepMachine {
         self.reserveFloor = reserveFloor
     }
 
-    /// This mission's step vocabulary. Plain strings because `Directive.step` is
-    /// deliberately untyped — each kind owns its own vocabulary.
+    /// This mission's step vocabulary, as the bare strings `Directive.step` holds.
     public enum Step {
         /// Decide whether to print, and start one if so.
         public static let stocking = "stocking"

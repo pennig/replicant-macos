@@ -54,9 +54,8 @@ public struct SalvageRun: MissionStepMachine {
         public static let restocking = "restocking"
     }
 
-    /// The fleet tag a row falls back to when it carries none of its own — a
-    /// row written before `fleetTag` existed, or created some other way, still
-    /// resolves its fleet.
+    /// The fleet tag a row falls back to when it carries none of its own, so a
+    /// row created some other way still resolves its fleet.
     public static let defaultFleetTag = "auto:salvage"
 
     /// The system `.extendQueue` anchors its census read on when a row carries no

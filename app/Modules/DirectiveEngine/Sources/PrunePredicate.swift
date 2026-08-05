@@ -24,7 +24,9 @@
 //  a modelled-but-nonexistent link makes a real chain look redundant and the
 //  redundant-looking half is what gets reclaimed. (Grow reads the same model
 //  harmlessly — it over-plans, and the plant simply fails to link.) Reading the
-//  per-endpoint `rangeA`/`rangeB` that `ftlLinks` now carries would close it.
+//  per-endpoint `rangeA`/`rangeB` those rows carry would close it, but only
+//  through `DirectFTLLinks`, never off the raw `ftlLinks` rows, which store the
+//  closure rather than the real links (see the ftl-authority-rule note).
 //
 //  Pure function of `(WorldView, MeshGraph)` — no state, no I/O, no clock, no
 //  database, and no logging.
@@ -138,8 +140,12 @@ public enum PrunePredicate {
         // per-relay check would save only the unplaceable relay itself and
         // still offer up everything standing behind it.
         //
-        // TARGETS are covered too, not just the mesh: every target source is
-        // independent of the `stars` census, so an unplaceable target drops out
+        // TARGETS are covered too, not just the mesh: every source
+        // `servedSystems` unions is independent of the `stars` census —
+        // `salvageUnits` from `SiteAssay`, `beltsBySystem`/`surveyedSystems`
+        // from `SystemDetail`, `eventSystems` from `LocationEvent`,
+        // `devices`/`meshSystems` from `Device`, `replicantSystems` from
+        // `Replicant` — so an unplaceable target drops out
         // of `pathUnion` taking with it the pin it was the sole source of, and
         // an in-progress chain toward value the census has not paged in yet
         // reads as reclaimable — the brain plants and un-plants it.

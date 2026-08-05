@@ -91,9 +91,10 @@ enum DirectiveExecutor {
 
         case let .refreshSystem(designation, nextStep):
             // Best-effort by contract: the endpoint 403s for a system the census
-            // has never marked explored, and a stale cache only costs the
-            // confirming step one evaluation. Stalling on a transient read would
-            // strand a mission that is fine.
+            // has never marked explored, and a failed hydrate leaves `nextStep`
+            // judging a stale cache — which each mission already handles itself,
+            // with a bounded retry or a stall. Stalling on a transient read here
+            // would strand a mission that is fine.
             @Dependency(\.locationsClient) var locationsClient
             try? await locationsClient.hydrateSystem(designation: designation)
             await move(directive, to: nextStep, controllerCode: directive.controllerCode)
