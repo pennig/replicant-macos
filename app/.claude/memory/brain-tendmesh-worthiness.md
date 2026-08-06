@@ -38,6 +38,10 @@ survey EXCLUDED.** Ranking key (lexicographic; generalises salvage's `already-me
 2. **Cheapest remaining chain** — fewest additional relays still needed; distance is a *minor* sub-tiebreak (travel is cheap).
 3. **Value** — **(i) best tier** any served system reaches, then **(ii) aggregate magnitude at that tier** (salvage = summed units; belts = count of served belts at that tier). Tier is a **hard ordering, never out-summed by volume:**
    > **Event ▸ Rich belt ▸ Moderate belt ▸ salvage-sites-by-units ▸ Sparse belt**
+
+   **AMENDED by [[brain-stockpile-value]]: a sixth tier, `stockpile`, sits between Moderate belt and
+   salvage** — already-extracted units awaiting a Haul Run. The value set is now salvage + mine +
+   events + stockpiles.
    Belt class (Rich/Moderate/Sparse) is **pre-mesh-knowable** from survey/census; actual yields are not (need mesh + a site search), so the class is the only pre-mesh signal. Events top the tier because they yield XP + **permanent civilisation reputation**, not just resources. (Exact source field for belt class → confirm at build.)
 4. **Resource cost** — the relay bill: **370 units TOTAL across all six types, never 370 per type** (`carbon 20, silicates 100, structural 80, rares 40, conductive 120, volatiles 10`; see [[brain-relay-reserve-floor]]). An earlier draft of this line read "fixed 370×6", which is wrong — corrected 2026-08-05. **Still effectively inert as a tier, but for the reason rather than the number:** the bill is fixed per relay, so a candidate's cost is `370 × relays-still-needed` — a strictly increasing function of the very relay count key 2 already ranks on. It can therefore only ever be consulted on candidates key 2 has tied, where the counts are equal and the costs are equal with them. Kept for honesty.
 5. **Stable tiebreak** — system designation.

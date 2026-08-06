@@ -73,9 +73,13 @@ public struct BeltInfo: Equatable, Sendable {
 public enum ValueTier: Int, Comparable, Sendable {
     case sparseBelt = 0
     case salvage = 1
-    case moderateBelt = 2
-    case richBelt = 3
-    case event = 4
+    /// Units already extracted and awaiting collection. Above `salvage`
+    /// because no mining cycle stands between the fleet and them, below the
+    /// belt tiers because a pile is finite and a belt never depletes.
+    case stockpile = 2
+    case moderateBelt = 3
+    case richBelt = 4
+    case event = 5
 
     public static func < (l: Self, r: Self) -> Bool { l.rawValue < r.rawValue }
 }
@@ -100,18 +104,39 @@ public struct ValueTarget: Equatable, Sendable {
     public let beltCount: [BeltClass: Int]
     /// Whether the system currently hosts a live location event.
     public let hasEvent: Bool
+    /// Units already extracted and sitting at this system's locations, summed,
+    /// carried through from `WorldView.stockpileUnits`. `0` when the system
+    /// holds no pile.
+    public let stockpileUnits: Double
+
+    public init(
+        system: String,
+        bestTier: ValueTier,
+        salvageUnits: Double,
+        beltCount: [BeltClass: Int],
+        hasEvent: Bool,
+        stockpileUnits: Double = 0
+    ) {
+        self.system = system
+        self.bestTier = bestTier
+        self.salvageUnits = salvageUnits
+        self.beltCount = beltCount
+        self.hasEvent = hasEvent
+        self.stockpileUnits = stockpileUnits
+    }
 }
 
 /// The value model over `WorldView`'s known-value signals — the enumeration a
 /// ranking pass sorts on.
 public enum ValueCatalog {
     /// Every unmeshed system in `view` holding known value (salvage assays,
-    /// mine belts, or a live event), each tiered on the richest signal it
-    /// holds and sorted by `system` for a stable order across calls.
+    /// mine belts, a live event, or already-extracted units awaiting
+    /// collection), each tiered on the richest signal it holds and sorted by
+    /// `system` for a stable order across calls.
     ///
     /// Survey frontier — a system with a known position but no
-    /// salvage/belt/event — is EXCLUDED, as are already-meshed systems, so a
-    /// caller wanting unexplored space must not read this as the frontier.
+    /// salvage/belt/event/pile — is EXCLUDED, as are already-meshed systems, so
+    /// a caller wanting unexplored space must not read this as the frontier.
     ///
     /// Pure function of `view`: no I/O, no graph work, deterministic given the
     /// same snapshot.
@@ -119,11 +144,13 @@ public enum ValueCatalog {
         var candidateSystems = Set(view.salvageUnits.keys)
         candidateSystems.formUnion(view.beltsBySystem.keys)
         candidateSystems.formUnion(view.eventSystems)
+        candidateSystems.formUnion(view.stockpileUnits.keys)
         candidateSystems.subtract(view.meshSystems)
 
         let targets = candidateSystems.compactMap { system -> ValueTarget? in
             let salvageUnits = view.salvageUnits[system] ?? 0
             let hasEvent = view.eventSystems.contains(system)
+            let stockpileUnits = Double(view.stockpileUnits[system] ?? 0)
 
             var beltCount: [BeltClass: Int] = [:]
             for belt in view.beltsBySystem[system] ?? [] {
@@ -135,6 +162,7 @@ public enum ValueCatalog {
             var candidateTiers: [ValueTier] = []
             if hasEvent { candidateTiers.append(.event) }
             if salvageUnits > 0 { candidateTiers.append(.salvage) }
+            if stockpileUnits > 0 { candidateTiers.append(.stockpile) }
             if let richestBeltClass = beltCount.keys.max() {
                 candidateTiers.append(richestBeltClass.valueTier)
             }
@@ -142,7 +170,8 @@ public enum ValueCatalog {
 
             return ValueTarget(
                 system: system, bestTier: bestTier,
-                salvageUnits: salvageUnits, beltCount: beltCount, hasEvent: hasEvent
+                salvageUnits: salvageUnits, beltCount: beltCount, hasEvent: hasEvent,
+                stockpileUnits: stockpileUnits
             )
         }
         return targets.sorted { $0.system < $1.system }

@@ -106,9 +106,8 @@ public struct WorldView: Equatable, Sendable {
     /// it at selection is what makes the shortfall a choice not taken rather
     /// than a stall discovered mid-run (`RelayRun.carrierRetainsAuthority`).
     public let replicantHostDevices: Set<String>
-    /// Every system holding at least one location the census reports with
-    /// units on it — resources already extracted and waiting for a Haul Run to
-    /// collect them.
+    /// System → summed units sitting at its locations: resources already
+    /// extracted and waiting for a Haul Run to collect them.
     ///
     /// Distinct in kind from `salvageUnits` and `beltsBySystem`, which are
     /// value still IN THE GROUND: a pile is inventory the fleet already paid
@@ -118,10 +117,14 @@ public struct WorldView: Equatable, Sendable {
     /// instant — the assay drops out of `salvageUnits` exactly as the units
     /// land on the ground.
     ///
+    /// Summed ACROSS a system's locations, because both consumers ask about
+    /// the system rather than the pile: prune keeps the road to the system,
+    /// and grow ranks one relay per system.
+    ///
     /// Read off `LocationFootprint`, bounded in SQL to rows holding units:
     /// most of that table is locations looked at once and found empty, and
     /// taking those too would pin every system the fleet has ever visited.
-    public let stockpileSystems: Set<String>
+    public let stockpileUnits: [String: Int]
     /// Systems that have been through a full system scan
     /// (`SystemDetail.systemScanned`) — the very rows `beltsBySystem` decodes.
     ///
@@ -148,7 +151,7 @@ public struct WorldView: Equatable, Sendable {
         surveyedSystems: Set<String> = [],
         replicantSystems: Set<String> = [],
         replicantHostDevices: Set<String> = [],
-        stockpileSystems: Set<String> = [],
+        stockpileUnits: [String: Int] = [:],
         now: Date
     ) {
         self.devices = devices
@@ -161,7 +164,7 @@ public struct WorldView: Equatable, Sendable {
         self.surveyedSystems = surveyedSystems
         self.replicantSystems = replicantSystems
         self.replicantHostDevices = replicantHostDevices
-        self.stockpileSystems = stockpileSystems
+        self.stockpileUnits = stockpileUnits
         self.now = now
     }
 
@@ -242,7 +245,9 @@ public struct WorldView: Equatable, Sendable {
                 replicants.compactMap { $0.currentStar.map { SiteAssay.system(of: $0) } }
             ),
             replicantHostDevices: Set(replicants.compactMap(\.hostedDeviceCode)),
-            stockpileSystems: Set(stockpiles.map { SiteAssay.system(of: $0.location) }),
+            stockpileUnits: stockpiles.reduce(into: [:]) { totals, row in
+                totals[SiteAssay.system(of: row.location), default: 0] += row.resources
+            },
             now: now
         )
     }

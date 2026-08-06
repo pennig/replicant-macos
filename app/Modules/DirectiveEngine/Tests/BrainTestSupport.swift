@@ -505,7 +505,7 @@ func prunableWorld(
     fleet: [String: String] = [:],
     surveyed: Set<String>? = nil,
     replicants: Set<String> = [],
-    stockpiles: Set<String> = []
+    stockpiles: [String: Int] = [:]
 ) -> WorldView {
     let relayDevices = relays.sorted { $0.key < $1.key }.map { code, system in
         deviceFixture(
@@ -528,7 +528,7 @@ func prunableWorld(
         beltsBySystem: belts,
         surveyedSystems: surveyed ?? Set(positions.keys),
         replicantSystems: replicants,
-        stockpileSystems: stockpiles,
+        stockpileUnits: stockpiles,
         now: Date(timeIntervalSince1970: 0)
     )
 }
@@ -581,7 +581,8 @@ extension WorldView {
         eventSystems: Set<String>? = nil,
         starPositions: [String: Position]? = nil,
         beltsBySystem: [String: [BeltInfo]]? = nil,
-        surveyedSystems: Set<String>? = nil
+        surveyedSystems: Set<String>? = nil,
+        stockpileUnits: [String: Int]? = nil
     ) -> WorldView {
         WorldView(
             devices: devices,
@@ -592,6 +593,7 @@ extension WorldView {
             hubLocation: hubLocation,
             beltsBySystem: beltsBySystem ?? self.beltsBySystem,
             surveyedSystems: surveyedSystems ?? self.surveyedSystems,
+            stockpileUnits: stockpileUnits ?? self.stockpileUnits,
             now: now
         )
     }

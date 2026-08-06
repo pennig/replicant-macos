@@ -412,7 +412,7 @@ struct PruneTests {
             positions: positions,
             relays: ["REL_SOL": "SOL", "REL_PILE": "PILE", "REL_EMPTY": "EMPTY"],
             salvage: [:], // every assay in both systems is spent
-            stockpiles: ["PILE"] // …but PILE's mined units are still sitting there
+            stockpiles: ["PILE": 500] // …but PILE's mined units are still sitting there
         )
         let analysis = PrunePredicate.analyse(view: world, graph: MeshGraph(positions: positions))
         #expect(analysis.pinned == ["REL_SOL", "REL_PILE"])
@@ -436,7 +436,7 @@ struct PruneTests {
             positions: positions,
             relays: ["REL_SOL": "SOL", "REL_W": "W", "REL_PILE": "PILE"],
             salvage: [:],
-            stockpiles: ["PILE"]
+            stockpiles: ["PILE": 500]
         )
         let analysis = PrunePredicate.analyse(view: world, graph: MeshGraph(positions: positions))
         #expect(analysis.pinned == ["REL_SOL", "REL_W", "REL_PILE"])

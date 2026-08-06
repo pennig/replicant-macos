@@ -155,16 +155,17 @@ struct WorldViewTests {
         #expect(view.beltsBySystem.isEmpty)
         #expect(view.replicantSystems.isEmpty)
         #expect(view.replicantHostDevices.isEmpty)
-        #expect(view.stockpileSystems.isEmpty)
+        #expect(view.stockpileUnits.isEmpty)
     }
 
-    /// Every location the census shows holding units, reduced to its system —
-    /// the piles a Haul Run exists to collect.
+    /// Every location the census shows holding units, reduced to its system and
+    /// SUMMED there — the piles a Haul Run exists to collect.
     ///
-    /// Several locations in one system collapse to a single entry, and a
-    /// location the same system holds with nothing on it neither adds nor
-    /// removes one: presence anywhere in the system is the whole question.
-    @Test func stockpileSystemsSurfaceEveryLocationHoldingUnits() async throws {
+    /// Summing is what makes the magnitude usable: a system with five modest
+    /// piles is worth more than one with a single pile of the same size, and
+    /// both grow's ranking and any per-system judgement ask about the system.
+    /// A location holding nothing contributes nothing to its system's total.
+    @Test func stockpileUnitsSumEveryLocationHoldingUnitsPerSystem() async throws {
         let db = try GameDatabase.bootstrap()
         try await db.write { db in
             try seedStockpile(db, location: "ORASALAS-6-9", resources: 318)
@@ -173,7 +174,7 @@ struct WorldViewTests {
             try seedStockpile(db, location: "VEGA-2", resources: 40)
         }
         let view = try await db.read { try WorldView.read(from: $0, now: Date()) }
-        #expect(view.stockpileSystems == ["ORASALAS", "VEGA"])
+        #expect(view.stockpileUnits == ["ORASALAS": 540, "VEGA": 40])
     }
 
     /// A census row reporting no units is not a stockpile. Most of the table is
@@ -186,7 +187,7 @@ struct WorldViewTests {
             try seedStockpile(db, location: "DEAD-1", resources: 0)
         }
         let view = try await db.read { try WorldView.read(from: $0, now: Date()) }
-        #expect(view.stockpileSystems.isEmpty)
+        #expect(view.stockpileUnits.isEmpty)
     }
 
     /// The `replicants` read (Task 23), projected into the two facts the brain

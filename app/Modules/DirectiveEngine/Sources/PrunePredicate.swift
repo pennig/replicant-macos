@@ -226,18 +226,17 @@ public enum PrunePredicate {
     /// one strands the units rather than merely postponing them.
     ///
     /// **Not bounded to meshed systems**, which puts it alongside
-    /// `liveValueSystems` rather than the two mesh-bounded sources. An
-    /// unmeshed pile cannot be ferried at all, so the ferry it protects is one
-    /// the mesh does not yet offer — and `ValueCatalog` ranks assays, belts and
-    /// events but not piles, so no grow is currently extending a chain toward
-    /// one either. Admitting it anyway only ever adds pins, which is the
-    /// direction every uncertain edge in this file errs in.
+    /// `liveValueSystems` rather than the two mesh-bounded sources — and for
+    /// the same reason. `ValueCatalog` ranks an unmeshed pile as a grow target
+    /// (`ValueTier.stockpile`), so a chain toward one is a chain the brain is
+    /// actively extending, and the hops already planted along it must not read
+    /// as spare while it is being built.
     ///
     /// It carries the cost `liveValueSystems` already carries: a pile in a
     /// system the census cannot place makes the coverage precondition decline
     /// the whole judgement, pinning everything.
     static func stockpileSystems(in view: WorldView) -> Set<String> {
-        view.stockpileSystems
+        Set(view.stockpileUnits.keys)
     }
 
     /// Meshed systems in `view` holding one of the account's replicants.
