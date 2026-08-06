@@ -109,44 +109,56 @@ changes.
 
 ### The survey repair step
 
-Placement, in `SurveyRun`'s step machine:
+Two additions to `SurveyRun`'s step vocabulary, either side of the survey it
+already runs:
 
-    travel → deploy/launch → [REPAIR] → search bodies → recall → stow → travel
+    travelling → [DEPLOY BOTS] → configuring → launching → awaiting →
+    confirming → recovering → [REPAIR GATE, STOW BOTS] → returning
 
-**At the start, after deploy, before the first search dispatch.** Drones carry
-damage *in* from the previous system, so repairing before dispatching searches
-means every scan in this system runs at restored speed. Repairing at the end
-would leave the current system's scans running on damage already taken and add
-pure latency before travel.
+**Repair overlaps the survey rather than preceding it.** The survey begins at
+`launching`: configuring the controller and launching it deploys the drones and
+starts the searches in one act, so no window exists in which the drones are
+deployed and idle. Before `launching` they sit stowed inside the vessel, out of a
+bot's reach.
 
-**Entry gate.** Any fleet device below **50%** capacity — the drones *and the
-bots*. A degraded bot is included deliberately: it is the failure that silently
-disables everything downstream, and its partner is the thing that fixes it.
+That costs nothing, because it is exactly what a service bot is for. **Hot repair
+without deactivation** is the capability distinguishing it from a maintenance
+drone, so bots deployed on arrival cruise to the drones and repair them
+mid-search, over a survey that runs tens of minutes.
 
-**Exit gate — progress-based, not threshold-based.** The step leaves when:
+**Deploy on arrival.** One `deploy` per bot after the vessel arrives, before
+`configuring`. The bots are not adopted by the survey controller, so `launching`
+will not deploy them — they need their own dispatch.
 
-1. the bots report idle, **and**
-2. no fleet device's capacity rose between two consecutive polls,
-3. with a step deadline behind the whole thing.
+**The gate sits before departure**, after `recovering` has every drone back
+aboard. Concurrent repair leaves exactly one risk open — the vessel travelling on
+while repair is unfinished — and this is the step that closes it.
 
-This is the load-bearing decision in the design. The obvious gate — "wait until
-everything reads ≥90%" — **cannot be written safely**, because `service` repairs
-to an unquantified "functional level" that may sit below 90%. A threshold gate
-against an unmeasured threshold is a permanent stall. A progress gate asks the
-only question that is always answerable — *is repair still accomplishing
-anything?* — and is correct under `service` and `patrol` alike, so switching
-directives later changes no code.
+**Entry.** Any fleet device below **50%** capacity, the drones *and the bots*. A
+degraded bot is included deliberately: it is the failure that silently disables
+everything downstream, and its partner is the thing that fixes it.
 
-**No commands are issued by this step.** Co-location is the trigger and deploy
-already achieved it. The step is a *gate*, not a dispatcher: it observes and
-waits. That is what makes it nearly free against the 60/min `CommandGovernor`
-budget.
+**Exit: the bots are idle.** Read from the world on each evaluation — no bot
+reporting active repair work — guarded by a probe delay and the fresh-evidence
+rule, after which the bots are stowed and the run travels on. A step deadline
+sits behind it.
 
-**Degradation.** No bot aboard → the step is **skipped with a named reason**, and
-the survey proceeds unrepaired; a missing bot must not stop a survey. Deadline
-expiry → **escalate, do not retry**, with the reason naming the bots' own
-capacity, because the case worth an operator's attention is precisely "both bots
-are too worn to work".
+Two other gates were considered and cannot be built. **"Wait until everything
+reads ≥90%"** is unsafe: `service` repairs to an unquantified "functional level"
+that may sit below 90%, so the threshold can be unreachable by construction.
+**"Wait until no capacity rose between two polls"** requires remembering the
+previous poll, and `nextAction(directive:world:)` is pure by contract with
+nowhere to keep it short of a new column. Bot idleness is answerable from the
+current world alone, and stays correct under `service` and `patrol` alike.
+
+**The gate issues no repair commands.** Co-location is the trigger and the deploy
+already achieved it. Its only dispatches are the bots' `deploy` on arrival and
+their `stow` on departure.
+
+**Degradation.** No bot aboard → both steps are **skipped with a named reason**
+and the survey runs unrepaired; a missing bot must not stop a survey. Deadline
+expiry → **escalate, do not retry**, naming the bots' own capacity, because the
+case worth an operator's attention is precisely "both bots are too worn to work".
 
 ### Mine and salvage: no step at all
 
@@ -188,7 +200,7 @@ Against the eight clauses of `brain-robustness-bar`:
 | Clause | How this clears it |
 | --- | --- |
 | 1 Selector, not enactor | The step issues **no commands at all**. It is a gate over `WorldSnapshot`. |
-| 2 Stateless between ticks | The gate re-derives from capacity readings each evaluation; the only carried value is the previous poll's capacities, held in the step's own state exactly as other polling steps hold a watermark. |
+| 2 Stateless between ticks | Fully stateless. The gate reads bot idleness out of the current world and carries nothing between evaluations — which is why the two-poll comparison was rejected. |
 | 3 Pure selection; API vetoes | Nothing to select. The directive chooses targets server-side. |
 | 4 Snapshot fidelity | Capacity is read from device rows; the step must prove freshness against its own `stepStartedAt` before judging, per `confirm-steps-need-fresh-evidence` — a pre-deploy reading must never satisfy the gate. |
 | 5 Determinism / e2e | A fleet entering below 50% and rising to a plateau exits; one that never rises hits the deadline and escalates. Both are assertable end-to-end against a fixture fleet. |
@@ -219,5 +231,12 @@ Cheap to answer once, and each changes a value rather than the design:
    field. If it proves high enough, `patrol` never needs revisiting.
 2. **What is the capacity floor below which a bot stops repairing?** The user's
    premise for pairing. Only the escalation message's wording depends on it.
-3. **Does a bot repair a device that is stowed rather than deployed?** Affects
-   only whether the mine/salvage fleets stay covered between runs.
+3. **Does a bot repair a device that is stowed rather than deployed?** No longer
+   gates survey, since the bots now deploy on arrival and repair deployed drones.
+   It decides only whether the mine and salvage fleets stay covered between runs.
+
+4. **What does an idle bot look like on the wire?** The exit gate turns on it.
+   Live bots with nothing to repair read `ami_directive._eval_state: "idle"` and
+   carry no `repair` block; a working bot should populate `repair` with
+   `target_device_code`, `progress_percent` and `eta_seconds`. Confirm the
+   working shape before trusting the gate.
