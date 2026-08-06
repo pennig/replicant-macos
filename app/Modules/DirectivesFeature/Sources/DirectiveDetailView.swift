@@ -267,11 +267,12 @@ public struct DirectiveDetailView: View {
     /// whichever id the selected row carries.
     @ViewBuilder
     private func timelineSection(title: String) -> some View {
-        if !store.timeline.entries.isEmpty {
+        let rows = DirectiveLogCollapsing.collapse(store.timeline.entries).prefix(DirectiveTimeline.entryLimit)
+        if !rows.isEmpty {
             VStack(alignment: .leading, spacing: Space.xs) {
                 RCSectionHeader(title)
-                ForEach(store.timeline.entries) { entry in
-                    DirectiveTimelineRow(entry: entry)
+                ForEach(rows) { row in
+                    DirectiveTimelineRow(entry: row.entry, count: row.count)
                 }
             }
         }

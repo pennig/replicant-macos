@@ -21,9 +21,15 @@ public struct DirectiveTimeline: FetchKeyRequest {
         public init(entries: [DirectiveLogEntry] = []) { self.entries = entries }
     }
 
-    /// Most entries any one pane renders. A multi-target run accumulates
-    /// roughly six per target and nothing prunes the table.
+    /// Display budget: the most rows a pane renders, after collapsing.
+    /// A multi-target run accumulates roughly six raw entries per target
+    /// and nothing prunes the table.
     public static let entryLimit = 100
+
+    /// Raw rows fetched for a mission's timeline before collapsing repeats
+    /// down to `entryLimit` display rows — 5×, enough for the worst observed
+    /// same-step burst (~40) without an effectively unbounded fetch.
+    public static let rawFetchLimit = 500
 
     public let directiveID: String?
     public let deviceCode: String?
@@ -55,7 +61,7 @@ public struct DirectiveTimeline: FetchKeyRequest {
             return Value(entries: try DirectiveLogEntry
                 .where { $0.directiveID.eq(directiveID) }
                 .order { $0.occurredAt.desc() }
-                .limit(Self.entryLimit)
+                .limit(Self.rawFetchLimit)
                 .fetchAll(db))
         }
         if let deviceCode {

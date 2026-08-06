@@ -136,12 +136,12 @@ struct DirectiveTimelineTests {
         #expect(value.entries.isEmpty)
     }
 
-    /// The newest `entryLimit` entries are kept — a long multi-target run is
-    /// otherwise unbounded.
+    /// The newest `rawFetchLimit` entries are kept — a long multi-target run
+    /// is otherwise unbounded.
     @Test func capsToTheNewestEntries() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in
-            for index in 0..<(DirectiveTimeline.entryLimit + 10) {
+            for index in 0..<(DirectiveTimeline.rawFetchLimit + 10) {
                 try DirectiveLogEntry.insert {
                     entry("L\(index)", directiveID: "D1", at: TimeInterval(index))
                 }.execute(db)
@@ -150,8 +150,8 @@ struct DirectiveTimelineTests {
         let value = try await database.read { db in
             try DirectiveTimeline(directiveID: "D1", deviceCode: nil).fetch(db)
         }
-        #expect(value.entries.count == DirectiveTimeline.entryLimit)
-        #expect(value.entries.first?.id == "L\(DirectiveTimeline.entryLimit + 9)", "newest kept")
+        #expect(value.entries.count == DirectiveTimeline.rawFetchLimit)
+        #expect(value.entries.first?.id == "L\(DirectiveTimeline.rawFetchLimit + 9)", "newest kept")
     }
 
     /// `request(for:)` maps each row kind to the right key, so no caller has to
