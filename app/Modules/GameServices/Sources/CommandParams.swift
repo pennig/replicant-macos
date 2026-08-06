@@ -81,4 +81,20 @@ public struct CommandParams: Sendable, Equatable {
         }
         return .object(dict)
     }
+
+    /// The one field worth naming in a timeline summary, whichever this
+    /// dispatch set. For `set_directive`, `configuration`'s `collect` (a
+    /// pile) beats the directive name, which rarely varies.
+    public var summaryDetail: String? {
+        if let destination { return destination }
+        if let deviceType { return deviceType }
+        if let target { return target }
+        if let directive {
+            if let collect = configuration?["collect"]?.stringValue {
+                return "collect \(collect)"
+            }
+            return directive
+        }
+        return nil
+    }
 }

@@ -97,6 +97,73 @@ struct DirectiveEngineTests {
             #expect(entries.map(\.kind) == [.stepStarted, .commandDispatched])
             #expect(entries.allSatisfy { $0.directiveID == "D1" })
             #expect(entries.last?.operationID == "OP1")
+            #expect(entries.last?.summary == "Dispatched travel to VES1 — SOL",
+                     "a travel's dispatch entry names its destination")
+        }
+    }
+
+    /// A `set_directive` repoint names the pile it's pointing the controller
+    /// at — `configuration`'s `collect` — not just the generic verb, which is
+    /// what let 112 identical Haul Run repoints drown in a run's timeline.
+    @Test func setDirectiveDispatchNamesTheCollectPile() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { mission(step: "start") }.execute(db)
+        }
+        let core = DirectiveEngineCore(
+            machines: [ScriptedMachine([
+                .dispatch(kind: .setDirective, deviceCode: "AMI1",
+                          params: CommandParams(directive: "auto:haul", configuration: [
+                              "collect": .string("OCHIRD-5-1"),
+                              "deliver": .string("OCHIRD-3-1"),
+                          ]),
+                          nextStep: "dispatched"),
+            ])],
+            tick: .seconds(5)
+        )
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.commandGovernor.dispatch = { _, _, _ in .dispatched(.accepted(operationID: "OP1")) }
+        } operation: {
+            await core.evaluateOnce(directiveID: "D1")
+
+            let entries = try await database.read { db in
+                try DirectiveLogEntry.order { $0.id }.fetchAll(db)
+            }
+            #expect(entries.last?.summary == "Dispatched set_directive to AMI1 — collect OCHIRD-5-1")
+        }
+    }
+
+    /// A dispatch whose params carry nothing worth naming degrades to the old
+    /// text exactly — no trailing separator dangling off an empty detail.
+    @Test func dispatchWithEmptyParamsDegradesToTheOldSummary() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { mission(step: "start") }.execute(db)
+        }
+        let core = DirectiveEngineCore(
+            machines: [ScriptedMachine([
+                .dispatch(kind: .simple("launch"), deviceCode: "VES1",
+                          params: CommandParams(), nextStep: "launching"),
+            ])],
+            tick: .seconds(5)
+        )
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.commandGovernor.dispatch = { _, _, _ in .dispatched(.accepted(operationID: "OP1")) }
+        } operation: {
+            await core.evaluateOnce(directiveID: "D1")
+
+            let entries = try await database.read { db in
+                try DirectiveLogEntry.order { $0.id }.fetchAll(db)
+            }
+            #expect(entries.last?.summary == "Dispatched launch to VES1")
         }
     }
 

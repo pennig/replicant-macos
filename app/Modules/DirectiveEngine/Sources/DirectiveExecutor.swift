@@ -63,7 +63,7 @@ enum DirectiveExecutor {
                         entry(directive, .stepStarted, "Step: \(nextStep)",
                               step: nextStep, operationID: nil,
                               id: uuid().uuidString, at: date.now),
-                        entry(directive, .commandDispatched, "Dispatched \(kind.rawValue) to \(deviceCode)",
+                        entry(directive, .commandDispatched, dispatchSummary(kind, deviceCode, params),
                               step: nextStep, operationID: operationID,
                               id: uuid().uuidString, at: date.now),
                     ])
@@ -329,6 +329,17 @@ enum DirectiveExecutor {
                   id: uuid().uuidString, at: date.now),
         ])
         logger.notice("directive \(directive.id, privacy: .public) stalled: \(summary, privacy: .public)")
+    }
+
+    /// Names `params`'s salient field after an em dash when it has one;
+    /// degrades to the plain "Dispatched kind to device" text, no dangling
+    /// separator, when it doesn't.
+    private static func dispatchSummary(
+        _ kind: OperationKind, _ deviceCode: String, _ params: CommandParams
+    ) -> String {
+        let base = "Dispatched \(kind.rawValue) to \(deviceCode)"
+        guard let detail = params.summaryDetail else { return base }
+        return "\(base) — \(detail)"
     }
 
     /// Build one unpersisted timeline entry of `kind` reading `summary`, owned
