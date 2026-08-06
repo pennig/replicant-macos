@@ -358,19 +358,12 @@ let growHubLocation = "SOL-3"
 /// check.
 let fixtureCensusFetchedAt = Date(timeIntervalSince1970: 0)
 
-/// The smallest world the brain can actually grow from: `SOL` meshed by a live
-/// relay, a print hub with `carriers` HEAVEN vessels parked alongside it, and
-/// one unmeshed salvage system per entry in `salvage`.
-///
-/// **Every salvage system sits at exactly 5 ly from SOL**, on a different axis.
-/// That is load-bearing, not decoration: `GrowRanking`'s key compares
-/// `relaysRemaining` and then `hopDistance` BEFORE it ever looks at value, so
-/// a test that expects the richest pile to rank first would otherwise be
-/// decided by whichever system happened to be nearest. With the distances tied
-/// exactly (each is a single axis offset of 5, so `sqrt(25)` with no floating
-/// point residue) the sort is forced down to field 3 — magnitude — which is
-/// what those tests mean to exercise. At most six systems; a seventh would
-/// have no equidistant axis left and is not supported.
+/// The smallest world the brain can grow from: `SOL` meshed by a live relay, a
+/// print hub with `carriers` vessels alongside, and one unmeshed salvage system
+/// per `salvage` entry. **Every one sits at exactly 5 ly from SOL on its own
+/// axis** — load-bearing, since the ranking key compares distance BEFORE value,
+/// so tying the distances forces the sort down to magnitude. Six systems maximum:
+/// a seventh has no equidistant axis left.
 func seedGrowableWorld(
     _ db: Database,
     carriers: [String] = ["V1"],
@@ -419,6 +412,20 @@ func seedHubStockpile(
     resources: Int,
     fetchedAt: Date = fixtureCensusFetchedAt
 ) throws {
+    try seedStockpile(db, location: location, resources: resources, fetchedAt: fetchedAt)
+}
+
+/// A `LocationFootprint` census row for `location` holding `resources` units.
+///
+/// The same table `seedHubStockpile` writes, named generally because the row
+/// answers two unrelated questions: whether a print-capable location is a hub,
+/// and whether a system holds units awaiting collection.
+func seedStockpile(
+    _ db: Database,
+    location: String,
+    resources: Int,
+    fetchedAt: Date = fixtureCensusFetchedAt
+) throws {
     try LocationFootprint.insert {
         LocationFootprint(
             location: location, devices: 1, resources: resources, resourceSites: 0,
@@ -448,7 +455,8 @@ func prunableWorld(
     events: Set<String> = [],
     fleet: [String: String] = [:],
     surveyed: Set<String>? = nil,
-    replicants: Set<String> = []
+    replicants: Set<String> = [],
+    stockpiles: [String: Int] = [:]
 ) -> WorldView {
     let relayDevices = relays.sorted { $0.key < $1.key }.map { code, system in
         deviceFixture(
@@ -471,6 +479,7 @@ func prunableWorld(
         beltsBySystem: belts,
         surveyedSystems: surveyed ?? Set(positions.keys),
         replicantSystems: replicants,
+        stockpileUnits: stockpiles,
         now: Date(timeIntervalSince1970: 0)
     )
 }
@@ -523,7 +532,8 @@ extension WorldView {
         eventSystems: Set<String>? = nil,
         starPositions: [String: Position]? = nil,
         beltsBySystem: [String: [BeltInfo]]? = nil,
-        surveyedSystems: Set<String>? = nil
+        surveyedSystems: Set<String>? = nil,
+        stockpileUnits: [String: Int]? = nil
     ) -> WorldView {
         WorldView(
             devices: devices,
@@ -534,6 +544,7 @@ extension WorldView {
             hubLocation: hubLocation,
             beltsBySystem: beltsBySystem ?? self.beltsBySystem,
             surveyedSystems: surveyedSystems ?? self.surveyedSystems,
+            stockpileUnits: stockpileUnits ?? self.stockpileUnits,
             now: now
         )
     }

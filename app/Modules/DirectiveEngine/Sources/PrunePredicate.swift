@@ -147,15 +147,28 @@ public enum PrunePredicate {
         return PruneAnalysis(pinned: pinned, reclaimable: reclaimable)
     }
 
-    /// Everything the mesh must keep serving — live value, where our own hardware
-    /// stands, meshed systems nobody has surveyed, and meshed systems holding a
-    /// replicant. All four only ever ADD targets, so a source can move a relay from
-    /// reclaimable to pinned and never the other way.
+    /// Everything the mesh must keep serving — live value, uncollected stockpiles,
+    /// where our own hardware stands, meshed systems nobody has surveyed, and
+    /// meshed systems holding a replicant. All five only ever ADD targets, so a
+    /// source can move a relay from reclaimable to pinned and never the other way.
     static func servedSystems(in view: WorldView) -> Set<String> {
         liveValueSystems(in: view)
+            .union(stockpileSystems(in: view))
             .union(fleetSystems(in: view))
             .union(unsurveyedMeshSystems(in: view))
             .union(replicantSystems(in: view))
+    }
+
+    /// Systems holding resources already extracted and awaiting collection. A pile
+    /// is inventory the fleet has already paid for, and `HaulTargetPlanner` issues
+    /// the `ferry` that collects it only while both ends sit on the mesh, so
+    /// reclaiming the relay over one strands the units rather than postponing them.
+    ///
+    /// **Not bounded to meshed systems**, unlike the two below it: `ValueCatalog`
+    /// ranks an unmeshed pile as a grow target, so the hops already planted along
+    /// a chain toward one must not read as spare while it is being built.
+    static func stockpileSystems(in view: WorldView) -> Set<String> {
+        Set(view.stockpileUnits.keys)
     }
 
     /// Meshed systems holding one of the account's replicants. Without this the

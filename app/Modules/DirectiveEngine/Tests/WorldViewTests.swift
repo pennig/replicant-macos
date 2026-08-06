@@ -155,6 +155,39 @@ struct WorldViewTests {
         #expect(view.beltsBySystem.isEmpty)
         #expect(view.replicantSystems.isEmpty)
         #expect(view.replicantHostDevices.isEmpty)
+        #expect(view.stockpileUnits.isEmpty)
+    }
+
+    /// Every location the census shows holding units, reduced to its system and
+    /// SUMMED there — the piles a Haul Run exists to collect.
+    ///
+    /// Summing is what makes the magnitude usable: a system with five modest
+    /// piles is worth more than one with a single pile of the same size, and
+    /// both grow's ranking and any per-system judgement ask about the system.
+    /// A location holding nothing contributes nothing to its system's total.
+    @Test func stockpileUnitsSumEveryLocationHoldingUnitsPerSystem() async throws {
+        let db = try GameDatabase.bootstrap()
+        try await db.write { db in
+            try seedStockpile(db, location: "ORASALAS-6-9", resources: 318)
+            try seedStockpile(db, location: "ORASALAS-9-10", resources: 222)
+            try seedStockpile(db, location: "ORASALAS-3-2", resources: 0)
+            try seedStockpile(db, location: "VEGA-2", resources: 40)
+        }
+        let view = try await db.read { try WorldView.read(from: $0, now: Date()) }
+        #expect(view.stockpileUnits == ["ORASALAS": 540, "VEGA": 40])
+    }
+
+    /// A census row reporting no units is not a stockpile. Most of the table is
+    /// exactly that — a location visited once and found empty — so a read that
+    /// took every row would make every system we have ever looked at pin its
+    /// own relay forever, and prune would have nothing left to offer.
+    @Test func aLocationHoldingNothingIsNotAStockpile() async throws {
+        let db = try GameDatabase.bootstrap()
+        try await db.write { db in
+            try seedStockpile(db, location: "DEAD-1", resources: 0)
+        }
+        let view = try await db.read { try WorldView.read(from: $0, now: Date()) }
+        #expect(view.stockpileUnits.isEmpty)
     }
 
     /// The `replicants` read (Task 23), projected into the two facts the brain

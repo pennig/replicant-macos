@@ -99,6 +99,10 @@ extension GrowCandidate {
     public var magnitudeSummary: String {
         switch bestTier {
         case .salvage: Self.counted(magnitudeAtTier, "unit")
+        // Named apart from `.salvage`'s bare "unit": the operator checking this
+        // against the map needs to know whether the units are still in the
+        // ground or already on it.
+        case .stockpile: Self.counted(magnitudeAtTier, "mined unit")
         case .event: Self.counted(magnitudeAtTier, "live event")
         case .richBelt: Self.counted(magnitudeAtTier, "rich belt")
         case .moderateBelt: Self.counted(magnitudeAtTier, "moderate belt")
@@ -217,6 +221,8 @@ public enum GrowRanking {
     ///     which tier won that target's own `bestTier`, so this is the real
     ///     reachable total — not just the targets whose own `bestTier` was
     ///     `.salvage`.
+    ///   - `.stockpile`: the same, over already-extracted units
+    ///     (`ValueTarget.stockpileUnits`).
     ///   - `.richBelt` / `.moderateBelt` / `.sparseBelt`: the summed belt COUNT
     ///     at that exact class (`beltCount[class]`, read via the tier's
     ///     matching `BeltClass` — see `ValueTier.beltClass` below), never the
@@ -233,6 +239,8 @@ public enum GrowRanking {
             return Double(targets.reduce(0) { $0 + ($1.beltCount[beltClass] ?? 0) })
         case .salvage:
             return targets.reduce(0) { $0 + $1.salvageUnits }
+        case .stockpile:
+            return targets.reduce(0) { $0 + $1.stockpileUnits }
         }
     }
 }

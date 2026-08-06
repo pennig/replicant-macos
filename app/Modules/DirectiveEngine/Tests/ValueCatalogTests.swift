@@ -8,9 +8,11 @@
 //  growing toward unexplored space is a different capability. Already-meshed
 //  systems are excluded too — they're already reached.
 //
-//  The locked tier ordering is `event(4) ▸ richBelt(3) ▸ moderateBelt(2) ▸
-//  salvage(1) ▸ sparseBelt(0)` — salvage sits BETWEEN the two belt tiers, not
-//  below both; that's a deliberate design decision, not a mistake.
+//  The locked tier ordering is `event(5) ▸ richBelt(4) ▸ moderateBelt(3) ▸
+//  stockpile(2) ▸ salvage(1) ▸ sparseBelt(0)`. Two placements in it are
+//  deliberate rather than mistakes: salvage sits BETWEEN the two belt tiers,
+//  not below both, and stockpile sits above salvage but below every belt —
+//  already-extracted units need no mining cycle, but a belt never depletes.
 //
 
 import Testing
@@ -27,6 +29,44 @@ struct ValueCatalogTests {
         #expect(vega.bestTier == .event)
         #expect(vega.salvageUnits == 3200)
         #expect(vega.hasEvent)
+    }
+
+    /// A system holding nothing but already-mined units is a target in its own
+    /// right. Nothing else here yields one — no assay, no belt, no event — so
+    /// the pile is doing all the work.
+    @Test func stockpileOnlySystemProducesTargetAtStockpileTier() throws {
+        let view = WorldView.empty(meshSystems: ["SOL"]).with(stockpileUnits: ["COCIBOLCU": 2206])
+        let target = try #require(ValueCatalog.build(from: view).first { $0.system == "COCIBOLCU" })
+        #expect(target.bestTier == .stockpile)
+        #expect(target.stockpileUnits == 2206)
+        #expect(target.salvageUnits == 0)
+    }
+
+    /// A pile in a system the mesh already reaches is not a grow target: the
+    /// `ferry` that collects it can already be issued, so there is nothing left
+    /// to plant. Prune is the half that keeps that relay standing.
+    @Test func meshedSystemWithAStockpileIsNotATarget() {
+        let view = WorldView.empty(meshSystems: ["ORASALAS"])
+            .with(stockpileUnits: ["ORASALAS": 1191])
+        #expect(ValueCatalog.build(from: view).allSatisfy { $0.system != "ORASALAS" })
+    }
+
+    /// The tier's place in the order, proven from both sides at one system.
+    /// Units already on the ground beat an unmined assay — no mining cycle
+    /// stands between us and them — but lose to a belt that never depletes.
+    @Test func stockpileOutranksSalvageAndLosesToAModerateBelt() throws {
+        let overSalvage = WorldView.empty().with(
+            salvageUnits: ["MIXED": 99_999], stockpileUnits: ["MIXED": 1]
+        )
+        let salvageCase = try #require(ValueCatalog.build(from: overSalvage).first)
+        #expect(salvageCase.bestTier == .stockpile, "a single mined unit still outranks any assay")
+
+        let underBelt = WorldView.empty().with(
+            beltsBySystem: ["MIXED": [BeltInfo(designation: "MIXED-BELT-1", beltClass: .moderate)]],
+            stockpileUnits: ["MIXED": 99_999]
+        )
+        let beltCase = try #require(ValueCatalog.build(from: underBelt).first)
+        #expect(beltCase.bestTier == .moderateBelt, "a perpetual belt outranks any finite pile")
     }
 
     @Test func meshedSystemsAreNotTargets() {

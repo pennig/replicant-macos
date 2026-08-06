@@ -44,6 +44,52 @@ struct GrowRankingTests {
     /// before the tier comparison ever ran, so the assertion held for the
     /// wrong reason — the exact tie plus the contrarian naming closes that
     /// hole.
+    /// Field 3 decides between a pile and an assay, and the pile wins.
+    ///
+    /// Built like `tierBeatsMagnitude`: an EXACT `hopDistance` tie (both 5 ly
+    /// from MESH) forces the sort past field 2, and the naming is contrarian —
+    /// "ASALV" < "ZPILE", so a sort that fell through to designation would pick
+    /// the assay. The assay also carries the far bigger number, so a sort that
+    /// compared magnitude before tier would pick it too.
+    @Test func aStockpileOutranksAFarLargerAssay() {
+        let view = WorldView.empty(meshSystems: ["MESH"])
+            .with(
+                salvageUnits: ["ASALV": 99_999],
+                starPositions: [
+                    "MESH": .init(x: 0, y: 0, z: 0),
+                    "ASALV": .init(x: 0, y: 5, z: 0),
+                    "ZPILE": .init(x: 5, y: 0, z: 0),
+                ],
+                stockpileUnits: ["ZPILE": 100]
+            )
+        let ranked = GrowRanking.rank(view: view, graph: MeshGraph(positions: view.starPositions))
+        #expect(ranked.first?.firstHop == "ZPILE")
+        #expect(ranked.first?.bestTier == .stockpile)
+    }
+
+    /// `magnitudeAtTier` at `.stockpile` is the summed unit total over every
+    /// target the hop serves, matching `.salvage`'s definition — not a count of
+    /// systems holding a pile.
+    ///
+    /// `HOP` is the single first hop for both piles beyond it, so the candidate
+    /// aggregates the two: 2,206 + 1,447. A per-system count would read 2.
+    @Test func stockpileMagnitudeSumsUnitsAcrossServedTargets() throws {
+        let view = WorldView.empty(meshSystems: ["MESH"])
+            .with(
+                starPositions: [
+                    "MESH": .init(x: 0, y: 0, z: 0),
+                    "HOP": .init(x: 7, y: 0, z: 0),
+                    "FARA": .init(x: 14, y: 0, z: 0),
+                    "FARB": .init(x: 14, y: 1, z: 0),
+                ],
+                stockpileUnits: ["FARA": 2206, "FARB": 1447]
+            )
+        let ranked = GrowRanking.rank(view: view, graph: MeshGraph(positions: view.starPositions))
+        let hop = try #require(ranked.first { $0.firstHop == "HOP" })
+        #expect(hop.bestTier == .stockpile)
+        #expect(hop.magnitudeAtTier == 3653)
+    }
+
     @Test func tierBeatsMagnitude() {
         let view = WorldView.empty(meshSystems: ["MESH"])
             .with(

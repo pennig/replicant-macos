@@ -299,6 +299,50 @@ struct PruneTests {
         #expect(analysis.reclaimable == [ReclaimableRelay(deviceCode: "REL_EMPTY", system: "EMPTY")])
     }
 
+    /// A system whose value is spent but whose EXTRACTED units are still on the
+    /// ground is pinned: reclaiming the relay strands inventory already paid for,
+    /// since the `ferry` that collects it needs both ends on the mesh. Depleted
+    /// salvage is exactly what leaves a full pile behind, so this sits on the
+    /// ordinary path out of a finished Salvage Run. `EMPTY` is the control.
+    @Test func systemHoldingAnUncollectedStockpileIsPinned() {
+        let positions: [String: Position] = [
+            "SOL": .init(x: 0, y: 0, z: 0),
+            "PILE": .init(x: 0, y: 7, z: 0),
+            "EMPTY": .init(x: 0, y: -7, z: 0),
+        ]
+        let world = prunableWorld(
+            positions: positions,
+            relays: ["REL_SOL": "SOL", "REL_PILE": "PILE", "REL_EMPTY": "EMPTY"],
+            salvage: [:], // every assay in both systems is spent
+            stockpiles: ["PILE": 500] // …but PILE's mined units are still sitting there
+        )
+        let analysis = PrunePredicate.analyse(view: world, graph: MeshGraph(positions: positions))
+        #expect(analysis.pinned == ["REL_SOL", "REL_PILE"])
+        #expect(analysis.reclaimable == [ReclaimableRelay(deviceCode: "REL_EMPTY", system: "EMPTY")])
+    }
+
+    /// A stockpile is a TARGET, so the whole road to it is pinned rather than just
+    /// the relay on top of it. `W` holds nothing and bridges the 14 ly the anchor
+    /// cannot span, so it survives only if `PILE` is a target the union is built
+    /// over — pinning the pile's own system alone leaves the units unreachable.
+    @Test func relaysOnTheRoadToAStockpileArePinned() {
+        let positions: [String: Position] = [
+            "SOL": .init(x: 0, y: 0, z: 0),
+            "W": .init(x: 0, y: 7, z: 0),
+            "PILE": .init(x: 0, y: 14, z: 0),
+        ]
+        let world = prunableWorld(
+            positions: positions,
+            relays: ["REL_SOL": "SOL", "REL_W": "W", "REL_PILE": "PILE"],
+            salvage: [:],
+            stockpiles: ["PILE": 500]
+        )
+        let analysis = PrunePredicate.analyse(view: world, graph: MeshGraph(positions: positions))
+        #expect(analysis.pinned == ["REL_SOL", "REL_W", "REL_PILE"])
+        #expect(analysis.reclaimable.isEmpty)
+        #expect(analysis.declined == nil)
+    }
+
     /// Unknown value reads as pinned. Belt richness is legible only after a full
     /// scan, and `beltsBySystem` cannot tell "scanned, no belt" from "never
     /// scanned". `SURVEYED` is the control: same shape, same lack of known value,
