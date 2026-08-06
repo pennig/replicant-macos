@@ -264,15 +264,11 @@ extension Device {
         return Self.fallbackDirectives[deviceType] ?? []
     }
 
-    /// Directive vocabularies the server omits from a device's runtime
-    /// `available_directives`. Sourced from the device blueprints' `directives`
-    /// field / API docs: a maintenance drone and a service bot both run a repair
-    /// `patrol` (the service bot has no blueprint entry at all, so it can only be
-    /// known here). Keyed by `device_type`; only consulted when the runtime list is
-    /// empty, so a device that *does* advertise its directives always wins.
+    /// Per-`device_type` directive vocabulary, from the device blueprints.
+    /// Consulted only when the runtime list (above) is empty.
     private static let fallbackDirectives: [String: [String]] = [
         "maintenance_drone": ["patrol"],
-        "service_bot": ["patrol"],
+        "service_bot": ["patrol", "service"],
     ]
 
     /// The name of the directive currently in force (`ami_directive.name`), or nil

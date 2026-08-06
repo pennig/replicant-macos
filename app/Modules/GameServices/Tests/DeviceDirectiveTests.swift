@@ -108,10 +108,10 @@ import Utils
 
     /// The maintenance drone and service bot both accept `set_directive` but the
     /// server leaves their runtime `available_directives` empty — the per-type
-    /// fallback surfaces their `patrol` directive so the command still appears.
+    /// fallback surfaces their directives so the command still appears.
     @Test func fallbackVocabularyForWorkerDevices() {
         #expect(device(type: "maintenance_drone", detail: .object([:])).availableDirectives == ["patrol"])
-        #expect(device(type: "service_bot", detail: .object([:])).availableDirectives == ["patrol"])
+        #expect(device(type: "service_bot", detail: .object([:])).availableDirectives == ["patrol", "service"])
     }
 
     /// A device type with a fallback still prefers a non-empty runtime list, so a
