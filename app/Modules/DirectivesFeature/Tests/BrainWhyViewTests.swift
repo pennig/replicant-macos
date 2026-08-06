@@ -766,12 +766,60 @@ struct BrainWhyViewTests {
         let launched = BrainWhy.from(
             report: Self.report(
                 .idle(reason: "no grow or prune work"),
-                survey: .launched(carrier: "V1", roamCentre: "AINALRAM")
+                survey: .launched(carrier: "V1", roamCentre: "AINALRAM", status: .running)
             )
         )
         #expect(ready.survey.kind != launched.survey.kind)
         #expect(ready.survey.text != launched.survey.text)
         #expect(launched.survey.text == "roaming from AINALRAM — carrier V1")
+    }
+
+    /// A fixed-target run's live row carries no `roamCentre`; the card must
+    /// say what it IS doing, never substitute a fake designation —
+    /// `"unknown"` is not a real place.
+    @Test func aFixedTargetSurveyNamesNoCentreRatherThanAFakeOne() {
+        let why = BrainWhy.from(
+            report: Self.report(
+                .idle(reason: "no grow or prune work"),
+                survey: .launched(carrier: "V1", roamCentre: nil, status: .running)
+            )
+        )
+        #expect(why.survey.text == "surveying a fixed target queue — carrier V1")
+        #expect(!why.survey.spans.contains { $0.isDesignation })
+        #expect(!why.survey.text.contains("unknown"))
+    }
+
+    /// `.needsAttention`/`.paused` are both live, but a card rendering all
+    /// three alike would tell an operator a stalled survey is roaming — each
+    /// must read apart, and paused must not read as a fault.
+    @Test func theThreeLaunchedStatusesRenderDistinguishably() {
+        let running = BrainWhy.from(
+            report: Self.report(
+                .idle(reason: "no grow or prune work"),
+                survey: .launched(carrier: "V1", roamCentre: "AINALRAM", status: .running)
+            )
+        ).survey
+        let halted = BrainWhy.from(
+            report: Self.report(
+                .idle(reason: "no grow or prune work"),
+                survey: .launched(carrier: "V1", roamCentre: "AINALRAM", status: .needsAttention)
+            )
+        ).survey
+        let paused = BrainWhy.from(
+            report: Self.report(
+                .idle(reason: "no grow or prune work"),
+                survey: .launched(carrier: "V1", roamCentre: "AINALRAM", status: .paused)
+            )
+        ).survey
+
+        #expect(Set([running.kind, halted.kind, paused.kind]).count == 3)
+        #expect(Set([running.text, halted.text, paused.text]).count == 3)
+        #expect(running.text == "roaming from AINALRAM — carrier V1")
+        #expect(halted.text == "halted — roaming from AINALRAM — carrier V1")
+        #expect(paused.text == "paused — roaming from AINALRAM — carrier V1")
+        // A deliberate pause is not a fault: it must not borrow halted's word.
+        #expect(!paused.text.contains("halted"))
+        #expect(!paused.text.contains("attention"))
     }
 
     /// The three named idle reasons an operator must be able to tell apart
@@ -837,7 +885,10 @@ struct BrainWhyViewTests {
     @Test func noSurveyStateEverEscalatesAStillIdleGate() {
         for survey: BrainSurveyStatus in [
             .ready(carrier: "V1", roamCentre: "AINALRAM"),
-            .launched(carrier: "V1", roamCentre: "AINALRAM"),
+            .launched(carrier: "V1", roamCentre: "AINALRAM", status: .running),
+            .launched(carrier: "V1", roamCentre: "AINALRAM", status: .needsAttention),
+            .launched(carrier: "V1", roamCentre: "AINALRAM", status: .paused),
+            .launched(carrier: "V1", roamCentre: nil, status: .running),
             .idle(reason: "no vessel is tagged auto:survey"),
         ] {
             let why = BrainWhy.from(

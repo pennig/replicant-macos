@@ -203,19 +203,28 @@ public struct BrainPrune: Equatable, Sendable {
     }
 }
 
-/// `Brain.ensureSurvey`'s verdict this tick — the mesh-growth goal's sibling,
-/// over the disjoint survey fleet. `.ready` and `.launched` both mean the
-/// fleet can roam; they read apart because `.ready` names a verdict this tick
-/// reached and `.launched` names a row that already exists to show for it.
+/// `Brain.ensureSurvey`'s verdict this tick, published for the why-view.
+/// `.ready` names a verdict this tick reached; `.launched` names a row that
+/// already exists, in the `LaunchedStatus` that row's own column carries.
 public enum BrainSurveyStatus: Equatable, Sendable {
-    /// A Survey Run already owns the fleet — `carrier` and `roamCentre` come
-    /// from that row, not from re-deriving the verdict.
-    case launched(carrier: String, roamCentre: String)
+    /// A Survey Run already owns the fleet. `roamCentre` is nil for a
+    /// fixed-target run — never a fake designation — and `status` is the
+    /// live row's own, never assumed to be `.running`.
+    case launched(carrier: String, roamCentre: String?, status: LaunchedStatus)
     /// No run owns the fleet yet, but this tick's verdict is to launch one.
     case ready(carrier: String, roamCentre: String)
     /// Task 1's own reason, carried verbatim — never paraphrased, so the
     /// screen and the log cannot disagree.
     case idle(reason: String)
+
+    /// `Brain.owningStatuses`' three members. A dedicated type, not
+    /// `DirectiveStatus` itself, so `.launched` can never carry `.completed`/
+    /// `.cancelled` — the two values that already mean not-live.
+    public enum LaunchedStatus: Equatable, Sendable {
+        case running
+        case needsAttention
+        case paused
+    }
 }
 
 /// One brain tick, as reported to the operator: the `decision` it reached, the

@@ -57,7 +57,7 @@ public struct BrainWhyDetailView: View {
                 section("Survey") {
                     why.survey.spans
                         .styled(prose: .rcBody, designation: .rcMono)
-                        .foregroundStyle(why.survey.kind == .idle ? .rcTextTertiary : .rcTextSecondary)
+                        .foregroundStyle(surveyColor(why.survey.kind))
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
@@ -108,6 +108,17 @@ public struct BrainWhyDetailView: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(why.gateText)
+    }
+
+    /// Idle reads as a quiet observation and a halt gets `limitPressure`'s own
+    /// warning weight; everything else, `.paused` included, stays neutral so
+    /// a deliberate pause never reads as a fault.
+    private func surveyColor(_ kind: BrainWhySurvey.Kind) -> Color {
+        switch kind {
+        case .idle: .rcTextTertiary
+        case .halted: .rcWarning
+        case .running, .paused, .ready: .rcTextSecondary
+        }
     }
 
     @ViewBuilder

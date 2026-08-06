@@ -10,8 +10,12 @@
 /// One line of "what the roaming Survey Run is doing" in the why-view.
 public struct BrainWhySurvey: Equatable, Sendable {
     public enum Kind: String, Sendable, CaseIterable {
-        /// A Survey Run already owns the fleet and is roaming.
-        case launched
+        /// A live run, actively working.
+        case running
+        /// A live run that halted and needs the operator's attention.
+        case halted
+        /// A live run the operator paused — a choice, never a fault.
+        case paused
         /// The fleet is staged and tagged; nothing owns it yet.
         case ready
         /// Nothing can launch. See `spans` for the named reason.

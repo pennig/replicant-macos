@@ -56,10 +56,9 @@ public struct BrainWhy: Equatable, Sendable {
     /// **Never escalates.** See `BrainWhyPruneNote`'s header: growth can halt
     /// and need an operator, prune cannot.
     public var pruneNotes: [BrainWhyPruneNote]
-    /// What the roaming Survey Run goal is doing — a different fleet and a
-    /// different question from `topGoalGate`'s grow/prune story, so it never
-    /// folds into it. Never absent: the verdict is read every tick, ready or
-    /// not, the same discipline `limitPressure` follows for the rails.
+    /// What the Survey Run goal is doing — a different fleet and question
+    /// from `topGoalGate`'s grow/prune story. Never absent, the same
+    /// discipline `limitPressure` follows for the rails.
     public var survey: BrainWhySurvey
     /// Where the brain's two standing rails stand right now, plus a recent
     /// 429 when there is one.
@@ -345,15 +344,11 @@ public struct BrainWhy: Equatable, Sendable {
 
     /// Survey's own line, in `topGoalGate`'s voice but never merged into it —
     /// a different fleet and a different question. `.idle`'s reason is
-    /// carried verbatim; the split only tags a designation it already knows
-    /// about, never rewords the sentence itself.
+    /// carried verbatim, never reworded.
     private static func surveyLine(in report: BrainReport) -> BrainWhySurvey {
         switch report.survey {
-        case let .launched(carrier, roamCentre):
-            return BrainWhySurvey(
-                kind: .launched,
-                spans: [.prose("roaming from "), .designation(roamCentre), .prose(" — carrier \(carrier)")]
-            )
+        case let .launched(carrier, roamCentre, status):
+            return launchedSurveyLine(carrier: carrier, roamCentre: roamCentre, status: status)
         case let .ready(carrier, roamCentre):
             return BrainWhySurvey(
                 kind: .ready,
@@ -361,6 +356,28 @@ public struct BrainWhy: Equatable, Sendable {
             )
         case let .idle(reason):
             return BrainWhySurvey(kind: .idle, spans: .spans(in: reason, designations: knownDesignations(in: report)))
+        }
+    }
+
+    /// The activity clause names a centre, or names having none rather than
+    /// inventing one. A halted or paused run leads with that word, never with
+    /// the bare activity clause, so it cannot read as ordinary progress.
+    private static func launchedSurveyLine(
+        carrier: String, roamCentre: String?, status: BrainSurveyStatus.LaunchedStatus
+    ) -> BrainWhySurvey {
+        let activity: [BrainWhySpan] = if let roamCentre {
+            [.prose("roaming from "), .designation(roamCentre)]
+        } else {
+            [.prose("surveying a fixed target queue")]
+        }
+        let tail: [BrainWhySpan] = [.prose(" — carrier \(carrier)")]
+        switch status {
+        case .running:
+            return BrainWhySurvey(kind: .running, spans: activity + tail)
+        case .needsAttention:
+            return BrainWhySurvey(kind: .halted, spans: [.prose("halted — ")] + activity + tail)
+        case .paused:
+            return BrainWhySurvey(kind: .paused, spans: [.prose("paused — ")] + activity + tail)
         }
     }
 

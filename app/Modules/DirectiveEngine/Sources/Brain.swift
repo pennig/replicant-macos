@@ -912,18 +912,30 @@ struct Brain: Sendable {
         return .launch(carrier: carrier.deviceCode, roamCentre: centre)
     }
 
-    /// The why-view's survey line: `.launched` off an already-live row,
-    /// otherwise `surveyReadiness`'s own verdict — `.ready` for `.launch`,
-    /// carried straight through for `.idle`.
+    /// The why-view's survey line: `.launched` off an already-live row —
+    /// never re-deriving carrier, centre or status — otherwise
+    /// `surveyReadiness`'s own verdict, carried through for `.launch`/`.idle`.
     static func surveyStatus(directives: [Directive], view: WorldView) -> BrainSurveyStatus {
         if let live = directives.first(where: {
             $0.kind == .surveyRun && owningStatuses.contains($0.status)
         }) {
-            return .launched(carrier: live.deviceCode, roamCentre: live.roamCentre ?? "unknown")
+            return .launched(carrier: live.deviceCode, roamCentre: live.roamCentre, status: launchedStatus(live.status))
         }
         switch surveyReadiness(view: view) {
         case let .launch(carrier, roamCentre): return .ready(carrier: carrier, roamCentre: roamCentre)
         case let .idle(reason): return .idle(reason: reason)
+        }
+    }
+
+    /// `owningStatuses`' three members, narrowed from the column's five — the
+    /// other two never reach here, since the caller above only matches rows
+    /// `owningStatuses.contains` already accepted.
+    private static func launchedStatus(_ status: DirectiveStatus) -> BrainSurveyStatus.LaunchedStatus {
+        switch status {
+        case .running: .running
+        case .needsAttention: .needsAttention
+        case .paused: .paused
+        case .completed, .cancelled: .running
         }
     }
 

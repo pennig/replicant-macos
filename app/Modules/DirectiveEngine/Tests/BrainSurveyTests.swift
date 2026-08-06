@@ -191,7 +191,32 @@ struct BrainSurveyStatusTests {
 
         #expect(
             Brain.surveyStatus(directives: [live], view: view)
-                == .launched(carrier: "V9", roamCentre: "VEGA")
+                == .launched(carrier: "V9", roamCentre: "VEGA", status: .running)
+        )
+    }
+
+    /// A fixed-target run's row carries no `roamCentre` — `nil`, never a
+    /// substitute string. The status field carries the row's own status too,
+    /// so a halted or paused run is never silently reported as running.
+    @Test("a fixed-target live survey carries its nil roam centre and real status through", arguments: [
+        (DirectiveStatus.running, BrainSurveyStatus.LaunchedStatus.running),
+        (.needsAttention, .needsAttention),
+        (.paused, .paused),
+    ])
+    func aFixedTargetLiveSurveyCarriesNilCentreAndRealStatus(
+        row: DirectiveStatus, expected: BrainSurveyStatus.LaunchedStatus
+    ) {
+        let live = Directive(
+            id: "LIVE", kind: .surveyRun, status: row, deviceCode: "V9",
+            roamCentre: nil, targets: ["ALTAIR"], targetIndex: 0, step: "step",
+            stepStartedAt: surveyFixtureNow, returnToOrigin: false, originDesignation: nil,
+            attentionReason: nil, createdAt: surveyFixtureNow, updatedAt: surveyFixtureNow
+        )
+        let view = surveyReadinessView(devices: [], hubLocation: nil)
+
+        #expect(
+            Brain.surveyStatus(directives: [live], view: view)
+                == .launched(carrier: "V9", roamCentre: nil, status: expected)
         )
     }
 
@@ -441,7 +466,27 @@ struct BrainSurveyReportTests {
 
         let report = await surveyEnsureReport(database)
 
-        #expect(report.survey == .launched(carrier: surveyEnsureCarrier, roamCentre: surveyEnsureHubSystem))
+        #expect(
+            report.survey
+                == .launched(carrier: surveyEnsureCarrier, roamCentre: surveyEnsureHubSystem, status: .running)
+        )
+    }
+
+    /// End to end through the real engine: `.needsAttention`/`.paused` both
+    /// keep `ensureSurvey`'s relaunch guard closed, and the published report
+    /// must carry that same status through rather than default to running.
+    @Test(arguments: [DirectiveStatus.needsAttention, .paused])
+    func aHaltedOrPausedLiveSurveyReportsItsOwnStatus(_ status: DirectiveStatus) async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try seedSurveyEnsureReadyWorld(db)
+            try seedDirective(db, id: "EXISTING", kind: .surveyRun, status: status, deviceCode: surveyEnsureCarrier)
+        }
+
+        let report = await surveyEnsureReport(database)
+
+        let expected: BrainSurveyStatus.LaunchedStatus = status == .needsAttention ? .needsAttention : .paused
+        #expect(report.survey == .launched(carrier: surveyEnsureCarrier, roamCentre: nil, status: expected))
     }
 
     /// No fleet at all: the published report idles with the exact reason
