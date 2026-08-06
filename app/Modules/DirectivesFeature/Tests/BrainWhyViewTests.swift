@@ -815,11 +815,15 @@ struct BrainWhyViewTests {
         #expect(Set([running.kind, halted.kind, paused.kind]).count == 3)
         #expect(Set([running.text, halted.text, paused.text]).count == 3)
         #expect(running.text == "roaming from AINALRAM — carrier V1")
-        #expect(halted.text == "halted — roaming from AINALRAM — carrier V1")
-        #expect(paused.text == "paused — roaming from AINALRAM — carrier V1")
+        #expect(halted.text == "halted, roam centre AINALRAM — carrier V1")
+        #expect(paused.text == "paused, roam centre AINALRAM — carrier V1")
         // A deliberate pause is not a fault: it must not borrow halted's word.
         #expect(!paused.text.contains("halted"))
         #expect(!paused.text.contains("attention"))
+        // The centre is still the only mono span — "roam centre" is prose.
+        #expect(halted.spans == [
+            .prose("halted, roam centre "), .designation("AINALRAM"), .prose(" — carrier V1"),
+        ])
     }
 
     /// The three named idle reasons an operator must be able to tell apart

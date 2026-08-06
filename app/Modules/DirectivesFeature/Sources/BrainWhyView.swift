@@ -359,25 +359,32 @@ public struct BrainWhy: Equatable, Sendable {
         }
     }
 
-    /// The activity clause names a centre, or names having none rather than
-    /// inventing one. A halted or paused run leads with that word, never with
-    /// the bare activity clause, so it cannot read as ordinary progress.
+    /// A halted or paused run with a centre states it as a static place, never
+    /// as the present-progressive "roaming" verb — that would claim motion a
+    /// stopped run is not making. `.running` keeps the verb; it is true there.
     private static func launchedSurveyLine(
         carrier: String, roamCentre: String?, status: BrainSurveyStatus.LaunchedStatus
     ) -> BrainWhySurvey {
-        let activity: [BrainWhySpan] = if let roamCentre {
-            [.prose("roaming from "), .designation(roamCentre)]
-        } else {
-            [.prose("surveying a fixed target queue")]
-        }
         let tail: [BrainWhySpan] = [.prose(" — carrier \(carrier)")]
+        guard let roamCentre else {
+            let activity: [BrainWhySpan] = [.prose("surveying a fixed target queue")]
+            switch status {
+            case .running: return BrainWhySurvey(kind: .running, spans: activity + tail)
+            case .needsAttention: return BrainWhySurvey(kind: .halted, spans: [.prose("halted — ")] + activity + tail)
+            case .paused: return BrainWhySurvey(kind: .paused, spans: [.prose("paused — ")] + activity + tail)
+            }
+        }
         switch status {
         case .running:
-            return BrainWhySurvey(kind: .running, spans: activity + tail)
+            return BrainWhySurvey(kind: .running, spans: [.prose("roaming from "), .designation(roamCentre)] + tail)
         case .needsAttention:
-            return BrainWhySurvey(kind: .halted, spans: [.prose("halted — ")] + activity + tail)
+            return BrainWhySurvey(
+                kind: .halted, spans: [.prose("halted, roam centre "), .designation(roamCentre)] + tail
+            )
         case .paused:
-            return BrainWhySurvey(kind: .paused, spans: [.prose("paused — ")] + activity + tail)
+            return BrainWhySurvey(
+                kind: .paused, spans: [.prose("paused, roam centre "), .designation(roamCentre)] + tail
+            )
         }
     }
 
