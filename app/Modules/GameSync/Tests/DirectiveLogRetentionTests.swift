@@ -84,4 +84,12 @@ struct DirectiveLogRetentionTests {
         #expect(await DirectiveLogRetention.sweep(database, now: now) == 1)
         #expect(try await remainingIDs(database).isEmpty)
     }
+
+    @Test func keepsRecentBuiltInAMIEntriesThatOwnNoDirective() async throws {
+        let recent = now.addingTimeInterval(-60)
+        let database = try await seed([], [entry("ami", directiveID: nil, occurredAt: recent, deviceCode: "CTRL1")])
+
+        #expect(await DirectiveLogRetention.sweep(database, now: now) == 0)
+        #expect(try await remainingIDs(database) == ["ami"])
+    }
 }

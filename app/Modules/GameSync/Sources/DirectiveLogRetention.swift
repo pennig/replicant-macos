@@ -20,14 +20,7 @@ enum DirectiveLogRetention {
 
     /// Delete stale log entries older than `window`, returning how many went.
     ///
-    /// Two families, judged differently. An entry owned by a still-OPEN
-    /// directive is never pruned however old — a running mission re-reads its
-    /// own log every tick. An entry with no owning directive (`directiveID`
-    /// nil) is a built-in AMI line keyed off `deviceCode` instead; it carries
-    /// no status to consult, so it ages on time alone.
-    ///
-    /// Reported rather than thrown: retention is housekeeping, and failing it
-    /// must never take down the sync engine that calls it.
+    /// An entry owned by a still-open directive is never pruned however old.
     @discardableResult
     static func sweep(_ database: any DatabaseWriter, now: Date) async -> Int {
         let cutoff = now.addingTimeInterval(-window)
