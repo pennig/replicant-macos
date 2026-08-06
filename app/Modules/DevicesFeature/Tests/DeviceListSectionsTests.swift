@@ -344,6 +344,23 @@ import Testing
         expectNoDifference(drone.hostDeviceType, "ami_survey_controller")
     }
 
+    /// Type and System are partitions: every device appears exactly once across
+    /// the whole list. Mission is the documented exception, so it is excluded.
+    @Test func typeAndSystemPlaceEveryDeviceExactlyOnce() {
+        let fleet = [
+            makeDevice("VESSEL", type: "heaven_vessel", location: "ATIANFU-1-L4"),
+            makeDevice("CTRL", type: "ami_survey_controller", stowedIn: "VESSEL"),
+            makeDevice("DRONEA", type: "survey_drone", controlledBy: "CTRL"),
+            makeDevice("HURT", type: "ftl_relay", capacity: 5),
+            makeDevice("LOOSE", type: "ftl_relay"),
+        ]
+        for grouping in [DeviceGrouping.type, .system] {
+            let ids = sections(fleet: fleet, grouping: grouping).flatMap(\.entries).map(\.id)
+            expectNoDifference(ids.sorted(), fleet.map(\.deviceCode).sorted())
+            expectNoDifference(Set(ids).count, ids.count)
+        }
+    }
+
     /// Status shares describe the section they head.
     @Test func aGroupHeaderReadsItsOwnComposition() throws {
         let fleet = [
