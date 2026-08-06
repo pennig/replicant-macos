@@ -546,7 +546,15 @@ public struct SurveyRun: MissionStepMachine {
     /// Gated on the bots falling IDLE, never a capacity threshold — `service`
     /// repairs to an unquantified level a threshold gate could wait on forever.
     private func awaitRepair(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
-        let bots = RepairFleet.bots(deployedAt: vessel.location, in: world)
+        // A nil location reads as "no bots deployed" to a location-scoped
+        // query, not as evidence they are gone — buy a fresh vessel row first.
+        guard let location = vessel.location else {
+            let elapsed = world.now.timeIntervalSince(directive.stepStartedAt)
+            if elapsed > Self.repairDeadline { return .stall(.repairUnfinished) }
+            if world.now.timeIntervalSince(vessel.updatedAt) < Self.botProbeInterval { return .wait }
+            return .refreshDevices(deviceCodes: [vessel.deviceCode], thenStall: nil)
+        }
+        let bots = RepairFleet.bots(deployedAt: location, in: world)
         if bots.isEmpty { return .advanceStep(nextStep: Step.stowingBots) }
         // A fleet nothing is worn enough to hold for leaves without paying the
         // probe delay or a single read.
@@ -571,7 +579,14 @@ public struct SurveyRun: MissionStepMachine {
     /// Stow the next service bot still standing in the system, or advance when
     /// none is left out.
     private func stowBots(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
-        let out = RepairFleet.bots(deployedAt: vessel.location, in: world)
+        guard let location = vessel.location else {
+            if world.now.timeIntervalSince(directive.stepStartedAt) > Self.recallDeadline {
+                return .stall(.dronesNotRecovered)
+            }
+            if world.now.timeIntervalSince(vessel.updatedAt) < Self.botProbeInterval { return .wait }
+            return .refreshDevices(deviceCodes: [vessel.deviceCode], thenStall: nil)
+        }
+        let out = RepairFleet.bots(deployedAt: location, in: world)
         guard let next = out.first else { return .advanceTarget }
         return .dispatch(
             kind: .stow, deviceCode: next.deviceCode,
@@ -585,7 +600,11 @@ public struct SurveyRun: MissionStepMachine {
         let elapsed = world.now.timeIntervalSince(directive.stepStartedAt)
         if elapsed < Self.botProbeDelay { return .wait }
         if elapsed > Self.recallDeadline { return .stall(.dronesNotRecovered) }
-        let out = RepairFleet.bots(deployedAt: vessel.location, in: world)
+        guard let location = vessel.location else {
+            if world.now.timeIntervalSince(vessel.updatedAt) < Self.botProbeInterval { return .wait }
+            return .refreshDevices(deviceCodes: [vessel.deviceCode], thenStall: nil)
+        }
+        let out = RepairFleet.bots(deployedAt: location, in: world)
         if out.isEmpty { return .advanceTarget }
         if out.contains(where: { $0.updatedAt < directive.stepStartedAt }) {
             let lastLook = out.map(\.updatedAt).min() ?? .distantPast

@@ -154,4 +154,40 @@ import Utils
         let d = repairDirective(step: SurveyRun.Step.confirmingBotStow, deviceCode: "VESSEL", stepStartedAt: past)
         #expect(SurveyRun().nextAction(directive: d, world: w) == .stall(.dronesNotRecovered))
     }
+
+    @Test func anUnknownVesselLocationDoesNotAbandonBotsAtRepairing() {
+        let vessel = repairDevice(
+            "VESSEL", type: "heaven_vessel", location: nil,
+            updatedAt: repairFixtureNow.addingTimeInterval(-40)
+        )
+        let bot = repairDevice("BOT1", type: "service_bot", location: "SOL-3", directives: ["service"])
+        let w = repairWorld(devices: [vessel, bot])
+        let d = repairDirective(step: SurveyRun.Step.repairing, deviceCode: "VESSEL", stepStartedAt: repairFixtureNow)
+        #expect(SurveyRun().nextAction(directive: d, world: w) == .refreshDevices(deviceCodes: ["VESSEL"], thenStall: nil))
+    }
+
+    @Test func anUnknownVesselLocationDoesNotAbandonBotsAtStowingBots() {
+        let vessel = repairDevice(
+            "VESSEL", type: "heaven_vessel", location: nil,
+            updatedAt: repairFixtureNow.addingTimeInterval(-40)
+        )
+        let bot = repairDevice("BOT1", type: "service_bot", location: "SOL-3", directives: ["service"])
+        let w = repairWorld(devices: [vessel, bot])
+        let d = repairDirective(step: SurveyRun.Step.stowingBots, deviceCode: "VESSEL")
+        #expect(SurveyRun().nextAction(directive: d, world: w) == .refreshDevices(deviceCodes: ["VESSEL"], thenStall: nil))
+    }
+
+    @Test func anUnknownVesselLocationDoesNotAbandonBotsAtConfirmingBotStow() {
+        let vessel = repairDevice(
+            "VESSEL", type: "heaven_vessel", location: nil,
+            updatedAt: repairFixtureNow.addingTimeInterval(-40)
+        )
+        let bot = repairDevice("BOT1", type: "service_bot", location: "SOL-3", directives: ["service"])
+        let w = repairWorld(devices: [vessel, bot])
+        let d = repairDirective(
+            step: SurveyRun.Step.confirmingBotStow, deviceCode: "VESSEL",
+            stepStartedAt: repairFixtureNow.addingTimeInterval(-60)
+        )
+        #expect(SurveyRun().nextAction(directive: d, world: w) == .refreshDevices(deviceCodes: ["VESSEL"], thenStall: nil))
+    }
 }
