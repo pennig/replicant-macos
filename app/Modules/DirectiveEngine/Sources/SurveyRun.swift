@@ -553,7 +553,10 @@ public struct SurveyRun: MissionStepMachine {
         let elapsed = world.now.timeIntervalSince(directive.stepStartedAt)
         if elapsed < Self.botProbeDelay { return .wait }
         if elapsed > Self.repairDeadline { return .stall(.repairUnfinished) }
-        if !bots.contains(where: RepairFleet.isRepairing) {
+        // Bots repair silently server-side; an unread row cannot be trusted to
+        // report idle, so treat it as still working until a read says otherwise.
+        let stale = bots.contains { $0.updatedAt < directive.stepStartedAt }
+        if !stale, !bots.contains(where: RepairFleet.isRepairing) {
             return .advanceStep(nextStep: Step.stowingBots)
         }
         let lastLook = bots.map(\.updatedAt).min() ?? .distantPast
