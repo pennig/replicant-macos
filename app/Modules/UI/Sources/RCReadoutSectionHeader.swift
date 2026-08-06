@@ -99,8 +99,7 @@ public struct RCReadoutSectionHeader: View {
         .accessibilityAddTraits(.isHeader)
     }
 
-    /// A designation is already uppercase, and kerning fights a monospaced
-    /// font's own advance, so it takes neither.
+    // A designation is already uppercase, and kerning fights a mono advance.
     private var titleText: Text {
         isTitleDesignation
             ? Text(title).font(.rcSectionLabelMono)

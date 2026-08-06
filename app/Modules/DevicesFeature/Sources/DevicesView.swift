@@ -103,8 +103,7 @@ public struct DevicesListView: View {
         .task { store.send(.task) }
     }
 
-    /// `grouping` is `@Shared`, so the picker writes through an action rather
-    /// than a binding the reducer would set directly.
+    // `grouping` is `@Shared`, which is written through an action, never set.
     private var groupingSelection: Binding<DeviceGrouping> {
         Binding(
             get: { store.grouping },

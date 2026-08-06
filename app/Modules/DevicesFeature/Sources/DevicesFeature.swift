@@ -42,8 +42,7 @@ public struct DevicesFeature {
         /// `BindingReducer()` — no bespoke action.
         public var searchText = ""
 
-        /// The axis the list is organised along, persisted across launches and
-        /// driven by the toolbar picker through the `BindingReducer()`.
+        /// The axis the list is organised along, persisted across launches.
         /// `@ObservationStateIgnored` because `@Shared` drives its own.
         @ObservationStateIgnored
         @Shared(.devicesListGrouping) public var grouping: DeviceGrouping

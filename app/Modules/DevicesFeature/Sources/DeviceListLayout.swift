@@ -224,13 +224,9 @@ extension DeviceListLayout {
         )
     }
 
-    /// The list's one entry point. Returns a pinned Needs Attention section
-    /// (when anything is flagged) above the sections `grouping` produces. A
-    /// section the search empties is dropped; a collapsed one keeps its header.
-    ///
-    /// `collapsedGroups` is honoured by every *headered* section. The Carrier
-    /// and Flat fleet sections are unheadered, so nothing can produce a collapse
-    /// gesture for them and they never check membership.
+    /// The list's one entry point: a pinned Needs Attention section above the
+    /// sections `grouping` produces. A section the search empties is dropped, a
+    /// collapsed one keeps its header, and only headered ones read `collapsedGroups`.
     public static func sections(
         fleet: [Device],
         attentionDirectives: [Directive],
