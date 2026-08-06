@@ -31,6 +31,26 @@ public struct DevicesFeature {
         @ObservationStateIgnored
         @FetchAll(Device.order { $0.deviceType }) public var devices: [Device]
 
+        /// Directives currently flagged for the operator — the third Needs
+        /// Attention predicate. Filtered in SQL (`DirectiveStatus` is
+        /// `QueryBindable`) so the layout never re-checks status.
+        @ObservationStateIgnored
+        @FetchAll(Directive.where { $0.status.eq(DirectiveStatus.needsAttention) })
+        public var attentionDirectives: [Directive]
+
+        /// The list's search query. Driven by `.searchable` through the
+        /// `BindingReducer()` — no bespoke action.
+        public var searchText = ""
+
+        /// Codes of the hosts the operator has opened. Empty ⇒ every host
+        /// collapsed, which is the default and needs no seeding.
+        public var expandedHosts: Set<String> = []
+
+        /// IDs of the sections the operator has closed. Empty ⇒ every section
+        /// open. The two disclosure sets are asymmetric on purpose: each
+        /// defaults to the desired state at an empty set.
+        public var collapsedGroups: Set<String> = []
+
         /// The inspected device (drives the detail pane).
         public var selectedDeviceCode: String?
         public var isLoading: Bool
@@ -80,6 +100,46 @@ public struct DevicesFeature {
             guard let code = selectedDeviceCode else { return nil }
             return devices.first { $0.deviceCode == code }
         }
+
+        /// The selected device's Needs Attention flags, for the inspector's
+        /// attention section. Derived through the same
+        /// `DeviceListLayout.attentionFlags` the row's dot uses, so the
+        /// inspector can never disagree with why the row was flagged. Empty
+        /// when nothing is selected or the device carries no flag.
+        public var selectedDeviceAttention: [AttentionFlag] {
+            guard let device = selectedDevice else { return [] }
+            return DeviceListLayout.attentionFlags(for: device, directives: attentionDirectives)
+        }
+
+        /// The organised list. `State` derives it, the view renders it — the
+        /// established "list query in state, view is a pure renderer" standard.
+        /// Recomputed on access, so a view body should bind it to a `let` once
+        /// rather than reading `store.sections` several times.
+        public var sections: [DeviceListSection] {
+            DeviceListLayout.sections(
+                fleet: devices,
+                attentionDirectives: attentionDirectives,
+                searchText: searchText,
+                expandedHosts: expandedHosts,
+                collapsedGroups: collapsedGroups
+            )
+        }
+
+        /// Arrow-key navigation order. A collapsed host contributes no entries,
+        /// so hidden rows are absent by construction rather than by a second
+        /// rule that could drift out of step with the renderer.
+        public var orderedIDs: [String] {
+            sections.orderedIDs
+        }
+
+        /// Devices matching the active query across the *whole* fleet — the "N"
+        /// in the "N of M devices" subtitle. Not the visible row count, which
+        /// also includes the non-matching ancestors a match reveals.
+        public var matchCount: Int {
+            let query = DeviceListLayout.Query(searchText)
+            guard !query.isEmpty else { return devices.count }
+            return devices.filter { DeviceListLayout.matches($0, query: query) }.count
+        }
     }
 
     public enum Action: BindableAction {
@@ -90,6 +150,10 @@ public struct DevicesFeature {
         case loadSucceeded
         case loadFailed(String)
         case dismissError
+        /// The disclosure gestures. Named for the gesture rather than the logic,
+        /// because the logic is `DeviceListLayout`'s.
+        case groupDisclosureToggled(String)
+        case hostDisclosureToggled(String)
         /// Confirmed from the inspector's command grid.
         case commandConfirmed(kind: OperationKind, deviceCode: String, params: CommandParams)
         case commandFinished(CommandOutcome)
@@ -226,6 +290,22 @@ public struct DevicesFeature {
         Reduce { state, action in
             switch action {
             case .binding:
+                return .none
+
+            case let .groupDisclosureToggled(sectionID):
+                if state.collapsedGroups.contains(sectionID) {
+                    state.collapsedGroups.remove(sectionID)
+                } else {
+                    state.collapsedGroups.insert(sectionID)
+                }
+                return .none
+
+            case let .hostDisclosureToggled(deviceCode):
+                if state.expandedHosts.contains(deviceCode) {
+                    state.expandedHosts.remove(deviceCode)
+                } else {
+                    state.expandedHosts.insert(deviceCode)
+                }
                 return .none
 
             case let .inspectorVisibilityChanged(deviceCode):

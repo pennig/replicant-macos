@@ -264,6 +264,13 @@ public enum Hairline {
     public static let regular: CGFloat = 1
 }
 
+/// Thickness for a readout's stacked composition bar (`RCReadoutSectionHeader`).
+/// Kept separate from `Hairline` — that token means a 0.5/1pt separator stroke,
+/// while this is a deliberately thicker, visible bar segment.
+public enum BarThickness {
+    public static let readout: CGFloat = 3
+}
+
 /// Square dimensions for the icon/glyph tiles used in list rows (small) and
 /// detail headers (large). Owned here so the two recurring magic numbers live in
 /// one place; consumed by `RCGlyphTile`.
@@ -278,6 +285,24 @@ public enum TileSize {
 /// `RCButtonStyle`.
 public enum Control {
     public static let height: CGFloat = 34
+}
+
+/// Width reserved for a list row's leading disclosure control (chevron +
+/// child count). Reserved for every row at a given depth, whether or not that
+/// row actually has children, so a leaf row's glyph lines up flush with an
+/// expandable host row's one column over — the fixed gutter is what keeps
+/// depth-aligned rows visually aligned, not just the rows that use it.
+/// Consumed by `DeviceRow`.
+public enum RowGutter {
+    public static let disclosure: CGFloat = 22
+}
+
+/// Diameter of a small filled-circle status marker — e.g. the dot that flags
+/// a fleet row flagged for attention. Kept distinct from `TileSize` — that
+/// token sizes icon/glyph tiles, this one sizes a plain marker dot. Consumed
+/// by `DeviceRow`.
+public enum MarkerSize {
+    public static let attentionDot: CGFloat = 6
 }
 
 public extension Font {

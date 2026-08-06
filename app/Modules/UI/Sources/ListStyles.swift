@@ -11,8 +11,8 @@ public enum SelectableListStyle: Sendable {
 }
 
 public enum SelectableListMetrics {
-    public static let leadingPadding = Space.l
-    public static let trailingPadding = Space.m
+    public static let leadingPadding = Space.s
+    public static let trailingPadding = Space.xs
 }
 
 struct SelectableListStyleKey: EnvironmentKey {

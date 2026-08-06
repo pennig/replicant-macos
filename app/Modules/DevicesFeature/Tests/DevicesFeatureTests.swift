@@ -381,3 +381,164 @@ private func device(_ code: String, status: String = "idle") -> Device {
         #expect(endedEditing.value == true)
     }
 }
+
+/// The list's organisation state: binding-driven search, the two disclosure
+/// gestures, and the derived sections the view renders.
+@MainActor
+@Suite struct DeviceListStateTests {
+
+    @Test func hostDisclosureTogglesOnAndOff() async throws {
+        let database = try GameDatabase.bootstrap()
+        let store = TestStore(initialState: DevicesFeature.State()) {
+            DevicesFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
+        }
+
+        await store.send(.hostDisclosureToggled("VESSEL")) {
+            $0.expandedHosts = ["VESSEL"]
+        }
+        await store.send(.hostDisclosureToggled("VESSEL")) {
+            $0.expandedHosts = []
+        }
+    }
+
+    @Test func groupDisclosureTogglesOnAndOff() async throws {
+        let database = try GameDatabase.bootstrap()
+        let store = TestStore(initialState: DevicesFeature.State()) {
+            DevicesFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
+        }
+
+        await store.send(.groupDisclosureToggled(DeviceListSection.attentionID)) {
+            $0.collapsedGroups = [DeviceListSection.attentionID]
+        }
+        await store.send(.groupDisclosureToggled(DeviceListSection.attentionID)) {
+            $0.collapsedGroups = []
+        }
+    }
+
+    @Test func searchTextIsDrivenByTheBindingReducer() async throws {
+        let database = try GameDatabase.bootstrap()
+        let store = TestStore(initialState: DevicesFeature.State()) {
+            DevicesFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
+        }
+
+        await store.send(\.binding.searchText, "survey") {
+            $0.searchText = "survey"
+        }
+    }
+
+    /// Hosts default collapsed, so the top level is roots only — and the
+    /// disclosure gesture opens exactly one level.
+    @Test func derivedSectionsCollapseHostsByDefault() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Device.insert {
+                makeDevice("VESSEL", type: "heaven_vessel")
+                makeDevice("CTRL", type: "ami_survey_controller", stowedIn: "VESSEL")
+            }
+            .execute(db)
+        }
+
+        let store = TestStore(initialState: DevicesFeature.State()) {
+            DevicesFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
+        }
+        store.exhaustivity = .off
+
+        #expect(store.state.orderedIDs == ["VESSEL"])
+        await store.send(.hostDisclosureToggled("VESSEL"))
+        #expect(store.state.orderedIDs == ["VESSEL", "CTRL"])
+    }
+
+    /// `matchCount` counts the whole fleet's matches, not the visible rows —
+    /// the "N" in the "N of M devices" subtitle.
+    @Test func matchCountCountsMatchesNotVisibleRows() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Device.insert {
+                makeDevice("VESSEL", type: "heaven_vessel")
+                makeDevice("DRONEA", type: "survey_drone", stowedIn: "VESSEL")
+            }
+            .execute(db)
+        }
+
+        let store = TestStore(initialState: DevicesFeature.State()) {
+            DevicesFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
+        }
+        store.exhaustivity = .off
+
+        #expect(store.state.matchCount == 2)
+        await store.send(\.binding.searchText, "survey_drone")
+        #expect(store.state.matchCount == 1)
+        // The ancestor is revealed but is not itself a match.
+        #expect(store.state.orderedIDs == ["VESSEL", "DRONEA"])
+    }
+
+    /// The design spec's Search guarantee: a filtered-out selection keeps its
+    /// detail pane. `selectedDevice` resolves against the whole `devices`
+    /// array, never the filtered `sections`, so it stays correct by
+    /// construction — but the spec calls it out by name, so it earns its own
+    /// assertion rather than riding on some other test's coincidence.
+    @Test func filteredOutSelectionKeepsItsDetailPane() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Device.insert {
+                makeDevice("KEEP", type: "heaven_vessel")
+                makeDevice("HIDDEN", type: "survey_drone")
+            }
+            .execute(db)
+        }
+
+        let store = TestStore(initialState: DevicesFeature.State(selectedDeviceCode: "HIDDEN")) {
+            DevicesFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
+        }
+        store.exhaustivity = .off
+
+        await store.send(\.binding.searchText, "heaven_vessel")
+
+        #expect(store.state.selectedDevice?.deviceCode == "HIDDEN")
+        #expect(!store.state.orderedIDs.contains("HIDDEN"))
+    }
+
+    /// `selectedDeviceAttention` feeds the inspector's attention section —
+    /// empty with no selection, empty for an unflagged device, and populated
+    /// (through the same `DeviceListLayout.attentionFlags` the row's dot
+    /// uses) for a flagged one. The database is seeded before the
+    /// `TestStore` exists, since `@FetchAll` needs the rows present when
+    /// state is first constructed.
+    @Test func selectedDeviceAttentionReflectsTheSelection() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Device.insert {
+                makeDevice("HURT", capacity: 10)
+                makeDevice("FINE", capacity: 100)
+            }
+            .execute(db)
+        }
+
+        let store = TestStore(initialState: DevicesFeature.State()) {
+            DevicesFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
+        }
+        store.exhaustivity = .off
+
+        #expect(store.state.selectedDeviceAttention == [])
+
+        await store.send(.binding(.set(\.selectedDeviceCode, "FINE")))
+        #expect(store.state.selectedDeviceAttention == [])
+
+        await store.send(.binding(.set(\.selectedDeviceCode, "HURT")))
+        #expect(store.state.selectedDeviceAttention == [.damaged(capacity: 10)])
+    }
+}
