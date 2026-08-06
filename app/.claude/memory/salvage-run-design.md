@@ -48,10 +48,18 @@ first). Fix: `SiteAssay` gained a STICKY `depleted` flag (append-only migration)
 `salvage.depleted` event (`markSalvageDepleted` now updates the assay too) and a location re-fetch (a sink
 reads the **fresh** fetched system's depleted sites — robust to the richer-body-wins `mergingSystemDetail`),
 preserved through the three assay writers, and excluded by `nextTarget` (`&& !assay.depleted`). Nothing ever
-clears it (salvage never replenishes). **Caveat:** on the fetch path the ASSAY is authoritative for the
-planner, but the BLOB's `depleted` (read by within-system `nextBody`) can momentarily lag if a richer cached
-body wins the merge — narrow and self-correcting (a `salvage.depleted` event or `salvageBodyNotDepleted`
-stall resolves it).
+clears it (salvage never replenishes). **The caveat this note used to carry was wrong and is now fixed**
+(2026-08-06): the BLOB's `depleted` (read by within-system `nextBody`) did not "momentarily lag, self-correcting
+via the stall" — a richer cached body kept its salvage roster wholesale in `mergingScan`, which took the fresh
+roster only when the kept one was EMPTY, so on an already-hydrated body a fresh `depleted: true` was discarded
+on **every** star-level refresh. That made `salvageBodyNotDepleted` unclearable: its one `.refreshSystem`, and
+every Retry re-arming that budget, merged to the same stale answer, and only a per-body `hydrateBody` fetch
+(`applying` → `upsertPlanet`, which replaces the roster) could lower the flag — which is why the live INIKAWAIY
+stall cleared only after the operator toured each salvage location in the Locations UI by hand and then retried.
+Both roster paths (`mergingScan`'s planets and `mergingMoons`) now reconcile through `mergingSalvage`, which
+gained a `clearingDepleted` parameter: a SCAN observes the site directly and may clear the flag, a ROSTER can
+lag a `salvage.depleted` event and so only ever raises it. A per-body fetch is still authoritative and still
+bypasses the reconcile, so a hand tour remains the operator's override.
 
 (5) **Arrival-freshness gate on all four travel dispatch sites** (2026-08-01, live incident): the run
 stalled `commandRejected: "Already at destination"` 139 ms after a `travel.arrived`, because
