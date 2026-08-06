@@ -389,6 +389,61 @@ struct PruneTests {
         #expect(analysis.reclaimable == [ReclaimableRelay(deviceCode: "REL_EMPTY", system: "EMPTY")])
     }
 
+    /// A system whose value is spent but whose EXTRACTED units are still on
+    /// the ground is pinned.
+    ///
+    /// The pile is not value in the ground — it is inventory we already own,
+    /// waiting for a Haul Run to collect it, and `HaulTargetPlanner` can only
+    /// issue the `ferry` that collects it while both ends sit on the mesh. So
+    /// reclaiming the relay does not lose a prospect, it strands units already
+    /// paid for. Depleted salvage is exactly the state that leaves a full pile
+    /// behind, which puts this on the ordinary path out of every finished
+    /// Salvage Run rather than in a corner of the state space.
+    ///
+    /// `EMPTY` is the control: identical in every respect, nothing left on the
+    /// ground.
+    @Test func systemHoldingAnUncollectedStockpileIsPinned() {
+        let positions: [String: Position] = [
+            "SOL": .init(x: 0, y: 0, z: 0),
+            "PILE": .init(x: 0, y: 7, z: 0),
+            "EMPTY": .init(x: 0, y: -7, z: 0),
+        ]
+        let world = prunableWorld(
+            positions: positions,
+            relays: ["REL_SOL": "SOL", "REL_PILE": "PILE", "REL_EMPTY": "EMPTY"],
+            salvage: [:], // every assay in both systems is spent
+            stockpiles: ["PILE"] // …but PILE's mined units are still sitting there
+        )
+        let analysis = PrunePredicate.analyse(view: world, graph: MeshGraph(positions: positions))
+        #expect(analysis.pinned == ["REL_SOL", "REL_PILE"])
+        #expect(analysis.reclaimable == [ReclaimableRelay(deviceCode: "REL_EMPTY", system: "EMPTY")])
+    }
+
+    /// A stockpile is a TARGET, so the whole road to it is pinned and not just
+    /// the relay standing on top of it.
+    ///
+    /// `W` holds nothing itself and bridges the 14 ly the anchor cannot span,
+    /// so it survives only if the pile at `PILE` is a target the union is built
+    /// over. Pinning the pile's own system alone would leave `W` spare and the
+    /// units just as unreachable.
+    @Test func relaysOnTheRoadToAStockpileArePinned() {
+        let positions: [String: Position] = [
+            "SOL": .init(x: 0, y: 0, z: 0),
+            "W": .init(x: 0, y: 7, z: 0),
+            "PILE": .init(x: 0, y: 14, z: 0),
+        ]
+        let world = prunableWorld(
+            positions: positions,
+            relays: ["REL_SOL": "SOL", "REL_W": "W", "REL_PILE": "PILE"],
+            salvage: [:],
+            stockpiles: ["PILE"]
+        )
+        let analysis = PrunePredicate.analyse(view: world, graph: MeshGraph(positions: positions))
+        #expect(analysis.pinned == ["REL_SOL", "REL_W", "REL_PILE"])
+        #expect(analysis.reclaimable.isEmpty)
+        #expect(analysis.declined == nil)
+    }
+
     /// A meshed system nobody has surveyed holds UNKNOWN value, and unknown
     /// reads as pinned.
     ///

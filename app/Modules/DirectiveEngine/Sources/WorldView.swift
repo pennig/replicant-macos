@@ -4,15 +4,16 @@
 //
 //  The galaxy as the automation brain sees it: one consistent read of every
 //  meshed system, every census star position, every non-depleted salvage assay,
-//  every live location event, the account's replicants and the print hub — the
-//  single input every brain pass (pathfinding, value ranking, prune analysis)
-//  consumes.
+//  every live location event, every location holding uncollected units, the
+//  account's replicants and the print hub — the single input every brain pass
+//  (pathfinding, value ranking, prune analysis) consumes.
 //
 //  A sibling to `WorldSnapshot`, but wider: `WorldSnapshot` scopes systems to
 //  one directive's `wanted` set because decoding thousands of `StarSystem`
 //  blobs per tick is real cost, while the brain must rank ACROSS the whole
 //  census. So this reads the cheap tables — devices, `stars`, `siteAssays`,
-//  `locationEvents`, `replicants` — and touches exactly one blob field.
+//  `locationEvents`, `locationFootprints`, `replicants` — and touches exactly
+//  one blob field.
 //
 //  That field is `beltsBySystem`. Belt richness exists only inside the
 //  per-system `StarSystem` JSON (`SystemDetail.systemJSON`), and decoding all
@@ -105,6 +106,22 @@ public struct WorldView: Equatable, Sendable {
     /// it at selection is what makes the shortfall a choice not taken rather
     /// than a stall discovered mid-run (`RelayRun.carrierRetainsAuthority`).
     public let replicantHostDevices: Set<String>
+    /// Every system holding at least one location the census reports with
+    /// units on it — resources already extracted and waiting for a Haul Run to
+    /// collect them.
+    ///
+    /// Distinct in kind from `salvageUnits` and `beltsBySystem`, which are
+    /// value still IN THE GROUND: a pile is inventory the fleet already paid
+    /// for, and `HaulTargetPlanner` can only issue the `ferry` that collects it
+    /// while both ends sit on the mesh. Depletion is what produces a pile, so
+    /// without this the two facts move in opposite directions at the same
+    /// instant — the assay drops out of `salvageUnits` exactly as the units
+    /// land on the ground.
+    ///
+    /// Read off `LocationFootprint`, bounded in SQL to rows holding units:
+    /// most of that table is locations looked at once and found empty, and
+    /// taking those too would pin every system the fleet has ever visited.
+    public let stockpileSystems: Set<String>
     /// Systems that have been through a full system scan
     /// (`SystemDetail.systemScanned`) — the very rows `beltsBySystem` decodes.
     ///
@@ -131,6 +148,7 @@ public struct WorldView: Equatable, Sendable {
         surveyedSystems: Set<String> = [],
         replicantSystems: Set<String> = [],
         replicantHostDevices: Set<String> = [],
+        stockpileSystems: Set<String> = [],
         now: Date
     ) {
         self.devices = devices
@@ -143,6 +161,7 @@ public struct WorldView: Equatable, Sendable {
         self.surveyedSystems = surveyedSystems
         self.replicantSystems = replicantSystems
         self.replicantHostDevices = replicantHostDevices
+        self.stockpileSystems = stockpileSystems
         self.now = now
     }
 
@@ -193,6 +212,12 @@ public struct WorldView: Equatable, Sendable {
             .reduce(into: [:]) { $0[$1.location] = $1.resources }
         let hub = Self.hubLocation(in: allDevices, meshSystems: mesh, stockByLocation: hubStock)
 
+        // Bounded in SQL to rows actually holding units. The table carries a
+        // row per location the fleet has ever looked at and most of them are
+        // empty, so the predicate is what keeps this a handful of rows rather
+        // than the whole census.
+        let stockpiles = try LocationFootprint.where { $0.resources > 0 }.fetchAll(db)
+
         // One fetch, two fields: SURVEY is the sole bound on the blob decode,
         // so the rows that define `surveyedSystems` are exactly the rows
         // `beltsBySystem` decodes. Reading them once keeps the two from ever
@@ -217,6 +242,7 @@ public struct WorldView: Equatable, Sendable {
                 replicants.compactMap { $0.currentStar.map { SiteAssay.system(of: $0) } }
             ),
             replicantHostDevices: Set(replicants.compactMap(\.hostedDeviceCode)),
+            stockpileSystems: Set(stockpiles.map { SiteAssay.system(of: $0.location) }),
             now: now
         )
     }

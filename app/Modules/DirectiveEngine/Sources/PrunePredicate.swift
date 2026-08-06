@@ -193,11 +193,13 @@ public enum PrunePredicate {
     }
 
     /// Everything the mesh must keep serving in `view` — the target set the
-    /// union is built over. FOUR sources, each answering "would losing
+    /// union is built over. FIVE sources, each answering "would losing
     /// authority here cost us something we cannot get back?" from a different
     /// direction:
     ///
     ///   - live VALUE, reached or grow-wanted (`liveValueSystems`);
+    ///   - units already EXTRACTED and awaiting collection
+    ///     (`stockpileSystems`) — value we own rather than value we might get;
     ///   - where our own deployed hardware actually STANDS (`fleetSystems`) —
     ///     a system can hold a working vessel long after its last assay
     ///     depletes;
@@ -206,13 +208,36 @@ public enum PrunePredicate {
     ///   - meshed systems where a REPLICANT stands (`replicantSystems`) —
     ///     where authority itself comes from.
     ///
-    /// All four only ever ADD targets, so a source can only ever move a relay
+    /// All five only ever ADD targets, so a source can only ever move a relay
     /// from reclaimable to pinned, never the other way.
     static func servedSystems(in view: WorldView) -> Set<String> {
         liveValueSystems(in: view)
+            .union(stockpileSystems(in: view))
             .union(fleetSystems(in: view))
             .union(unsurveyedMeshSystems(in: view))
             .union(replicantSystems(in: view))
+    }
+
+    /// Systems holding resources already extracted and waiting to be collected.
+    ///
+    /// A pile is not a prospect, it is inventory the fleet has already paid
+    /// for, and `HaulTargetPlanner` can only issue the `ferry` that collects it
+    /// while both ends sit on the mesh — so reclaiming the relay standing over
+    /// one strands the units rather than merely postponing them.
+    ///
+    /// **Not bounded to meshed systems**, which puts it alongside
+    /// `liveValueSystems` rather than the two mesh-bounded sources. An
+    /// unmeshed pile cannot be ferried at all, so the ferry it protects is one
+    /// the mesh does not yet offer — and `ValueCatalog` ranks assays, belts and
+    /// events but not piles, so no grow is currently extending a chain toward
+    /// one either. Admitting it anyway only ever adds pins, which is the
+    /// direction every uncertain edge in this file errs in.
+    ///
+    /// It carries the cost `liveValueSystems` already carries: a pile in a
+    /// system the census cannot place makes the coverage precondition decline
+    /// the whole judgement, pinning everything.
+    static func stockpileSystems(in view: WorldView) -> Set<String> {
+        view.stockpileSystems
     }
 
     /// Meshed systems in `view` holding one of the account's replicants.

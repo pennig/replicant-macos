@@ -442,6 +442,20 @@ func seedHubStockpile(
     resources: Int,
     fetchedAt: Date = fixtureCensusFetchedAt
 ) throws {
+    try seedStockpile(db, location: location, resources: resources, fetchedAt: fetchedAt)
+}
+
+/// A `LocationFootprint` census row for `location` holding `resources` units.
+///
+/// The same table `seedHubStockpile` writes, named generally because the row
+/// answers two unrelated questions: whether a print-capable location is a hub,
+/// and whether a system holds units awaiting collection.
+func seedStockpile(
+    _ db: Database,
+    location: String,
+    resources: Int,
+    fetchedAt: Date = fixtureCensusFetchedAt
+) throws {
     try LocationFootprint.insert {
         LocationFootprint(
             location: location, devices: 1, resources: resources, resourceSites: 0,
@@ -490,7 +504,8 @@ func prunableWorld(
     events: Set<String> = [],
     fleet: [String: String] = [:],
     surveyed: Set<String>? = nil,
-    replicants: Set<String> = []
+    replicants: Set<String> = [],
+    stockpiles: Set<String> = []
 ) -> WorldView {
     let relayDevices = relays.sorted { $0.key < $1.key }.map { code, system in
         deviceFixture(
@@ -513,6 +528,7 @@ func prunableWorld(
         beltsBySystem: belts,
         surveyedSystems: surveyed ?? Set(positions.keys),
         replicantSystems: replicants,
+        stockpileSystems: stockpiles,
         now: Date(timeIntervalSince1970: 0)
     )
 }
