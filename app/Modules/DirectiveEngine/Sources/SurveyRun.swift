@@ -36,6 +36,10 @@ public struct SurveyRun: MissionStepMachine {
         public static let preflight = "preflight"
         /// Fly the vessel to the current target system.
         public static let travelling = "travelling"
+        /// Put the service bots into the system so they can repair as it works.
+        public static let deployingBots = "deployingBots"
+        /// Read whether the ordered deploy landed before ordering the next.
+        public static let confirmingBotDeploy = "confirmingBotDeploy"
         /// Put `surveyConfig` in force on the stowed controller.
         public static let configuring = "configuring"
         /// Launch the controller, which deploys its adopted drones.
@@ -65,6 +69,12 @@ public struct SurveyRun: MissionStepMachine {
     /// ETA-driven wait handles the honest cases, so reaching this means the
     /// recall really is not happening.
     public static let recallDeadline: TimeInterval = 20 * 60
+
+    /// How long to let an ordered bot deploy or stow settle before the first read.
+    public static let botProbeDelay: TimeInterval = 10
+
+    /// Floor between bot-state probes, so an unmoving row is not re-read each tick.
+    public static let botProbeInterval: TimeInterval = 30
 
     /// How old a row backing a POSITIVE staging finding may be and still be
     /// believed without an authoritative re-read.
@@ -98,6 +108,8 @@ public struct SurveyRun: MissionStepMachine {
         switch directive.step {
         case Step.preflight: return preflight(directive, vessel, world)
         case Step.travelling: return travel(directive, vessel, world)
+        case Step.deployingBots: return deployBots(directive, vessel, world)
+        case Step.confirmingBotDeploy: return confirmBotDeploy(directive, vessel, world)
         case Step.configuring: return configure(directive, vessel, world)
         case Step.launching: return launch(directive, vessel, world)
         case Step.awaiting: return awaitCompletion(directive, world)
@@ -483,11 +495,38 @@ public struct SurveyRun: MissionStepMachine {
         guard let target = directive.currentTarget else {
             return .advanceStep(nextStep: Step.preflight)
         }
-        if Self.system(of: vessel) == target { return .advanceStep(nextStep: Step.configuring) }
+        if Self.system(of: vessel) == target { return .advanceStep(nextStep: Step.deployingBots) }
         if world.openOperation(for: vessel.deviceCode) != nil { return .wait }
         return .dispatch(
             kind: .travel, deviceCode: vessel.deviceCode,
             params: CommandParams(destination: target), nextStep: Step.travelling
         )
+    }
+
+    /// Deploy the next service bot still aboard `vessel`, or move on when the
+    /// system already has them all.
+    private func deployBots(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
+        let aboard = RepairFleet.bots(aboard: vessel, in: world)
+        guard let next = aboard.first else { return .advanceStep(nextStep: Step.configuring) }
+        return .dispatch(
+            kind: .simple("deploy"), deviceCode: next.deviceCode,
+            params: CommandParams(), nextStep: Step.confirmingBotDeploy
+        )
+    }
+
+    /// Judge an ordered deploy, looping back for the next bot until none is aboard.
+    private func confirmBotDeploy(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
+        let elapsed = world.now.timeIntervalSince(directive.stepStartedAt)
+        if elapsed < Self.botProbeDelay { return .wait }
+        let aboard = RepairFleet.bots(aboard: vessel, in: world)
+        if aboard.isEmpty { return .advanceStep(nextStep: Step.configuring) }
+        // A row that has not been read since the deploy was ordered cannot yet
+        // show it landing; buy the read rather than believing a stale claim.
+        if aboard.contains(where: { $0.updatedAt < directive.stepStartedAt }) {
+            let lastLook = aboard.map(\.updatedAt).min() ?? .distantPast
+            if world.now.timeIntervalSince(lastLook) < Self.botProbeInterval { return .wait }
+            return .refreshDevices(deviceCodes: aboard.map(\.deviceCode), thenStall: nil)
+        }
+        return .advanceStep(nextStep: Step.deployingBots)
     }
 }

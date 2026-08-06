@@ -439,7 +439,7 @@ struct SurveyRunPreflightTests {
     @Test func skipsTravelWhenAlreadyThere() {
         let directive = run(step: SurveyRun.Step.travelling, controllerCode: "AMI1")
         #expect(SurveyRun().nextAction(directive: directive, world: world(stagedFleet(vesselAt: "TAU-2")))
-                == .advanceStep(nextStep: SurveyRun.Step.configuring))
+                == .advanceStep(nextStep: SurveyRun.Step.deployingBots))
     }
 
     /// Mid-travel is a WAIT, never a stall (spec §4) — and never a second travel

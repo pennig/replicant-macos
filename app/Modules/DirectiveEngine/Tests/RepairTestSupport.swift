@@ -42,3 +42,19 @@ func repairWorld(devices: [Device]) -> WorldSnapshot {
         openOperations: [:], log: [], systems: [:], now: repairFixtureNow
     )
 }
+
+func repairDirective(
+    step: String,
+    deviceCode: String,
+    targets: [String] = [],
+    targetIndex: Int = 0,
+    stepStartedAt: Date = repairFixtureNow
+) -> Directive {
+    Directive(
+        id: "D1", kind: .surveyRun, status: .running, deviceCode: deviceCode,
+        targets: targets, targetIndex: targetIndex,
+        step: step, stepStartedAt: stepStartedAt, returnToOrigin: false,
+        originDesignation: nil, attentionReason: nil,
+        createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0)
+    )
+}
