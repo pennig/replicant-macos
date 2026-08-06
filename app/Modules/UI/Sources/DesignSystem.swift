@@ -313,7 +313,7 @@ public enum Motion {
 
     /// Past this many rows a reveal skips the row transition: inserting them
     /// all in one frame stutters. The chevron still animates.
-    public static let disclosureRowLimit = 50
+    public static let disclosureRowLimit = 100
 }
 
 public extension Font {

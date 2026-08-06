@@ -109,7 +109,7 @@ public struct DevicesListView: View {
         .task { store.send(.task) }
     }
 
-    /// Nil past `Motion.disclosureRowLimit`, so opening the 53-relay type
+    /// Nil past `Motion.disclosureRowLimit`, so opening a huge
     /// section doesn't animate every row in at once. The chevron animates on
     /// its own regardless.
     private func disclosureAnimation(rows: Int) -> Animation? {
