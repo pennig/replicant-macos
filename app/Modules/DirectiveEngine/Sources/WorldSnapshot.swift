@@ -27,11 +27,14 @@ public struct WorldSnapshot: Equatable, Sendable {
     /// excluded: a step machine asks "is this device busy?", and a completed op
     /// is not busy.
     public let openOperations: [String: GameModels.Operation]
-    /// This directive's audit trail, oldest first. Completion detection reads
-    /// it: the `directive.completed` route writes an entry, and the mission
-    /// observes that ROW rather than the event — the observe-reconciled-state
-    /// invariant is what keeps missions replay-immune.
+    /// This directive's newest `logWindow` timeline entries, ascending.
+    /// Completion detection reads the `directive.completed` ROW here rather
+    /// than the event, which is what keeps missions replay-immune.
     public let log: [DirectiveLogEntry]
+    /// This directive's FULL `.commandDispatched`/`.opCompleted` history —
+    /// unlike `log`, never windowed, so an op dispatched long before `log`'s
+    /// cutoff can still be resolved by `DirectiveExecutor`'s audit pass.
+    public let auditLog: [DirectiveLogEntry]
     /// The operations this directive dispatched, by operation id — **including
     /// closed ones**, so the audit pass can notice a dispatched op reaching a
     /// terminal state and write its `.opCompleted` entry. Scoped to the ids
@@ -96,10 +99,16 @@ public struct WorldSnapshot: Equatable, Sendable {
     /// tests deterministic.
     public let now: Date
 
+    /// Newest entries kept for `log`. HaulRun's `dispatchAttemptCount` — the
+    /// deepest `world.log` walk-back — stays under a few hundred entries even
+    /// with many interleaved controllers; 500 leaves headroom.
+    public static let logWindow = 500
+
     public init(
         devices: [String: Device],
         openOperations: [String: GameModels.Operation],
         log: [DirectiveLogEntry] = [],
+        auditLog: [DirectiveLogEntry] = [],
         dispatchedOperations: [String: GameModels.Operation] = [:],
         systems: [String: StarSystem] = [:],
         siteAssays: [String: [String: Double]] = [:],
@@ -110,6 +119,7 @@ public struct WorldSnapshot: Equatable, Sendable {
         self.devices = devices
         self.openOperations = openOperations
         self.log = log
+        self.auditLog = auditLog
         self.dispatchedOperations = dispatchedOperations
         self.systems = systems
         self.siteAssays = siteAssays
@@ -147,15 +157,22 @@ public struct WorldSnapshot: Equatable, Sendable {
             let operations = try GameModels.Operation
                 .where { $0.status.in(OperationStatus.openCases) }
                 .fetchAll(db)
-            let log = try DirectiveLogEntry
+            // Newest `logWindow` first, then restored to ascending order — the
+            // order every caller (`.reversed()` walks included) already expects.
+            let log = try Array(DirectiveLogEntry
                 .where { $0.directiveID.eq(directiveID) }
+                .order { $0.occurredAt.desc() }
+                .limit(Self.logWindow)
+                .fetchAll(db)
+                .reversed())
+
+            // Unbounded and kind-scoped, unlike `log`: an old-enough dispatch
+            // must stay resolvable after `log`'s window rolls past it.
+            let auditLog = try DirectiveLogEntry
+                .where { $0.directiveID.eq(directiveID) && $0.kind.in([DirectiveLogKind.commandDispatched, .opCompleted]) }
                 .order { $0.occurredAt }
                 .fetchAll(db)
-
-            // Every op this directive dispatched, by id — read in the SAME
-            // transaction as the log that names them, so the audit pass can never
-            // see a dispatch entry without being able to resolve its op.
-            let dispatchedIDs = Array(Set(log.compactMap { entry in
+            let dispatchedIDs = Array(Set(auditLog.compactMap { entry in
                 entry.kind == .commandDispatched ? entry.operationID : nil
             }))
             let dispatched = dispatchedIDs.isEmpty ? [] : try GameModels.Operation
@@ -205,6 +222,7 @@ public struct WorldSnapshot: Equatable, Sendable {
                 devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
                 openOperations: Dictionary(operations.map { ($0.entityCode, $0) }, uniquingKeysWith: { _, last in last }),
                 log: log,
+                auditLog: auditLog,
                 dispatchedOperations: Dictionary(dispatched.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last }),
                 systems: systems,
                 siteAssays: siteAssays,

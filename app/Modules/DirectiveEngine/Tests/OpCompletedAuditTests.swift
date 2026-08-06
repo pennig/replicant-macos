@@ -238,6 +238,35 @@ struct OpCompletedAuditTests {
         }
     }
 
+    /// A dispatch older than `WorldSnapshot.logWindow` still gets audited: the
+    /// pass reads `auditLog`, which is never windowed, so an op dispatched long
+    /// before `log`'s cutoff can still be resolved once it closes.
+    @Test func aDispatchOlderThanTheLogWindowStillGetsAudited() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await seed(database, operation: operation(id: "OP1", status: .completed))
+        try await database.write { db in
+            for i in 0..<(WorldSnapshot.logWindow + 10) {
+                try DirectiveLogEntry.insert {
+                    DirectiveLogEntry(
+                        id: "filler-\(i)", directiveID: "D1", deviceCode: nil, kind: .stepStarted,
+                        summary: "noise", step: nil, operationID: nil, eventID: nil,
+                        occurredAt: Date(timeIntervalSince1970: 200 + Double(i))
+                    )
+                }.execute(db)
+            }
+        }
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 100_000))
+            $0.uuid = .incrementing
+        } operation: {
+            await core().evaluateOnce(directiveID: "D1")
+            let log = try await entries(database)
+            #expect(log.contains { $0.kind == .opCompleted && $0.operationID == "OP1" })
+        }
+    }
+
     /// A non-running directive is left entirely alone — the documented gap. The
     /// entry lands once the user resumes, not behind their back.
     @Test func aStalledDirectiveLogsNothingUntilItResumes() async throws {

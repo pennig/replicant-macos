@@ -206,13 +206,14 @@ enum DirectiveExecutor {
         @Dependency(\.date) var date
         @Dependency(\.uuid) var uuid
 
-        // Op ids already accounted for, so a closed op is logged exactly once.
-        let alreadyLogged = Set(world.log.compactMap { entry in
+        // Op ids already accounted for. Reads `auditLog`, not the windowed
+        // `log`, so an old dispatch this pass still needs stays resolvable.
+        let alreadyLogged = Set(world.auditLog.compactMap { entry in
             entry.kind == .opCompleted ? entry.operationID : nil
         })
 
         var entries: [DirectiveLogEntry] = []
-        for dispatch in world.log where dispatch.kind == .commandDispatched {
+        for dispatch in world.auditLog where dispatch.kind == .commandDispatched {
             guard let operationID = dispatch.operationID,
                   !alreadyLogged.contains(operationID),
                   let operation = world.dispatchedOperations[operationID],

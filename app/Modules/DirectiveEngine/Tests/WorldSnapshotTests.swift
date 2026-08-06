@@ -38,6 +38,16 @@ private func op(_ id: String, device: String, status: OperationStatus) -> Operat
     )
 }
 
+/// A `D1`-owned `.stepStarted` entry stamped `i` seconds after the epoch, id
+/// `"L<i>"` — the window-truncation tests' filler row.
+private func worldSnapshotTestLogEntry(_ i: Int) -> DirectiveLogEntry {
+    DirectiveLogEntry(
+        id: "L\(i)", directiveID: "D1", deviceCode: nil, kind: .stepStarted,
+        summary: "step \(i)", step: nil, operationID: nil, eventID: nil,
+        occurredAt: Date(timeIntervalSince1970: Double(i))
+    )
+}
+
 private func directive(targets: [String] = ["SOL"]) -> Directive {
     Directive(
         id: "D1", kind: .surveyRun, status: .running, deviceCode: "VES1",
@@ -75,6 +85,41 @@ struct WorldSnapshotTests {
             from: database, now: Date(timeIntervalSince1970: 100), directive: directive()
         )
         #expect(world.log.map(\.id) == ["L1"])
+    }
+
+    /// A directive whose history exceeds `logWindow` still gets a snapshot: the
+    /// newest `logWindow` entries, oldest first — the order every re-entry
+    /// walk-back (`HaulRun.dispatchAttemptCount` and friends) already assumes.
+    @Test func truncatesToTheNewestLogWindowEntriesInAscendingOrder() async throws {
+        let database = try GameDatabase.bootstrap()
+        let total = WorldSnapshot.logWindow + 50
+        try await database.write { db in
+            for i in 0..<total {
+                try DirectiveLogEntry.insert { worldSnapshotTestLogEntry(i) }.execute(db)
+            }
+        }
+        let world = try await WorldSnapshot.read(
+            from: database, now: Date(timeIntervalSince1970: 10_000), directive: directive()
+        )
+        #expect(world.log.count == WorldSnapshot.logWindow)
+        #expect(world.log.first?.id == "L50")
+        #expect(world.log.last?.id == "L\(total - 1)")
+        #expect(world.log.map(\.occurredAt) == world.log.map(\.occurredAt).sorted())
+    }
+
+    /// A directive under the window is untouched — truncation only ever bites
+    /// once the history outgrows `logWindow`.
+    @Test func leavesALogUnderTheWindowUnaffected() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            for i in 0..<10 {
+                try DirectiveLogEntry.insert { worldSnapshotTestLogEntry(i) }.execute(db)
+            }
+        }
+        let world = try await WorldSnapshot.read(
+            from: database, now: Date(timeIntervalSince1970: 1_000), directive: directive()
+        )
+        #expect(world.log.map(\.id) == (0..<10).map { "L\($0)" })
     }
 
     /// Cached system blobs are decoded for the directive's targets, so the
