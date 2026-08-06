@@ -51,6 +51,16 @@ public struct BrainWhyDetailView: View {
                     }
                 }
 
+                // Unconditional, like `limitPressure`: the survey verdict is
+                // read every tick, and a card that only spoke up when idle
+                // could not be told apart from one that stopped reporting.
+                section("Survey") {
+                    why.survey.spans
+                        .styled(prose: .rcBody, designation: .rcMono)
+                        .foregroundStyle(why.survey.kind == .idle ? .rcTextTertiary : .rcTextSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
                 // Empty only when prune did not run at all — not when the mesh
                 // is healthy, which is why a tidy mesh still gets a line.
                 if !why.pruneNotes.isEmpty {

@@ -100,9 +100,16 @@ struct Brain: Sendable {
                 ranked: [],
                 hubLocation: nil,
                 limits: Self.limits(hubFootprint: nil),
+                survey: .idle(reason: "world unavailable"),
                 observedAt: now
             )
         }
+
+        // Read before `ensureSurvey` acts, mirroring `ranked`/`hubLocation`:
+        // the report states the tick's SNAPSHOT, not its write. A verdict of
+        // `.ready` here launches inside `ensureSurvey` below on this very
+        // tick — the next tick's fresh read is what turns it `.launched`.
+        let survey = Self.surveyStatus(directives: snapshot.directives, view: snapshot.view)
 
         let escalated = await respondToStalls(snapshot)
         let plan = Self.plan(view: snapshot.view, directives: snapshot.directives)
@@ -118,6 +125,7 @@ struct Brain: Sendable {
             prune: Self.pruneReport(
                 plan: plan, decision: decision, directives: snapshot.directives
             ),
+            survey: survey,
             observedAt: now
         )
     }
@@ -902,6 +910,21 @@ struct Brain: Sendable {
         }
 
         return .launch(carrier: carrier.deviceCode, roamCentre: centre)
+    }
+
+    /// The why-view's survey line: `.launched` off an already-live row,
+    /// otherwise `surveyReadiness`'s own verdict — `.ready` for `.launch`,
+    /// carried straight through for `.idle`.
+    static func surveyStatus(directives: [Directive], view: WorldView) -> BrainSurveyStatus {
+        if let live = directives.first(where: {
+            $0.kind == .surveyRun && owningStatuses.contains($0.status)
+        }) {
+            return .launched(carrier: live.deviceCode, roamCentre: live.roamCentre ?? "unknown")
+        }
+        switch surveyReadiness(view: view) {
+        case let .launch(carrier, roamCentre): return .ready(carrier: carrier, roamCentre: roamCentre)
+        case let .idle(reason): return .idle(reason: reason)
+        }
     }
 
     /// The lowest-coded vessel tagged `surveyCarrierTag`, wherever it stands —

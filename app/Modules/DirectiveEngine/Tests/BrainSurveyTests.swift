@@ -170,6 +170,63 @@ struct BrainSurveyTests {
     }
 }
 
+// MARK: - `Brain.surveyStatus` — the why-view's verdict
+
+@Suite("Brain — the survey status for the why-view")
+struct BrainSurveyStatusTests {
+    /// A live row wins outright — its OWN carrier and roam centre, never
+    /// re-derived from `surveyReadiness`, and asked before that verdict is
+    /// even computed.
+    @Test("a live survey reports launched, off the row itself")
+    func aLiveSurveyReportsLaunched() {
+        let live = Directive(
+            id: "LIVE", kind: .surveyRun, status: .running, deviceCode: "V9",
+            roamCentre: "VEGA", targets: [], targetIndex: 0, step: "step",
+            stepStartedAt: surveyFixtureNow, returnToOrigin: false, originDesignation: nil,
+            attentionReason: nil, createdAt: surveyFixtureNow, updatedAt: surveyFixtureNow
+        )
+        // A view that would otherwise idle — proves the live row is checked
+        // FIRST, not merely that it wins when readiness also says launch.
+        let view = surveyReadinessView(devices: [], hubLocation: nil)
+
+        #expect(
+            Brain.surveyStatus(directives: [live], view: view)
+                == .launched(carrier: "V9", roamCentre: "VEGA")
+        )
+    }
+
+    /// No live row, and readiness says go: `.ready`, carrying the exact
+    /// carrier/centre the launch below would use.
+    @Test("a ready, staged fleet with no live row reports ready")
+    func aReadyFleetReportsReady() {
+        let view = surveyReadinessView(
+            devices: surveyReadinessStagedFleet(),
+            hubLocation: "AINALRAM-BELT-1",
+            starPositions: ["AINALRAM": Position(x: 0, y: 0, z: 0)]
+        )
+        #expect(
+            Brain.surveyStatus(directives: [], view: view)
+                == .ready(carrier: "V1", roamCentre: "AINALRAM")
+        )
+    }
+
+    /// No live row, and readiness declines: the reason is carried straight
+    /// through, unparaphrased.
+    @Test("an unready fleet with no live row reports idle with the named reason")
+    func anUnreadyFleetReportsIdle() {
+        let devices = [surveyReadinessDevice("V1", type: Brain.carrierDeviceType)]
+        let view = surveyReadinessView(devices: devices, hubLocation: nil)
+
+        guard case let .idle(status) = Brain.surveyStatus(directives: [], view: view),
+              case let .idle(readiness) = Brain.surveyReadiness(view: view)
+        else {
+            Issue.record("expected both to idle")
+            return
+        }
+        #expect(status == readiness)
+    }
+}
+
 // MARK: - `Brain.ensureSurvey`
 
 private let surveyEnsureNow = Date(timeIntervalSince1970: 20_000)
@@ -343,5 +400,59 @@ struct BrainEnsureSurveyTests {
         #expect(after.count == 2, "exactly the pre-existing row plus the one survey launch")
         let otherAfter = try #require(after.first { $0.id == "OTHER" })
         #expect(otherAfter == otherBefore, "the brain must touch nothing but the row it inserts")
+    }
+}
+
+// MARK: - `BrainReport.survey`
+
+private func surveyEnsureReport(_ database: any DatabaseWriter) async -> BrainReport {
+    await withDependencies {
+        $0.defaultDatabase = database
+        $0.date = .constant(surveyEnsureNow)
+        $0.uuid = .incrementing
+    } operation: {
+        await Brain(now: surveyEnsureNow).report()
+    }
+}
+
+@Suite("Brain — the survey verdict on the published report")
+struct BrainSurveyReportTests {
+    /// The tick that launches reports `.ready` — the snapshot it decided from
+    /// had no live row yet — while the launch it triggers lands in the SAME
+    /// tick. The report states what was READ, not the write beside it.
+    @Test func theLaunchingTickReportsReadyAndStillLaunches() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in try seedSurveyEnsureReadyWorld(db) }
+
+        let report = await surveyEnsureReport(database)
+
+        #expect(report.survey == .ready(carrier: surveyEnsureCarrier, roamCentre: surveyEnsureHubSystem))
+        let directives = try await surveyEnsureDirectives(database)
+        #expect(directives.count == 1, "the launch this same tick's `ensureSurvey` performs")
+        #expect(directives.first?.kind == .surveyRun)
+    }
+
+    /// The next tick's fresh read finds the row `.ready` launched, and the
+    /// report flips to `.launched` — a live run, not a repeated verdict.
+    @Test func theFollowingTickReportsLaunchedOffTheLiveRow() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in try seedSurveyEnsureReadyWorld(db) }
+        _ = await surveyEnsureReport(database)
+
+        let report = await surveyEnsureReport(database)
+
+        #expect(report.survey == .launched(carrier: surveyEnsureCarrier, roamCentre: surveyEnsureHubSystem))
+    }
+
+    /// No fleet at all: the published report idles with the exact reason
+    /// `surveyReadiness` names, so an operator reading the card sees what the
+    /// log would say too.
+    @Test func anUnstagedWorldReportsIdleWithTheNamedReason() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in try seedGrowableWorld(db, carriers: [], salvage: [:]) }
+
+        let report = await surveyEnsureReport(database)
+
+        #expect(report.survey == .idle(reason: "no vessel is tagged \(Brain.surveyCarrierTag)"))
     }
 }

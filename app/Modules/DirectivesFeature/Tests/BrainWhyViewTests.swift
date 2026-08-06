@@ -80,12 +80,18 @@ struct BrainWhyViewTests {
         )
     }
 
+    /// A survey idle for the same reason `theHubDesignationInAnIdleGateIsTagged`
+    /// tests picks for the grow gate — irrelevant to every test that isn't
+    /// about survey, so it stays a quiet default.
+    static let idleSurvey = BrainSurveyStatus.idle(reason: "no vessel is tagged auto:survey")
+
     static func report(
         _ decision: BrainDecision,
         ranked: [GrowCandidate] = [],
         hubLocation: String? = "SOL-3",
         limits: BrainLimits = calmLimits(),
         prune: BrainPrune? = nil,
+        survey: BrainSurveyStatus = idleSurvey,
         observedAt: Date = now
     ) -> BrainReport {
         BrainReport(
@@ -94,6 +100,7 @@ struct BrainWhyViewTests {
             hubLocation: hubLocation,
             limits: limits,
             prune: prune,
+            survey: survey,
             observedAt: observedAt
         )
     }
@@ -719,6 +726,125 @@ struct BrainWhyViewTests {
     @Test func aTickThatDidNotJudgeSaysNothingAboutPrune() {
         let why = BrainWhy.from(report: Self.report(.idle(reason: "no mesh yet")))
         #expect(why.pruneNotes.isEmpty)
+    }
+
+    // MARK: - Survey
+
+    /// The brief's headline case: a published report carries the verdict
+    /// through, ready or idle-with-reason, as its OWN field — never folded
+    /// into `topGoalGate`, which answers a different question.
+    @Test func theReportCarriesTheSurveyVerdictReadyOrIdle() {
+        let ready = BrainWhy.from(
+            report: Self.report(
+                .idle(reason: "no grow or prune work"),
+                survey: .ready(carrier: "V1", roamCentre: "AINALRAM")
+            )
+        )
+        #expect(ready.survey.kind == .ready)
+        #expect(ready.survey.text == "ready to roam from AINALRAM — carrier V1")
+
+        let idle = BrainWhy.from(
+            report: Self.report(
+                .idle(reason: "no grow or prune work"),
+                survey: .idle(reason: "no vessel is tagged auto:survey")
+            )
+        )
+        #expect(idle.survey.kind == .idle)
+        #expect(idle.survey.text == "no vessel is tagged auto:survey")
+    }
+
+    /// A ready verdict and a live run must not read the same, and the kind is
+    /// what a build cannot fake past — a wording slip that happened to leave
+    /// the two sentences equal would still be caught here.
+    @Test func aReadySurveyAndALaunchedSurveyDoNotReadIdentically() {
+        let ready = BrainWhy.from(
+            report: Self.report(
+                .idle(reason: "no grow or prune work"),
+                survey: .ready(carrier: "V1", roamCentre: "AINALRAM")
+            )
+        )
+        let launched = BrainWhy.from(
+            report: Self.report(
+                .idle(reason: "no grow or prune work"),
+                survey: .launched(carrier: "V1", roamCentre: "AINALRAM")
+            )
+        )
+        #expect(ready.survey.kind != launched.survey.kind)
+        #expect(ready.survey.text != launched.survey.text)
+        #expect(launched.survey.text == "roaming from AINALRAM — carrier V1")
+    }
+
+    /// The three named idle reasons an operator must be able to tell apart
+    /// without opening the log — pinned as a set, the same discipline
+    /// `theFourGateStatesAllReadDifferently` applies to the grow gate.
+    @Test func theThreeIdleReasonsRenderDistinguishably() {
+        let reasons = [
+            "no vessel is tagged auto:survey",
+            "V1 has no survey controller aboard",
+            "roam centre AINALRAM is not in the census",
+        ]
+        let lines = reasons.map { reason in
+            BrainWhy.from(
+                report: Self.report(.idle(reason: "no grow or prune work"), survey: .idle(reason: reason))
+            ).survey
+        }
+        #expect(Set(lines.map(\.text)).count == 3)
+        #expect(lines.allSatisfy { $0.kind == .idle })
+    }
+
+    /// Never paraphrased: the idle line is Task 1's own reason string, so the
+    /// screen and the log cannot disagree about why nothing launched.
+    @Test func theIdleSurveyReasonIsCarriedVerbatim() {
+        let reason = "V1's controller AMI1 has adopted no drone aboard"
+        let why = BrainWhy.from(
+            report: Self.report(.idle(reason: "no grow or prune work"), survey: .idle(reason: reason))
+        )
+        #expect(why.survey.text == reason)
+    }
+
+    /// The roam centre is a location designation, so it renders mono even
+    /// where it is embedded in an idle sentence rather than standing alone —
+    /// the same rule `designationsEmbeddedInTheGateAreTaggedForMonospace`
+    /// pins for the grow gate.
+    @Test func theRoamCentreIsTaggedForMonospaceEverywhereItAppears() {
+        let ready = BrainWhy.from(
+            report: Self.report(
+                .idle(reason: "no grow or prune work"),
+                survey: .ready(carrier: "V1", roamCentre: "AINALRAM")
+            )
+        )
+        #expect(ready.survey.spans == [
+            .prose("ready to roam from "), .designation("AINALRAM"), .prose(" — carrier V1"),
+        ])
+
+        let idle = BrainWhy.from(
+            report: Self.report(
+                .idle(reason: "no grow or prune work"),
+                hubLocation: "AINALRAM-BELT-1",
+                survey: .idle(reason: "roam centre AINALRAM is not in the census")
+            )
+        )
+        #expect(idle.survey.spans == [
+            .prose("roam centre "), .designation("AINALRAM"), .prose(" is not in the census"),
+        ])
+        // The carrier is a DEVICE code, never governed by the monospace rule.
+        #expect(!ready.survey.spans.contains(.designation("V1")))
+    }
+
+    /// Survey has no stall path (mirrors `SurveyReadiness`'s own two cases),
+    /// so nothing about it can flip the card's temperature — the same
+    /// argument `noPruneStateEverEscalates` makes for prune.
+    @Test func noSurveyStateEverEscalatesAStillIdleGate() {
+        for survey: BrainSurveyStatus in [
+            .ready(carrier: "V1", roamCentre: "AINALRAM"),
+            .launched(carrier: "V1", roamCentre: "AINALRAM"),
+            .idle(reason: "no vessel is tagged auto:survey"),
+        ] {
+            let why = BrainWhy.from(
+                report: Self.report(.idle(reason: "no grow or prune work"), survey: survey)
+            )
+            #expect(!why.isEscalated, "survey must never escalate — \(survey)")
+        }
     }
 
     // MARK: - Monospace for embedded designations

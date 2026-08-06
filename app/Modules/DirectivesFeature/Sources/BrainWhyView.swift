@@ -24,6 +24,7 @@ import DirectiveEngine
 import Foundation
 import SwiftUI
 import UI
+import UniverseModels
 
 /// A `BrainReport`, projected into what an operator needs to read at a
 /// glance: the current goal gate, the candidates under consideration, and
@@ -55,6 +56,11 @@ public struct BrainWhy: Equatable, Sendable {
     /// **Never escalates.** See `BrainWhyPruneNote`'s header: growth can halt
     /// and need an operator, prune cannot.
     public var pruneNotes: [BrainWhyPruneNote]
+    /// What the roaming Survey Run goal is doing — a different fleet and a
+    /// different question from `topGoalGate`'s grow/prune story, so it never
+    /// folds into it. Never absent: the verdict is read every tick, ready or
+    /// not, the same discipline `limitPressure` follows for the rails.
+    public var survey: BrainWhySurvey
     /// Where the brain's two standing rails stand right now, plus a recent
     /// 429 when there is one.
     ///
@@ -76,12 +82,14 @@ public struct BrainWhy: Equatable, Sendable {
         topGoalGate: [BrainWhySpan],
         candidates: [BrainWhyRow],
         pruneNotes: [BrainWhyPruneNote] = [],
+        survey: BrainWhySurvey,
         limitPressure: [BrainWhyPressure],
         isEscalated: Bool
     ) {
         self.topGoalGate = topGoalGate
         self.candidates = candidates
         self.pruneNotes = pruneNotes
+        self.survey = survey
         self.limitPressure = limitPressure
         self.isEscalated = isEscalated
     }
@@ -112,6 +120,7 @@ public struct BrainWhy: Equatable, Sendable {
             ),
             candidates: candidates(in: report),
             pruneNotes: pruneNotes(in: report),
+            survey: surveyLine(in: report),
             limitPressure: pressure(in: report),
             isEscalated: isEscalated(report.decision)
         )
@@ -332,6 +341,29 @@ public struct BrainWhy: Equatable, Sendable {
         "\(self.count(count)) relay\(count == 1 ? "" : "s")"
     }
 
+    // MARK: - Survey
+
+    /// Survey's own line, in `topGoalGate`'s voice but never merged into it —
+    /// a different fleet and a different question. `.idle`'s reason is
+    /// carried verbatim; the split only tags a designation it already knows
+    /// about, never rewords the sentence itself.
+    private static func surveyLine(in report: BrainReport) -> BrainWhySurvey {
+        switch report.survey {
+        case let .launched(carrier, roamCentre):
+            return BrainWhySurvey(
+                kind: .launched,
+                spans: [.prose("roaming from "), .designation(roamCentre), .prose(" — carrier \(carrier)")]
+            )
+        case let .ready(carrier, roamCentre):
+            return BrainWhySurvey(
+                kind: .ready,
+                spans: [.prose("ready to roam from "), .designation(roamCentre), .prose(" — carrier \(carrier)")]
+            )
+        case let .idle(reason):
+            return BrainWhySurvey(kind: .idle, spans: .spans(in: reason, designations: knownDesignations(in: report)))
+        }
+    }
+
     // MARK: - Limit pressure
 
     private static func pressure(in report: BrainReport) -> [BrainWhyPressure] {
@@ -429,7 +461,13 @@ public struct BrainWhy: Equatable, Sendable {
     private static func knownDesignations(in report: BrainReport) -> Set<String> {
         var codes = Set(report.ranked.flatMap { [$0.firstHop] + $0.servedTargets })
         if case let .dispatch(goal, _) = report.decision { codes.insert(goal.target) }
-        if let hub = report.hubLocation { codes.insert(hub) }
+        if let hub = report.hubLocation {
+            codes.insert(hub)
+            // The survey roam centre — `Brain.surveyReadiness` derives it the
+            // same way, so an idle reason naming it (the census-miss case)
+            // still tags mono without a second field to carry it.
+            codes.insert(SiteAssay.system(of: hub))
+        }
         return codes
     }
 }

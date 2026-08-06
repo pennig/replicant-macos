@@ -203,6 +203,21 @@ public struct BrainPrune: Equatable, Sendable {
     }
 }
 
+/// `Brain.ensureSurvey`'s verdict this tick — the mesh-growth goal's sibling,
+/// over the disjoint survey fleet. `.ready` and `.launched` both mean the
+/// fleet can roam; they read apart because `.ready` names a verdict this tick
+/// reached and `.launched` names a row that already exists to show for it.
+public enum BrainSurveyStatus: Equatable, Sendable {
+    /// A Survey Run already owns the fleet — `carrier` and `roamCentre` come
+    /// from that row, not from re-deriving the verdict.
+    case launched(carrier: String, roamCentre: String)
+    /// No run owns the fleet yet, but this tick's verdict is to launch one.
+    case ready(carrier: String, roamCentre: String)
+    /// Task 1's own reason, carried verbatim — never paraphrased, so the
+    /// screen and the log cannot disagree.
+    case idle(reason: String)
+}
+
 /// One brain tick, as reported to the operator: the `decision` it reached, the
 /// `ranked` field it decided against, the `hubLocation` and `limits` it decided
 /// under, what `prune` saw, and the `observedAt` instant all of that was read.
@@ -230,6 +245,10 @@ public struct BrainReport: Equatable, Sendable {
     /// "the mesh is tidy", and the why-view renders it as silence rather than
     /// as reassurance.
     public let prune: BrainPrune?
+    /// `Brain.ensureSurvey`'s verdict this tick — a different goal over a
+    /// disjoint fleet from `decision`/`ranked`/`prune`, so it is never folded
+    /// into the grow/prune story above.
+    public let survey: BrainSurveyStatus
     /// The tick's clock reading (`@Dependency(\.date)`, never `Date()`), so a
     /// "recent 429" window is judged against the same instant everything else
     /// on this report was.
@@ -241,6 +260,7 @@ public struct BrainReport: Equatable, Sendable {
         hubLocation: String?,
         limits: BrainLimits,
         prune: BrainPrune? = nil,
+        survey: BrainSurveyStatus,
         observedAt: Date
     ) {
         self.decision = decision
@@ -248,6 +268,7 @@ public struct BrainReport: Equatable, Sendable {
         self.hubLocation = hubLocation
         self.limits = limits
         self.prune = prune
+        self.survey = survey
         self.observedAt = observedAt
     }
 }
