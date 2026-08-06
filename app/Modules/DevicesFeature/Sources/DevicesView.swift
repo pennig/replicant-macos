@@ -50,6 +50,7 @@ public struct DevicesListView: View {
                             count: header.count,
                             isCollapsed: header.isCollapsed,
                             isWarning: header.hasDamaged,
+                            isTitleDesignation: header.titleIsDesignation,
                             shares: header.statusShares.map {
                                 RCReadoutSectionHeader.Share(
                                     label: $0.status,
@@ -77,6 +78,18 @@ public struct DevicesListView: View {
             }
         }
         .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Menu {
+                    Picker("Group by", selection: groupingSelection) {
+                        ForEach(DeviceGrouping.allCases) { option in
+                            Label(option.label, systemImage: option.symbol).tag(option)
+                        }
+                    }
+                } label: {
+                    Label("Group by", systemImage: "rectangle.3.group")
+                }
+                .help("Group the fleet")
+            }
             ToolbarItem {
                 Button {
                     store.send(.refreshButtonTapped)
@@ -88,6 +101,15 @@ public struct DevicesListView: View {
             }
         }
         .task { store.send(.task) }
+    }
+
+    /// `grouping` is `@Shared`, so the picker writes through an action rather
+    /// than a binding the reducer would set directly.
+    private var groupingSelection: Binding<DeviceGrouping> {
+        Binding(
+            get: { store.grouping },
+            set: { store.send(.groupingSelected($0)) }
+        )
     }
 
     /// "N of M devices" while a query is active, the plain inflected count

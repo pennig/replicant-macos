@@ -319,6 +319,7 @@ public extension Font {
     static let rcTitleMono    = Font.system(size: 20, weight: .bold, design: .monospaced)     // system name, title prominence
     static let rcHeadlineMono = Font.system(size: 15, weight: .semibold, design: .monospaced) // system name, headline prominence
     static let rcBodyEmphMono  = Font.system(size: 13, weight: .semibold, design: .monospaced) // system name, list-row prominence
+    static let rcSectionLabelMono = Font.system(size: 10, weight: .semibold, design: .monospaced) // system name, section-header prominence
     static let rcDisplay      = Font.system(size: 28, weight: .semibold)            // large detail-header glyph / number
     static let rcMicro        = Font.system(size: 9, weight: .semibold)             // micro badge / caption below rcSectionLabel
     static let rcMicroMono    = Font.system(size: 9, weight: .semibold, design: .monospaced) // micro badge, mono readouts

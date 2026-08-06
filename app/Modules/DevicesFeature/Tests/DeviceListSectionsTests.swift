@@ -335,8 +335,8 @@ import Testing
         )
     }
 
-    /// Position no longer encodes containment in a flattened mode, so the row
-    /// carries its host as a badge instead.
+    /// Position encodes no containment in a flattened mode, so the row carries
+    /// its host as a badge instead.
     @Test func aFlattenedRowBadgesItsHost() throws {
         let result = sections(fleet: nestedFleet, grouping: .type)
         let drone = try #require(result.flatMap(\.entries).first { $0.id == "DRONEA" })

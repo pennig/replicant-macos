@@ -82,9 +82,9 @@ extension DeviceListLayout {
         }
     }
 
-    /// Rows for a flattened mode. Position no longer encodes containment, so
-    /// every row sits at depth 0 and carries its highest-precedence host
-    /// relation as a badge. `devices` is emitted in the order given.
+    /// Rows for a flattened mode: position encodes no containment, so every row
+    /// sits at depth 0 and badges its highest-precedence host relation instead.
+    /// `devices` is emitted in the order given.
     static func flatEntries(
         _ devices: [Device],
         attention: [String: [AttentionFlag]],

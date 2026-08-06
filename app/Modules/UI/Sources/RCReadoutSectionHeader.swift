@@ -33,14 +33,18 @@ public struct RCReadoutSectionHeader: View {
     private let count: Int
     private let isCollapsed: Bool
     private let isWarning: Bool
+    private let isTitleDesignation: Bool
     private let shares: [Share]
     private let onToggle: () -> Void
 
+    /// - Parameter isTitleDesignation: the title is a designation code, so it
+    ///   renders monospaced and keeps its own case and spacing.
     public init(
         title: String,
         count: Int,
         isCollapsed: Bool,
         isWarning: Bool = false,
+        isTitleDesignation: Bool = false,
         shares: [Share] = [],
         onToggle: @escaping () -> Void
     ) {
@@ -48,6 +52,7 @@ public struct RCReadoutSectionHeader: View {
         self.count = count
         self.isCollapsed = isCollapsed
         self.isWarning = isWarning
+        self.isTitleDesignation = isTitleDesignation
         self.shares = shares
         self.onToggle = onToggle
     }
@@ -62,9 +67,7 @@ public struct RCReadoutSectionHeader: View {
                         .font(.system(size: IconSize.s))
                         .rotationEffect(.degrees(isCollapsed ? 0 : 90))
                         .foregroundStyle(.rcTextTertiary)
-                    Text(title.uppercased())
-                        .font(.rcSectionLabel)
-                        .kerning(1)
+                    titleText
                         .foregroundStyle(.rcTextTertiary)
                     Text("\(count)")
                         .font(.rcMonoSmall)
@@ -94,6 +97,14 @@ public struct RCReadoutSectionHeader: View {
         )
         .accessibilityValue(isCollapsed ? Text("Collapsed") : Text("Expanded"))
         .accessibilityAddTraits(.isHeader)
+    }
+
+    /// A designation is already uppercase, and kerning fights a monospaced
+    /// font's own advance, so it takes neither.
+    private var titleText: Text {
+        isTitleDesignation
+            ? Text(title).font(.rcSectionLabelMono)
+            : Text(title.uppercased()).font(.rcSectionLabel).kerning(1)
     }
 
     /// The composition bar. `GeometryReader` is fenced inside an explicit
