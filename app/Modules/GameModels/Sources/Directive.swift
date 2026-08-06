@@ -124,6 +124,9 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
     /// Self-supply (mine/salvage) refills the hub over time, so this clears on
     /// its own as stock recovers — it never needs an operator.
     case printStockShort
+    /// The service bots were still working when the repair deadline expired, so
+    /// the fleet would otherwise depart mid-repair.
+    case repairUnfinished
 
     /// The stall panel's headline.
     public var displayName: String {
@@ -145,6 +148,7 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
         case .vesselPositionUnconfirmed: "Vessel position unconfirmed"
         case .noHaulControllerTagged: "No haul controller tagged"
         case .printStockShort: "Resource stock too low to print"
+        case .repairUnfinished: "Repair not finished"
         }
     }
 
@@ -187,6 +191,8 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
             "No AMI transport controller carries the \"auto:haul\" tag. Tag one from the device inspector, then retry."
         case .printStockShort:
             "The hub doesn't have enough of a resource to print without dropping below reserve. It clears on its own as stock recovers — retry once supply catches up."
+        case .repairUnfinished:
+            "The service bots didn't finish repairing before the deadline. Retry once they've finished, or skip this target."
         }
     }
 }
@@ -215,7 +221,8 @@ public extension DirectiveAttentionReason {
             return .retry
         case .noSurveyControllerAboard, .noSurveyDroneAboard, .noMiningControllerAboard,
              .noMiningDroneAboard, .noRelayCoLocated, .dronesNotRecovered,
-             .launchDeployedNothing, .noHaulControllerTagged, .awaitingRelayRestock:
+             .launchDeployedNothing, .noHaulControllerTagged, .awaitingRelayRestock,
+             .repairUnfinished:
             return .escalate
         }
     }
