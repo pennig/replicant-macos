@@ -4,12 +4,13 @@
 //
 //  The automation brain's evaluation entry point, ticked by
 //  `DirectiveEngineCore.tickBrain()`: one tick reads the world, answers its own
-//  halted missions, launches at most one Relay Run, and keeps the hub's restock
-//  run stocked. A PURE SELECTOR — it inserts directives and drives the
-//  `retry`/`cancel` resolution verbs, nothing else, and touches only the
-//  `relayRun`/`restockRun` rows it wrote. STATELESS between ticks: a tick is a
-//  pure function of `(WorldView, directive rows)`. Not an actor, so ranking
-//  cannot block the reconciliation loop beside it.
+//  halted missions, launches at most one Relay Run, keeps the hub's restock
+//  run stocked, and keeps one Survey Run roaming. A PURE SELECTOR — it inserts
+//  directives and drives the `retry`/`cancel` resolution verbs, nothing else,
+//  and touches only the `relayRun`/`restockRun`/`surveyRun` rows it wrote.
+//  STATELESS between ticks: a tick is a pure function of `(WorldView,
+//  directive rows)`. Not an actor, so ranking cannot block the reconciliation
+//  loop beside it.
 //
 
 import Dependencies
@@ -107,6 +108,7 @@ struct Brain: Sendable {
         let plan = Self.plan(view: snapshot.view, directives: snapshot.directives)
         let decision = await decide(plan, escalated: escalated, database: database)
         await tendRestock(plan: plan, snapshot: snapshot, decision: decision, database: database)
+        await ensureSurvey(snapshot: snapshot, database: database)
 
         return await BrainReport(
             decision: decision,
@@ -198,6 +200,51 @@ struct Brain: Sendable {
             }
         } catch {
             logger.error("restock launch failed: \(error)")
+        }
+    }
+
+    /// Keep exactly one Survey Run roaming — `tendRestock`'s sibling. Nothing
+    /// preempts it: `.needsAttention`/`.paused` count as live so the brain
+    /// never relaunches around a halted run or an operator's own pause.
+    private func ensureSurvey(snapshot: Snapshot, database: any DatabaseWriter) async {
+        guard !Task.isCancelled else { return }
+        let live = snapshot.directives.contains {
+            $0.kind == .surveyRun && Self.owningStatuses.contains($0.status)
+        }
+        guard !live else { return }
+        guard case let .launch(carrier, roamCentre) = Self.surveyReadiness(view: snapshot.view) else { return }
+
+        @Dependency(\.uuid) var uuid
+        let directive = Directive(
+            id: uuid().uuidString,
+            kind: .surveyRun,
+            status: .running,
+            deviceCode: carrier,
+            controllerCode: nil, roamCentre: roamCentre, fleetTag: nil, sourceRelayCode: nil,
+            targets: [], targetIndex: 0,
+            step: SurveyRun().firstStep,
+            stepStartedAt: now,
+            returnToOrigin: false,
+            originDesignation: snapshot.view.devices[carrier]?.location.map { SiteAssay.system(of: $0) },
+            attentionReason: nil,
+            createdAt: now, updatedAt: now
+        )
+        do {
+            try await database.write { db in
+                // Re-check inside the transaction: a survey launched by the
+                // previous tick could have landed between the read and here.
+                let live = try Directive
+                    .where { $0.kind.eq(DirectiveKind.surveyRun) }
+                    .fetchAll(db)
+                    .contains { Self.owningStatuses.contains($0.status) }
+                guard !live else { return }
+                try Directive.insert { directive }.execute(db)
+                logger.info(
+                    "survey \(directive.id, privacy: .public) launched on \(carrier, privacy: .public)"
+                )
+            }
+        } catch {
+            logger.error("survey launch failed: \(error)")
         }
     }
 

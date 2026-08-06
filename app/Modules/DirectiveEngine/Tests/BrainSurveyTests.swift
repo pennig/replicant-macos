@@ -4,11 +4,15 @@
 //
 //  `Brain.surveyReadiness` as a pure function table: every gate names the
 //  reason it declined rather than a bare "not ready", and an unstaged vessel
-//  must idle — never reach the mission and manufacture a stall.
+//  must idle — never reach the mission and manufacture a stall. The second
+//  suite below drives `Brain.ensureSurvey` end to end through a real database.
 //
 
+import Dependencies
 import Foundation
+import GameDatabase
 import GameModels
+import SQLiteData
 import Testing
 import UniverseModels
 import Utils
@@ -163,5 +167,181 @@ struct BrainSurveyTests {
             Issue.record("expected idle")
             return
         }
+    }
+}
+
+// MARK: - `Brain.ensureSurvey`
+
+private let surveyEnsureNow = Date(timeIntervalSince1970: 20_000)
+private let surveyEnsureHubSystem = "SOL"
+private let surveyEnsureCarrier = "SV1"
+
+/// The DB-backed twin of `surveyReadinessDevice` above — same shape, written
+/// straight to the database rather than held as a value.
+private func seedSurveyEnsureDevice(
+    _ db: Database, code: String, type: String, tags: [String] = [],
+    stowedIn: String? = nil, controllerDeviceCode: String? = nil, directives: [String] = []
+) throws {
+    var detail: [String: JSONValue] = [:]
+    if !directives.isEmpty {
+        detail["available_directives"] = .array(directives.map(JSONValue.string))
+    }
+    try Device.insert {
+        Device(
+            deviceCode: code, deviceType: type, replicantCode: "R1", status: "idle",
+            location: nil, locationName: nil, operationalCapacity: 100, queueSize: 0,
+            stowedInDeviceCode: stowedIn, controllerDeviceCode: controllerDeviceCode,
+            attachedToDeviceCode: nil, createdAt: Date(timeIntervalSince1970: 0),
+            availableCommands: [], features: [], tags: tags, detail: .object(detail),
+            updatedAt: surveyEnsureNow, firstSeenAt: Date(timeIntervalSince1970: 0)
+        )
+    }.execute(db)
+}
+
+/// A fully staged, tagged survey fleet: `seedSurveyEnsureDevice`'s three rows,
+/// carrier + stowed controller + adopted drone.
+private func seedSurveyEnsureFleet(_ db: Database, carrier: String = surveyEnsureCarrier) throws {
+    try seedSurveyEnsureDevice(db, code: carrier, type: Brain.carrierDeviceType, tags: [Brain.surveyCarrierTag])
+    try seedSurveyEnsureDevice(
+        db, code: "AMI1", type: "ami_survey_controller", stowedIn: carrier, directives: ["survey_system"]
+    )
+    try seedSurveyEnsureDevice(
+        db, code: "DRONE1", type: "survey_drone", stowedIn: carrier, controllerDeviceCode: "AMI1"
+    )
+}
+
+/// `seedGrowableWorld`'s meshed hub — no tendMesh carrier, no salvage, since
+/// this suite is not about growth — plus a staged, tagged survey fleet.
+private func seedSurveyEnsureReadyWorld(_ db: Database) throws {
+    try seedGrowableWorld(db, carriers: [], salvage: [:])
+    try seedSurveyEnsureFleet(db)
+}
+
+private func surveyEnsureDirectives(_ database: any DatabaseWriter) async throws -> [Directive] {
+    try await database.read { db in try Directive.all.fetchAll(db) }
+}
+
+private func surveyEnsureTick(_ database: any DatabaseWriter) async {
+    await withDependencies {
+        $0.defaultDatabase = database
+        $0.date = .constant(surveyEnsureNow)
+        $0.uuid = .incrementing
+    } operation: {
+        _ = await Brain(now: surveyEnsureNow).evaluateOnce()
+    }
+}
+
+@Suite("Brain — ensureSurvey")
+struct BrainEnsureSurveyTests {
+    /// The headline: a ready, staged fleet with no live survey launches
+    /// exactly one row, shaped as the design specifies.
+    @Test func readyFleetWithNoLiveSurveyInsertsExactlyOneRow() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in try seedSurveyEnsureReadyWorld(db) }
+
+        await surveyEnsureTick(database)
+
+        let directives = try await surveyEnsureDirectives(database)
+        let survey = try #require(directives.first)
+        #expect(directives.count == 1)
+        #expect(survey.kind == .surveyRun)
+        #expect(survey.deviceCode == surveyEnsureCarrier)
+        #expect(survey.roamCentre == surveyEnsureHubSystem)
+        #expect(survey.step == SurveyRun().firstStep)
+        #expect(survey.status == .running)
+    }
+
+    /// A second tick against the row the first tick just launched inserts
+    /// nothing — the live row already owns the fleet.
+    @Test func aSecondTickWithTheLaunchedRowStillLiveInsertsNothing() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in try seedSurveyEnsureReadyWorld(db) }
+        await surveyEnsureTick(database)
+        let afterFirst = try await surveyEnsureDirectives(database)
+        #expect(afterFirst.count == 1)
+
+        await surveyEnsureTick(database)
+
+        let afterSecond = try await surveyEnsureDirectives(database)
+        #expect(afterSecond == afterFirst, "the row the first tick launched already owns the fleet")
+    }
+
+    /// Every owning status — `.running`, `.needsAttention`, `.paused` — holds
+    /// the fleet. A halted run is one Retry from moving and a paused run is
+    /// the operator's own choice; neither should be relaunched around.
+    @Test(arguments: [DirectiveStatus.running, .needsAttention, .paused])
+    func aLiveSurveyInAnyOwningStatusBlocksRelaunch(_ status: DirectiveStatus) async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try seedSurveyEnsureReadyWorld(db)
+            try seedDirective(db, id: "EXISTING", kind: .surveyRun, status: status, deviceCode: surveyEnsureCarrier)
+        }
+        let before = try await surveyEnsureDirectives(database)
+
+        await surveyEnsureTick(database)
+
+        let after = try await surveyEnsureDirectives(database)
+        #expect(after == before, "a \(status) survey already owns the fleet — nothing else should launch")
+    }
+
+    /// `.completed`/`.cancelled` do NOT count as live, so a finished roam
+    /// (a roam is unbounded and should not finish, but if one does) is
+    /// replaced — the old row is left exactly as it was.
+    @Test(arguments: [DirectiveStatus.completed, .cancelled])
+    func aFinishedSurveyDoesNotBlockAFreshRoam(_ status: DirectiveStatus) async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try seedSurveyEnsureReadyWorld(db)
+            try seedDirective(db, id: "FINISHED", kind: .surveyRun, status: status, deviceCode: surveyEnsureCarrier)
+        }
+        let finishedBefore = try #require(
+            try await database.read { db in try Directive.where { $0.id.eq("FINISHED") }.fetchOne(db) }
+        )
+
+        await surveyEnsureTick(database)
+
+        let after = try await surveyEnsureDirectives(database)
+        #expect(after.count == 2, "the finished row does not hold the fleet, so a fresh roam launches")
+        let finishedAfter = try #require(after.first { $0.id == "FINISHED" })
+        #expect(finishedAfter == finishedBefore, "the finished row is left exactly as it was")
+        let launched = try #require(after.first { $0.id != "FINISHED" })
+        #expect(launched.kind == .surveyRun)
+        #expect(launched.status == .running)
+    }
+
+    /// An idle verdict — no tagged, staged fleet — writes nothing at all,
+    /// directives or otherwise.
+    @Test func anIdleVerdictInsertsNothingAndWritesNothingAtAll() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in try seedGrowableWorld(db, carriers: [], salvage: [:]) }
+        let devicesBefore = try await database.read { db in try Device.all.fetchAll(db) }
+
+        await surveyEnsureTick(database)
+
+        let directives = try await surveyEnsureDirectives(database)
+        #expect(directives.isEmpty)
+        let devicesAfter = try await database.read { db in try Device.all.fetchAll(db) }
+        #expect(devicesAfter == devicesBefore, "an idle survey verdict must not mutate any device row")
+    }
+
+    /// The additive-writes witness, `allWritesAreAdditive`'s shape: a launch
+    /// must not touch a pre-existing row of a DIFFERENT kind — asserted over
+    /// the whole directive table, not a count of survey rows.
+    @Test func theBrainWritesNoOtherRowWhileLaunchingASurvey() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try seedSurveyEnsureReadyWorld(db)
+            try seedDirective(db, id: "OTHER", kind: .salvageRun, deviceCode: "UNRELATED")
+        }
+        let otherBefore = try #require(
+            try await database.read { db in try Directive.where { $0.id.eq("OTHER") }.fetchOne(db) }
+        )
+
+        await surveyEnsureTick(database)
+
+        let after = try await surveyEnsureDirectives(database)
+        #expect(after.count == 2, "exactly the pre-existing row plus the one survey launch")
+        let otherAfter = try #require(after.first { $0.id == "OTHER" })
+        #expect(otherAfter == otherBefore, "the brain must touch nothing but the row it inserts")
     }
 }
