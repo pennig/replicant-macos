@@ -54,6 +54,8 @@ public struct SurveyRun: MissionStepMachine {
         public static let repairing = "repairing"
         /// Stow the deployed service bots before the vessel departs.
         public static let stowingBots = "stowingBots"
+        /// Read whether the ordered stow landed before ordering the next.
+        public static let confirmingBotStow = "confirmingBotStow"
         /// Fly the vessel back to the run's origin.
         public static let returning = "returning"
     }
@@ -123,6 +125,8 @@ public struct SurveyRun: MissionStepMachine {
         case Step.confirming: return confirm(directive, world)
         case Step.recovering: return recover(directive, vessel, world)
         case Step.repairing: return awaitRepair(directive, vessel, world)
+        case Step.stowingBots: return stowBots(directive, vessel, world)
+        case Step.confirmingBotStow: return confirmBotStow(directive, vessel, world)
         case Step.returning: return returnHome(directive, vessel, world)
         default:
             logger.notice("survey run \(directive.id, privacy: .public): unknown step \(directive.step, privacy: .public) — waiting")
@@ -562,5 +566,32 @@ public struct SurveyRun: MissionStepMachine {
         let lastLook = bots.map(\.updatedAt).min() ?? .distantPast
         if world.now.timeIntervalSince(lastLook) < Self.botProbeInterval { return .wait }
         return .refreshDevices(deviceCodes: bots.map(\.deviceCode), thenStall: nil)
+    }
+
+    /// Stow the next service bot still standing in the system, or advance when
+    /// none is left out.
+    private func stowBots(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
+        let out = RepairFleet.bots(deployedAt: vessel.location, in: world)
+        guard let next = out.first else { return .advanceTarget }
+        return .dispatch(
+            kind: .stow, deviceCode: next.deviceCode,
+            params: CommandParams(target: vessel.deviceCode),
+            nextStep: Step.confirmingBotStow
+        )
+    }
+
+    /// Judge an ordered stow, looping back for the next bot until none is out.
+    private func confirmBotStow(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
+        let elapsed = world.now.timeIntervalSince(directive.stepStartedAt)
+        if elapsed < Self.botProbeDelay { return .wait }
+        if elapsed > Self.recallDeadline { return .stall(.dronesNotRecovered) }
+        let out = RepairFleet.bots(deployedAt: vessel.location, in: world)
+        if out.isEmpty { return .advanceTarget }
+        if out.contains(where: { $0.updatedAt < directive.stepStartedAt }) {
+            let lastLook = out.map(\.updatedAt).min() ?? .distantPast
+            if world.now.timeIntervalSince(lastLook) < Self.botProbeInterval { return .wait }
+            return .refreshDevices(deviceCodes: out.map(\.deviceCode), thenStall: nil)
+        }
+        return .advanceStep(nextStep: Step.stowingBots)
     }
 }

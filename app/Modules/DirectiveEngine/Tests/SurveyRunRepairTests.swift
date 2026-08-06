@@ -122,4 +122,36 @@ import Utils
         let d = repairDirective(step: SurveyRun.Step.repairing, deviceCode: "VESSEL", stepStartedAt: repairFixtureNow.addingTimeInterval(-60))
         #expect(SurveyRun().nextAction(directive: d, world: w) == .refreshDevices(deviceCodes: ["BOT1"], thenStall: nil))
     }
+
+    @Test func departureStowsTheFirstBotStillOut() {
+        let vessel = repairDevice("VESSEL", type: "heaven_vessel", location: "SOL-3")
+        let bot = repairDevice("BOT1", type: "service_bot", location: "SOL-3", directives: ["service"])
+        let w = repairWorld(devices: [vessel, bot])
+        let d = repairDirective(step: SurveyRun.Step.stowingBots, deviceCode: "VESSEL")
+        #expect(SurveyRun().nextAction(directive: d, world: w) == .dispatch(
+            kind: .stow, deviceCode: "BOT1",
+            params: CommandParams(target: "VESSEL"),
+            nextStep: SurveyRun.Step.confirmingBotStow
+        ))
+    }
+
+    @Test func everyBotAboardAdvancesTheTarget() {
+        let vessel = repairDevice("VESSEL", type: "heaven_vessel", location: "SOL-3")
+        let bot = repairDevice("BOT1", type: "service_bot", location: nil, stowedIn: "VESSEL", directives: ["service"])
+        let w = repairWorld(devices: [vessel, bot])
+        let d = repairDirective(
+            step: SurveyRun.Step.confirmingBotStow, deviceCode: "VESSEL",
+            stepStartedAt: repairFixtureNow.addingTimeInterval(-60)
+        )
+        #expect(SurveyRun().nextAction(directive: d, world: w) == .advanceTarget)
+    }
+
+    @Test func aBotThatNeverStowsDoesNotStrandTheRun() {
+        let vessel = repairDevice("VESSEL", type: "heaven_vessel", location: "SOL-3")
+        let bot = repairDevice("BOT1", type: "service_bot", location: "SOL-3", directives: ["service"], updatedAt: repairFixtureNow)
+        let w = repairWorld(devices: [vessel, bot])
+        let past = repairFixtureNow.addingTimeInterval(-(SurveyRun.recallDeadline + 1))
+        let d = repairDirective(step: SurveyRun.Step.confirmingBotStow, deviceCode: "VESSEL", stepStartedAt: past)
+        #expect(SurveyRun().nextAction(directive: d, world: w) == .stall(.dronesNotRecovered))
+    }
 }
