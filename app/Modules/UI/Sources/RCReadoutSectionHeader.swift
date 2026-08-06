@@ -66,6 +66,7 @@ public struct RCReadoutSectionHeader: View {
                     Image(systemName: "chevron.right")
                         .font(.system(size: IconSize.s))
                         .rotationEffect(.degrees(isCollapsed ? 0 : 90))
+                        .animation(Motion.disclosure, value: isCollapsed)
                         .foregroundStyle(.rcTextTertiary)
                     titleText
                         .foregroundStyle(.rcTextTertiary)

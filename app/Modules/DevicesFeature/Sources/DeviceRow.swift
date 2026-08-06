@@ -45,6 +45,7 @@ struct DeviceRow: View {
                     Image(systemName: "chevron.right")
                         .font(.system(size: IconSize.s))
                         .rotationEffect(.degrees(entry.isExpanded ? 90 : 0))
+                        .animation(Motion.disclosure, value: entry.isExpanded)
                     Text("\(entry.childCount)")
                         .font(.rcMicroMono)
                 }

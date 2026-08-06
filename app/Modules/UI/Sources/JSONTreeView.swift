@@ -180,10 +180,7 @@ private struct JSONTreeRow: View {
     /// Width reserved for the chevron so leaf rows align with container labels.
     private static let chevronColumn = Space.m
 
-    // Animating an expansion inserts every revealed descendant row at once;
-    // past this many immediate children we skip the row transition (the chevron
-    // still animates) so opening a large container stays snappy.
-    private static let animationChildLimit = 50
+    private static let animationChildLimit = Motion.disclosureRowLimit
 
     // Empty containers ([] / {}) carry a non-nil but empty `children`, so they
     // render as leaves: no chevron, no tap, and the label shows the empty pair.
@@ -214,7 +211,7 @@ private struct JSONTreeRow: View {
         // inserting hundreds of rows in one frame.
         let childCount = node.children?.count ?? 0
         if childCount <= Self.animationChildLimit {
-            withAnimation(.snappy(duration: 0.2)) {
+            withAnimation(Motion.disclosure) {
                 expansion.overrides[node.id] = !isExpanded
             }
         } else {
@@ -259,7 +256,7 @@ private struct JSONTreeRow: View {
                 .font(.rcCaption)
                 .foregroundStyle(.rcTextTertiary)
                 .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                .animation(.snappy(duration: 0.2), value: isExpanded)
+                .animation(Motion.disclosure, value: isExpanded)
                 .frame(width: Self.chevronColumn)
         } else {
             // Empty column keeps leaf rows aligned with their siblings' labels.

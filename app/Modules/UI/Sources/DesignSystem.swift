@@ -305,6 +305,17 @@ public enum MarkerSize {
     public static let attentionDot: CGFloat = 6
 }
 
+/// Shared motion curves. A disclosure gesture — a section collapsing, a host
+/// opening — reads the same everywhere, so the curve lives here rather than as
+/// a literal at each toggle.
+public enum Motion {
+    public static let disclosure = Animation.snappy(duration: 0.2)
+
+    /// Past this many rows a reveal skips the row transition: inserting them
+    /// all in one frame stutters. The chevron still animates.
+    public static let disclosureRowLimit = 50
+}
+
 public extension Font {
     static let rcTitle        = Font.system(size: 20, weight: .bold)            // inspector / list title
     static let rcHeadline     = Font.system(size: 15, weight: .semibold)

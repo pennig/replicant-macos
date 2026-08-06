@@ -76,7 +76,7 @@ struct LocationOutlineRowContent: View {
                 .font(.rcCaption)
                 .foregroundStyle(.rcTextTertiary)
                 .rotationEffect(.degrees(row.isExpanded ? 90 : 0))
-                .animation(.snappy(duration: 0.2), value: row.isExpanded)
+                .animation(Motion.disclosure, value: row.isExpanded)
                 .frame(width: LocationRowMetrics.chevronColumn)
         } else {
             Color.clear.frame(width: LocationRowMetrics.chevronColumn, height: 1)

@@ -38,7 +38,10 @@ public struct DevicesListView: View {
                     ForEach(section.entries) { entry in
                         SelectableRow(id: entry.id) { isSelected in
                             DeviceRow(entry: entry) {
-                                store.send(.hostDisclosureToggled(entry.id))
+                                store.send(
+                                    .hostDisclosureToggled(entry.id),
+                                    animation: disclosureAnimation(rows: entry.childCount)
+                                )
                             }
                             .rcSidebarRow(isSelected: isSelected)
                         }
@@ -59,7 +62,10 @@ public struct DevicesListView: View {
                                 )
                             }
                         ) {
-                            store.send(.groupDisclosureToggled(section.id))
+                            store.send(
+                                .groupDisclosureToggled(section.id),
+                                animation: disclosureAnimation(rows: header.count)
+                            )
                         }
                     }
                 }
@@ -101,6 +107,13 @@ public struct DevicesListView: View {
             }
         }
         .task { store.send(.task) }
+    }
+
+    /// Nil past `Motion.disclosureRowLimit`, so opening the 53-relay type
+    /// section doesn't animate every row in at once. The chevron animates on
+    /// its own regardless.
+    private func disclosureAnimation(rows: Int) -> Animation? {
+        rows <= Motion.disclosureRowLimit ? Motion.disclosure : nil
     }
 
     // `grouping` is `@Shared`, which is written through an action, never set.
