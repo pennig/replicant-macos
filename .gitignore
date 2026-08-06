@@ -30,6 +30,9 @@ Package.pins
 .netrc
 ## Keep Package.resolved tracked so dependency versions are pinned for the app.
 
+# Agent scratch: ledgers, task briefs and review packages
+.superpowers/
+
 # macOS
 .DS_Store
 .vercel
