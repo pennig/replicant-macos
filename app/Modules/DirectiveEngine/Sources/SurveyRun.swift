@@ -50,6 +50,10 @@ public struct SurveyRun: MissionStepMachine {
         public static let confirming = "confirming"
         /// Hold the vessel until every recalled drone is back aboard.
         public static let recovering = "recovering"
+        /// Hold the vessel while the service bots finish what they are repairing.
+        public static let repairing = "repairing"
+        /// Stow the deployed service bots before the vessel departs.
+        public static let stowingBots = "stowingBots"
         /// Fly the vessel back to the run's origin.
         public static let returning = "returning"
     }
@@ -75,6 +79,9 @@ public struct SurveyRun: MissionStepMachine {
 
     /// Floor between bot-state probes, so an unmoving row is not re-read each tick.
     public static let botProbeInterval: TimeInterval = 30
+
+    /// The cap on holding a vessel for repair before surfacing `repairUnfinished`.
+    public static let repairDeadline: TimeInterval = 20 * 60
 
     /// How old a row backing a POSITIVE staging finding may be and still be
     /// believed without an authoritative re-read.
@@ -115,6 +122,7 @@ public struct SurveyRun: MissionStepMachine {
         case Step.awaiting: return awaitCompletion(directive, world)
         case Step.confirming: return confirm(directive, world)
         case Step.recovering: return recover(directive, vessel, world)
+        case Step.repairing: return awaitRepair(directive, vessel, world)
         case Step.returning: return returnHome(directive, vessel, world)
         default:
             logger.notice("survey run \(directive.id, privacy: .public): unknown step \(directive.step, privacy: .public) — waiting")
@@ -358,7 +366,7 @@ public struct SurveyRun: MissionStepMachine {
     /// run that treats a completion as clearance dispatches the vessel while its
     /// drones are still flying to the rendezvous and strands them.
     ///
-    /// Sits BEFORE `.advanceTarget` so it covers both ways a vessel leaves: the
+    /// Sits BEFORE the repair gate so it covers both ways a vessel leaves: the
     /// next target's travel leg, and the queue-exhausted leg home — preflight's
     /// staging checks never run on the latter.
     private func recover(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
@@ -366,11 +374,11 @@ public struct SurveyRun: MissionStepMachine {
             // Nothing to recall, and a vanished controller is preflight's
             // diagnosis to make — holding the run here would stall on a reason
             // that doesn't name the real problem.
-            return .advanceTarget
+            return .advanceStep(nextStep: Step.repairing)
         }
         let adopted = Self.adoptedDrones(of: controller, in: world)
         let stranded = adopted.filter { $0.stowedInDeviceCode != vessel.deviceCode }
-        if stranded.isEmpty { return .advanceTarget }
+        if stranded.isEmpty { return .advanceStep(nextStep: Step.repairing) }
 
         let elapsed = world.now.timeIntervalSince(directive.stepStartedAt)
         // The recall was ordered moments ago; nothing can have changed yet.
@@ -528,5 +536,28 @@ public struct SurveyRun: MissionStepMachine {
             return .refreshDevices(deviceCodes: aboard.map(\.deviceCode), thenStall: nil)
         }
         return .advanceStep(nextStep: Step.deployingBots)
+    }
+
+    /// Hold `vessel` while any deployed service bot is still repairing.
+    /// Gated on the bots falling IDLE, never a capacity threshold — `service`
+    /// repairs to an unquantified level a threshold gate could wait on forever.
+    private func awaitRepair(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
+        let bots = RepairFleet.bots(deployedAt: vessel.location, in: world)
+        if bots.isEmpty { return .advanceStep(nextStep: Step.stowingBots) }
+        // A fleet nothing is worn enough to hold for leaves without paying the
+        // probe delay or a single read.
+        if !RepairFleet.needsRepair(RepairFleet.fleet(of: vessel, in: world)) {
+            return .advanceStep(nextStep: Step.stowingBots)
+        }
+
+        let elapsed = world.now.timeIntervalSince(directive.stepStartedAt)
+        if elapsed < Self.botProbeDelay { return .wait }
+        if elapsed > Self.repairDeadline { return .stall(.repairUnfinished) }
+        if !bots.contains(where: RepairFleet.isRepairing) {
+            return .advanceStep(nextStep: Step.stowingBots)
+        }
+        let lastLook = bots.map(\.updatedAt).min() ?? .distantPast
+        if world.now.timeIntervalSince(lastLook) < Self.botProbeInterval { return .wait }
+        return .refreshDevices(deviceCodes: bots.map(\.deviceCode), thenStall: nil)
     }
 }

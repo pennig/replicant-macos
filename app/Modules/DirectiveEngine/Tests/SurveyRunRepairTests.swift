@@ -65,4 +65,49 @@ import Utils
         let d = repairDirective(step: SurveyRun.Step.confirmingBotDeploy, deviceCode: "VESSEL", stepStartedAt: repairFixtureNow)
         #expect(SurveyRun().nextAction(directive: d, world: w) == .wait)
     }
+
+    @Test func aHealthyFleetLeavesWithoutWaiting() {
+        let vessel = repairDevice("VESSEL", type: "heaven_vessel", location: "SOL-3")
+        let bot = repairDevice("BOT1", type: "service_bot", location: "SOL-3", directives: ["service"])
+        let drone = repairDevice("DRONE1", type: "survey_drone", location: nil, stowedIn: "VESSEL", capacity: 100)
+        let w = repairWorld(devices: [vessel, bot, drone])
+        let d = repairDirective(step: SurveyRun.Step.repairing, deviceCode: "VESSEL", stepStartedAt: repairFixtureNow.addingTimeInterval(-60))
+        #expect(SurveyRun().nextAction(directive: d, world: w) == .advanceStep(nextStep: SurveyRun.Step.stowingBots))
+    }
+
+    @Test func aWorkingBotHoldsTheVessel() {
+        let vessel = repairDevice("VESSEL", type: "heaven_vessel", location: "SOL-3")
+        let bot = repairDevice("BOT1", type: "service_bot", location: "SOL-3", directives: ["service"], repairingTarget: "DRONE1")
+        let drone = repairDevice("DRONE1", type: "survey_drone", location: nil, stowedIn: "VESSEL", capacity: 30)
+        let w = repairWorld(devices: [vessel, bot, drone])
+        let d = repairDirective(step: SurveyRun.Step.repairing, deviceCode: "VESSEL", stepStartedAt: repairFixtureNow.addingTimeInterval(-60))
+        #expect(SurveyRun().nextAction(directive: d, world: w) == .wait)
+    }
+
+    @Test func idleBotsReleaseTheVesselEvenWithADroneStillWorn() {
+        let vessel = repairDevice("VESSEL", type: "heaven_vessel", location: "SOL-3")
+        let bot = repairDevice("BOT1", type: "service_bot", location: "SOL-3", directives: ["service"])
+        let drone = repairDevice("DRONE1", type: "survey_drone", location: nil, stowedIn: "VESSEL", capacity: 30)
+        let w = repairWorld(devices: [vessel, bot, drone])
+        let d = repairDirective(step: SurveyRun.Step.repairing, deviceCode: "VESSEL", stepStartedAt: repairFixtureNow.addingTimeInterval(-60))
+        #expect(SurveyRun().nextAction(directive: d, world: w) == .advanceStep(nextStep: SurveyRun.Step.stowingBots))
+    }
+
+    @Test func noBotDeployedSkipsTheGate() {
+        let vessel = repairDevice("VESSEL", type: "heaven_vessel", location: "SOL-3")
+        let drone = repairDevice("DRONE1", type: "survey_drone", location: nil, stowedIn: "VESSEL", capacity: 30)
+        let w = repairWorld(devices: [vessel, drone])
+        let d = repairDirective(step: SurveyRun.Step.repairing, deviceCode: "VESSEL", stepStartedAt: repairFixtureNow.addingTimeInterval(-60))
+        #expect(SurveyRun().nextAction(directive: d, world: w) == .advanceStep(nextStep: SurveyRun.Step.stowingBots))
+    }
+
+    @Test func aBotStillWorkingAtTheDeadlineEscalates() {
+        let vessel = repairDevice("VESSEL", type: "heaven_vessel", location: "SOL-3")
+        let bot = repairDevice("BOT1", type: "service_bot", location: "SOL-3", directives: ["service"], repairingTarget: "DRONE1")
+        let drone = repairDevice("DRONE1", type: "survey_drone", location: nil, stowedIn: "VESSEL", capacity: 30)
+        let w = repairWorld(devices: [vessel, bot, drone])
+        let past = repairFixtureNow.addingTimeInterval(-(SurveyRun.repairDeadline + 1))
+        let d = repairDirective(step: SurveyRun.Step.repairing, deviceCode: "VESSEL", stepStartedAt: past)
+        #expect(SurveyRun().nextAction(directive: d, world: w) == .stall(.repairUnfinished))
+    }
 }

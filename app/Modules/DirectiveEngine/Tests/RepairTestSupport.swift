@@ -20,11 +20,15 @@ func repairDevice(
     stowedIn: String? = nil,
     directives: [String] = [],
     capacity: Double = 100,
-    updatedAt: Date = repairFixtureNow
+    updatedAt: Date = repairFixtureNow,
+    repairingTarget: String? = nil
 ) -> Device {
     var detail: [String: JSONValue] = [:]
     if !directives.isEmpty {
         detail["available_directives"] = .array(directives.map(JSONValue.string))
+    }
+    if let repairingTarget {
+        detail["repair"] = .object(["target_device_code": .string(repairingTarget)])
     }
     return Device(
         deviceCode: code, deviceType: type, replicantCode: "R1", status: "idle",

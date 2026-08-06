@@ -745,7 +745,7 @@ struct SurveyRunRecoveryTests {
     @Test func advancesOnceEveryDroneIsAboard() {
         let directive = run(step: SurveyRun.Step.recovering, controllerCode: "AMI1")
         #expect(SurveyRun().nextAction(directive: directive, world: world(recallingFleet(aboard: 3)))
-                == .advanceTarget)
+                == .advanceStep(nextStep: SurveyRun.Step.repairing))
     }
 
     /// The recall has only just been ordered — give it a beat before spending a
@@ -915,7 +915,7 @@ struct SurveyRunRecoveryTests {
         let directive = run(step: SurveyRun.Step.recovering, controllerCode: "AMI1")
         #expect(SurveyRun().nextAction(directive: directive,
                                        world: world(recallingFleet(aboard: 0, adopted: 0)))
-                == .advanceTarget)
+                == .advanceStep(nextStep: SurveyRun.Step.repairing))
     }
 
     /// A drone adopted by a DIFFERENT controller is not this run's to wait for.
@@ -923,7 +923,8 @@ struct SurveyRunRecoveryTests {
         var fleet = recallingFleet(aboard: 0, adopted: 0)
         fleet.append(device("OTHER", type: "survey_drone", location: "TAU-9", controlledBy: "AMI9"))
         let directive = run(step: SurveyRun.Step.recovering, controllerCode: "AMI1")
-        #expect(SurveyRun().nextAction(directive: directive, world: world(fleet)) == .advanceTarget)
+        #expect(SurveyRun().nextAction(directive: directive, world: world(fleet))
+                == .advanceStep(nextStep: SurveyRun.Step.repairing))
     }
 
     /// The recovery gate covers the LAST target too — the leg home is where the
