@@ -432,6 +432,74 @@ private func device(_ code: String, status: String = "idle") -> Device {
         }
     }
 
+    /// `@Shared` insulates its storage per test, so two stores built here share
+    /// one ephemeral app storage and no other test sees it.
+    private func groupingStore(_ database: any DatabaseWriter) -> TestStoreOf<DevicesFeature> {
+        let store = TestStore(initialState: DevicesFeature.State()) {
+            DevicesFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
+        }
+        store.exhaustivity = .off
+        return store
+    }
+
+    @Test func selectingAGroupingReshapesTheList() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Device.insert {
+                makeDevice("VESSEL", type: "heaven_vessel")
+                makeDevice("CTRL", type: "ami_survey_controller", stowedIn: "VESSEL")
+            }
+            .execute(db)
+        }
+        let store = groupingStore(database)
+
+        // Carrier is the default, and it nests: only the vessel is visible.
+        #expect(store.state.grouping == .carrier)
+        #expect(store.state.orderedIDs == ["VESSEL"])
+
+        await store.send(.groupingSelected(.type))
+        #expect(store.state.grouping == .type)
+        #expect(store.state.sections.map(\.id) == ["type:ami_survey_controller", "type:heaven_vessel"])
+        #expect(store.state.orderedIDs.sorted() == ["CTRL", "VESSEL"])
+    }
+
+    /// The choice is app storage, so a second state reading the same suite
+    /// starts where the first left off.
+    @Test func theGroupingChoiceSurvivesAStateRoundTrip() async throws {
+        let database = try GameDatabase.bootstrap()
+        let first = groupingStore(database)
+
+        await first.send(.groupingSelected(.mission))
+
+        let second = groupingStore(database)
+        #expect(second.state.grouping == .mission)
+    }
+
+    /// The disclosure gesture is the same one in every mode — Stage 1 only ever
+    /// pointed it at the attention section.
+    @Test func groupDisclosureCollapsesAGroupedSection() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Device.insert {
+                makeDevice("R1", type: "ftl_relay")
+                makeDevice("S1", type: "survey_drone")
+            }
+            .execute(db)
+        }
+        let store = groupingStore(database)
+
+        await store.send(.groupingSelected(.type))
+        #expect(store.state.orderedIDs == ["R1", "S1"])
+
+        await store.send(.groupDisclosureToggled("type:ftl_relay"))
+        #expect(store.state.collapsedGroups == ["type:ftl_relay"])
+        #expect(store.state.orderedIDs == ["S1"])
+        // The header survives so the section can be opened again.
+        #expect(store.state.sections.map(\.id) == ["type:ftl_relay", "type:survey_drone"])
+    }
+
     /// Hosts default collapsed, so the top level is roots only — and the
     /// disclosure gesture opens exactly one level.
     @Test func derivedSectionsCollapseHostsByDefault() async throws {

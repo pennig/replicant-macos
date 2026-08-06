@@ -161,6 +161,9 @@ public struct DevicesFeature {
         /// because the logic is `DeviceListLayout`'s.
         case groupDisclosureToggled(String)
         case hostDisclosureToggled(String)
+        /// The toolbar grouping picker. Not a binding: `grouping` is `@Shared`,
+        /// which is written through `withLock` rather than set.
+        case groupingSelected(DeviceGrouping)
         /// Confirmed from the inspector's command grid.
         case commandConfirmed(kind: OperationKind, deviceCode: String, params: CommandParams)
         case commandFinished(CommandOutcome)
@@ -313,6 +316,10 @@ public struct DevicesFeature {
                 } else {
                     state.expandedHosts.insert(deviceCode)
                 }
+                return .none
+
+            case let .groupingSelected(grouping):
+                state.$grouping.withLock { $0 = grouping }
                 return .none
 
             case let .inspectorVisibilityChanged(deviceCode):
