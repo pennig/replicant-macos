@@ -37,6 +37,10 @@ struct Brain: Sendable {
     /// a raw `tags.contains` refuses the vessel that was just opted in.
     static let carrierTag = "auto:tendmesh"
 
+    /// The survey fleet's own opt-in tag, disjoint from `carrierTag` — the two
+    /// automations never contend over the same vessel.
+    static let surveyCarrierTag = "auto:survey"
+
     /// How far off its road the brain will send a carrier to fetch a spare relay
     /// rather than print one. Measured from the PLANT SITE, never the hub: the
     /// triangle inequality bounds the detour by `2 · d(source, target)` wherever
@@ -809,6 +813,68 @@ struct Brain: Sendable {
             && device.location == hub
             && !device.isBusy
             && !reserved.contains(device.deviceCode)
+    }
+
+    // MARK: - Survey readiness
+
+    /// Whether the brain should launch a Survey Run: a carrier and roam centre,
+    /// or a named idle reason. Pure, so the launch path and the why-view read
+    /// the same verdict.
+    enum SurveyReadiness: Equatable, Sendable {
+        case launch(carrier: String, roamCentre: String)
+        case idle(reason: String)
+    }
+
+    /// The survey verdict for `view`. Staging is judged through `SurveyRun`'s
+    /// own fleet queries so the brain and the mission can never disagree about
+    /// what "staged" means.
+    static func surveyReadiness(view: WorldView) -> SurveyReadiness {
+        guard let carrier = surveyCarrier(devices: view.devices) else {
+            return .idle(reason: surveyCarrierBlocker(devices: view.devices))
+        }
+
+        let world = WorldSnapshot(devices: view.devices, openOperations: [:], now: view.now)
+        guard let controller = SurveyRun.controller(aboard: carrier, in: world) else {
+            return .idle(reason: "\(carrier.deviceCode) has no survey controller aboard")
+        }
+        let drones = SurveyRun.adoptedDrones(of: controller, aboard: carrier, in: world)
+        guard !drones.isEmpty else {
+            return .idle(
+                reason: "\(carrier.deviceCode)'s controller \(controller.deviceCode) has adopted no drone aboard"
+            )
+        }
+
+        // The anchor replicant and the print hub are co-located by construction
+        // (nothing enforces it), so the hub's location stands in for the anchor's.
+        guard let hub = view.hubLocation else {
+            return .idle(reason: "the anchor has no resolvable location")
+        }
+        let centre = SiteAssay.system(of: hub)
+        guard view.starPositions[centre] != nil else {
+            return .idle(reason: "roam centre \(centre) is not in the census")
+        }
+
+        return .launch(carrier: carrier.deviceCode, roamCentre: centre)
+    }
+
+    /// The lowest-coded vessel tagged `surveyCarrierTag`, wherever it stands —
+    /// survey never co-locates at a hub the way `freeCarrier` requires.
+    private static func surveyCarrier(devices: [String: Device]) -> Device? {
+        devices.values
+            .filter { $0.deviceType == carrierDeviceType && $0.hasTag(surveyCarrierTag) }
+            .min { $0.deviceCode < $1.deviceCode }
+    }
+
+    /// Mirrors `carrierBlocker`'s register: names the candidates and that they
+    /// are untagged, never a bare "unavailable".
+    private static func surveyCarrierBlocker(devices: [String: Device]) -> String {
+        let hulls = devices.values
+            .filter { $0.deviceType == carrierDeviceType }
+            .sorted { $0.deviceCode < $1.deviceCode }
+        guard !hulls.isEmpty else { return "no vessel is tagged \(surveyCarrierTag)" }
+        let names = hulls.prefix(2).map(\.deviceCode).joined(separator: ", ")
+        let rest = hulls.count > 2 ? " +\(hulls.count - 2) more" : ""
+        return "no vessel is tagged \(surveyCarrierTag) — \(names)\(rest) \(hulls.count == 1 ? "is" : "are") untagged"
     }
 
     // MARK: - The rationale
