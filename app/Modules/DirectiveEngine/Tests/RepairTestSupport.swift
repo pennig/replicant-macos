@@ -13,7 +13,7 @@ import Utils
 
 let repairFixtureNow = Date(timeIntervalSince1970: 1_000)
 
-func device(
+func repairDevice(
     _ code: String,
     type: String,
     location: String? = "SOL-3",
@@ -36,7 +36,7 @@ func device(
     )
 }
 
-func world(devices: [Device]) -> WorldSnapshot {
+func repairWorld(devices: [Device]) -> WorldSnapshot {
     WorldSnapshot(
         devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
         openOperations: [:], log: [], systems: [:], now: repairFixtureNow
