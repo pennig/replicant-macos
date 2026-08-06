@@ -7,6 +7,7 @@
 //
 
 import GameModels
+import UniverseModels
 
 /// Fleet queries over a `WorldSnapshot` already in hand, shared by every mission
 /// that carries service bots.
@@ -24,13 +25,25 @@ public enum RepairFleet {
             .sorted { $0.deviceCode < $1.deviceCode }
     }
 
-    /// The service bots standing at `location` in `world`. A stowed device has no
-    /// location, so this returns only genuinely deployed bots.
-    public static func bots(deployedAt location: String?, in world: WorldSnapshot) -> [Device] {
+    /// The service bots deployed anywhere in `location`'s STAR SYSTEM in `world`.
+    /// System-scoped, never site-scoped: `service` and `patrol` cover a system and
+    /// the bot cruises to each damaged device, so a site filter loses a working bot.
+    public static func bots(deployedNear location: String?, in world: WorldSnapshot) -> [Device] {
         guard let location else { return [] }
-        return world.devices.values
-            .filter { $0.stowedInDeviceCode == nil && $0.location == location }
-            .filter { $0.availableDirectives.contains("service") }
+        return deployed(in: world, system: SiteAssay.system(of: location))
+    }
+
+    /// Whether `world` holds a deployed service bot at all — what a step with no
+    /// vessel location must answer before waiting on bots. Narrowed to `system`
+    /// where the caller knows one, so another fleet's bot cannot hold this one.
+    public static func anyBotDeployed(in world: WorldSnapshot, system: String?) -> Bool {
+        !deployed(in: world, system: system).isEmpty
+    }
+
+    private static func deployed(in world: WorldSnapshot, system: String?) -> [Device] {
+        world.devices.values
+            .filter { $0.stowedInDeviceCode == nil && $0.availableDirectives.contains("service") }
+            .filter { bot in system.map { bot.location.map(SiteAssay.system(of:)) == $0 } ?? true }
             .sorted { $0.deviceCode < $1.deviceCode }
     }
 
@@ -49,7 +62,7 @@ public enum RepairFleet {
     /// whatever is stowed aboard `vessel`, which by departure is every drone.
     public static func fleet(of vessel: Device, in world: WorldSnapshot) -> [Device] {
         let aboard = world.devices.values.filter { $0.stowedInDeviceCode == vessel.deviceCode }
-        return (bots(deployedAt: vessel.location, in: world) + aboard)
+        return (bots(deployedNear: vessel.location, in: world) + aboard)
             .sorted { $0.deviceCode < $1.deviceCode }
     }
 }

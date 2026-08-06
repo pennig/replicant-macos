@@ -14,11 +14,32 @@ import Utils
         #expect(RepairFleet.bots(aboard: vessel, in: w).map(\.deviceCode) == ["BOT1"])
     }
 
-    @Test func botsDeployedAtALocationExcludeStowedOnes() {
+    @Test func botsDeployedNearALocationExcludeStowedOnes() {
         let deployed = repairDevice("BOT1", type: "service_bot", location: "SOL-3", directives: ["service"])
         let stowed = repairDevice("BOT2", type: "service_bot", location: nil, stowedIn: "VESSEL", directives: ["service"])
         let w = repairWorld(devices: [deployed, stowed])
-        #expect(RepairFleet.bots(deployedAt: "SOL-3", in: w).map(\.deviceCode) == ["BOT1"])
+        #expect(RepairFleet.bots(deployedNear: "SOL-3", in: w).map(\.deviceCode) == ["BOT1"])
+    }
+
+    @Test func botsDeployedNearALocationSpanTheWholeSystem() {
+        let here = repairDevice("BOT1", type: "service_bot", location: "TAU-2", directives: ["service"])
+        let cruised = repairDevice("BOT2", type: "service_bot", location: "TAU-9", directives: ["service"])
+        let away = repairDevice("BOT3", type: "service_bot", location: "SOL-3", directives: ["service"])
+        let w = repairWorld(devices: [here, cruised, away])
+        #expect(RepairFleet.bots(deployedNear: "TAU-2", in: w).map(\.deviceCode) == ["BOT1", "BOT2"])
+    }
+
+    @Test func anyBotDeployedIgnoresAnotherSystemsBotWhenTheSystemIsKnown() {
+        let away = repairDevice("BOT1", type: "service_bot", location: "SOL-3", directives: ["service"])
+        let w = repairWorld(devices: [away])
+        #expect(RepairFleet.anyBotDeployed(in: w, system: nil))
+        #expect(!RepairFleet.anyBotDeployed(in: w, system: "TAU"))
+    }
+
+    @Test func anyBotDeployedIsFalseForAFleetCarryingNone() {
+        let vessel = repairDevice("VESSEL", type: "heaven_vessel", location: "SOL-3")
+        let drone = repairDevice("DRONE1", type: "survey_drone", location: nil, stowedIn: "VESSEL")
+        #expect(!RepairFleet.anyBotDeployed(in: repairWorld(devices: [vessel, drone]), system: nil))
     }
 
     @Test func aBotWithARepairBlockIsRepairing() {
