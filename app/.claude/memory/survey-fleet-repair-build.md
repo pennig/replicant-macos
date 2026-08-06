@@ -95,10 +95,16 @@ the sweep deletes approximately zero.
 
 It is a correct backstop for terminal runs and for orphaned AMI entries (whose
 `directiveID` is nil and which age on time alone). It is **not** a bound on
-`directiveLogEntries`. Bounding an open run needs a per-directive row cap, and
-that must respect whatever log-derived counters missions rely on — including
-`SurveyRun.dispatchRounds` and `SalvageRun.stepEntryCount`, which this build
-made load-bearing.
+`directiveLogEntries`.
+
+**RESOLVED 2026-08-06, and not the way this note first proposed.** A
+per-directive row cap was the wrong shape — see
+[directive-log-window-and-timeline](directive-log-window-and-timeline.md). Rows
+are ~132 bytes and disk was never the problem; the cost was re-reading them all
+every tick. The fix bounds the QUERY (`WorldSnapshot.logWindow`) and deletes
+nothing, which also keeps the timeline's full history. Suppressing the writes
+would have been worse still: three loop bounds count exactly those rows,
+including the one this build added.
 
 ## Verification at sign-off
 
