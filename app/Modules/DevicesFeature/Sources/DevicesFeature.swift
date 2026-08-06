@@ -742,3 +742,13 @@ public struct DevicesFeature {
         }
     }
 }
+
+// MARK: - Shared persistence
+
+extension SharedKey where Self == AppStorageKey<DeviceGrouping>.Default {
+    /// The axis the fleet list is organised along, remembered across launches.
+    /// The key carries no `.` or `@` — both are invalid in an app-storage key.
+    public static var devicesListGrouping: Self {
+        Self[.appStorage("devicesListGrouping"), default: .carrier]
+    }
+}
