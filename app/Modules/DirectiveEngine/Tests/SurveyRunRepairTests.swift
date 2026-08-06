@@ -190,4 +190,19 @@ import Utils
         )
         #expect(SurveyRun().nextAction(directive: d, world: w) == .refreshDevices(deviceCodes: ["VESSEL"], thenStall: nil))
     }
+
+    @Test func aRunWithNoBotsWalksTheOriginalPath() {
+        let vessel = repairDevice("VESSEL", type: "heaven_vessel", location: "SOL-3")
+        let w = repairWorld(devices: [vessel])
+        let run = SurveyRun()
+        let deploy = repairDirective(step: SurveyRun.Step.deployingBots, deviceCode: "VESSEL")
+        #expect(run.nextAction(directive: deploy, world: w) == .advanceStep(nextStep: SurveyRun.Step.configuring))
+        let repair = repairDirective(
+            step: SurveyRun.Step.repairing, deviceCode: "VESSEL",
+            stepStartedAt: repairFixtureNow.addingTimeInterval(-60)
+        )
+        #expect(run.nextAction(directive: repair, world: w) == .advanceStep(nextStep: SurveyRun.Step.stowingBots))
+        let stow = repairDirective(step: SurveyRun.Step.stowingBots, deviceCode: "VESSEL")
+        #expect(run.nextAction(directive: stow, world: w) == .advanceTarget)
+    }
 }
