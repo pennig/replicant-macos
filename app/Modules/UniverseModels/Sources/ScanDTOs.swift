@@ -182,9 +182,12 @@ extension StarSystem {
             }
             let existingIsRicher = existing.physical != nil || !existing.moons.isEmpty
                 || !existing.sites.isEmpty || existing.recon == .scanned
-            // Keep the richer body, but always take the fresh salvage roster.
+            // Keep the richer body, but reconcile its salvage roster against the
+            // fresh one — the only way a `depleted` flag reaches an already-hydrated body.
             var kept = existingIsRicher ? existing : fresh
-            if kept.salvage.isEmpty { kept.salvage = fresh.salvage }
+            kept.salvage = Self.mergingSalvage(
+                fresh: fresh.salvage, into: kept.salvage, clearingDepleted: false
+            )
             return kept
         }
         result.belts = scanned.belts.map { fresh in

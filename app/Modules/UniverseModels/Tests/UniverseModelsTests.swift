@@ -182,6 +182,102 @@ import Testing
         #expect(merged.allSalvageSites.contains { $0.designation == "SAFANA-7-15-SAL-1" })
     }
 
+    @Test func starRefreshDepletesASiteOnAnAlreadyHydratedBody() {
+        // A richer cached body is kept wholesale, so its salvage roster must be
+        // reconciled site by site or a fresh `depleted` never lands.
+        let cached = StarSystem(
+            designation: "INIKAWAIY",
+            planets: [Planet(
+                designation: "INIKAWAIY-4", recon: .scanned,
+                physical: BodyPhysical(massEarth: 1.2),
+                salvage: [SalvageSite(designation: "INIKAWAIY-4-SAL-1", name: "Derelict Freighter")]
+            )]
+        )
+        let fresh = StarSystem(
+            designation: "INIKAWAIY",
+            planets: [Planet(
+                designation: "INIKAWAIY-4", recon: .visited,
+                salvage: [SalvageSite(
+                    designation: "INIKAWAIY-4-SAL-1", name: "Derelict Freighter", depleted: true
+                )]
+            )]
+        )
+
+        let merged = cached.mergingSystemDetail(fresh)
+        let planet = try! #require(merged.planets.first)
+        #expect(planet.physical?.massEarth == 1.2)
+        #expect(planet.salvage.map(\.depleted) == [true])
+        // What a Salvage Run reads: the body stops being offered.
+        #expect(merged.salvageBodies.isEmpty)
+    }
+
+    @Test func starRefreshKeepsASiteTheFreshRosterOmits() {
+        let cached = StarSystem(
+            designation: "INIKAWAIY",
+            planets: [Planet(
+                designation: "INIKAWAIY-4", recon: .scanned,
+                physical: BodyPhysical(massEarth: 1.2),
+                salvage: [SalvageSite(designation: "INIKAWAIY-4-SAL-1", name: "Derelict Freighter")]
+            )]
+        )
+        let fresh = StarSystem(
+            designation: "INIKAWAIY",
+            planets: [Planet(designation: "INIKAWAIY-4", recon: .visited)]
+        )
+
+        let merged = cached.mergingSystemDetail(fresh)
+        #expect(merged.planets.first?.salvage.map(\.designation) == ["INIKAWAIY-4-SAL-1"])
+    }
+
+    @Test func aDepletedSiteStaysDepleted() {
+        // Salvage never replenishes, so the flag is sticky — a stale `false` on any
+        // later read would put a worked-out body back on offer.
+        let cached = StarSystem(
+            designation: "INIKAWAIY",
+            planets: [Planet(
+                designation: "INIKAWAIY-4", recon: .scanned,
+                physical: BodyPhysical(massEarth: 1.2),
+                salvage: [SalvageSite(designation: "INIKAWAIY-4-SAL-1", depleted: true)]
+            )]
+        )
+        let fresh = StarSystem(
+            designation: "INIKAWAIY",
+            planets: [Planet(
+                designation: "INIKAWAIY-4", recon: .visited,
+                salvage: [SalvageSite(designation: "INIKAWAIY-4-SAL-1", depleted: false)]
+            )]
+        )
+
+        let merged = cached.mergingSystemDetail(fresh)
+        #expect(merged.planets.first?.salvage.map(\.depleted) == [true])
+    }
+
+    @Test func planetRefetchDepletesASiteOnAnAlreadyScannedMoon() {
+        let richMoon = Moon(
+            designation: "INIKAWAIY-4-1", recon: .scanned,
+            physical: BodyPhysical(massEarth: 0.01),
+            salvage: [SalvageSite(designation: "INIKAWAIY-4-1-SAL-1", name: "Wreck")]
+        )
+        let system = StarSystem(
+            designation: "INIKAWAIY",
+            planets: [Planet(designation: "INIKAWAIY-4", recon: .scanned, moons: [richMoon])]
+        )
+        let freshPlanet = Planet(
+            designation: "INIKAWAIY-4", recon: .scanned,
+            moons: [Moon(
+                designation: "INIKAWAIY-4-1", recon: .scanned,
+                salvage: [SalvageSite(
+                    designation: "INIKAWAIY-4-1-SAL-1", name: "Wreck", depleted: true
+                )]
+            )]
+        )
+
+        let merged = system.applying(.planet(freshPlanet))
+        let moon = try! #require(merged.planets.first?.moons.first)
+        #expect(moon.physical?.massEarth == 0.01)
+        #expect(moon.salvage.map(\.depleted) == [true])
+    }
+
     @Test func planetSalvageDecodesAsOwnType() throws {
         // BETSU-3 roster entry carries a salvage site (research station).
         let raw = try decode(Self.betsuStarJSON)

@@ -1053,7 +1053,9 @@ extension StarSystem {
             guard let e = existingByID[f.designation] else { return f }
             let existingIsRicher = e.physical != nil || !e.sites.isEmpty || !e.salvage.isEmpty
             var kept = existingIsRicher ? e : f
-            if kept.salvage.isEmpty { kept.salvage = f.salvage }
+            kept.salvage = Self.mergingSalvage(
+                fresh: f.salvage, into: kept.salvage, clearingDepleted: false
+            )
             if kept.inventory.isEmpty { kept.inventory = f.inventory }
             return kept
         }

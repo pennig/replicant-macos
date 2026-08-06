@@ -131,7 +131,9 @@ extension StarSystem {
         }
         planet.physical = observation.physical
         planet.recon = .scanned
-        planet.salvage = Self.mergingSalvage(fresh: observation.salvage, into: planet.salvage)
+        planet.salvage = Self.mergingSalvage(
+            fresh: observation.salvage, into: planet.salvage, clearingDepleted: true
+        )
 
         // The scan's moon roster is authoritative about *which* moons exist, but
         // its entries are stubs — `mergingMoons` keeps any richer moon a prior
@@ -163,7 +165,9 @@ extension StarSystem {
         if let lifeStage = observation.lifeStage { moon.lifeStage = lifeStage }
         moon.physical = observation.physical
         moon.recon = .scanned
-        moon.salvage = Self.mergingSalvage(fresh: observation.salvage, into: moon.salvage)
+        moon.salvage = Self.mergingSalvage(
+            fresh: observation.salvage, into: moon.salvage, clearingDepleted: true
+        )
 
         if let moonIndex {
             copy.planets[planetIndex].moons[moonIndex] = moon
@@ -195,10 +199,13 @@ extension StarSystem {
     /// so taking its entries verbatim would discard the only live figures we
     /// have — the same reason `ingestScanResult` restores them after `applying`.
     ///
-    /// `depleted` is taken from the scan, not preserved: a scan is a fresh
-    /// observation of the site's state, so this is the path that can *clear* a
-    /// stale local flag as well as set one.
-    static func mergingSalvage(fresh: [SalvageSite], into existing: [SalvageSite]) -> [SalvageSite] {
+    /// Pass `clearingDepleted` only for a scan — a fresh observation of the site
+    /// itself, and so the one path that may *clear* a stale local flag. A body
+    /// roster may lag a `salvage.depleted` event, so it raises the flag and never
+    /// lowers it.
+    static func mergingSalvage(
+        fresh: [SalvageSite], into existing: [SalvageSite], clearingDepleted: Bool
+    ) -> [SalvageSite] {
         guard !fresh.isEmpty else { return existing }
         var result = existing
         for site in fresh {
@@ -208,6 +215,7 @@ extension StarSystem {
             }
             var merged = site
             if merged.remainingPct.isEmpty { merged.remainingPct = result[index].remainingPct }
+            if !clearingDepleted { merged.depleted = merged.depleted || result[index].depleted }
             result[index] = merged
         }
         return result
