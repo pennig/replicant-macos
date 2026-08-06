@@ -1,120 +1,99 @@
-# The cleanup standard — read before editing any file
+# The comment standard
 
-Derived from Task 2 (`MissionStepMachine.swift`, 300 → ~165 lines) and its review.
-That commit is the reference diff. Read it:
+## Why this replaces the previous version
 
-    git show <task-2-sha> -- app/Modules/DirectiveEngine/Sources/MissionStepMachine.swift
+The first standard set a *keep* test — "does this change what a correct implementer
+writes?" — and explicitly refused a line budget, calling the budget "a shape, not a
+count". Applied honestly, that produced 20-line doc comments on string constants and
+a 54-line comment block on a test. Measured over the whole repo afterwards: 595
+comment blocks of ten lines or more held 8,957 lines, a third of all comment prose.
+The module the cleanup actually swept ended as the most heavily commented in the
+repo, at 35% against a 25% repo average.
+
+A keep test cannot bound anything, because a determined reader finds a defensible
+invariant behind every line. This version sets a budget first and a test second.
+
+## The budget — hard, not advisory
+
+    file header            ≤ 6 lines
+    declaration doc (///)  ≤ 3 lines
+    inline //              ≤ 2 lines
+    anything longer        needs a reason you can say out loud, per block
+
+Blocks over the cap are not "justified by the declaration being important". They are
+cut. If the fact does not fit in three lines, it is not a comment — it is a memory
+note in `app/.claude/memory/`, and the comment is the one sentence that points at it.
+
+Count blank `///` lines and `//` separator lines against the budget. A four-line doc
+padded to seven with blanks is a seven-line doc. The `//  <Name>.swift` /
+`//  Replicould — <Module>` banner is exempt — it is not prose, and it stays.
 
 ## The rule
 
-**A comment may only explain the code as it exists in situ.** History lives in
-`app/.claude/memory/` and in git, never in the source.
+**A comment may only explain the code as it exists in situ.** History goes to
+`app/.claude/memory/` and git, never the source.
 
-**KEEP:** what the file is and does; invariants true of the code itself; what each
-parameter means; what a caller must guarantee.
+**Keep** — what the file is; an invariant a reader cannot recover from the code; what
+a caller must guarantee; the meaning of a parameter whose name does not carry it.
 
-**DELETE:** dated history ("as of 2026-08-04", "before the fix", round-N narratives);
-rejected alternatives; product/design rationale; live-fleet snapshots (device codes,
-replicant names, stock figures); incident narratives; provenance pointers ("ticket 05
-decided this", "spec §11"); restatement of what the code plainly says.
+**Delete** — dated history; rejected alternatives; design and product rationale;
+live-fleet snapshots (device codes, replicant names, stock figures); incident
+narratives; provenance pointers ("§4.1", "ticket 05 decided this"); restatement of
+what the signature already says.
 
-A pointer survives ONLY when it names where a full contract lives, never who decided it.
+## The test, applied after the budget
 
-## Five rules the Task 2 review established
+Not "does this help?" but: **would a competent Swift reader, looking at this code,
+get it wrong without this sentence?** If the answer is no, it goes — however true it
+is. Truth was never the bar.
 
-1. **Every parameter gets a sentence, before any prohibition gets a paragraph.**
-   Task 2 landed above its line target *and still* dropped `thenStall`'s meaning from
-   two cases. Overshooting the target is fine; cutting parameter semantics while
-   overshooting is not. Sweep the parameter list of every declaration before calling a
-   doc comment done.
+Three specific habits to cut on sight:
 
-2. **A false comment gets CORRECTED to the true rule, not deleted** — when the true
-   rule is recorded in `.claude/memory/` and is caller-facing. Deleting is the fallback
-   for when the truth isn't known. Correcting a sentence changes no executable line and
-   is squarely inside a comment-only pass.
+1. **Restating the signature.** `/// The device code.` on `var deviceCode: String`
+   earns nothing. A parameter whose name carries its meaning gets no sentence. The
+   previous standard's "every parameter gets a sentence" rule is withdrawn — it
+   manufactured boilerplate on `directive:` and `world:` across every mission.
 
-3. **Ban "which is why" and "on purpose" as standalone justifications.** A
-   consequence-of-violation survives ("treating that absence as 'device gone' deletes
-   the fleet"); an explanation-of-choice does not ("which is why `Directive.step` is a
-   bare `String`").
+2. **The argued paragraph.** Any comment that reasons — "so that", "which is why",
+   "deliberately does NOT", "the alternative would" — is making a case to a reader
+   who is not litigating. State the rule, or delete it. A consequence survives only
+   when the consequence is severe and non-obvious, and then in one clause.
 
-4. **The test for any surviving sentence: does this change what a correct implementer
-   writes?** If no, cut it.
+3. **Docs on private helpers.** A `private func` inside the file that declares it
+   gets a comment only when its body is genuinely unreadable. The previous standard
+   required docs here; that requirement is withdrawn.
 
-5. **`check-comments.sh` exit=0 is a FLOOR, never a finish line.** The lint is eleven
-   regexes over dates, "as of", "used to", and device codes. It has no notion of
-   rationale — design essays, "modeled on X", and product narrative all pass it
-   cleanly. Task 2 confirmed this on its own intermediate drafts. Judge the prose
-   yourself against the DELETE list; passing the lint proves nothing about it.
+## Growth is not permitted
 
-## The line target is ADVISORY — established by the Task 3 review
+The previous standard allowed a file to grow during a comment-reduction pass, on the
+grounds that undocumented declarations needed documenting. That licence is
+withdrawn. **A file leaves this pass with fewer comment lines than it entered with.**
+If a declaration genuinely has no doc and genuinely needs one, it gets ≤3 lines and
+the file still nets down.
 
-The plan's per-file line targets were derived from a ratio and are not reachable on
-files with a lot of executable code. Task 3 landed at 1,243 against a ~700 target and
-was endorsed on review: only ~2% of its surviving prose failed the standard's test.
+Report gross removed and gross added per file. Added should be near zero.
 
-**The binding budget is per-declaration, and it is a shape, not a count:**
+## Mechanical discipline
 
-For each declaration allow exactly —
-1. one sentence saying what it does, naming **every** parameter;
-2. one sentence per live prohibition or invariant a caller can violate, each stated as
-   rule-plus-consequence in the present tense;
-3. nothing else.
+**Executable lines must not change.** Prove it per file, before building:
 
-Inline `//` only where the code cannot be read to that conclusion. Land wherever that
-puts the file, and report the number.
+    diff <(git show <BASE>:$F | grep -vE '^\s*(//|/\*|\*)' | grep -vE '^\s*$') \
+         <(grep -vE '^\s*(//|/\*|\*)' $F | grep -vE '^\s*$')
 
-**A task fails on a surviving sentence that names no rule. It does not fail on a line
-count. It DOES fail on a parameter cut to make a count.**
+Expected empty. This projection keeps code lines carrying a trailing `//` at full
+width, so an empty diff also proves no trailing comment was touched.
 
-Sanity check, not a gate: if a file lands above **~1.9 comment lines per executable
-line** (`MissionStepMachine.swift`'s measured post-cleanup density), justify it
-declaration by declaration. Below that, the ratio is not evidence of anything and is
-not worth arguing about. Task 3 landed at 1.34.
+Then: `cd app/Modules && swift build --build-tests` → `Build complete`, no new
+warnings. `./app/scripts/check-comments.sh <paths>` from the repo root → exit 0.
+Keep the `//  <Name>.swift` / `//  Replicould — <Module>` header banner.
 
-## A file may legitimately GROW — established by the Task 6 review
+`check-comments.sh` is eleven regexes over dates and device codes. It has no notion
+of an essay. Exit 0 proves nothing about the prose; judge that yourself against the
+budget.
 
-`SurveyRun.swift` went from 218 to 231 comment lines in a pass whose purpose is
-removing them, and was approved. The reason: 14 declarations had **zero** doc
-comments, and a zero-line doc cannot pass the parameter sweep rule 1 requires.
+## Trailing annotations are cheap and usually fine
 
-**Report gross, not net.** Task 6's SurveyRun removed 121 comment lines and added
-134. The deletion was real and complete — no dated history, no incident narrative, no
-provenance pointer survived. Net +13 hid a large two-way churn.
-
-The failure mode to police is a file that grew because **deletion was timid**,
-measurable as low gross removal. A file that grew because zero-doc declarations were
-finally documented is fine. Always report both numbers.
-
-Corollary, also settled in Task 6: **private helpers get docs too.** A stricter
-"only caller-misusable declarations" rule was considered and rejected — it would have
-saved ~6 lines of restatement and deleted the two highest-value additions in the
-task, because both sat on `private func`s.
-
-## The pattern worth copying
-
-The best move in the Task 2 diff: when a deleted narrative contained one genuinely
-load-bearing fact, that fact was **relocated to the API it is a property of** rather
-than dropped with the story around it. Do this — don't let a fact die because the
-paragraph carrying it was archaeology.
-
-## Mechanical discipline — copy without modification
-
-- **Executable lines must not change.** Prove it per file, before building:
-
-      diff <(git show <BASE>:$F | grep -vE '^\s*(//|/\*|\*)' | grep -vE '^\s*$') \
-           <(grep -vE '^\s*(//|/\*|\*)' $F | grep -vE '^\s*$')
-
-  Expected empty. This projection keeps code lines carrying a trailing `//` comment at
-  full width, so an empty diff also proves no trailing comment was touched — there is
-  no blind spot.
-- `cd app/Modules && swift build --build-tests` → `Build complete`, no new warnings.
-- `./app/scripts/check-comments.sh <each file>` from repo root → exit 0.
-- Header keeps the `//  <Name>.swift` / `//  Replicould — DirectiveEngine` banner.
-
-## Known false comment still in the tree
-
-`DirectiveExecutor.swift:93` says "the endpoint 403s away from the system". That is
-false — `location-endpoint-presence-gate.md` records the gate as EXPLORATION, not
-presence, and notes the 403's own message lies. Task 7 owns that file: correct it per
-rule 2, do not merely delete it.
+`private let starPipeline: MTLRenderPipelineState  // additive glow field (no depth)`
+is a good comment: one line, names a fact the type cannot. Cutting these is not where
+the win is. The win is in the multi-paragraph blocks — 56% of all comment prose sits
+in blocks of five lines or more.

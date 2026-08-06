@@ -3,16 +3,11 @@
 //  Replicould — DirectiveEngine
 //
 //  One serial executor per RUNNING custom directive, off the event-dispatch hot
-//  path. Built-in directives get no executor — the server runs them.
-//
-//  Evaluation is clock-driven, not event-driven: an evaluation is a local SQLite
-//  read plus a pure function, and it touches the network only when the mission
-//  actually wants a command. The engine therefore never sees an event and cannot
-//  be spooked by its own command echo, and every test is deterministic under
-//  `TestClock` with no observation plumbing.
-//
-//  Lifecycle is owned by the composition root: started with the sync engine on
-//  login, and stopped BEFORE the directive tables are wiped on logout.
+//  path; built-in directives get none, since the server runs them. Evaluation is
+//  clock-driven, not event-driven — a local SQLite read plus a pure function,
+//  touching the network only when a mission wants a command — so the engine never
+//  sees its own command echo and every test is deterministic under `TestClock`.
+//  Started with the sync engine on login, stopped BEFORE the tables are wiped.
 //
 
 import Dependencies
@@ -141,15 +136,10 @@ actor DirectiveEngineCore {
         brainLogger.info("stopping")
         brain?.cancel()
         brain = nil
-        // Retire the why-view's feed with the brain that fed it: a surviving
-        // report would show the PREVIOUS account's ranked systems and hub stock
-        // until the next login's first tick. This clears the shared store and
-        // reads nothing back, so it retains no engine state.
-        //
-        // The clear only STAYS cleared because `tickBrain()` re-checks
-        // cancellation before it publishes — `cancel()` above does not await the
-        // brain task, and a tick suspended inside `Brain.report()` resumes after
-        // this line.
+        // Retire the why-view's feed with the brain that fed it, or it shows the
+        // PREVIOUS account's data until the next login's first tick. It only STAYS
+        // cleared because `tickBrain()` re-checks cancellation before publishing —
+        // `cancel()` does not await, so a suspended tick resumes after this line.
         @Shared(.brainReport) var published: BrainReport?
         $published.withLock { $0 = nil }
         for (_, task) in executors { task.cancel() }
@@ -157,36 +147,17 @@ actor DirectiveEngineCore {
         idlePlanUntil.removeAll()
     }
 
-    /// One brain tick: bridge the clock's `now` in via `@Dependency(\.date)`
-    /// (never `Date()`, so `TestClock` determinism holds), ask `Brain` for a
-    /// decision, and publish it.
-    ///
-    /// The decision is REPORTED, not acted on: `Brain.report()` has already
-    /// committed whatever it decided through the sanctioned create-directive
-    /// rail. Nothing here writes a row, and nothing here may — a bespoke write at
-    /// this layer would sit outside the brain's audited enactment surface.
-    ///
-    /// Reporting means publishing the tick's `BrainReport` to
-    /// `@Shared(.brainReport)`, which `DirectivesFeature` renders as the why-view
-    /// (`brain-robustness-bar` clause 8). This actor keeps NO copy, so the engine
-    /// holds no UI state and the next tick's `Brain` — stateless by clause 2 —
-    /// has nothing here to read back.
+    /// One brain tick: bridge `now` in via `@Dependency(\.date)`, ask `Brain` for a
+    /// decision, publish it. The decision is REPORTED, not acted on — nothing here
+    /// writes a row, and nothing here may, since a bespoke write at this layer sits
+    /// outside the brain's audited enactment surface. This actor keeps no copy.
     ///
     /// **Cancellation is checked at both ends, and neither check is redundant.**
-    /// `stop()` cancels the brain task without awaiting it, and cancellation is
-    /// cooperative — the loop in `start()` only tests it between iterations. So:
-    ///
-    ///   - the ENTRY check catches a tick that began after `stop()`: the loop's
-    ///     own `!Task.isCancelled` can pass and the `await` hop onto this actor
-    ///     can then land after the cancel.
-    ///   - the EXIT check catches a tick already in flight: it is suspended
-    ///     across `Brain.report()`'s reads when `stop()` runs, so it resumes
-    ///     AFTER the feed was cleared and would republish the previous account's
-    ///     data, which is the session bleed `stop()` claims not to allow.
-    ///
-    /// Both checks read `Task.isCancelled`, not `brain != nil`: this body runs
-    /// INSIDE the task `stop()` cancels, so the flag is exact where the field is
-    /// not yet cleared.
+    /// The ENTRY check catches a tick that began after `stop()`; the EXIT check
+    /// catches one suspended across `Brain.report()`, which would otherwise resume
+    /// after the feed was cleared and republish the previous account's data. Both
+    /// read `Task.isCancelled`, not `brain != nil` — this body runs inside the task
+    /// `stop()` cancels, so the flag is exact where the field is not yet cleared.
     func tickBrain() async {
         guard !Task.isCancelled else {
             brainLogger.debug("tick skipped — engine already stopped")
@@ -534,17 +505,13 @@ actor DirectiveEngineCore {
         @Dependency(\.defaultDatabase) var database
         @Dependency(\.date) var date
 
-        // `.high` deliberately: the TTL and the read-budget floor exist to keep
-        // background chatter cheap, and this is the opposite of background — the
-        // alternative to these reads is a run that stops dead until a human
-        // notices. `seen` keeps the fan-out to one read per device.
+        // `.high` deliberately — the alternative to these reads is a run that stops
+        // dead until a human notices. `seen` keeps it to one read per device.
         var seen = Set<String>()
         for code in deviceCodes where seen.insert(code).inserted {
             guard let device = await deviceRefresher.refresh(code, .high) else { continue }
-            // Containment is two-ended. The carrier's fresh row names who is
-            // aboard, but the staging checks read each CHILD's stow column, so
-            // refreshing the vessel alone would leave the very rows the answer
-            // depends on exactly as stale as they were.
+            // Containment is two-ended: the staging checks read each CHILD's stow
+            // column, so refreshing the vessel alone leaves them just as stale.
             for stowed in device.stowedDeviceCodes where seen.insert(stowed).inserted {
                 _ = await deviceRefresher.refresh(stowed, .high)
             }
@@ -564,20 +531,11 @@ actor DirectiveEngineCore {
         return await reAsk(machine, directive, fresh, paid: paid)
     }
 
-    /// The same contract as `resolveRefresh` for `directive`, `machine`,
-    /// `reason` and `paid`, paid for with ONE list request scoped to
-    /// `designation` instead of a read per device — one request for everything
-    /// at a place, and it does not grow with the fleet.
-    ///
-    /// It answers PRESENCE only. A stowed device has no location and so is absent
-    /// from the response entirely (see `MissionAction.refreshDevicesInSystem`),
-    /// and because this walk deliberately prunes nothing, an absent row is left
-    /// exactly as stale as it was. Never resolve a containment question this way.
-    ///
-    /// Reconciled rather than upserted, exactly like the cold-load path, so the
-    /// event-time guard and local provenance hold. **Deliberately does NOT
-    /// prune**: a scoped walk is not the authoritative full fleet, and treating
-    /// everything outside the scope as gone would delete it.
+    /// `resolveRefresh`'s contract, paid for with ONE list request scoped to
+    /// `designation` — it does not grow with the fleet. Answers PRESENCE only: a
+    /// stowed device has no location and is absent entirely, so **never resolve a
+    /// containment question this way**. Reconciled rather than upserted, and
+    /// deliberately never pruned — a scoped walk is not the authoritative fleet.
     private func resolveSystemRefresh(
         designation: String,
         thenStall reason: DirectiveAttentionReason?,
@@ -610,20 +568,11 @@ actor DirectiveEngineCore {
         return await reAsk(machine, directive, fresh, paid: paid)
     }
 
-    /// The same contract as `resolveSystemRefresh` for `directive`, `machine`,
-    /// `reason` and `paid`, paid for with ONE request scoped to `tag` instead of
-    /// to a location.
-    ///
-    /// This is the containment counterpart `.refreshDevicesInSystem` cannot
-    /// serve: a tag filter never touches `location`, so stowing a device does
-    /// not drop it out of scope.
-    ///
-    /// Reconciled through `Reconciler.ingest` — the same path every other
-    /// device read uses — one device at a time, exactly like
-    /// `resolveSystemRefresh`. **Never prune after this read**: every untagged
-    /// device is absent from a tag response by construction, and treating that
-    /// absence as "device gone" would delete the fleet, so this deliberately
-    /// never calls `Reconciler.pruneDevices`.
+    /// `resolveSystemRefresh`'s contract, scoped to `tag` instead of a location.
+    /// The containment counterpart `.refreshDevicesInSystem` cannot serve — a tag
+    /// filter never touches `location`, so stowing does not drop a device out of
+    /// scope. **Never prune after this read**: every untagged device is absent by
+    /// construction, and treating that absence as "device gone" deletes the fleet.
     private func resolveFleetRefresh(
         tag: String,
         thenStall reason: DirectiveAttentionReason?,
@@ -656,20 +605,10 @@ actor DirectiveEngineCore {
         return await reAsk(machine, directive, fresh, paid: paid)
     }
 
-    /// The same contract as the three refresh resolvers above for `directive`,
-    /// `machine`, `reason` and `paid`, paid for with one stockpile-census
-    /// refresh, and falling back to `.advanceStep(nextStep:)` where they fall
-    /// back to `.wait`.
-    ///
-    /// Best-effort by contract: the request must never be the thing that strands
-    /// a mission over a transient GET, so a failure is logged and the re-ask
-    /// proceeds against whatever `WorldSnapshot.footprints` already holds rather
-    /// than short-circuiting.
-    ///
-    /// It needs its own resolver, rather than a case in `reAsk`, because the
-    /// census sits in front of an irreversible resource spend for one caller and
-    /// in front of an ordinary continuous cycle for another; `collapse(_:)` is
-    /// what keeps each caller's fallback its own.
+    /// The other resolvers' contract, paid for with one stockpile-census refresh,
+    /// falling back to `.advanceStep` where they fall back to `.wait`. Best-effort:
+    /// a transient GET must never strand a mission, so a failure is logged and the
+    /// re-ask proceeds against whatever `footprints` already holds.
     private func resolveFootprintRefresh(
         nextStep: String,
         thenStall reason: DirectiveAttentionReason?,
@@ -697,14 +636,9 @@ actor DirectiveEngineCore {
         return await reAsk(machine, directive, fresh, paid: paid)
     }
 
-    /// The four refresh actions as a discriminator, and the whole basis of the
-    /// chain bound below.
-    ///
-    /// Deliberately keyed on the KIND alone, never on the payload: a repeat
-    /// `.refreshDevices` naming a different device is still the same read this
-    /// evaluation already paid for, and letting a changed payload buy another
-    /// round would put back the unbounded loop the `reAsk` guard exists to
-    /// prevent.
+    /// The four refresh actions as a discriminator, and the basis of the chain
+    /// bound below. Keyed on the KIND alone, never the payload: letting a changed
+    /// payload buy another round restores the unbounded loop `reAsk` prevents.
     private enum RefreshKind: Hashable {
         case devices, devicesInSystem, fleet, footprint
 
@@ -720,62 +654,36 @@ actor DirectiveEngineCore {
         }
     }
 
-    /// What `action` becomes when the engine will not pay for it — its stall
-    /// reason and its nil-fallback read off `action` ITSELF, never off whatever
-    /// was carried in from an earlier hop.
-    ///
-    /// Each kind's own `thenStall` is the only correct answer for that kind:
-    /// collapsing a chained hop onto the reason belonging to the refresh already
-    /// performed blames the wrong thing — a run that refreshed a stale device row
-    /// and then found the census stale would stall `.unreachableDevice` on a
-    /// perfectly reachable device.
+    /// What `action` becomes when the engine will not pay for it, read off `action`
+    /// ITSELF and never off an earlier hop — collapsing onto the reason belonging
+    /// to the refresh already performed blames the wrong thing, stalling
+    /// `.unreachableDevice` on a perfectly reachable device.
     private static func collapse(_ action: MissionAction) -> MissionAction {
         switch action {
         case let .refreshDevices(_, reason), let .refreshDevicesInSystem(_, reason),
              let .refreshFleet(_, reason):
-            // "The state being watched is expected to resolve on its own" —
-            // these three never advance a step of their own accord.
+            // These three never advance a step of their own accord.
             return reason.map { MissionAction.stall($0) } ?? .wait
         case let .refreshFootprint(nextStep, reason):
-            // `HaulRun.survey`'s contract: a transient miss costs one cycle
-            // rather than stranding a continuous run.
+            // `HaulRun.survey`'s contract: a transient miss costs one cycle rather
+            // than stranding a continuous run.
             return reason.map { MissionAction.stall($0) } ?? .advanceStep(nextStep: nextStep)
         default:
             return action
         }
     }
 
-    /// Ask `machine` once more for `directive` against the freshly-read `fresh`
-    /// world, given the refresh kinds `paid` for so far. Shared by all four
-    /// refresh paths: this is the loop guard, and it must behave identically
-    /// however the reads were paid for.
+    /// Ask `machine` once more against the freshly-read `fresh` world, given the
+    /// kinds `paid` for so far. The loop guard, shared by all four refresh paths.
+    /// A non-refresh answer returns untouched; a kind already paid for collapses to
+    /// its own stall/fallback; a kind not yet paid for chains ONE hop into that
+    /// kind's resolver (passing it through unresolved would hit the executor's
+    /// bypass, which stalls instead of reading).
     ///
-    /// Three outcomes, in the order they are tested:
-    ///
-    /// 1. **Not a refresh at all** — the reads settled the question. Return the
-    ///    machine's answer untouched; that is the entire point of re-asking.
-    /// 2. **A refresh of a kind this evaluation has ALREADY paid for** —
-    ///    including, in the common case, the very kind just performed. The
-    ///    reads happened and the mission still wants them, so more of the same
-    ///    would be a loop. Collapse to that action's own stall/fallback
-    ///    (`collapse(_:)`).
-    /// 3. **A refresh of a kind not yet paid for** — the reads answered the
-    ///    question that was asked and uncovered a genuinely DIFFERENT one.
-    ///    Chain one hop into that kind's own resolver. Passing it through
-    ///    unresolved is not an option: `DirectiveExecutor`'s refresh case is a
-    ///    bypass fallback that would stall on the carried reason rather than
-    ///    perform the read.
-    ///
-    /// **The bound.** `paid` is a set over `RefreshKind`, a closed four-case
-    /// enum. Every chain hop is guarded by `!paid.contains(kind)` and inserts
-    /// `kind` before recursing, so `paid` grows strictly on each hop and can
-    /// never exceed four entries. An evaluation therefore performs **at most
-    /// one refresh round per kind — at most four in total — and then always
-    /// terminates in a non-refresh action**, whatever the machine says and
-    /// whatever the world looks like. Termination does not depend on any read
-    /// succeeding, on any row changing, or on the mission being well-behaved;
-    /// it is a property of the recursion alone. (Today's machines chain at
-    /// most two: `RelayRun.acquire`'s devices → footprint.)
+    /// **The bound:** `paid` grows strictly on every guarded hop over a closed
+    /// four-case enum, so an evaluation performs at most one refresh round per kind
+    /// — four in total — and always terminates in a non-refresh action. This
+    /// depends on no read succeeding and no mission being well-behaved.
     private func reAsk(
         _ machine: any MissionStepMachine,
         _ directive: Directive,

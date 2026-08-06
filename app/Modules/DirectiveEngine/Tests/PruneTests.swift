@@ -2,29 +2,13 @@
 //  PruneTests.swift
 //  Replicould — DirectiveEngine
 //
-//  Task 21: the path-union & prune partition — grow's computation read
-//  inversely. Every world below is built by `prunableWorld`, whose mesh is
-//  DERIVED from its relay device rows, so no test can assert against a mesh
-//  production could not produce.
-//
-//  Two structural facts decide almost every case here, and both are worth
-//  holding in mind while reading:
-//
-//  1. The union is rooted at the ANCHOR (the hub's system), not at "the mesh"
-//     — a deployed relay is a free INTERIOR node on the way out from the
-//     anchor, never a source. Rooting at the whole mesh (which is what
-//     `MeshGraph.reach` does for grow) makes every relay a zero-cost source
-//     that is then filtered out of `Chain.waypoints`, so no relay could ever
-//     land on the union and every one of them would read as reclaimable. See
-//     `PrunePredicate.swift`'s header.
-//  2. Because an existing relay is free and a new one costs a relay, any path
-//     that USES the existing mesh is strictly cheaper than one that re-plants
-//     around it. Exact ties are therefore only ever between two all-free
-//     paths — two parallel existing chains — where one really is redundant;
-//     `equalCostAlternativeChainsPinOneCompleteServingChain` pins that.
-//
-//  Geometry: `MeshGraph`'s hop range is 7.5 ly, so a 7 ly gap is one hop and
-//  a 13–14 ly gap is not.
+//  The path-union & prune partition — grow's computation read inversely. Worlds
+//  are built by `prunableWorld`, whose mesh is DERIVED from its relay rows, so no
+//  test can assert against a mesh production could not produce. Two facts decide
+//  most cases: the union is rooted at the ANCHOR, not the mesh (a deployed relay
+//  is a free interior node, never a source); and since an existing relay is free,
+//  any path using the mesh beats one re-planting around it, so exact ties only
+//  arise between two all-free chains. Hop range is 7.5 ly.
 //
 
 import Foundation
@@ -35,16 +19,10 @@ import UniverseModels
 
 @Suite("Prune predicate (the path-union, read inversely)")
 struct PruneTests {
-    /// Load-bearing. Live salvage at T is only commandable because the relay
-    /// at W bridges the 14 ly the anchor cannot span alone, so W is on the
-    /// anchor→T path and must be pinned.
-    ///
-    /// T already HOLDS a relay (it is reached value, not grow-wanted), which
-    /// is what makes this the sharpest case in the suite: grow's own
-    /// `reach` deliberately reports nothing at all for an already-meshed
-    /// target, so a union read off grow's chains is empty here and would
-    /// call every relay in the chain reclaimable — stranding the salvage
-    /// behind the very relay it reclaimed.
+    /// Live salvage at T is commandable only because W bridges 14 ly the anchor
+    /// cannot span. T already HOLDS a relay, which is what sharpens this: grow's
+    /// `reach` reports nothing for an already-meshed target, so a union read off
+    /// grow's chains would call the whole chain reclaimable and strand the salvage.
     @Test func loadBearingRelayIsPinned() {
         let positions: [String: Position] = [
             "SOL": .init(x: 0, y: 0, z: 0),
@@ -59,21 +37,15 @@ struct PruneTests {
         let analysis = PrunePredicate.analyse(view: world, graph: MeshGraph(positions: positions))
         #expect(analysis.pinned == ["REL_SOL", "REL_W", "REL_T"])
         #expect(analysis.reclaimable.isEmpty)
-        // Pinned-by-judgement, and this is the ONLY thing that says so: the
-        // partition itself is byte-identical to what a decline returns.
+        // Pinned by JUDGEMENT, and this is the only line that says so — the
+        // partition is byte-identical to what a decline returns.
         #expect(analysis.declined == nil)
     }
 
-    /// The thrash guard. W was planted this tick as the first hop toward V,
-    /// which still holds live salvage and is still unmeshed — so W lies on
-    /// the cheapest anchor→V path and is pinned BY CONSTRUCTION.
-    ///
-    /// Not a coincidence of this geometry: planting W makes every path
-    /// through W exactly one relay cheaper while leaving every path that
-    /// avoids W untouched, so the through-W path is STRICTLY cheapest and no
-    /// tiebreak can drop it. A fresh hop can therefore never read as useless,
-    /// which is what makes plant-then-immediately-reclaim structurally
-    /// impossible rather than merely unlikely.
+    /// The thrash guard. Planting W makes every path through W one relay cheaper
+    /// while leaving paths avoiding it untouched, so the through-W path is STRICTLY
+    /// cheapest and no tiebreak can drop it — which makes
+    /// plant-then-immediately-reclaim structurally impossible, not merely unlikely.
     @Test func brandNewHopTowardUnreachedValueIsPinnedByConstruction() {
         let positions: [String: Position] = [
             "SOL": .init(x: 0, y: 0, z: 0),
@@ -90,16 +62,10 @@ struct PruneTests {
         #expect(analysis.reclaimable.isEmpty)
     }
 
-    /// A relay already standing is not made useless by the existence of a
-    /// shorter route that would have to be BUILT. `AA` offers a 12 ly path to
-    /// the salvage at V against W's 13.4, and would win on distance — but
-    /// taking it means planting a relay, and the union costs an existing
-    /// relay at nothing. So the union runs through W, and W stays pinned.
-    ///
-    /// This is the predicate-level half of `MeshGraph`'s
-    /// `freeRouteBeatsAShorterRouteThatMustPlant`, and it is what stops prune
-    /// from recommending the brain tear down a working chain to rebuild a
-    /// marginally tidier one — the graph-shaped form of thrash.
+    /// A standing relay is not made useless by a shorter route that must be BUILT.
+    /// `AA` offers 12 ly against W's 13.4 and wins on distance, but taking it means
+    /// planting. This is what stops prune recommending the brain tear down a
+    /// working chain to rebuild a marginally tidier one.
     @Test func standingRelayOutranksACheaperRouteThatWouldHaveToBePlanted() {
         let positions: [String: Position] = [
             "SOL": .init(x: 0, y: 0, z: 0),
@@ -117,15 +83,9 @@ struct PruneTests {
         #expect(analysis.reclaimable.isEmpty)
     }
 
-    /// Durable uselessness. The SAME world as the thrash-guard case above,
-    /// with one variable changed: V's salvage has depleted, so V drops out of
-    /// the live-value set. Nothing else routes through W, it falls off the
-    /// union, and it becomes reclaimable — carrying its system, which is what
-    /// a later task's nearest-source search needs.
-    ///
-    /// Depletion is sticky (`SiteAssay.depleted` never un-sets and
-    /// `WorldView.salvageUnits` excludes depleted sites), so this is a
-    /// durable transition, not a flicker.
+    /// The thrash-guard world with one variable changed: V's salvage depleted, so
+    /// V drops out of the live-value set and W falls off the union. Depletion is
+    /// sticky, so this is a durable transition rather than a flicker.
     @Test func durablyUselessRelayIsReclaimable() {
         let positions: [String: Position] = [
             "SOL": .init(x: 0, y: 0, z: 0),
@@ -139,20 +99,15 @@ struct PruneTests {
         )
         let analysis = PrunePredicate.analyse(view: world, graph: MeshGraph(positions: positions))
         #expect(analysis.reclaimable == [ReclaimableRelay(deviceCode: "REL_W", system: "W")])
-        // The anchor's own relay is never reclaimable, even with no value left
-        // to serve: every anchor→target path begins there, so reclaiming it
-        // would cut the mesh from the replicant that authorises it.
+        // The anchor's own relay is never reclaimable even with nothing left to
+        // serve — every path begins there, so reclaiming it cuts the mesh from the
+        // replicant that authorises it.
         #expect(analysis.pinned == ["REL_SOL"])
     }
 
-    /// A mine belt never depletes, so its system stays a live-value target
-    /// forever and the relay standing in it can never fall off the union.
-    ///
-    /// The variable is ISOLATED: `MINE` and `DEAD` are the same shape — both
-    /// meshed leaves exactly 7 ly off the anchor, neither on the way to
-    /// anything else, adjacent to nothing but SOL. The only difference is
-    /// that MINE holds a rich belt. If the predicate ignored belts (or pinned
-    /// leaves for some unrelated reason) the two would come out the same way.
+    /// A mine belt never depletes, so its relay can never fall off the union. The
+    /// variable is ISOLATED: `MINE` and `DEAD` are the same shape and differ only
+    /// in the belt, so a predicate ignoring belts returns them identically.
     @Test func perpetualMineBeltRelayIsNeverPrunable() {
         let positions: [String: Position] = [
             "SOL": .init(x: 0, y: 0, z: 0),
@@ -192,31 +147,15 @@ struct PruneTests {
         #expect(analysis.reclaimable == [ReclaimableRelay(deviceCode: "REL_DEAD", system: "DEAD")])
     }
 
-    /// The equal-cost tie carried forward from the Dijkstra task's review: two
-    /// chains of the same cost reach T, `reach`'s total order picks exactly
-    /// one, and a relay on the road not taken lies on no returned path.
+    /// Two equal-cost chains reach T and the tiebreak pins ONE COMPLETE chain, so
+    /// the loser's reclamation cannot strand T — the pinned set is by construction
+    /// a connected subgraph still serving every live target. That does NOT license
+    /// reclaiming the whole complement at once: taking a nearer reclaimable relay
+    /// first can remove the authority needed to reach a farther one.
     ///
-    /// It resolves, and the reason is worth stating precisely. Because an
-    /// existing relay is free to traverse while a new one costs a relay, an
-    /// exact tie can only ever arise between two ALL-EXISTING chains — one of
-    /// which is genuinely redundant. The tiebreak then pins ONE COMPLETE
-    /// chain (SOL→AWEST→T here), so the loser's reclamation cannot strand T:
-    /// the pinned set is by construction a connected subgraph that still
-    /// serves every live target.
-    ///
-    /// That property is about SERVING THE TARGETS, and it does not license
-    /// reclaiming the whole complement in one go: a reclaim is itself an
-    /// operation on a relay, and taking a nearer reclaimable relay first can
-    /// remove the command authority needed to reach a farther one. Sequencing
-    /// reclaims is the reclaim task's problem; the partition only promises
-    /// that nothing on the pinned side is ever needed by nothing.
-    ///
-    /// Proven geometry-independently, the same way `MeshGraphReachTests`
-    /// proves `reach`'s own tiebreak: the two positions are mirror images
-    /// about the SOL→T axis (identical distances to the digit), and the run
-    /// is repeated with the designations SWAPPED between them. "AWEST" wins
-    /// both times, which isolates designation — not position, not dictionary
-    /// order — as the deciding factor.
+    /// Proven geometry-independently: the two positions are mirror images about the
+    /// SOL→T axis and the run repeats with the designations SWAPPED, so designation
+    /// rather than position or dictionary order is isolated as the decider.
     @Test func equalCostAlternativeChainsPinOneCompleteServingChain() {
         for (west, east) in [("AWEST", "ZEAST"), ("ZEAST", "AWEST")] {
             let positions: [String: Position] = [
@@ -293,22 +232,11 @@ struct PruneTests {
         #expect(analysis.declined == .censusIncomplete(systems: ["SOL"]))
     }
 
-    /// A census hole ANYWHERE in the mesh stops the whole judgement, not just
-    /// the judgement of the unplaceable relay.
-    ///
-    /// The union can only contain systems the graph can place, so a missing
-    /// census row makes a system invisible to the search — and, worse, breaks
-    /// every path that would have run THROUGH it, offering up load-bearing
-    /// relays standing behind the hole. The `stars` census really does lag
-    /// (it repopulates after a reset and trails `systemDetails`), so this is
-    /// a live state.
-    ///
-    /// Isolated to one variable against `perpetualMineBeltRelayIsNeverPrunable`
-    /// — the identical world, in which REL_DEAD is reclaimable — with MINE's
-    /// census row removed and MINE still marked surveyed, so the flip can only
-    /// be the census hole and not the unknown-value clause. Note MINE is not
-    /// the relay whose verdict changes: DEAD is placeable and still stops
-    /// being offered.
+    /// A census hole ANYWHERE stops the whole judgement, not just that of the
+    /// unplaceable relay: a missing row breaks every path that would have run
+    /// through it, offering up load-bearing relays behind the hole. Isolated
+    /// against `perpetualMineBeltRelayIsNeverPrunable` — same world, MINE's census
+    /// row removed, MINE still surveyed, and DEAD is the verdict that flips.
     @Test func censusHoleAnywhereInTheMeshPinsEveryRelay() {
         let positions: [String: Position] = [
             "SOL": .init(x: 0, y: 0, z: 0),
@@ -327,22 +255,12 @@ struct PruneTests {
         #expect(analysis.declined == .censusIncomplete(systems: ["MINE"]))
     }
 
-    /// An in-progress chain toward value the census has not paged in yet must
-    /// not be offered up — the thrash guard failing under exactly the lag the
-    /// coverage precondition exists for.
-    ///
-    /// The target sources are all independent of the `stars` table (salvage
-    /// from `SiteAssay`, belts from `SystemDetail`, events from
-    /// `LocationEvent`), so "we know V holds salvage but have no census row
-    /// for it" is a reachable state. An unplaceable target drops silently out
-    /// of `pathUnion`, taking with it the only pin W had — and W is a relay
-    /// the brain planted THIS tick, so it would be planted and reclaimed in
-    /// consecutive ticks.
-    ///
-    /// Isolated against `brandNewHopTowardUnreachedValueIsPinnedByConstruction`
-    /// — the identical world WITH V's census row, where REL_W is pinned by
-    /// judgement (`declined == nil`). Same verdict on REL_W here, reached the
-    /// other way, and `declined` is what tells the two apart.
+    /// The value sources are all independent of the `stars` table, so "we know V
+    /// holds salvage but have no census row for it" is reachable. An unplaceable
+    /// target drops silently out of `pathUnion`, taking W's only pin with it — and
+    /// W was planted THIS tick, so it would be planted and reclaimed consecutively.
+    /// Isolated against `brandNewHopToward…`, where `declined == nil` tells apart
+    /// the same verdict reached by judgement rather than by refusal.
     @Test func inProgressChainTowardUnplaceableValueIsNotOfferedUp() {
         let positions: [String: Position] = [
             "SOL": .init(x: 0, y: 0, z: 0),
@@ -360,18 +278,10 @@ struct PruneTests {
         #expect(analysis.declined == .censusIncomplete(systems: ["V"]))
     }
 
-    /// A system holding our own deployed hardware is pinned even when its
-    /// value is gone.
-    ///
-    /// The scenario is ordinary: the last salvage assay at `WORKING` depletes
-    /// while the vessel and its drones are still on station and a Haul Run is
-    /// still draining the pile. Value-only targeting drops the system that
-    /// same tick and offers up the relay that makes the vessel commandable at
-    /// all — and per the FTL authority rule, a device whose system leaves the
-    /// mesh subgraph cannot be recovered, so this strands hardware rather
-    /// than merely losing value.
-    ///
-    /// `EMPTY` is the control: identical in every respect, no vessel.
+    /// A system holding our own deployed hardware is pinned even with its value
+    /// gone: the assay at `WORKING` depletes while the vessel is still on station,
+    /// and value-only targeting would offer up the relay that makes it commandable
+    /// at all — stranding hardware, not merely losing value. `EMPTY` is the control.
     @Test func systemHoldingOurOwnDeployedDevicesIsPinned() {
         let positions: [String: Position] = [
             "SOL": .init(x: 0, y: 0, z: 0),
@@ -389,15 +299,10 @@ struct PruneTests {
         #expect(analysis.reclaimable == [ReclaimableRelay(deviceCode: "REL_EMPTY", system: "EMPTY")])
     }
 
-    /// A meshed system nobody has surveyed holds UNKNOWN value, and unknown
-    /// reads as pinned.
-    ///
-    /// Belt richness — the one value signal that never depletes — is only
-    /// legible after a full system scan, and `beltsBySystem` cannot tell
-    /// "scanned, holds no belt" from "never scanned": both are simply absent.
-    /// `SURVEYED` is the control that proves the distinction is really being
-    /// drawn — same shape, same lack of any known value, but it HAS been
-    /// looked at, so its emptiness is a fact rather than an absence of one.
+    /// Unknown value reads as pinned. Belt richness is legible only after a full
+    /// scan, and `beltsBySystem` cannot tell "scanned, no belt" from "never
+    /// scanned". `SURVEYED` is the control: same shape, same lack of known value,
+    /// but looked at — so its emptiness is a fact rather than an absence of one.
     @Test func meshedSystemNobodyHasSurveyedIsPinned() {
         let positions: [String: Position] = [
             "SOL": .init(x: 0, y: 0, z: 0),
@@ -464,18 +369,9 @@ struct PruneTests {
     // MARK: - The census precondition, enforced against the GRAPH
 
     /// The precondition is only worth anything if it validates the census the
-    /// SEARCH reads, and until Task 23 it did not: it filtered
-    /// `view.starPositions` while `search`/`backtrack` read `MeshGraph`'s own
-    /// positions. The contract "build the graph from `view.starPositions`" was
-    /// documented and unenforced, so a caller handing over a filtered or older
-    /// graph passed the precondition vacuously — and every system the graph
-    /// could not place then dropped silently out of the union, taking with it
-    /// the pins it was the sole source of.
-    ///
-    /// This is that exact divergence: the view can place `W`, the graph cannot.
-    /// Read off the graph, `W` is unplaceable, the anchor cannot span the 14 ly
-    /// to `T` at all, the union collapses to the anchor, and both `REL_W` and
-    /// `REL_T` read reclaimable — with live salvage sitting behind them. The
+    /// SEARCH reads. Here the view can place `W` and the graph cannot: read off the
+    /// graph the anchor cannot span 14 ly to `T`, the union collapses to the
+    /// anchor, and both relays read reclaimable with live salvage behind them. The
     /// predicate must refuse to judge instead.
     @Test func aGraphThatCannotPlaceAMeshSystemDeclinesRatherThanShrinkingTheUnion() {
         let positions: [String: Position] = [
@@ -500,21 +396,11 @@ struct PruneTests {
 
     // MARK: - The anchor is authority, not just the printer
 
-    /// **The print hub is not where authority comes from — a replicant is.**
-    /// The anchor is the hub's system because the design asserts the two are
-    /// co-located (`brain-resource-hub-model`), and nothing enforces that. Here
-    /// they are not: the hub sits at `HUBSYS`, the replicant three systems away
-    /// at `REPSYS`, and the only value is at `VALUE` in the opposite direction.
-    ///
-    /// Judged on the hub→value path alone, the two relays on the replicant's
-    /// road (`REL_MID`, `REL_REP`) lie on no anchor→target path and read
-    /// reclaimable — and reclaiming them severs the mesh from the one
-    /// stationary replicant that makes ANY of it commandable
-    /// (`ftl-authority-rule`, rule 2). Total authority loss, dressed up as
-    /// tidying.
-    ///
-    /// So every meshed system holding a replicant is a served system in its own
-    /// right, and the road to it is pinned like any other.
+    /// **The print hub is not where authority comes from — a replicant is.** The
+    /// anchor is the hub's system on the assumption the two are co-located, which
+    /// nothing enforces. Here they are not, and judged on the hub→value path alone
+    /// the relays on the replicant's road read reclaimable — severing the mesh from
+    /// the one stationary replicant that makes any of it commandable.
     @Test func relaysOnTheRoadToAReplicantAwayFromTheHubArePinned() {
         let positions: [String: Position] = [
             "HUBSYS": .init(x: 0, y: 0, z: 0),
@@ -564,16 +450,11 @@ struct PruneTests {
         #expect(analysis.reclaimable == [ReclaimableRelay(deviceCode: "REL_SPUR", system: "SPUR")])
     }
 
-    /// An OFF-MESH replicant adds no target. It is not an oversight: a system
-    /// holding no relay is on nobody's mesh road — authority there is rule (1),
-    /// a replicant present, which no relay grants and none can take away — and
-    /// admitting it would force the census precondition to place every roaming
-    /// replicant's system or decline forever.
-    ///
-    /// `ROAMING` sits 14 ly out — reachable only THROUGH `SPUR` — so the test
-    /// discriminates: treat every replicant system as a target and the road to
-    /// it pins `REL_SPUR`; treat only the meshed ones and `REL_SPUR` stays
-    /// spare, which is the answer.
+    /// An OFF-MESH replicant adds no target: authority there is a replicant
+    /// present, which no relay grants or takes away, and admitting it would force
+    /// the census precondition to place every roaming replicant or decline forever.
+    /// `ROAMING` sits 14 ly out, reachable only THROUGH `SPUR`, so the test
+    /// discriminates — treat every replicant system as a target and `REL_SPUR` pins.
     @Test func anOffMeshReplicantPinsNothing() {
         let positions: [String: Position] = [
             "SOL": .init(x: 0, y: 0, z: 0),

@@ -2,55 +2,13 @@
 //  BrainDegradationTests.swift
 //  Replicould — DirectiveEngine
 //
-//  Task 26: the evidence for the last two robustness clauses.
-//
-//    • **Clause 6 — safe degradation.** A transient failure DEFERS (and a
-//      deferred tick writes nothing and spends nothing); an UNKNOWN world is
-//      left alone (no value data ⇒ no target); a PERSISTENT failure retries on
-//      a real backoff and then ESCALATES. And the pair that must never look
-//      alike: a brain with nothing to do reports `.idle` and surfaces nothing,
-//      while a brain that is stuck reports `.stall` and leaves a
-//      `.needsAttention` row for a human.
-//    • **Clause 7 — bounded blast radius.** The worst case of any single
-//      decision is a wasted trip or an operator-resolvable stall. Grow spend is
-//      bounded by the `R` reserve rail; a reclaim never strands live value; and
-//      every write the brain makes is additive.
-//
-//  **The two rails Task 25's lifecycle gate traverses but never LOADS, loaded
-//  here.** That gate seeds its world with 999,999 units, so
-//  `RelayRun.printStockIsShort` permits every print; and nothing in it races,
-//  so `Brain.commitBlocker` never refuses anything. Both could be deleted and
-//  that suite would stay green. This file is where they are made to fire:
-//
-//    1. `theReserveRailVetoesThePrintAndTheBrainIdlesInsteadOfThrashing` drives
-//       a genuinely below-floor world through the real `RelayRun` and proves the
-//       print is never dispatched — then keeps driving for fifty virtual
-//       minutes to prove the refusal costs a bounded, countable number of API
-//       reads rather than one per tick.
-//    2. `aRacingClaimOnTheSameSpareRelayIsRefusedAtCommitTime` loads
-//       `commitBlocker`'s THIRD guard — `inFlightSources` — which had no test
-//       anywhere in the package before this file: the two operator-race tests
-//       in `BrainConfirmFreshTests` cover the carrier and the target arms only.
-//
-//  **Fake seam placement matches Task 25's**: `commandClient` (the wire),
-//  `locationsClient.footprint` (the `GET /v1/locations` read the rail consults)
-//  and `deviceRefresher` (the authoritative device read) are scripted; the real
-//  `Brain`, the real `DirectiveEngineCore` loop bodies, the REGISTERED
-//  `RelayRun` from `MissionRegistry.machines`, the real `DirectiveExecutor`,
-//  the real `CommandGovernor.liveValue` and the real
-//  `DirectiveResolutionClient.liveValue.retry` all run.
-//
-//  **On `uuid`**: bound ONCE per test and threaded into every tick.
-//  `UUIDGenerator.incrementing` is a computed property, so re-entering
-//  `withDependencies` per tick would mint the same id every time and make every
-//  row-count assertion here incapable of failing (the second insert would
-//  collide on the primary key and degrade to `.idle` whatever the gate did).
-//
-//  **On driving ticks**: directly, one virtual step per iteration, exactly as
-//  `BrainGrowLifecycleE2ETests` does and for the reason `BrainLoopTests`
-//  records empirically — advancing a `TestClock` past the loop's real database
-//  read is not reproducible. A `TestClock` is installed regardless so nothing
-//  can sleep for real.
+//  Loads the two rails the lifecycle e2e traverses but never fires: the reserve
+//  rail (that suite seeds 999,999 units, so every print is permitted) and
+//  `commitBlocker`'s `inFlightSources` arm (nothing there races). Only the wire,
+//  the footprint read and the device refresher are faked; `Brain`, `RelayRun`,
+//  `DirectiveExecutor` and the governor are real. `uuid` is bound ONCE per test —
+//  `incrementing` is a computed property, so re-binding per tick mints the same id
+//  and makes every row-count assertion incapable of failing.
 //
 
 import API
@@ -70,38 +28,25 @@ import Utils
 
 // MARK: - The world
 
-/// The instant every world here is seeded AT. Device rows are stamped with it
-/// rather than the epoch: `RelayRun.acquire` refuses to trust a hub row older
-/// than `hubFreshness` (5 min), so an epoch-stamped fleet would spend every
+/// Rows are stamped with this rather than the epoch: `RelayRun.acquire` refuses a
+/// hub row older than `hubFreshness`, so an epoch-stamped fleet would spend every
 /// test in a refresh-then-stall loop instead of reaching the rail under test.
 private let liftoff = Date(timeIntervalSince1970: 2_000_000)
 
-/// Where the autofactory and the carrier stand — inside the meshed `SOL`
-/// system, which is what makes `WorldView.hubLocation` non-nil.
+/// Inside the meshed `SOL` system, which makes `WorldView.hubLocation` non-nil.
 private let hubLocation = "SOL-3"
 
-/// The grow target these worlds rank first.
 private let target = "VEGA"
 
-/// A stock reading comfortably BELOW `BrainCeiling.aggregateSpendFloor`
-/// (35,078). Not zero, and that is the point: the rail must veto on a world
-/// that plainly holds resources — enough for ninety-odd relays at the 370-unit
-/// bill — because what it protects is the RESERVE, not the last unit. A
-/// zero-stock fixture would pass against a rail that only refused to spend
-/// money it did not have.
+/// Below `aggregateSpendFloor` but deliberately NOT zero — the rail must veto on a
+/// world plainly holding resources, because what it protects is the reserve rather
+/// than the last unit.
 private let belowFloorStock = 34_000
 
-/// A stock reading above the floor, for the positive control.
 private let aboveFloorStock = 200_000
 
-/// The smallest world that ranks one grow candidate: `SOL` meshed by one live
-/// relay, an autofactory and a HEAVEN vessel standing together at `SOL-3`, a
-/// census row carrying `hubStock`, and one salvage system 5 ly out.
-///
-/// `salvage` is a parameter because the UNKNOWN-value clause needs the same
-/// world with the value data removed and nothing else changed — two worlds that
-/// differ in one fact are what makes "no value data yields no target" a
-/// statement about the value data.
+/// The smallest world ranking one grow candidate. `salvage` is a parameter so the
+/// unknown-value case can remove the value data and change nothing else.
 private func seedDegradationWorld(
     _ db: Database,
     hubStock: Int = belowFloorStock,
@@ -146,15 +91,9 @@ private struct SeamCommand: Equatable, Sendable, CustomStringConvertible {
     var description: String { "\(verb) → \(deviceCode)" }
 }
 
-/// The command wire, recording only.
-///
-/// Every test in this file is about something the brain or the mission
-/// DECLINED to do, so the assertion that matters is almost always that this
-/// actor recorded nothing. It sits UNDER `CommandGovernor.liveValue` — the
-/// budget gate and the per-device in-flight claim both run before anything here
-/// does — and it ACCEPTS whatever reaches it, so a rail that had been deleted
-/// would show up as a recorded command rather than as a rejection the mission
-/// might have swallowed.
+/// The command wire, recording only. Sits UNDER `CommandGovernor.liveValue` and
+/// ACCEPTS whatever reaches it, so a deleted rail shows up as a recorded command
+/// rather than as a rejection the mission might have swallowed.
 private actor RecordingSeam {
     private(set) var commands: [SeamCommand] = []
     private var opCounter = 0
@@ -174,19 +113,11 @@ private actor RecordingSeam {
     }
 }
 
-/// A `deviceRefresher` that answers from the local fleet table AND writes the
-/// answer back with a fresh `updatedAt` — which is what `PollCoordinator` does
-/// in production, and what `BrainTestSupport`'s `confirmingRefresher`
-/// deliberately does not.
-///
-/// The difference matters here and only here: these tests run for tens of
-/// virtual minutes, and `RelayRun.acquire` will not trust a hub row older than
-/// `hubFreshness` (5 min). With a stand-in that never stamps the row, every
-/// retry would stall `.unreachableDevice` on a perfectly reachable hub and the
-/// reserve rail — the thing under test — would never be reached at all.
-///
-/// `answering` receives the row the database holds and returns what the SERVER
-/// says about it; nil is a read that did not land.
+/// Answers from the local fleet table AND writes back a fresh `updatedAt`, as
+/// `PollCoordinator` does and `confirmingRefresher` deliberately does not. These
+/// tests run for tens of virtual minutes, so without the stamp every retry would
+/// stall `.unreachableDevice` on a reachable hub and never reach the rail under
+/// test. `answering` returns what the SERVER says; nil is a read that did not land.
 private func reconcilingRefresher(
     _ database: any DatabaseWriter,
     reads: LockIsolated<[ConfirmRead]> = LockIsolated([]),
@@ -211,20 +142,11 @@ private func reconcilingRefresher(
     }
 }
 
-/// A resolution client that records what the brain drove, performs the REAL
-/// `retry`, and makes the three operator-only verbs impossible to drive
-/// quietly.
-///
-/// `retry` calls `liveValue` rather than merely recording, for the reason
-/// `BrainStallResponseTests` states: the retry budget is derived from the
-/// `.resolved` timeline entries `retry` writes, so a stub that only recorded
-/// would leave the budget reading zero forever and every "then escalates"
-/// assertion would pass vacuously.
-///
-/// `skipTarget`/`pause`/`resume` stay `unimplemented` — they are the operator's
-/// verbs, permanently, and a degrading brain reaching for one must fail loudly
-/// wherever it happened rather than be caught by an assertion someone
-/// remembered to write.
+/// Records what the brain drove and performs the REAL `retry` — the budget is
+/// derived from the `.resolved` entries `retry` writes, so a stub that only
+/// recorded would leave it reading zero and every "then escalates" assertion would
+/// pass vacuously. `skipTarget`/`pause`/`resume` stay `unimplemented` so a brain
+/// reaching for an operator verb fails loudly where it happened.
 private struct Resolutions: Sendable {
     let retried = LockIsolated<[String]>([])
     let cancelled = LockIsolated<[String]>([])
@@ -260,24 +182,19 @@ private struct Tick: Sendable {
     let attentionReason: DirectiveAttentionReason?
 }
 
-/// A healthy actions budget, so the REAL `CommandGovernor` lets commands
-/// through. `GameClient.testValue` reports `remaining: 0`, which the governor
-/// correctly reads as "defer everything" — that is the governor working, not a
-/// fixture to route around, so it is fed a real budget instead of replaced.
-/// Every "nothing was dispatched" assertion in this file would otherwise be
-/// satisfied by the governor rather than by the rail under test.
+/// A healthy actions budget, so the REAL governor lets commands through.
+/// `GameClient.testValue` reports `remaining: 0`, which the governor correctly
+/// reads as "defer everything" — leaving it would satisfy every "nothing was
+/// dispatched" assertion here by the governor rather than by the rail under test.
 private func fundedGameClient() -> GameClient {
     var client = GameClient.testValue
     client.budget = { _ in RateLimitGovernor.Snapshot(limit: 60, remaining: 60, resetAt: nil) }
     return client
 }
 
-/// Drive `count` virtual ticks of BOTH engine loops against the scripted world:
-/// the brain plans (`tickBrain`), then every RUNNING directive gets one
-/// executor evaluation (`evaluateOnce`) — the two loops `start()` runs side by
-/// side in production. The running set is re-read after the brain plans, so a
-/// run launched (or retried back to `.running`) on this tick is evaluated on
-/// this tick, exactly as the supervisor would pick it up.
+/// Drive `count` virtual ticks of BOTH engine loops: the brain plans, then every
+/// running directive gets one executor evaluation. The running set is re-read
+/// after the brain plans, so a run launched on this tick is evaluated on it.
 private func drive(
     _ database: any DatabaseWriter,
     core: DirectiveEngineCore,
@@ -373,48 +290,20 @@ private func tickReport(
 
 // MARK: - Clause 7: the reserve rail
 
-/// **On concurrency, and what `.serialized` does and does not buy.** These
-/// suites install `CommandGovernorClient.liveValue` — ONE process-shared
-/// governor whose in-flight claim is a bare `Set<String>` keyed on device code
-/// (`CommandGovernor.inFlight`). A concurrent dispatch on the same code gets
-/// `.deferred(.commandInFlight)`, which for a file whose assertions are mostly
-/// "nothing reached the wire" is the dangerous direction: it would make them
-/// pass for entirely the wrong reason.
-///
-/// `.serialized` orders tests WITHIN a suite. It does not order these three
-/// suites against each other, and it certainly does not order them against
-/// `BrainGrowLifecycleE2ETests`, which installs the same live governor. So it
-/// is not what closes the hole, and an earlier draft of this comment claimed it
-/// was. What closes it is that **every device code in this file is unique to
-/// this file** — `HUBDEG`, `VDEG1`, `VDEG2`, `RELDEG_1`, `RELDEG_S`, `RDEG_A`,
-/// none of which appears in any other suite — so no other test can hold a claim
-/// on a code these tests dispatch at. `.serialized` is kept for the narrower
-/// property it does provide: a stable order within each suite.
+/// The live governor's in-flight claim is keyed on device code, and a concurrent
+/// dispatch on the same code defers — which would make this file's "nothing
+/// reached the wire" assertions pass for the wrong reason. What prevents it is
+/// that **every device code here is unique to this file**; `.serialized` only
+/// orders tests within a suite, not across them.
 @Suite("Brain — bounded blast radius: the reserve rail", .serialized)
 struct BrainReserveRailDegradationTests {
 
-    /// **The headline, and the rail Task 25's lifecycle gate never loads.**
-    ///
-    /// Same world, same real stack, one fact changed: the hub holds 34,000 units
-    /// against `BrainCeiling.aggregateSpendFloor`'s 35,078. The brain still
-    /// ranks VEGA and still launches a Relay Run — it is a selector, and the
-    /// rail lives at the ENACTMENT layer where the spend actually is — and then
-    /// `RelayRun.acquire` refuses to dispatch the print.
-    ///
-    /// Four separate things are asserted, and each of them can fail on its own:
-    ///
-    ///   1. **The print never went out.** Not "the run stalled" — the actual
-    ///      command list, empty. This is the assertion that fails outright if
-    ///      the rail is disarmed.
-    ///   2. **No thrash.** ONE run for fifty virtual minutes of ticks, and the
-    ///      brain's auto-retry spent exactly its budget (3) rather than one per
-    ///      tick.
-    ///   3. **No budget burn.** The authoritative `.high` reads and the census
-    ///      refreshes are both counted exactly. A rail that re-fired every tick
-    ///      would show 600 of them.
-    ///   4. **It escalates.** The run ends `.needsAttention` carrying
-    ///      `.printStockShort`, and the brain's own decision ends `.stall` —
-    ///      surfaced AND escalated, which is what a human needs to see.
+    /// One fact changed against the lifecycle e2e: the hub holds 34,000 units
+    /// against a 35,078 floor. The brain still ranks VEGA and still launches — it
+    /// is a selector, and the rail lives at the ENACTMENT layer — and then
+    /// `acquire` refuses the print. Asserts four independently-failing things: the
+    /// command list is empty, one run for fifty virtual minutes, the live-API
+    /// counters are exact, and it ends escalated.
     @Test func theReserveRailVetoesThePrintAndTheBrainIdlesInsteadOfThrashing() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in try seedDegradationWorld(db, hubStock: belowFloorStock) }
@@ -425,10 +314,8 @@ struct BrainReserveRailDegradationTests {
         let resolutions = Resolutions()
         let uuid = UUIDGenerator.incrementing
 
-        // Fifty virtual minutes at the engine's own 5-second cadence. Long
-        // enough to cover the whole retry episode — attempts land at roughly
-        // t, t+15 min and t+30 min (`Brain.retryInterval`), with escalation
-        // following the third — and long enough that a per-tick loop would be
+        // Fifty virtual minutes at the engine's 5s cadence — long enough to cover
+        // the whole retry episode (t, t+15, t+30) and to make a per-tick loop
         // unmissable in the counts below.
         let ticks = await drive(
             database, core: core, seam: seam, uuid: uuid, reads: reads,
@@ -436,16 +323,15 @@ struct BrainReserveRailDegradationTests {
             storage: InMemoryStorage(), from: liftoff, step: 5, ticks: 600
         )
 
-        // 1. THE RAIL FIRED. No print — no command of any kind — reached the
-        //    wire, over six hundred ticks, with a healthy actions budget and a
-        //    seam that accepts everything.
+        // 1. THE RAIL FIRED — no command of any kind reached the wire, over six
+        //    hundred ticks, with a healthy budget and a seam accepting everything.
         #expect(
             await seam.commands.isEmpty,
             "the reserve rail vetoes BEFORE the dispatch: nothing may reach the wire"
         )
 
-        // 2. NO THRASH. One launch, however many ticks ran, and a retry count
-        //    that is the budget rather than the tick count.
+        // 2. NO THRASH. One launch, and a retry count that is the budget rather
+        //    than the tick count.
         let runs = try await relayRuns(database)
         #expect(runs.count == 1, "one launch for one target, and the stalled run keeps its carrier")
         let launched = try #require(runs.first)
@@ -455,35 +341,14 @@ struct BrainReserveRailDegradationTests {
         )
         #expect(resolutions.cancelled.value.isEmpty, "a resource shortage is not a reason to cancel a run")
 
-        // 3. NO BUDGET BURN. Both live-API counters, exactly — and the exact
-        //    figures are the evidence, not a ceiling somebody guessed at.
-        //
-        //    THREE authoritative reads and TWO census refreshes for fifty
-        //    virtual minutes of ticking. A rail that re-judged per tick would
-        //    show six hundred of each.
-        //
-        //    Both are LIST/VALUE equalities over the whole run, not ceilings:
-        //    a 601st read, a `.low` poll sneaking in, or a read of a device
-        //    nobody named all fail. And because they cover the whole run, the
-        //    ~450 ticks that follow the third retry's escalation are pinned
-        //    too — zero further reads, zero further commands, on a run that is
-        //    now permanently escalated. That tail is the actual proof that the
-        //    cost tracks the retry budget rather than the clock.
-        //
-        //    The `.high` reads are the brain's one confirm of the carrier at
-        //    launch, plus one hub read for each of the SECOND and THIRD
-        //    retries. The first retry buys nothing: it fires the moment the run
-        //    stalls (there is no `.resolved` entry to space it from), so it
-        //    re-enters `acquire` while the hub row and the census are both
-        //    still inside their own freshness windows — `hubFreshness` is 5 min
-        //    and `SalvageRun.relayPollInterval` 60 s, against a stall that
-        //    happened seconds ago. It re-judges the rows it already has and
-        //    vetoes again for free. The later two land 15 and 30 virtual
-        //    minutes out, past both windows, so each pays for exactly one hub
-        //    read and one census refresh before re-judging.
-        //
-        //    That is the shape a bounded degradation should have: the cost
-        //    tracks the RETRY BUDGET, never the clock.
+        // 3. NO BUDGET BURN. Three authoritative reads and two census refreshes
+        //    for fifty virtual minutes; a rail re-judging per tick shows six
+        //    hundred of each. LIST equalities over the WHOLE run, not ceilings, so
+        //    the ~450 escalated ticks at the tail are pinned to zero too — that
+        //    tail is the proof the cost tracks the retry budget, not the clock.
+        //    The reads are one carrier confirm at launch plus one hub read for the
+        //    2nd and 3rd retries; the 1st fires the moment the run stalls, inside
+        //    both freshness windows, so it re-judges the rows it has for free.
         #expect(
             reads.value == [ConfirmRead(deviceCode: "VDEG1", isHigh: true)]
                 + Array(
@@ -506,14 +371,9 @@ struct BrainReserveRailDegradationTests {
         #expect(last.report?.decision == .stall(.printStockShort))
     }
 
-    /// **The positive control, and the reason the test above cannot be passing
-    /// for an unrelated reason.** One fact changed — the hub census reads
-    /// 200,000 instead of 34,000 — and the same stack, over three ticks,
-    /// dispatches the print.
-    ///
-    /// Without this, "no command reached the wire" is equally satisfied by a
-    /// world where the brain never launched, the governor deferred everything,
-    /// or the seam was never wired up.
+    /// The positive control. Without it, "no command reached the wire" is equally
+    /// satisfied by a brain that never launched, a governor that deferred
+    /// everything, or a seam that was never wired up.
     @Test func aWorldAboveTheFloorPrintsWithTheIdenticalStack() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in try seedDegradationWorld(db, hubStock: aboveFloorStock) }
@@ -534,24 +394,12 @@ struct BrainReserveRailDegradationTests {
         #expect(run.attentionReason == nil, "nothing stalls on a funded world")
     }
 
-    /// The rail's veto, as the operator sees it in the why-view's feed: on the
-    /// same world the test above drove to a real veto, the brain's own report
-    /// reads BELOW FLOOR — so the card and the rail cannot tell an operator two
-    /// different stories about the same world.
-    ///
-    /// **This test does not drive the rail**, and its name says so: it reads the
-    /// MIRROR (`BrainLimits.hubStockStanding`) on a world the test above proved
-    /// the rail vetoes. The mirror↔rail agreement itself — every combination of
-    /// stock and age, including the exact `hubFreshness` boundary — is pinned
-    /// separately by `BrainCeilingTests.hubStockStandingAgreesWithTheRailItMirrors`.
-    /// What is added here is that the two are pointed at the same WORLD, which
-    /// neither of those tests establishes on its own.
-    ///
-    /// `BrainLimits.hubStockStanding` is a deliberate mirror of
-    /// `RelayRun.printStockIsShort` (they read different shapes and so cannot
-    /// share an implementation); `hubStockStandingAgreesWithTheRailItMirrors`
-    /// pins the two against each other, and this pins the mirror against a world
-    /// the rail really did veto.
+    /// **Does not drive the rail** — it reads the MIRROR
+    /// (`BrainLimits.hubStockStanding`) on the world the test above proved the rail
+    /// vetoes, so the card and the rail cannot tell two stories about one world.
+    /// The mirror↔rail agreement itself is pinned by
+    /// `BrainCeilingTests.hubStockStandingAgreesWithTheRailItMirrors`; what is
+    /// added here is that both are pointed at the same WORLD.
     @Test func theWhyViewFeedReadsBelowFloorOnTheWorldTheRailVetoes() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in try seedDegradationWorld(db, hubStock: belowFloorStock) }
@@ -574,38 +422,17 @@ struct BrainReserveRailDegradationTests {
 @Suite("Brain — bounded blast radius: commitments and writes", .serialized)
 struct BrainBlastRadiusTests {
 
-    /// **`Brain.commitBlocker`'s third guard, which had no test anywhere in this
-    /// package.** `BrainConfirmFreshTests` loads the carrier arm and the target
-    /// arm; the `inFlightSources` arm — "a relay another run is already fetching
-    /// is not offered twice" — was checked only on the SELECTION side
-    /// (`BrainReclaimSourcingTests.aSourceAnotherRunIsAlreadyFetchingIsNotSelectedTwice`),
-    /// never at commit time.
+    /// `commitBlocker`'s `inFlightSources` arm, previously checked only on the
+    /// SELECTION side. A second run claims `RDEG_A` after the confirm-read and
+    /// before the insert, driven off the `uuid` generator — the one deterministic
+    /// seam between them. The tick must DEFER wholesale rather than fall back to a
+    /// print.
     ///
-    /// The race is the one the guard is written for: the brain has ranked, has
-    /// chosen `RDEG_A` as its reclaim source, and has taken its `.high` confirm-read
-    /// — and a second Relay Run claiming `RDEG_A` lands before the insert opens.
-    /// The racing row is driven off the `uuid` generator, the one deterministic
-    /// seam between the confirm-read and the write transaction; `DatabaseWriter`
-    /// commits it there and then, so by the time the brain's own transaction
-    /// opens the collision is already on disk. Only a re-check taken INSIDE that
-    /// transaction can see it.
-    ///
-    /// Losing this race is the expensive one: two carriers converge on one
-    /// relay, the second finds it stowed aboard somebody else, and the mesh has
-    /// lost a node for one grow instead of two. The gate DEFERS the whole tick
-    /// rather than falling back to a print — its contract is to let the tick's
-    /// decision through or stop it, never to substitute a resource-spending one.
-    ///
-    /// **Scope, stated so nobody reads more into it.** This pins the guard's
-    /// LOGIC, not its PLACEMENT. The racing row commits at `uuid()`, which is
-    /// strictly before `database.write` opens, so a re-check hoisted just
-    /// outside the transaction would pass this test too. The in-transaction
-    /// placement — the thing `launch`'s doc argues for at length — is not
-    /// pinned here, and arguably cannot be pinned deterministically: it would
-    /// need a writer that interleaves INSIDE GRDB's serialized write queue,
-    /// which is precisely what that queue exists to prevent. The same limit
-    /// applies to `BrainConfirmFreshTests.anOperatorLaunchAfterTheConfirmReadIs`
-    /// `StillCaught`, which races the same seam for the carrier arm.
+    /// **Scope:** this pins the guard's LOGIC, not its PLACEMENT. The racing row
+    /// commits strictly before `database.write` opens, so a re-check hoisted just
+    /// outside the transaction would pass too — pinning the placement would need a
+    /// writer interleaving inside GRDB's serialized queue, which is what that
+    /// queue exists to prevent.
     @Test func aRacingClaimOnTheSameSpareRelayIsRefusedAtCommitTime() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in try seedReclaimableWorld(db) }
@@ -635,11 +462,8 @@ struct BrainBlastRadiusTests {
         )
     }
 
-    /// The positive control for the guard above: the identical world with no
-    /// racing claim launches, and sources itself from `RDEG_A`.
-    ///
-    /// Without it, "no second run was written" is equally satisfied by a world
-    /// in which the brain would never have reclaimed anything.
+    /// The positive control. Without it, "no second run was written" is equally
+    /// satisfied by a world where the brain would never have reclaimed anything.
     @Test func theSameWorldWithoutTheRaceReclaimsR_A() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in try seedReclaimableWorld(db) }
@@ -655,26 +479,14 @@ struct BrainBlastRadiusTests {
         #expect(report.prune?.reclaimed?.deviceCode == "RDEG_A")
     }
 
-    /// **Reclaim never strands live value, and the guard is the confirm-read.**
-    ///
-    /// The brain plans off a best-effort `WorldView`: here it names `RDEG_A` as a
-    /// spare relay to reclaim, on the strength of a device row that is a full
-    /// day old. By the time the run evaluates, the authoritative read says the
-    /// relay is no longer the deployed, `relaying` relay prune assessed —
-    /// somebody got there first.
-    ///
-    /// The run refuses. It does NOT `deactivate` on the stale row, and — the
-    /// more tempting mistake — it does not fall back to printing 370 units the
-    /// plan explicitly declined to spend. It stalls, which is exactly clause 7's
-    /// worst case: an operator-resolvable halt, with the mesh intact.
-    ///
-    /// The assertion is on the WIRE, not on the step: zero commands. A run that
-    /// deactivated a live relay on stale evidence would show one here.
+    /// Reclaim never strands live value, and the guard is the confirm-read. The
+    /// brain names `RDEG_A` off a day-old row; the authoritative read says somebody
+    /// got there first. The run must neither `deactivate` on the stale row nor fall
+    /// back to a print the plan declined — it stalls, mesh intact. The assertion is
+    /// on the WIRE, not the step: a run that acted on stale evidence shows a command.
     @Test func aStaleSourceRowNeverAuthorisesTearingARelayDown() async throws {
         let database = try GameDatabase.bootstrap()
-        // The source's row is stamped a DAY before the tick — far past
-        // `RelayRun.reclaimFreshness` (5 min), so nothing may be concluded from
-        // it without an authoritative read.
+        // Stamped a DAY before the tick, far past `reclaimFreshness`.
         try await database.write { db in
             try seedReclaimableWorld(db, sourceUpdatedAt: liftoff.addingTimeInterval(-86_400))
         }
@@ -778,20 +590,11 @@ struct BrainBlastRadiusTests {
 @Suite("Brain — safe degradation", .serialized)
 struct BrainSafeDegradationTests {
 
-    /// **Unknown is left alone.** The world is identical to the one that ranks
-    /// VEGA first — same star, same distance, same mesh, same hub, same free
-    /// carrier — except that nothing has assayed VEGA. No salvage totals, no
-    /// belts, no event.
-    ///
-    /// The brain ranks nothing and launches nothing. It does not guess, does not
-    /// send a carrier to look, and does not treat "we have no value data" as
-    /// "there is no value": survey is a separate goal with its own mission, and
-    /// `tendMesh` meshes toward KNOWN value by construction
-    /// (`brain-tendmesh-worthiness`).
-    ///
-    /// The two halves are asserted TOGETHER, in one test, because either alone
-    /// is worthless: a brain that ranked nothing ever would pass the first, and
-    /// one that ranked everything would pass the second.
+    /// Unknown is left alone: the world that ranks VEGA first, minus the assay.
+    /// The brain must not treat "no value data" as "no value" — `tendMesh` meshes
+    /// toward KNOWN value, and survey is a separate goal. Both halves are asserted
+    /// together because either alone is worthless: a brain that ranked nothing
+    /// would pass the first, one that ranked everything would pass the second.
     @Test func aSystemWithNoValueDataYieldsNoTargetAndOneWithValueDoesGetOne() async throws {
         let unknown = try GameDatabase.bootstrap()
         try await unknown.write { db in
@@ -820,44 +623,17 @@ struct BrainSafeDegradationTests {
         #expect(goal.target == target)
     }
 
-    /// **A transient failure defers, and a deferred tick writes nothing and
-    /// spends nothing.**
+    /// The confirm-read comes back nil for twenty ticks. Each defers with its own
+    /// distinct reason, writes no row and dispatches no command; then the read
+    /// lands and the next tick launches exactly once, the deferral never having
+    /// been remembered.
     ///
-    /// The confirm-read — the brain's one authoritative look at the carrier
-    /// before an irreversible commitment — comes back nil for twenty
-    /// consecutive ticks. `DeviceRefreshClient.testValue` is INERT (nil, not
-    /// `unimplemented`), which is exactly the shape of a real transient: the
-    /// read simply did not land.
-    ///
-    /// Every one of those ticks defers with its own distinct reason ("could not
-    /// be confirmed", never "unavailable" — an operator has to be able to tell
-    /// an API problem from a carrier that was taken), writes NO row, and
-    /// dispatches NO command. Then the read starts landing and the very next
-    /// tick launches, exactly once — the deferral was never remembered, which is
-    /// clause 2 and is what makes this degradation SAFE rather than sticky.
-    ///
-    /// **What this proves about SPEND, stated exactly, because the obvious
-    /// reading of it is too generous.** A deferred tick writes nothing and
-    /// dispatches nothing — that is proven outright. It does NOT prove the
-    /// deferral path is cheap: the read count below is one `.high` read per
-    /// tick, which at the engine's 5-second cadence is **12 authoritative reads
-    /// per minute, sustained for as long as the API stays down**, with no
-    /// backoff and — by clause 2 — no memory of the last refusal.
-    ///
-    /// That is a deliberate, documented trade (`Brain.confirmCarrier`'s own doc:
-    /// "the ceiling is one `.high` read per tick (12/min, for ONE device) …
-    /// the alternative is remembering the refusal, which is state between ticks
-    /// (clause 2), and the same window would otherwise have the brain
-    /// committing blind"). The assertion below pins that ceiling rather than
-    /// endorsing it: a build that started reading twice per tick, or polling
-    /// `.low` beside it, fails here.
-    ///
-    /// **So bounded read cost is proven for the STALL-RETRY path only** — by
-    /// `theReserveRailVetoesThePrintAndTheBrainIdlesInsteadOfThrashing` (three
-    /// reads for six hundred ticks) and `autoRetriesAreSpacedByTheRetryInterval`
-    /// (the 15-minute floor between attempts). The transient-deferral path has
-    /// no backoff at all, and nothing in this file should be read as claiming
-    /// otherwise.
+    /// **Scope, because the obvious reading is too generous.** This proves a
+    /// deferred tick writes and spends nothing. It does NOT prove the path is
+    /// cheap: the count below is one `.high` read per tick — 12/min for as long as
+    /// the API stays down, with no backoff. Bounded read cost is proven for the
+    /// STALL-RETRY path only. The assertion pins that ceiling rather than
+    /// endorsing it.
     @Test func aTransientConfirmFailureDefersEveryTickAndWritesNothingUntilItClears() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in try seedDegradationWorld(db, hubStock: aboveFloorStock) }
@@ -933,27 +709,11 @@ struct BrainSafeDegradationTests {
         }
     }
 
-    /// **Idle-surfaced-not-escalated and stall-surfaced-and-escalated must not
-    /// look alike** — clause 6's sharpest requirement, driven end-to-end
-    /// through the real stack in both worlds rather than asserted over
-    /// hand-built reports.
-    ///
-    /// The distinction is checked on the three things that carry it:
-    ///
-    ///   1. **The decision the brain publishes.** `.idle` vs `.stall`, which is
-    ///      the exact discriminator `BrainWhy.from`'s exhaustive switch reads —
-    ///      `isEscalated` is false for `.idle`/`.dispatch` and true for `.stall`
-    ///      alone, pinned by `BrainWhyViewTests.theFourGateStatesAllReadDifferently`
-    ///      over all four gate shapes (and `aDeferralReadsAsItsOwnGateNotAsAn`
-    ///      `OrdinaryIdle` for the third). Those drive SYNTHETIC reports; this
-    ///      one proves the real brain produces the two inputs they distinguish.
-    ///   2. **Neither is a DEFERRAL.** A deferred tick is normal operation and
-    ///      must not creep into either bucket.
-    ///   3. **The ledger.** The idle world surfaces NOTHING — no
-    ///      `.needsAttention` row for a human to find — while the stuck world
-    ///      leaves exactly one, carrying its reason. A brain that reported a
-    ///      stall it had not surfaced, or surfaced a run it reported as calm,
-    ///      fails here.
+    /// An idle brain and a stuck brain must not look alike, driven end-to-end
+    /// through the real stack in both worlds rather than over hand-built reports.
+    /// Checked on the three things that carry the distinction: the published
+    /// decision, that neither is a deferral, and the ledger — the idle world
+    /// surfaces nothing, the stuck world exactly one row carrying its reason.
     @Test func anIdleBrainAndAStuckBrainDoNotLookAlike() async throws {
         // The idle world: everything healthy, nothing worth doing.
         let idleWorld = try GameDatabase.bootstrap()
@@ -991,17 +751,11 @@ struct BrainSafeDegradationTests {
                 "a stuck brain leaves exactly one surfaced run, carrying its reason")
     }
 
-    /// The backoff itself, read off the timeline the retries actually wrote.
-    ///
-    /// "Defer with backoff" is only a real property if the gaps are real: three
-    /// auto-retries fired one tick apart would spend the whole budget inside a
-    /// single print's duration and escalate a shortage that a delivery cycle
-    /// would have cleared. `Brain.retryInterval` is 15 minutes and this is where
-    /// the driven run is held to it.
-    ///
-    /// The first attempt is deliberately NOT spaced: at the first stall there is
-    /// no `.resolved` entry to measure from, so it fires immediately. Only the
-    /// gaps BETWEEN attempts are the backoff.
+    /// The backoff, read off the timeline the retries actually wrote. Three
+    /// auto-retries a tick apart would spend the whole budget inside one print's
+    /// duration and escalate a shortage a delivery cycle would have cleared. The
+    /// first attempt is deliberately unspaced — there is no `.resolved` entry to
+    /// measure from — so only the gaps BETWEEN attempts are the backoff.
     @Test func autoRetriesAreSpacedByTheRetryInterval() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in try seedDegradationWorld(db, hubStock: belowFloorStock) }
@@ -1028,15 +782,10 @@ struct BrainSafeDegradationTests {
             gaps.allSatisfy { $0 >= Brain.retryInterval },
             "every gap between attempts clears the configured floor — gaps were \(gaps)"
         )
-        // …and an INDEPENDENT anchor, because the line above compares the
-        // observed gaps against the very constant that produces them: set
-        // `retryInterval` to zero and it still passes, which is exactly the
-        // test-that-cannot-fail this suite exists to avoid. `RelayRun
-        // .hubFreshness` is the information floor `Brain.retryInterval`'s own
-        // doc derives from — below it a retry re-reads numbers the run already
-        // considers current and is STRUCTURALLY incapable of a different
-        // answer, so it can only burn an attempt. A backoff that does not
-        // clear it is not a backoff.
+        // An INDEPENDENT anchor: the line above compares the gaps against the very
+        // constant that produces them, so it still passes at `retryInterval == 0`.
+        // `hubFreshness` is the information floor below which a retry re-reads
+        // numbers the run already considers current and can only burn an attempt.
         #expect(
             gaps.allSatisfy { $0 > RelayRun.hubFreshness },
             "…and clears the freshness floor below which a retry cannot learn anything — gaps were \(gaps)"

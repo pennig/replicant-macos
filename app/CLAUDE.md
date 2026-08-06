@@ -37,37 +37,46 @@ Look in the `Modules/UI` folder for the Swift package that represents the design
 
 **A comment may only explain the code as it exists in situ.** History — why it
 changed, what broke, what we rejected — goes to `.claude/memory/` and git, never
-into the source. `app/scripts/check-comments.sh` is available to check a tree for
-the mechanical half of this (dates, "used to", device codes) — run it from the
-repo root, `./app/scripts/check-comments.sh [paths…]`; its paths are repo-root
-relative. Nothing runs it automatically, and exit 0 is a floor, not proof: it is
-a handful of regexes with no notion of rationale, so judge the prose yourself
-against the Delete list below.
+into the source.
 
-**Keep:**
-- **A file header** — what the file is, what it does, and invariants true of the
-  code itself (purity, one-shot lifecycle, what owns what). No line ceiling: one
-  sentence per invariant, and nothing that is not one. A header fails on a
-  sentence that states no invariant, never on its length.
-- **`///` on public/internal API** — what it does, what each parameter means, what
-  a caller must guarantee. Bare contract.
-- **Inline `//`** — only where intent is not recoverable by reading the code: a
-  non-obvious algorithm step, a deliberate deviation from the obvious approach, or
-  a workaround for an external constraint (server behaviour, SDK bug).
+**The budget is hard, not advisory:**
+
+    file header            ≤ 6 lines
+    declaration doc (///)  ≤ 3 lines
+    inline //              ≤ 2 lines
+
+Blank `///` lines count. A fact that does not fit in three lines is a memory note,
+and the comment is the sentence that points at it. An important declaration does
+not buy a longer doc.
+
+**Keep** — what the file is; an invariant a reader cannot recover from the code;
+what a caller must guarantee; the meaning of a parameter whose name does not carry
+it. A one-line trailing `//` naming something the type cannot is cheap and good.
 
 **Delete:**
-- Dated history — "as of 2026-08-04", "before the fix", "this worked differently
-  before", round-N narratives
-- Rejected alternatives, "we considered X"
+- Dated history — "as of 2026-08-04", "before the fix", round-N narratives
+- Rejected alternatives, "we considered X", "deliberately does NOT"
 - Product and design rationale — *why we chose this shape* belongs in memory
 - Live-fleet snapshots — device codes, replicant names, current stock figures
 - Incident narratives
-- Provenance pointers ("ticket 05 decided this"). A pointer survives only when it
-  names *where the full contract lives*, never who decided it.
-- Restatement of what the code plainly says
+- Provenance pointers ("§4.1", "ticket 05 decided this"). A pointer survives only
+  when it names *where the full contract lives*, never who decided it.
+- Restatement of what the signature already says — `/// The device code.` on
+  `var deviceCode: String` earns nothing
+- Docs on `private` helpers, unless the body is genuinely unreadable
+
+The test, applied after the budget: **would a competent Swift reader get this code
+wrong without the sentence?** If no, cut it — however true it is.
 
 When a fact you are deleting is load-bearing and not already in `.claude/memory/`,
 write the memory note first (with its `MEMORY.md` index line), then delete.
+
+`app/scripts/check-comments.sh` checks the mechanical half (dates, "used to",
+device codes) — run it from the repo root, `./app/scripts/check-comments.sh
+[paths…]`, its paths being repo-root relative. Nothing runs it automatically, and
+exit 0 proves nothing about prose: it is eleven regexes with no notion of an essay.
+The full standard, and the measurements behind the budget, are in
+`docs/superpowers/comment-cleanup-standard.md`.
 
 ## Don't
 - Don't introduce new accent colors or gradients beyond the token set.
