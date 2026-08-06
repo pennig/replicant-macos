@@ -2,15 +2,10 @@
 //  BrainTestSupport.swift
 //  Replicould — DirectiveEngine
 //
-//  Shared seed helpers for the automation-brain test suite. Every brain task
-//  that needs a minimal device/star/assay/event row writes it here rather than
-//  hand-rolling a private copy per test file — the fixtures are trivial, but
-//  duplicating them across a dozen test files is exactly the kind of drift
-//  that lets one file's `Device` init fall out of sync with the real schema.
-//
-//  Internal to the test target only: production `Sources/` must never carry
-//  test fixtures (a review already caught and reversed exactly that mistake on
-//  Task 3 — see `DevicePredicatesTests.swift`'s private `Device.fixture`).
+//  Shared seed helpers for the brain test suite. The fixtures are trivial, but
+//  duplicating them across a dozen files is what lets one file's `Device` init
+//  fall out of sync with the real schema. Test target only — production
+//  `Sources/` must never carry test fixtures.
 //
 
 import Dependencies
@@ -23,14 +18,10 @@ import UniverseModels
 
 // MARK: - Device seeds
 
-/// A minimal device row. Defaults read as an idle, undeployed device; override
-/// only what a test cares about.
-///
-/// `updatedAt` defaults to the epoch, which reads as "arbitrarily stale" — the
-/// right default for the pure-ranking tests, which never judge a row's age. A
-/// test driving a MISSION must set it: `RelayRun.acquire` refuses to trust a
-/// hub row older than `hubFreshness`, so an epoch-stamped fleet spends its life
-/// in a refresh-then-stall loop rather than doing the thing under test.
+/// A minimal device row; defaults read as idle and undeployed. `updatedAt`
+/// defaults to the epoch — "arbitrarily stale", right for the pure-ranking tests.
+/// **A test driving a MISSION must set it**, or `acquire` refuses to trust the hub
+/// row and the fleet spends its life in a refresh-then-stall loop.
 func deviceFixture(
     code: String,
     type: String = "heaven_vessel",
@@ -42,14 +33,10 @@ func deviceFixture(
     stowedIn: String? = nil,
     updatedAt: Date = Date(timeIntervalSince1970: 0)
 ) -> Device {
-    // A carrier fixture wears `Brain.carrierTag` unless the test says otherwise.
-    //
-    // Every fixture here predates the tag and was written to mean "a vessel the
-    // brain may fly", which is now exactly what the tag says. Defaulting it
-    // keeps that meaning in one place instead of sprinkling the same tag across
-    // a hundred call sites, and leaves an explicit `tags:` free to express
-    // anything else — including the untagged fleet, which `BrainCarrierTagTests`
-    // builds directly so the gate is never proved by its own default.
+    // A carrier wears `Brain.carrierTag` unless the test says otherwise, which
+    // keeps "a vessel the brain may fly" in one place. An explicit `tags:` still
+    // expresses anything else, including the untagged fleet `BrainCarrierTagTests`
+    // builds directly — so the gate is never proved by its own default.
     let resolved = (type == Brain.carrierDeviceType && tags.isEmpty) ? [Brain.carrierTag] : tags
     return Device(
         deviceCode: code, deviceType: type, replicantCode: "R1", status: status,
@@ -261,25 +248,15 @@ struct ConfirmRead: Equatable, Sendable {
     let isHigh: Bool
 }
 
-/// A `deviceRefresher` stand-in that answers from the LOCAL fleet table — the
-/// "nothing moved between ranking and the commit" world, which is what every
-/// launch test means when it says the carrier was free.
+/// A `deviceRefresher` stand-in answering from the LOCAL fleet table — the
+/// "nothing moved between ranking and the commit" world. `answering` returns what
+/// the SERVER says, and is `async` so a test can mutate the world INSIDE the
+/// confirm window. Every call lands in `reads`, so a test can prove WHEN the brain
+/// confirms rather than only what it concluded.
 ///
-/// `answering` receives the row the database holds and returns what the SERVER
-/// says about it: the row unchanged (nothing moved), a mutated row (something
-/// did), or nil (the read failed / was deferred). It is `async` so a test can
-/// also mutate the world *inside* the confirm window — which is how the
-/// operator-launches-in-the-race-window test is written.
-///
-/// Every call lands in `reads`, so a test can prove WHEN the brain confirms
-/// rather than only what it concluded: a gate that fired on every tick would
-/// spend a `.high` read against the live API every five seconds.
-///
-/// **Deliberately does not write the answer back.** The live client reconciles
-/// (that is `PollCoordinator`'s job, not the brain's); a stand-in that stamped
-/// `devices.updatedAt` would break the row-for-row "a launching brain writes
-/// the directive and nothing else" assertions over a write the brain does not
-/// make.
+/// **Deliberately does not write the answer back**: stamping `updatedAt` would
+/// break the "a launching brain writes the directive and nothing else" assertions
+/// over a write the brain does not make.
 func confirmingRefresher(
     _ database: any DatabaseWriter,
     reads: LockIsolated<[ConfirmRead]> = LockIsolated([]),
@@ -453,34 +430,15 @@ func seedHubStockpile(
 
 // MARK: - Prune worlds
 
-/// A hub-anchored `WorldView` for prune analysis.
-///
-/// `meshSystems` is DERIVED from the relay device rows via the production
-/// predicate (`SalvageTargetPlanner.meshSystems(in:)`), never hand-set: a
-/// fixture that could claim a system is meshed with no relay standing in it
-/// would let a prune test pass against a world production cannot produce —
-/// and prune's whole job is to judge relay device rows against the mesh they
-/// create.
-///
-/// `hub` names the hub's SYSTEM. The resulting `hubLocation` follows
-/// `WorldView.hubLocation`'s own rule: a location inside that system, but only
-/// when the system is genuinely meshed — `nil` otherwise, which is exactly how
-/// an off-mesh hub reaches the brain.
-///
-/// `surveyed` defaults to every system with a census position — a fully
-/// surveyed neighbourhood, which is what a test means unless it is
-/// specifically about unknown value. Prune treats an unsurveyed MESHED system
-/// as a target (unknown ⇒ pinned), so the default keeps that clause quiet in
-/// every test that is not about it.
-///
-/// `fleet` places non-relay devices (a vessel, a drone) at systems, which pin
-/// them the same way value does.
-///
-/// `replicants` names the systems holding one of the account's replicants —
-/// where command AUTHORITY stands, which prune must keep connected. It defaults
-/// to empty rather than to `[hub]`: the co-location the old design assumed is
-/// exactly what this parameter exists to be able to break, and a default that
-/// silently asserted it would make the away-from-the-hub case unwritable.
+/// A hub-anchored `WorldView` for prune analysis. `meshSystems` is DERIVED from
+/// the relay rows via the production predicate, never hand-set — a fixture that
+/// could claim a system is meshed with no relay in it would let a prune test pass
+/// against a world production cannot produce. `hub` names the hub's SYSTEM, and
+/// the resulting `hubLocation` is nil unless that system is genuinely meshed.
+/// `surveyed` defaults to every placed system, so the unknown-value clause stays
+/// quiet in tests that are not about it. `replicants` defaults to EMPTY rather
+/// than `[hub]`: the co-location the old design assumed is exactly what this
+/// parameter exists to break.
 func prunableWorld(
     positions: [String: Position],
     relays: [String: String],

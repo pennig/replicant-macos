@@ -2,14 +2,11 @@
 //  HaulRunTests.swift
 //  Replicould — DirectiveEngine
 //
-//  The Haul Run as a pure function: (directive, world) → one action. No network,
-//  no clock — `world.now` is the only time source (design spec §6).
-//
-//  Two suites live here. `HaulRunTests` is that pure-function unit sweep.
-//  `HaulRunEndToEndTests` at the bottom drives a real directive row through the
-//  real `DirectiveEngineCore` over a real (in-memory) database and asserts what
-//  actually reaches the command governor — the one shape of test that can catch
-//  a planner the engine never calls. See that suite's doc comment.
+//  The Haul Run as a pure function: (directive, world) → one action, with
+//  `world.now` the only time source. `HaulRunTests` is that unit sweep;
+//  `HaulRunEndToEndTests` below drives a real row through the real engine and
+//  asserts what reaches the governor — the one shape of test that catches a
+//  planner the engine never calls.
 //
 
 import ConcurrencyExtras
@@ -445,20 +442,11 @@ struct HaulRunTests {
 
     // MARK: dispatch-attempt budget
     //
-    // Round-2 regression coverage: `hasTakenSomeHaulConfig` (used by
-    // `confirm`) is looser than `isInForce` (used by `assign`), so a
-    // controller whose dispatched command is accepted but never actually
-    // APPLIED reads as instantly settled and gets re-pinned/re-dispatched by
-    // `assign` every cycle forever, with no deadline anywhere in the loop to
-    // stop it. `dispatchAssignment`'s log-derived `dispatchAttemptCount`
-    // bounds that.
-    //
-    // Round-3 regression coverage: that budget must be scoped to the ONE
-    // controller being judged, not the whole pass — `assign` pins one
-    // controller per evaluation and only leaves the loop once every
-    // controller is in force, so an UNSCOPED count over a healthy fleet of 4+
-    // controllers reaches the limit on the fleet's very first pass, before
-    // any dispatch has actually failed. See `healthyPass(size:)` below.
+    // `hasTakenSomeHaulConfig` is looser than `isInForce`, so a command accepted
+    // but never APPLIED reads as instantly settled and is re-dispatched every
+    // cycle forever with no deadline to stop it; `dispatchAttemptCount` bounds it.
+    // That budget must be scoped to the ONE controller being judged — an unscoped
+    // count over a healthy fleet of 4+ reaches the limit on its first pass.
 
     /// Right at the budget: exactly `dispatchAttemptLimit` PRIOR dispatches
     /// to THIS controller are logged, so this evaluation is dispatch number
@@ -1062,31 +1050,16 @@ struct HaulRunEndToEndTests {
         #expect(row.step == HaulRun.Step.hauling)
     }
 
-    /// **CRITICAL regression guard (2026-07-31 final review).** The steady
-    /// state, which nothing else here covers: the controller is ALREADY running
-    /// a haul config — the previous repoint's — and its local row was last read
-    /// minutes before this dispatch went out. Every other `confirming` fixture
-    /// and both e2e tests above use a controller with no `ami_directive` at all,
-    /// the fresh-controller case, which is the only one where `confirm`
-    /// genuinely waits.
+    /// **The steady state nothing else here covers**: the controller is ALREADY
+    /// running a haul config and its row predates the dispatch. Every other
+    /// `confirming` fixture uses a controller with no `ami_directive`, the fresh
+    /// case, which is the only one where `confirm` genuinely waits.
     ///
-    /// Before the fix a healthy repoint burned THREE redundant `set_directive`
-    /// POSTs and then falsely stalled: `hasTakenSomeHaulConfig` accepts any
-    /// ferry/shuttle delivering home, which is precisely the controller's
-    /// PRE-dispatch config, so `confirming` read the stale row, reported
-    /// "settled" on the very next 5s tick and never waited — `confirmDeadline`
-    /// could not accumulate, so the post-deadline authoritative read was
-    /// unreachable — while `assigning`'s strict `isInForce` still saw the old
-    /// `collect`, re-pinned the same controller, and `dispatching` POSTed
-    /// again. Three laps later `dispatchAttemptCount` tripped and stalled
-    /// `.commandRejected` on a command that had landed correctly. Measured:
-    /// `dispatching, confirming, assigning` three times over, `running` ×10
-    /// then `needsAttention`, three POSTs for one repoint (and three more per
-    /// Retry). Reachable on the live account from the first repoint after
-    /// launch, and the whole budget burns in ~50 seconds while device rows
-    /// refresh about five minutes apart.
-    ///
-    /// One POST, one authoritative read, and the run settles into `hauling`.
+    /// Without the fresh-evidence gate a healthy repoint burns three redundant
+    /// POSTs and then falsely stalls: the pre-dispatch config satisfies
+    /// `hasTakenSomeHaulConfig`, so `confirming` never waits, `confirmDeadline`
+    /// cannot accumulate, and `assigning` re-pins the same controller until the
+    /// attempt budget trips on a command that landed correctly.
     @Test func aControllerOnAnOldHaulConfigIsRepointedWithOneCommand() async throws {
         let database = try GameDatabase.bootstrap()
         // The live shape: C1 has been ferrying ATIANFU-BELT-1 home, that pile is

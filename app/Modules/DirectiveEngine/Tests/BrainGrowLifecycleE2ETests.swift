@@ -2,54 +2,17 @@
 //  BrainGrowLifecycleE2ETests.swift
 //  Replicould — DirectiveEngine
 //
-//  Task 25: the whole grow lifecycle, driven through the REAL stack.
+//  The whole grow lifecycle through the REAL stack — nothing above the command
+//  wire is stubbed, because a pure-unit ranker test does not satisfy the bar
+//  (`SalvageTargetPlanner` once shipped unit-green with zero production callers).
+//  Only three dependencies are scripted, all of them things that would otherwise
+//  reach replicant.space: the command wire, the footprint read, and the device
+//  refresher. `Brain`, the engine loops, the REGISTERED `RelayRun`,
+//  `DirectiveExecutor` and the live governor are all the production article.
 //
-//  This is the gate the plan asks for by name. `SalvageTargetPlanner` once
-//  shipped fully unit-green with ZERO production callers and nobody noticed,
-//  and the lesson was written down as a rule: a pure-unit ranker test does not
-//  satisfy the bar. So nothing above the command wire is stubbed here.
-//
-//  **Where the fake seam sits: at the network, and nowhere else.** Three
-//  dependencies are scripted, and all three are things that would otherwise
-//  reach replicant.space:
-//
-//    • `@Dependency(\.commandClient)` — the command wire (`ScriptedServer`),
-//    • `@Dependency(\.locationsClient.footprint)` — the `GET /v1/locations`
-//      read the reserve rail consults (the client's own persistence,
-//      `refreshFootprint()`, is the real one),
-//    • `@Dependency(\.deviceRefresher)` — the authoritative device read, via
-//      `confirmingRefresher`, the same stand-in the rest of the brain suite
-//      uses.
-//
-//  Everything above them is the production article:
-//
-//    • `Brain` (ranking, the confirm-fresh gate, the launch write),
-//    • `DirectiveEngineCore.tickBrain()` / `.evaluateOnce(directiveID:)`
-//      (the real plan loop body and the real per-directive executor, including
-//      the four refresh resolvers and their re-ask bound),
-//    • `MissionRegistry.machines` — the REGISTERED `RelayRun`, not a hand-built
-//      one, so an unregistered machine fails this file,
-//    • `DirectiveExecutor` (step moves, timeline entries, stalls),
-//    • and the real `CommandGovernor`, via `CommandGovernorClient.liveValue` —
-//      the actions-budget gate and the per-device in-flight claim both run.
-//
-//  `ScriptedServer` stands in for the server AND for the sync that folds its
-//  answers back into SQLite: it records each command, applies that command's
-//  real-world effect to the device rows, and keeps the `Operation` bookkeeping
-//  `CommandClient` would have kept — which is where the `.simple`-verb
-//  distinction lives. `travel`/`print` are TRACKED (an `Operation` row, open
-//  until it completes); `stow`/`deploy`/`activate` are `.simple` and carry no
-//  operation row at all, so the machine's split dispatch/poll steps are
-//  exercised for real rather than papered over.
-//
-//  **On driving ticks.** `BrainLoopTests.theTimerLoopItselfTicksOnSchedule`
-//  already records — empirically — that advancing `TestClock` past the brain
-//  loop's real database read is not reproducible, and that the loop's wiring to
-//  the clock is proven there instead. So ticks here are driven directly, the
-//  same way `BrainGrowTests` drives them: one virtual 5-second step per
-//  iteration, `tickBrain()` then one `evaluateOnce` per running row — the two
-//  loops `start()` runs side by side. A `TestClock` is installed regardless so
-//  nothing can sleep for real.
+//  `ScriptedServer` stands in for the server AND the sync that folds its answers
+//  back into SQLite, keeping the `Operation` bookkeeping where the `.simple`-verb
+//  distinction lives — so the split dispatch/poll steps run for real.
 //
 
 import API
@@ -69,37 +32,29 @@ import Utils
 
 // MARK: - The world
 
-/// The tick the run starts on. Device rows are seeded AT this instant, not at
-/// the epoch: `RelayRun.acquire` refuses to trust a hub row older than
-/// `hubFreshness` (5 min), so an epoch-stamped fleet would spend the whole test
+/// Rows are seeded AT this instant, not the epoch: `acquire` refuses a hub row
+/// older than `hubFreshness`, so an epoch-stamped fleet would spend the whole test
 /// in a refresh-then-stall loop instead of printing.
 private let liftoff = Date(timeIntervalSince1970: 1_000_000)
 
-/// The engine's own cadence, and this file's virtual clock step.
 private let tickSeconds: TimeInterval = 5
 
-/// Where the autofactory and the carrier both stand — inside the meshed `SOL`
-/// system, which is what makes `WorldView.hubLocation` non-nil.
+/// Inside the meshed `SOL` system, which makes `WorldView.hubLocation` non-nil.
 private let hubLocation = "SOL-3"
 
-/// The system this lifecycle meshes, and the poorer one behind it that proves
-/// the brain re-ranks rather than merely stopping.
 private let target = "VEGA"
+/// The poorer system behind the target, so "VEGA is no longer ranked" is a claim
+/// about re-ranking rather than about an empty field.
 private let runnerUp = "ALTAIR"
 
-/// The code the hub's print names as the new relay — the clone `printing`
-/// waits for. Numbered by print, because a world that prints twice must not
-/// hand back the same device twice.
+/// Numbered by print, because a world that prints twice must not hand back the
+/// same device twice.
 private func cloneCode(forPrint index: Int) -> String { "RLY900\(index)" }
 private let firstClone = cloneCode(forPrint: 1)
 
-/// The smallest world this lifecycle needs: `SOL` meshed by one live relay, an
-/// autofactory and a HEAVEN vessel standing together at `SOL-3`, a stocked
-/// census row for that location, and two unmeshed salvage systems 5 ly out.
-///
-/// `VEGA` is the richer pile, so `GrowRanking` must choose it first; `ALTAIR`
-/// exists so the post-lifecycle assertion "VEGA is no longer ranked" is a
-/// statement about re-ranking rather than about an empty field.
+/// The smallest world this lifecycle needs: `SOL` meshed by one relay, an
+/// autofactory and a vessel at `SOL-3`, a stocked census row, and two unmeshed
+/// salvage systems 5 ly out.
 private func seedGrowWorld(_ db: Database) throws {
     try seedRelay(db, code: "REL1", location: "SOL", updatedAt: liftoff)
     try seedStar(db, designation: "SOL", x: 0, y: 0, z: 0)
@@ -175,26 +130,12 @@ private struct SeamCommand: Equatable, Sendable, CustomStringConvertible {
     }
 }
 
-/// The server, and the sync that folds its answers back into SQLite.
-///
-/// It sits UNDER `CommandGovernor` — the governor's budget gate and its
-/// per-device in-flight claim both run before anything here does — and its
-/// whole job is to be honest about two things the mission machine is built
-/// around:
-///
-///   1. **Tracked vs `.simple`.** `print` and `travel` create an `Operation`
-///      row that stays OPEN until the world catches up, exactly as
-///      `CommandClient` writes one; `stow`, `deploy` and `activate` are
-///      `.simple` verbs classified `.immediate`, so they create no operation
-///      row and answer `.accepted(operationID: nil)`. That is what makes the
-///      run's split dispatch/poll steps mean something here.
-///   2. **Effects take TIME.** A print materialises its clone later; a travel
-///      lands later. Both are queued and applied by `settle(now:)` when the
-///      virtual clock reaches them, so the poll steps genuinely poll.
-///
-/// An unrecognised command is recorded as an Issue and rejected rather than
-/// quietly accepted — a lifecycle that started issuing something new must not
-/// pass silently.
+/// The server, and the sync that folds its answers back into SQLite. Sits UNDER
+/// `CommandGovernor`, and is honest about the two things the mission machine is
+/// built around: tracked verbs create an OPEN `Operation` row while `.simple` ones
+/// create none, and effects take TIME — prints and travels are queued and applied
+/// by `settle(now:)`, so the poll steps genuinely poll. An unrecognised command is
+/// an Issue rather than a quiet acceptance.
 private actor ScriptedServer {
     private let database: any DatabaseWriter
     private let printDelay: TimeInterval
@@ -595,34 +536,21 @@ private func stepPath(_ ticks: [Tick]) -> [String] {
 @Suite("Brain — grow lifecycle end to end", .serialized)
 struct BrainGrowLifecycleE2ETests {
 
-    /// The headline. From a standing start the brain ranks, gates, and launches
-    /// a Relay Run; the executor prints, stows, travels, emplaces, activates;
-    /// the world reflects `relaying`; the target joins `meshSystems`; **the
-    /// carrier flies itself home**; and the brain launches the next target
-    /// without a human touching anything.
-    ///
-    /// **This test used to END at the stranded carrier**, and said so: the run
-    /// planted its relay, `returnToOrigin` was false, and the closing assertion
-    /// pinned `.idle("no free carrier at SOL-3")` as the brain's converged
-    /// state. `brain-tendmesh-build` recorded that the e2e ENCODED that
-    /// limitation and that changing it would not be a regression. This is that
-    /// change: the loop now closes, so the assertions describe a fleet that
-    /// keeps going rather than one that stops.
-    ///
-    /// Every one of those is asserted as an OUTCOME, not as a step visited:
-    /// the exact command sequence (so a run that skipped `activate` fails), the
-    /// device row's `statusBase`, `WorldView.meshSystems`, and the ranked field
-    /// the brain published afterwards.
+    /// The headline. From a standing start the brain ranks, gates and launches; the
+    /// executor prints, stows, travels, emplaces, activates; the target joins
+    /// `meshSystems`; the carrier flies itself home; and the brain launches the
+    /// next target untouched. Each is asserted as an OUTCOME rather than a step
+    /// visited — the exact command sequence, the row's `statusBase`,
+    /// `meshSystems`, and the field the brain published afterwards.
     @Test func aGrowLaunchRunsAllTheWayToAGrownMesh() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in try seedGrowWorld(db) }
         let server = ScriptedServer(database: database)
         let core = DirectiveEngineCore(machines: MissionRegistry.machines, tick: .seconds(5))
         let reads = LockIsolated<[ConfirmRead]>([])
-        // ONE generator for the whole test: `UUIDGenerator.incrementing` is a
-        // computed property, so re-entering `withDependencies` per tick would
-        // mint the same id every time and make "did not double-launch" pass
-        // vacuously (`BrainGrowTests` records the same trap).
+        // ONE generator for the whole test: `incrementing` is a computed property,
+        // so re-binding per tick mints the same id and makes "did not
+        // double-launch" pass vacuously.
         let uuid = UUIDGenerator.incrementing
 
         // Long enough for the first run to finish its return leg (tick 32) and
@@ -762,31 +690,21 @@ struct BrainGrowLifecycleE2ETests {
             """
         )
 
-        // 7. THE CONFIRM-FRESH GATE actually fired, at `.high`, once per launch.
-        //    `DeviceRefreshClient.testValue` is INERT (nil, not unimplemented),
-        //    so a brain that had lost its gate would defer silently and every
-        //    assertion above would still pass on a run that never launched —
-        //    except this one.
+        // 7. THE CONFIRM-FRESH GATE fired, at `.high`, once per launch.
+        //    `DeviceRefreshClient.testValue` is INERT rather than unimplemented, so
+        //    a brain that lost its gate defers silently and every assertion above
+        //    still passes on a run that never launched — except this one.
         #expect(reads.value == [
             ConfirmRead(deviceCode: "V1", isHigh: true),
             ConfirmRead(deviceCode: "V1", isHigh: true),
         ], "one gated launch each for VEGA and ALTAIR")
     }
 
-    /// The other half of convergence: the brain does not merely stop, it moves
-    /// on — **and it does so with no hand on the wheel.**
-    ///
-    /// This test used to reach here by flying the carrier home itself
-    /// (`server.place`) and calling that the operator's manual crank. It no
-    /// longer touches a device: the world runs from a standing start to a mesh
-    /// containing BOTH candidate systems, with the same single carrier making
-    /// both trips. That is the whole capability this branch adds, so the
-    /// absence of `place` in this test body is load-bearing rather than tidy.
-    ///
-    /// It also still exercises `acquire`'s stale-census branch for real. Five
-    /// virtual minutes elapse before the second run needs stock, so the census
-    /// IS stale by then and the second print has to buy a refresh through the
-    /// engine's `resolveFootprintRefresh`.
+    /// The brain does not merely stop, it moves on — with no hand on the wheel.
+    /// **The absence of any `server.place` call in this body is load-bearing**: the
+    /// world runs from a standing start to a mesh holding BOTH candidates on one
+    /// carrier. It also exercises `acquire`'s stale-census branch for real — five
+    /// virtual minutes elapse, so the second print must buy a refresh.
     @Test func theNextGrowGoesToTheNextCandidateNotTheMeshedOne() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in try seedGrowWorld(db) }

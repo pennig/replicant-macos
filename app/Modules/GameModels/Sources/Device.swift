@@ -2,19 +2,11 @@
 //  Device.swift
 //  Replicould — shared dependency clients
 //
-//  The locally-persisted device record. Fetched from `GET /v1/devices/{code}`
-//  (and, later, the account list walk) and upserted into SQLite so the fleet
-//  reads instantly and stays live off the event stream. Mirrors
-//  `app_schemas_devices_DeviceStatusSchema`.
-//
-//  Storage follows IMPLEMENTATION_PLAN §4.1: stable typed columns for the
-//  universal fields (which drive lists / status badges / capacity rings and are
-//  observed via `@FetchAll`), plus a single `detail` JSON blob holding the
-//  entire variable per-`device_type` tail verbatim — both the typed activity
-//  sub-objects (`travel`, `mining`, `printing`, …) and the schemaless
-//  `additionalProperties` objects (`ami_directive`, `system_status`, …). The
-//  detail pane decodes just the subtree it needs on demand, so a new device type
-//  or field needs no migration.
+//  The locally-persisted device record, upserted into SQLite so the fleet reads
+//  instantly and stays live off the event stream. Storage is stable typed columns
+//  for the universal fields (observed via `@FetchAll`) plus one `detail` JSON blob
+//  holding the whole variable per-`device_type` tail verbatim, decoded on demand —
+//  so a new device type or field needs no migration.
 //
 
 import API
@@ -25,7 +17,6 @@ import Utils
 /// A single device owned by the signed-in account.
 @Table
 public struct Device: Identifiable, Equatable, Sendable {
-    /// Device designation code — the natural primary key.
     @Column(primaryKey: true) public var deviceCode: String
     public var deviceType: String
     public var replicantCode: String
@@ -34,9 +25,8 @@ public struct Device: Identifiable, Equatable, Sendable {
     public var location: String?
     public var locationName: String?
     public var operationalCapacity: Double
-    /// The print queue's *capacity* (`queue_size` on the wire) — e.g. 10 for an
-    /// autofactory — not the number of jobs waiting. For the count of queued jobs
-    /// use `queuedJobCount` (the length of the `print_queue` array in `detail`).
+    /// The queue's *capacity*, not the number of jobs waiting — for that use
+    /// `queuedJobCount`.
     public var queueSize: Int
     public var stowedInDeviceCode: String?
     public var controllerDeviceCode: String?
@@ -48,17 +38,11 @@ public struct Device: Identifiable, Equatable, Sendable {
     /// The entire variable per-type tail, verbatim (snake_case keys, as on the
     /// wire), with the core-column keys stripped. Decoded on demand.
     @Column(as: JSONValue.JSONRepresentation.self) public var detail: JSONValue
-    /// Synthesized event-time used by the reconciliation guard (§4.1 / §6).
-    /// Because the payload carries no server modified-time, this is the read's
-    /// *request-issue* time — captured before the round-trip so snapshots order
-    /// by when each read began, not by when its response arrived (a read issued
-    /// later reflects same-or-newer state, so a slow earlier read can't clobber a
-    /// newer one). Device rows are only ever written from authoritative reads —
-    /// never optimistically, never straight from an event — so read-issue order
-    /// is the only ordering the guard needs, and no provenance column is required.
+    /// The read's *request-issue* time, not the server's — the payload carries no
+    /// modified-time. Captured before the round-trip, so snapshots order by when
+    /// each read began and a slow earlier read cannot clobber a newer one.
     public var updatedAt: Date
-    /// Local-only provenance — when this device was first seen. Preserved across
-    /// upserts (like `Star.createdAt`).
+    /// Local-only provenance, preserved across upserts.
     public var firstSeenAt: Date
 
     public var id: String { deviceCode }
@@ -200,25 +184,15 @@ public extension Device {
 // MARK: - Tags
 
 extension Device {
-    /// **The server normalises every tag to lowercase.** Send `auto:tendMesh`
-    /// and the fleet reads back `auto:tendmesh` — confirmed live on 2026-08-04,
-    /// where a vessel tagged from the device inspector came back lowercased and
-    /// an exact-match gate refused the very vessel the operator had just opted
-    /// in.
-    ///
-    /// So a tag is only ever compared through here. `auto:haul` and
-    /// `auto:salvage` happened to be spelled in lowercase already and worked by
-    /// luck; that is not a property worth relying on for the next tag somebody
-    /// adds.
+    /// **The server normalises every tag to lowercase** — send `auto:tendMesh` and
+    /// the fleet reads back `auto:tendmesh`, so an exact-match gate refuses the very
+    /// vessel the operator just opted in. Compare tags only through here.
     public static func normalizedTag(_ raw: String) -> String {
         raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
-    /// Whether this device carries `tag`, compared the way the server stores it.
-    ///
-    /// Both sides are normalised rather than just the constant: a row written
-    /// before a sync — or by an optimistic local edit — can still hold whatever
-    /// the operator typed.
+    /// Whether this device carries `tag`. BOTH sides are normalised, not just the
+    /// constant: a row written before a sync can still hold whatever was typed.
     public func hasTag(_ tag: String) -> Bool {
         let wanted = Self.normalizedTag(tag)
         return tags.contains { Self.normalizedTag($0) == wanted }
@@ -237,15 +211,10 @@ extension Device {
     /// finish" messaging, so a resting device must never report `true`.
     public var isBusy: Bool { !Self.restingStatuses.contains(statusBase) }
 
-    /// Whether this device can act as the *source* of a replication.
-    ///
-    /// The backend gates `replicate` on the `matrix` feature, and the two travel
-    /// together across the whole fleet. The non-obvious part: an
-    /// `empty_replicant_matrix` is printed *with* `matrix`, but once a replicant is
-    /// replicated into it the device becomes a `replicant_matrix` and the feature is
-    /// gone — so a replicant born from replication cannot itself replicate, while
-    /// the account's original matrix can. Confirmed against the live API on
-    /// 2026-07-31 (`60160672` vs `1F6A12EB`).
+    /// Whether this device can act as the *source* of a replication. The backend
+    /// gates `replicate` on the `matrix` feature, which an `empty_replicant_matrix`
+    /// LOSES once replicated into — so a replicant born from replication can never
+    /// itself replicate, while the account's original matrix can.
     public var canBeSource: Bool { features.contains("matrix") }
 }
 
@@ -508,23 +477,12 @@ extension Device {
         return soonest
     }
 
-    /// The deadline a `travel` block describes, given the whole route's end
-    /// (`final_arrives_at`) and the active leg's arrival (`arrives_at`).
-    ///
-    /// The route's end wins when it is genuinely later — a multi-leg trip ends
-    /// when the ROUTE does, and keying off the leg ends the op a waypoint
-    /// early. But it only wins *then*. A surge plate mid-hop reports a
-    /// `final_arrives_at` left over from a route it already finished (observed
-    /// three days stale, next to `route_eta_seconds: 0`, `route_progress_percent:
-    /// 100` and a live leg at 45%), and a deadline in the past makes every op it
-    /// stamps instantly overdue: `DeadlineScheduler` measures its give-up window
-    /// from `completesAt`, so such an op is marked `unknown` on its very first
-    /// pass. That produced 215 bogus `unknown` travel ops across five plates in
-    /// two days, each costing a `.high` confirm-read.
-    ///
-    /// A leg cannot outlast the route that contains it, so "the later of the
-    /// two" is the entire rule — it keeps the multi-leg behaviour and discards
-    /// only values that are impossible.
+    /// The deadline a `travel` block describes. The ROUTE's end wins when genuinely
+    /// later, since keying off the leg ends a multi-leg op a waypoint early — but a
+    /// surge plate mid-hop reports a `final_arrives_at` left over from a route it
+    /// already finished, and a past deadline makes every op it stamps instantly
+    /// overdue. A leg cannot outlast its route, so "the later of the two" is the
+    /// whole rule: it keeps multi-leg behaviour and discards only impossible values.
     public static func travelDeadline(routeEnd: Date?, legEnd: Date?) -> Date? {
         switch (routeEnd, legEnd) {
         case let (route?, leg?): Swift.max(route, leg)
