@@ -42,6 +42,12 @@ public struct DevicesFeature {
         /// `BindingReducer()` — no bespoke action.
         public var searchText = ""
 
+        /// The axis the list is organised along, persisted across launches and
+        /// driven by the toolbar picker through the `BindingReducer()`.
+        /// `@ObservationStateIgnored` because `@Shared` drives its own.
+        @ObservationStateIgnored
+        @Shared(.devicesListGrouping) public var grouping: DeviceGrouping
+
         /// Codes of the hosts the operator has opened. Empty ⇒ every host
         /// collapsed, which is the default and needs no seeding.
         public var expandedHosts: Set<String> = []
@@ -119,6 +125,7 @@ public struct DevicesFeature {
             DeviceListLayout.sections(
                 fleet: devices,
                 attentionDirectives: attentionDirectives,
+                grouping: grouping,
                 searchText: searchText,
                 expandedHosts: expandedHosts,
                 collapsedGroups: collapsedGroups

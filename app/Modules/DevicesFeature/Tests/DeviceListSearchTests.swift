@@ -77,6 +77,7 @@ import Testing
         DeviceListLayout.sections(
             fleet: fleet,
             attentionDirectives: [],
+            grouping: .carrier,
             searchText: search,
             expandedHosts: expanded,
             collapsedGroups: []
@@ -144,6 +145,7 @@ import Testing
         let result = DeviceListLayout.sections(
             fleet: flaggedFleet,
             attentionDirectives: [],
+            grouping: .carrier,
             searchText: "mining",
             expandedHosts: [],
             collapsedGroups: []

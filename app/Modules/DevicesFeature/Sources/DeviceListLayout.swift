@@ -207,19 +207,34 @@ extension DeviceListLayout {
             }
     }
 
-    /// The list's one entry point. Returns a pinned Needs Attention section (when
-    /// anything is flagged) above one unheadered Carrier section. Empty sections
-    /// are dropped, except a *collapsed* Needs Attention, which keeps its header
-    /// so the operator can open it again.
+    /// A section's readout header, summarising the whole population under it.
+    static func header(
+        title: String,
+        isDesignation: Bool = false,
+        members: [Device],
+        isCollapsed: Bool
+    ) -> DeviceListHeader {
+        DeviceListHeader(
+            title: title,
+            count: members.count,
+            isCollapsed: isCollapsed,
+            statusShares: statusShares(members),
+            hasDamaged: members.contains { $0.operationalCapacity < damagedCapacityThreshold },
+            titleIsDesignation: isDesignation
+        )
+    }
+
+    /// The list's one entry point. Returns a pinned Needs Attention section
+    /// (when anything is flagged) above the sections `grouping` produces. A
+    /// section the search empties is dropped; a collapsed one keeps its header.
     ///
-    /// `collapsedGroups` is honoured for the Needs Attention section only — the
-    /// fleet section is unheadered (Stage 1 has no gesture that could add
-    /// `DeviceListSection.fleetID` to the set), so it never checks membership. A
-    /// headered fleet section, if Stage 2 ever adds one, would need that check
-    /// added here rather than assuming it already holds.
+    /// `collapsedGroups` is honoured by every *headered* section. The Carrier
+    /// and Flat fleet sections are unheadered, so nothing can produce a collapse
+    /// gesture for them and they never check membership.
     public static func sections(
         fleet: [Device],
         attentionDirectives: [Directive],
+        grouping: DeviceGrouping,
         searchText: String,
         expandedHosts: Set<String>,
         collapsedGroups: Set<String>
@@ -228,13 +243,26 @@ extension DeviceListLayout {
             fleet.map { ($0.deviceCode, attentionFlags(for: $0, directives: attentionDirectives)) },
             uniquingKeysWith: { first, _ in first }
         )
-        let flagged = Set(attention.filter { !$0.value.isEmpty }.keys)
-        let hostTypes = Dictionary(
-            fleet.map { ($0.deviceCode, $0.deviceType) },
+        let byCode = Dictionary(
+            fleet.map { ($0.deviceCode, $0) },
             uniquingKeysWith: { first, _ in first }
         )
-
+        let hostTypes = byCode.mapValues(\.deviceType)
         let query = Query(searchText)
+
+        guard case .carrier = grouping else {
+            return flattenedSections(
+                fleet: fleet,
+                dimension: grouping.dimension,
+                query: query,
+                attention: attention,
+                hosts: byCode,
+                hostTypes: hostTypes,
+                collapsedGroups: collapsedGroups
+            )
+        }
+
+        let flagged = Set(attention.filter { !$0.value.isEmpty }.keys)
         let split = promote(forest(fleet: fleet), flagged: flagged)
 
         let attentionPruned = pruned(split.promoted, query: query)
@@ -247,16 +275,13 @@ extension DeviceListLayout {
 
         if !attentionRoots.isEmpty {
             let isCollapsed = collapsedGroups.contains(DeviceListSection.attentionID)
-            let members = devices(in: attentionRoots)
             sections.append(
                 DeviceListSection(
                     id: DeviceListSection.attentionID,
-                    header: DeviceListHeader(
-                        title: "Needs Attention",
-                        count: members.count,
-                        isCollapsed: isCollapsed,
-                        statusShares: statusShares(members),
-                        hasDamaged: members.contains { $0.operationalCapacity < damagedCapacityThreshold }
+                    header: header(
+                        title: attentionTitle,
+                        members: devices(in: attentionRoots),
+                        isCollapsed: isCollapsed
                     ),
                     entries: isCollapsed ? [] : flatten(
                         attentionRoots,
@@ -284,4 +309,6 @@ extension DeviceListLayout {
 
         return sections
     }
+
+    static let attentionTitle = "Needs Attention"
 }

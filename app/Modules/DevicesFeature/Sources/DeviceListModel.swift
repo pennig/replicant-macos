@@ -154,19 +154,23 @@ public struct DeviceListHeader: Equatable, Sendable {
     public var statusShares: [StatusShare]
     /// Any member below `DeviceListLayout.damagedCapacityThreshold`.
     public var hasDamaged: Bool
+    /// The title is a designation, so it renders monospaced.
+    public var titleIsDesignation: Bool
 
     public init(
         title: String,
         count: Int,
         isCollapsed: Bool,
         statusShares: [StatusShare],
-        hasDamaged: Bool
+        hasDamaged: Bool,
+        titleIsDesignation: Bool = false
     ) {
         self.title = title
         self.count = count
         self.isCollapsed = isCollapsed
         self.statusShares = statusShares
         self.hasDamaged = hasDamaged
+        self.titleIsDesignation = titleIsDesignation
     }
 }
 
