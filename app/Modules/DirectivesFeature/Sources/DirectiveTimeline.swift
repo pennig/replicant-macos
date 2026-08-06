@@ -26,10 +26,10 @@ public struct DirectiveTimeline: FetchKeyRequest {
     /// and nothing prunes the table.
     public static let entryLimit = 100
 
-    /// Raw rows fetched for a mission's timeline before collapsing repeats
-    /// down to `entryLimit` display rows — 5×, enough for the worst observed
-    /// same-step burst (~40) without an effectively unbounded fetch.
-    public static let rawFetchLimit = 500
+    /// Raw rows fetched for a mission's timeline before collapsing cycles
+    /// down to `entryLimit` display rows — measured live, 500 undershoots
+    /// the busiest run (37 rows); 1000 clears the budget (103), still bounded.
+    public static let rawFetchLimit = 1000
 
     public let directiveID: String?
     public let deviceCode: String?

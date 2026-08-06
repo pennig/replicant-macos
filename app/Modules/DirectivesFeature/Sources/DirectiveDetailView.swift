@@ -272,7 +272,10 @@ public struct DirectiveDetailView: View {
             VStack(alignment: .leading, spacing: Space.xs) {
                 RCSectionHeader(title)
                 ForEach(rows) { row in
-                    DirectiveTimelineRow(entry: row.entry, count: row.count)
+                    DirectiveTimelineRow(
+                        entry: row.unit[0], count: row.count,
+                        cycleSteps: row.unit.compactMap(\.step)
+                    )
                 }
             }
         }

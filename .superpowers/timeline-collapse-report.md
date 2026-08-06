@@ -89,3 +89,111 @@ compress in this particular live snapshot.
   before collapsing fills the display budget — it would degrade to fewer
   than 100 display rows rather than crash or go unbounded, which matches the
   brief's "may render as very few" framing as an accepted risk, not a bug.
+
+## Fix round 1: repeated STEP → repeated CYCLE
+
+The coordinator verified concern #1 against the live database and it held:
+the running `haulRun`'s newest entries are a genuine **period-3 cycle**
+(`assigning → surveying → hauling`, repeating) with zero *adjacent*
+duplicates — exactly the run the operator described as "a loop... over and
+over," and exactly the case round 1's step-only collapsing could not touch.
+
+### What changed
+
+- **`DirectiveLogCollapsing.swift`** — generalized from "collapse adjacent
+  identical steps" to "collapse a maximal run of ≥2 consecutive repetitions
+  of a period-`p` step cycle, `p` in `1...maxPeriod`, preferring the
+  smallest `p`." `DirectiveTimelineDisplayRow` now carries `unit:
+  [DirectiveLogEntry]` (one repetition's entries, in fetch order) instead of
+  a single `entry`, plus the same `count` — now counting *repetitions*, not
+  raw entries. `maxPeriod = 4`. The old single-step behavior is exactly the
+  `p = 1` case and is unchanged (all 4 round-1 tests pass unmodified).
+  `longestCycle(in:from:)` tries `period = 1, 2, 3, 4` in order and returns
+  the first that repeats ≥2 times fully; because a genuine period-`p`
+  sequence never spuriously satisfies a smaller period (its own elements
+  differ within one repetition), trying small-to-large and stopping at the
+  first hit is sufficient to always prefer the smallest true period — no
+  extra harmonic-detection logic was needed. `matches` requires non-nil
+  `step` at every compared position (not just the unit's first element), so
+  a `kind` without a `step` (a repoint, a stall, a completion) can never
+  silently join a cycle.
+- **`DirectiveTimelineRow.swift`** — now takes `cycleSteps: [String] = []`
+  alongside `entry`/`count`; when a collapsed row spans more than one
+  distinct step it renders `cycleSteps.joined(separator: " → ")` instead of
+  the single entry's own summary line (e.g. `assigning → surveying →
+  hauling`), so the `×N` pill reads against something legible instead of
+  just the cycle's first line repeated.
+- **`DirectiveDetailView.swift`** — feeds `row.unit[0]` as the display
+  entry (for icon/tint/timestamp), `row.unit.compactMap(\.step)` as
+  `cycleSteps`, and `row.count` as before.
+- **`DirectiveTimeline.swift`** — `rawFetchLimit` raised from 500 to 1000
+  (see below); no other change (the `matches`/period generalization lives
+  entirely in the pure transform, not the query).
+- **`DirectiveLogCollapsingTests.swift`** — added 3 tests: a period-2 cycle
+  collapsing to one row; a cycle that changes shape partway staying as two
+  separate collapsed rows (never merged into a false longer-period read);
+  and the coordinator's literal 24-entry Haul Run fixture (the period-3
+  cycle interrupted once by an `assigning, confirming, dispatching` beat).
+  All 5 round-1 tests (including `capsToTheNewestEntries`, which reads
+  `rawFetchLimit` symbolically and needed no edit) still pass.
+
+### Period bound
+
+`maxPeriod = 4`. Every `MissionStepMachine`'s step vocabulary was read
+directly (`HaulRun`, `SurveyRun`, `SalvageRun`, `RelayRun`, `RestockRun`):
+Haul Run's steady-state polling loop (`assigning → surveying → hauling`) is
+the largest known *live, repeating* sub-cycle at period 3 — the other
+machines' larger step counts (Survey Run has 13, Relay Run 13) are linear
+once-through progressions, not loops. 4 gives one step of headroom beyond
+the one known real cycle without inviting a coincidental match: at `p = 5`
+a window needs 10 consecutive matching entries to trigger, which starts
+trading specificity for reach with no known mission to justify it.
+
+### The 24-entry fixture
+
+Collapses to **5 display rows**: a period-3 cycle ×2, then three individual
+rows (`assigning`, `confirming`, `dispatching` — the repoint), then a
+period-3 cycle ×5. The repoint's three entries never merge into either
+surrounding cycle (each fails every period check against its neighbors),
+so it stands fully apart between two collapsed groups — the reading the
+brief asked for.
+
+### `rawFetchLimit` re-derived: 500 → 1000
+
+Cycle collapsing compresses far harder than round 1's step-only version, so
+500 was re-measured directly against the live database using the actual
+`collapse` algorithm (period 1–4, ≥2 reps): the running `haulRun`'s newest
+500 raw rows collapse to only **37** display rows — well short of the 100
+budget. 1000 raw rows collapse to **103**, clearing the budget as a single
+bounded fetch (Swift's `.prefix(entryLimit)` in the view caps the excess).
+Checked against all 10 other historical directive logs on the account too:
+none exceeds ~700 raw entries total, so 1000 fully covers them uncapped.
+`rawFetchLimit` is now `1000`.
+
+### Verification
+
+- `swift build --build-tests` — clean.
+- `./app/scripts/check-comments.sh` over every touched file — clean, no
+  output; comment line counts re-verified by hand against the ≤6/≤3/≤2
+  budget.
+- `DirectivesFeatureTests` (`--test-product`): 146 tests / 15 suites (was
+  143/15 after round 1 — delta is the 3 new tests), 0 failed, `runEnded`
+  confirmed.
+- `DirectiveEngineTests` (`--test-product`): 714 tests / 95 suites, 0
+  failed — unchanged, unaffected.
+
+### Concerns
+
+- `cycleSteps` (and the `×N`/joined-summary rendering) still has no
+  UI/snapshot coverage, same caveat as round 1 — verified by inspection and
+  a clean build only, not a running app screenshot.
+- `maxPeriod = 4` is a judgment call grounded in the five known
+  `MissionStepMachine`s today; a future mission with a genuinely 5-or-more
+  step polling loop would render as individual rows rather than collapse,
+  degrading gracefully (not crashing, not over-matching) but not compress
+  as well as it could until the bound is revisited.
+- `rawFetchLimit = 1000` is calibrated to the one account this repo has
+  live data for; an account that ran the same directive uninterrupted for
+  much longer than this one could still undershoot the display budget on
+  its oldest, most-compressible stretches — an explicitly accepted
+  "thin timeline" risk per the original brief, not a new one.
