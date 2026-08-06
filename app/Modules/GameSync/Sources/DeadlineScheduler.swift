@@ -125,6 +125,7 @@ actor DeadlineScheduler {
                 lastRetentionSweepAt = now
                 @Dependency(\.defaultDatabase) var database
                 await OperationRetention.sweep(database, now: now)
+                await DirectiveLogRetention.sweep(database, now: now)
             }
 
             let upcoming = await openDatedOps()

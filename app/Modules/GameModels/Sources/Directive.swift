@@ -47,6 +47,10 @@ public enum DirectiveStatus: String, Codable, Equatable, Sendable, CaseIterable,
     case completed
     case cancelled
 
+    /// running + needsAttention + paused — a resumable directive whose log a
+    /// live or later-resumed mission may still read (see `DirectiveLogRetention`).
+    public static let openCases: [DirectiveStatus] = [.running, .needsAttention, .paused]
+
     /// The pane's label. Without this the detail view renders the raw case name
     /// ("needsAttention") straight at the user.
     public var displayName: String {
