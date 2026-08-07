@@ -579,24 +579,29 @@ public struct SurveyRun: MissionStepMachine {
     }
 
     /// Ensure the next mis-armed deployed bot carries an ACTIVE `service`
-    /// directive — never inheriting whatever is already set, since `patrol`
-    /// deactivates devices and `configure` faces the same problem the same way.
+    /// directive: `set_directive` first if the name is wrong (never inherited,
+    /// like `configure` does), `activate` once the name is right but paused.
     private func armBots(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
         let deployed = RepairFleet.bots(deployedNear: vessel.location, in: world)
         guard let next = deployed.first(where: { !RepairFleet.isArmed($0) }) else {
             return .advanceStep(nextStep: Step.configuring)
         }
-        // `set_directive` is untracked and the confirm step re-stamps
-        // `stepStartedAt`, so the log is the only bound on this loop that
-        // re-entry cannot rewind.
+        // Both dispatches below are untracked and the confirm step re-stamps
+        // `stepStartedAt`, so the log is the only bound re-entry cannot rewind.
         if Self.dispatchRounds(world, dispatch: Step.armingBots, confirm: Step.confirmingBotArm)
             > Self.botDispatchRounds {
             logger.notice("survey run \(directive.id, privacy: .public): \(next.deviceCode, privacy: .public) will not arm")
             return .stall(.serviceBotNotArmed)
         }
+        guard next.currentDirective == "service" else {
+            return .dispatch(
+                kind: .setDirective, deviceCode: next.deviceCode,
+                params: CommandParams(directive: "service"), nextStep: Step.confirmingBotArm
+            )
+        }
         return .dispatch(
-            kind: .setDirective, deviceCode: next.deviceCode,
-            params: CommandParams(directive: "service"), nextStep: Step.confirmingBotArm
+            kind: OperationKind.simple("activate"), deviceCode: next.deviceCode,
+            params: CommandParams(), nextStep: Step.confirmingBotArm
         )
     }
 

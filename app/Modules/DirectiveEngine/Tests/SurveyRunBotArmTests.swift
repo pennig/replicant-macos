@@ -21,9 +21,10 @@ import Utils
         #expect(SurveyRun().nextAction(directive: d, world: w) == .advanceStep(nextStep: SurveyRun.Step.configuring))
     }
 
-    /// The reported live defect: a freshly-deployed bot reads `service` /
-    /// `paused`, which repairs nothing. Arming must re-issue rather than trust it.
-    @Test func aPausedServiceBotIsReArmed() {
+    /// The reported live defect, and the reason for two branches: a bot
+    /// already reading `service` needs `activate`, never `set_directive` again
+    /// — resending the name endlessly would never touch the paused status.
+    @Test func aPausedServiceBotIsActivatedNotReDirected() {
         let vessel = repairDevice("VESSEL", type: "heaven_vessel", location: "SOL-3")
         let bot = repairDevice(
             "BOT1", type: "service_bot", location: "SOL-3", directives: ["patrol", "service"],
@@ -32,8 +33,8 @@ import Utils
         let w = repairWorld(devices: [vessel, bot])
         let d = repairDirective(step: SurveyRun.Step.armingBots, deviceCode: "VESSEL")
         #expect(SurveyRun().nextAction(directive: d, world: w) == .dispatch(
-            kind: .setDirective, deviceCode: "BOT1",
-            params: CommandParams(directive: "service"),
+            kind: OperationKind.simple("activate"), deviceCode: "BOT1",
+            params: CommandParams(),
             nextStep: SurveyRun.Step.confirmingBotArm
         ))
     }
@@ -51,6 +52,36 @@ import Utils
         #expect(SurveyRun().nextAction(directive: d, world: w) == .dispatch(
             kind: .setDirective, deviceCode: "BOT1",
             params: CommandParams(directive: "service"),
+            nextStep: SurveyRun.Step.confirmingBotArm
+        ))
+    }
+
+    /// The two facts are separate dispatches, name first: a bot on `patrol`
+    /// gets renamed this round, then activated the round after — never both
+    /// at once, since a mission returns exactly one action.
+    @Test func aBotOnPatrolIsArmedInTwoRounds() {
+        let vessel = repairDevice("VESSEL", type: "heaven_vessel", location: "SOL-3")
+        let onPatrol = repairDevice(
+            "BOT1", type: "service_bot", location: "SOL-3", directives: ["patrol", "service"],
+            currentDirective: "patrol", currentDirectiveStatus: "active"
+        )
+        let firstWorld = repairWorld(devices: [vessel, onPatrol])
+        let firstAsk = repairDirective(step: SurveyRun.Step.armingBots, deviceCode: "VESSEL")
+        #expect(SurveyRun().nextAction(directive: firstAsk, world: firstWorld) == .dispatch(
+            kind: .setDirective, deviceCode: "BOT1",
+            params: CommandParams(directive: "service"),
+            nextStep: SurveyRun.Step.confirmingBotArm
+        ))
+
+        let renamed = repairDevice(
+            "BOT1", type: "service_bot", location: "SOL-3", directives: ["patrol", "service"],
+            currentDirective: "service", currentDirectiveStatus: "paused"
+        )
+        let secondWorld = repairWorld(devices: [vessel, renamed])
+        let secondAsk = repairDirective(step: SurveyRun.Step.armingBots, deviceCode: "VESSEL")
+        #expect(SurveyRun().nextAction(directive: secondAsk, world: secondWorld) == .dispatch(
+            kind: OperationKind.simple("activate"), deviceCode: "BOT1",
+            params: CommandParams(),
             nextStep: SurveyRun.Step.confirmingBotArm
         ))
     }
