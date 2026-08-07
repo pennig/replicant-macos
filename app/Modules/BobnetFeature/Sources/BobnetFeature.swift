@@ -63,6 +63,11 @@ public struct BobnetFeature {
         /// Messages that landed while the reader was away from the bottom.
         /// Zeroed wherever the view is known to be pinned to the newest message.
         public var newWhileAway: Int = 0
+        /// Bumped to ask the view to scroll to the bottom.
+        public var scrollToBottomToken: Int = 0
+        /// A bottom-scroll was requested and has not been observed to land.
+        /// While true, geometry reporting not-at-bottom is stale and ignored.
+        public var pendingBottomScroll: Bool = false
         public var composeText: String = ""
         public var newChannelDraft: NewChannelDraft?
         public var isCatchingUp: Bool = false
@@ -110,6 +115,11 @@ public struct BobnetFeature {
         /// The detail view's scrolling content (identified by the channel it is
         /// rendering) appeared — re-establishes the at-latest flag.
         case detailAppeared(String?)
+        /// The jump-to-latest affordance was tapped.
+        case jumpToLatestTapped
+        /// The bottom-scroll suppression window closed without the scroll
+        /// being observed to land.
+        case pendingScrollExpired
         case sendButtonTapped
         case sendSucceeded
         case sendFailed(String)
@@ -126,7 +136,7 @@ public struct BobnetFeature {
     @Dependency(\.bobnetClient) var bobnetClient
     @Dependency(\.continuousClock) var clock
 
-    private enum CancelID { case linger }
+    private enum CancelID { case linger, pendingScroll }
 
     public var body: some Reducer<State, Action> {
         BindingReducer()
@@ -136,7 +146,20 @@ public struct BobnetFeature {
                 return selectionChanged(&state)
 
             case .binding(\.isAtLatest):
-                if state.isAtLatest { state.newWhileAway = 0 }
+                // A negative report while a bottom-scroll is in flight is the
+                // content having grown under a held viewport, not a reader leaving.
+                if state.pendingBottomScroll, !state.isAtLatest {
+                    state.isAtLatest = true
+                    return .none
+                }
+                if state.isAtLatest {
+                    state.newWhileAway = 0
+                    state.pendingBottomScroll = false
+                    return .merge(
+                        .cancel(id: CancelID.pendingScroll),
+                        reevaluateLinger(state)
+                    )
+                }
                 return reevaluateLinger(state)
 
             case .binding:
@@ -206,8 +229,12 @@ public struct BobnetFeature {
                 return .none
 
             case .latestMessageChanged:
-                if !state.isAtLatest { state.newWhileAway += 1 }
-                return reevaluateLinger(state)
+                guard state.isAtLatest else {
+                    state.newWhileAway += 1
+                    return reevaluateLinger(state)
+                }
+                let scroll = requestBottomScroll(&state)
+                return .merge(scroll, reevaluateLinger(state))
 
             case .lingerElapsed:
                 // Re-check the arming conditions rather than trusting that a
@@ -240,6 +267,7 @@ public struct BobnetFeature {
                 guard channel == state.selectedChannel else { return .none }
                 state.isAtLatest = true
                 state.newWhileAway = 0
+                state.pendingBottomScroll = false
                 return reevaluateLinger(state)
 
             case let .detailDisappeared(channel):
@@ -250,7 +278,21 @@ public struct BobnetFeature {
                 guard channel == state.selectedChannel else { return .none }
                 state.isAtLatest = false
                 state.newWhileAway = 0
-                return .cancel(id: CancelID.linger)
+                state.pendingBottomScroll = false
+                return .merge(
+                    .cancel(id: CancelID.linger),
+                    .cancel(id: CancelID.pendingScroll)
+                )
+
+            case .jumpToLatestTapped:
+                state.isAtLatest = true
+                state.newWhileAway = 0
+                let scroll = requestBottomScroll(&state)
+                return .merge(scroll, reevaluateLinger(state))
+
+            case .pendingScrollExpired:
+                state.pendingBottomScroll = false
+                return .none
 
             case .sendButtonTapped:
                 let text = state.composeText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -265,7 +307,10 @@ public struct BobnetFeature {
             case .sendSucceeded:
                 state.isSending = false
                 state.composeText = ""
-                return .none
+                state.isAtLatest = true
+                state.newWhileAway = 0
+                let scroll = requestBottomScroll(&state)
+                return .merge(scroll, reevaluateLinger(state))
 
             case let .sendFailed(message):
                 state.isSending = false
@@ -323,8 +368,10 @@ public struct BobnetFeature {
             .first { $0.name == channel }?.lastReadMessageID ?? 0
         state.isAtLatest = channel != nil
         state.newWhileAway = 0
+        state.pendingBottomScroll = false
         return .merge(
             reevaluateLinger(state),
+            .cancel(id: CancelID.pendingScroll),
             .run { [fetch = state.$channelMessages] _ in
                 _ = try? await fetch.load(BobnetChannelMessages(channel: channel))
             }
@@ -344,6 +391,20 @@ public struct BobnetFeature {
               row.latestMessageID > row.lastReadMessageID
         else { return nil }
         return channel
+    }
+
+    /// Ask the view to scroll to the bottom, suppressing geometry's negative
+    /// reports until it lands or 250 ms passes — else a stuck flag would
+    /// freeze `isAtLatest` true and let a read marker advance while away.
+    private func requestBottomScroll(_ state: inout State) -> Effect<Action> {
+        state.scrollToBottomToken += 1
+        state.pendingBottomScroll = true
+        let clock = self.clock
+        return .run { send in
+            try await clock.sleep(for: .milliseconds(250))
+            await send(.pendingScrollExpired)
+        }
+        .cancellable(id: CancelID.pendingScroll, cancelInFlight: true)
     }
 
     /// (Re)arm or cancel the 3-second read-marker linger. `cancelInFlight`

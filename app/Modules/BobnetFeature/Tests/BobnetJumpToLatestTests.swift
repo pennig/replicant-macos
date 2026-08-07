@@ -78,15 +78,99 @@ import Testing
     }
 
     /// Re-entering the pane clears the count, the same as `.detailAppeared`
-    /// re-establishes `isAtLatest`.
+    /// re-establishes `isAtLatest`. A message lands after the pane has left,
+    /// so `.detailAppeared` clears a genuinely nonzero count.
     @Test func reappearingPaneClearsTheCount() async throws {
         let (store, _) = try await makeStore(clock: TestClock())
 
         await store.send(.binding(.set(\.isAtLatest, false)))
         await store.send(.latestMessageChanged)
         await store.send(.detailDisappeared("#general"))
-        await store.send(.detailAppeared("#general"))
+        await store.send(.latestMessageChanged)
+        #expect(store.state.newWhileAway == 1)
 
+        await store.send(.detailAppeared("#general"))
         #expect(store.state.newWhileAway == 0)
+    }
+
+    /// A message landing while the reader is AT the bottom asks the view to
+    /// follow, and is never counted as unseen.
+    @Test func messageWhileAtBottomRequestsAScroll() async throws {
+        let (store, _) = try await makeStore(clock: TestClock())
+
+        await store.send(.binding(.set(\.isAtLatest, true)))
+        let before = store.state.scrollToBottomToken
+        await store.send(.latestMessageChanged)
+
+        #expect(store.state.scrollToBottomToken == before + 1)
+        #expect(store.state.newWhileAway == 0)
+        #expect(store.state.pendingBottomScroll == true)
+    }
+
+    /// While a bottom-scroll is in flight, geometry reporting "not at bottom" is
+    /// the content having grown under a held viewport — not the reader leaving.
+    /// It must not flip the flag or count a message.
+    @Test func negativeGeometryDuringPendingScrollIsIgnored() async throws {
+        let (store, _) = try await makeStore(clock: TestClock())
+
+        await store.send(.binding(.set(\.isAtLatest, true)))
+        await store.send(.latestMessageChanged)
+        #expect(store.state.pendingBottomScroll == true)
+
+        await store.send(.binding(.set(\.isAtLatest, false)))
+
+        #expect(store.state.isAtLatest == true)
+        #expect(store.state.newWhileAway == 0)
+    }
+
+    /// The suppression cannot stick: with no geometry report at all, 250 ms
+    /// clears it and geometry becomes authoritative again.
+    @Test func pendingScrollExpiresWithoutAGeometryReport() async throws {
+        let clock = TestClock()
+        let (store, _) = try await makeStore(clock: clock)
+
+        await store.send(.binding(.set(\.isAtLatest, true)))
+        await store.send(.latestMessageChanged)
+        #expect(store.state.pendingBottomScroll == true)
+
+        await clock.advance(by: .milliseconds(250))
+        await store.receive(\.pendingScrollExpired)
+        #expect(store.state.pendingBottomScroll == false)
+
+        // Geometry is authoritative once more.
+        await store.send(.binding(.set(\.isAtLatest, false)))
+        #expect(store.state.isAtLatest == false)
+
+        await store.finish()
+    }
+
+    /// Tapping the pill goes to the bottom and clears the count.
+    @Test func jumpToLatestScrollsAndClears() async throws {
+        let (store, _) = try await makeStore(clock: TestClock())
+
+        await store.send(.binding(.set(\.isAtLatest, false)))
+        await store.send(.latestMessageChanged)
+        let before = store.state.scrollToBottomToken
+
+        await store.send(.jumpToLatestTapped)
+
+        #expect(store.state.isAtLatest == true)
+        #expect(store.state.newWhileAway == 0)
+        #expect(store.state.scrollToBottomToken == before + 1)
+    }
+
+    /// Sending a message from scrolled-up history takes the reader to it.
+    @Test func sendingScrollsToTheBottom() async throws {
+        let (store, _) = try await makeStore(clock: TestClock())
+
+        await store.send(.binding(.set(\.isAtLatest, false)))
+        await store.send(.latestMessageChanged)
+        let before = store.state.scrollToBottomToken
+
+        await store.send(.sendSucceeded)
+
+        #expect(store.state.isAtLatest == true)
+        #expect(store.state.newWhileAway == 0)
+        #expect(store.state.scrollToBottomToken == before + 1)
     }
 }
