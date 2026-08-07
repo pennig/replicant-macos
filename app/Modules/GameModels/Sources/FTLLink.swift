@@ -60,11 +60,9 @@ public struct FTLLink: Equatable, Sendable, Hashable {
 /// fail. The one exception is the launch on which `addLinkMetrics` runs: it clears
 /// the table, so the overlay is empty until the next rebuild.
 ///
-/// The mesh is small and always recomputed wholesale from every relay's live
-/// network view, so it's rewritten in full (see `replace`) whenever the relay
-/// roster changes or a relay's liveness flips (`relay_activated` /
-/// `relay_deactivated`). Endpoints keep `FTLLink`'s canonical order (`a <= b`),
-/// and `id` is their joined pair so reciprocal reports collapse to one row.
+/// A roster change rewrites the table in full (`replace`); one relay's liveness
+/// flip rewrites only its own star's rows (`MeshUpdate`). Endpoints keep
+/// `FTLLink`'s canonical order (`a <= b`), and `id` is their joined pair.
 @Table("ftlLinks")
 public struct FTLLinkRecord: Identifiable, Equatable, Sendable {
     /// The canonical endpoint pair, joined — the natural primary key (`A|B`).

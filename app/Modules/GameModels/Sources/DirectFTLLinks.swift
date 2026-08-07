@@ -92,7 +92,7 @@ public struct DirectFTLLinks: FetchKeyRequest {
 }
 
 /// Minimal union-find over star designations, for component parity.
-private struct UnionFind {
+struct UnionFind {
     private var parent: [String: String] = [:]
 
     mutating func add(_ x: String) {
