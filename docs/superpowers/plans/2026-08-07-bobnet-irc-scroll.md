@@ -883,7 +883,67 @@ struct BobnetChannelMessagesScroll: View {
 }
 ```
 
-**If Task 1 selected rung 2**, additionally add `.containerRelativeFrame(.vertical, alignment: .bottom)` directly after the `.frame(maxWidth: .infinity, alignment: .leading)` line on the `LazyVStack`.
+**Task 1's outcome, which changes this task's justification:** the harness reproduces
+*neither* reported symptom across 16 measurements (`{bare, split} × {800, 1054}`, seeded
+from the live table), with `atBottom` true on all 16 and `fillsViewport ==
+visibleH - insets.bottom` exactly in all six rows where `#claims` genuinely fits. So none
+of the three rungs applies. Build this task for the **IRC behaviour** it delivers —
+`.top` for `sizeChanges` is what stops a new message yanking the reader out of history —
+not as a fix for a bug the harness could never find. Do **not** add
+`.containerRelativeFrame`; nothing measured justifies it.
+
+**Temporary instrumentation (removed in Task 6).** Because the symptom lives only in the
+running app, this view also logs its real geometry. Add to the top of the file:
+
+```swift
+import OSLog
+
+private let logger = Logger(subsystem: "name.pennig.replicould", category: "BobnetScroll")
+```
+
+and add this modifier directly after the existing `.onScrollGeometryChange(for: Bool.self)`
+block:
+
+```swift
+        // Temporary: the isolated harness cannot reproduce the reported layout
+        // symptoms, so the running app reports its own geometry.
+        .onScrollGeometryChange(for: BobnetScrollProbe.self) { geometry in
+            BobnetScrollProbe(
+                offset: geometry.contentOffset.y,
+                container: geometry.containerSize.height,
+                content: geometry.contentSize.height,
+                topInset: geometry.contentInsets.top,
+                bottomInset: geometry.contentInsets.bottom
+            )
+        } action: { _, probe in
+            logger.info("""
+                \(channel, privacy: .public) rows=\(store.channelMessages.messages.count) \
+                offset=\(probe.offset, format: .fixed(precision: 1)) \
+                container=\(probe.container, format: .fixed(precision: 1)) \
+                content=\(probe.content, format: .fixed(precision: 1)) \
+                insets=(t\(probe.topInset, format: .fixed(precision: 0)),\
+                b\(probe.bottomInset, format: .fixed(precision: 0))) \
+                fills=\(probe.content + probe.topInset, format: .fixed(precision: 1)) \
+                target=\(probe.container - probe.bottomInset, format: .fixed(precision: 1))
+                """)
+        }
+```
+
+with this value type at the bottom of the same file:
+
+```swift
+/// Temporary geometry probe for the running app's layout logging.
+struct BobnetScrollProbe: Equatable {
+    var offset: CGFloat
+    var container: CGFloat
+    var content: CGFloat
+    var topInset: CGFloat
+    var bottomInset: CGFloat
+}
+```
+
+`fills` versus `target` is the whole diagnosis: equal means the content is correctly
+bottom-aligned, and `fills` falling short of `target` is symptom 1 caught in the act.
 
 - [ ] **Step 2: Shrink the detail view to composition**
 
@@ -928,15 +988,17 @@ Run: `cd app/Modules && swift build --build-tests 2>&1 | tail -20`
 
 Expected: no errors. `NewMessagesDivider` is `private` in `BobnetChannelDetailView.swift` and is now referenced from `BobnetChannelMessagesScroll.swift` — **change its declaration from `private struct NewMessagesDivider` to `struct NewMessagesDivider`** (module-internal) if the build reports it as inaccessible.
 
-- [ ] **Step 4: Re-run the harness and compare against Task 1's baseline**
+- [ ] **Step 4: Re-run the harness and confirm no regression**
 
-Run: `cd app/Modules && swift run -c release BobnetLayoutHarness`
+Run: `cd app/Modules && swift run BobnetLayoutHarness split 1054`
 
-Expected, on all four lines:
-- `#claims` (12 messages): content laid out at the visual bottom — `documentH` no greater than `visibleH`, and the messages not floating mid-pane.
-- `#general` and `#trade`: `gapBelow ≈ insets.bottom`, meaning resting at the true bottom with nothing hidden under the compose bar.
+Task 1 established the correct reading: `atBottom` true, and for a `#claims` that fits,
+`fillsViewport == visibleH - insets.bottom` exactly (982 == 982 at this size). The bar here
+is **no regression** — the restructure must not break placement that already measured
+correct. Record the four lines and compare against Task 1's `[split h=1054]` block.
 
-Record the four lines. If either expectation fails, this is a real result, not a mistake to paper over — report it and stop.
+If placement regresses, that is a real result: report it and stop rather than adjusting the
+harness to agree.
 
 - [ ] **Step 5: Run every Bobnet suite**
 
@@ -1129,7 +1191,7 @@ jq -r 'select(.payload.kind=="issueRecorded") | "\(.payload.issue.sourceLocation
 
 Expected: no `issueRecorded` lines, **except** `theSupervisorAdoptsTheRowTheBrainLaunched`, which is a known pre-existing whole-package-only failure (see `app/.claude/memory/supervisor-adopts-row-whole-package-failure.md`) and must not be attributed to this work.
 
-- [ ] **Step 3: Remove the harness**
+- [ ] **Step 3: Remove the harness and the temporary instrumentation**
 
 ```bash
 cd /Users/matt/Developer/replicant-macos/.claude/worktrees/bobnet-irc-scroll
@@ -1137,6 +1199,13 @@ rm -rf app/Modules/BobnetLayoutHarness
 ```
 
 Then delete the `.executableTarget(name: "BobnetLayoutHarness", …)` block from `app/Modules/Package.swift`.
+
+**Only if the controller tells you the app-log capture is finished**, also remove from
+`app/Modules/BobnetFeature/Sources/BobnetChannelMessagesScroll.swift`: the
+`.onScrollGeometryChange(for: BobnetScrollProbe.self)` block, the `BobnetScrollProbe`
+struct, the `import OSLog`, and the `logger` constant. If the controller has not confirmed
+the capture, leave all four in place and say so in your report — they are the only
+instrument that can see the reported symptom.
 
 - [ ] **Step 4: Verify the package still resolves and builds**
 
