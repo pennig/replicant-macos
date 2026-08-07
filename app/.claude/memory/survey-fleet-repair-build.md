@@ -68,22 +68,23 @@ eventually crosses the floor below which it can no longer repair others.
 
 ## Preconditions and residuals, all latent on today's fleet
 
-- **`bots(deployedNear:)` matches ANY deployed service bot in the system,
-  including another fleet's — and it is the query that issues `recall`.** There
-  is no per-fleet bot ownership signal. Inert while one survey fleet owns the
-  only two bots; it ARMS the moment the mine or salvage fleets get bots, which
-  the design explicitly plans. Close this before a second bot-carrying fleet
-  exists.
+- ~~**`bots(deployedNear:)` matches ANY deployed service bot in the system,
+  including another fleet's — and it is the query that issues `recall`.**~~
+  **CLOSED** by the `auto:`-tag ownership predicate — see
+  [[salvage-fleet-repair-build]], which is the second bot-carrying fleet this
+  residual said to close it before. Survey passes `owner: nil` and so still
+  claims untagged bots, which is why today's untagged pair is unaffected; two
+  fleets whose bots are BOTH untagged still collide.
 - **`recall` stows on the NEAREST craft, not necessarily this vessel.** The
   departure path uses `recall` rather than `stow` because a cruised-away bot is
   not co-located and `stow` requires co-location. If another craft is nearer,
   the bot leaves the query as stowed and the vessel departs having put its bot
   in someone else's hold.
-- **`confirmBotDeploy` has no deadline.** The dispatch loop is bounded, but if
-  bot rows never refresh the confirm step returns `.refreshDevices` every tick
-  and never re-enters the dispatch step, so the bound is never consulted. Same
-  documented trade as the brain's transient-deferral path: one `.high` read per
-  tick, no backoff.
+- ~~**`confirmBotDeploy` has no deadline.**~~ **CLOSED** by `botConfirmDeadline`
+  (10 min) on both confirm steps, in both runs — see
+  [[salvage-fleet-repair-build]]. The bound had to be a deadline and not the
+  round budget: a stuck confirm step never re-enters the dispatch step where
+  that budget is consulted.
 - **A bot-recall failure escalates `.dronesNotRecovered`** — a drone reason for
   a bot problem, so the panel names the wrong hardware.
 - **`isRepairing` reads `detail["repair"]["target_device_code"]`, and the
