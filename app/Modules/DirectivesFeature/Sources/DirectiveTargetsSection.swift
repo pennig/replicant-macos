@@ -26,6 +26,7 @@ enum DirectiveTargetsSection: Equatable {
     /// A roam's standing: where it is anchored, what it is working now, and the
     /// tail of what it has already finished.
     struct Coverage: Equatable {
+        /// Non-nil only where the run's planner actually anchors on it.
         let centre: String?
         let current: String?
         let charted: Int
@@ -98,12 +99,19 @@ enum DirectiveTargetsSection: Equatable {
         // A stopped run works nothing, and its cursor still names a system.
         let working = ![.completed, .cancelled].contains(directive.status)
         return Coverage(
-            centre: directive.roamCentre,
+            centre: anchorsOnCentre(directive.kind) ? directive.roamCentre : nil,
             current: working ? directive.currentTarget : nil,
             charted: charted,
             recent: Array(finished.prefix(trailLimit)),
             earlier: max(0, charted - trailLimit)
         )
+    }
+
+    /// Whether `kind`'s planner reads the roam centre. `SurveyRoamPlanner`
+    /// anchors its band on it; `SalvageTargetPlanner` takes no centre at all and
+    /// ranks by mesh membership, units, then distance from the vessel.
+    private static func anchorsOnCentre(_ kind: DirectiveKind) -> Bool {
+        kind == .surveyRun
     }
 
     /// Each controller of `directive`'s fleet and the pile it drains, resolved

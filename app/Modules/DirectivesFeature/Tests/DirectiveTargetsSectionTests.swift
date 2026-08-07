@@ -106,6 +106,22 @@ struct DirectiveTargetsSectionTests {
         #expect(coverage.earlier == 0)
     }
 
+    /// A Salvage roam reports coverage but names no centre: its planner takes
+    /// none, ranking by mesh membership, units, then distance from the vessel.
+    @Test func aSalvageRoamNamesNoCentre() {
+        let directive = run(
+            kind: .salvageRun,
+            targets: ["A", "B"],
+            targetIndex: 1,
+            roamCentre: "SOL"
+        )
+        guard case let .coverage(coverage) = DirectiveTargetsSection.section(for: directive, devices: [])
+        else { return #expect(Bool(false), "expected coverage") }
+        #expect(coverage.centre == nil)
+        #expect(coverage.charted == 1)
+        #expect(coverage.current == "B")
+    }
+
     /// The trail is capped, and what it leaves out is counted rather than
     /// dropped — this is the growth the raw checklist had no answer for.
     @Test func aLongRoamCapsTheTrailAndCountsTheRest() {
