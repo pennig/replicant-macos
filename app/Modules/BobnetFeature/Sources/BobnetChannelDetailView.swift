@@ -2,10 +2,8 @@
 //  BobnetChannelDetailView.swift
 //  Replicould — Bobnet feature
 //
-//  The channel-detail pane (the split view's detail column): the selected
-//  channel's messages, oldest first, pinned to the newest; a "New messages"
-//  divider anchored at the read marker as it stood on selection; a compose bar;
-//  and at-latest scroll reporting that drives the read-marker linger.
+//  The channel-detail pane: the message list, an error banner, and a compose
+//  bar. The list and its scroll behaviour live in BobnetChannelMessagesScroll.
 //
 
 import ComposableArchitecture
@@ -32,60 +30,28 @@ public struct BobnetChannelDetailView: View {
 
     @ViewBuilder
     private func messages(for channel: String) -> some View {
-        // Bound once per list build. `.defaultScrollAnchor(.bottom)` walks the
-        // whole `ForEach` to size the content, so a per-row call is quadratic.
-        let firstUnreadID = BobnetUnreadDivider.anchor(
-            in: store.channelMessages.messages,
-            marker: store.markerAtSelection
-        )
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: Space.s) {
-                ForEach(store.channelMessages.messages) { message in
-                    if message.id == firstUnreadID {
-                        NewMessagesDivider()
-                    }
-                    BobnetMessageRow(message: message)
+        BobnetChannelMessagesScroll(store: store, channel: channel)
+            // Above the anchors and the geometry observer, so a channel switch
+            // gives all of them a fresh identity. Deliberately not around the
+            // compose bar, which keeps its field identity across a switch.
+            .id(channel)
+            .background(.rcContentBackground)
+            .navigationTitle(channel)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if let errorMessage = store.errorMessage {
+                    RCErrorBanner(errorMessage) { store.send(.dismissError) }
                 }
             }
-            .padding(Space.l)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .defaultScrollAnchor(.bottom)
-        .id(channel)
-        .onScrollGeometryChange(for: Bool.self) { geometry in
-            BobnetScrollBottom.isAtBottom(
-                contentOffset: geometry.contentOffset.y,
-                containerHeight: geometry.containerSize.height,
-                contentHeight: geometry.contentSize.height,
-                bottomInset: geometry.contentInsets.bottom
-            )
-        } action: { _, isAtBottom in
-            if store.isAtLatest != isAtBottom {
-                store.send(.binding(.set(\.isAtLatest, isAtBottom)))
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                ComposeBar(store: store, channel: channel)
             }
-        }
-        .onChange(of: store.channelMessages.messages.last?.id) {
-            store.send(.latestMessageChanged)
-        }
-        .onAppear { store.send(.detailAppeared(channel)) }
-        .onDisappear { store.send(.detailDisappeared(channel)) }
-        .background(.rcContentBackground)
-        .navigationTitle(channel)
-        .safeAreaInset(edge: .top, spacing: 0) {
-            if let errorMessage = store.errorMessage {
-                RCErrorBanner(errorMessage) { store.send(.dismissError) }
-            }
-        }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            ComposeBar(store: store, channel: channel)
-        }
     }
 }
 
 // MARK: - New-messages divider
 
 /// The "New" separator inserted before the first message past the read marker.
-private struct NewMessagesDivider: View {
+struct NewMessagesDivider: View {
     var body: some View {
         HStack(spacing: Space.s) {
             Divider().overlay(.rcAccent)
