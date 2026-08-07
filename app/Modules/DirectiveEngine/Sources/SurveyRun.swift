@@ -660,6 +660,13 @@ public struct SurveyRun: MissionStepMachine {
         return .refreshDevices(deviceCodes: bots.map(\.deviceCode), thenStall: nil)
     }
 
+    /// An operation with no `completesAt` can never resolve — a `recall` at a
+    /// bot already co-located stows instantly, with no travel block to set one.
+    /// Waiting on it waits on nothing.
+    private static func openRecallOperation(_ deviceCode: String, in world: WorldSnapshot) -> GameModels.Operation? {
+        world.openOperation(for: deviceCode).flatMap { $0.completesAt == nil ? nil : $0 }
+    }
+
     /// Recall the next service bot still out in the system, or advance when none
     /// is left. `recall`, not `stow`: `stow` needs the bot beside the vessel, and
     /// a bot that cruised off to repair a drone is not.
@@ -669,7 +676,7 @@ public struct SurveyRun: MissionStepMachine {
                 return .advanceTarget
             }
             if world.now.timeIntervalSince(directive.stepStartedAt) > Self.recallDeadline {
-                return .stall(.dronesNotRecovered)
+                return .stall(.serviceBotNotRecovered)
             }
             if world.now.timeIntervalSince(vessel.updatedAt) < Self.botProbeInterval { return .wait }
             return .refreshDevices(deviceCodes: [vessel.deviceCode], thenStall: nil)
@@ -678,13 +685,11 @@ public struct SurveyRun: MissionStepMachine {
         guard let next = out.first else { return .advanceTarget }
         if Self.dispatchRounds(world, dispatch: Step.stowingBots, confirm: Step.confirmingBotStow)
             > Self.botDispatchRounds {
-            return .stall(.dronesNotRecovered)
+            return .stall(.serviceBotNotRecovered)
         }
-        // `recall` is a tracked deadline op, so this guard really fires — and an
-        // op that never closes must not hold the run past the recall backstop.
-        if world.openOperation(for: next.deviceCode) != nil {
+        if Self.openRecallOperation(next.deviceCode, in: world) != nil {
             if world.now.timeIntervalSince(directive.stepStartedAt) > Self.recallDeadline {
-                return .stall(.dronesNotRecovered)
+                return .stall(.serviceBotNotRecovered)
             }
             return .wait
         }
@@ -698,7 +703,7 @@ public struct SurveyRun: MissionStepMachine {
     private func confirmBotStow(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
         let elapsed = world.now.timeIntervalSince(directive.stepStartedAt)
         if elapsed < Self.botProbeDelay { return .wait }
-        if elapsed > Self.recallDeadline { return .stall(.dronesNotRecovered) }
+        if elapsed > Self.recallDeadline { return .stall(.serviceBotNotRecovered) }
         guard let location = vessel.location else {
             guard RepairFleet.anyBotDeployed(in: world, system: directive.currentTarget) else {
                 return .advanceTarget

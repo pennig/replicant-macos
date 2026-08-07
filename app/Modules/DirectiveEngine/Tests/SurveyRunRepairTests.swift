@@ -152,7 +152,7 @@ import Utils
         let w = repairWorld(devices: [vessel, bot])
         let past = repairFixtureNow.addingTimeInterval(-(SurveyRun.recallDeadline + 1))
         let d = repairDirective(step: SurveyRun.Step.confirmingBotStow, deviceCode: "VESSEL", stepStartedAt: past)
-        #expect(SurveyRun().nextAction(directive: d, world: w) == .stall(.dronesNotRecovered))
+        #expect(SurveyRun().nextAction(directive: d, world: w) == .stall(.serviceBotNotRecovered))
     }
 
     @Test func anUnknownVesselLocationDoesNotAbandonBotsAtRepairing() {
@@ -243,17 +243,46 @@ import Utils
         #expect(SurveyRun().nextAction(directive: d, world: w) == .wait)
     }
 
-    @Test func anOpenRecallIsNotRedispatched() {
+    @Test func anOpenRecallWithADeadlineIsNotRedispatched() {
         let vessel = repairDevice("VESSEL", type: "heaven_vessel", location: "TAU-2")
         let bot = repairDevice("BOT1", type: "service_bot", location: "TAU-9", directives: ["service"])
-        let open = GameModels.Operation(
-            id: "OP1", entityCode: "BOT1", kind: "recall", status: .active, source: .optimistic,
-            startedAt: repairFixtureNow, completesAt: nil,
-            lastConfirmedAt: repairFixtureNow, detail: .object([:])
+        let open = STUCKOP_operation(
+            entityCode: "BOT1", kind: "recall",
+            completesAt: repairFixtureNow.addingTimeInterval(120)
         )
         let w = repairWorld(devices: [vessel, bot], openOperations: ["BOT1": open])
         let d = repairDirective(step: SurveyRun.Step.stowingBots, deviceCode: "VESSEL", targets: ["TAU"])
         #expect(SurveyRun().nextAction(directive: d, world: w) == .wait)
+    }
+
+    @Test func anOpenRecallWithADeadlineStillStallsAtTheBackstop() {
+        let vessel = repairDevice("VESSEL", type: "heaven_vessel", location: "TAU-2")
+        let bot = repairDevice("BOT1", type: "service_bot", location: "TAU-9", directives: ["service"])
+        let open = STUCKOP_operation(
+            entityCode: "BOT1", kind: "recall",
+            completesAt: repairFixtureNow.addingTimeInterval(120)
+        )
+        let w = repairWorld(devices: [vessel, bot], openOperations: ["BOT1": open])
+        let past = repairFixtureNow.addingTimeInterval(-(SurveyRun.recallDeadline + 1))
+        let d = repairDirective(step: SurveyRun.Step.stowingBots, deviceCode: "VESSEL", targets: ["TAU"], stepStartedAt: past)
+        #expect(SurveyRun().nextAction(directive: d, world: w) == .stall(.serviceBotNotRecovered))
+    }
+
+    /// The live incident: a `recall` op written with no `completesAt` (the bot
+    /// was already co-located, so the server's travel block never populated
+    /// one) can never resolve. Waiting on it waits on nothing — dispatch again
+    /// rather than stall silently for the full backstop.
+    @Test func aRecallWithNoDeadlineIsRedispatchedRatherThanWaitedOn() {
+        let vessel = repairDevice("VESSEL", type: "heaven_vessel", location: "SOL-3")
+        let bot = repairDevice("BOT1", type: "service_bot", location: "SOL-3", directives: ["service"])
+        let stuck = STUCKOP_operation(entityCode: "BOT1", kind: "recall", completesAt: nil)
+        let w = repairWorld(devices: [vessel, bot], openOperations: ["BOT1": stuck])
+        let d = repairDirective(step: SurveyRun.Step.stowingBots, deviceCode: "VESSEL")
+        #expect(SurveyRun().nextAction(directive: d, world: w) == .dispatch(
+            kind: .simple("recall"), deviceCode: "BOT1",
+            params: CommandParams(),
+            nextStep: SurveyRun.Step.confirmingBotStow
+        ))
     }
 
     @Test func theDeployLoopGivesUpAndSurveysUnrepaired() {
@@ -292,10 +321,10 @@ import Utils
                 stepStartedAt: repairFixtureNow.addingTimeInterval(-60)
             )
             action = run.nextAction(directive: d, world: w)
-            if action == .stall(.dronesNotRecovered) { break }
+            if action == .stall(.serviceBotNotRecovered) { break }
             step = Self.nextStep(after: action) ?? step
         }
-        #expect(action == .stall(.dronesNotRecovered))
+        #expect(action == .stall(.serviceBotNotRecovered))
     }
 
     @Test func aBotlessFleetWithAnUnknownLocationAdvancesRatherThanStalling() {

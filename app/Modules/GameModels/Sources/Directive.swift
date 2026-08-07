@@ -135,6 +135,10 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
     /// `set_directive` was reissued past the retry bound and it still reads
     /// some other directive, or `service` but paused, so it repairs nothing.
     case serviceBotNotArmed
+    /// A deployed service bot never made it back aboard before the recall
+    /// deadline — distinct from `dronesNotRecovered`, which is the survey
+    /// drones' own recall.
+    case serviceBotNotRecovered
 
     /// The stall panel's headline.
     public var displayName: String {
@@ -158,6 +162,7 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
         case .printStockShort: "Resource stock too low to print"
         case .repairUnfinished: "Repair not finished"
         case .serviceBotNotArmed: "Service bot not armed"
+        case .serviceBotNotRecovered: "Service bot not recovered"
         }
     }
 
@@ -204,6 +209,8 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
             "The service bots didn't finish repairing before the deadline. Retry once they've finished, or skip this target."
         case .serviceBotNotArmed:
             "A service bot won't hold an active \"service\" directive. Check it in the device inspector, then retry or skip this target."
+        case .serviceBotNotRecovered:
+            "A service bot didn't stow before the recall deadline. Retry once it's aboard, or skip this target."
         }
     }
 }
@@ -233,7 +240,7 @@ public extension DirectiveAttentionReason {
         case .noSurveyControllerAboard, .noSurveyDroneAboard, .noMiningControllerAboard,
              .noMiningDroneAboard, .noRelayCoLocated, .dronesNotRecovered,
              .launchDeployedNothing, .noHaulControllerTagged, .awaitingRelayRestock,
-             .repairUnfinished, .serviceBotNotArmed:
+             .repairUnfinished, .serviceBotNotArmed, .serviceBotNotRecovered:
             return .escalate
         }
     }

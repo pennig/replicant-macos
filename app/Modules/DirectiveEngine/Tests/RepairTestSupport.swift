@@ -53,6 +53,18 @@ func repairDevice(
     )
 }
 
+/// An operation row for the `openOperations` fixture, `completesAt` set by the
+/// caller — this is the one field the stuck-recall incident turns on.
+func STUCKOP_operation(
+    entityCode: String, kind: String, completesAt: Date?
+) -> GameModels.Operation {
+    GameModels.Operation(
+        id: "OP1", entityCode: entityCode, kind: kind, status: .active, source: .optimistic,
+        startedAt: repairFixtureNow, completesAt: completesAt,
+        lastConfirmedAt: repairFixtureNow, detail: .object([:])
+    )
+}
+
 func repairWorld(
     devices: [Device],
     log: [DirectiveLogEntry] = [],
