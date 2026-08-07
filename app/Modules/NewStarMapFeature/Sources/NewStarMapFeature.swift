@@ -195,6 +195,7 @@ public struct NewStarMapFeature {
     @Dependency(\.starsClient) var starsClient
     @Dependency(\.locationsClient) var locationsClient
     @Dependency(\.domainFreshness) var domainFreshness
+    @Dependency(\.ftlMeshRefresher) var ftlMeshRefresher
     @Dependency(\.commandClient) var commandClient
     @Dependency(\.date) var date
 
@@ -365,15 +366,22 @@ public struct NewStarMapFeature {
                 return .none
 
             case let .refreshMesh(rosterChanged):
-                // The mesh rebuild is O(relays) network reads, so it goes through
-                // the freshness engine instead of firing directly (V3.4-B2/B6). A
+                // The mesh refresh is network reads, so it goes through the
+                // freshness engine instead of firing directly (V3.4-B2/B6). A
                 // genuine roster change invalidates — the debounce collapses the
-                // cold-load's page-by-page roster churn into one rebuild. A mere
-                // pane appear only rebuilds when the domain is stale or its TTL
+                // cold-load's page-by-page roster churn into one refresh. A mere
+                // pane appear only refreshes when the domain is stale or its TTL
                 // lapsed; the `relay.*` event route keeps it fresh in between.
                 let domainFreshness = self.domainFreshness
+                let ftlMeshRefresher = self.ftlMeshRefresher
                 if rosterChanged {
-                    return .run { _ in domainFreshness.invalidate(.ftlMesh) }
+                    // Which relay moved is not recoverable from a roster diff, and
+                    // an unattributed change must read every relay rather than fold
+                    // one in over a roster that shifted underneath it.
+                    return .run { _ in
+                        ftlMeshRefresher.noteRelayChanged(nil)
+                        domainFreshness.invalidate(.ftlMesh)
+                    }
                 }
                 return .run { _ in await domainFreshness.refreshIfStale(.ftlMesh) }
 
