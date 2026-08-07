@@ -95,18 +95,29 @@ public struct HaulRun: MissionStepMachine {
 
     // MARK: - Fleet
 
-    /// Every device in `world` carrying `tag` and offering `ferry`, sorted by code
-    /// so a controller keeps its rank across evaluations. Resolved by TAG, never
-    /// location — untagging is how the operator takes a controller back.
-    public static func controllers(in world: WorldSnapshot, tag: String) -> [Device] {
-        world.devices.values
+    /// Every device in `devices` carrying `tag` and offering `ferry`, sorted by
+    /// code so a controller keeps its rank across evaluations. Resolved by TAG,
+    /// never location — untagging is how the operator takes a controller back.
+    public static func controllers(in devices: some Sequence<Device>, tag: String) -> [Device] {
+        devices
             .filter { $0.hasTag(tag) }
             .filter { $0.availableDirectives.contains(requiredDirective) }
             .sorted { $0.deviceCode < $1.deviceCode }
     }
 
+    public static func controllers(in world: WorldSnapshot, tag: String) -> [Device] {
+        controllers(in: world.devices.values, tag: tag)
+    }
+
     private static func fleetTag(of directive: Directive) -> String {
         directive.fleetTag ?? defaultFleetTag
+    }
+
+    /// The stockpile `controller` is draining, or nil when it runs no config
+    /// this run could have issued.
+    public static func drainedPile(of controller: Device) -> String? {
+        guard hasTakenSomeHaulConfig(controller) else { return nil }
+        return controller.currentDirectiveConfig?["collect"]?.stringValue
     }
 
     /// The stockpile `tag`ged controllers are draining, or nil for the "Nothing
@@ -117,10 +128,7 @@ public struct HaulRun: MissionStepMachine {
             .filter { $0.hasTag(tag) }
             .sorted { $0.deviceCode < $1.deviceCode }
             .lazy
-            .compactMap { device -> String? in
-                guard hasTakenSomeHaulConfig(device) else { return nil }
-                return device.currentDirectiveConfig?["collect"]?.stringValue
-            }
+            .compactMap { drainedPile(of: $0) }
             .first
     }
 

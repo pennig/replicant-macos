@@ -232,27 +232,7 @@ public struct DirectiveDetailView: View {
                     }
                 }
 
-                VStack(alignment: .leading, spacing: Space.xs) {
-                    RCSectionHeader("Targets")
-                    // Keyed by position, not element: `targets` is a revisit
-                    // queue and the same system designation can legitimately
-                    // appear twice, which would collide as a SwiftUI id.
-                    ForEach(Array(directive.targets.enumerated()), id: \.offset) { index, target in
-                        HStack(spacing: Space.s) {
-                            // `hasDelivered(targetAt:)`, never a bare
-                            // `targetIndex` comparison: the cursor is not a
-                            // completion count, and a Relay Run finishes
-                            // without ever moving it.
-                            let delivered = directive.hasDelivered(targetAt: index)
-                            Image(systemName: delivered ? "checkmark.circle.fill" : "circle")
-                                .foregroundStyle(delivered ? .rcAccent : .rcTextTertiary)
-                            Text(target)
-                                .font(.rcMonoSmall)
-                                .foregroundStyle(.rcTextPrimary)
-                            Spacer(minLength: 0)
-                        }
-                    }
-                }
+                targetsSection(directive)
 
                 timelineSection(title: "Timeline")
             }
@@ -260,6 +240,127 @@ public struct DirectiveDetailView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .navigationTitle(directive.kind.title)
+    }
+
+    // MARK: Targets
+
+    /// The queue-shaped section, whichever shape this run takes. A run with
+    /// nothing to say here draws no header — see `DirectiveTargetsSection`.
+    @ViewBuilder
+    private func targetsSection(_ directive: Directive) -> some View {
+        let section = DirectiveTargetsSection.section(for: directive, devices: store.devices)
+        if let title = section.title {
+            VStack(alignment: .leading, spacing: Space.xs) {
+                RCSectionHeader(title)
+                switch section {
+                case let .queue(stops):
+                    ForEach(stops) { stop in
+                        markedRow(stop.designation, delivered: stop.delivered)
+                    }
+                case let .coverage(coverage):
+                    coverageBlock(coverage)
+                case let .assignments(delivering, assignments):
+                    assignmentsBlock(delivering: delivering, assignments)
+                case let .demand(targets):
+                    // Keyed by position: the same designation may repeat.
+                    ForEach(Array(targets.enumerated()), id: \.offset) { _, target in
+                        Text(target)
+                            .font(.rcMonoSmall)
+                            .foregroundStyle(.rcTextPrimary)
+                    }
+                case .empty:
+                    EmptyView()
+                }
+            }
+        }
+    }
+
+    /// A roam's standing: what it is working, how much it has charted, and the
+    /// tail of where it has been. The rest is a count, never a row.
+    @ViewBuilder
+    private func coverageBlock(_ coverage: DirectiveTargetsSection.Coverage) -> some View {
+        HStack(spacing: Space.xxs) {
+            Text("\(coverage.charted) charted")
+                .font(.rcCaption)
+                .foregroundStyle(.rcTextSecondary)
+            if let centre = coverage.centre {
+                Text("· roaming from")
+                    .font(.rcCaption)
+                    .foregroundStyle(.rcTextTertiary)
+                Text(centre)
+                    .font(.rcMonoSmall)
+                    .foregroundStyle(.rcTextSecondary)
+            }
+            Spacer(minLength: 0)
+        }
+        if let current = coverage.current {
+            HStack(spacing: Space.s) {
+                Image(systemName: "circle")
+                    .foregroundStyle(.rcAccent)
+                Text(current)
+                    .font(.rcBodyEmphMono)
+                    .foregroundStyle(.rcTextPrimary)
+                Spacer(minLength: 0)
+            }
+        }
+        ForEach(Array(coverage.recent.enumerated()), id: \.offset) { _, designation in
+            markedRow(designation, delivered: true, dimmed: true)
+        }
+        if coverage.earlier > 0 {
+            Text("+ \(coverage.earlier) earlier")
+                .font(.rcCaption)
+                .foregroundStyle(.rcTextTertiary)
+        }
+    }
+
+    /// Which controller drains which pile — a Haul Run's actual work, where a
+    /// queue-walker would show its queue.
+    @ViewBuilder
+    private func assignmentsBlock(
+        delivering: String, _ assignments: [DirectiveTargetsSection.Assignment]
+    ) -> some View {
+        HStack(spacing: Space.xxs) {
+            Text("delivering to")
+                .font(.rcCaption)
+                .foregroundStyle(.rcTextTertiary)
+            Text(delivering)
+                .font(.rcMonoSmall)
+                .foregroundStyle(.rcTextSecondary)
+            Spacer(minLength: 0)
+        }
+        ForEach(assignments) { assignment in
+            HStack(spacing: Space.s) {
+                Text(assignment.controllerCode)
+                    .font(.rcMonoSmall)
+                    .foregroundStyle(.rcTextPrimary)
+                if let collecting = assignment.collecting {
+                    Text("→")
+                        .font(.rcCaption)
+                        .foregroundStyle(.rcTextTertiary)
+                    Text(collecting)
+                        .font(.rcMonoSmall)
+                        .foregroundStyle(.rcTextPrimary)
+                } else {
+                    Text("· unassigned")
+                        .font(.rcCaption)
+                        .foregroundStyle(.rcTextTertiary)
+                }
+                Spacer(minLength: 0)
+            }
+        }
+    }
+
+    /// One target with its delivery mark. `dimmed` sinks a roam's trail behind
+    /// the system it is working now.
+    private func markedRow(_ designation: String, delivered: Bool, dimmed: Bool = false) -> some View {
+        HStack(spacing: Space.s) {
+            Image(systemName: delivered ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(delivered && !dimmed ? .rcAccent : .rcTextTertiary)
+            Text(designation)
+                .font(.rcMonoSmall)
+                .foregroundStyle(dimmed ? .rcTextSecondary : .rcTextPrimary)
+            Spacer(minLength: 0)
+        }
     }
 
     /// The timeline, shared by both panes: a mission's step history and a
