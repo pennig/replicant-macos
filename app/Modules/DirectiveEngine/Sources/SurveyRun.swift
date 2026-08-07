@@ -89,6 +89,10 @@ public struct SurveyRun: MissionStepMachine {
     /// The cap on holding a vessel for repair before surfacing `repairUnfinished`.
     public static let repairDeadline: TimeInterval = 20 * 60
 
+    /// The cap on a deploy or arm confirmation. Generous, but finite: without it
+    /// a row that never refreshes buys one `.high` read every tick forever.
+    public static let botConfirmDeadline: TimeInterval = 10 * 60
+
     /// The cap on dispatch rounds inside a bot deploy or recall loop. A fleet of
     /// two bots needs two; the rest is slack for a command that has to be
     /// re-issued once.
@@ -439,24 +443,6 @@ public struct SurveyRun: MissionStepMachine {
         stranded.compactMap(\.activityDeadline).max()
     }
 
-    // MARK: - Re-entry budget
-
-    /// How often `world`'s log shows the CURRENT unbroken run of the
-    /// `dispatch`/`confirm` loop entering `dispatch`. Read off the log because
-    /// `stepStartedAt` re-stamps on every hop, bounding one attempt not the loop.
-    static func dispatchRounds(_ world: WorldSnapshot, dispatch: String, confirm: String) -> Int {
-        var count = 0
-        for entry in world.log.reversed() {
-            if entry.kind == .resolved { break }
-            guard entry.kind == .stepStarted else { continue }
-            // Any other step ends this run of the loop, so each target's visit
-            // gets its own budget.
-            guard let step = entry.step, step == dispatch || step == confirm else { break }
-            if step == dispatch { count += 1 }
-        }
-        return count
-    }
-
     /// Fly `vessel` back to `directive`'s origin, finishing once `world` puts it
     /// in that system.
     ///
@@ -551,7 +537,7 @@ public struct SurveyRun: MissionStepMachine {
         guard let next = aboard.first else { return .advanceStep(nextStep: Step.configuring) }
         // `deploy` is untracked and the confirm step re-stamps `stepStartedAt`, so
         // the log is the only bound on this loop that re-entry cannot rewind.
-        if Self.dispatchRounds(world, dispatch: Step.deployingBots, confirm: Step.confirmingBotDeploy)
+        if MissionLogBudget.dispatchRounds(world, dispatch: Step.deployingBots, confirm: Step.confirmingBotDeploy)
             > Self.botDispatchRounds {
             logger.notice("survey run \(directive.id, privacy: .public): \(next.deviceCode, privacy: .public) will not deploy — surveying unrepaired")
             return .advanceStep(nextStep: Step.armingBots)
@@ -562,20 +548,37 @@ public struct SurveyRun: MissionStepMachine {
         )
     }
 
+    /// One throttled read of `rows` when any predates the step, or nil when they
+    /// are fresh enough to judge. Callers must check their deadline FIRST — a
+    /// failing read never advances `updatedAt`, so a staleness-first order loops.
+    private static func probe(
+        _ rows: [Device], _ directive: Directive, _ world: WorldSnapshot
+    ) -> MissionAction? {
+        guard rows.contains(where: { $0.updatedAt < directive.stepStartedAt }) else { return nil }
+        let lastLook = rows.map(\.updatedAt).min() ?? .distantPast
+        if world.now.timeIntervalSince(lastLook) < Self.botProbeInterval { return .wait }
+        return .refreshDevices(deviceCodes: rows.map(\.deviceCode), thenStall: nil)
+    }
+
     /// Judge an ordered deploy, looping back for the next bot until none is aboard.
     private func confirmBotDeploy(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
         let elapsed = world.now.timeIntervalSince(directive.stepStartedAt)
         if elapsed < Self.botProbeDelay { return .wait }
-        let aboard = RepairFleet.bots(aboard: vessel, in: world)
-        if aboard.isEmpty { return .advanceStep(nextStep: Step.armingBots) }
-        // A row that has not been read since the deploy was ordered cannot yet
-        // show it landing; buy the read rather than believing a stale claim.
-        if aboard.contains(where: { $0.updatedAt < directive.stepStartedAt }) {
-            let lastLook = aboard.map(\.updatedAt).min() ?? .distantPast
-            if world.now.timeIntervalSince(lastLook) < Self.botProbeInterval { return .wait }
-            return .refreshDevices(deviceCodes: aboard.map(\.deviceCode), thenStall: nil)
+        if elapsed > Self.botConfirmDeadline {
+            logger.notice("survey run \(directive.id, privacy: .public): bot deploy unconfirmed — surveying unrepaired")
+            return .advanceStep(nextStep: Step.armingBots)
         }
-        return .advanceStep(nextStep: Step.deployingBots)
+        let aboard = RepairFleet.bots(aboard: vessel, in: world)
+        guard aboard.isEmpty else {
+            // A row that has not been read since the deploy was ordered cannot
+            // yet show it landing; buy the read rather than a stale claim.
+            return Self.probe(aboard, directive, world)
+                ?? .advanceStep(nextStep: Step.deployingBots)
+        }
+        // `armingBots` judges the DEPLOYED rows, and nothing has read them since
+        // the deploy was ordered — a stale one reads armed and skips repair.
+        let deployed = RepairFleet.bots(deployedNear: vessel.location, in: world)
+        return Self.probe(deployed, directive, world) ?? .advanceStep(nextStep: Step.armingBots)
     }
 
     /// Ensure the next mis-armed deployed bot carries an ACTIVE `service`
@@ -588,7 +591,7 @@ public struct SurveyRun: MissionStepMachine {
         }
         // Both dispatches below are untracked and the confirm step re-stamps
         // `stepStartedAt`, so the log is the only bound re-entry cannot rewind.
-        if Self.dispatchRounds(world, dispatch: Step.armingBots, confirm: Step.confirmingBotArm)
+        if MissionLogBudget.dispatchRounds(world, dispatch: Step.armingBots, confirm: Step.confirmingBotArm)
             > Self.botDispatchRounds {
             logger.notice("survey run \(directive.id, privacy: .public): \(next.deviceCode, privacy: .public) will not arm")
             return .stall(.serviceBotNotArmed)
@@ -609,16 +612,13 @@ public struct SurveyRun: MissionStepMachine {
     private func confirmBotArm(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
         let elapsed = world.now.timeIntervalSince(directive.stepStartedAt)
         if elapsed < Self.botProbeDelay { return .wait }
+        if elapsed > Self.botConfirmDeadline { return .stall(.serviceBotNotArmed) }
         let deployed = RepairFleet.bots(deployedNear: vessel.location, in: world)
-        guard let bot = deployed.first(where: { !RepairFleet.isArmed($0) }) else {
+        // "Everything is armed" is the conclusion that skips repair entirely, so
+        // it needs the same proof the mis-armed one does.
+        if let probe = Self.probe(deployed, directive, world) { return probe }
+        guard deployed.contains(where: { !RepairFleet.isArmed($0) }) else {
             return .advanceStep(nextStep: Step.configuring)
-        }
-        // A row that has not been read since the arm was ordered cannot yet
-        // show it landing; buy the read rather than believing a stale claim.
-        if bot.updatedAt < directive.stepStartedAt {
-            let lastLook = deployed.map(\.updatedAt).min() ?? .distantPast
-            if world.now.timeIntervalSince(lastLook) < Self.botProbeInterval { return .wait }
-            return .refreshDevices(deviceCodes: deployed.map(\.deviceCode), thenStall: nil)
         }
         return .advanceStep(nextStep: Step.armingBots)
     }
@@ -660,13 +660,6 @@ public struct SurveyRun: MissionStepMachine {
         return .refreshDevices(deviceCodes: bots.map(\.deviceCode), thenStall: nil)
     }
 
-    /// An operation with no `completesAt` can never resolve — a `recall` at a
-    /// bot already co-located stows instantly, with no travel block to set one.
-    /// Waiting on it waits on nothing.
-    private static func openRecallOperation(_ deviceCode: String, in world: WorldSnapshot) -> GameModels.Operation? {
-        world.openOperation(for: deviceCode).flatMap { $0.completesAt == nil ? nil : $0 }
-    }
-
     /// Recall the next service bot still out in the system, or advance when none
     /// is left. `recall`, not `stow`: `stow` needs the bot beside the vessel, and
     /// a bot that cruised off to repair a drone is not.
@@ -683,11 +676,11 @@ public struct SurveyRun: MissionStepMachine {
         }
         let out = RepairFleet.bots(deployedNear: location, in: world)
         guard let next = out.first else { return .advanceTarget }
-        if Self.dispatchRounds(world, dispatch: Step.stowingBots, confirm: Step.confirmingBotStow)
+        if MissionLogBudget.dispatchRounds(world, dispatch: Step.stowingBots, confirm: Step.confirmingBotStow)
             > Self.botDispatchRounds {
             return .stall(.serviceBotNotRecovered)
         }
-        if Self.openRecallOperation(next.deviceCode, in: world) != nil {
+        if RepairFleet.openRecall(for: next.deviceCode, in: world) != nil {
             if world.now.timeIntervalSince(directive.stepStartedAt) > Self.recallDeadline {
                 return .stall(.serviceBotNotRecovered)
             }

@@ -8,6 +8,7 @@
 
 import Foundation
 import GameModels
+import UniverseModels
 import Utils
 @testable import DirectiveEngine
 
@@ -22,6 +23,9 @@ func repairDevice(
     currentDirective: String? = nil,
     currentDirectiveStatus: String? = nil,
     capacity: Double = 100,
+    tags: [String] = [],
+    features: [String] = [],
+    status: String = "idle",
     updatedAt: Date = repairFixtureNow,
     repairingTarget: String? = nil,
     travelArrival: Date? = nil
@@ -44,11 +48,11 @@ func repairDevice(
         detail["travel"] = .object(["arrives_at": .string(stamp)])
     }
     return Device(
-        deviceCode: code, deviceType: type, replicantCode: "R1", status: "idle",
+        deviceCode: code, deviceType: type, replicantCode: "R1", status: status,
         location: location, locationName: nil, operationalCapacity: capacity, queueSize: 0,
         stowedInDeviceCode: stowedIn, controllerDeviceCode: nil, attachedToDeviceCode: nil,
         createdAt: Date(timeIntervalSince1970: 0), availableCommands: [],
-        features: [], tags: [], detail: .object(detail),
+        features: features, tags: tags, detail: .object(detail),
         updatedAt: updatedAt, firstSeenAt: Date(timeIntervalSince1970: 0)
     )
 }
@@ -68,11 +72,12 @@ func STUCKOP_operation(
 func repairWorld(
     devices: [Device],
     log: [DirectiveLogEntry] = [],
-    openOperations: [String: GameModels.Operation] = [:]
+    openOperations: [String: GameModels.Operation] = [:],
+    systems: [String: StarSystem] = [:]
 ) -> WorldSnapshot {
     WorldSnapshot(
         devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
-        openOperations: openOperations, log: log, systems: [:], now: repairFixtureNow
+        openOperations: openOperations, log: log, systems: systems, now: repairFixtureNow
     )
 }
 
@@ -93,10 +98,14 @@ func repairDirective(
     deviceCode: String,
     targets: [String] = [],
     targetIndex: Int = 0,
-    stepStartedAt: Date = repairFixtureNow
+    stepStartedAt: Date = repairFixtureNow,
+    kind: DirectiveKind = .surveyRun,
+    controllerCode: String? = nil,
+    fleetTag: String? = nil
 ) -> Directive {
     Directive(
-        id: "D1", kind: .surveyRun, status: .running, deviceCode: deviceCode,
+        id: "D1", kind: kind, status: .running, deviceCode: deviceCode,
+        controllerCode: controllerCode, fleetTag: fleetTag,
         targets: targets, targetIndex: targetIndex,
         step: step, stepStartedAt: stepStartedAt, returnToOrigin: false,
         originDesignation: nil, attentionReason: nil,

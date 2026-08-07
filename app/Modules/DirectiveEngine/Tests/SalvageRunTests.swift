@@ -357,13 +357,13 @@ struct SalvageRunTravelTests {
     }
 
     /// Arrived, and a relay is already relaying here — nothing to emplace, so
-    /// the run skips straight past that step.
-    @Test func skipsStraightToMiningWhenTheSystemIsAlreadyMeshed() {
+    /// the run skips that step and puts its service bots into the system.
+    @Test func skipsStraightToTheBotDeployWhenTheSystemIsAlreadyMeshed() {
         let arrived = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3")
         let here = device("R", location: "TOSLIT-3-L4", features: ["relay"], status: "relaying")
         let snapshot = world(devices: [arrived, controller, drone, relay, here])
         #expect(SalvageRun().nextAction(directive: running(step: "travelling"), world: snapshot)
-                == .advanceStep(nextStep: "positioning"))
+                == .advanceStep(nextStep: "deployingBots"))
     }
 
     /// Arrived at an unmeshed system: go emplace the relay before mining.
@@ -531,12 +531,12 @@ struct SalvageRunEmplacementTests {
                          params: CommandParams(), nextStep: "confirmingRelay"))
     }
 
-    @Test func advancesToConfiguringOnceTheRelayIsRelaying() {
+    @Test func advancesToTheBotDeployOnceTheRelayIsRelaying() {
         let atL4 = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3-L4")
         let up = device("RELAY", type: "ftl_relay", location: "TOSLIT-3-L4", features: ["relay"], status: "relaying")
         let world = world(devices: [atL4, controller, drone, up], systems: ["TOSLIT": toslit])
         #expect(SalvageRun().nextAction(directive: running(step: "confirmingRelay"), world: world)
-            == .advanceStep(nextStep: "positioning"))
+            == .advanceStep(nextStep: "deployingBots"))
     }
 
     /// The relay is now planted infrastructure, not cargo: `auto:salvage`
@@ -551,7 +551,7 @@ struct SalvageRunEmplacementTests {
                         features: ["relay"], status: "relaying", tags: ["auto:salvage"])
         let world = world(devices: [atL4, controller, drone, up], systems: ["TOSLIT": toslit])
         #expect(SalvageRun().nextAction(directive: running(step: "confirmingRelay"), world: world)
-            == .setDeviceTags(deviceCode: "RELAY", tags: [], nextStep: "positioning"))
+            == .setDeviceTags(deviceCode: "RELAY", tags: [], nextStep: "deployingBots"))
     }
 
     /// `updateTags` is declarative — it replaces the WHOLE set — so untagging
@@ -564,7 +564,7 @@ struct SalvageRunEmplacementTests {
         let world = world(devices: [atL4, controller, drone, up], systems: ["TOSLIT": toslit])
         #expect(SalvageRun().nextAction(directive: running(step: "confirmingRelay"), world: world)
             == .setDeviceTags(
-                deviceCode: "RELAY", tags: ["operator:keep", "operator:also-keep"], nextStep: "positioning"
+                deviceCode: "RELAY", tags: ["operator:keep", "operator:also-keep"], nextStep: "deployingBots"
             ))
     }
 
@@ -577,12 +577,12 @@ struct SalvageRunEmplacementTests {
         let directive = running(step: "confirmingRelay", fleetTag: "auto:salvage-2")
         let world = world(devices: [atL4, controller, drone, up], systems: ["TOSLIT": toslit])
         #expect(SalvageRun().nextAction(directive: directive, world: world)
-            == .setDeviceTags(deviceCode: "RELAY", tags: [], nextStep: "positioning"))
+            == .setDeviceTags(deviceCode: "RELAY", tags: [], nextStep: "deployingBots"))
     }
 
     /// Idempotent: a relay that no longer carries the fleet tag — the run
     /// relaunched after untagging landed, or the operator removed it by hand —
-    /// must not re-issue a redundant PATCH. `advancesToConfiguringOnceTheRelayIsRelaying`
+    /// must not re-issue a redundant PATCH. `advancesToTheBotDeployOnceTheRelayIsRelaying`
     /// above already covers this (its fixture carries no tags at all); this
     /// test pins the property explicitly against a relay that has OTHER tags
     /// but not this run's own.
@@ -592,7 +592,7 @@ struct SalvageRunEmplacementTests {
                         features: ["relay"], status: "relaying", tags: ["operator:keep"])
         let world = world(devices: [atL4, controller, drone, up], systems: ["TOSLIT": toslit])
         #expect(SalvageRun().nextAction(directive: running(step: "confirmingRelay"), world: world)
-            == .advanceStep(nextStep: "positioning"))
+            == .advanceStep(nextStep: "deployingBots"))
     }
 
     /// The property that pins the Critical fix from review: from the polling
@@ -657,7 +657,7 @@ struct SalvageRunEmplacementTests {
                         features: ["relay"], status: "relaying (TOSLIT)")
         let world = world(devices: [atL4, controller, drone, up], systems: ["TOSLIT": toslit])
         #expect(SalvageRun().nextAction(directive: running(step: "confirmingRelay"), world: world)
-            == .advanceStep(nextStep: "positioning"))
+            == .advanceStep(nextStep: "deployingBots"))
     }
 
     /// A `system_hub` carries the `relay` FEATURE — it contains an integrated
@@ -695,7 +695,7 @@ struct SalvageRunEmplacementTests {
         let world = world(devices: [arrived, controller, drone, relay],
                           systems: ["TOSLIT": toslitWithNoPlanets])
         #expect(SalvageRun().nextAction(directive: running(step: "emplacing"), world: world)
-            == .advanceStep(nextStep: "positioning"))
+            == .advanceStep(nextStep: "deployingBots"))
     }
 
     /// `emplace`'s relay-aboard guard is a backstop for the relay being
@@ -868,12 +868,13 @@ struct SalvageRunPositioningTests {
     }
 
     /// No live body left in the system: this target is done. `positioning` owns
-    /// the first look now, so it inherits `configure`'s finished handling.
-    @Test func advancesTheTargetWhenNoBodyIsLeft() {
+    /// the first look now, so it inherits `configure`'s finished handling, and
+    /// leaving the system routes through the bot recall.
+    @Test func recallsTheBotsWhenNoBodyIsLeft() {
         let drained = StarSystem(designation: "TOSLIT", planets: [])
         let world = world(devices: [atSystem, controller, drone], systems: ["TOSLIT": drained])
         #expect(SalvageRun().nextAction(directive: running(step: "positioning"), world: world)
-            == .advanceTarget)
+            == .advanceStep(nextStep: "repairing"))
     }
 
     /// An uncached system blob must NOT read as "nothing to mine" — wait for it,
@@ -1105,11 +1106,11 @@ struct SalvageRunMiningTests {
     /// exists: it recognises "nothing left" identically whether this is the
     /// first evaluation after arrival or a return trip after a body just
     /// finished, so no separate finished-system check is needed there.
-    @Test func advancesTheTargetWhenNoBodyIsLeftToWork() {
+    @Test func recallsTheBotsWhenNoBodyIsLeftToWork() {
         let drained = StarSystem(designation: "TOSLIT", planets: [])
         let world = world(devices: [atSystem, controller, drone], systems: ["TOSLIT": drained])
         #expect(SalvageRun().nextAction(directive: running(step: "configuring"), world: world)
-            == .advanceTarget)
+            == .advanceStep(nextStep: "repairing"))
     }
 
     /// CRITICAL fix from review: a system that hasn't been cached yet (its
@@ -1218,20 +1219,21 @@ struct SalvageRunVerificationTests {
             == .refreshFleet(tag: "auto:salvage", thenStall: .dronesNotRecovered))
     }
 
-    /// No salvage left anywhere in the system: this target is finished.
-    @Test func advancesTheTargetOnceTheSystemIsDrained() {
+    /// No salvage left anywhere in the system: this target is finished, and the
+    /// service bots come home before the vessel leaves.
+    @Test func recallsTheBotsOnceTheSystemIsDrained() {
         let world = world(devices: [atSystem, controller, drone], systems: ["TOSLIT": drainedToslit])
         #expect(SalvageRun().nextAction(directive: running(step: "verifying"), world: world)
-            == .advanceTarget)
+            == .advanceStep(nextStep: "repairing"))
     }
 
     /// A vanished controller is preflight's diagnosis to make, not
     /// verifying's — holding here would stall on a reason that doesn't name
     /// the real problem. Mirrors `SurveyRun.recover`'s identical handling.
-    @Test func advancesTheTargetWhenTheControllerHasVanished() {
+    @Test func recallsTheBotsWhenTheControllerHasVanished() {
         let world = world(devices: [atSystem, drone], systems: ["TOSLIT": miningToslit])
         #expect(SalvageRun().nextAction(directive: running(step: "verifying"), world: world)
-            == .advanceTarget)
+            == .advanceStep(nextStep: "repairing"))
     }
 
     /// The same Critical-class fix as `configure`/`emplace`, one step over:
