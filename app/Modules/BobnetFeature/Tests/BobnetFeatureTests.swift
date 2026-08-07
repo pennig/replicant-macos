@@ -218,21 +218,24 @@ func bobnetMessage(
 
             await store.send(.binding(.set(\.selectedChannel, "#general"))) {
                 $0.selectedChannel = "#general"
-                $0.markerAtSelection = 7
                 $0.isAtLatest = true
+            }
+            try await database.write { db in
+                try BobnetChannel.upsert {
+                    BobnetChannel(name: "#general", lastActive: nil, lastReadMessageID: 99)
+                }.execute(db)
             }
             await clock.advance(by: .seconds(3))
             await store.receive(\.lingerElapsed)
             await store.finish()
             #expect(store.state.channelMessages.messages.map(\.id) == [7, 8])
-            #expect(store.state.channelMessages.marker == 7)
+            #expect(store.state.channelMessages.marker == 7) // the stale snapshot, not the live 99
         }
     }
 
     /// The pane's whole value is self-consistent: `channelMessages.channel`,
-    /// `.marker`, and `.messages` always describe the SAME channel, even across
-    /// a switch — no combination of stale fields can point a divider at another
-    /// channel's history.
+    /// `.marker`, and `.messages` always describe the SAME channel — no stale
+    /// field can point a divider at another channel's history.
     @Test func channelMessagesValueDescribesOneChannelAfterASwitch() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in
@@ -259,12 +262,24 @@ func bobnetMessage(
             try await store.state.$channelList.load(BobnetChannelList())
 
             await store.send(.binding(.set(\.selectedChannel, "#general")))
+            // Moves the live row AFTER the snapshot was captured — a
+            // live-reading `fetch` would echo 999, not the captured 7.
+            try await database.write { db in
+                try BobnetChannel.upsert {
+                    BobnetChannel(name: "#general", lastActive: nil, lastReadMessageID: 999)
+                }.execute(db)
+            }
             await store.finish()
             #expect(store.state.channelMessages.channel == "#general")
             #expect(store.state.channelMessages.marker == 7)
             #expect(store.state.channelMessages.messages.allSatisfy { $0.channel == "#general" })
 
             await store.send(.binding(.set(\.selectedChannel, "#trade")))
+            try await database.write { db in
+                try BobnetChannel.upsert {
+                    BobnetChannel(name: "#trade", lastActive: nil, lastReadMessageID: 888)
+                }.execute(db)
+            }
             await store.finish()
             #expect(store.state.channelMessages.channel == "#trade")
             #expect(store.state.channelMessages.marker == 51)

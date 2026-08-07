@@ -48,10 +48,6 @@ public struct BobnetFeature {
         @Fetch(BobnetChannelMessages(channel: nil, marker: 0)) public var channelMessages = BobnetChannelMessages.Value()
 
         public var selectedChannel: String?
-        /// The read-marker snapshot for the *current selection*, set
-        /// synchronously so the channel list highlights instantly. Compare
-        /// `channelMessages.marker`, the snapshot the *rendered* messages loaded with.
-        public var markerAtSelection: Int = 0
         /// Whether the detail view is showing the newest message: geometry's
         /// truth, established on selection and on the pane appearing (both render
         /// pinned to the bottom) and thereafter only maintained by its reports.
@@ -355,7 +351,6 @@ public struct BobnetFeature {
         let channel = state.selectedChannel
         let marker = state.channelList.rows
             .first { $0.name == channel }?.lastReadMessageID ?? 0
-        state.markerAtSelection = marker
         state.isAtLatest = channel != nil
         state.newWhileAway = 0
         state.pendingBottomScroll = false
