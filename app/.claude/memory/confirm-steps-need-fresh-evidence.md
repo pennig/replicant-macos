@@ -109,8 +109,14 @@ watermark.
 second-granularity). The op still closes, so the row reads **fresh-but-wrong** and the gate above
 *passes* — same stall, different door. The fix belongs in `applyEventFields`, not in a mission.
 
-**Sibling exposure:** `SurveyRun.swift:416` (`returnHome`) and `:488` (`travel`) still have the
-pre-fix shape — both guard a travel dispatch on `world.openOperation` alone.
+**Sibling exposure CLOSED 2026-08-07**, after it fired live: a roaming Survey Run stalled
+`commandRejected: "Already at destination"` **1.2 s** after its vessel's travel op closed, and sat
+halted for seven hours until a hand Retry. `SurveyRun.travel` and `SurveyRun.returnHome` now call the
+same `SalvageRun.travelPositionUnconfirmed`, so all nine travel dispatch sites in the engine carry the
+arrival watermark. The gate's PLACEMENT is pinned per site by a stale fixture that already names the
+destination (`travelAdvancesOnAStaleRowThatAlreadyNamesTheTarget`,
+`returnCompletesOnAStaleRowThatAlreadyNamesTheOrigin`) — hoisting the gate above the equality check
+breaks exactly those two and nothing else.
 
 ## Rules
 

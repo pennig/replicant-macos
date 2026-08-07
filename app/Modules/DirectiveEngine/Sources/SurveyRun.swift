@@ -445,13 +445,12 @@ public struct SurveyRun: MissionStepMachine {
 
     /// Fly `vessel` back to `directive`'s origin, finishing once `world` puts it
     /// in that system.
-    ///
-    /// Carries the same open-op-only dispatch guard `travel` does, and the same
-    /// exposure it documents.
     private func returnHome(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
         guard let origin = directive.originDesignation else { return .done }
         if Self.system(of: vessel) == origin { return .done }
         if world.openOperation(for: vessel.deviceCode) != nil { return .wait }
+        // The equality check above misreads a row still lagging the arrival.
+        if let unconfirmed = SalvageRun.travelPositionUnconfirmed(vessel, world) { return unconfirmed }
         return .dispatch(
             kind: .travel, deviceCode: vessel.deviceCode,
             params: CommandParams(destination: origin), nextStep: Step.returning
@@ -511,19 +510,14 @@ public struct SurveyRun: MissionStepMachine {
 
     /// Fly `vessel` to `directive`'s current target, or advance once `world`
     /// already places it there.
-    ///
-    /// The open-op guard proves only that the last travel's operation row is
-    /// closed. An arrival closes that row and writes `device.location` in two
-    /// separate transactions, so a tick landing between them re-commands travel
-    /// at a vessel already parked on the destination: a dispatch step's watermark
-    /// must be the ARRIVAL, which this one does not carry
-    /// (`confirm-steps-need-fresh-evidence`).
     private func travel(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
         guard let target = directive.currentTarget else {
             return .advanceStep(nextStep: Step.preflight)
         }
         if Self.system(of: vessel) == target { return .advanceStep(nextStep: Step.deployingBots) }
         if world.openOperation(for: vessel.deviceCode) != nil { return .wait }
+        // The equality check above misreads a row still lagging the arrival.
+        if let unconfirmed = SalvageRun.travelPositionUnconfirmed(vessel, world) { return unconfirmed }
         return .dispatch(
             kind: .travel, deviceCode: vessel.deviceCode,
             params: CommandParams(destination: target), nextStep: Step.travelling
