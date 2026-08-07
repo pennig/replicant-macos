@@ -156,3 +156,36 @@ design (message landing at the bottom, reader scrolling up mid-window, the short
 channel, and a pill tap whose scroll never lands) are asserted in
 `BobnetJumpToLatestTests` against `BobnetChannel.lastReadMessageID` — state-only
 assertions are what let both prior bugs through.
+
+## Selection and data change at different times, so identity must key on the data
+
+`selectionChanged` writes `selectedChannel` synchronously but reloads
+`channelMessages` through an async effect, so for at least one frame the two
+disagree. Anything keyed on the *selection* therefore sees the *previous*
+channel's content: the scroll view rebuilt under the new channel's `.id` while
+still holding the old channel's messages, laid out against the stale content
+height, and the real content then arrived as a **size change**.
+`.defaultScrollAnchor(.top, for: .sizeChanges)` correctly refuses to re-anchor on
+a size change, so the alignment inset computed for the old height was stranded —
+measured live 2026-08-07 at `802 + 198 = 1000` against a target of `894`, a
+106-point overshoot (`106 = 52 + 54`, the settled top and bottom insets), and on
+a large-to-small switch a `contentOffset` past the end of the document. It was
+fine on first load only because there was no prior height to strand.
+
+The fix is `BobnetChannelMessages.Value` carrying the channel its messages came
+from, and `.id` keyed on that. The scroll view keeps its old identity and its
+correctly-laid-out old content until the new data lands, then flips exactly once,
+taking a fresh `.initialOffset` anchor against final content and never seeing a
+size change across a switch. `.sizeChanges: .top` stays, now governing only true
+in-channel growth, which is what it is for.
+
+Two consequences worth keeping. Before the first load the value's channel is
+`nil`, and that is used as a real identity rather than falling back to the
+selection — a fallback would hold the *empty* view's identity through the first
+load and turn the initial population into exactly the size change being fixed.
+And `.detailAppeared`/`.detailDisappeared` must carry the **loaded** channel,
+passed in from the same expression that computes the `.id`, never the selection
+and never re-read from the store inside the closure: those guards compare against
+`selectedChannel` to reject a stale identity, and a view reporting the selection
+it was re-rendered with would always compare equal, letting the departing
+channel's `onDisappear` clobber the arriving channel's linger.
