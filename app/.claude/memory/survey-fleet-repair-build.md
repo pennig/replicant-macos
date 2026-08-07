@@ -152,6 +152,40 @@ a mission returns exactly one action. The loop is bounded off
 `stepStartedAt` re-stamping), and the bound covers BOTH dispatch branches, so a
 bot refusing to activate terminates the same way as one refusing `set_directive`.
 
+## An instant command leaves an operation that never closes (2026-08-07)
+
+The second live incident, and the more general lesson. A Survey Run entered
+`stowingBots`, dispatched nothing for twenty minutes, and stalled — while every
+drone sat safely aboard.
+
+**`recall` takes its deadline from the recalled device's travel block.** A bot
+already co-located with the vessel stows INSTANTLY, so there is no `arrives_at`,
+so its `Operation` row is written `active` with **`completesAt: nil`**.
+`DeadlineScheduler` has nothing to fire on, so that row stays open forever. The
+command itself succeeded — the bots stowed, travelled, and redeployed. Only the
+bookkeeping stuck.
+
+`stowBots` gated on `world.openOperation(for:)`, so it waited on a row that
+could never resolve and burned its backstop.
+
+**The rule: an operation carrying no `completesAt` must never block a dispatch.**
+It cannot resolve, so waiting on it is waiting on nothing. `stowBots` now uses a
+narrow private predicate; `WorldSnapshot.openOperation(for:)` is deliberately
+UNCHANGED, because the other twelve callers ask "is this device busy?" — a
+different question — and every one of them guards a `.travel`/`.print` behind a
+co-location check that prevents the instant-completion shape arising at all.
+
+**The stuck row clears itself once the dispatch is unblocked**: `CommandClient`
+allows at most one open op per device and supersedes the prior one when the new
+command is CONFIRMED (a 4xx leaves the prior untouched), so re-issuing the recall
+retires the dead row.
+
+**A bot that will not come home is `serviceBotNotRecovered`**, not
+`dronesNotRecovered`. Borrowing the drone reason told the operator their drones
+were lost while all six were aboard, and cost a real diagnosis. A reviewer
+flagged the misnaming as a minor the day it shipped and it was deferred; this is
+what deferring it bought.
+
 **Still unverified live:** whether `activate` actually clears
 `ami_directive_status` for a `service_bot` the way it does for an FTL relay.
 Establishing it needs a mutation. If the server no-ops it, every deploy burns
