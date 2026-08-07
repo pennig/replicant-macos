@@ -20,7 +20,7 @@ struct JumpToLatestPill: View {
 
     private var presentation: Presentation {
         if store.newWhileAway > 0 { return .count(store.newWhileAway) }
-        return store.isAtLatest ? .hidden : .arrow
+        return !store.isAtLatest && !store.pendingBottomScroll ? .arrow : .hidden
     }
 
     var body: some View {

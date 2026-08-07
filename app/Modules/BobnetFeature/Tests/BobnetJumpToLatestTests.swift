@@ -49,6 +49,25 @@ import Testing
         }
     }
 
+    /// Write a new #general message and reload the list the reducer reads from,
+    /// the way the SSE route plus the `@Fetch` observation would.
+    private func land(
+        _ id: Int,
+        _ database: any DatabaseWriter,
+        _ store: TestStore<BobnetFeature.State, BobnetFeature.Action>
+    ) async throws {
+        try await withDependencies {
+            $0.defaultDatabase = database
+        } operation: {
+            try await database.write { db in
+                try BobnetMessage.upsert {
+                    bobnetMessage(id, at: TimeInterval(id) * 100)
+                }.execute(db)
+            }
+            try await store.state.$channelList.load(BobnetChannelList())
+        }
+    }
+
     /// A message landing while the reader is scrolled away is counted.
     @Test func messageWhileAwayIsCounted() async throws {
         let (store, _) = try await makeStore(clock: TestClock())
@@ -113,10 +132,10 @@ import Testing
         #expect(store.state.pendingBottomScroll == true)
     }
 
-    /// While a bottom-scroll is in flight, geometry reporting "not at bottom" is
-    /// the content having grown under a held viewport — not the reader leaving.
-    /// It must not flip the flag or count a message.
-    @Test func negativeGeometryDuringPendingScrollIsIgnored() async throws {
+    /// Geometry reporting "not at bottom" while a bottom-scroll is in flight is
+    /// recorded as-is — the mask, not an overwrite, is what keeps the message
+    /// from being counted as unseen.
+    @Test func negativeGeometryDuringPendingScrollIsNotCounted() async throws {
         let (store, _) = try await makeStore(clock: TestClock())
 
         await store.send(.binding(.set(\.isAtLatest, true)))
@@ -125,9 +144,82 @@ import Testing
 
         await store.send(.binding(.set(\.isAtLatest, false)))
 
-        #expect(store.state.isAtLatest == true)
+        #expect(store.state.isAtLatest == false)
         #expect(store.state.newWhileAway == 0)
         #expect(store.state.pendingBottomScroll == true)
+    }
+
+    /// A message landing while the reader is at the bottom holds the linger
+    /// armed across the whole window, counts nothing as unseen, and the landing
+    /// report drops the mask — the marker still advances.
+    @Test func messageLandingAtTheBottomKeepsTheLingerArmed() async throws {
+        let clock = TestClock()
+        let (store, database) = try await makeStore(clock: clock)
+
+        await store.send(.binding(.set(\.isAtLatest, true)))
+        try await land(3, database, store)
+        await store.send(.latestMessageChanged)
+        #expect(store.state.pendingBottomScroll == true)
+        #expect(store.state.newWhileAway == 0)
+
+        // The content grew under the held viewport before the scroll landed.
+        await store.send(.binding(.set(\.isAtLatest, false)))
+        #expect(store.state.newWhileAway == 0)
+        #expect(store.state.pendingBottomScroll == true)
+
+        await store.send(.binding(.set(\.isAtLatest, true)))
+        #expect(store.state.pendingBottomScroll == false)
+
+        await clock.advance(by: .seconds(3))
+        await store.receive(\.lingerElapsed)
+        await store.finish()
+        #expect(try await marker(database, "#general") == 3)
+    }
+
+    /// The reader scrolling up mid-window: geometry is believed immediately, the
+    /// mask holds until it expires, and the marker never advances after it does.
+    @Test func scrollingUpMidWindowDisarmsTheLingerAtTheExpiry() async throws {
+        let clock = TestClock()
+        let (store, database) = try await makeStore(clock: clock)
+
+        await store.send(.binding(.set(\.isAtLatest, true)))
+        try await land(3, database, store)
+        await store.send(.latestMessageChanged)
+
+        await store.send(.binding(.set(\.isAtLatest, false)))
+        #expect(store.state.isAtLatest == false)
+        #expect(store.state.pendingBottomScroll == true)
+
+        await clock.advance(by: .milliseconds(250))
+        await store.receive(\.pendingScrollExpired)
+        #expect(store.state.isAtLatest == false)
+        #expect(store.state.pendingBottomScroll == false)
+
+        await clock.advance(by: .seconds(3))
+        await store.finish()
+        #expect(try await marker(database, "#general") == nil)
+    }
+
+    /// A channel shorter than the viewport: `isAtBottom` is true at rest and
+    /// stays true as content grows, so no geometry report ever arrives. The
+    /// reader is at the newest message and the marker must still advance.
+    @Test func shortChannelWithNoGeometryReportStillAdvancesTheMarker() async throws {
+        let clock = TestClock()
+        let (store, database) = try await makeStore(clock: clock)
+
+        await store.send(.binding(.set(\.isAtLatest, true)))
+        try await land(3, database, store)
+        await store.send(.latestMessageChanged)
+
+        await clock.advance(by: .milliseconds(250))
+        await store.receive(\.pendingScrollExpired)
+        #expect(store.state.isAtLatest == true)
+        #expect(store.state.pendingBottomScroll == false)
+
+        await clock.advance(by: .seconds(3))
+        await store.receive(\.lingerElapsed)
+        await store.finish()
+        #expect(try await marker(database, "#general") == 3)
     }
 
     /// The genuine exit: a positive geometry report while a scroll is pending
@@ -153,8 +245,8 @@ import Testing
         await store.finish()
     }
 
-    /// The suppression cannot stick: with no geometry report at all, 250 ms
-    /// clears it and geometry becomes authoritative again.
+    /// The mask cannot stick: with no geometry report at all, 250 ms clears it
+    /// and `isAtLatest` alone decides again.
     @Test func pendingScrollExpiresWithoutAGeometryReport() async throws {
         let clock = TestClock()
         let (store, _) = try await makeStore(clock: clock)
@@ -174,41 +266,44 @@ import Testing
         await store.finish()
     }
 
-    /// A suppressed report is the only one the view will send: the transformed
-    /// `Bool` is already false, so geometry stays silent. The expiry has to
-    /// apply that truth, or the linger marks history read.
-    @Test func suppressedNegativeReportIsAppliedByTheExpiry() async throws {
+    /// A negative report is not repeated once the mask expires, so the reader is
+    /// genuinely away: the next arrival is counted rather than followed.
+    @Test func negativeReportOutlivesTheMaskWindow() async throws {
         let clock = TestClock()
         let (store, database) = try await makeStore(clock: clock)
 
         await store.send(.binding(.set(\.isAtLatest, true)))
         await store.send(.latestMessageChanged)
         await store.send(.binding(.set(\.isAtLatest, false)))
-        #expect(store.state.isAtLatest == true) // suppressed, and now unrepeatable
 
         await clock.advance(by: .milliseconds(250))
         await store.receive(\.pendingScrollExpired)
-        #expect(store.state.isAtLatest == false)
-        #expect(store.state.pendingBottomScroll == false)
+
+        let before = store.state.scrollToBottomToken
+        await store.send(.latestMessageChanged)
+        #expect(store.state.newWhileAway == 1)
+        #expect(store.state.scrollToBottomToken == before)
 
         await clock.advance(by: .seconds(3))
         await store.finish()
         #expect(try await marker(database, "#general") == nil)
     }
 
-    /// The pill's optimistic flag fails closed: with no landing report at all,
-    /// 250 ms puts the reader back in history and disarms the linger.
-    @Test func jumpToLatestThatNeverLandsFailsClosed() async throws {
+    /// The pill's mask cannot stick: with no landing report at all it drops at
+    /// 250 ms, leaving the reader in history and the marker where it was.
+    @Test func jumpToLatestThatNeverLandsAdvancesNothing() async throws {
         let clock = TestClock()
         let (store, database) = try await makeStore(clock: clock)
 
         await store.send(.binding(.set(\.isAtLatest, false)))
         await store.send(.jumpToLatestTapped)
-        #expect(store.state.isAtLatest == true)
+        #expect(store.state.isAtLatest == false)
+        #expect(store.state.pendingBottomScroll == true)
 
         await clock.advance(by: .milliseconds(250))
         await store.receive(\.pendingScrollExpired)
         #expect(store.state.isAtLatest == false)
+        #expect(store.state.pendingBottomScroll == false)
 
         await clock.advance(by: .seconds(3))
         await store.finish()
@@ -237,7 +332,8 @@ import Testing
         #expect(store.state.pendingBottomScroll == true)
     }
 
-    /// Tapping the pill goes to the bottom and clears the count.
+    /// Tapping the pill asks for the bottom and clears the count; the mask
+    /// carries "effectively at latest" until geometry speaks.
     @Test func jumpToLatestScrollsAndClears() async throws {
         let (store, _) = try await makeStore(clock: TestClock())
 
@@ -247,7 +343,8 @@ import Testing
 
         await store.send(.jumpToLatestTapped)
 
-        #expect(store.state.isAtLatest == true)
+        #expect(store.state.isAtLatest == false)
+        #expect(store.state.pendingBottomScroll == true)
         #expect(store.state.newWhileAway == 0)
         #expect(store.state.scrollToBottomToken == before + 1)
     }
@@ -262,13 +359,14 @@ import Testing
 
         await store.send(.sendSucceeded("#general"))
 
-        #expect(store.state.isAtLatest == true)
+        #expect(store.state.isAtLatest == false)
+        #expect(store.state.pendingBottomScroll == true)
         #expect(store.state.newWhileAway == 0)
         #expect(store.state.scrollToBottomToken == before + 1)
     }
 
     /// A send response for a channel the reader has since switched away from
-    /// must not force that OTHER channel to latest or scroll it.
+    /// must not mask that OTHER channel to latest or scroll it.
     @Test func staleSendSucceededIsIgnored() async throws {
         let (store, _) = try await makeStore(clock: TestClock())
 
@@ -279,6 +377,7 @@ import Testing
         await store.send(.sendSucceeded("#general"))
 
         #expect(store.state.isAtLatest == false)
+        #expect(store.state.pendingBottomScroll == false)
         #expect(store.state.scrollToBottomToken == before)
     }
 }

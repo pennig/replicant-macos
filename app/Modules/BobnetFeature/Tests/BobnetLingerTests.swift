@@ -113,8 +113,7 @@ import Testing
             try await store.state.$channelList.load(BobnetChannelList())
         }
         await store.send(.latestMessageChanged)
-        // The bottom-scroll it requested lands, and geometry says so — without
-        // that report the 250 ms window closes fail-closed and disarms.
+        // The bottom-scroll it requested lands, and geometry says so.
         await store.send(.binding(.set(\.isAtLatest, true)))
 
         await clock.advance(by: .seconds(2))

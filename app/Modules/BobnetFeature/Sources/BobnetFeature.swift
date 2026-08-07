@@ -52,21 +52,18 @@ public struct BobnetFeature {
         /// "New messages" divider anchors here so it doesn't jump while the
         /// live marker advances.
         public var markerAtSelection: Int = 0
-        /// Whether the detail view is showing the newest message.
-        ///
-        /// Established on selection and on the pane appearing — both render the
-        /// scroll view pinned to the bottom — and thereafter *maintained* by the
-        /// view's scroll-geometry reports. It cannot be sourced from geometry
-        /// alone: that callback fires only when its `Bool` changes, so the
-        /// opening at-the-bottom state is never announced.
+        /// Whether the detail view is showing the newest message: geometry's
+        /// truth, established on selection and on the pane appearing (both render
+        /// pinned to the bottom) and thereafter only maintained by its reports.
         public var isAtLatest: Bool = false
         /// Messages that landed while the reader was away from the bottom.
         /// Zeroed wherever the view is known to be pinned to the newest message.
         public var newWhileAway: Int = 0
         /// Bumped to ask the view to scroll to the bottom.
         public var scrollToBottomToken: Int = 0
-        /// A bottom-scroll was requested and has not been observed to land.
-        /// While true, geometry reporting not-at-bottom is stale and ignored.
+        /// A bottom-scroll was requested and has not been observed to land. It
+        /// masks `isAtLatest`: OR-ed with it wherever "effectively at the newest
+        /// message" is the question.
         public var pendingBottomScroll: Bool = false
         public var composeText: String = ""
         public var newChannelDraft: NewChannelDraft?
@@ -117,7 +114,7 @@ public struct BobnetFeature {
         case detailAppeared(String?)
         /// The jump-to-latest affordance was tapped.
         case jumpToLatestTapped
-        /// The bottom-scroll suppression window closed without the scroll being
+        /// The bottom-scroll mask window closed without the scroll being
         /// observed to land. Carries the `scrollToBottomToken` that armed it;
         /// any other value is an escaped expiry from a closed window.
         case pendingScrollExpired(Int)
@@ -149,12 +146,6 @@ public struct BobnetFeature {
                 return selectionChanged(&state)
 
             case .binding(\.isAtLatest):
-                // A negative report while a bottom-scroll is in flight is the
-                // content having grown under a held viewport, not a reader leaving.
-                if state.pendingBottomScroll, !state.isAtLatest {
-                    state.isAtLatest = true
-                    return .none
-                }
                 if state.isAtLatest {
                     state.newWhileAway = 0
                     state.pendingBottomScroll = false
@@ -232,7 +223,7 @@ public struct BobnetFeature {
                 return .none
 
             case .latestMessageChanged:
-                guard state.isAtLatest else {
+                guard state.isAtLatest || state.pendingBottomScroll else {
                     state.newWhileAway += 1
                     return reevaluateLinger(state)
                 }
@@ -288,18 +279,15 @@ public struct BobnetFeature {
                 )
 
             case .jumpToLatestTapped:
-                state.isAtLatest = true
                 state.newWhileAway = 0
                 let scroll = requestBottomScroll(&state)
                 return .merge(scroll, reevaluateLinger(state))
 
             case let .pendingScrollExpired(token):
-                // The window closed with no landing report, so the suppressed
-                // "not at bottom" was the truth — geometry cannot repeat it.
+                // Dropping the mask can change lingerability, so re-test it here.
                 guard token == state.scrollToBottomToken, state.pendingBottomScroll
                 else { return .none }
                 state.pendingBottomScroll = false
-                state.isAtLatest = false
                 return reevaluateLinger(state)
 
             case .sendButtonTapped:
@@ -318,7 +306,6 @@ public struct BobnetFeature {
                 // latest/scroll onto the channel now showing, nor wipe its draft.
                 guard channel == state.selectedChannel else { return .none }
                 state.composeText = ""
-                state.isAtLatest = true
                 state.newWhileAway = 0
                 let scroll = requestBottomScroll(&state)
                 return .merge(scroll, reevaluateLinger(state))
@@ -380,24 +367,20 @@ public struct BobnetFeature {
         )
     }
 
-    /// The channel whose read marker the linger may advance: a selection, sitting
-    /// at the newest message, with something unread. Nil disqualifies the linger.
-    ///
-    /// Deliberately shared by arming and firing — the conditions have to hold at
-    /// *both* ends of the 3-second window, and only re-reading them at the far end
-    /// closes the gap left by a cancellation that didn't take.
+    /// The channel whose read marker the linger may advance: a selection,
+    /// effectively at the newest message, with something unread. Shared by arming
+    /// and firing — the conditions must hold at *both* ends of the window.
     private func lingerableChannel(_ state: State) -> String? {
         guard let channel = state.selectedChannel,
-              state.isAtLatest,
+              state.isAtLatest || state.pendingBottomScroll,
               let row = state.channelList.rows.first(where: { $0.name == channel }),
               row.latestMessageID > row.lastReadMessageID
         else { return nil }
         return channel
     }
 
-    /// Ask the view to scroll to the bottom, suppressing geometry's negative
-    /// reports until it lands or 250 ms passes — else a stuck flag would
-    /// freeze `isAtLatest` true and let a read marker advance while away.
+    /// Ask the view to scroll to the bottom, masking "effectively at latest"
+    /// until it lands or 250 ms passes.
     private func requestBottomScroll(_ state: inout State) -> Effect<Action> {
         state.scrollToBottomToken += 1
         state.pendingBottomScroll = true
