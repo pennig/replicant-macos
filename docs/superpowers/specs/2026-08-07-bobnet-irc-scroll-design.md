@@ -120,44 +120,74 @@ var pendingBottomScroll: Bool = false
 
 ### Actions and transitions
 
+**`isAtLatest` is pure geometry truth. The reducer never writes it mid-flight.**
+It is *established* where the view is known to render pinned to the bottom
+(`selectionChanged`, `.detailAppeared`, `.detailDisappeared` clearing it on the
+way out) and otherwise only ever set by the view's own report.
+`pendingBottomScroll` is a **mask**: OR-ed with `isAtLatest` wherever the question
+is "effectively at the newest message".
+
 | Trigger | Effect on state |
 |---|---|
-| `.latestMessageChanged`, `isAtLatest` true | `scrollToBottomToken += 1`, `pendingBottomScroll = true`, arm the 250 ms expiry |
-| `.latestMessageChanged`, `isAtLatest` false | `newWhileAway += 1` |
-| `.binding(\.isAtLatest)` reporting **false** while `pendingBottomScroll` | **ignored entirely** — no flag flip, no counter increment |
-| `.binding(\.isAtLatest)` reporting **false** otherwise | `isAtLatest = false` (today's behaviour, unchanged) |
+| `.latestMessageChanged`, `isAtLatest \|\| pendingBottomScroll` | `scrollToBottomToken += 1`, `pendingBottomScroll = true`, arm the 250 ms expiry |
+| `.latestMessageChanged`, neither | `newWhileAway += 1` |
+| `.binding(\.isAtLatest)` reporting **false** | `isAtLatest = false` — recorded as reported, whether or not a scroll is in flight; the mask, not an override, keeps the linger alive |
 | `.binding(\.isAtLatest)` reporting **true** | `newWhileAway = 0`, `pendingBottomScroll = false`, cancel the expiry |
-| `.jumpToLatestTapped` (new) | `isAtLatest = true`, `newWhileAway = 0`, token bump + pending, re-arm the linger |
-| `.sendSucceeded` | `isAtLatest = true`, `newWhileAway = 0`, token bump + pending |
-| `.pendingScrollExpired` (new) | `pendingBottomScroll = false` |
-| `selectionChanged`, `.detailAppeared` | `newWhileAway = 0`, `pendingBottomScroll = false` |
-| `.detailDisappeared` | `newWhileAway = 0`, `pendingBottomScroll = false`, plus today's `isAtLatest = false` |
+| `.jumpToLatestTapped` (new) | `newWhileAway = 0`, token bump + mask, re-arm the linger |
+| `.sendSucceeded` | `newWhileAway = 0`, token bump + mask |
+| `.pendingScrollExpired` (new) | `pendingBottomScroll = false`, re-evaluate the linger |
+| `selectionChanged`, `.detailAppeared` | `isAtLatest = true`, `newWhileAway = 0`, `pendingBottomScroll = false` |
+| `.detailDisappeared` | `isAtLatest = false`, `newWhileAway = 0`, `pendingBottomScroll = false` |
 
 `.sendSucceeded` scrolling to the bottom is deliberate: sending a message while
 scrolled up should take you to your own message.
 
-`reevaluateLinger` continues to run wherever it does today. No linger behaviour
-changes.
+`lingerableChannel(_:)` — the one place arming and firing both read — guards on
+`isAtLatest || pendingBottomScroll`. That single OR is what keeps the linger alive
+across the brief window where content has grown and the scroll has not yet landed.
+No other linger behaviour changes.
 
 ### Why `pendingBottomScroll` exists
 
 Without it, a message arriving while the reader is *at* the bottom is a race. The
 content grows, `sizeChanges: .top` holds the viewport, and geometry reports
-not-at-bottom. If that report lands before `.latestMessageChanged`, the reducer
-sees `isAtLatest == false` and increments `newWhileAway` — producing a spurious
-"1 new ↓" for a message the reader watched arrive. That is a wrong count, not
-merely a one-frame flash.
+not-at-bottom. The reducer sees `isAtLatest == false` and both disarms the linger
+and increments `newWhileAway` — producing a spurious "1 new ↓" for a message the
+reader watched arrive, and a read marker that stops advancing. That is a wrong
+count, not merely a one-frame flash.
 
-Suppressing negative geometry reports while a bottom-scroll is in flight removes
-the race in both orderings.
+The mask covers that window: while a bottom-scroll is in flight the reader counts
+as at-latest even though geometry says otherwise, so the negative report costs
+neither the linger nor a count.
+
+It removes **one** ordering, not both. If the geometry report lands *before*
+`.latestMessageChanged`, the mask is not yet armed and `newWhileAway` still takes a
+spurious increment. That is a known limitation, accepted because the increment is
+bounded by one per arrival and the pill's count is corrected by the next positive
+report. Closing it would need the reducer to know a size change was in flight
+before the view told it, which nothing in the geometry contract offers.
+
+The one thing the mask must **not** do is write `isAtLatest`. `onScrollGeometryChange`
+fires only when its transformed `Bool` *changes*, so a report the reducer overwrites
+is a report the view can never repeat: the two values desynchronise permanently and
+the observer stays silent. Masking leaves geometry's value untouched, so the
+observer and the reducer always agree on what was last reported.
 
 ### Why the expiry is bounded
 
-A `pendingBottomScroll` that never clears freezes `isAtLatest` at true, and a
-falsely-true `isAtLatest` is precisely the failure that advances a read marker
-while the reader is scrolled away — the bug documented in
-`.claude/memory/bobnet-feature.md`. The 250 ms expiry makes the optimistic hold
-unable to stick; after it fires, geometry is authoritative again.
+A mask that never clears makes "effectively at latest" permanently true, and that
+is precisely the failure that advances a read marker while the reader is scrolled
+away — the bug documented in `.claude/memory/bobnet-feature.md`. The 250 ms expiry
+makes the optimistic hold unable to stick.
+
+After it fires, geometry is authoritative again — and under the mask design that
+claim is actually true. Nothing overwrote `isAtLatest` during the window, so the
+value the expiry falls back to is the last thing the view reported, not a reducer
+invention the view has no way to correct. Dropping the mask can change
+lingerability, so `.pendingScrollExpired` re-evaluates the linger at that moment.
+A channel shorter than its viewport is the case that proves the difference: it is
+at rest at the bottom, `isAtBottom` stays true as content grows, so no report ever
+arrives — and the expiry leaves `isAtLatest` true, exactly as the view last said.
 
 The hold is safe within its window for an independent reason: the linger is 3
 seconds and **re-checks its arming conditions when it fires**
@@ -215,7 +245,7 @@ tapping sends `.jumpToLatestTapped`. Two states:
 | Condition | Label |
 |---|---|
 | `newWhileAway > 0` | `"3 new ↓"` |
-| `!isAtLatest && newWhileAway == 0` | bare `↓` |
+| `!isAtLatest && !pendingBottomScroll && newWhileAway == 0` | bare `↓` |
 | otherwise | hidden |
 
 `Capsule` + `.rcAccent` + `Space` tokens. `UI`'s existing `rcPill(_:)` is a
@@ -235,13 +265,20 @@ exist because the behaviour moved out of the scroll view:
   `newWhileAway`.
 - A message arriving while away increments `newWhileAway` and does not bump the
   token.
-- A geometry report of false during `pendingBottomScroll` changes nothing.
+- A geometry report of false during `pendingBottomScroll` is recorded but costs
+  neither the linger nor a count.
 - A geometry report of true clears both `newWhileAway` and `pendingBottomScroll`.
 - `pendingBottomScroll` clears on the 250 ms expiry with no geometry report at
   all (`TestClock`).
-- `.jumpToLatestTapped` and `.sendSucceeded` each set `isAtLatest`, zero the
-  counter, and bump the token.
+- `.jumpToLatestTapped` and `.sendSucceeded` each set the mask, zero the counter,
+  and bump the token — neither writes `isAtLatest`.
 - Selection change zeroes both.
+
+The four cases that decide whether the mask is right are asserted against the
+**database** (`BobnetChannel.lastReadMessageID`), not state: a message landing at
+the bottom, the reader scrolling up mid-window, a channel shorter than its
+viewport that never reports at all, and a pill tap whose scroll never lands.
+State-only assertions are what let the override design's two bugs through.
 
 **Placement — not unit-testable, and this design does not pretend otherwise.**
 The harness numbers from the diagnosis step are the evidence. They belong in a

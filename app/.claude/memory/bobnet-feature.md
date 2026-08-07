@@ -117,11 +117,42 @@ region, which lives in `BobnetChannelMessagesScroll` so `@State
 scrollPosition` is recreated per channel. Programmatic scrolling is the
 reducer's: `scrollToBottomToken` is bumped on a message arriving while at the
 bottom, on send, and on the pill tap, and the view answers it with
-`scrollPosition.scrollTo(edge: .bottom)`. `pendingBottomScroll` suppresses
-geometry's not-at-bottom report while such a scroll is in flight, bounded to
-250 ms so it can never stick — a frozen-true `isAtLatest` is what advances a
+`scrollPosition.scrollTo(edge: .bottom)`. `pendingBottomScroll` is a **mask**
+over "effectively at latest" while such a scroll is in flight, bounded to
+250 ms so it can never stick — a permanently-true mask is what advances a
 read marker under a reader who has scrolled away. The temporary
 `BobnetScrollProbe` logging instrumentation in
 `BobnetChannelMessagesScroll.swift` stays in place past this branch: it is
 the only thing that can see the reported symptom in the running app, since
 the harness could not reproduce it.
+
+## `pendingBottomScroll` is a mask; the reducer must never write `isAtLatest`
+
+`pendingBottomScroll` does not override geometry — it is OR-ed with `isAtLatest`
+wherever "effectively at the newest message" is the question (`lingerableChannel`,
+`.latestMessageChanged`, the pill's bare-arrow state). The reducer writes
+`isAtLatest` only where the view is *known* to render pinned to the bottom and
+delivers no geometry change to say so: `selectionChanged`, `.detailAppeared`,
+`.detailDisappeared`. It writes it nowhere mid-flight.
+
+Why the rule is absolute: `onScrollGeometryChange` fires only when its transformed
+`Bool` *changes*, so a reducer write desynchronises the reducer's value from the
+observer's stored one, and a change-driven observer that has already reported
+cannot re-announce the same value. Two successive bugs came out of exactly that.
+Writing `true` to suppress a negative report left `isAtLatest` wrongly true when
+the reader scrolled into history inside the 250 ms window (geometry stayed false,
+so it never spoke again) and the linger marked unread messages read. Failing
+closed at the expiry — writing `false` — bought the opposite bug on a channel
+**shorter than the viewport**, where `BobnetScrollBottom.isAtBottom` is true at
+rest and stays true as content grows (measured `1054 >= 715`, then `1054 >= 764`
+at the app's real geometry): no report ever arrives, the expiry parked
+`isAtLatest = false` under a reader sitting on the newest message, and that
+channel's unread count never cleared again.
+
+The mask has one known limitation, deliberately accepted: if the geometry report
+lands *before* `.latestMessageChanged`, the mask is not yet armed and
+`newWhileAway` still takes one spurious increment. The four cases that decide the
+design (message landing at the bottom, reader scrolling up mid-window, the short
+channel, and a pill tap whose scroll never lands) are asserted in
+`BobnetJumpToLatestTests` against `BobnetChannel.lastReadMessageID` — state-only
+assertions are what let both prior bugs through.
