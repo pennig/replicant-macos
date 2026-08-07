@@ -45,12 +45,12 @@ public struct BobnetFeature {
         /// The selected channel's messages, oldest first; reloaded (new request
         /// instance) whenever the selection changes.
         @ObservationStateIgnored
-        @Fetch(BobnetChannelMessages(channel: nil)) public var channelMessages = BobnetChannelMessages.Value()
+        @Fetch(BobnetChannelMessages(channel: nil, marker: 0)) public var channelMessages = BobnetChannelMessages.Value()
 
         public var selectedChannel: String?
-        /// The read marker as it stood when the channel was selected — the
-        /// "New messages" divider anchors here so it doesn't jump while the
-        /// live marker advances.
+        /// The read-marker snapshot for the *current selection*, set
+        /// synchronously so the channel list highlights instantly. Compare
+        /// `channelMessages.marker`, the snapshot the *rendered* messages loaded with.
         public var markerAtSelection: Int = 0
         /// Whether the detail view is showing the newest message: geometry's
         /// truth, established on selection and on the pane appearing (both render
@@ -353,8 +353,9 @@ public struct BobnetFeature {
     /// renders at its newest message, and geometry only maintains that.
     private func selectionChanged(_ state: inout State) -> Effect<Action> {
         let channel = state.selectedChannel
-        state.markerAtSelection = state.channelList.rows
+        let marker = state.channelList.rows
             .first { $0.name == channel }?.lastReadMessageID ?? 0
+        state.markerAtSelection = marker
         state.isAtLatest = channel != nil
         state.newWhileAway = 0
         state.pendingBottomScroll = false
@@ -362,7 +363,7 @@ public struct BobnetFeature {
             reevaluateLinger(state),
             .cancel(id: CancelID.pendingScroll),
             .run { [fetch = state.$channelMessages] _ in
-                _ = try? await fetch.load(BobnetChannelMessages(channel: channel))
+                _ = try? await fetch.load(BobnetChannelMessages(channel: channel, marker: marker))
             }
         )
     }

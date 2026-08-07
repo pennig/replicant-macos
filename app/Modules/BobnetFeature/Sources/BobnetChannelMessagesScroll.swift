@@ -27,7 +27,7 @@ struct BobnetChannelMessagesScroll: View {
         // to size the content, so anything O(n) inside the closure is O(n²).
         let firstUnreadID = BobnetUnreadDivider.anchor(
             in: store.channelMessages.messages,
-            marker: store.markerAtSelection
+            marker: store.channelMessages.marker
         )
         ScrollView {
             LazyVStack(alignment: .leading, spacing: Space.s) {

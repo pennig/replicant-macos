@@ -225,6 +225,50 @@ func bobnetMessage(
             await store.receive(\.lingerElapsed)
             await store.finish()
             #expect(store.state.channelMessages.messages.map(\.id) == [7, 8])
+            #expect(store.state.channelMessages.marker == 7)
+        }
+    }
+
+    /// The pane's whole value is self-consistent: `channelMessages.channel`,
+    /// `.marker`, and `.messages` always describe the SAME channel, even across
+    /// a switch — no combination of stale fields can point a divider at another
+    /// channel's history.
+    @Test func channelMessagesValueDescribesOneChannelAfterASwitch() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            // Markers equal the latest local message in each channel — nothing
+            // unread, so no linger effect arms to outlive the switch below.
+            try BobnetChannel.upsert {
+                BobnetChannel(name: "#general", lastActive: nil, lastReadMessageID: 7)
+            }.execute(db)
+            try BobnetChannel.upsert {
+                BobnetChannel(name: "#trade", lastActive: nil, lastReadMessageID: 51)
+            }.execute(db)
+            try BobnetMessage.upsert { bobnetMessage(7, channel: "#general", at: 100) }.execute(db)
+            try BobnetMessage.upsert { bobnetMessage(51, channel: "#trade", at: 300) }.execute(db)
+        }
+        try await withDependencies {
+            $0.defaultDatabase = database
+        } operation: {
+            let store = TestStore(initialState: BobnetFeature.State()) {
+                BobnetFeature()
+            } withDependencies: {
+                $0.defaultDatabase = database
+            }
+            store.exhaustivity = .off
+            try await store.state.$channelList.load(BobnetChannelList())
+
+            await store.send(.binding(.set(\.selectedChannel, "#general")))
+            await store.finish()
+            #expect(store.state.channelMessages.channel == "#general")
+            #expect(store.state.channelMessages.marker == 7)
+            #expect(store.state.channelMessages.messages.allSatisfy { $0.channel == "#general" })
+
+            await store.send(.binding(.set(\.selectedChannel, "#trade")))
+            await store.finish()
+            #expect(store.state.channelMessages.channel == "#trade")
+            #expect(store.state.channelMessages.marker == 51)
+            #expect(store.state.channelMessages.messages.allSatisfy { $0.channel == "#trade" })
         }
     }
 }

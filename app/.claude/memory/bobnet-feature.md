@@ -189,3 +189,23 @@ and never re-read from the store inside the closure: those guards compare agains
 `selectedChannel` to reject a stale identity, and a view reporting the selection
 it was re-rendered with would always compare equal, letting the departing
 channel's `onDisappear` clobber the arriving channel's linger.
+
+## The divider marker was the last split-brain (2026-08-07)
+
+`.id` fixed identity, but the "New" divider still anchored on
+`state.markerAtSelection` — set synchronously by `selectionChanged`, ahead of the
+async `channelMessages` reload — while the divider read it against
+`store.channelMessages.messages`, which for one frame was still the *previous*
+channel's. Switching `#general` → `#trade` briefly rendered `#trade`'s (high) marker
+against `#general`'s 622 messages, landing the divider near the end of the old
+list. Fix: `BobnetChannelMessages` takes the marker snapshot on the request and
+`fetch` echoes it into `Value.marker`, so channel/marker/messages arrive together
+in one beat; the scroll view now reads `channelMessages.marker`.
+`state.markerAtSelection` still exists — it drives the channel list's *instant*
+highlight and legitimately differs from `Value.marker` during the load window —
+but nothing about the *rendered pane* may read it.
+
+**The general rule**: the pane renders from one asynchronously-loaded value.
+Anything per-channel kept beside it — a marker, a scroll flag, anything read at
+selection time instead of load time — will be a frame out of date and must not
+feed the render.
