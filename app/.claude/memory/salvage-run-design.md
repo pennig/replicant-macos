@@ -61,6 +61,19 @@ gained a `clearingDepleted` parameter: a SCAN observes the site directly and may
 lag a `salvage.depleted` event and so only ever raises it. A per-body fetch is still authoritative and still
 bypasses the reconcile, so a hand tour remains the operator's override.
 
+**Amended 2026-08-07 (the ATARIA-6-37 false stall)**: the same stall fired again with the merge fix working
+correctly — a DIFFERENT root. That evening's SSE delivery ran ~2–3 min behind its own `createdAt` stamps, so
+`awaitCompletion`'s authoritative fleet read saw the drones stowed (its by-design dropped-frame exit) while
+the cycle's `salvage.depleted` frame was still in flight, and `sameBodyAgain` spent its single
+`.refreshSystem` ~90 s after the server depleted the site — against a `locations/{star}` roster that ALSO
+still said not-depleted (the documented roster lag) — then stalled at 21:34:40, 38 s before the truth
+arrived. Fix: `sameBodyAgain` is now ordered grace → read → stall (the `unresolvedSystem` shape), waiting
+out `depletionPropagationGrace` = **5 min** (covers the observed 2m40s SSE lag plus the roster lag, same
+scale as `arrivalConfirmDeadline`; the cost is only a vessel idling at a finished body) before the read is
+spent — in the common race the late frame lands during the grace and the run advances spending nothing.
+Worst-case latency to a GENUINE never-drains stall is ~2× the grace (the read's re-entry re-stamps
+`stepStartedAt`). The stall stayed Retry-clearable throughout, exactly as the 2026-08-06 fix intended.
+
 **AMENDED 2026-08-07 by [[salvage-controller-recall-race]]**: `awaitCompletion`'s "never stalls,
 however long the cycle runs" now has exactly one exception — a `gather_salvage` that reads PAUSED,
 which emits no completion and so would wait forever. `verify` also gained a controller-aboard gate:
