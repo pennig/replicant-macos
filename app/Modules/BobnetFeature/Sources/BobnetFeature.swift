@@ -60,6 +60,9 @@ public struct BobnetFeature {
         /// alone: that callback fires only when its `Bool` changes, so the
         /// opening at-the-bottom state is never announced.
         public var isAtLatest: Bool = false
+        /// Messages that landed while the reader was away from the bottom.
+        /// Zeroed wherever the view is known to be pinned to the newest message.
+        public var newWhileAway: Int = 0
         public var composeText: String = ""
         public var newChannelDraft: NewChannelDraft?
         public var isCatchingUp: Bool = false
@@ -133,6 +136,7 @@ public struct BobnetFeature {
                 return selectionChanged(&state)
 
             case .binding(\.isAtLatest):
+                if state.isAtLatest { state.newWhileAway = 0 }
                 return reevaluateLinger(state)
 
             case .binding:
@@ -202,6 +206,7 @@ public struct BobnetFeature {
                 return .none
 
             case .latestMessageChanged:
+                if !state.isAtLatest { state.newWhileAway += 1 }
                 return reevaluateLinger(state)
 
             case .lingerElapsed:
@@ -234,6 +239,7 @@ public struct BobnetFeature {
                 // are ignored, mirroring `.detailDisappeared`.
                 guard channel == state.selectedChannel else { return .none }
                 state.isAtLatest = true
+                state.newWhileAway = 0
                 return reevaluateLinger(state)
 
             case let .detailDisappeared(channel):
@@ -243,6 +249,7 @@ public struct BobnetFeature {
                 // (the disappearing identity is still the selection) tears down.
                 guard channel == state.selectedChannel else { return .none }
                 state.isAtLatest = false
+                state.newWhileAway = 0
                 return .cancel(id: CancelID.linger)
 
             case .sendButtonTapped:
@@ -315,6 +322,7 @@ public struct BobnetFeature {
         state.markerAtSelection = state.channelList.rows
             .first { $0.name == channel }?.lastReadMessageID ?? 0
         state.isAtLatest = channel != nil
+        state.newWhileAway = 0
         return .merge(
             reevaluateLinger(state),
             .run { [fetch = state.$channelMessages] _ in
