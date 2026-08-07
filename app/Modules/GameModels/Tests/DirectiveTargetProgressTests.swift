@@ -79,6 +79,40 @@ struct DirectiveTargetProgressTests {
         #expect(!directive.hasDelivered(targetAt: 2), "\(status) must not check off an unreached target")
     }
 
+    /// `progress` is the m/n the mission list draws. A single-target run
+    /// finishes with its cursor still at 0, and the readout must not report
+    /// that as nothing delivered.
+    @Test func aCompletedSingleTargetRunCountsItsDelivery() {
+        let directive = run(kind: .relayRun, status: .completed, targets: ["NERVIU"], targetIndex: 0)
+
+        #expect(directive.progress.completed == 1)
+        #expect(directive.progress.total == 1)
+    }
+
+    /// The same run before it finishes has genuinely delivered nothing, and
+    /// must keep saying so.
+    @Test func aRunningSingleTargetRunCountsNoDelivery() {
+        let directive = run(kind: .relayRun, status: .running, targets: ["NERVIU"], targetIndex: 0)
+
+        #expect(directive.progress.completed == 0)
+        #expect(directive.progress.total == 1)
+    }
+
+    /// `progress` and `hasDelivered` must never disagree: a run stopped early
+    /// counts only the targets it really reached.
+    @Test("progress counts exactly the delivered targets", arguments: [
+        DirectiveStatus.cancelled, .needsAttention, .paused, .running, .completed,
+    ])
+    func progressAgreesWithDelivery(_ status: DirectiveStatus) {
+        let directive = run(
+            kind: .surveyRun, status: status,
+            targets: ["TAU", "SHERATANON", "VEGA"], targetIndex: 1
+        )
+        let delivered = directive.targets.indices.filter { directive.hasDelivered(targetAt: $0) }
+
+        #expect(directive.progress.completed == delivered.count, "\(status)")
+    }
+
     /// A completed multi-target run has, by definition, delivered all of them —
     /// and survey runs DO advance the cursor, so this agrees with the cursor
     /// rather than overriding it.

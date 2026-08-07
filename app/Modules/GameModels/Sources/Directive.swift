@@ -377,9 +377,11 @@ public struct Directive: Identifiable, Equatable, Sendable {
         self.updatedAt = updatedAt
     }
 
-    /// Progress through the queue, for the list row's "m/n" readout.
+    /// Progress through the queue, for the list row's "m/n" readout. Counts
+    /// delivery, not the cursor — see `hasDelivered(targetAt:)` for why those
+    /// differ on a single-target run.
     public var progress: (completed: Int, total: Int) {
-        (Swift.min(targetIndex, targets.count), targets.count)
+        (targets.indices.count(where: { hasDelivered(targetAt: $0) }), targets.count)
     }
 
     /// The target currently being worked, or nil when the queue is exhausted.

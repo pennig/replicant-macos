@@ -54,13 +54,14 @@ private func device(
 private func mission(
     id: String,
     kind: DirectiveKind = .surveyRun,
+    status: DirectiveStatus = .running,
     targets: [String] = ["TAU", "SHERATANON"],
     targetIndex: Int = 1,
     roamCentre: String? = nil,
     fleetTag: String? = nil
 ) -> Directive {
     Directive(
-        id: id, kind: kind, status: .running, deviceCode: "VESSEL1",
+        id: id, kind: kind, status: status, deviceCode: "VESSEL1",
         roamCentre: roamCentre, fleetTag: fleetTag,
         targets: targets, targetIndex: targetIndex, step: "surveying",
         stepStartedAt: Date(timeIntervalSince1970: 0),
@@ -282,6 +283,23 @@ struct DirectiveRowSubtitleTests {
             mission(id: "D1", targets: ["A", "B", "C"], targetIndex: 1)
         )
         #expect(row.subtitle == "1/3")
+    }
+
+    /// A Relay Run is single-target and never advances the cursor, so a
+    /// finished one carries `targetIndex == 0` and the row must still count
+    /// its delivery.
+    @Test func aCompletedSingleTargetRunReadsAsDelivered() {
+        let row = DirectiveRow.custom(
+            mission(id: "D1", kind: .relayRun, status: .completed, targets: ["NERVIU"], targetIndex: 0)
+        )
+        #expect(row.subtitle == "1/1")
+    }
+
+    @Test func aRunningSingleTargetRunHasDeliveredNothingYet() {
+        let row = DirectiveRow.custom(
+            mission(id: "D1", kind: .relayRun, status: .running, targets: ["NERVIU"], targetIndex: 0)
+        )
+        #expect(row.subtitle == "0/1")
     }
 
     /// The bug this branch exists for: a continuous run sits at
