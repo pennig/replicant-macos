@@ -294,7 +294,7 @@ private struct BeltInspector: View {
                 }
             }
             if !belt.richness.isEmpty {
-                RCReadoutCard("Richness", count: belt.richness.count) {
+                RCReadoutCard("Richness") {
                     ForEach(belt.richness.sorted(by: { $0.key < $1.key }), id: \.key) { name, level in
                         Readout(name.capitalized, level.capitalized)
                     }
@@ -385,9 +385,9 @@ private struct InventoryCard: View {
     init(_ items: [InventoryItem]) { self.items = items }
     var body: some View {
         if !items.isEmpty {
-            RCReadoutCard("Inventory", count: items.count) {
+            RCReadoutCard("Inventory") {
                 ForEach(items, id: \.resourceType) { item in
-                    Readout(item.resourceType.capitalized, String(format: "%.0f", item.quantity))
+                    Readout(item.resourceType.capitalized, item.quantity.formatted(.number.precision(.fractionLength(0))))
                 }
             }
         }
@@ -408,7 +408,7 @@ private struct InventoryHoldingRow: View {
                 HStack {
                     Text(item.resourceType.capitalized).font(.rcCaption).foregroundStyle(.rcTextSecondary)
                     Spacer()
-                    Text(String(format: "%.0f", item.quantity)).font(.rcMonoSmall).foregroundStyle(.rcTextPrimary)
+                    Text(item.quantity.formatted(.number.precision(.fractionLength(0)))).font(.rcMonoSmall).foregroundStyle(.rcTextPrimary)
                 }
             }
         }
@@ -516,7 +516,7 @@ private struct Readout: View {
         HStack {
             Text(label).font(.rcBody).foregroundStyle(.rcTextSecondary)
             Spacer()
-            Text(value).font(mono ? .rcMono : .rcBodyEmph).foregroundStyle(.rcTextPrimary)
+            Text(value).font(mono ? .rcBodyEmphMono : .rcBodyEmph).monospacedDigit().foregroundStyle(.rcTextPrimary)
         }
     }
 }
