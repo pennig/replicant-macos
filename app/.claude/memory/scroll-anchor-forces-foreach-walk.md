@@ -19,14 +19,20 @@ trap is that anything O(n) sitting in that closure is then O(n²).
 
 `BobnetChannelDetailView` had exactly that — the "New messages" divider compared
 each row against `firstUnreadID`, a computed property that scanned the channel's
-whole message array. Measured settle time for one channel switch (real view,
-real `NSWindow`, debug):
+whole message array. Settle time for one channel switch, real view in a real
+`NSWindow`, **`-c release`** (the commit message for `b1d21d0` mislabels this
+same table as debug):
 
 | messages | before | after |
 |---|---|---|
 | 611 | 138 ms | 108 ms |
 | 1200 | 942 ms | 121 ms |
 | 2400 | 8866 ms | 125 ms |
+
+Debug at 611 is 117–148 ms before and 72–120 ms after, so the config barely
+moves it — this is Sharing/store access per scan, not arithmetic the optimiser
+can fold. Worth knowing because the app is normally run as a Debug build out of
+Xcode, so debug is the config the symptom lives in.
 
 After binding the anchor once per list build the switch is **flat** — a
 25-message channel and a 2400-message channel both cost ~110 ms, so row count no
@@ -35,9 +41,7 @@ fix is worth ~30 ms, and the whole win is in the growth curve.
 
 Rule: **inside a `ForEach` closure under a scroll anchor, treat every element as
 if the closure runs for all of them, because it does.** Bind list-wide values
-above the `ScrollView`, never in the closure. The cost survives `-c release`
-(572 ms vs 73 ms there too) because it is Sharing/store access per scan, not
-arithmetic the optimiser can fold.
+above the `ScrollView`, never in the closure.
 
 Related, same family: [[event-log-feature]] capped its query at `displayLimit`
 because `SelectableList` measures every row. Different mechanism (that one
