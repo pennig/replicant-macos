@@ -409,17 +409,19 @@ extension GameSync {
     /// relays, not a device field). Invalidate the mesh domain whenever any
     /// `relay.*` event arrives, independent of whether the map is on screen.
     ///
-    /// Invalidate, never rebuild inline (V3.4-B2): the rebuild is O(relays)
-    /// serial network reads, and `EventRouter.dispatch` awaits routes serially —
-    /// an inline rebuild would head-of-line-block all event ingestion behind
-    /// it, and a burst of `relay.*` events would pay for a full rebuild each.
-    /// The domain's trailing debounce collapses the burst into one rebuild
-    /// after it quiets. (The composition root registers the `.ftlMesh` refresh
-    /// as `ftlMeshRefresher.refresh`.)
+    /// Note the relay, then invalidate — never read inline (V3.4-B2), because
+    /// `EventRouter.dispatch` awaits routes serially and any network read here
+    /// head-of-line-blocks all event ingestion behind it. The domain's trailing
+    /// debounce collapses a burst into one refresh after it quiets, and the note
+    /// is what lets that refresh fold in a single relay instead of reading every
+    /// one. An event with no device code cannot be attributed, so it forces the
+    /// full read.
     static func ftlMeshRoute() -> EventRoute {
         EventRoute(id: "ftl.mesh", match: .category("relay")) { event in
             @Dependency(\.domainFreshness) var domainFreshness
+            @Dependency(\.ftlMeshRefresher) var ftlMeshRefresher
             logger.debug("ftl mesh: \(event.event, privacy: .public) → invalidate")
+            ftlMeshRefresher.noteRelayChanged(event.deviceCode)
             domainFreshness.invalidate(.ftlMesh)
         }
     }
