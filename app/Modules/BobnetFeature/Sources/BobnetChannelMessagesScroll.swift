@@ -61,7 +61,6 @@ struct BobnetChannelMessagesScroll: View {
         // symptoms, so the running app reports its own geometry.
         .onScrollGeometryChange(for: BobnetScrollProbe.self) { geometry in
             BobnetScrollProbe(
-                offset: geometry.contentOffset.y,
                 container: geometry.containerSize.height,
                 content: geometry.contentSize.height,
                 topInset: geometry.contentInsets.top,
@@ -70,7 +69,6 @@ struct BobnetChannelMessagesScroll: View {
         } action: { _, probe in
             logger.info("""
                 \(channel, privacy: .public) rows=\(store.channelMessages.messages.count) \
-                offset=\(probe.offset, format: .fixed(precision: 1)) \
                 container=\(probe.container, format: .fixed(precision: 1)) \
                 content=\(probe.content, format: .fixed(precision: 1)) \
                 insets=(t\(probe.topInset, format: .fixed(precision: 0)),\
@@ -92,7 +90,6 @@ struct BobnetChannelMessagesScroll: View {
 
 /// Temporary geometry probe for the running app's layout logging.
 struct BobnetScrollProbe: Equatable {
-    var offset: CGFloat
     var container: CGFloat
     var content: CGFloat
     var topInset: CGFloat

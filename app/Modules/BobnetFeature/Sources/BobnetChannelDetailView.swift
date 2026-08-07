@@ -42,6 +42,9 @@ public struct BobnetChannelDetailView: View {
                     RCErrorBanner(errorMessage) { store.send(.dismissError) }
                 }
             }
+            .overlay(alignment: .bottom) {
+                JumpToLatestPill(store: store)
+            }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 ComposeBar(store: store, channel: channel)
             }

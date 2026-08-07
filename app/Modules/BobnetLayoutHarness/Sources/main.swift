@@ -203,6 +203,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         spin(seconds: 3.0)
         report("\(config) short2 (#claims,   15)", window)
 
+        // Scroll up in a long channel, then confirm the pill renders above the
+        // compose bar rather than behind it.
+        store.send(.binding(.set(\.selectedChannel, "#general")))
+        spin(seconds: 2.0)
+        store.send(.binding(.set(\.isAtLatest, false)))
+        store.send(.latestMessageChanged)
+        store.send(.latestMessageChanged)
+        spin(seconds: 2.0)
+        if let root = window.contentView, let scroll = findScrollView(root) {
+            let scrollBottom = scroll.convert(scroll.bounds, to: nil).minY
+            print(String(format: "pill: newWhileAway=%d scrollViewBottomY=%.1f",
+                         store.newWhileAway, scrollBottom))
+        }
+        print("pill: capture the window and inspect visually")
+
         exit(0)
     }
 
