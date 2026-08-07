@@ -50,6 +50,16 @@ public enum RepairFleet {
         return deployed(in: world, system: SiteAssay.system(of: location), owner: owner)
     }
 
+    /// The service bots answering to `owner` that a departure must not leave: those
+    /// deployed in `location`'s system, plus any in transit under an open operation.
+    /// A recall clears the bot's location for its whole cruise home.
+    public static func botsOut(
+        near location: String?, in world: WorldSnapshot, owner: String? = nil
+    ) -> [Device] {
+        (bots(deployedNear: location, in: world, owner: owner) + inTransit(in: world, owner: owner))
+            .sorted { $0.deviceCode < $1.deviceCode }
+    }
+
     /// Whether `world` holds a deployed service bot answering to `owner` — what a
     /// step with no vessel location must answer before waiting on bots. Narrowed to
     /// `system` where the caller knows one.
@@ -57,6 +67,23 @@ public enum RepairFleet {
         in world: WorldSnapshot, system: String?, owner: String? = nil
     ) -> Bool {
         !deployed(in: world, system: system, owner: owner).isEmpty
+    }
+
+    /// `anyBotDeployed` widened to count a bot in transit, for the steps that
+    /// answer it in order to decide whether the run may leave the system.
+    public static func anyBotOut(
+        in world: WorldSnapshot, system: String?, owner: String? = nil
+    ) -> Bool {
+        anyBotDeployed(in: world, system: system, owner: owner)
+            || !inTransit(in: world, owner: owner).isEmpty
+    }
+
+    private static func inTransit(in world: WorldSnapshot, owner: String?) -> [Device] {
+        world.devices.values
+            .filter { $0.stowedInDeviceCode == nil && $0.location == nil }
+            .filter { $0.availableDirectives.contains("service") }
+            .filter { answers($0, to: owner) }
+            .filter { world.openOperation(for: $0.deviceCode) != nil }
     }
 
     private static func deployed(

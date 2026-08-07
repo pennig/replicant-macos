@@ -940,7 +940,7 @@ public struct SalvageRun: MissionStepMachine {
     private func stowBots(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
         let owner = Self.fleetTag(directive)
         guard let location = vessel.location else {
-            guard RepairFleet.anyBotDeployed(
+            guard RepairFleet.anyBotOut(
                 in: world, system: directive.currentTarget, owner: owner
             ) else {
                 return .advanceTarget
@@ -951,7 +951,7 @@ public struct SalvageRun: MissionStepMachine {
             if world.now.timeIntervalSince(vessel.updatedAt) < Self.botProbeInterval { return .wait }
             return .refreshDevices(deviceCodes: [vessel.deviceCode], thenStall: nil)
         }
-        let out = RepairFleet.bots(deployedNear: location, in: world, owner: owner)
+        let out = RepairFleet.botsOut(near: location, in: world, owner: owner)
         guard let next = out.first else { return .advanceTarget }
         if MissionLogBudget.dispatchRounds(
             world, dispatch: Step.stowingBots, confirm: Step.confirmingBotStow
@@ -977,7 +977,7 @@ public struct SalvageRun: MissionStepMachine {
         if elapsed < Self.botProbeDelay { return .wait }
         if elapsed > Self.botRecallDeadline { return .stall(.serviceBotNotRecovered) }
         guard let location = vessel.location else {
-            guard RepairFleet.anyBotDeployed(
+            guard RepairFleet.anyBotOut(
                 in: world, system: directive.currentTarget, owner: owner
             ) else {
                 return .advanceTarget
@@ -985,7 +985,7 @@ public struct SalvageRun: MissionStepMachine {
             if world.now.timeIntervalSince(vessel.updatedAt) < Self.botProbeInterval { return .wait }
             return .refreshDevices(deviceCodes: [vessel.deviceCode], thenStall: nil)
         }
-        let out = RepairFleet.bots(deployedNear: location, in: world, owner: owner)
+        let out = RepairFleet.botsOut(near: location, in: world, owner: owner)
         if out.isEmpty { return .advanceTarget }
         // A recall cruises the bot home, so wait out its own arrival time.
         if let arrival = Self.recallArrival(out), arrival > world.now { return .wait }
