@@ -24,6 +24,7 @@ struct JumpToLatestPill: View {
     }
 
     var body: some View {
+        let presentation = self.presentation
         switch presentation {
         case .hidden:
             EmptyView()

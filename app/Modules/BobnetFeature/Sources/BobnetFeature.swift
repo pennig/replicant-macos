@@ -314,10 +314,10 @@ public struct BobnetFeature {
 
             case let .sendSucceeded(channel):
                 state.isSending = false
-                state.composeText = ""
                 // A stale identity (switched channels mid-send) must not force
-                // latest/scroll onto the channel now showing.
+                // latest/scroll onto the channel now showing, nor wipe its draft.
                 guard channel == state.selectedChannel else { return .none }
+                state.composeText = ""
                 state.isAtLatest = true
                 state.newWhileAway = 0
                 let scroll = requestBottomScroll(&state)
@@ -361,18 +361,9 @@ public struct BobnetFeature {
         }
     }
 
-    /// Selection housekeeping shared by direct selection and channel creation:
-    /// snapshot the marker for the divider, re-establish the scroll flag,
-    /// reload the detail query, and re-arm (or cancel) the linger.
-    ///
-    /// The newly-selected channel renders pinned to its newest message — the
-    /// detail scroll view is rebuilt per channel (`.id(channel)`) with
-    /// `.defaultScrollAnchor(.bottom)` — so `isAtLatest` is *true* here. It
-    /// cannot be left to the scroll-geometry callback to say so: that callback
-    /// fires only when its `Bool` changes, and it is applied outside the
-    /// `.id(channel)` identity, so it survives the rebuild holding the same
-    /// value and stays silent. Resetting to false here is what left every
-    /// switched-to channel unable to clear its unread count.
+    /// Selection housekeeping: snapshot the divider marker, reload the detail
+    /// query, re-arm the linger, and *establish* `isAtLatest` — the new channel
+    /// renders at its newest message, and geometry only maintains that.
     private func selectionChanged(_ state: inout State) -> Effect<Action> {
         let channel = state.selectedChannel
         state.markerAtSelection = state.channelList.rows

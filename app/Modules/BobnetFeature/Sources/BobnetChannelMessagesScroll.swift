@@ -12,7 +12,7 @@ import OSLog
 import SwiftUI
 import UI
 
-private let logger = Logger(subsystem: "name.pennig.replicould", category: "BobnetScroll")
+private let logger = Logger(subsystem: "name.pennig.replicould", category: "BobnetFeature")
 
 struct BobnetChannelMessagesScroll: View {
     @Bindable var store: StoreOf<BobnetFeature>
@@ -55,8 +55,7 @@ struct BobnetChannelMessagesScroll: View {
         } action: { _, isAtBottom in
             store.send(.binding(.set(\.isAtLatest, isAtBottom)))
         }
-        // Temporary: the isolated harness cannot reproduce the reported layout
-        // symptoms, so the running app reports its own geometry.
+        // Temporary geometry logging for the running app.
         .onScrollGeometryChange(for: BobnetScrollProbe.self) { geometry in
             BobnetScrollProbe(
                 container: geometry.containerSize.height,
@@ -65,7 +64,7 @@ struct BobnetChannelMessagesScroll: View {
                 bottomInset: geometry.contentInsets.bottom
             )
         } action: { _, probe in
-            logger.info("""
+            logger.debug("""
                 \(channel, privacy: .public) rows=\(store.channelMessages.messages.count) \
                 container=\(probe.container, format: .fixed(precision: 1)) \
                 content=\(probe.content, format: .fixed(precision: 1)) \
