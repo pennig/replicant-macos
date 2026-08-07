@@ -64,10 +64,37 @@ Two things that cost real time here and will again:
   (630 ms debug / 572 ms release for work that re-measures at ~140 ms) purely
   from machine state after a long build. Never compare across batches.
 
-## Still open
+## An out-of-app harness understated this ~30×, and nearly buried it
 
-This did **not** explain the reported symptom. An isolated switch at the live
-611 messages settles in ~110 ms before *or* after the fix, and the running app's
-main thread is idle at rest (2825 of 2848 samples in `mach_msg_trap`). Whatever
-makes channel switching feel slow today is not in the Bobnet detail pane's own
-work, and is unmeasured.
+The harness said an isolated switch costs ~110 ms at the live 611 messages
+before *or* after the fix, so the first conclusion written here was that the
+quadratic was latent and did **not** explain the reported symptom. A SwiftUI
+Instruments trace of the real app says the opposite: four main-thread hangs in
+a 20 s recording — 3.85 s, 6.08 s, 1.53 s, 3.02 s, three of them Severe — and
+`BobnetChannelDetailView.firstUnreadID.getter`, called from the `ForEach`
+closure, is **13.46 s of the 14.46 s hung, 93%**. Per window it is 98 / 94 / 79
+/ 92%.
+
+The gap is the **store hierarchy**, and it is the reusable lesson. In the app
+the leaf frames under that getter are `swift_retain`/`swift_release`, and the
+app frames beneath it are `AppFeature.State.appState.getter`,
+`initializeWithCopy for AppFeature.State`, `assignWithCopy for
+MainFeature.State`, `destroy for AppFeature.State` — every `store.channelMessages`
+and `store.markerAtSelection` read walks and copies the composed parent state.
+The harness built a bare root `Store(initialState: BobnetFeature.State())` with
+no parent, so each access was cheap and the per-access constant was ~30× too
+small. The *shape* (quadratic, flat after the fix) transferred; the *constant*
+did not.
+
+So: **an isolated view harness measures the algorithm, never the store.** For
+anything whose cost is per-`store`-access, either compose the real parent
+feature into the harness or measure the running app. And when a harness and a
+symptom disagree by an order of magnitude, the harness is the thing to doubt —
+here it very nearly retired a real bug as latent.
+
+Instruments route, all queryable offline: `xctrace export --input X --toc`, then
+`--xpath '//trace-toc/run/data/table[@schema="…"]'`. `potential-hangs` gives the
+windows, `swiftui-update-groups` names the long updates ("Transaction" /
+"Transaction for Gesture" — the "Other Long Updates" bucket, unattributed there),
+and `time-profile` carries the stacks that actually name the culprit. Rows use
+`id`/`ref` interning and the backtrace element is `tagged-backtrace`, leaf-first.
