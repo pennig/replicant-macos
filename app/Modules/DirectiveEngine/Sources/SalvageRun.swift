@@ -99,6 +99,11 @@ public struct SalvageRun: MissionStepMachine {
     /// The cap on a bot recall before the run surfaces `serviceBotNotRecovered`.
     public static let botRecallDeadline: TimeInterval = 20 * 60
 
+    /// The cap on the controller's own flight back to the vessel before the run
+    /// surfaces `miningControllerNotRecovered`. Its leg is a cross-system cruise
+    /// from whichever body it was deployed at, so it is scaled like a bot recall.
+    public static let controllerRecallDeadline: TimeInterval = 20 * 60
+
     /// The cap on a deploy or arm confirmation. Generous, but finite: without it
     /// a row that never refreshes buys one `.high` read every tick forever.
     public static let botConfirmDeadline: TimeInterval = 10 * 60
@@ -208,6 +213,20 @@ public struct SalvageRun: MissionStepMachine {
     /// The star system `device` is currently in, or nil in transit / stowed.
     static func system(of device: Device) -> String? {
         device.location.map { SiteAssay.system(of: $0) }
+    }
+
+    /// Whether `controller` is actually working `gather_salvage`. The name alone
+    /// is not enough — a paused directive mines nothing and never completes, so
+    /// reading it as "in force" waits on an event that can never arrive.
+    static func isMining(_ controller: Device) -> Bool {
+        controller.currentDirective == "gather_salvage"
+            && controller.currentDirectiveStatus == "active"
+    }
+
+    /// Whether `controller` holds a `gather_salvage` that is set but not running.
+    static func isPaused(_ controller: Device) -> Bool {
+        controller.currentDirective == "gather_salvage"
+            && controller.currentDirectiveStatus == "paused"
     }
 
     // MARK: - Re-entry budget
@@ -628,15 +647,24 @@ public struct SalvageRun: MissionStepMachine {
             guard let controller = claimedController(directive, vessel, world) else {
                 return .stall(.noMiningControllerAboard)
             }
-            if controller.currentDirective == "gather_salvage",
-               Self.configMatches(controller.currentDirectiveConfig, body: body) {
-                return .advanceStep(nextStep: Step.launching)
+            guard Self.configMatches(controller.currentDirectiveConfig, body: body),
+                  controller.currentDirective == "gather_salvage"
+            else {
+                return .dispatch(
+                    kind: .setDirective, deviceCode: controller.deviceCode,
+                    params: CommandParams(directive: "gather_salvage", configuration: Self.salvageConfig(body: body)),
+                    nextStep: Step.launching
+                )
             }
-            return .dispatch(
-                kind: .setDirective, deviceCode: controller.deviceCode,
-                params: CommandParams(directive: "gather_salvage", configuration: Self.salvageConfig(body: body)),
-                nextStep: Step.launching
-            )
+            // Right directive, right body, but not running: `activate` is what
+            // starts it. Re-sending the name would never touch the status.
+            guard Self.isMining(controller) else {
+                return .dispatch(
+                    kind: OperationKind.simple("activate"), deviceCode: controller.deviceCode,
+                    params: CommandParams(), nextStep: Step.launching
+                )
+            }
+            return .advanceStep(nextStep: Step.launching)
         }
     }
 
@@ -738,8 +766,15 @@ public struct SalvageRun: MissionStepMachine {
         // Still mining — the drones are out by design. Reconcile on a cadence to
         // catch completion (or the controller going idle); never stall, however
         // long the cycle runs.
-        if controller.currentDirective == "gather_salvage" {
+        if Self.isMining(controller) {
             return canRead ? .refreshFleet(tag: Self.fleetTag(directive), thenStall: nil) : .wait
+        }
+        // Set but not running, drones out: no completion is ever coming, so the
+        // reconcile above would wait forever. Prove it on a fresh read, then name it.
+        if Self.isPaused(controller) {
+            return canRead
+                ? .refreshFleet(tag: Self.fleetTag(directive), thenStall: .miningDirectivePaused)
+                : .wait
         }
         // Mining done, drones still out: a post-mining recall (near-instant now
         // the vessel sits at the body). Wait out any traveller's own ETA; re-read
@@ -989,6 +1024,11 @@ public struct SalvageRun: MissionStepMachine {
         if !stranded.isEmpty {
             return .refreshFleet(tag: Self.fleetTag(directive), thenStall: .dronesNotRecovered)
         }
+        // The controller flies its own recall leg, and `directive.completed`
+        // tracks the DRONES, so it is routinely still airborne here. Departing
+        // now leaves it chasing the vessel, and the stow ending that chase
+        // pauses whatever `set_directive` landed meanwhile.
+        if let waiting = controllerNotAboard(controller, vessel, directive, world) { return waiting }
         guard let target = directive.currentTarget else {
             return .advanceStep(nextStep: Step.repairing)
         }
@@ -1006,6 +1046,21 @@ public struct SalvageRun: MissionStepMachine {
             // Must NEVER read as `.finished`. Same backstop as `emplace`.
             return unresolvedSystem(directive, world, target: target)
         }
+    }
+
+    /// How to wait for `controller` to get back aboard `vessel`, or nil once it
+    /// is. Deadline BEFORE the staleness guard: a read that keeps failing never
+    /// advances `updatedAt`, so the other order makes the escape unreachable.
+    private func controllerNotAboard(
+        _ controller: Device, _ vessel: Device, _ directive: Directive, _ world: WorldSnapshot
+    ) -> MissionAction? {
+        guard controller.stowedInDeviceCode != vessel.deviceCode else { return nil }
+        if world.now.timeIntervalSince(directive.stepStartedAt) > Self.controllerRecallDeadline {
+            return .stall(.miningControllerNotRecovered)
+        }
+        if let arrival = controller.activityDeadline, arrival > world.now { return .wait }
+        if world.now.timeIntervalSince(controller.updatedAt) < Self.arrivalReadInterval { return .wait }
+        return .refreshDevices(deviceCodes: [controller.deviceCode], thenStall: nil)
     }
 
     /// The body `controller`'s in-force `gather_salvage` config names, or nil when

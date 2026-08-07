@@ -139,6 +139,14 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
     /// deadline — distinct from `dronesNotRecovered`, which is the survey
     /// drones' own recall.
     case serviceBotNotRecovered
+    /// The mining controller's `gather_salvage` reads paused while its drones
+    /// are still deployed. A paused directive mines nothing and never emits the
+    /// completion the run waits on, so the wait would otherwise never end.
+    case miningDirectivePaused
+    /// The mining controller did not get back aboard the vessel before the run
+    /// needed to move on. Its recall leg outlives `directive.completed`, which
+    /// tracks the DRONES, so departing now leaves it chasing the vessel.
+    case miningControllerNotRecovered
 
     /// The stall panel's headline.
     public var displayName: String {
@@ -163,6 +171,8 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
         case .repairUnfinished: "Repair not finished"
         case .serviceBotNotArmed: "Service bot not armed"
         case .serviceBotNotRecovered: "Service bot not recovered"
+        case .miningDirectivePaused: "Mining directive paused"
+        case .miningControllerNotRecovered: "Mining controller not recovered"
         }
     }
 
@@ -211,6 +221,10 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
             "A service bot won't hold an active \"service\" directive. Check it in the device inspector, then retry or skip this target."
         case .serviceBotNotRecovered:
             "A service bot didn't stow before the recall deadline. Retry once it's aboard, or skip this target."
+        case .miningDirectivePaused:
+            "The mining controller's salvage directive is paused, so its deployed drones are idle. Resume it from the device inspector — that recalls the drones — then retry."
+        case .miningControllerNotRecovered:
+            "The mining controller is still travelling back to the vessel. Retry once it's stowed aboard; departing without it strands it in this system."
         }
     }
 }
@@ -240,7 +254,8 @@ public extension DirectiveAttentionReason {
         case .noSurveyControllerAboard, .noSurveyDroneAboard, .noMiningControllerAboard,
              .noMiningDroneAboard, .noRelayCoLocated, .dronesNotRecovered,
              .launchDeployedNothing, .noHaulControllerTagged, .awaitingRelayRestock,
-             .repairUnfinished, .serviceBotNotArmed, .serviceBotNotRecovered:
+             .repairUnfinished, .serviceBotNotArmed, .serviceBotNotRecovered,
+             .miningDirectivePaused, .miningControllerNotRecovered:
             return .escalate
         }
     }

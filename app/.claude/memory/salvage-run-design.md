@@ -61,6 +61,11 @@ gained a `clearingDepleted` parameter: a SCAN observes the site directly and may
 lag a `salvage.depleted` event and so only ever raises it. A per-body fetch is still authoritative and still
 bypasses the reconcile, so a hand tour remains the operator's override.
 
+**AMENDED 2026-08-07 by [[salvage-controller-recall-race]]**: `awaitCompletion`'s "never stalls,
+however long the cycle runs" now has exactly one exception — a `gather_salvage` that reads PAUSED,
+which emits no completion and so would wait forever. `verify` also gained a controller-aboard gate:
+`directive.completed` tracks the DRONES, and the controller's own recall leg outlives it.
+
 (5) **Arrival-freshness gate on all four travel dispatch sites** (2026-08-01, live incident): the run
 stalled `commandRejected: "Already at destination"` 139 ms after a `travel.arrived`, because
 `travel`/`emplace`/`position`/`restock` each guarded a re-dispatch on `openOperation` alone — and the

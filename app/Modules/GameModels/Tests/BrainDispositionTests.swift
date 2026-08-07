@@ -17,6 +17,7 @@ import Testing
             .noMiningDroneAboard, .noRelayCoLocated, .dronesNotRecovered,
             .launchDeployedNothing, .noHaulControllerTagged, .awaitingRelayRestock,
             .repairUnfinished, .serviceBotNotArmed, .serviceBotNotRecovered,
+            .miningDirectivePaused, .miningControllerNotRecovered,
         ]
         for r in escalate { #expect(r.brainDisposition == .escalate, "\(r) should be escalate") }
     }

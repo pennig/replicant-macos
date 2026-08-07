@@ -37,6 +37,7 @@ private func device(
     status: String = "idle",
     currentDirective: String? = nil,
     currentDirectiveConfig: [String: JSONValue]? = nil,
+    currentDirectiveStatus: String = "active",
     tags: [String] = [],
     updatedAt: Date = fixtureNow,
     arrivesAt: Date? = nil
@@ -63,6 +64,7 @@ private func device(
             "name": .string(currentDirective),
             "config": .object(currentDirectiveConfig ?? [:]),
         ])
+        detail["ami_directive_status"] = .string(currentDirectiveStatus)
     }
     return Device(
         deviceCode: code, deviceType: type, replicantCode: "R1",
@@ -935,6 +937,24 @@ struct SalvageRunMiningTests {
         #expect(next == "launching")
     }
 
+    /// Right directive, right body, but paused: `activate` starts it. Re-sending
+    /// the name would be a no-op forever, which is what let a paused controller
+    /// survive a Retry.
+    @Test func activatesAPausedControllerRatherThanResendingItsName() {
+        let paused = device(
+            "CTRL", type: "ami_mining_controller", stowedIn: "VESSEL",
+            controlled: ["DRONE"], directives: ["gather_salvage"],
+            currentDirective: "gather_salvage",
+            currentDirectiveConfig: ["location": .string("TOSLIT-6-5"), "recall": .bool(true)],
+            currentDirectiveStatus: "paused"
+        )
+        let world = world(devices: [atSystem, paused, drone],
+                          systems: ["TOSLIT": miningToslit], siteAssays: miningToslitAssays)
+        #expect(SalvageRun().nextAction(directive: running(step: "configuring"), world: world)
+            == .dispatch(kind: OperationKind.simple("activate"), deviceCode: "CTRL",
+                         params: CommandParams(), nextStep: "launching"))
+    }
+
     @Test func launchesTheController() {
         let world = world(devices: [atSystem, controller, drone],
                           systems: ["TOSLIT": miningToslit], siteAssays: miningToslitAssays)
@@ -957,6 +977,44 @@ struct SalvageRunMiningTests {
         let deployed = device("DRONE", type: "mining_drone", location: "TOSLIT-6-5", controlledBy: "CTRL")
         let directive = running(step: "awaiting", stepStartedAt: now.addingTimeInterval(-11 * 60))
         let world = world(devices: [atSystem, mining, deployed], now: now)
+        #expect(SalvageRun().nextAction(directive: directive, world: world) == .wait)
+    }
+
+    /// The reported live defect: a controller whose `gather_salvage` reads
+    /// PAUSED holds the directive name, so a name-only check reads it as "still
+    /// mining" and reconciles forever. A paused directive never completes, so
+    /// the wait must end in a named stall instead.
+    @Test func namesAPausedDirectiveRatherThanWaitingOnACompletionThatCannotCome() {
+        let paused = device(
+            "CTRL", type: "ami_mining_controller", stowedIn: "VESSEL",
+            controlled: ["DRONE"], directives: ["gather_salvage"],
+            currentDirective: "gather_salvage",
+            currentDirectiveConfig: ["location": .string("TOSLIT-6-5"), "recall": .bool(true)],
+            currentDirectiveStatus: "paused",
+            updatedAt: now.addingTimeInterval(-3 * 60)
+        )
+        let deployed = device("DRONE", type: "mining_drone", location: "TOSLIT-6-5", controlledBy: "CTRL",
+                              updatedAt: now.addingTimeInterval(-3 * 60))
+        let directive = running(step: "awaiting", stepStartedAt: now.addingTimeInterval(-7 * 60 * 60))
+        let world = world(devices: [atSystem, paused, deployed], now: now)
+        #expect(SalvageRun().nextAction(directive: directive, world: world)
+            == .refreshFleet(tag: "auto:salvage", thenStall: .miningDirectivePaused))
+    }
+
+    /// The throttle still binds on the paused branch, so a controller that keeps
+    /// reading paused cannot buy a read every tick on its way to the stall.
+    @Test func throttlesTheReadThatProvesADirectiveIsPaused() {
+        let paused = device(
+            "CTRL", type: "ami_mining_controller", stowedIn: "VESSEL",
+            controlled: ["DRONE"], directives: ["gather_salvage"],
+            currentDirective: "gather_salvage",
+            currentDirectiveConfig: ["location": .string("TOSLIT-6-5"), "recall": .bool(true)],
+            currentDirectiveStatus: "paused", updatedAt: now.addingTimeInterval(-30)
+        )
+        let deployed = device("DRONE", type: "mining_drone", location: "TOSLIT-6-5", controlledBy: "CTRL",
+                              updatedAt: now.addingTimeInterval(-30))
+        let directive = running(step: "awaiting", stepStartedAt: now.addingTimeInterval(-60 * 60))
+        let world = world(devices: [atSystem, paused, deployed], now: now)
         #expect(SalvageRun().nextAction(directive: directive, world: world) == .wait)
     }
 
@@ -1217,6 +1275,56 @@ struct SalvageRunVerificationTests {
         let world = world(devices: [atSystem, controller, stranded], systems: ["TOSLIT": miningToslit])
         #expect(SalvageRun().nextAction(directive: running(step: "verifying"), world: world)
             == .refreshFleet(tag: "auto:salvage", thenStall: .dronesNotRecovered))
+    }
+
+    /// The root of the live soft-stall: `directive.completed` tracks the DRONES,
+    /// and the controller then flies its OWN leg back. Releasing the vessel here
+    /// leaves it chasing, and the stow ending that chase pauses the directive
+    /// `configure`/`launch` set meanwhile.
+    @Test func waitsForTheControllerStillFlyingBackToTheVessel() {
+        let flying = device(
+            "CTRL", type: "ami_mining_controller", controlled: ["DRONE"],
+            directives: ["gather_salvage"], arrivesAt: now.addingTimeInterval(90)
+        )
+        let world = world(devices: [atSystem, flying, drone],
+                          systems: ["TOSLIT": miningToslit], siteAssays: miningToslitAssays, now: now)
+        // Resolved by code: a controller out of the vessel is invisible to the
+        // stowed-aboard fallback, which reads it as vanished instead.
+        let directive = running(step: "verifying", controllerCode: "CTRL")
+        #expect(SalvageRun().nextAction(directive: directive, world: world) == .wait)
+    }
+
+    /// A controller out of the vessel with no ETA and a stale row buys one
+    /// throttled read rather than departing on rows nothing has confirmed.
+    @Test func readsTheControllerRowBeforeConcludingItIsHome() {
+        let ashore = device(
+            "CTRL", type: "ami_mining_controller", location: "TOSLIT-6-5",
+            controlled: ["DRONE"], directives: ["gather_salvage"],
+            updatedAt: now.addingTimeInterval(-SalvageRun.arrivalReadInterval - 1)
+        )
+        let world = world(devices: [atSystem, ashore, drone],
+                          systems: ["TOSLIT": miningToslit], siteAssays: miningToslitAssays, now: now)
+        let directive = running(step: "verifying", controllerCode: "CTRL")
+        #expect(SalvageRun().nextAction(directive: directive, world: world)
+            == .refreshDevices(deviceCodes: ["CTRL"], thenStall: nil))
+    }
+
+    /// The escape: a controller that never gets back aboard must surface rather
+    /// than hold the run forever. Checked BEFORE the staleness guard, so a row
+    /// whose reads keep failing still reaches it.
+    @Test func surfacesAControllerThatNeverComesBackAboard() {
+        let ashore = device(
+            "CTRL", type: "ami_mining_controller", location: "TOSLIT-6-5",
+            controlled: ["DRONE"], directives: ["gather_salvage"], updatedAt: now
+        )
+        let directive = running(
+            step: "verifying", controllerCode: "CTRL",
+            stepStartedAt: now.addingTimeInterval(-SalvageRun.controllerRecallDeadline - 1)
+        )
+        let world = world(devices: [atSystem, ashore, drone],
+                          systems: ["TOSLIT": miningToslit], siteAssays: miningToslitAssays, now: now)
+        #expect(SalvageRun().nextAction(directive: directive, world: world)
+            == .stall(.miningControllerNotRecovered))
     }
 
     /// No salvage left anywhere in the system: this target is finished, and the
