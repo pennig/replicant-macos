@@ -58,6 +58,12 @@ public enum RepairFleet {
         devices.contains { $0.operationalCapacity < repairThreshold }
     }
 
+    /// Whether `bot` carries an ACTIVE `service` directive — the name alone is
+    /// not enough, since a `service` directive read `paused` repairs nothing.
+    public static func isArmed(_ bot: Device) -> Bool {
+        bot.currentDirective == "service" && bot.currentDirectiveStatus == "active"
+    }
+
     /// Everything a repair gate judges: the bots standing in the system plus
     /// whatever is stowed aboard `vessel`, which by departure is every drone.
     public static func fleet(of vessel: Device, in world: WorldSnapshot) -> [Device] {

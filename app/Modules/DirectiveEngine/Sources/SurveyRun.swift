@@ -40,6 +40,10 @@ public struct SurveyRun: MissionStepMachine {
         public static let deployingBots = "deployingBots"
         /// Read whether the ordered deploy landed before ordering the next.
         public static let confirmingBotDeploy = "confirmingBotDeploy"
+        /// Ensure each deployed bot carries an ACTIVE `service` directive.
+        public static let armingBots = "armingBots"
+        /// Read whether an ordered arm landed before ordering the next.
+        public static let confirmingBotArm = "confirmingBotArm"
         /// Put `surveyConfig` in force on the stowed controller.
         public static let configuring = "configuring"
         /// Launch the controller, which deploys its adopted drones.
@@ -124,6 +128,8 @@ public struct SurveyRun: MissionStepMachine {
         case Step.travelling: return travel(directive, vessel, world)
         case Step.deployingBots: return deployBots(directive, vessel, world)
         case Step.confirmingBotDeploy: return confirmBotDeploy(directive, vessel, world)
+        case Step.armingBots: return armBots(directive, vessel, world)
+        case Step.confirmingBotArm: return confirmBotArm(directive, vessel, world)
         case Step.configuring: return configure(directive, vessel, world)
         case Step.launching: return launch(directive, vessel, world)
         case Step.awaiting: return awaitCompletion(directive, world)
@@ -548,7 +554,7 @@ public struct SurveyRun: MissionStepMachine {
         if Self.dispatchRounds(world, dispatch: Step.deployingBots, confirm: Step.confirmingBotDeploy)
             > Self.botDispatchRounds {
             logger.notice("survey run \(directive.id, privacy: .public): \(next.deviceCode, privacy: .public) will not deploy — surveying unrepaired")
-            return .advanceStep(nextStep: Step.configuring)
+            return .advanceStep(nextStep: Step.armingBots)
         }
         return .dispatch(
             kind: .simple("deploy"), deviceCode: next.deviceCode,
@@ -561,7 +567,7 @@ public struct SurveyRun: MissionStepMachine {
         let elapsed = world.now.timeIntervalSince(directive.stepStartedAt)
         if elapsed < Self.botProbeDelay { return .wait }
         let aboard = RepairFleet.bots(aboard: vessel, in: world)
-        if aboard.isEmpty { return .advanceStep(nextStep: Step.configuring) }
+        if aboard.isEmpty { return .advanceStep(nextStep: Step.armingBots) }
         // A row that has not been read since the deploy was ordered cannot yet
         // show it landing; buy the read rather than believing a stale claim.
         if aboard.contains(where: { $0.updatedAt < directive.stepStartedAt }) {
@@ -570,6 +576,46 @@ public struct SurveyRun: MissionStepMachine {
             return .refreshDevices(deviceCodes: aboard.map(\.deviceCode), thenStall: nil)
         }
         return .advanceStep(nextStep: Step.deployingBots)
+    }
+
+    /// Ensure the next mis-armed deployed bot carries an ACTIVE `service`
+    /// directive — never inheriting whatever is already set, since `patrol`
+    /// deactivates devices and `configure` faces the same problem the same way.
+    private func armBots(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
+        let deployed = RepairFleet.bots(deployedNear: vessel.location, in: world)
+        guard let next = deployed.first(where: { !RepairFleet.isArmed($0) }) else {
+            return .advanceStep(nextStep: Step.configuring)
+        }
+        // `set_directive` is untracked and the confirm step re-stamps
+        // `stepStartedAt`, so the log is the only bound on this loop that
+        // re-entry cannot rewind.
+        if Self.dispatchRounds(world, dispatch: Step.armingBots, confirm: Step.confirmingBotArm)
+            > Self.botDispatchRounds {
+            logger.notice("survey run \(directive.id, privacy: .public): \(next.deviceCode, privacy: .public) will not arm")
+            return .stall(.serviceBotNotArmed)
+        }
+        return .dispatch(
+            kind: .setDirective, deviceCode: next.deviceCode,
+            params: CommandParams(directive: "service"), nextStep: Step.confirmingBotArm
+        )
+    }
+
+    /// Judge an ordered arm, looping back for the next mis-armed bot until none is left.
+    private func confirmBotArm(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
+        let elapsed = world.now.timeIntervalSince(directive.stepStartedAt)
+        if elapsed < Self.botProbeDelay { return .wait }
+        let deployed = RepairFleet.bots(deployedNear: vessel.location, in: world)
+        guard let bot = deployed.first(where: { !RepairFleet.isArmed($0) }) else {
+            return .advanceStep(nextStep: Step.configuring)
+        }
+        // A row that has not been read since the arm was ordered cannot yet
+        // show it landing; buy the read rather than believing a stale claim.
+        if bot.updatedAt < directive.stepStartedAt {
+            let lastLook = deployed.map(\.updatedAt).min() ?? .distantPast
+            if world.now.timeIntervalSince(lastLook) < Self.botProbeInterval { return .wait }
+            return .refreshDevices(deviceCodes: deployed.map(\.deviceCode), thenStall: nil)
+        }
+        return .advanceStep(nextStep: Step.armingBots)
     }
 
     /// Hold `vessel` while any deployed service bot is still repairing.

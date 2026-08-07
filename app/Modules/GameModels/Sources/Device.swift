@@ -286,6 +286,12 @@ extension Device {
         detail["ami_directive"]?["config"]
     }
 
+    /// The lifecycle state of the directive currently in force
+    /// (`ami_directive_status`, e.g. `"active"` or `"paused"`), or nil when none.
+    public var currentDirectiveStatus: String? {
+        detail["ami_directive_status"]?.stringValue
+    }
+
     /// One device an AMI controller currently controls, from a `controlled_devices`
     /// entry. Backs the release picker (and lets the adopt picker exclude these).
     public struct ControlledDevice: Equatable, Sendable, Identifiable {

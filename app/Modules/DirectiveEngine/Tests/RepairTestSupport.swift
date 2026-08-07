@@ -19,6 +19,8 @@ func repairDevice(
     location: String? = "SOL-3",
     stowedIn: String? = nil,
     directives: [String] = [],
+    currentDirective: String? = nil,
+    currentDirectiveStatus: String? = nil,
     capacity: Double = 100,
     updatedAt: Date = repairFixtureNow,
     repairingTarget: String? = nil,
@@ -27,6 +29,12 @@ func repairDevice(
     var detail: [String: JSONValue] = [:]
     if !directives.isEmpty {
         detail["available_directives"] = .array(directives.map(JSONValue.string))
+    }
+    if let currentDirective {
+        detail["ami_directive"] = .object(["name": .string(currentDirective)])
+    }
+    if let currentDirectiveStatus {
+        detail["ami_directive_status"] = .string(currentDirectiveStatus)
     }
     if let repairingTarget {
         detail["repair"] = .object(["target_device_code": .string(repairingTarget)])

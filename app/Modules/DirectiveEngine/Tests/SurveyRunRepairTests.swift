@@ -46,7 +46,7 @@ import Utils
         #expect(SurveyRun().nextAction(directive: d, world: w) == .advanceStep(nextStep: SurveyRun.Step.deployingBots))
     }
 
-    @Test func everyBotDeployedAdvancesToConfiguring() {
+    @Test func everyBotDeployedAdvancesToArming() {
         let vessel = repairDevice("VESSEL", type: "heaven_vessel", location: "SOL-3")
         let a = repairDevice("BOT1", type: "service_bot", location: "SOL-3", directives: ["service"])
         let b = repairDevice("BOT2", type: "service_bot", location: "SOL-3", directives: ["service"])
@@ -55,7 +55,7 @@ import Utils
             step: SurveyRun.Step.confirmingBotDeploy, deviceCode: "VESSEL",
             stepStartedAt: repairFixtureNow.addingTimeInterval(-60)
         )
-        #expect(SurveyRun().nextAction(directive: d, world: w) == .advanceStep(nextStep: SurveyRun.Step.configuring))
+        #expect(SurveyRun().nextAction(directive: d, world: w) == .advanceStep(nextStep: SurveyRun.Step.armingBots))
     }
 
     @Test func aFreshlyOrderedDeployIsNotJudgedYet() {

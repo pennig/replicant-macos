@@ -131,6 +131,10 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
     /// The service bots were still working when the repair deadline expired, so
     /// the fleet would otherwise depart mid-repair.
     case repairUnfinished
+    /// A deployed service bot never came up on an ACTIVE `service` directive —
+    /// `set_directive` was reissued past the retry bound and it still reads
+    /// some other directive, or `service` but paused, so it repairs nothing.
+    case serviceBotNotArmed
 
     /// The stall panel's headline.
     public var displayName: String {
@@ -153,6 +157,7 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
         case .noHaulControllerTagged: "No haul controller tagged"
         case .printStockShort: "Resource stock too low to print"
         case .repairUnfinished: "Repair not finished"
+        case .serviceBotNotArmed: "Service bot not armed"
         }
     }
 
@@ -197,6 +202,8 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
             "The hub doesn't have enough of a resource to print without dropping below reserve. It clears on its own as stock recovers — retry once supply catches up."
         case .repairUnfinished:
             "The service bots didn't finish repairing before the deadline. Retry once they've finished, or skip this target."
+        case .serviceBotNotArmed:
+            "A service bot won't hold an active \"service\" directive. Check it in the device inspector, then retry or skip this target."
         }
     }
 }
@@ -226,7 +233,7 @@ public extension DirectiveAttentionReason {
         case .noSurveyControllerAboard, .noSurveyDroneAboard, .noMiningControllerAboard,
              .noMiningDroneAboard, .noRelayCoLocated, .dronesNotRecovered,
              .launchDeployedNothing, .noHaulControllerTagged, .awaitingRelayRestock,
-             .repairUnfinished:
+             .repairUnfinished, .serviceBotNotArmed:
             return .escalate
         }
     }
