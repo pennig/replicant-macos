@@ -110,8 +110,13 @@ public struct BobnetChannelMessages: FetchKeyRequest {
     public var channel: String?
 
     public struct Value: Equatable, Sendable {
+        /// The channel `messages` belongs to; nil before the first load.
+        public var channel: String?
         public var messages: [BobnetMessage] = []
-        public init(messages: [BobnetMessage] = []) { self.messages = messages }
+        public init(channel: String? = nil, messages: [BobnetMessage] = []) {
+            self.channel = channel
+            self.messages = messages
+        }
     }
 
     public init(channel: String?) { self.channel = channel }
@@ -119,6 +124,7 @@ public struct BobnetChannelMessages: FetchKeyRequest {
     public func fetch(_ db: Database) throws -> Value {
         guard let channel else { return Value() }
         return Value(
+            channel: channel,
             messages: try BobnetMessage
                 .where { $0.channel.eq(channel) }
                 .order { ($0.time, $0.id) }
