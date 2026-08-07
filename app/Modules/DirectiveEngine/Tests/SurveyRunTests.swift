@@ -145,6 +145,7 @@ private func world(
     log: [DirectiveLogEntry] = [],
     systems: [String: StarSystem] = [:],
     travelling: Bool = false,
+    dispatchedOperations: [String: GameModels.Operation] = [:],
     now: Date = Date(timeIntervalSince1970: 1_000)
 ) -> WorldSnapshot {
     let openOps: [String: GameModels.Operation] = travelling
@@ -157,7 +158,8 @@ private func world(
         : [:]
     return WorldSnapshot(
         devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
-        openOperations: openOps, log: log, systems: systems, now: now
+        openOperations: openOps, log: log,
+        dispatchedOperations: dispatchedOperations, systems: systems, now: now
     )
 }
 
@@ -1056,5 +1058,159 @@ struct SurveyRunRoamTests {
             world: world(stagedFleet(), systems: ["TAU": scanned])
         )
         #expect(action == .advanceTarget)
+    }
+}
+
+// MARK: - Arrival freshness
+
+/// The tick that decides a travel dispatch, 139 ms after the arrival op closed
+/// — inside the window where `device.location` has not been written yet.
+private let arrivalClosedAt = fixtureNow.addingTimeInterval(-0.139)
+
+/// A vessel row written before the arrival closed, recent enough that the
+/// throttled read has not come due, so the gate answers `.wait`.
+private let rowLaggingArrival = arrivalClosedAt.addingTimeInterval(-5)
+
+/// One CLOSED travel op for the vessel, keyed the way `dispatchedOperations`
+/// is. Distinct from `world(travelling:)`, which builds the single OPEN op the
+/// `openOperation` guard reads — a finished op must never read as in-flight.
+private func afterArrival(
+    status: OperationStatus = .completed, completedAt: Date = arrivalClosedAt
+) -> [String: GameModels.Operation] {
+    let op = GameModels.Operation(
+        id: "OP-ARRIVED", entityCode: "VES1", kind: OperationKind.travel.rawValue,
+        status: status, source: .event,
+        startedAt: completedAt.addingTimeInterval(-120), completesAt: nil,
+        lastConfirmedAt: completedAt, detail: .object([:])
+    )
+    return [op.id: op]
+}
+
+/// Both of the run's travel dispatch sites against the two-transaction arrival
+/// window: `travel.arrived` closes the op first and writes `device.location`
+/// second, so a tick in between reads "trip finished, still elsewhere" and
+/// re-commands travel at a vessel already parked.
+///
+/// Every fixture carries the PRIOR state — a closed travel op AND a vessel row
+/// older than it. A world with no completed travel takes the cold-run arm.
+@Suite("Survey Run — arrival freshness")
+struct SurveyRunArrivalFreshnessTests {
+    // MARK: Site 1 — travel (destination = the target system)
+
+    @Test func travelWaitsWhenTheVesselRowStillLagsTheArrival() {
+        let directive = run(step: SurveyRun.Step.travelling, controllerCode: "AMI1")
+        let snapshot = world(stagedFleet(vesselAt: "SOL-3", updatedAt: rowLaggingArrival),
+                             dispatchedOperations: afterArrival())
+        #expect(SurveyRun().nextAction(directive: directive, world: snapshot) == .wait)
+    }
+
+    /// The no-regression half: a row written AT the arrival still departs. If
+    /// this fails the gate has become a brake on every legitimate travel.
+    @Test func travelStillDispatchesWhenTheRowPostDatesTheArrival() {
+        let directive = run(step: SurveyRun.Step.travelling, controllerCode: "AMI1")
+        let snapshot = world(stagedFleet(vesselAt: "SOL-3", updatedAt: arrivalClosedAt),
+                             dispatchedOperations: afterArrival())
+        #expect(SurveyRun().nextAction(directive: directive, world: snapshot)
+                == .dispatch(kind: .travel, deviceCode: "VES1",
+                             params: CommandParams(destination: "TAU"),
+                             nextStep: SurveyRun.Step.travelling))
+    }
+
+    /// Where the gate may sit, not just whether it fires. Every other stale
+    /// fixture here has `location != destination` and so passes equally against
+    /// a gate hoisted above the equality check; this one is just as stale but
+    /// already names the target — the benign direction, which must advance.
+    @Test func travelAdvancesOnAStaleRowThatAlreadyNamesTheTarget() {
+        let directive = run(step: SurveyRun.Step.travelling, controllerCode: "AMI1")
+        let snapshot = world(stagedFleet(vesselAt: "TAU-2", updatedAt: rowLaggingArrival),
+                             dispatchedOperations: afterArrival())
+        #expect(SurveyRun().nextAction(directive: directive, world: snapshot)
+                == .advanceStep(nextStep: SurveyRun.Step.deployingBots))
+    }
+
+    // MARK: Site 2 — returnHome (destination = the run's origin)
+
+    @Test func returnWaitsWhenTheVesselRowStillLagsTheArrival() {
+        let directive = run(step: SurveyRun.Step.returning, targets: ["TAU"], targetIndex: 1,
+                            returnToOrigin: true, origin: "SOL")
+        let snapshot = world(stagedFleet(vesselAt: "TAU-2", updatedAt: rowLaggingArrival),
+                             dispatchedOperations: afterArrival())
+        #expect(SurveyRun().nextAction(directive: directive, world: snapshot) == .wait)
+    }
+
+    @Test func returnStillDispatchesWhenTheRowPostDatesTheArrival() {
+        let directive = run(step: SurveyRun.Step.returning, targets: ["TAU"], targetIndex: 1,
+                            returnToOrigin: true, origin: "SOL")
+        let snapshot = world(stagedFleet(vesselAt: "TAU-2", updatedAt: arrivalClosedAt),
+                             dispatchedOperations: afterArrival())
+        #expect(SurveyRun().nextAction(directive: directive, world: snapshot)
+                == .dispatch(kind: .travel, deviceCode: "VES1",
+                             params: CommandParams(destination: "SOL"),
+                             nextStep: SurveyRun.Step.returning))
+    }
+
+    /// Gate placement for site 2: a stale row already home must finish the run,
+    /// never wait. Hoisting the gate turns every arrival home into a stall.
+    @Test func returnCompletesOnAStaleRowThatAlreadyNamesTheOrigin() {
+        let directive = run(step: SurveyRun.Step.returning, targets: ["TAU"], targetIndex: 1,
+                            returnToOrigin: true, origin: "SOL")
+        let snapshot = world(stagedFleet(vesselAt: "SOL-3", updatedAt: rowLaggingArrival),
+                             dispatchedOperations: afterArrival())
+        #expect(SurveyRun().nextAction(directive: directive, world: snapshot) == .done)
+    }
+
+    // MARK: The cold run
+
+    /// No completed travel means no watermark to post-date, so a first
+    /// evaluation departs at once. This is why the watermark is the ARRIVAL and
+    /// not `stepStartedAt`, which would delay every first travel by a deadline.
+    @Test func dispatchesImmediatelyOnAColdRunWithNoCompletedTravel() {
+        let directive = run(step: SurveyRun.Step.travelling, controllerCode: "AMI1")
+        let fleet = stagedFleet(vesselAt: "SOL-3", updatedAt: rowLaggingArrival)
+        let snapshot = world(fleet)
+        #expect(SalvageRun.lastTravelCompletion(for: fleet[0], snapshot) == nil)
+        #expect(SurveyRun().nextAction(directive: directive, world: snapshot)
+                == .dispatch(kind: .travel, deviceCode: "VES1",
+                             params: CommandParams(destination: "TAU"),
+                             nextStep: SurveyRun.Step.travelling))
+    }
+
+    /// A `.superseded` op stamps `lastConfirmedAt` on a travel that never
+    /// arrived, so it must not install itself as the watermark and gate a real
+    /// dispatch behind an arrival that did not happen.
+    @Test func aSupersededTravelIsNotAnArrival() {
+        let directive = run(step: SurveyRun.Step.travelling, controllerCode: "AMI1")
+        let snapshot = world(stagedFleet(vesselAt: "SOL-3", updatedAt: rowLaggingArrival),
+                             dispatchedOperations: afterArrival(status: .superseded))
+        #expect(SurveyRun().nextAction(directive: directive, world: snapshot)
+                == .dispatch(kind: .travel, deviceCode: "VES1",
+                             params: CommandParams(destination: "TAU"),
+                             nextStep: SurveyRun.Step.travelling))
+    }
+
+    // MARK: The escalation ladder
+
+    /// The DEADLINE outranks the throttled read. Reversed, a vessel whose reads
+    /// never land never reaches its deadline and buys a `.high` read every tick.
+    @Test func surfacesVesselPositionUnconfirmedOnceTheArrivalDeadlinePasses() {
+        let longAgo = fixtureNow.addingTimeInterval(-SalvageRun.arrivalConfirmDeadline)
+        let directive = run(step: SurveyRun.Step.travelling, controllerCode: "AMI1")
+        let snapshot = world(
+            stagedFleet(vesselAt: "SOL-3", updatedAt: longAgo.addingTimeInterval(-5)),
+            dispatchedOperations: afterArrival(completedAt: longAgo)
+        )
+        #expect(SurveyRun().nextAction(directive: directive, world: snapshot)
+                == .refreshDevices(deviceCodes: ["VES1"], thenStall: .vesselPositionUnconfirmed))
+    }
+
+    /// Past the read throttle but inside the deadline: buy one read, carrying no
+    /// stall reason so an unresolved probe waits rather than halting the run.
+    @Test func buysOneThrottledReadOnceTheRowIsOldEnough() {
+        let directive = run(step: SurveyRun.Step.travelling, controllerCode: "AMI1")
+        let stale = arrivalClosedAt.addingTimeInterval(-SalvageRun.arrivalReadInterval - 1)
+        let snapshot = world(stagedFleet(vesselAt: "SOL-3", updatedAt: stale),
+                             dispatchedOperations: afterArrival())
+        #expect(SurveyRun().nextAction(directive: directive, world: snapshot)
+                == .refreshDevices(deviceCodes: ["VES1"], thenStall: nil))
     }
 }
