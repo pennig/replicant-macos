@@ -19,14 +19,6 @@ public struct BobnetChannelDetailView: View {
         self.store = store
     }
 
-    /// The id of the first message past the selection-time read marker — the
-    /// anchor for the "New messages" divider. Nil when nothing is unread.
-    private var firstUnreadID: Int? {
-        guard store.markerAtSelection > 0 else { return nil }
-        return store.channelMessages.messages
-            .first { $0.id > store.markerAtSelection }?.id
-    }
-
     public var body: some View {
         if let channel = store.selectedChannel {
             messages(for: channel)
@@ -40,6 +32,12 @@ public struct BobnetChannelDetailView: View {
 
     @ViewBuilder
     private func messages(for channel: String) -> some View {
+        // Bound once per list build. `.defaultScrollAnchor(.bottom)` walks the
+        // whole `ForEach` to size the content, so a per-row call is quadratic.
+        let firstUnreadID = BobnetUnreadDivider.anchor(
+            in: store.channelMessages.messages,
+            marker: store.markerAtSelection
+        )
         ScrollView {
             LazyVStack(alignment: .leading, spacing: Space.s) {
                 ForEach(store.channelMessages.messages) { message in
