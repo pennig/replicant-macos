@@ -121,6 +121,30 @@ import Testing
 
         #expect(store.state.isAtLatest == true)
         #expect(store.state.newWhileAway == 0)
+        #expect(store.state.pendingBottomScroll == true)
+    }
+
+    /// The genuine exit: a positive geometry report while a scroll is pending
+    /// clears the flag AND cancels the 250 ms backstop — not just the flag.
+    @Test func genuineLandingClearsPendingAndCancelsExpiry() async throws {
+        let clock = TestClock()
+        let (store, _) = try await makeStore(clock: clock)
+
+        await store.send(.binding(.set(\.isAtLatest, true)))
+        await store.send(.latestMessageChanged)
+        await store.send(.binding(.set(\.isAtLatest, false)))
+        await store.send(.binding(.set(\.isAtLatest, true)))
+
+        #expect(store.state.pendingBottomScroll == false)
+
+        // Exhaustive from here: an uncancelled expiry effect would deliver
+        // `.pendingScrollExpired` unasserted, and the next `send` would fail.
+        store.exhaustivity = .on
+        await clock.advance(by: .milliseconds(250))
+        await store.send(.binding(.set(\.isAtLatest, false))) {
+            $0.isAtLatest = false
+        }
+        await store.finish()
     }
 
     /// The suppression cannot stick: with no geometry report at all, 250 ms
@@ -167,10 +191,25 @@ import Testing
         await store.send(.latestMessageChanged)
         let before = store.state.scrollToBottomToken
 
-        await store.send(.sendSucceeded)
+        await store.send(.sendSucceeded("#general"))
 
         #expect(store.state.isAtLatest == true)
         #expect(store.state.newWhileAway == 0)
         #expect(store.state.scrollToBottomToken == before + 1)
+    }
+
+    /// A send response for a channel the reader has since switched away from
+    /// must not force that OTHER channel to latest or scroll it.
+    @Test func staleSendSucceededIsIgnored() async throws {
+        let (store, _) = try await makeStore(clock: TestClock())
+
+        await store.send(.binding(.set(\.selectedChannel, "#trade")))
+        await store.send(.binding(.set(\.isAtLatest, false)))
+        let before = store.state.scrollToBottomToken
+
+        await store.send(.sendSucceeded("#general"))
+
+        #expect(store.state.isAtLatest == false)
+        #expect(store.state.scrollToBottomToken == before)
     }
 }

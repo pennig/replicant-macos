@@ -121,7 +121,9 @@ public struct BobnetFeature {
         /// being observed to land.
         case pendingScrollExpired
         case sendButtonTapped
-        case sendSucceeded
+        /// The channel a send was posted to, captured at dispatch — the
+        /// selection can have moved on by the time this lands.
+        case sendSucceeded(String)
         case sendFailed(String)
         case newChannelButtonTapped
         case newChannelDismissed
@@ -302,11 +304,15 @@ public struct BobnetFeature {
                       let replicant = state.activeReplicantCode
                 else { return .none }
                 state.isSending = true
-                return sendMessage(channel: channel, text: text, as: replicant) { .sendSucceeded }
+                return sendMessage(channel: channel, text: text, as: replicant) { .sendSucceeded(channel) }
 
-            case .sendSucceeded:
+            case let .sendSucceeded(channel):
                 state.isSending = false
                 state.composeText = ""
+                // A stale identity (the reader switched channels while the
+                // send was in flight) must not force latest/scroll on the
+                // channel now showing.
+                guard channel == state.selectedChannel else { return .none }
                 state.isAtLatest = true
                 state.newWhileAway = 0
                 let scroll = requestBottomScroll(&state)
