@@ -170,6 +170,18 @@ let package = Package(
             dependencies: ["BobnetFeature"],
             path: "BobnetFeature/Tests"
         ),
+        .executableTarget(
+            name: "BobnetLayoutHarness",
+            dependencies: [
+                "BobnetFeature",
+                "GameDatabase",
+                "GameModels",
+                "UI",
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "SQLiteData", package: "sqlite-data"),
+            ],
+            path: "BobnetLayoutHarness/Sources"
+        ),
         .target(
             name: "CivilisationsFeature",
             dependencies: [

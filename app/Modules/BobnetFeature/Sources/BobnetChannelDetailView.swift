@@ -50,8 +50,8 @@ public struct BobnetChannelDetailView: View {
             .padding(Space.l)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .id(channel)
         .defaultScrollAnchor(.bottom)
+        .id(channel)
         .onScrollGeometryChange(for: Bool.self) { geometry in
             BobnetScrollBottom.isAtBottom(
                 contentOffset: geometry.contentOffset.y,
