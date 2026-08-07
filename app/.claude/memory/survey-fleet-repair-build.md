@@ -7,9 +7,16 @@ Additive: no migration, no schema change, no new table, no new poller.
 
 ## What shipped
 
-**Repair is autonomous.** A service bot standing in the same system as a damaged
-device repairs it with no command at all — the engine only handles placement and
-timing. Nothing in this build issues `repair`.
+**Repair is autonomous, but only once the bot is ARMED.** A service bot whose
+`service` directive is ACTIVE repairs damaged devices in its system with no
+per-device command — nothing here issues `repair`. **A freshly deployed bot is
+not armed**: it lands with `ami_directive_status: "paused"`, verified against
+the server on the first live run, so this build deployed both bots and they
+stood idle for the whole survey while the gate read them as not-repairing and
+released the vessel immediately. Silent no-repair, which is exactly what the
+design meant to make loud.
+Closed 2026-08-07 by the `armingBots` / `confirmingBotArm` pair — see the
+arming section below.
 
 - **`RepairFleet`** — the pure query namespace: `bots(aboard:in:)`,
   `bots(deployedNear:in:)`, `anyBotDeployed`, `isRepairing(_:)`,
@@ -115,8 +122,41 @@ Per-product event-stream runs, one output path each:
 --build-tests` clean.
 
 **It ships INERT until an operator stages two service bots aboard the survey
-vessel.** Survey Run never stows or adopts; staging is the player's job. The two
-bots the account owns are untagged and sit at the print hub.
+vessel.** Survey Run never stows or adopts; staging is the player's job.
+
+## Arming the bots (2026-08-07) — the first live run's finding
+
+Deploying a bot is NOT enough. The first real survey deployed both bots at the
+target system and neither repaired anything, because a deployed bot reads
+`ami_directive_status: "paused"` — confirmed against the server, not a stale
+local row. The failure was silent by construction: `repairing` reads a paused
+bot as not-repairing and releases the vessel at once.
+
+`armingBots` / `confirmingBotArm` now sit between `confirmingBotDeploy` and
+`configuring`, dispatching only what a bot actually lacks:
+
+    directive name ≠ service          → set_directive(directive: "service")
+    name is service, status ≠ active  → simple("activate")
+    name service and active           → armed, skip
+    round bound exceeded              → stall(.serviceBotNotArmed)
+
+**The run SETS the directive rather than inheriting one**, for the same reason
+`SurveyRun.configure` puts its own `surveyConfig` in force: `available_directives`
+is `["patrol", "service"]`, and `patrol` DEACTIVATES each device to restore it
+fully while `service` hot-repairs without deactivation. A bot left on `patrol`
+by manual use would switch off survey drones mid-survey.
+
+A bot wrong on both facts is renamed on one round and activated on a later one —
+a mission returns exactly one action. The loop is bounded off
+`SurveyRun.dispatchRounds` (the directive's own `.stepStarted` log, immune to
+`stepStartedAt` re-stamping), and the bound covers BOTH dispatch branches, so a
+bot refusing to activate terminates the same way as one refusing `set_directive`.
+
+**Still unverified live:** whether `activate` actually clears
+`ami_directive_status` for a `service_bot` the way it does for an FTL relay.
+Establishing it needs a mutation. If the server no-ops it, every deploy burns
+the round budget and stalls `serviceBotNotArmed` — correct and loud, but still
+no repair.
 
 Related: [[directives-feature]], [[same-step-dispatch-needs-tracked-op]],
 [[confirm-steps-need-fresh-evidence]], [[brain-tendmesh-build]],
