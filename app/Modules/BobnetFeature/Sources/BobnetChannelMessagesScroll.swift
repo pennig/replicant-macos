@@ -53,9 +53,7 @@ struct BobnetChannelMessagesScroll: View {
                 bottomInset: geometry.contentInsets.bottom
             )
         } action: { _, isAtBottom in
-            if store.isAtLatest != isAtBottom {
-                store.send(.binding(.set(\.isAtLatest, isAtBottom)))
-            }
+            store.send(.binding(.set(\.isAtLatest, isAtBottom)))
         }
         // Temporary: the isolated harness cannot reproduce the reported layout
         // symptoms, so the running app reports its own geometry.

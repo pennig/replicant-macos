@@ -43,6 +43,12 @@ import Testing
         }
     }
 
+    private func marker(_ database: any DatabaseWriter, _ channel: String) async throws -> Int? {
+        try await database.read { db in
+            try BobnetChannel.where { $0.name.eq(channel) }.fetchOne(db)?.lastReadMessageID
+        }
+    }
+
     /// A message landing while the reader is scrolled away is counted.
     @Test func messageWhileAwayIsCounted() async throws {
         let (store, _) = try await makeStore(clock: TestClock())
@@ -166,6 +172,69 @@ import Testing
         #expect(store.state.isAtLatest == false)
 
         await store.finish()
+    }
+
+    /// A suppressed report is the only one the view will send: the transformed
+    /// `Bool` is already false, so geometry stays silent. The expiry has to
+    /// apply that truth, or the linger marks history read.
+    @Test func suppressedNegativeReportIsAppliedByTheExpiry() async throws {
+        let clock = TestClock()
+        let (store, database) = try await makeStore(clock: clock)
+
+        await store.send(.binding(.set(\.isAtLatest, true)))
+        await store.send(.latestMessageChanged)
+        await store.send(.binding(.set(\.isAtLatest, false)))
+        #expect(store.state.isAtLatest == true) // suppressed, and now unrepeatable
+
+        await clock.advance(by: .milliseconds(250))
+        await store.receive(\.pendingScrollExpired)
+        #expect(store.state.isAtLatest == false)
+        #expect(store.state.pendingBottomScroll == false)
+
+        await clock.advance(by: .seconds(3))
+        await store.finish()
+        #expect(try await marker(database, "#general") == nil)
+    }
+
+    /// The pill's optimistic flag fails closed: with no landing report at all,
+    /// 250 ms puts the reader back in history and disarms the linger.
+    @Test func jumpToLatestThatNeverLandsFailsClosed() async throws {
+        let clock = TestClock()
+        let (store, database) = try await makeStore(clock: clock)
+
+        await store.send(.binding(.set(\.isAtLatest, false)))
+        await store.send(.jumpToLatestTapped)
+        #expect(store.state.isAtLatest == true)
+
+        await clock.advance(by: .milliseconds(250))
+        await store.receive(\.pendingScrollExpired)
+        #expect(store.state.isAtLatest == false)
+
+        await clock.advance(by: .seconds(3))
+        await store.finish()
+        #expect(try await marker(database, "#general") == nil)
+    }
+
+    /// An expiry whose window a landing already closed — or that a later
+    /// request superseded — must not put the reader back in history.
+    @Test func expiryFromAClosedWindowIsInert() async throws {
+        let clock = TestClock()
+        let (store, _) = try await makeStore(clock: clock)
+
+        await store.send(.binding(.set(\.isAtLatest, true)))
+        await store.send(.latestMessageChanged)
+        let armed = store.state.scrollToBottomToken
+
+        await store.send(.binding(.set(\.isAtLatest, true))) // the scroll landed
+        #expect(store.state.pendingBottomScroll == false)
+
+        await store.send(.pendingScrollExpired(armed)) // a cancellation that didn't take
+        #expect(store.state.isAtLatest == true)
+
+        await store.send(.latestMessageChanged) // a fresh window opens
+        await store.send(.pendingScrollExpired(armed))
+        #expect(store.state.isAtLatest == true)
+        #expect(store.state.pendingBottomScroll == true)
     }
 
     /// Tapping the pill goes to the bottom and clears the count.

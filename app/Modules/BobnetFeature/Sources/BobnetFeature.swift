@@ -117,9 +117,10 @@ public struct BobnetFeature {
         case detailAppeared(String?)
         /// The jump-to-latest affordance was tapped.
         case jumpToLatestTapped
-        /// The bottom-scroll suppression window closed without the scroll
-        /// being observed to land.
-        case pendingScrollExpired
+        /// The bottom-scroll suppression window closed without the scroll being
+        /// observed to land. Carries the `scrollToBottomToken` that armed it;
+        /// any other value is an escaped expiry from a closed window.
+        case pendingScrollExpired(Int)
         case sendButtonTapped
         /// The channel a send was posted to, captured at dispatch — the
         /// selection can have moved on by the time this lands.
@@ -292,9 +293,14 @@ public struct BobnetFeature {
                 let scroll = requestBottomScroll(&state)
                 return .merge(scroll, reevaluateLinger(state))
 
-            case .pendingScrollExpired:
+            case let .pendingScrollExpired(token):
+                // The window closed with no landing report, so the suppressed
+                // "not at bottom" was the truth — geometry cannot repeat it.
+                guard token == state.scrollToBottomToken, state.pendingBottomScroll
+                else { return .none }
                 state.pendingBottomScroll = false
-                return .none
+                state.isAtLatest = false
+                return reevaluateLinger(state)
 
             case .sendButtonTapped:
                 let text = state.composeText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -404,10 +410,11 @@ public struct BobnetFeature {
     private func requestBottomScroll(_ state: inout State) -> Effect<Action> {
         state.scrollToBottomToken += 1
         state.pendingBottomScroll = true
+        let token = state.scrollToBottomToken
         let clock = self.clock
         return .run { send in
             try await clock.sleep(for: .milliseconds(250))
-            await send(.pendingScrollExpired)
+            await send(.pendingScrollExpired(token))
         }
         .cancellable(id: CancelID.pendingScroll, cancelInFlight: true)
     }
