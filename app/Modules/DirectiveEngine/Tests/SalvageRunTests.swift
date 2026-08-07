@@ -1394,14 +1394,28 @@ struct SalvageRunLoopProgressTests {
         )
     }
 
-    /// The body just worked is still the richest live one. Rather than
-    /// re-launching at it — which is what the loop did forever — read the system
-    /// authoritatively: the common cause is a stale `depleted` flag, and the
-    /// read repairs it.
-    @Test func readsTheSystemWhenTheBodyJustWorkedComesBackAgain() {
+    /// Moments after a cycle ends, a still-on-offer worked body is lag, not
+    /// evidence — the `salvage.depleted` frame and the roster both run minutes
+    /// behind the drones' real finish. Wait, spend nothing.
+    @Test func waitsOutPropagationLagBeforeSpendingTheRead() {
         let world = world(devices: [atSystem, worked("TOSLIT-6-5"), drone],
                           systems: ["TOSLIT": miningToslit], siteAssays: miningToslitAssays)
         #expect(SalvageRun().nextAction(directive: running(step: "verifying"), world: world)
+            == .wait)
+    }
+
+    /// The body just worked is still the richest live one past the grace.
+    /// Rather than re-launching at it — which is what the loop did forever —
+    /// read the system authoritatively: the common cause is a stale `depleted`
+    /// flag, and the read repairs it.
+    @Test func readsTheSystemWhenTheBodyJustWorkedComesBackAgain() {
+        let directive = running(
+            step: "verifying",
+            stepStartedAt: fixtureNow.addingTimeInterval(-SalvageRun.depletionPropagationGrace - 1)
+        )
+        let world = world(devices: [atSystem, worked("TOSLIT-6-5"), drone],
+                          systems: ["TOSLIT": miningToslit], siteAssays: miningToslitAssays)
+        #expect(SalvageRun().nextAction(directive: directive, world: world)
             == .refreshSystem(designation: "TOSLIT", nextStep: "verifying"))
     }
 
@@ -1409,13 +1423,17 @@ struct SalvageRunLoopProgressTests {
     /// surfaces instead of looping. A stall the operator can Skip past beats an
     /// invisible command loop against the live API.
     @Test func stallsWhenAWorkedBodyNeverDrains() {
+        let directive = running(
+            step: "verifying",
+            stepStartedAt: fixtureNow.addingTimeInterval(-SalvageRun.depletionPropagationGrace - 1)
+        )
         let world = world(
             devices: [atSystem, worked("TOSLIT-6-5"), drone],
             log: [stepStarted("verifying", at: fixtureNow.addingTimeInterval(-120)),
                   stepStarted("verifying", at: fixtureNow.addingTimeInterval(-60))],
             systems: ["TOSLIT": miningToslit], siteAssays: miningToslitAssays
         )
-        #expect(SalvageRun().nextAction(directive: running(step: "verifying"), world: world)
+        #expect(SalvageRun().nextAction(directive: directive, world: world)
             == .stall(.salvageBodyNotDepleted))
     }
 
