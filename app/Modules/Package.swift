@@ -49,7 +49,7 @@ let package = Package(
         // equality then prints a structural diff instead of two dumped values.
         .package(url: "https://github.com/pointfreeco/swift-custom-dump", from: "1.3.0"),
         .package(url: "https://github.com/pointfreeco/swift-dependencies", from: "1.9.0"),
-        .package(url: "https://github.com/pointfreeco/sqlite-data", from: "1.6.0"),
+        .package(url: "https://github.com/pointfreeco/sqlite-data", from: "1.9.0"),
         .package(url: "https://github.com/pointfreeco/swift-sharing", from: "2.8.2"),
         .package(url: "https://github.com/siteline/swiftui-introspect", exact: "26.0.1"),
     ],
