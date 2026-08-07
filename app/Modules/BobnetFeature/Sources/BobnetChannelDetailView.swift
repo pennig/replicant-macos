@@ -31,9 +31,8 @@ public struct BobnetChannelDetailView: View {
     @ViewBuilder
     private func messages(for channel: String) -> some View {
         BobnetChannelMessagesScroll(store: store, channel: channel)
-            // Above the anchors and the geometry observer, so a channel switch
-            // gives all of them a fresh identity. Deliberately not around the
-            // compose bar, which keeps its field identity across a switch.
+            // Above the anchors and geometry observer, so a channel switch gives
+            // them fresh identity; deliberately excludes the compose bar's field.
             .id(channel)
             .background(.rcContentBackground)
             .navigationTitle(channel)

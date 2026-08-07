@@ -309,9 +309,8 @@ public struct BobnetFeature {
             case let .sendSucceeded(channel):
                 state.isSending = false
                 state.composeText = ""
-                // A stale identity (the reader switched channels while the
-                // send was in flight) must not force latest/scroll on the
-                // channel now showing.
+                // A stale identity (switched channels mid-send) must not force
+                // latest/scroll onto the channel now showing.
                 guard channel == state.selectedChannel else { return .none }
                 state.isAtLatest = true
                 state.newWhileAway = 0
