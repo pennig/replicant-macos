@@ -79,3 +79,80 @@ directly to simulate the lost cancellation.
 
 Also: the `lingerElapsed` DB write had no `catch:`, so a throwing marker write
 was discarded in silence. It logs now.
+
+## The scroll view is bottom-anchored by the reducer, not by one anchor modifier
+
+The motivating hypothesis — that `.id(channel)` sitting *below*
+`.defaultScrollAnchor(.bottom)` broke bottom alignment on a channel switch —
+was never confirmed. An isolated harness (a real `NSHostingView` in a real
+`NSWindow`, seeded from the live table: `#general` 615 messages, `#trade` 226,
+`#claims` 15 at 25-34 characters each) measured `{bare, split} × {800, 1054}`,
+16 configurations in all. Every one reported `atBottom=Y`; in the six rows
+where `#claims` genuinely fit its viewport, `fillsViewport == visibleH -
+insets.bottom` **exactly** (952 == 952 under `split h=800`; 982 == 982 under
+`bare h=1054` and `split h=1054`). **The isolated harness reproduces neither
+reported symptom** — not the short channel failing to bottom-align, not
+messages hidden behind the compose bar — so this branch's changes stand on
+the IRC behaviour they deliver, not on a measured fix.
+
+Two measurement traps cost real time getting there:
+
+- The first harness reading concluded "rung 3, rewrite in AppKit" from a
+  reading guide that had the sign backwards. The correct identity is
+  `gapBelow == -insets.bottom` at rest — an `NSClipView` with
+  `contentInsets` scrolled to its true maximum sits at `bounds.maxY ==
+  documentHeight + insets.bottom`. A metric that fails to discriminate can
+  mean the instrument is broken *or* that nothing is wrong; here it was the
+  latter.
+- `findScrollView`'s depth-first search grabbed the sidebar's `NSScrollView`
+  under the split-view variant, silently reporting `documentH=120` unchanged
+  across every channel switch. Fix: pick the rightmost scroll view by window
+  x, not the first one found in tree order.
+
+What the branch actually built, since the harness gave it no measured bug to
+fix: the anchor is split by role (`.bottom` for `initialOffset` and
+`alignment`, `.top` for `sizeChanges`, so a message landing doesn't drag the
+viewport out of history) and `.id(channel)` now wraps the whole scroll
+region, which lives in `BobnetChannelMessagesScroll` so `@State
+scrollPosition` is recreated per channel. Programmatic scrolling is the
+reducer's: `scrollToBottomToken` is bumped on a message arriving while at the
+bottom, on send, and on the pill tap, and the view answers it with
+`scrollPosition.scrollTo(edge: .bottom)`. `pendingBottomScroll` is a **mask**
+over "effectively at latest" while such a scroll is in flight, bounded to
+250 ms so it can never stick — a permanently-true mask is what advances a
+read marker under a reader who has scrolled away. The temporary
+`BobnetScrollProbe` logging instrumentation in
+`BobnetChannelMessagesScroll.swift` stays in place past this branch: it is
+the only thing that can see the reported symptom in the running app, since
+the harness could not reproduce it.
+
+## `pendingBottomScroll` is a mask; the reducer must never write `isAtLatest`
+
+`pendingBottomScroll` does not override geometry — it is OR-ed with `isAtLatest`
+wherever "effectively at the newest message" is the question (`lingerableChannel`,
+`.latestMessageChanged`, the pill's bare-arrow state). The reducer writes
+`isAtLatest` only where the view is *known* to render pinned to the bottom and
+delivers no geometry change to say so: `selectionChanged`, `.detailAppeared`,
+`.detailDisappeared`. It writes it nowhere mid-flight.
+
+Why the rule is absolute: `onScrollGeometryChange` fires only when its transformed
+`Bool` *changes*, so a reducer write desynchronises the reducer's value from the
+observer's stored one, and a change-driven observer that has already reported
+cannot re-announce the same value. Two successive bugs came out of exactly that.
+Writing `true` to suppress a negative report left `isAtLatest` wrongly true when
+the reader scrolled into history inside the 250 ms window (geometry stayed false,
+so it never spoke again) and the linger marked unread messages read. Failing
+closed at the expiry — writing `false` — bought the opposite bug on a channel
+**shorter than the viewport**, where `BobnetScrollBottom.isAtBottom` is true at
+rest and stays true as content grows (measured `1054 >= 715`, then `1054 >= 764`
+at the app's real geometry): no report ever arrives, the expiry parked
+`isAtLatest = false` under a reader sitting on the newest message, and that
+channel's unread count never cleared again.
+
+The mask has one known limitation, deliberately accepted: if the geometry report
+lands *before* `.latestMessageChanged`, the mask is not yet armed and
+`newWhileAway` still takes one spurious increment. The four cases that decide the
+design (message landing at the bottom, reader scrolling up mid-window, the short
+channel, and a pill tap whose scroll never lands) are asserted in
+`BobnetJumpToLatestTests` against `BobnetChannel.lastReadMessageID` — state-only
+assertions are what let both prior bugs through.
