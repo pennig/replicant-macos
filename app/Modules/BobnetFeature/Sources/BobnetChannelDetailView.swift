@@ -30,10 +30,11 @@ public struct BobnetChannelDetailView: View {
 
     @ViewBuilder
     private func messages(for channel: String) -> some View {
-        BobnetChannelMessagesScroll(store: store, channel: channel)
-            // Above the anchors and geometry observer, so a channel switch gives
-            // them fresh identity; deliberately excludes the compose bar's field.
-            .id(channel)
+        // The loaded channel, not the selection: identity flips once, when the new
+        // messages land, never while the old ones are still on screen.
+        let loaded = store.channelMessages.channel
+        BobnetChannelMessagesScroll(store: store, channel: loaded)
+            .id(loaded)
             .background(.rcContentBackground)
             .navigationTitle(channel)
             .safeAreaInset(edge: .top, spacing: 0) {

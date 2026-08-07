@@ -4,7 +4,7 @@
 //
 //  The channel's message list: oldest first, laid out from the bottom, with the
 //  unread divider at the read marker as it stood on selection. Owns the scroll
-//  position, so the caller's `.id(channel)` gives each channel a fresh one.
+//  position, so the caller's `.id` gives each loaded channel a fresh one.
 //
 
 import ComposableArchitecture
@@ -16,7 +16,9 @@ private let logger = Logger(subsystem: "name.pennig.replicould", category: "Bobn
 
 struct BobnetChannelMessagesScroll: View {
     @Bindable var store: StoreOf<BobnetFeature>
-    let channel: String
+    /// The channel the rendered messages belong to, which is also this view's
+    /// `.id`. Nil until the first load lands.
+    let channel: String?
 
     @State private var scrollPosition = ScrollPosition(idType: Int.self)
 
@@ -58,6 +60,7 @@ struct BobnetChannelMessagesScroll: View {
         // Temporary geometry logging for the running app.
         .onScrollGeometryChange(for: BobnetScrollProbe.self) { geometry in
             BobnetScrollProbe(
+                offset: geometry.contentOffset.y,
                 container: geometry.containerSize.height,
                 content: geometry.contentSize.height,
                 topInset: geometry.contentInsets.top,
@@ -65,7 +68,8 @@ struct BobnetChannelMessagesScroll: View {
             )
         } action: { _, probe in
             logger.debug("""
-                \(channel, privacy: .public) rows=\(store.channelMessages.messages.count) \
+                \(channel ?? "-", privacy: .public) rows=\(store.channelMessages.messages.count) \
+                offset=\(probe.offset, format: .fixed(precision: 1)) \
                 container=\(probe.container, format: .fixed(precision: 1)) \
                 content=\(probe.content, format: .fixed(precision: 1)) \
                 insets=(t\(probe.topInset, format: .fixed(precision: 0)),\
@@ -87,6 +91,7 @@ struct BobnetChannelMessagesScroll: View {
 
 /// Temporary geometry probe for the running app's layout logging.
 struct BobnetScrollProbe: Equatable {
+    var offset: CGFloat
     var container: CGFloat
     var content: CGFloat
     var topInset: CGFloat

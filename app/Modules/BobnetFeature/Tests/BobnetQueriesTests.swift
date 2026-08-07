@@ -101,6 +101,31 @@ private func message(
         #expect(empty.messages.isEmpty)
     }
 
+    @Test func channelMessagesCarryTheChannelTheyCameFrom() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try BobnetMessage.upsert { message(1, channel: "#general", at: 100) }.execute(db)
+            try BobnetMessage.upsert { message(2, channel: "#trade", at: 200) }.execute(db)
+        }
+        let general = try await database.read { db in
+            try BobnetChannelMessages(channel: "#general").fetch(db)
+        }
+        #expect(general.channel == "#general")
+        #expect(general.messages.map(\.id) == [1])
+
+        let missing = try await database.read { db in
+            try BobnetChannelMessages(channel: "#quiet").fetch(db)
+        }
+        #expect(missing.channel == "#quiet") // named even with nothing to show
+        #expect(missing.messages.isEmpty)
+
+        let none = try await database.read { db in
+            try BobnetChannelMessages(channel: nil).fetch(db)
+        }
+        #expect(none.channel == nil)
+        #expect(none.messages.isEmpty)
+    }
+
     @Test func readMarkerAdvancesMonotonicallyAndPreservesLastActive() async throws {
         let database = try GameDatabase.bootstrap()
         let active = Date(timeIntervalSince1970: 900)
