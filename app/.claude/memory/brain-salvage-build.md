@@ -161,13 +161,16 @@ each:
 
 | Product | Tests | Suites | Failed | Crashed |
 | --- | --- | --- | --- | --- |
-| DirectiveEngineTests | 838 | 119 | 0 | 0 |
+| DirectiveEngineTests | 847 | 119 | 0 | 0 |
 | GameServicesTests | 219 | 28 | 0 | 0 |
 | DirectivesFeatureTests | 173 | 17 | 0 | 0 |
 | GameModelsTests | 98 | 16 | 0 | 0 |
 
-**1,328 tests, zero failures, zero crashed targets.** Pruning the obsolete
-emplacement coverage removed 425 lines from `SalvageRunTests.swift`.
+**1,337 tests, zero failures, zero crashed targets**, counted after merging
+`main` in — it had advanced with two `SalvageRun` fixes (the depletion-propagation
+wait and the service-bot departure guard) that land in the same file as the
+surgery. They merged without conflict and the suite is green over both. Pruning
+the obsolete emplacement coverage removed 425 lines from `SalvageRunTests.swift`.
 
 Four guards were demonstrated failing before their fix landed: the planner
 narrowing against the shipped ranking, the mesh-wait idle, the haul fleet-tag
