@@ -121,7 +121,8 @@ enum DirectiveTargetsSection: Equatable {
         return HaulRun.controllers(in: devices, tag: tag).map { controller in
             Assignment(
                 controllerCode: controller.deviceCode,
-                collecting: HaulRun.drainedPile(of: controller)
+                // The fallback sink: this section has no `WorldSnapshot`.
+                collecting: HaulRun.drainedPile(of: controller, delivery: HaulRun.deliveryLocation)
             )
         }
     }

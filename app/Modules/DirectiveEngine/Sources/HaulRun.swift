@@ -46,8 +46,8 @@ public struct HaulRun: MissionStepMachine {
     /// The fleet tag a row falls back to when it carries none of its own.
     public static let defaultFleetTag = "auto:haul"
 
-    /// Where everything is delivered. Must match the Salvage Run's own base —
-    /// two runs disagreeing about home split the fleet's deliveries silently.
+    /// The sink used when no hub is recognised. A fallback, not the answer:
+    /// `deliverySink(in:)` is what a run with a world in hand must ask.
     public static let deliveryLocation = "AINALRAM-BELT-1"
 
     /// Matched on the DIRECTIVE a device offers, not `device_type` — a
@@ -113,22 +113,28 @@ public struct HaulRun: MissionStepMachine {
         directive.fleetTag ?? defaultFleetTag
     }
 
+    /// Where this run delivers: the recognised hub, or `deliveryLocation` when
+    /// no hub is on the mesh. One recognition rule, shared with `RelayRun`.
+    public static func deliverySink(in world: WorldSnapshot) -> String {
+        RelayRun.hubLocation(in: world) ?? deliveryLocation
+    }
+
     /// The stockpile `controller` is draining, or nil when it runs no config
-    /// this run could have issued.
-    public static func drainedPile(of controller: Device) -> String? {
-        guard hasTakenSomeHaulConfig(controller) else { return nil }
+    /// this run could have issued. `delivery` is the sink to recognise it by.
+    public static func drainedPile(of controller: Device, delivery: String) -> String? {
+        guard hasTakenSomeHaulConfig(controller, delivery: delivery) else { return nil }
         return controller.currentDirectiveConfig?["collect"]?.stringValue
     }
 
     /// The stockpile `tag`ged controllers are draining, or nil for the "Nothing
     /// reachable" state. Names the LOWEST-CODED controller's pile when several
     /// differ, so the answer cannot flicker with dictionary order.
-    public static func currentHaulTarget(devices: [Device], tag: String) -> String? {
+    public static func currentHaulTarget(devices: [Device], tag: String, delivery: String) -> String? {
         devices
             .filter { $0.hasTag(tag) }
             .sorted { $0.deviceCode < $1.deviceCode }
             .lazy
-            .compactMap { drainedPile(of: $0) }
+            .compactMap { drainedPile(of: $0, delivery: delivery) }
             .first
     }
 
@@ -137,7 +143,7 @@ public struct HaulRun: MissionStepMachine {
             controllers: controllers(in: world, tag: fleetTag(of: directive)),
             footprints: world.footprints.mapValues(\.resources),
             meshSystems: SalvageTargetPlanner.meshSystems(in: Array(world.devices.values)),
-            delivery: deliveryLocation
+            delivery: deliverySink(in: world)
         )
     }
 
@@ -150,18 +156,18 @@ public struct HaulRun: MissionStepMachine {
               let config = controller.currentDirectiveConfig
         else { return false }
         return config["collect"]?.stringValue == assignment.location
-            && config["deliver"]?.stringValue == deliveryLocation
+            && config["deliver"]?.stringValue == deliverySink(in: world)
     }
 
     /// Whether `controller` runs ANY config this run could have issued, whichever
     /// pile it names. **Only meaningful on a row read AFTER the dispatch** — the
     /// pre-dispatch config satisfies it exactly, so `confirm` must order the two.
-    static func hasTakenSomeHaulConfig(_ controller: Device) -> Bool {
+    static func hasTakenSomeHaulConfig(_ controller: Device, delivery: String) -> Bool {
         guard let currentDirective = controller.currentDirective,
               [HaulTargetPlanner.ferry, HaulTargetPlanner.shuttle].contains(currentDirective),
               let config = controller.currentDirectiveConfig
         else { return false }
-        return config["deliver"]?.stringValue == deliveryLocation
+        return config["deliver"]?.stringValue == delivery
     }
 
     // MARK: - Re-entry budget
@@ -269,7 +275,7 @@ public struct HaulRun: MissionStepMachine {
             deviceCode: pending.controllerCode,
             params: CommandParams(directive: pending.directive, configuration: [
                 "collect": .string(pending.location),
-                "deliver": .string(Self.deliveryLocation),
+                "deliver": .string(Self.deliverySink(in: world)),
             ]),
             nextStep: Step.confirming
         )
@@ -302,7 +308,7 @@ public struct HaulRun: MissionStepMachine {
             }
             return .wait
         }
-        if Self.hasTakenSomeHaulConfig(controller) {
+        if Self.hasTakenSomeHaulConfig(controller, delivery: Self.deliverySink(in: world)) {
             return .advanceStep(nextStep: Step.assigning)
         }
         if world.now.timeIntervalSince(directive.stepStartedAt) < Self.confirmDeadline {

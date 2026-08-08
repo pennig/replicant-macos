@@ -219,7 +219,10 @@ public enum DirectiveRow: Equatable, Identifiable, Sendable {
                 directive,
                 haulTarget: HaulRun.currentHaulTarget(
                     devices: devices,
-                    tag: directive.fleetTag ?? HaulRun.defaultFleetTag
+                    tag: directive.fleetTag ?? HaulRun.defaultFleetTag,
+                    // The fallback: this row has no `WorldSnapshot` to derive
+                    // the live sink from.
+                    delivery: HaulRun.deliveryLocation
                 )
             )
         }
