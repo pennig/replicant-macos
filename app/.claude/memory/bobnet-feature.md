@@ -7,8 +7,9 @@ first *relaying* `ftl_relay`: channel directory + forward cursor walk from max
 local id (cursor pages ascending; `latest=true` seeds empty tables; 5-page
 cap). Send = `POST replicants/{code}/message` as the active replicant — also
 the channel-creation primitive (auto-subscribes). Read marker: 3s linger at
-newest message (TestClock-proven) or own send; "New" divider anchors to
-`markerAtSelection` snapshot. No relaying relay → read-only + banner.
+newest message (TestClock-proven) or own send; "New" divider anchors to the
+read-marker snapshot carried on `BobnetChannelMessages.Value.marker`. No
+relaying relay → read-only + banner.
 App-target link of the module product is manual (user, Xcode).
 
 ## `isAtLatest` must never be sourced from scroll geometry alone (2026-07-31)
@@ -189,3 +190,24 @@ and never re-read from the store inside the closure: those guards compare agains
 `selectedChannel` to reject a stale identity, and a view reporting the selection
 it was re-rendered with would always compare equal, letting the departing
 channel's `onDisappear` clobber the arriving channel's linger.
+
+## The divider marker was the last split-brain (2026-08-07)
+
+`.id` fixed identity, but the "New" divider still anchored on
+`state.markerAtSelection` — set synchronously by `selectionChanged`, ahead of the
+async `channelMessages` reload — while the divider read it against
+`store.channelMessages.messages`, which for one frame was still the *previous*
+channel's. Switching `#general` → `#trade` briefly rendered `#trade`'s (high) marker
+against `#general`'s 622 messages, landing the divider near the end of the old
+list. Fix: `BobnetChannelMessages` takes the marker snapshot on the request and
+`fetch` echoes it into `Value.marker`, so channel/marker/messages arrive together
+in one beat; the scroll view now reads `channelMessages.marker`. `markerAtSelection`
+was DELETED, not kept alongside it — the divider was its only reader, so once the
+divider moved to `Value.marker` nothing in production read the field at all; the
+sidebar highlight comes from `List`'s own `selection:` binding on `selectedChannel`,
+never from a marker.
+
+**The general rule**: the pane renders from one asynchronously-loaded value.
+Anything per-channel kept beside it — a marker, a scroll flag, anything read at
+selection time instead of load time — will be a frame out of date and must not
+feed the render.
