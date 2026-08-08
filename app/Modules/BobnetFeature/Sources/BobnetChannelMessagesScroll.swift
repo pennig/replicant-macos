@@ -8,11 +8,8 @@
 //
 
 import ComposableArchitecture
-import OSLog
 import SwiftUI
 import UI
-
-private let logger = Logger(subsystem: "name.pennig.replicould", category: "BobnetFeature")
 
 struct BobnetChannelMessagesScroll: View {
     @Bindable var store: StoreOf<BobnetFeature>
@@ -57,27 +54,6 @@ struct BobnetChannelMessagesScroll: View {
         } action: { _, isAtBottom in
             store.send(.binding(.set(\.isAtLatest, isAtBottom)))
         }
-        // Temporary geometry logging for the running app.
-        .onScrollGeometryChange(for: BobnetScrollProbe.self) { geometry in
-            BobnetScrollProbe(
-                offset: geometry.contentOffset.y,
-                container: geometry.containerSize.height,
-                content: geometry.contentSize.height,
-                topInset: geometry.contentInsets.top,
-                bottomInset: geometry.contentInsets.bottom
-            )
-        } action: { _, probe in
-            logger.debug("""
-                \(channel ?? "-", privacy: .public) rows=\(store.channelMessages.messages.count) \
-                offset=\(probe.offset, format: .fixed(precision: 1)) \
-                container=\(probe.container, format: .fixed(precision: 1)) \
-                content=\(probe.content, format: .fixed(precision: 1)) \
-                insets=(t\(probe.topInset, format: .fixed(precision: 0)),\
-                b\(probe.bottomInset, format: .fixed(precision: 0))) \
-                fills=\(probe.content + probe.topInset, format: .fixed(precision: 1)) \
-                target=\(probe.container - probe.bottomInset, format: .fixed(precision: 1))
-                """)
-        }
         .onChange(of: store.scrollToBottomToken) {
             scrollPosition.scrollTo(edge: .bottom)
         }
@@ -87,13 +63,4 @@ struct BobnetChannelMessagesScroll: View {
         .onAppear { store.send(.detailAppeared(channel)) }
         .onDisappear { store.send(.detailDisappeared(channel)) }
     }
-}
-
-/// Temporary geometry probe for the running app's layout logging.
-struct BobnetScrollProbe: Equatable {
-    var offset: CGFloat
-    var container: CGFloat
-    var content: CGFloat
-    var topInset: CGFloat
-    var bottomInset: CGFloat
 }
