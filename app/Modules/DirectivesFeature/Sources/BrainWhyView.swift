@@ -60,6 +60,9 @@ public struct BrainWhy: Equatable, Sendable {
     /// from `topGoalGate`'s grow/prune story. Never absent, the same
     /// discipline `limitPressure` follows for the rails.
     public var survey: BrainWhySurvey
+    /// The two production liveness goals, salvage first. Never absent, for the
+    /// same reason `survey` is not.
+    public var goals: [BrainWhyGoal]
     /// Where the brain's two standing rails stand right now, plus a recent
     /// 429 when there is one.
     ///
@@ -82,6 +85,7 @@ public struct BrainWhy: Equatable, Sendable {
         candidates: [BrainWhyRow],
         pruneNotes: [BrainWhyPruneNote] = [],
         survey: BrainWhySurvey,
+        goals: [BrainWhyGoal] = [],
         limitPressure: [BrainWhyPressure],
         isEscalated: Bool
     ) {
@@ -89,6 +93,7 @@ public struct BrainWhy: Equatable, Sendable {
         self.candidates = candidates
         self.pruneNotes = pruneNotes
         self.survey = survey
+        self.goals = goals
         self.limitPressure = limitPressure
         self.isEscalated = isEscalated
     }
@@ -120,6 +125,10 @@ public struct BrainWhy: Equatable, Sendable {
             candidates: candidates(in: report),
             pruneNotes: pruneNotes(in: report),
             survey: surveyLine(in: report),
+            goals: [
+                goalLine(.salvage, status: report.salvage, report: report),
+                goalLine(.haul, status: report.haul, report: report),
+            ],
             limitPressure: pressure(in: report),
             isEscalated: isEscalated(report.decision)
         )
@@ -385,6 +394,65 @@ public struct BrainWhy: Equatable, Sendable {
             return BrainWhySurvey(
                 kind: .paused, spans: [.prose("paused, roam centre "), .designation(roamCentre)] + tail
             )
+        }
+    }
+
+    // MARK: - Salvage and haul
+
+    /// Both liveness goals render through one builder: they answer the same
+    /// question over different fleets. A halted or paused run states its focus
+    /// as a static place, never with an active verb.
+    static func goalLine(
+        _ goal: BrainWhyGoal.Goal, status: BrainGoalStatus, report: BrainReport
+    ) -> BrainWhyGoal {
+        let verb = goal == .salvage ? "working " : "delivering to "
+        switch status {
+        case let .launched(vessel, focus, launched):
+            let tail: [BrainWhySpan] = [.prose(" — \(goal == .salvage ? "carrier" : "controller") \(vessel)")]
+            guard let focus else {
+                let idleActivity: [BrainWhySpan] = [.prose(goal == .salvage ? "no target yet" : "no sink resolved")]
+                return BrainWhyGoal(goal: goal, kind: kind(for: launched), spans: prefix(launched) + idleActivity + tail)
+            }
+            switch launched {
+            case .running:
+                return BrainWhyGoal(goal: goal, kind: .running, spans: [.prose(verb), .designation(focus)] + tail)
+            case .needsAttention:
+                return BrainWhyGoal(
+                    goal: goal, kind: .halted,
+                    spans: [.prose("halted, last "), .designation(focus)] + tail
+                )
+            case .paused:
+                return BrainWhyGoal(
+                    goal: goal, kind: .paused,
+                    spans: [.prose("paused, last "), .designation(focus)] + tail
+                )
+            }
+        case let .ready(vessel):
+            return BrainWhyGoal(
+                goal: goal, kind: .ready,
+                spans: [.prose("ready to launch — \(goal == .salvage ? "carrier" : "controller") \(vessel)")]
+            )
+        case let .idle(reason):
+            return BrainWhyGoal(
+                goal: goal, kind: .idle,
+                spans: .spans(in: reason, designations: knownDesignations(in: report))
+            )
+        }
+    }
+
+    private static func kind(for status: BrainGoalStatus.LaunchedStatus) -> BrainWhyGoal.Kind {
+        switch status {
+        case .running: .running
+        case .needsAttention: .halted
+        case .paused: .paused
+        }
+    }
+
+    private static func prefix(_ status: BrainGoalStatus.LaunchedStatus) -> [BrainWhySpan] {
+        switch status {
+        case .running: []
+        case .needsAttention: [.prose("halted — ")]
+        case .paused: [.prose("paused — ")]
         }
     }
 

@@ -227,6 +227,26 @@ public enum BrainSurveyStatus: Equatable, Sendable {
     }
 }
 
+/// A liveness goal's standing: the run that owns the fleet, a verdict to launch
+/// one, or a named reason there is none. Shared by salvage and haul, which are
+/// the same "keep exactly one alive" shape over different fleets.
+public enum BrainGoalStatus: Equatable, Sendable {
+    /// `focus` is the salvage run's current target system, or the haul run's
+    /// sink — nil when the row names neither yet.
+    case launched(vessel: String, focus: String?, status: LaunchedStatus)
+    case ready(vessel: String)
+    /// The verdict's own reason, carried verbatim so screen and log agree.
+    case idle(reason: String)
+
+    /// `Brain.owningStatuses`' three members, so `.launched` can never carry
+    /// the two that already mean not-live.
+    public enum LaunchedStatus: Equatable, Sendable {
+        case running
+        case needsAttention
+        case paused
+    }
+}
+
 /// One brain tick, as reported to the operator: the `decision` it reached, the
 /// `ranked` field it decided against, the `hubLocation` and `limits` it decided
 /// under, what `prune` saw, and the `observedAt` instant all of that was read.
@@ -258,6 +278,10 @@ public struct BrainReport: Equatable, Sendable {
     /// disjoint fleet from `decision`/`ranked`/`prune`, so it is never folded
     /// into the grow/prune story above.
     public let survey: BrainSurveyStatus
+    /// `Brain.ensureSalvage`'s verdict this tick, over its own tagged fleet.
+    public let salvage: BrainGoalStatus
+    /// `Brain.ensureHaul`'s verdict for the GENERAL drainer this tick.
+    public let haul: BrainGoalStatus
     /// The tick's clock reading (`@Dependency(\.date)`, never `Date()`), so a
     /// "recent 429" window is judged against the same instant everything else
     /// on this report was.
@@ -270,6 +294,8 @@ public struct BrainReport: Equatable, Sendable {
         limits: BrainLimits,
         prune: BrainPrune? = nil,
         survey: BrainSurveyStatus,
+        salvage: BrainGoalStatus = .idle(reason: "not evaluated"),
+        haul: BrainGoalStatus = .idle(reason: "not evaluated"),
         observedAt: Date
     ) {
         self.decision = decision
@@ -278,6 +304,8 @@ public struct BrainReport: Equatable, Sendable {
         self.limits = limits
         self.prune = prune
         self.survey = survey
+        self.salvage = salvage
+        self.haul = haul
         self.observedAt = observedAt
     }
 }

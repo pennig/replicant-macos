@@ -61,6 +61,17 @@ public struct BrainWhyDetailView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
+                // Same discipline as Survey: read every tick, reported every
+                // tick, so silence never has to be interpreted.
+                ForEach(why.goals) { goal in
+                    section(goal.goal.title) {
+                        goal.spans
+                            .styled(prose: .rcBody, designation: .rcMono)
+                            .foregroundStyle(goalColor(goal.kind))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
                 // Empty only when prune did not run at all — not when the mesh
                 // is healthy, which is why a tidy mesh still gets a line.
                 if !why.pruneNotes.isEmpty {
@@ -114,6 +125,15 @@ public struct BrainWhyDetailView: View {
     /// warning weight; everything else, `.paused` included, stays neutral so
     /// a deliberate pause never reads as a fault.
     private func surveyColor(_ kind: BrainWhySurvey.Kind) -> Color {
+        switch kind {
+        case .idle: .rcTextTertiary
+        case .halted: .rcWarning
+        case .running, .paused, .ready: .rcTextSecondary
+        }
+    }
+
+    /// `surveyColor`'s rule over the production goals' own kind vocabulary.
+    private func goalColor(_ kind: BrainWhyGoal.Kind) -> Color {
         switch kind {
         case .idle: .rcTextTertiary
         case .halted: .rcWarning

@@ -100,6 +100,8 @@ struct Brain: Sendable {
                 hubLocation: nil,
                 limits: Self.limits(hubFootprint: nil),
                 survey: .idle(reason: "world unavailable"),
+                salvage: .idle(reason: "world unavailable"),
+                haul: .idle(reason: "world unavailable"),
                 observedAt: now
             )
         }
@@ -109,6 +111,8 @@ struct Brain: Sendable {
         // `.ready` here launches inside `ensureSurvey` below on this very
         // tick — the next tick's fresh read is what turns it `.launched`.
         let survey = Self.surveyStatus(directives: snapshot.directives, view: snapshot.view)
+        let salvage = Self.salvageStatus(directives: snapshot.directives, view: snapshot.view)
+        let haul = Self.haulStatus(directives: snapshot.directives, view: snapshot.view)
 
         let escalated = await respondToStalls(snapshot)
         let plan = Self.plan(view: snapshot.view, directives: snapshot.directives)
@@ -127,6 +131,8 @@ struct Brain: Sendable {
                 plan: plan, decision: decision, directives: snapshot.directives
             ),
             survey: survey,
+            salvage: salvage,
+            haul: haul,
             observedAt: now
         )
     }
@@ -1090,6 +1096,52 @@ struct Brain: Sendable {
             return .idle(reason: "no print hub on the mesh")
         }
         return .launch(controller: controller.deviceCode)
+    }
+
+    /// The why-view's salvage line. Reads an already-live row FIRST: once a run
+    /// owns the fleet its own tag reserves the carrier, so re-deriving would
+    /// report "no vessel" about the vessel the operator is looking at.
+    static func salvageStatus(directives: [Directive], view: WorldView) -> BrainGoalStatus {
+        if let live = directives.first(where: {
+            $0.kind == .salvageRun && owningStatuses.contains($0.status)
+        }) {
+            return .launched(
+                vessel: live.deviceCode,
+                focus: live.currentTarget,
+                status: launchedGoalStatus(live.status)
+            )
+        }
+        switch salvageReadiness(view: view, directives: directives) {
+        case let .launch(carrier, _): return .ready(vessel: carrier)
+        case let .idle(reason): return .idle(reason: reason)
+        }
+    }
+
+    /// The why-view's haul line, for the GENERAL drainer only — a per-site row
+    /// is a different goal and must not stand in for this one.
+    static func haulStatus(directives: [Directive], view: WorldView) -> BrainGoalStatus {
+        if let live = directives.first(where: {
+            $0.kind == .haulRun && owningStatuses.contains($0.status) && isGeneralHaul($0)
+        }) {
+            return .launched(
+                vessel: live.deviceCode,
+                focus: view.hubLocation,
+                status: launchedGoalStatus(live.status)
+            )
+        }
+        switch haulReadiness(view: view) {
+        case let .launch(controller): return .ready(vessel: controller)
+        case let .idle(reason): return .idle(reason: reason)
+        }
+    }
+
+    private static func launchedGoalStatus(_ status: DirectiveStatus) -> BrainGoalStatus.LaunchedStatus {
+        switch status {
+        case .running: .running
+        case .needsAttention: .needsAttention
+        case .paused: .paused
+        case .completed, .cancelled: .running
+        }
     }
 
     /// The why-view's survey line: `.launched` off an already-live row —
