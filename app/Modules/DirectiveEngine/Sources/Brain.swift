@@ -211,48 +211,66 @@ struct Brain: Sendable {
         }
     }
 
+    /// Keep exactly one live directive of `kind` that `matching` accepts,
+    /// building one through `build` when none is. `matching` narrows liveness
+    /// past kind alone — the general haul drainer is one row among its siblings.
+    private func ensureOne(
+        _ kind: DirectiveKind,
+        matching: @escaping @Sendable (Directive) -> Bool = { _ in true },
+        snapshot: Snapshot,
+        database: any DatabaseWriter,
+        build: () -> Directive?
+    ) async {
+        guard !Task.isCancelled else { return }
+        let live = snapshot.directives.contains {
+            $0.kind == kind && Self.owningStatuses.contains($0.status) && matching($0)
+        }
+        guard !live else { return }
+        guard let directive = build() else { return }
+
+        do {
+            try await database.write { db in
+                // Re-check inside the transaction: a row the previous tick
+                // launched could have landed between the read and here.
+                let live = try Directive
+                    .where { $0.kind.eq(kind) }
+                    .fetchAll(db)
+                    .contains { Self.owningStatuses.contains($0.status) && matching($0) }
+                guard !live else { return }
+                try Directive.insert { directive }.execute(db)
+                logger.info(
+                    """
+                    \(kind.rawValue, privacy: .public) \(directive.id, privacy: .public) \
+                    launched on \(directive.deviceCode, privacy: .public)
+                    """
+                )
+            }
+        } catch {
+            logger.error("\(kind.rawValue, privacy: .public) launch failed: \(error)")
+        }
+    }
+
     /// Keep exactly one Survey Run roaming — `tendRestock`'s sibling. Nothing
     /// preempts it: `.needsAttention`/`.paused` count as live so the brain
     /// never relaunches around a halted run or an operator's own pause.
     private func ensureSurvey(snapshot: Snapshot, database: any DatabaseWriter) async {
-        guard !Task.isCancelled else { return }
-        let live = snapshot.directives.contains {
-            $0.kind == .surveyRun && Self.owningStatuses.contains($0.status)
-        }
-        guard !live else { return }
         guard case let .launch(carrier, roamCentre) = Self.surveyReadiness(view: snapshot.view) else { return }
-
         @Dependency(\.uuid) var uuid
-        let directive = Directive(
-            id: uuid().uuidString,
-            kind: .surveyRun,
-            status: .running,
-            deviceCode: carrier,
-            controllerCode: nil, roamCentre: roamCentre, fleetTag: nil, sourceRelayCode: nil,
-            targets: [], targetIndex: 0,
-            step: SurveyRun().firstStep,
-            stepStartedAt: now,
-            returnToOrigin: false,
-            originDesignation: snapshot.view.devices[carrier]?.location.map { SiteAssay.system(of: $0) },
-            attentionReason: nil,
-            createdAt: now, updatedAt: now
-        )
-        do {
-            try await database.write { db in
-                // Re-check inside the transaction: a survey launched by the
-                // previous tick could have landed between the read and here.
-                let live = try Directive
-                    .where { $0.kind.eq(DirectiveKind.surveyRun) }
-                    .fetchAll(db)
-                    .contains { Self.owningStatuses.contains($0.status) }
-                guard !live else { return }
-                try Directive.insert { directive }.execute(db)
-                logger.info(
-                    "survey \(directive.id, privacy: .public) launched on \(carrier, privacy: .public)"
-                )
-            }
-        } catch {
-            logger.error("survey launch failed: \(error)")
+        await ensureOne(.surveyRun, snapshot: snapshot, database: database) {
+            Directive(
+                id: uuid().uuidString,
+                kind: .surveyRun,
+                status: .running,
+                deviceCode: carrier,
+                controllerCode: nil, roamCentre: roamCentre, fleetTag: nil, sourceRelayCode: nil,
+                targets: [], targetIndex: 0,
+                step: SurveyRun().firstStep,
+                stepStartedAt: now,
+                returnToOrigin: false,
+                originDesignation: snapshot.view.devices[carrier]?.location.map { SiteAssay.system(of: $0) },
+                attentionReason: nil,
+                createdAt: now, updatedAt: now
+            )
         }
     }
 
