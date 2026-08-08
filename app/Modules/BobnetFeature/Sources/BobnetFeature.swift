@@ -45,21 +45,22 @@ public struct BobnetFeature {
         /// The selected channel's messages, oldest first; reloaded (new request
         /// instance) whenever the selection changes.
         @ObservationStateIgnored
-        @Fetch(BobnetChannelMessages(channel: nil)) public var channelMessages = BobnetChannelMessages.Value()
+        @Fetch(BobnetChannelMessages(channel: nil, marker: 0)) public var channelMessages = BobnetChannelMessages.Value()
 
         public var selectedChannel: String?
-        /// The read marker as it stood when the channel was selected — the
-        /// "New messages" divider anchors here so it doesn't jump while the
-        /// live marker advances.
-        public var markerAtSelection: Int = 0
-        /// Whether the detail view is showing the newest message.
-        ///
-        /// Established on selection and on the pane appearing — both render the
-        /// scroll view pinned to the bottom — and thereafter *maintained* by the
-        /// view's scroll-geometry reports. It cannot be sourced from geometry
-        /// alone: that callback fires only when its `Bool` changes, so the
-        /// opening at-the-bottom state is never announced.
+        /// Whether the detail view is showing the newest message: geometry's
+        /// truth, established on selection and on the pane appearing (both render
+        /// pinned to the bottom) and thereafter only maintained by its reports.
         public var isAtLatest: Bool = false
+        /// Messages that landed while the reader was away from the bottom.
+        /// Zeroed wherever the view is known to be pinned to the newest message.
+        public var newWhileAway: Int = 0
+        /// Bumped to ask the view to scroll to the bottom.
+        public var scrollToBottomToken: Int = 0
+        /// A bottom-scroll was requested and has not been observed to land. It
+        /// masks `isAtLatest`: OR-ed with it wherever "effectively at the newest
+        /// message" is the question.
+        public var pendingBottomScroll: Bool = false
         public var composeText: String = ""
         public var newChannelDraft: NewChannelDraft?
         public var isCatchingUp: Bool = false
@@ -107,8 +108,16 @@ public struct BobnetFeature {
         /// The detail view's scrolling content (identified by the channel it is
         /// rendering) appeared — re-establishes the at-latest flag.
         case detailAppeared(String?)
+        /// The jump-to-latest affordance was tapped.
+        case jumpToLatestTapped
+        /// The bottom-scroll mask window closed without the scroll being
+        /// observed to land. Carries the `scrollToBottomToken` that armed it;
+        /// any other value is an escaped expiry from a closed window.
+        case pendingScrollExpired(Int)
         case sendButtonTapped
-        case sendSucceeded
+        /// The channel a send was posted to, captured at dispatch — the
+        /// selection can have moved on by the time this lands.
+        case sendSucceeded(String)
         case sendFailed(String)
         case newChannelButtonTapped
         case newChannelDismissed
@@ -123,7 +132,7 @@ public struct BobnetFeature {
     @Dependency(\.bobnetClient) var bobnetClient
     @Dependency(\.continuousClock) var clock
 
-    private enum CancelID { case linger }
+    private enum CancelID { case linger, pendingScroll }
 
     public var body: some Reducer<State, Action> {
         BindingReducer()
@@ -133,6 +142,14 @@ public struct BobnetFeature {
                 return selectionChanged(&state)
 
             case .binding(\.isAtLatest):
+                if state.isAtLatest {
+                    state.newWhileAway = 0
+                    state.pendingBottomScroll = false
+                    return .merge(
+                        .cancel(id: CancelID.pendingScroll),
+                        reevaluateLinger(state)
+                    )
+                }
                 return reevaluateLinger(state)
 
             case .binding:
@@ -202,7 +219,12 @@ public struct BobnetFeature {
                 return .none
 
             case .latestMessageChanged:
-                return reevaluateLinger(state)
+                guard state.isAtLatest || state.pendingBottomScroll else {
+                    state.newWhileAway += 1
+                    return reevaluateLinger(state)
+                }
+                let scroll = requestBottomScroll(&state)
+                return .merge(scroll, reevaluateLinger(state))
 
             case .lingerElapsed:
                 // Re-check the arming conditions rather than trusting that a
@@ -234,6 +256,8 @@ public struct BobnetFeature {
                 // are ignored, mirroring `.detailDisappeared`.
                 guard channel == state.selectedChannel else { return .none }
                 state.isAtLatest = true
+                state.newWhileAway = 0
+                state.pendingBottomScroll = false
                 return reevaluateLinger(state)
 
             case let .detailDisappeared(channel):
@@ -243,7 +267,24 @@ public struct BobnetFeature {
                 // (the disappearing identity is still the selection) tears down.
                 guard channel == state.selectedChannel else { return .none }
                 state.isAtLatest = false
-                return .cancel(id: CancelID.linger)
+                state.newWhileAway = 0
+                state.pendingBottomScroll = false
+                return .merge(
+                    .cancel(id: CancelID.linger),
+                    .cancel(id: CancelID.pendingScroll)
+                )
+
+            case .jumpToLatestTapped:
+                state.newWhileAway = 0
+                let scroll = requestBottomScroll(&state)
+                return .merge(scroll, reevaluateLinger(state))
+
+            case let .pendingScrollExpired(token):
+                // Dropping the mask can change lingerability, so re-test it here.
+                guard token == state.scrollToBottomToken, state.pendingBottomScroll
+                else { return .none }
+                state.pendingBottomScroll = false
+                return reevaluateLinger(state)
 
             case .sendButtonTapped:
                 let text = state.composeText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -253,12 +294,17 @@ public struct BobnetFeature {
                       let replicant = state.activeReplicantCode
                 else { return .none }
                 state.isSending = true
-                return sendMessage(channel: channel, text: text, as: replicant) { .sendSucceeded }
+                return sendMessage(channel: channel, text: text, as: replicant) { .sendSucceeded(channel) }
 
-            case .sendSucceeded:
+            case let .sendSucceeded(channel):
                 state.isSending = false
+                // A stale identity (switched channels mid-send) must not force
+                // latest/scroll onto the channel now showing, nor wipe its draft.
+                guard channel == state.selectedChannel else { return .none }
                 state.composeText = ""
-                return .none
+                state.newWhileAway = 0
+                let scroll = requestBottomScroll(&state)
+                return .merge(scroll, reevaluateLinger(state))
 
             case let .sendFailed(message):
                 state.isSending = false
@@ -298,44 +344,49 @@ public struct BobnetFeature {
         }
     }
 
-    /// Selection housekeeping shared by direct selection and channel creation:
-    /// snapshot the marker for the divider, re-establish the scroll flag,
-    /// reload the detail query, and re-arm (or cancel) the linger.
-    ///
-    /// The newly-selected channel renders pinned to its newest message — the
-    /// detail scroll view is rebuilt per channel (`.id(channel)`) with
-    /// `.defaultScrollAnchor(.bottom)` — so `isAtLatest` is *true* here. It
-    /// cannot be left to the scroll-geometry callback to say so: that callback
-    /// fires only when its `Bool` changes, and it is applied outside the
-    /// `.id(channel)` identity, so it survives the rebuild holding the same
-    /// value and stays silent. Resetting to false here is what left every
-    /// switched-to channel unable to clear its unread count.
+    /// Selection housekeeping: snapshot the divider marker, reload the detail
+    /// query, re-arm the linger, and *establish* `isAtLatest` — the new channel
+    /// renders at its newest message, and geometry only maintains that.
     private func selectionChanged(_ state: inout State) -> Effect<Action> {
         let channel = state.selectedChannel
-        state.markerAtSelection = state.channelList.rows
+        let marker = state.channelList.rows
             .first { $0.name == channel }?.lastReadMessageID ?? 0
         state.isAtLatest = channel != nil
+        state.newWhileAway = 0
+        state.pendingBottomScroll = false
         return .merge(
             reevaluateLinger(state),
+            .cancel(id: CancelID.pendingScroll),
             .run { [fetch = state.$channelMessages] _ in
-                _ = try? await fetch.load(BobnetChannelMessages(channel: channel))
+                _ = try? await fetch.load(BobnetChannelMessages(channel: channel, marker: marker))
             }
         )
     }
 
-    /// The channel whose read marker the linger may advance: a selection, sitting
-    /// at the newest message, with something unread. Nil disqualifies the linger.
-    ///
-    /// Deliberately shared by arming and firing — the conditions have to hold at
-    /// *both* ends of the 3-second window, and only re-reading them at the far end
-    /// closes the gap left by a cancellation that didn't take.
+    /// The channel whose read marker the linger may advance: a selection,
+    /// effectively at the newest message, with something unread. Shared by arming
+    /// and firing — the conditions must hold at *both* ends of the window.
     private func lingerableChannel(_ state: State) -> String? {
         guard let channel = state.selectedChannel,
-              state.isAtLatest,
+              state.isAtLatest || state.pendingBottomScroll,
               let row = state.channelList.rows.first(where: { $0.name == channel }),
               row.latestMessageID > row.lastReadMessageID
         else { return nil }
         return channel
+    }
+
+    /// Ask the view to scroll to the bottom, masking "effectively at latest"
+    /// until it lands or 250 ms passes.
+    private func requestBottomScroll(_ state: inout State) -> Effect<Action> {
+        state.scrollToBottomToken += 1
+        state.pendingBottomScroll = true
+        let token = state.scrollToBottomToken
+        let clock = self.clock
+        return .run { send in
+            try await clock.sleep(for: .milliseconds(250))
+            await send(.pendingScrollExpired(token))
+        }
+        .cancellable(id: CancelID.pendingScroll, cancelInFlight: true)
     }
 
     /// (Re)arm or cancel the 3-second read-marker linger. `cancelInFlight`

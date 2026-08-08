@@ -1,5 +1,5 @@
 {
-  "originHash" : "e0b835db54670b151185e8dc187d5e3bceb26cdfdd0ab346b2856031de838ffb",
+  "originHash" : "ed21702cc5d16b662a5a9ee281207159e484b0535e666eb51739ef5af93c95d2",
   "pins" : [
     {
       "identity" : "combine-schedulers",
@@ -33,8 +33,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/pointfreeco/sqlite-data",
       "state" : {
-        "revision" : "0c79d7a5748fc6d9ce7a1ba2b50f31b175305049",
-        "version" : "1.6.6"
+        "revision" : "97987458b49f0311717ecfbf7e8ac4c406afbf55",
+        "version" : "1.9.0"
       }
     },
     {
@@ -87,8 +87,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/pointfreeco/swift-composable-architecture",
       "state" : {
-        "revision" : "e2fa1df6cd9eec6fa6314aa20513e47da576f24e",
-        "version" : "1.26.0"
+        "revision" : "ead11e04e5011c437722c1990d22f80d87056978",
+        "version" : "1.26.1"
       }
     },
     {
@@ -141,8 +141,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/pointfreeco/swift-navigation",
       "state" : {
-        "revision" : "32f35241b8be0719c4c7f00eb27713b1cadb6248",
-        "version" : "2.8.0"
+        "revision" : "418a57db2e757b02817dfd3d8a0374d5794664ab",
+        "version" : "2.11.0"
       }
     },
     {
@@ -159,8 +159,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-openapi-generator",
       "state" : {
-        "revision" : "d002e5d9a1ac4ff6466bb89ab8fa1c9a0afd820f",
-        "version" : "1.12.2"
+        "revision" : "af9a2a1f5dcfb00a278d4bb29c6d75080932e99e",
+        "version" : "1.13.0"
       }
     },
     {
@@ -204,8 +204,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/pointfreeco/swift-snapshot-testing",
       "state" : {
-        "revision" : "ad5e3190cc63dc288f28546f9c6827efc1e9d495",
-        "version" : "1.19.2"
+        "revision" : "59a99c458de4d2dee580529b61b4f78dca7b7fa6",
+        "version" : "1.19.4"
       }
     },
     {
@@ -213,8 +213,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/pointfreeco/swift-structured-queries",
       "state" : {
-        "revision" : "b59f4424b9050739ac7c2d82e80edf5e6dbb19e8",
-        "version" : "0.31.3"
+        "revision" : "fb25c16d0bde460ffc01fe19ab911bb26f40f26b",
+        "version" : "0.35.0"
       }
     },
     {

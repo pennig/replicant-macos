@@ -34,6 +34,7 @@ import Testing
             } withDependencies: {
                 $0.defaultDatabase = database
                 $0.bobnetClient.send = send
+                $0.continuousClock = TestClock()
             }
             store.exhaustivity = .off
             try await store.state.$relays.load()

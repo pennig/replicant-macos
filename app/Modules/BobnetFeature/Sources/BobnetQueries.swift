@@ -108,21 +108,37 @@ public struct BobnetChannelList: FetchKeyRequest {
 /// The detail-pane query: one channel's messages, oldest first.
 public struct BobnetChannelMessages: FetchKeyRequest {
     public var channel: String?
+    /// Read-marker snapshot taken at request time; echoed into `Value.marker`
+    /// untouched, never read live from the database.
+    public var marker: Int
 
     public struct Value: Equatable, Sendable {
+        /// The channel `messages` belongs to; nil before the first load.
+        public var channel: String?
         public var messages: [BobnetMessage] = []
-        public init(messages: [BobnetMessage] = []) { self.messages = messages }
+        /// The marker `BobnetChannelMessages` was constructed with.
+        public var marker: Int = 0
+        public init(channel: String? = nil, messages: [BobnetMessage] = [], marker: Int = 0) {
+            self.channel = channel
+            self.messages = messages
+            self.marker = marker
+        }
     }
 
-    public init(channel: String?) { self.channel = channel }
+    public init(channel: String?, marker: Int) {
+        self.channel = channel
+        self.marker = marker
+    }
 
     public func fetch(_ db: Database) throws -> Value {
         guard let channel else { return Value() }
         return Value(
+            channel: channel,
             messages: try BobnetMessage
                 .where { $0.channel.eq(channel) }
                 .order { ($0.time, $0.id) }
-                .fetchAll(db)
+                .fetchAll(db),
+            marker: marker
         )
     }
 }

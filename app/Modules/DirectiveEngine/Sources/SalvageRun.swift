@@ -835,7 +835,7 @@ public struct SalvageRun: MissionStepMachine {
     private func stowBots(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
         let owner = Self.fleetTag(directive)
         guard let location = vessel.location else {
-            guard RepairFleet.anyBotDeployed(
+            guard RepairFleet.anyBotOut(
                 in: world, system: directive.currentTarget, owner: owner
             ) else {
                 return .advanceTarget
@@ -846,7 +846,7 @@ public struct SalvageRun: MissionStepMachine {
             if world.now.timeIntervalSince(vessel.updatedAt) < Self.botProbeInterval { return .wait }
             return .refreshDevices(deviceCodes: [vessel.deviceCode], thenStall: nil)
         }
-        let out = RepairFleet.bots(deployedNear: location, in: world, owner: owner)
+        let out = RepairFleet.botsOut(near: location, in: world, owner: owner)
         guard let next = out.first else { return .advanceTarget }
         if MissionLogBudget.dispatchRounds(
             world, dispatch: Step.stowingBots, confirm: Step.confirmingBotStow
@@ -872,7 +872,7 @@ public struct SalvageRun: MissionStepMachine {
         if elapsed < Self.botProbeDelay { return .wait }
         if elapsed > Self.botRecallDeadline { return .stall(.serviceBotNotRecovered) }
         guard let location = vessel.location else {
-            guard RepairFleet.anyBotDeployed(
+            guard RepairFleet.anyBotOut(
                 in: world, system: directive.currentTarget, owner: owner
             ) else {
                 return .advanceTarget
@@ -880,7 +880,7 @@ public struct SalvageRun: MissionStepMachine {
             if world.now.timeIntervalSince(vessel.updatedAt) < Self.botProbeInterval { return .wait }
             return .refreshDevices(deviceCodes: [vessel.deviceCode], thenStall: nil)
         }
-        let out = RepairFleet.bots(deployedNear: location, in: world, owner: owner)
+        let out = RepairFleet.botsOut(near: location, in: world, owner: owner)
         if out.isEmpty { return .advanceTarget }
         // A recall cruises the bot home, so wait out its own arrival time.
         if let arrival = Self.recallArrival(out), arrival > world.now { return .wait }
@@ -971,15 +971,20 @@ public struct SalvageRun: MissionStepMachine {
     /// back unchanged before surfacing it. One: the read is authoritative.
     public static let bodyProgressAttempts = 1
 
-    /// The mining loop's terminator: a completed cycle left the same body still on
-    /// offer, so spend one `.refreshSystem` and then stall. A body leaves the
-    /// candidate set only when `salvage.depleted` flips its flag, so without this
-    /// bound a single dropped frame re-offers it forever — a real `launch` POST
-    /// every cycle, with no deadline and no stall. One read tells a stale catalogue
-    /// row from a body that genuinely did not deplete; past it, stop.
+    /// How long `verify` waits before treating a still-on-offer worked body as
+    /// evidence: the `salvage.depleted` frame and the roster both lag the drones'
+    /// real finish, so a read spent sooner asks a server not yet caught up.
+    public static let depletionPropagationGrace: TimeInterval = 5 * 60
+
+    /// The mining loop's terminator, ordered grace → one `.refreshSystem` → stall:
+    /// a body leaves the candidate set only when `salvage.depleted` flips it, and
+    /// a read spent inside the propagation window asks a server not yet caught up.
     private func sameBodyAgain(
         _ directive: Directive, _ world: WorldSnapshot, target: String
     ) -> MissionAction {
+        if world.now.timeIntervalSince(directive.stepStartedAt) <= Self.depletionPropagationGrace {
+            return .wait
+        }
         if Self.stepEntryCount(directive, world) <= Self.bodyProgressAttempts {
             return .refreshSystem(designation: target, nextStep: Step.verifying)
         }

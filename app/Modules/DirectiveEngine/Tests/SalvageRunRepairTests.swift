@@ -40,13 +40,14 @@ private func bot(
     currentDirectiveStatus: String? = "active",
     capacity: Double = 100,
     updatedAt: Date = repairFixtureNow,
-    repairingTarget: String? = nil
+    repairingTarget: String? = nil,
+    travelArrival: Date? = nil
 ) -> Device {
     repairDevice(
         code, type: "service_bot", location: location, stowedIn: stowedIn,
         directives: ["patrol", "service"], currentDirective: currentDirective,
         currentDirectiveStatus: currentDirectiveStatus, capacity: capacity, tags: tags,
-        updatedAt: updatedAt, repairingTarget: repairingTarget
+        updatedAt: updatedAt, repairingTarget: repairingTarget, travelArrival: travelArrival
     )
 }
 
@@ -424,6 +425,72 @@ private let long = repairFixtureNow.addingTimeInterval(-60)
             step: SalvageRun.Step.stowingBots, targets: ["TOSLIT"], stepStartedAt: long
         )
         #expect(SalvageRun().nextAction(directive: d, world: w) == .wait)
+    }
+
+    /// A recall clears the bot's location for the whole cruise home, so the system
+    /// reads empty and the run departs over a bot that is still on its way in.
+    @Test func aRecallCruisingHomeIsWaitedOutThoughItClearedItsLocation() {
+        let w = repairWorld(
+            devices: [
+                vessel,
+                bot("BOT1", location: nil, travelArrival: repairFixtureNow.addingTimeInterval(120)),
+            ],
+            openOperations: ["BOT1": STUCKOP_operation(
+                entityCode: "BOT1", kind: "recall",
+                completesAt: repairFixtureNow.addingTimeInterval(120)
+            )]
+        )
+        let d = salvageDirective(
+            step: SalvageRun.Step.confirmingBotStow, targets: ["TOSLIT"],
+            stepStartedAt: repairFixtureNow.addingTimeInterval(-60)
+        )
+        #expect(SalvageRun().nextAction(directive: d, world: w) == .wait)
+    }
+
+    @Test func stowingDoesNotAdvanceOverABotStillCruisingHome() {
+        let w = repairWorld(
+            devices: [
+                vessel,
+                bot("BOT1", location: nil, travelArrival: repairFixtureNow.addingTimeInterval(120)),
+            ],
+            openOperations: ["BOT1": STUCKOP_operation(
+                entityCode: "BOT1", kind: "recall",
+                completesAt: repairFixtureNow.addingTimeInterval(120)
+            )]
+        )
+        let d = salvageDirective(step: SalvageRun.Step.stowingBots, targets: ["TOSLIT"])
+        #expect(SalvageRun().nextAction(directive: d, world: w) == .wait)
+    }
+
+    /// Neither side of the query has a location: the vessel is under way and the
+    /// bot is cruising in. The run must not read that as an empty system.
+    @Test func aVesselUnderWayDoesNotAdvanceOverABotStillCruisingHome() {
+        let travelling = repairDevice("VESSEL", type: "heaven_vessel", location: nil)
+        let w = repairWorld(
+            devices: [
+                travelling,
+                bot("BOT1", location: nil, travelArrival: repairFixtureNow.addingTimeInterval(120)),
+            ],
+            openOperations: ["BOT1": STUCKOP_operation(
+                entityCode: "BOT1", kind: "recall",
+                completesAt: repairFixtureNow.addingTimeInterval(120)
+            )]
+        )
+        let d = salvageDirective(step: SalvageRun.Step.stowingBots, targets: ["TOSLIT"])
+        #expect(SalvageRun().nextAction(directive: d, world: w) == .wait)
+    }
+
+    /// A stowed bot also carries no location, and must NOT read as one in transit.
+    @Test func aStowedBotDoesNotHoldTheRunAtTheSystem() {
+        let w = repairWorld(
+            devices: [vessel, bot("BOT1", location: nil, stowedIn: "VESSEL")],
+            openOperations: ["BOT1": STUCKOP_operation(
+                entityCode: "BOT1", kind: "recall",
+                completesAt: repairFixtureNow.addingTimeInterval(120)
+            )]
+        )
+        let d = salvageDirective(step: SalvageRun.Step.stowingBots, targets: ["TOSLIT"])
+        #expect(SalvageRun().nextAction(directive: d, world: w) == .advanceTarget)
     }
 
     @Test func aBotThatWillNotComeHomeStalls() {

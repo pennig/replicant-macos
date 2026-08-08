@@ -91,14 +91,57 @@ private func message(
             try BobnetMessage.upsert { message(3, channel: "#trade", at: 300) }.execute(db)
         }
         let value = try await database.read { db in
-            try BobnetChannelMessages(channel: "#general").fetch(db)
+            try BobnetChannelMessages(channel: "#general", marker: 0).fetch(db)
         }
         #expect(value.messages.map(\.id) == [1, 2])
 
         let empty = try await database.read { db in
-            try BobnetChannelMessages(channel: nil).fetch(db)
+            try BobnetChannelMessages(channel: nil, marker: 0).fetch(db)
         }
         #expect(empty.messages.isEmpty)
+    }
+
+    @Test func channelMessagesCarryTheChannelTheyCameFrom() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try BobnetMessage.upsert { message(1, channel: "#general", at: 100) }.execute(db)
+            try BobnetMessage.upsert { message(2, channel: "#trade", at: 200) }.execute(db)
+        }
+        let general = try await database.read { db in
+            try BobnetChannelMessages(channel: "#general", marker: 0).fetch(db)
+        }
+        #expect(general.channel == "#general")
+        #expect(general.messages.map(\.id) == [1])
+
+        let missing = try await database.read { db in
+            try BobnetChannelMessages(channel: "#quiet", marker: 0).fetch(db)
+        }
+        #expect(missing.channel == "#quiet") // named even with nothing to show
+        #expect(missing.messages.isEmpty)
+
+        let none = try await database.read { db in
+            try BobnetChannelMessages(channel: nil, marker: 0).fetch(db)
+        }
+        #expect(none.channel == nil)
+        #expect(none.messages.isEmpty)
+    }
+
+    /// `fetch` echoes the marker it was constructed with, untouched — it never
+    /// reads the live read-marker column itself.
+    @Test func fetchEchoesTheMarkerItWasConstructedWith() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try BobnetChannel.upsert {
+                BobnetChannel(name: "#general", lastActive: nil, lastReadMessageID: 999)
+            }.execute(db)
+            try BobnetMessage.upsert { message(1, channel: "#general", at: 100) }.execute(db)
+        }
+        let value = try await database.read { db in
+            try BobnetChannelMessages(channel: "#general", marker: 42).fetch(db)
+        }
+        #expect(value.channel == "#general")
+        #expect(value.marker == 42) // the snapshot passed in, not the live 999 in the table
+        #expect(value.messages.map(\.id) == [1])
     }
 
     @Test func readMarkerAdvancesMonotonicallyAndPreservesLastActive() async throws {

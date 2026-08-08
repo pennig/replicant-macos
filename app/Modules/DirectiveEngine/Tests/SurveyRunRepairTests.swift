@@ -243,6 +243,73 @@ import Utils
         #expect(SurveyRun().nextAction(directive: d, world: w) == .wait)
     }
 
+    /// A recall clears the bot's location for the whole cruise home, so the system
+    /// reads empty and the run departs over a bot that is still on its way in.
+    @Test func aRecallCruisingHomeIsWaitedOutThoughItClearedItsLocation() {
+        let vessel = repairDevice("VESSEL", type: "heaven_vessel", location: "TAU-2")
+        let bot = repairDevice(
+            "BOT1", type: "service_bot", location: nil, directives: ["service"],
+            travelArrival: repairFixtureNow.addingTimeInterval(120)
+        )
+        let open = STUCKOP_operation(
+            entityCode: "BOT1", kind: "recall",
+            completesAt: repairFixtureNow.addingTimeInterval(120)
+        )
+        let w = repairWorld(devices: [vessel, bot], openOperations: ["BOT1": open])
+        let d = repairDirective(
+            step: SurveyRun.Step.confirmingBotStow, deviceCode: "VESSEL", targets: ["TAU"],
+            stepStartedAt: repairFixtureNow.addingTimeInterval(-60)
+        )
+        #expect(SurveyRun().nextAction(directive: d, world: w) == .wait)
+    }
+
+    @Test func stowingDoesNotAdvanceOverABotStillCruisingHome() {
+        let vessel = repairDevice("VESSEL", type: "heaven_vessel", location: "TAU-2")
+        let bot = repairDevice(
+            "BOT1", type: "service_bot", location: nil, directives: ["service"],
+            travelArrival: repairFixtureNow.addingTimeInterval(120)
+        )
+        let open = STUCKOP_operation(
+            entityCode: "BOT1", kind: "recall",
+            completesAt: repairFixtureNow.addingTimeInterval(120)
+        )
+        let w = repairWorld(devices: [vessel, bot], openOperations: ["BOT1": open])
+        let d = repairDirective(step: SurveyRun.Step.stowingBots, deviceCode: "VESSEL", targets: ["TAU"])
+        #expect(SurveyRun().nextAction(directive: d, world: w) == .wait)
+    }
+
+    /// Neither side of the query has a location: the vessel is under way and the
+    /// bot is cruising in. The run must not read that as an empty system.
+    @Test func aVesselUnderWayDoesNotAdvanceOverABotStillCruisingHome() {
+        let vessel = repairDevice("VESSEL", type: "heaven_vessel", location: nil)
+        let bot = repairDevice(
+            "BOT1", type: "service_bot", location: nil, directives: ["service"],
+            travelArrival: repairFixtureNow.addingTimeInterval(120)
+        )
+        let open = STUCKOP_operation(
+            entityCode: "BOT1", kind: "recall",
+            completesAt: repairFixtureNow.addingTimeInterval(120)
+        )
+        let w = repairWorld(devices: [vessel, bot], openOperations: ["BOT1": open])
+        let d = repairDirective(step: SurveyRun.Step.stowingBots, deviceCode: "VESSEL", targets: ["TAU"])
+        #expect(SurveyRun().nextAction(directive: d, world: w) == .wait)
+    }
+
+    /// A stowed bot also carries no location, and must NOT read as one in transit.
+    @Test func aStowedBotDoesNotHoldTheRunAtTheSystem() {
+        let vessel = repairDevice("VESSEL", type: "heaven_vessel", location: "TAU-2")
+        let bot = repairDevice(
+            "BOT1", type: "service_bot", location: nil, stowedIn: "VESSEL", directives: ["service"]
+        )
+        let open = STUCKOP_operation(
+            entityCode: "BOT1", kind: "recall",
+            completesAt: repairFixtureNow.addingTimeInterval(120)
+        )
+        let w = repairWorld(devices: [vessel, bot], openOperations: ["BOT1": open])
+        let d = repairDirective(step: SurveyRun.Step.stowingBots, deviceCode: "VESSEL", targets: ["TAU"])
+        #expect(SurveyRun().nextAction(directive: d, world: w) == .advanceTarget)
+    }
+
     @Test func anOpenRecallWithADeadlineIsNotRedispatched() {
         let vessel = repairDevice("VESSEL", type: "heaven_vessel", location: "TAU-2")
         let bot = repairDevice("BOT1", type: "service_bot", location: "TAU-9", directives: ["service"])

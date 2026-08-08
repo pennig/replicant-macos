@@ -659,7 +659,7 @@ public struct SurveyRun: MissionStepMachine {
     /// a bot that cruised off to repair a drone is not.
     private func stowBots(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
         guard let location = vessel.location else {
-            guard RepairFleet.anyBotDeployed(in: world, system: directive.currentTarget) else {
+            guard RepairFleet.anyBotOut(in: world, system: directive.currentTarget) else {
                 return .advanceTarget
             }
             if world.now.timeIntervalSince(directive.stepStartedAt) > Self.recallDeadline {
@@ -668,7 +668,7 @@ public struct SurveyRun: MissionStepMachine {
             if world.now.timeIntervalSince(vessel.updatedAt) < Self.botProbeInterval { return .wait }
             return .refreshDevices(deviceCodes: [vessel.deviceCode], thenStall: nil)
         }
-        let out = RepairFleet.bots(deployedNear: location, in: world)
+        let out = RepairFleet.botsOut(near: location, in: world)
         guard let next = out.first else { return .advanceTarget }
         if MissionLogBudget.dispatchRounds(world, dispatch: Step.stowingBots, confirm: Step.confirmingBotStow)
             > Self.botDispatchRounds {
@@ -692,13 +692,13 @@ public struct SurveyRun: MissionStepMachine {
         if elapsed < Self.botProbeDelay { return .wait }
         if elapsed > Self.recallDeadline { return .stall(.serviceBotNotRecovered) }
         guard let location = vessel.location else {
-            guard RepairFleet.anyBotDeployed(in: world, system: directive.currentTarget) else {
+            guard RepairFleet.anyBotOut(in: world, system: directive.currentTarget) else {
                 return .advanceTarget
             }
             if world.now.timeIntervalSince(vessel.updatedAt) < Self.botProbeInterval { return .wait }
             return .refreshDevices(deviceCodes: [vessel.deviceCode], thenStall: nil)
         }
-        let out = RepairFleet.bots(deployedNear: location, in: world)
+        let out = RepairFleet.botsOut(near: location, in: world)
         if out.isEmpty { return .advanceTarget }
         // A recall cruises the bot home, so wait out its own arrival time — the
         // shape `recover` uses, for the same reason.
