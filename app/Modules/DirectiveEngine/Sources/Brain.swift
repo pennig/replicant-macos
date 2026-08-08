@@ -930,6 +930,60 @@ struct Brain: Sendable {
         return .launch(carrier: carrier.deviceCode, roamCentre: centre)
     }
 
+    /// A salvage carrier to launch on, or a named idle reason. No stall case:
+    /// launching at an unstaged fleet only manufactures `noMiningControllerAboard`
+    /// for a human, so declining is the correct answer.
+    enum SalvageReadiness: Equatable, Sendable {
+        case launch(carrier: String, roamCentre: String)
+        case idle(reason: String)
+    }
+
+    /// The salvage vessel wears its FLEET's tag — one string, so a fleet opted
+    /// in through the tag can never disagree with the vessel carrying it.
+    static let salvageCarrierTag = SalvageRun.defaultFleetTag
+
+    /// The salvage verdict for `view`. Takes `directives` as well, unlike
+    /// `surveyReadiness`: the carrier must be free of any OTHER kind's hold, and
+    /// an empty list would make that gate vacuous rather than lenient.
+    static func salvageReadiness(view: WorldView, directives: [Directive]) -> SalvageReadiness {
+        let reserved = reservedDevices(directives: directives, devices: view.devices)
+        guard let carrier = view.devices.values
+            .filter({ $0.deviceType == carrierDeviceType && $0.hasTag(salvageCarrierTag) })
+            .filter({ !reserved.contains($0.deviceCode) })
+            .min(by: { $0.deviceCode < $1.deviceCode })
+        else {
+            return .idle(reason: "no \(salvageCarrierTag) vessel")
+        }
+
+        // Judged through `SalvageRun`'s own queries, so the brain and the
+        // mission can never disagree about what staged means.
+        let world = WorldSnapshot(devices: view.devices, openOperations: [:], now: view.now)
+        guard let controller = SalvageRun.controller(aboard: carrier, in: world) else {
+            return .idle(reason: "\(carrier.deviceCode) has no mining controller aboard")
+        }
+        guard !SalvageRun.adoptedDrones(of: controller, aboard: carrier, in: world).isEmpty else {
+            return .idle(
+                reason: "\(carrier.deviceCode)'s controller \(controller.deviceCode) has adopted no drone aboard"
+            )
+        }
+
+        guard let hub = view.hubLocation else {
+            return .idle(reason: "the anchor has no resolvable location")
+        }
+        let centre = SiteAssay.system(of: hub)
+        guard view.starPositions[centre] != nil else {
+            return .idle(reason: "roam centre \(centre) is not in the census")
+        }
+        // `tendMesh` is the sole mesh authority, so unmeshed salvage is not this
+        // goal's to reach — it waits rather than planting its own relay.
+        guard view.salvageUnits.contains(where: { view.meshSystems.contains($0.key) && $0.value > 0 })
+        else {
+            return .idle(reason: "no meshed salvage system with units left")
+        }
+
+        return .launch(carrier: carrier.deviceCode, roamCentre: centre)
+    }
+
     /// The why-view's survey line: `.launched` off an already-live row —
     /// never re-deriving carrier, centre or status — otherwise
     /// `surveyReadiness`'s own verdict, carried through for `.launch`/`.idle`.
