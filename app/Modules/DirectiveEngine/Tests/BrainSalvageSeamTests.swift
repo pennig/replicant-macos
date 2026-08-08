@@ -30,20 +30,21 @@ private struct SeamDispatch: Equatable, Sendable, CustomStringConvertible {
 private func seamDevice(
     _ db: Database, code: String, type: String, location: String? = nil,
     tags: [String] = [], stowedIn: String? = nil, controllerDeviceCode: String? = nil,
-    directives: [String] = [], features: [String] = [], availableCommands: [String] = [],
+    directives: [String] = [], features: [String]? = nil, availableCommands: [String] = [],
     status: String = "idle"
 ) throws {
     var detail: [String: JSONValue] = [:]
     if !directives.isEmpty {
         detail["available_directives"] = .array(directives.map(JSONValue.string))
     }
+    let resolvedFeatures = features ?? fixtureFeatures(for: type)
     try Device.insert {
         Device(
             deviceCode: code, deviceType: type, replicantCode: "R1", status: status,
             location: location, locationName: nil, operationalCapacity: 100, queueSize: 0,
             stowedInDeviceCode: stowedIn, controllerDeviceCode: controllerDeviceCode,
             attachedToDeviceCode: nil, createdAt: Date(timeIntervalSince1970: 0),
-            availableCommands: availableCommands, features: features, tags: tags,
+            availableCommands: availableCommands, features: resolvedFeatures, tags: tags,
             detail: .object(detail), updatedAt: seamNow, firstSeenAt: Date(timeIntervalSince1970: 0)
         )
     }.execute(db)
@@ -62,7 +63,7 @@ private func seedSeamWorld(_ db: Database, salvageAt: String?) throws {
     try seedHubStockpile(db, location: "SOL-3", resources: BrainCeiling.aggregateSpendFloor * 2)
 
     try seamDevice(
-        db, code: "SALV1", type: Brain.carrierDeviceType, location: "SOL-3",
+        db, code: "SALV1", type: "heaven_vessel", location: "SOL-3",
         tags: [Brain.salvageCarrierTag]
     )
     try seamDevice(

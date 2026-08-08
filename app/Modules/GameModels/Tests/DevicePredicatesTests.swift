@@ -73,4 +73,30 @@ private extension Device {
         r.features = ["relay"]; r.status = "relaying (mesh)"
         #expect(r.isActiveRelay)
     }
+
+    /// The two live vessel classes share one feature set; both must qualify —
+    /// the predicate is capability, so the type string never matters.
+    @Test func carrierHullAcceptsBothVesselClassFeatureSets() {
+        let vesselFeatures = ["surge", "cruise", "system_scan", "mine", "cradle", "print", "census"]
+        var heaven = Device.fixture(code: "V1", type: "heaven_vessel", location: "SOL-3")
+        heaven.features = vesselFeatures
+        #expect(heaven.isCarrierHull)
+        var racing = Device.fixture(code: "V2", type: "racing_vessel", location: "SOL-3")
+        racing.features = vesselFeatures
+        #expect(racing.isCarrierHull)
+    }
+
+    /// Cradle alone (matrix_container) or surge alone (cargo_freighter,
+    /// surge_plate) must not read as a carrier hull.
+    @Test func carrierHullNeedsBothCradleAndSurge() {
+        var container = Device.fixture(code: "M1", type: "matrix_container", location: "SOL-3")
+        container.features = ["cruise", "cradle"]
+        #expect(!container.isCarrierHull)
+        var freighter = Device.fixture(code: "F1", type: "cargo_freighter", location: "SOL-3")
+        freighter.features = ["surge", "cruise", "transport"]
+        #expect(!freighter.isCarrierHull)
+        var plate = Device.fixture(code: "P1", type: "surge_plate", location: "SOL-3")
+        plate.features = ["surge", "cruise", "attach", "stow", "taxi"]
+        #expect(!plate.isCarrierHull)
+    }
 }

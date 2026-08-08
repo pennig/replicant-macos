@@ -38,7 +38,8 @@ private func salvageDevice(
         location: nil, locationName: nil, operationalCapacity: 100, queueSize: 0,
         stowedInDeviceCode: stowedIn, controllerDeviceCode: controllerDeviceCode,
         attachedToDeviceCode: nil, createdAt: Date(timeIntervalSince1970: 0),
-        availableCommands: [], features: [], tags: tags, detail: .object(detail),
+        availableCommands: [], features: fixtureFeatures(for: type), tags: tags,
+        detail: .object(detail),
         updatedAt: salvageFixtureNow, firstSeenAt: Date(timeIntervalSince1970: 0)
     )
 }
@@ -47,7 +48,7 @@ private func salvageDevice(
 /// offering `gather_salvage`, and one drone that controller has adopted.
 private func salvageStagedFleet(carrier: String = "V1") -> [Device] {
     [
-        salvageDevice(carrier, type: Brain.carrierDeviceType, tags: [Brain.salvageCarrierTag]),
+        salvageDevice(carrier, type: "heaven_vessel", tags: [Brain.salvageCarrierTag]),
         salvageDevice(
             "AMI1", type: "ami_mining_controller", stowedIn: carrier, directives: ["gather_salvage"]
         ),
@@ -84,9 +85,39 @@ struct BrainSalvageReadinessTests {
         )
     }
 
+    /// The carrier gate is capability, not type: a staged `racing_vessel`
+    /// wearing the fleet tag must be exactly as flyable as a HEAVEN vessel.
+    @Test("a tagged, staged racing vessel is a salvage carrier")
+    func racingVesselIsASalvageCarrier() {
+        let view = salvageView(devices: [
+            salvageDevice("V1", type: "racing_vessel", tags: [Brain.salvageCarrierTag]),
+            salvageDevice(
+                "AMI1", type: "ami_mining_controller", stowedIn: "V1", directives: ["gather_salvage"]
+            ),
+            salvageDevice("DRONE1", type: "mining_drone", stowedIn: "V1", controllerDeviceCode: "AMI1"),
+        ])
+        #expect(
+            Brain.salvageReadiness(view: view, directives: [])
+                == .launch(carrier: "V1", roamCentre: "AINALRAM")
+        )
+    }
+
+    /// A tag on a hull that cannot carry the fleet is a misapplied opt-in —
+    /// the idle reason names the device so the remedy reads as "move the tag".
+    @Test("a tagged non-carrier is named in the idle reason")
+    func taggedNonCarrierIsNamedInTheIdleReason() {
+        let view = salvageView(devices: [
+            salvageDevice("F1", type: "cargo_freighter", tags: [Brain.salvageCarrierTag])
+        ])
+        #expect(
+            Brain.salvageReadiness(view: view, directives: [])
+                == .idle(reason: "no \(Brain.salvageCarrierTag) vessel — F1 is tagged \(Brain.salvageCarrierTag) but is not a carrier hull")
+        )
+    }
+
     @Test("an untagged vessel is idle — there is no fallback to any free hull")
     func untaggedVesselIsIdle() {
-        let view = salvageView(devices: [salvageDevice("V1", type: Brain.carrierDeviceType, tags: [])])
+        let view = salvageView(devices: [salvageDevice("V1", type: "heaven_vessel", tags: [])])
         #expect(
             Brain.salvageReadiness(view: view, directives: [])
                 == .idle(reason: "no auto:salvage vessel")
@@ -106,7 +137,7 @@ struct BrainSalvageReadinessTests {
     @Test("a tagged carrier with no mining controller aboard is idle, never a stall")
     func noControllerIsIdle() {
         let view = salvageView(
-            devices: [salvageDevice("V1", type: Brain.carrierDeviceType, tags: [Brain.salvageCarrierTag])]
+            devices: [salvageDevice("V1", type: "heaven_vessel", tags: [Brain.salvageCarrierTag])]
         )
         #expect(
             Brain.salvageReadiness(view: view, directives: [])
@@ -117,7 +148,7 @@ struct BrainSalvageReadinessTests {
     @Test("a controller with no adopted drone aboard is idle and names both codes")
     func noDroneIsIdle() {
         let view = salvageView(devices: [
-            salvageDevice("V1", type: Brain.carrierDeviceType, tags: [Brain.salvageCarrierTag]),
+            salvageDevice("V1", type: "heaven_vessel", tags: [Brain.salvageCarrierTag]),
             salvageDevice(
                 "AMI1", type: "ami_mining_controller", stowedIn: "V1", directives: ["gather_salvage"]
             ),
@@ -175,7 +206,7 @@ struct BrainSalvageReadinessTests {
     func theLowestCodedCarrierWins() {
         var devices = salvageStagedFleet(carrier: "V1")
         devices.append(
-            salvageDevice("A0", type: Brain.carrierDeviceType, tags: [Brain.salvageCarrierTag])
+            salvageDevice("A0", type: "heaven_vessel", tags: [Brain.salvageCarrierTag])
         )
         // `A0` sorts first but is unstaged, so the verdict names ITS blocker —
         // proving the carrier is chosen before staging is judged.
@@ -207,7 +238,8 @@ private func seedSalvageEnsureDevice(
             location: nil, locationName: nil, operationalCapacity: 100, queueSize: 0,
             stowedInDeviceCode: stowedIn, controllerDeviceCode: controllerDeviceCode,
             attachedToDeviceCode: nil, createdAt: Date(timeIntervalSince1970: 0),
-            availableCommands: [], features: [], tags: tags, detail: .object(detail),
+            availableCommands: [], features: fixtureFeatures(for: type), tags: tags,
+            detail: .object(detail),
             updatedAt: salvageEnsureNow, firstSeenAt: Date(timeIntervalSince1970: 0)
         )
     }.execute(db)
@@ -215,7 +247,7 @@ private func seedSalvageEnsureDevice(
 
 private func seedSalvageEnsureFleet(_ db: Database, carrier: String = salvageEnsureCarrier) throws {
     try seedSalvageEnsureDevice(
-        db, code: carrier, type: Brain.carrierDeviceType, tags: [Brain.salvageCarrierTag]
+        db, code: carrier, type: "heaven_vessel", tags: [Brain.salvageCarrierTag]
     )
     try seedSalvageEnsureDevice(
         db, code: "AMI1", type: "ami_mining_controller", stowedIn: carrier, directives: ["gather_salvage"]
@@ -407,7 +439,7 @@ struct BrainEnsureSalvageTests {
             try seedSalvageAssay(db, id: "SITE-SOL", system: salvageEnsureHubSystem, totals: ["metal": 900])
             // One hull, both opt-in tags, staged for both automations.
             try seedSalvageEnsureDevice(
-                db, code: "BOTH", type: Brain.carrierDeviceType,
+                db, code: "BOTH", type: "heaven_vessel",
                 tags: [Brain.salvageCarrierTag, Brain.surveyCarrierTag]
             )
             try seedSalvageEnsureDevice(
@@ -451,7 +483,7 @@ struct BrainEnsureSalvageTests {
 /// One fleet: a tagged carrier with a controller and a drone stowed aboard.
 private func taggedFleet(carrier: String, controller: String, drone: String, tag: String) -> [Device] {
     [
-        salvageDevice(carrier, type: Brain.carrierDeviceType, tags: [tag]),
+        salvageDevice(carrier, type: "heaven_vessel", tags: [tag]),
         salvageDevice(controller, type: "ami_mining_controller", tags: [tag], stowedIn: carrier),
         salvageDevice(drone, type: "mining_drone", tags: [tag], stowedIn: carrier, controllerDeviceCode: controller),
     ]
