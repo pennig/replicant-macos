@@ -66,6 +66,41 @@ and failed exactly one test.
 Not reachable on today's fleet — the three carriers are singly tagged, which is
 precisely the configuration that hides it.
 
+## The second defect review caught — the remap landed rows in a state its target step could not handle
+
+`retiredSteps` first mapped all four removed steps to `deployingBots`. Three of
+them leave the vessel at the target system, so that was right. **`restocking`
+does not** — its whole job was flying the vessel to base, and a row halted on
+`awaitingRelayRestock` AT base is by far the likeliest persisted state.
+
+Remapped there, the run would deploy its service bots at the HUB, tour the target
+system without them, then recall at the target, find none, and `.advanceTarget` —
+abandoning both bots permanently and invisibly. That is
+[salvage-fleet-repair-build](salvage-fleet-repair-build.md)'s one-funnel
+invariant broken from the ENTRY side, and that note's own justification (
+"`restocking` sits BEFORE `deployingBots`, so no bot is ever out on that path")
+is what routing *from* `restocking` *into* `deployingBots` invalidated.
+
+All four now re-enter at **`preflight`**, the only funnel that re-derives where
+the vessel is. The first test could not see this: it parameterised all four step
+names over ONE fixture whose vessel already stood at the target.
+
+## Three more the same review closed
+
+- **`haulReadiness` consulted no reservations** while `salvageReadiness` did. A
+  controller held by a per-site row would make the verdict report `.ready`
+  forever while `ensureOne` declined it every tick — and the why-view would
+  render that impossible launch. It takes `directives` now.
+- **`reservedDevices` inside the transaction was fed the SNAPSHOT's device map.**
+  Fresh rows, stale devices: the stow closure under-reserves, which is the unsafe
+  direction. Devices are read in the same transaction now.
+- **The derived sink is time-varying, and `confirm` re-derives it.** A hub that
+  flickers between dispatch and confirm read a landed command as refused and
+  false-stalled a healthy fleet. `hasTakenSomeHaulConfig` accepts the fallback
+  alongside the derived sink; **`isInForce` stays strict**, which is the split
+  that matters — it drives the repoint, so a controller left on the old constant
+  is still corrected rather than delivering to the wrong place forever.
+
 ## A refinement that was reverted for being unobservable
 
 The carrier-blocker sentence briefly keyed its ", not the brain's to resolve"
@@ -104,6 +139,20 @@ rather than being planted into.
   has a `WorldSnapshot`. Visible at the call site rather than hidden in a default.
 - **Three near-identical status types** (`BrainSurveyStatus`, `BrainGoalStatus`,
   and the two render types) want unifying.
+- **The hub can follow a carrier parked on a pile.** `isPrintHub` is satisfied by
+  every HEAVEN vessel, and `WorldView.hubLocation`'s `stock > 0` clause does not
+  help when the vessel is standing ON a stockpile — which is exactly where
+  `positioning` parks the salvage carrier once it has mined. If a site pile ever
+  out-ranks hub stock the supply line inverts. Pre-existing (`tendMesh` was
+  already exposed); live numbers make it remote.
+- **The brain's launch gate and the planner disagree in two narrow ways.** The
+  gate does not require a `Star` census row, and it cannot see the row's
+  append-only `attempted` set. Either way `plan` returns `.idle` and the run
+  backs off holding its carrier rather than stalling — the pre-existing
+  idle-not-complete property, now reachable via a gate that says work exists.
+- **`travel` no longer re-derives mesh membership on arrival.** True at plan time
+  is not true at arrival: a `tendMesh` reclaim can un-mesh a target in flight,
+  and the run then works it without a relay.
 
 ## Sign-off (2026-08-07)
 
@@ -112,12 +161,12 @@ each:
 
 | Product | Tests | Suites | Failed | Crashed |
 | --- | --- | --- | --- | --- |
-| DirectiveEngineTests | 835 | 119 | 0 | 0 |
+| DirectiveEngineTests | 838 | 119 | 0 | 0 |
 | GameServicesTests | 219 | 28 | 0 | 0 |
 | DirectivesFeatureTests | 173 | 17 | 0 | 0 |
 | GameModelsTests | 98 | 16 | 0 | 0 |
 
-**1,325 tests, zero failures, zero crashed targets.** Pruning the obsolete
+**1,328 tests, zero failures, zero crashed targets.** Pruning the obsolete
 emplacement coverage removed 425 lines from `SalvageRunTests.swift`.
 
 Four guards were demonstrated failing before their fix landed: the planner

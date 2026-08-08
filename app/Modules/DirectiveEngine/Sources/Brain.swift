@@ -234,15 +234,15 @@ struct Brain: Sendable {
         }
         guard !live else { return }
         guard let directive = build() else { return }
-        let devices = snapshot.view.devices
 
         do {
             try await database.write { db in
-                // Both checks re-run against rows read INSIDE the transaction.
-                // The snapshot above predates this tick's own earlier launches,
-                // so it can see neither a row the last tick wrote nor one this
-                // tick just did.
+                // Rows AND devices read in-transaction: the snapshot predates
+                // this tick's own earlier launches, and a stale device map
+                // would under-reserve the stow closure.
                 let rows = try Directive.all.fetchAll(db)
+                let devices = try Device.all.fetchAll(db)
+                    .reduce(into: [String: Device]()) { $0[$1.deviceCode] = $1 }
                 let live = rows.contains {
                     $0.kind == kind && Self.owningStatuses.contains($0.status) && matching($0)
                 }
@@ -329,7 +329,7 @@ struct Brain: Sendable {
     /// `mine`'s future per-site rows carry their own tags, so they neither
     /// satisfy this rule nor get relaunched around by it.
     private func ensureHaul(snapshot: Snapshot, database: any DatabaseWriter) async {
-        guard case let .launch(controller) = Self.haulReadiness(view: snapshot.view) else { return }
+        guard case let .launch(controller) = Self.haulReadiness(view: snapshot.view, directives: snapshot.directives) else { return }
 
         @Dependency(\.uuid) var uuid
         await ensureOne(
@@ -923,9 +923,8 @@ struct Brain: Sendable {
     }
 
     /// The `holder`'s state, and — when the brain has no power over it — the
-    /// fact that waiting will not help. `brainManagedStall` is the authority on
-    /// that second half rather than a re-typed `kind == .relayRun`, so the
-    /// sentence cannot promise something the brain will not do.
+    /// fact that waiting will not help. The clause keys on `brainManagedStall`,
+    /// so it appears for a kind the brain does not answer for at all.
     private static func holdDescription(_ holder: Directive) -> String {
         switch holder.status {
         case .needsAttention:
@@ -1085,12 +1084,15 @@ struct Brain: Sendable {
     }
 
     /// The haul verdict for `view`. `HaulRun.controllers` already sorts by code,
-    /// so the choice is reproducible across ticks.
-    static func haulReadiness(view: WorldView) -> HaulReadiness {
+    /// so the choice is reproducible across ticks. Takes `directives` for the
+    /// same reason `salvageReadiness` does — without it the verdict reports
+    /// ready for a controller `ensureOne` will decline every tick, forever.
+    static func haulReadiness(view: WorldView, directives: [Directive]) -> HaulReadiness {
+        let reserved = reservedDevices(directives: directives, devices: view.devices)
         guard let controller = HaulRun.controllers(
             in: view.devices.values, tag: HaulRun.defaultFleetTag
-        ).first else {
-            return .idle(reason: "no \(HaulRun.defaultFleetTag) controller offering ferry")
+        ).first(where: { !reserved.contains($0.deviceCode) }) else {
+            return .idle(reason: "no free \(HaulRun.defaultFleetTag) controller offering ferry")
         }
         guard view.hubLocation != nil else {
             return .idle(reason: "no print hub on the mesh")
@@ -1129,7 +1131,7 @@ struct Brain: Sendable {
                 status: launchedGoalStatus(live.status)
             )
         }
-        switch haulReadiness(view: view) {
+        switch haulReadiness(view: view, directives: directives) {
         case let .launch(controller): return .ready(vessel: controller)
         case let .idle(reason): return .idle(reason: reason)
         }

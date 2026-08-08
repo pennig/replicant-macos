@@ -604,25 +604,25 @@ struct BrainHaulReadinessTests {
             haulController("T2", tags: [HaulRun.defaultFleetTag]),
             haulController("T1", tags: [HaulRun.defaultFleetTag]),
         ])
-        #expect(Brain.haulReadiness(view: view) == .launch(controller: "T1"))
+        #expect(Brain.haulReadiness(view: view, directives: []) == .launch(controller: "T1"))
     }
 
     @Test("an untagged controller is idle — untagging is the operator's off-switch")
     func anUntaggedControllerIsIdle() {
         let view = haulView(devices: [haulController("T1", tags: [])])
-        #expect(Brain.haulReadiness(view: view) == .idle(reason: "no auto:haul controller offering ferry"))
+        #expect(Brain.haulReadiness(view: view, directives: []) == .idle(reason: "no free auto:haul controller offering ferry"))
     }
 
     @Test("a tagged device that does not offer ferry is not a haul controller")
     func aNonFerryDeviceIsIdle() {
         let view = haulView(devices: [haulController("T1", tags: [HaulRun.defaultFleetTag], directives: [])])
-        #expect(Brain.haulReadiness(view: view) == .idle(reason: "no auto:haul controller offering ferry"))
+        #expect(Brain.haulReadiness(view: view, directives: []) == .idle(reason: "no free auto:haul controller offering ferry"))
     }
 
     @Test("no hub on the mesh is idle rather than hauling to a stale constant")
     func noHubIsIdle() {
         let view = haulView(devices: [haulController("T1", tags: [HaulRun.defaultFleetTag])], hubLocation: nil)
-        #expect(Brain.haulReadiness(view: view) == .idle(reason: "no print hub on the mesh"))
+        #expect(Brain.haulReadiness(view: view, directives: []) == .idle(reason: "no print hub on the mesh"))
     }
 
     /// The forward-shaping rule `mine` will rely on. A liveness rule written

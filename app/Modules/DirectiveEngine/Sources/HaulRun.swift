@@ -165,9 +165,12 @@ public struct HaulRun: MissionStepMachine {
     static func hasTakenSomeHaulConfig(_ controller: Device, delivery: String) -> Bool {
         guard let currentDirective = controller.currentDirective,
               [HaulTargetPlanner.ferry, HaulTargetPlanner.shuttle].contains(currentDirective),
-              let config = controller.currentDirectiveConfig
+              let sink = controller.currentDirectiveConfig?["deliver"]?.stringValue
         else { return false }
-        return config["deliver"]?.stringValue == delivery
+        // The fallback counts too: the sink is DERIVED, so a hub that flickers
+        // between dispatch and confirm would otherwise read a landed command as
+        // refused. `isInForce` stays strict, so the repoint still happens.
+        return sink == delivery || sink == deliveryLocation
     }
 
     // MARK: - Re-entry budget

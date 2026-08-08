@@ -56,6 +56,9 @@ public struct SalvageRun: MissionStepMachine {
 
     /// Step names outside this machine's vocabulary that must ADVANCE rather
     /// than wait. A row carrying one holds a fleet, and `default:` would park it.
+    /// They re-enter at `preflight`, the only funnel that re-derives where the
+    /// vessel is: one of them parks it at the hub, and every later step assumes
+    /// the target system.
     static let retiredSteps: Set<String> = ["emplacing", "activating", "confirmingRelay", "restocking"]
 
     /// The tag a row falls back to when it carries none of its own.
@@ -139,7 +142,7 @@ public struct SalvageRun: MissionStepMachine {
         case Step.stowingBots: return stowBots(directive, vessel, world)
         case Step.confirmingBotStow: return confirmBotStow(directive, vessel, world)
         case let step where Self.retiredSteps.contains(step):
-            return .advanceStep(nextStep: Step.deployingBots)
+            return .advanceStep(nextStep: Step.preflight)
         default:
             // Waiting is inert and recoverable; guessing would command the fleet.
             logger.notice("salvage run \(directive.id, privacy: .public): unknown step \(directive.step, privacy: .public) — waiting")
@@ -256,11 +259,11 @@ public struct SalvageRun: MissionStepMachine {
 
     // MARK: - Target planning
 
-    /// Where the run goes next, ranked by `SalvageTargetPlanner`: already meshed,
-    /// then one relay-hop from the mesh, then richest, then nearest. An empty answer
-    /// is `.idle`, never `.exhausted` — the frontier is a snapshot, not a limit.
-    /// Never resolve this through `SurveyRoamPlanner`: its candidate filter is the
-    /// exact inverse, and a run planned that way plants relays where no salvage is.
+    /// Where the run goes next, ranked by `SalvageTargetPlanner` over MESHED
+    /// systems only. An empty answer is `.idle`, never `.exhausted` — the
+    /// frontier is a snapshot, not a limit. Never resolve this through
+    /// `SurveyRoamPlanner`: its candidate filter is the exact inverse, so a run
+    /// planned that way tours systems holding no salvage at all.
     public func plan(_ context: RoamContext) -> RoamPlan {
         let stars = Dictionary(
             context.stars.map { ($0.designation, $0) }, uniquingKeysWith: { first, _ in first }

@@ -1168,11 +1168,16 @@ struct HaulRunDerivedSinkTests {
         #expect(HaulRun.deliverySink(in: world(devices: [])) == HaulRun.deliveryLocation)
     }
 
-    /// The one-time repoint: a controller still configured against the old
-    /// constant no longer reads as in force, so the run points it at the hub
-    /// once. Correct behaviour, but visible, so it is pinned as expected.
-    @Test("a controller configured on the old constant is not in force at the new sink")
-    func theOldConstantIsNoLongerInForce() {
+    /// The two checks part company here, and both answers are wanted.
+    ///
+    /// `isInForce` drives the REPOINT, so it must reject a controller still
+    /// delivering to the old constant — otherwise resources keep arriving at
+    /// the wrong place forever. `hasTakenSomeHaulConfig` only asks "did it take
+    /// something we could have issued", and the fallback is such a thing, so it
+    /// accepts — otherwise a hub that flickers between dispatch and confirm
+    /// reads a landed command as refused and stalls a healthy fleet.
+    @Test("the old constant is not in force, but does count as a config we issued")
+    func theOldConstantIsNotInForceYetStillCountsAsOurs() {
         let stale = controller(
             "C1", currentDirective: "ferry",
             currentConfig: [
@@ -1181,8 +1186,38 @@ struct HaulRunDerivedSinkTests {
             ]
         )
         let world = worldWithHubAt("SOL-3-1", controllers: [stale])
-        #expect(HaulRun.hasTakenSomeHaulConfig(stale, delivery: HaulRun.deliverySink(in: world)) == false)
-        #expect(HaulRun.drainedPile(of: stale, delivery: HaulRun.deliverySink(in: world)) == nil)
+        let assignment = HaulTargetPlanner.Assignment(
+            controllerCode: "C1", location: "ALPAHARD-7", directive: "ferry"
+        )
+        #expect(HaulRun.isInForce(assignment, in: world) == false, "the run must repoint it")
+        #expect(HaulRun.hasTakenSomeHaulConfig(stale, delivery: HaulRun.deliverySink(in: world)))
+    }
+
+    /// A foreign sink is neither in force nor ours, so it never masquerades as
+    /// a landed command.
+    @Test("a config delivering somewhere else entirely is not ours")
+    func aForeignSinkIsNotOurs() {
+        let foreign = controller(
+            "C1", currentDirective: "ferry",
+            currentConfig: ["collect": .string("ALPAHARD-7"), "deliver": .string("ELSEWHERE-9")]
+        )
+        let world = worldWithHubAt("SOL-3-1", controllers: [foreign])
+        #expect(HaulRun.hasTakenSomeHaulConfig(foreign, delivery: HaulRun.deliverySink(in: world)) == false)
+    }
+
+    /// A controller still on the fallback keeps reading as ours, which is what
+    /// stops `confirming` false-stalling across a hub change.
+    @Test("the fallback sink is recognised alongside the derived one")
+    func theFallbackIsRecognisedAlongsideTheDerivedSink() {
+        let onFallback = controller(
+            "C1", currentDirective: "ferry",
+            currentConfig: [
+                "collect": .string("ALPAHARD-7"),
+                "deliver": .string(HaulRun.deliveryLocation),
+            ]
+        )
+        let world = worldWithHubAt("SOL-3-1", controllers: [onFallback])
+        #expect(HaulRun.drainedPile(of: onFallback, delivery: HaulRun.deliverySink(in: world)) == "ALPAHARD-7")
     }
 
     @Test("a controller configured against the derived hub reads as in force")

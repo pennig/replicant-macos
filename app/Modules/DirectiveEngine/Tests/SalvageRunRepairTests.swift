@@ -83,14 +83,35 @@ private let long = repairFixtureNow.addingTimeInterval(-60)
             == .advanceStep(nextStep: SalvageRun.Step.deployingBots))
     }
 
-    /// Every retired relay step funnels to the same place, so a row parked on
-    /// one when the surgery shipped moves on instead of freezing with a fleet.
+    /// Every retired relay step re-enters at `preflight` rather than freezing
+    /// with a fleet. **Not at `deployingBots`**: a `restocking` row's vessel is
+    /// at the hub, and deploying bots there leaves them behind — the run recalls
+    /// them at the TARGET, finds none, and advances.
     @Test(arguments: ["emplacing", "activating", "confirmingRelay", "restocking"])
-    func aRowOnARetiredStepAdvancesToTheBots(_ step: String) {
+    func aRowOnARetiredStepReEntersAtPreflight(_ step: String) {
         let w = repairWorld(devices: [vessel, plantedRelay])
         let d = salvageDirective(step: step, targets: ["TOSLIT"])
         #expect(SalvageRun().nextAction(directive: d, world: w)
-            == .advanceStep(nextStep: SalvageRun.Step.deployingBots))
+            == .advanceStep(nextStep: SalvageRun.Step.preflight))
+    }
+
+    /// The case the single-fixture version could not see: a row remapped while
+    /// the vessel stands at the HUB must not reach the bot deploy until travel
+    /// has put it back at the target.
+    @Test func aRetiredRowAtTheHubDoesNotDeployBotsThere() {
+        let atHub = repairDevice("VESSEL", type: "heaven_vessel", location: "AINALRAM-BELT-1")
+        let w = repairWorld(devices: [atHub, plantedRelay])
+        let remapped = SalvageRun().nextAction(
+            directive: salvageDirective(step: "restocking", targets: ["TOSLIT"]), world: w
+        )
+        #expect(remapped == .advanceStep(nextStep: SalvageRun.Step.preflight))
+
+        // And from travelling, a vessel away from the target flies rather than
+        // handing to the bots.
+        let travelling = SalvageRun().nextAction(
+            directive: salvageDirective(step: SalvageRun.Step.travelling, targets: ["TOSLIT"]), world: w
+        )
+        #expect(travelling != .advanceStep(nextStep: SalvageRun.Step.deployingBots))
     }
 
     /// An unknown step that is NOT a retired one still waits — the remap must
