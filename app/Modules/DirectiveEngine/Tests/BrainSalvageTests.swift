@@ -337,6 +337,101 @@ struct BrainEnsureSalvageTests {
         #expect(directives.contains { $0.id != "DONE" && $0.kind == .salvageRun })
     }
 
+    /// The snapshot-level check cannot see a row written after the tick's own
+    /// world read, so the guard INSIDE the write transaction is the only thing
+    /// standing between two ticks and two rows. Driving `ensureOne` directly
+    /// with a deliberately stale snapshot is the one way to reach it.
+    @Test func theInTransactionRecheckIsWhatStopsTheSecondInsert() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in try seedSalvageEnsureReadyWorld(db) }
+
+        let stale = Brain.Snapshot(
+            view: try await database.read { db in
+                try WorldView.read(from: db, now: salvageEnsureNow)
+            },
+            directives: [],          // read BEFORE either insert, and never refreshed
+            log: [:], hubFootprint: nil
+        )
+        // Each call names a DIFFERENT vessel. With one vessel the reservation
+        // guard would refuse the second call and the liveness check would never
+        // be reached — the two guards overlap, and only this separates them.
+        let brain = Brain(now: salvageEnsureNow)
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.uuid = .incrementing
+        } operation: {
+            for vessel in ["SALV1", "SALV2"] {
+                await brain.ensureOne(.salvageRun, snapshot: stale, database: database) {
+                    directiveFixture(
+                        id: "ROW-\(vessel)", kind: .salvageRun,
+                        deviceCode: vessel, fleetTag: nil
+                    )
+                }
+            }
+        }
+
+        let rows = try await database.read { db in
+            try Directive.where { $0.kind.eq(DirectiveKind.salvageRun) }.fetchAll(db)
+        }
+        #expect(rows.count == 1, "the second call must be refused inside the transaction")
+        #expect(rows.first?.id == "ROW-SALV1")
+    }
+
+    /// Reaches the LIVENESS path rather than the reservation gate: the live row
+    /// sits on another vessel and carries no fleet tag, so it reserves nothing
+    /// the candidate carrier needs and `salvageReadiness` still says launch.
+    @Test func aLiveUntaggedRunOnAnotherVesselStillBlocksBbyKind() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try seedSalvageEnsureReadyWorld(db)
+            try seedDirective(
+                db, id: "ELSEWHERE", kind: .salvageRun, status: .running,
+                deviceCode: "UNRELATED", fleetTag: nil
+            )
+        }
+
+        await salvageEnsureTick(database)
+
+        let rows = try await salvageEnsureDirectives(database).filter { $0.kind == .salvageRun }
+        #expect(rows.count == 1)
+        #expect(rows.first?.id == "ELSEWHERE")
+    }
+
+    /// A vessel wearing two automation tags must not be committed twice in one
+    /// tick. The survey launch lands first and the salvage launch must decline,
+    /// even though the snapshot both read predates either row.
+    @Test func aDoubleTaggedVesselIsCommittedOnlyOnce() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try seedGrowableWorld(db, carriers: [], salvage: [:])
+            try seedSalvageAssay(db, id: "SITE-SOL", system: salvageEnsureHubSystem, totals: ["metal": 900])
+            // One hull, both opt-in tags, staged for both automations.
+            try seedSalvageEnsureDevice(
+                db, code: "BOTH", type: Brain.carrierDeviceType,
+                tags: [Brain.salvageCarrierTag, Brain.surveyCarrierTag]
+            )
+            try seedSalvageEnsureDevice(
+                db, code: "AMI1", type: "ami_mining_controller", stowedIn: "BOTH",
+                directives: ["gather_salvage"]
+            )
+            try seedSalvageEnsureDevice(
+                db, code: "DRONE1", type: "mining_drone", stowedIn: "BOTH", controllerDeviceCode: "AMI1"
+            )
+            try seedSalvageEnsureDevice(
+                db, code: "SAMI", type: "ami_survey_controller", stowedIn: "BOTH",
+                directives: ["survey_system"]
+            )
+            try seedSalvageEnsureDevice(
+                db, code: "SDRONE", type: "survey_drone", stowedIn: "BOTH", controllerDeviceCode: "SAMI"
+            )
+        }
+
+        await salvageEnsureTick(database)
+
+        let owners = try await salvageEnsureDirectives(database).filter { $0.deviceCode == "BOTH" }
+        #expect(owners.count == 1, "two directives owning one hull is a double commit")
+    }
+
     @Test func anIdleVerdictInsertsNothing() async throws {
         let database = try GameDatabase.bootstrap()
         // The ready world minus the fleet: no tagged vessel, so no launch.

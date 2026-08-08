@@ -693,10 +693,8 @@ struct BrainCarrierBlockerTests {
     /// `.needsAttention` on `awaitingRelayRestock` — waiting for a relay that
     /// only a grow could supply, while holding the carrier that grow needs.
     ///
-    /// `salvageRun` is now a brain-managed kind, so the tick no longer idles
-    /// beside that row: `awaitingRelayRestock` is escalate-classified, so the
-    /// brain surfaces it AND escalates. The pair's point is unchanged and the
-    /// gap is wider — one is a calm wait, the other a named escalation.
+    /// A healthy holder reads as a calm wait; a halted one the brain escalates
+    /// reads as a named escalation. The two must never render alike.
     @Test func aStalledHolderReadsDifferentlyFromAHealthyOne() async throws {
         let healthy = try await gateWithHolder(status: .running, reason: nil)
         let stalled = try await gateWithHolder(status: .needsAttention, reason: .awaitingRelayRestock)

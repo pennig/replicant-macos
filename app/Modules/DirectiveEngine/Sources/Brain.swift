@@ -3,14 +3,13 @@
 //  Replicould — DirectiveEngine
 //
 //  The automation brain's evaluation entry point, ticked by
-//  `DirectiveEngineCore.tickBrain()`: one tick reads the world, answers its own
-//  halted missions, launches at most one Relay Run, keeps the hub's restock
-//  run stocked, and keeps one Survey Run roaming. A PURE SELECTOR — it inserts
-//  directives and drives the `retry`/`cancel` resolution verbs, nothing else,
-//  and touches only the `relayRun`/`restockRun`/`surveyRun` rows it wrote.
-//  STATELESS between ticks: a tick is a pure function of `(WorldView,
-//  directive rows)`. Not an actor, so ranking cannot block the reconciliation
-//  loop beside it.
+//  `DirectiveEngineCore.tickBrain()`: one tick reads the world, answers halted
+//  missions of the kinds in `brainManagedKinds`, launches at most one Relay Run,
+//  and keeps one restock, survey, salvage and general haul run alive. A PURE
+//  SELECTOR — it inserts directives and drives the `retry`/`cancel` resolution
+//  verbs, nothing else. STATELESS between ticks: a tick is a pure function of
+//  `(WorldView, directive rows)`. Not an actor, so ranking cannot block the
+//  reconciliation loop beside it.
 //
 
 import Dependencies
@@ -216,7 +215,7 @@ struct Brain: Sendable {
     /// Keep exactly one live directive of `kind` that `matching` accepts,
     /// building one through `build` when none is. `matching` narrows liveness
     /// past kind alone — the general haul drainer is one row among its siblings.
-    private func ensureOne(
+    func ensureOne(
         _ kind: DirectiveKind,
         matching: @escaping @Sendable (Directive) -> Bool = { _ in true },
         snapshot: Snapshot,
@@ -229,16 +228,31 @@ struct Brain: Sendable {
         }
         guard !live else { return }
         guard let directive = build() else { return }
+        let devices = snapshot.view.devices
 
         do {
             try await database.write { db in
-                // Re-check inside the transaction: a row the previous tick
-                // launched could have landed between the read and here.
-                let live = try Directive
-                    .where { $0.kind.eq(kind) }
-                    .fetchAll(db)
-                    .contains { Self.owningStatuses.contains($0.status) && matching($0) }
+                // Both checks re-run against rows read INSIDE the transaction.
+                // The snapshot above predates this tick's own earlier launches,
+                // so it can see neither a row the last tick wrote nor one this
+                // tick just did.
+                let rows = try Directive.all.fetchAll(db)
+                let live = rows.contains {
+                    $0.kind == kind && Self.owningStatuses.contains($0.status) && matching($0)
+                }
                 guard !live else { return }
+                // A device another directive of ANY kind already owns is not
+                // this one's to commit — kind-scoped liveness cannot see that.
+                let reserved = Self.reservedDevices(directives: rows, devices: devices)
+                guard !reserved.contains(directive.deviceCode) else {
+                    logger.notice(
+                        """
+                        \(kind.rawValue, privacy: .public) declined: \
+                        \(directive.deviceCode, privacy: .public) is already committed
+                        """
+                    )
+                    return
+                }
                 try Directive.insert { directive }.execute(db)
                 logger.info(
                     """
@@ -437,7 +451,7 @@ struct Brain: Sendable {
     /// free to the ranking and reserved to the reservation pass. Holds
     /// `Directive.all` rather than a status filter, because which statuses own
     /// their devices is a rule (`owningStatuses`) that must not live in two places.
-    private struct Snapshot: Sendable {
+    struct Snapshot: Sendable {
         let view: WorldView
         let directives: [Directive]
         /// Oldest first, for each brain-managed stall and nothing else.
@@ -910,10 +924,7 @@ struct Brain: Sendable {
         switch holder.status {
         case .needsAttention:
             let reason = holder.attentionReason.map { " — \($0.displayName)" } ?? ""
-            // Keyed on the DISPOSITION, not membership: a stall the brain owns
-            // but will only escalate holds the carrier just as indefinitely.
-            let selfClearing = brainManagedStall(holder)?.brainDisposition == .retry
-            let orphan = selfClearing ? "" : ", not the brain's to resolve"
+            let orphan = brainManagedStall(holder) == nil ? ", not the brain's to resolve" : ""
             return "needs attention\(reason)\(orphan)"
         case .paused:
             return "paused"
