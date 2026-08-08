@@ -117,6 +117,7 @@ struct Brain: Sendable {
         await tendRestock(plan: plan, snapshot: snapshot, decision: decision, database: database)
         await ensureSurvey(snapshot: snapshot, database: database)
         await ensureSalvage(snapshot: snapshot, database: database)
+        await ensureHaul(snapshot: snapshot, database: database)
 
         return await BrainReport(
             decision: decision,
@@ -298,6 +299,36 @@ struct Brain: Sendable {
                 stepStartedAt: now,
                 returnToOrigin: false,
                 originDesignation: snapshot.view.devices[carrier]?.location.map { SiteAssay.system(of: $0) },
+                attentionReason: nil,
+                createdAt: now, updatedAt: now
+            )
+        }
+    }
+
+    /// Keep exactly one GENERAL haul run alive. Scoped by fleet tag, not kind:
+    /// `mine`'s future per-site rows carry their own tags, so they neither
+    /// satisfy this rule nor get relaunched around by it.
+    private func ensureHaul(snapshot: Snapshot, database: any DatabaseWriter) async {
+        guard case let .launch(controller) = Self.haulReadiness(view: snapshot.view) else { return }
+
+        @Dependency(\.uuid) var uuid
+        await ensureOne(
+            .haulRun, matching: Self.isGeneralHaul, snapshot: snapshot, database: database
+        ) {
+            Directive(
+                id: uuid().uuidString,
+                kind: .haulRun,
+                status: .running,
+                deviceCode: controller,
+                controllerCode: nil,
+                roamCentre: nil,
+                fleetTag: HaulRun.defaultFleetTag,
+                sourceRelayCode: nil,
+                targets: [], targetIndex: 0,
+                step: HaulRun().firstStep,
+                stepStartedAt: now,
+                returnToOrigin: false,
+                originDesignation: snapshot.view.hubLocation.map { SiteAssay.system(of: $0) },
                 attentionReason: nil,
                 createdAt: now, updatedAt: now
             )
@@ -1012,6 +1043,32 @@ struct Brain: Sendable {
         }
 
         return .launch(carrier: carrier.deviceCode, roamCentre: centre)
+    }
+
+    /// A haul controller to launch the general drainer on, or a named idle.
+    enum HaulReadiness: Equatable, Sendable {
+        case launch(controller: String)
+        case idle(reason: String)
+    }
+
+    /// Whether `directive` is THE general drainer rather than a per-site row.
+    /// A nil tag counts — `HaulRun.fleetTag(of:)` falls back to the default.
+    static func isGeneralHaul(_ directive: Directive) -> Bool {
+        (directive.fleetTag ?? HaulRun.defaultFleetTag) == HaulRun.defaultFleetTag
+    }
+
+    /// The haul verdict for `view`. `HaulRun.controllers` already sorts by code,
+    /// so the choice is reproducible across ticks.
+    static func haulReadiness(view: WorldView) -> HaulReadiness {
+        guard let controller = HaulRun.controllers(
+            in: view.devices.values, tag: HaulRun.defaultFleetTag
+        ).first else {
+            return .idle(reason: "no \(HaulRun.defaultFleetTag) controller offering ferry")
+        }
+        guard view.hubLocation != nil else {
+            return .idle(reason: "no print hub on the mesh")
+        }
+        return .launch(controller: controller.deviceCode)
     }
 
     /// The why-view's survey line: `.launched` off an already-live row —

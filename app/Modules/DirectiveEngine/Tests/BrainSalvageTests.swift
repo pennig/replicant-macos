@@ -350,3 +350,129 @@ struct BrainEnsureSalvageTests {
         #expect(try await salvageEnsureDirectives(database).isEmpty)
     }
 }
+
+// MARK: - haulReadiness / ensureHaul
+
+private func haulController(_ code: String, tags: [String], directives: [String] = ["ferry"]) -> Device {
+    var detail: [String: JSONValue] = [:]
+    if !directives.isEmpty {
+        detail["available_directives"] = .array(directives.map(JSONValue.string))
+    }
+    return Device(
+        deviceCode: code, deviceType: "ami_transport_controller", replicantCode: "R1",
+        status: "idle", location: nil, locationName: nil, operationalCapacity: 100, queueSize: 0,
+        stowedInDeviceCode: nil, controllerDeviceCode: nil, attachedToDeviceCode: nil,
+        createdAt: Date(timeIntervalSince1970: 0), availableCommands: [], features: [],
+        tags: tags, detail: .object(detail),
+        updatedAt: salvageEnsureNow, firstSeenAt: Date(timeIntervalSince1970: 0)
+    )
+}
+
+private func haulView(devices: [Device], hubLocation: String? = "SOL-3") -> WorldView {
+    WorldView(
+        devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
+        starPositions: ["SOL": Position(x: 0, y: 0, z: 0)],
+        meshSystems: ["SOL"], salvageUnits: [:], eventSystems: [],
+        hubLocation: hubLocation, now: salvageEnsureNow
+    )
+}
+
+@Suite("Brain — the haul readiness verdict")
+struct BrainHaulReadinessTests {
+    @Test("a tagged ferry controller with a hub launches on the lowest code")
+    func theLowestCodedControllerLaunches() {
+        let view = haulView(devices: [
+            haulController("T2", tags: [HaulRun.defaultFleetTag]),
+            haulController("T1", tags: [HaulRun.defaultFleetTag]),
+        ])
+        #expect(Brain.haulReadiness(view: view) == .launch(controller: "T1"))
+    }
+
+    @Test("an untagged controller is idle — untagging is the operator's off-switch")
+    func anUntaggedControllerIsIdle() {
+        let view = haulView(devices: [haulController("T1", tags: [])])
+        #expect(Brain.haulReadiness(view: view) == .idle(reason: "no auto:haul controller offering ferry"))
+    }
+
+    @Test("a tagged device that does not offer ferry is not a haul controller")
+    func aNonFerryDeviceIsIdle() {
+        let view = haulView(devices: [haulController("T1", tags: [HaulRun.defaultFleetTag], directives: [])])
+        #expect(Brain.haulReadiness(view: view) == .idle(reason: "no auto:haul controller offering ferry"))
+    }
+
+    @Test("no hub on the mesh is idle rather than hauling to a stale constant")
+    func noHubIsIdle() {
+        let view = haulView(devices: [haulController("T1", tags: [HaulRun.defaultFleetTag])], hubLocation: nil)
+        #expect(Brain.haulReadiness(view: view) == .idle(reason: "no print hub on the mesh"))
+    }
+
+    /// The forward-shaping rule `mine` will rely on. A liveness rule written
+    /// over kind alone would make both of these read the same.
+    @Test("a per-site row is not the general drainer, and the default-tagged one is")
+    func perSiteRowsAreNotTheGeneralDrainer() {
+        let perSite = directiveFixture(
+            id: "PS", kind: .haulRun, deviceCode: "T9", fleetTag: "auto:haul:ALPAHARD"
+        )
+        let general = directiveFixture(
+            id: "G", kind: .haulRun, deviceCode: "T1", fleetTag: HaulRun.defaultFleetTag
+        )
+        let untagged = directiveFixture(id: "U", kind: .haulRun, deviceCode: "T1", fleetTag: nil)
+        #expect(Brain.isGeneralHaul(perSite) == false)
+        #expect(Brain.isGeneralHaul(general) == true)
+        #expect(Brain.isGeneralHaul(untagged) == true, "a nil tag falls back to the default")
+    }
+}
+
+@Suite("Brain — ensureHaul")
+struct BrainEnsureHaulTests {
+    private func seedHaulReadyWorld(_ db: Database) throws {
+        try seedGrowableWorld(db, carriers: [], salvage: [:])
+        try Device.insert { haulController("T1", tags: [HaulRun.defaultFleetTag]) }.execute(db)
+    }
+
+    @Test func aTaggedControllerAndAHubLaunchOneGeneralDrainer() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in try self.seedHaulReadyWorld(db) }
+
+        await salvageEnsureTick(database)
+
+        let directives = try await salvageEnsureDirectives(database)
+        let haul = try #require(directives.first { $0.kind == .haulRun })
+        #expect(directives.count == 1)
+        #expect(haul.deviceCode == "T1")
+        #expect(haul.fleetTag == HaulRun.defaultFleetTag)
+        #expect(haul.step == HaulRun().firstStep)
+        #expect(haul.originDesignation == "SOL")
+    }
+
+    @Test func aSecondTickInsertsNothing() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in try self.seedHaulReadyWorld(db) }
+        await salvageEnsureTick(database)
+        let afterFirst = try await salvageEnsureDirectives(database)
+
+        await salvageEnsureTick(database)
+
+        #expect(try await salvageEnsureDirectives(database) == afterFirst)
+    }
+
+    /// The forward-shaping assertion, driven through the real tick: a live
+    /// per-site row must NOT be mistaken for the general drainer.
+    @Test func aPerSiteRowDoesNotSatisfyTheGeneralDrainersLiveness() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try self.seedHaulReadyWorld(db)
+            try seedDirective(
+                db, id: "PERSITE", kind: .haulRun, status: .running,
+                deviceCode: "T9", fleetTag: "auto:haul:ALPAHARD"
+            )
+        }
+
+        await salvageEnsureTick(database)
+
+        let hauls = try await salvageEnsureDirectives(database).filter { $0.kind == .haulRun }
+        #expect(hauls.count == 2)
+        #expect(hauls.filter { $0.fleetTag == HaulRun.defaultFleetTag }.count == 1)
+        #expect(hauls.contains { $0.id == "PERSITE" })
+    }
+}
