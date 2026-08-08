@@ -446,6 +446,50 @@ struct BrainEnsureSalvageTests {
     }
 }
 
+// MARK: - Reservation disjointness
+
+/// One fleet: a tagged carrier with a controller and a drone stowed aboard.
+private func taggedFleet(carrier: String, controller: String, drone: String, tag: String) -> [Device] {
+    [
+        salvageDevice(carrier, type: Brain.carrierDeviceType, tags: [tag]),
+        salvageDevice(controller, type: "ami_mining_controller", tags: [tag], stowedIn: carrier),
+        salvageDevice(drone, type: "mining_drone", tags: [tag], stowedIn: carrier, controllerDeviceCode: controller),
+    ]
+}
+
+/// The three live automations each own a carrier. `reservedDevices` closes over
+/// stow in BOTH directions and over adoption, so a cross-link would pull a
+/// second carrier into a directive's set — and `salvageReadiness` would then
+/// report "no auto:salvage vessel" while the vessel sat idle in front of it.
+/// That failure reads exactly like the honest idle, so it is pinned here.
+@Suite("Brain — the three carriers reserve disjointly")
+struct BrainReservationDisjointnessTests {
+    @Test func eachDirectiveReservesOnlyItsOwnCarrier() {
+        let devices = (
+            taggedFleet(carrier: "MESH1", controller: "MC", drone: "MD", tag: Brain.carrierTag)
+                + taggedFleet(carrier: "SALV1", controller: "SC", drone: "SD", tag: Brain.salvageCarrierTag)
+                + taggedFleet(carrier: "SURV1", controller: "QC", drone: "QD", tag: Brain.surveyCarrierTag)
+        ).reduce(into: [String: Device]()) { $0[$1.deviceCode] = $1 }
+
+        let carriers = ["MESH1", "SALV1", "SURV1"]
+        let directives = [
+            directiveFixture(id: "R", kind: .relayRun, deviceCode: "MESH1"),
+            directiveFixture(
+                id: "S", kind: .salvageRun, deviceCode: "SALV1", fleetTag: Brain.salvageCarrierTag
+            ),
+            directiveFixture(id: "Q", kind: .surveyRun, deviceCode: "SURV1"),
+        ]
+
+        for directive in directives {
+            let reserved = Brain.reservedDevices(directives: [directive], devices: devices)
+            #expect(
+                carriers.filter { reserved.contains($0) } == [directive.deviceCode],
+                "\(directive.id) reserved carriers beyond its own"
+            )
+        }
+    }
+}
+
 // MARK: - The widened brain-managed stall set
 
 /// A halted row of `kind` carrying `reason`, as `DirectiveExecutor.stall` leaves one.
