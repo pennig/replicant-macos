@@ -7,8 +7,11 @@
 //  unmeshed salvage is not this goal's to reach.
 //
 
+import Dependencies
 import Foundation
+import GameDatabase
 import GameModels
+import SQLiteData
 import Testing
 import UniverseModels
 import Utils
@@ -181,5 +184,169 @@ struct BrainSalvageReadinessTests {
             Brain.salvageReadiness(view: view, directives: [])
                 == .idle(reason: "A0 has no mining controller aboard")
         )
+    }
+}
+
+// MARK: - ensureSalvage
+
+private let salvageEnsureNow = Date(timeIntervalSince1970: 9_000)
+private let salvageEnsureCarrier = "SALV1"
+private let salvageEnsureHubSystem = "SOL"
+
+private func seedSalvageEnsureDevice(
+    _ db: Database, code: String, type: String, tags: [String] = [],
+    stowedIn: String? = nil, controllerDeviceCode: String? = nil, directives: [String] = []
+) throws {
+    var detail: [String: JSONValue] = [:]
+    if !directives.isEmpty {
+        detail["available_directives"] = .array(directives.map(JSONValue.string))
+    }
+    try Device.insert {
+        Device(
+            deviceCode: code, deviceType: type, replicantCode: "R1", status: "idle",
+            location: nil, locationName: nil, operationalCapacity: 100, queueSize: 0,
+            stowedInDeviceCode: stowedIn, controllerDeviceCode: controllerDeviceCode,
+            attachedToDeviceCode: nil, createdAt: Date(timeIntervalSince1970: 0),
+            availableCommands: [], features: [], tags: tags, detail: .object(detail),
+            updatedAt: salvageEnsureNow, firstSeenAt: Date(timeIntervalSince1970: 0)
+        )
+    }.execute(db)
+}
+
+private func seedSalvageEnsureFleet(_ db: Database, carrier: String = salvageEnsureCarrier) throws {
+    try seedSalvageEnsureDevice(
+        db, code: carrier, type: Brain.carrierDeviceType, tags: [Brain.salvageCarrierTag]
+    )
+    try seedSalvageEnsureDevice(
+        db, code: "AMI1", type: "ami_mining_controller", stowedIn: carrier, directives: ["gather_salvage"]
+    )
+    try seedSalvageEnsureDevice(
+        db, code: "DRONE1", type: "mining_drone", stowedIn: carrier, controllerDeviceCode: "AMI1"
+    )
+}
+
+/// `seedGrowableWorld`'s meshed hub with no tendMesh carrier and no unmeshed
+/// salvage, plus salvage assayed IN the meshed hub system and a staged fleet.
+private func seedSalvageEnsureReadyWorld(_ db: Database) throws {
+    try seedGrowableWorld(db, carriers: [], salvage: [:])
+    try seedSalvageAssay(db, id: "SITE-SOL", system: salvageEnsureHubSystem, totals: ["metal": 900])
+    try seedSalvageEnsureFleet(db)
+}
+
+private func salvageEnsureDirectives(_ database: any DatabaseWriter) async throws -> [Directive] {
+    try await database.read { db in try Directive.all.fetchAll(db) }
+}
+
+private func salvageEnsureTick(_ database: any DatabaseWriter) async {
+    await withDependencies {
+        $0.defaultDatabase = database
+        $0.date = .constant(salvageEnsureNow)
+        $0.uuid = .incrementing
+    } operation: {
+        _ = await Brain(now: salvageEnsureNow).evaluateOnce()
+    }
+}
+
+@Suite("Brain — ensureSalvage")
+struct BrainEnsureSalvageTests {
+    @Test func readyFleetWithNoLiveSalvageInsertsExactlyOneRow() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in try seedSalvageEnsureReadyWorld(db) }
+
+        await salvageEnsureTick(database)
+
+        let directives = try await salvageEnsureDirectives(database)
+        let salvage = try #require(directives.first)
+        #expect(directives.count == 1)
+        #expect(salvage.kind == .salvageRun)
+        #expect(salvage.deviceCode == salvageEnsureCarrier)
+        #expect(salvage.fleetTag == SalvageRun.defaultFleetTag)
+        #expect(salvage.roamCentre == salvageEnsureHubSystem)
+        #expect(salvage.step == SalvageRun().firstStep)
+        #expect(salvage.status == .running)
+        // Claimed at preflight, never eager-written — an eager one goes stale.
+        #expect(salvage.controllerCode == nil)
+        #expect(salvage.returnToOrigin == false)
+    }
+
+    @Test func aSecondTickWithTheLaunchedRowStillLiveInsertsNothing() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in try seedSalvageEnsureReadyWorld(db) }
+        await salvageEnsureTick(database)
+        let afterFirst = try await salvageEnsureDirectives(database)
+        #expect(afterFirst.count == 1)
+
+        await salvageEnsureTick(database)
+
+        let afterSecond = try await salvageEnsureDirectives(database)
+        #expect(afterSecond == afterFirst, "the row the first tick launched already owns the fleet")
+    }
+
+    /// A run the OPERATOR launched satisfies the goal exactly as one the brain
+    /// launched does — membership is by kind, never provenance.
+    @Test func anOperatorLaunchedRunIsAdoptedNotDuplicated() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try seedSalvageEnsureReadyWorld(db)
+            try seedDirective(
+                db, id: "OPERATOR", kind: .salvageRun, status: .running,
+                deviceCode: "OTHERVESSEL", fleetTag: SalvageRun.defaultFleetTag
+            )
+        }
+
+        await salvageEnsureTick(database)
+
+        let directives = try await salvageEnsureDirectives(database)
+        #expect(directives.count == 1)
+        #expect(directives.first?.id == "OPERATOR")
+    }
+
+    @Test(arguments: [DirectiveStatus.running, .needsAttention, .paused])
+    func aLiveSalvageInAnyOwningStatusBlocksRelaunch(_ status: DirectiveStatus) async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try seedSalvageEnsureReadyWorld(db)
+            try seedDirective(
+                db, id: "HELD", kind: .salvageRun, status: status,
+                deviceCode: salvageEnsureCarrier, fleetTag: SalvageRun.defaultFleetTag
+            )
+        }
+
+        await salvageEnsureTick(database)
+
+        let directives = try await salvageEnsureDirectives(database)
+        #expect(directives.count == 1)
+        #expect(directives.first?.id == "HELD")
+    }
+
+    @Test(arguments: [DirectiveStatus.completed, .cancelled])
+    func aFinishedSalvageDoesNotBlockAFreshRun(_ status: DirectiveStatus) async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try seedSalvageEnsureReadyWorld(db)
+            try seedDirective(
+                db, id: "DONE", kind: .salvageRun, status: status,
+                deviceCode: salvageEnsureCarrier, fleetTag: SalvageRun.defaultFleetTag
+            )
+        }
+
+        await salvageEnsureTick(database)
+
+        let directives = try await salvageEnsureDirectives(database)
+        #expect(directives.count == 2)
+        #expect(directives.contains { $0.id != "DONE" && $0.kind == .salvageRun })
+    }
+
+    @Test func anIdleVerdictInsertsNothing() async throws {
+        let database = try GameDatabase.bootstrap()
+        // The ready world minus the fleet: no tagged vessel, so no launch.
+        try await database.write { db in
+            try seedGrowableWorld(db, carriers: [], salvage: [:])
+            try seedSalvageAssay(db, id: "SITE-SOL", system: salvageEnsureHubSystem, totals: ["metal": 900])
+        }
+
+        await salvageEnsureTick(database)
+
+        #expect(try await salvageEnsureDirectives(database).isEmpty)
     }
 }

@@ -116,6 +116,7 @@ struct Brain: Sendable {
         let decision = await decide(plan, escalated: escalated, database: database)
         await tendRestock(plan: plan, snapshot: snapshot, decision: decision, database: database)
         await ensureSurvey(snapshot: snapshot, database: database)
+        await ensureSalvage(snapshot: snapshot, database: database)
 
         return await BrainReport(
             decision: decision,
@@ -265,6 +266,35 @@ struct Brain: Sendable {
                 controllerCode: nil, roamCentre: roamCentre, fleetTag: nil, sourceRelayCode: nil,
                 targets: [], targetIndex: 0,
                 step: SurveyRun().firstStep,
+                stepStartedAt: now,
+                returnToOrigin: false,
+                originDesignation: snapshot.view.devices[carrier]?.location.map { SiteAssay.system(of: $0) },
+                attentionReason: nil,
+                createdAt: now, updatedAt: now
+            )
+        }
+    }
+
+    /// Keep exactly one Salvage Run working — `ensureSurvey`'s sibling. The run
+    /// is continuous and picks its own targets, so liveness is the whole job.
+    private func ensureSalvage(snapshot: Snapshot, database: any DatabaseWriter) async {
+        guard case let .launch(carrier, roamCentre) = Self.salvageReadiness(
+            view: snapshot.view, directives: snapshot.directives
+        ) else { return }
+
+        @Dependency(\.uuid) var uuid
+        await ensureOne(.salvageRun, snapshot: snapshot, database: database) {
+            Directive(
+                id: uuid().uuidString,
+                kind: .salvageRun,
+                status: .running,
+                deviceCode: carrier,
+                controllerCode: nil,
+                roamCentre: roamCentre,
+                fleetTag: SalvageRun.defaultFleetTag,
+                sourceRelayCode: nil,
+                targets: [], targetIndex: 0,
+                step: SalvageRun().firstStep,
                 stepStartedAt: now,
                 returnToOrigin: false,
                 originDesignation: snapshot.view.devices[carrier]?.location.map { SiteAssay.system(of: $0) },
