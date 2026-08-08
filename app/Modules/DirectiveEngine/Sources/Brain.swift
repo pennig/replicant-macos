@@ -666,11 +666,18 @@ struct Brain: Sendable {
         }
     }
 
-    /// The reason `directive` is halted on, when the brain may answer it. `kind ==
-    /// .relayRun` is the whole membership rule — a run the operator launched
-    /// belongs to the operator, whatever its disposition.
+    /// The kinds the brain launches and may therefore answer for. `surveyRun`
+    /// and `restockRun` stay out: a survey verdict has no stall case at all, and
+    /// a restock stall is the hub's, not a mission the brain can retry into.
+    static let brainManagedKinds: Set<DirectiveKind> = [.relayRun, .salvageRun, .haulRun]
+
+    /// The reason `directive` is halted on, when the brain may answer it. Kind is
+    /// the whole membership rule — the brain adopts every row of a kind it
+    /// launches, including one the operator started by hand.
     static func brainManagedStall(_ directive: Directive) -> DirectiveAttentionReason? {
-        guard directive.kind == .relayRun, directive.status == .needsAttention else { return nil }
+        guard brainManagedKinds.contains(directive.kind), directive.status == .needsAttention else {
+            return nil
+        }
         return directive.attentionReason
     }
 
@@ -903,7 +910,10 @@ struct Brain: Sendable {
         switch holder.status {
         case .needsAttention:
             let reason = holder.attentionReason.map { " — \($0.displayName)" } ?? ""
-            let orphan = brainManagedStall(holder) == nil ? ", not the brain's to resolve" : ""
+            // Keyed on the DISPOSITION, not membership: a stall the brain owns
+            // but will only escalate holds the carrier just as indefinitely.
+            let selfClearing = brainManagedStall(holder)?.brainDisposition == .retry
+            let orphan = selfClearing ? "" : ", not the brain's to resolve"
             return "needs attention\(reason)\(orphan)"
         case .paused:
             return "paused"

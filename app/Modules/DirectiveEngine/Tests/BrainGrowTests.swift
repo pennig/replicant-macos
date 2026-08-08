@@ -692,22 +692,34 @@ struct BrainCarrierBlockerTests {
     /// `heaven_vessel` at the print hub is owned by a `salvageRun` sitting in
     /// `.needsAttention` on `awaitingRelayRestock` — waiting for a relay that
     /// only a grow could supply, while holding the carrier that grow needs.
-    /// `brainManagedStall` admits `relayRun` rows only, so nothing in the brain
-    /// will ever clear it, and the sentence has to say so.
+    ///
+    /// `salvageRun` is now a brain-managed kind, so the tick no longer idles
+    /// beside that row: `awaitingRelayRestock` is escalate-classified, so the
+    /// brain surfaces it AND escalates. The pair's point is unchanged and the
+    /// gap is wider — one is a calm wait, the other a named escalation.
     @Test func aStalledHolderReadsDifferentlyFromAHealthyOne() async throws {
         let healthy = try await gateWithHolder(status: .running, reason: nil)
         let stalled = try await gateWithHolder(status: .needsAttention, reason: .awaitingRelayRestock)
 
         #expect(healthy == .idle(reason: "no free carrier at SOL-3 — V1 is held by salvage run HOLD (running)"))
+        #expect(stalled == .stall(.awaitingRelayRestock))
+        #expect(healthy != stalled, "an indefinite growth halt must not read as a three-minute wait")
+    }
+
+    /// A holder of a kind the brain does NOT manage still produces the sentence,
+    /// and still carries the clause saying waiting will not clear it.
+    @Test func anUnmanagedKindsStallStillNamesItselfUnresolvable() async throws {
+        let held = try await gateWithHolder(
+            status: .needsAttention, reason: .noSurveyControllerAboard, kind: .surveyRun
+        )
         #expect(
-            stalled == .idle(
+            held == .idle(
                 reason: """
-                    no free carrier at SOL-3 — V1 is held by salvage run HOLD \
-                    (needs attention — Out of FTL relays, not the brain's to resolve)
+                    no free carrier at SOL-3 — V1 is held by survey run HOLD \
+                    (needs attention — No survey controller aboard, not the brain's to resolve)
                     """
             )
         )
-        #expect(healthy != stalled, "an indefinite growth halt must not read as a three-minute wait")
     }
 
     /// A halted Relay Run is the brain's OWN, and the sentence must not tell an

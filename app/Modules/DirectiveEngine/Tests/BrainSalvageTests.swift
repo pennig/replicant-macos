@@ -351,6 +351,86 @@ struct BrainEnsureSalvageTests {
     }
 }
 
+// MARK: - The widened brain-managed stall set
+
+/// A halted row of `kind` carrying `reason`, as `DirectiveExecutor.stall` leaves one.
+private func stalledRow(
+    id: String, kind: DirectiveKind, reason: DirectiveAttentionReason, step: String
+) -> Directive {
+    var directive = directiveFixture(id: id, kind: kind, status: .needsAttention, deviceCode: "V1")
+    directive.attentionReason = reason
+    directive.step = step
+    return directive
+}
+
+@Suite("Brain — the stall set widens by kind")
+struct BrainWidenedStallTests {
+    @Test("a retryable salvage stall is retried on the first look")
+    func aRetryableSalvageStallIsRetried() {
+        let row = stalledRow(
+            id: "S1", kind: .salvageRun, reason: .salvageBodyNotDepleted, step: "awaiting"
+        )
+        #expect(
+            Brain.stallResponse(for: row, log: [], now: Date(timeIntervalSince1970: 10_000))
+                == .retry(
+                    directiveID: "S1", reason: .salvageBodyNotDepleted,
+                    attempt: 1, lastAttemptAt: nil
+                )
+        )
+    }
+
+    @Test("a salvage stall that has spent its budget escalates")
+    func anExhaustedSalvageBudgetEscalates() {
+        let now = Date(timeIntervalSince1970: 100_000)
+        let row = stalledRow(
+            id: "S1", kind: .salvageRun, reason: .salvageBodyNotDepleted, step: "awaiting"
+        )
+        let spent = (0..<Brain.retryBudget).map { index in
+            DirectiveLogEntry(
+                id: "E\(index)", directiveID: "S1", deviceCode: nil, kind: .resolved,
+                summary: "retry", step: "awaiting", operationID: nil, eventID: nil,
+                occurredAt: now.addingTimeInterval(Double(-3_600 * (Brain.retryBudget - index)))
+            )
+        }
+        #expect(
+            Brain.stallResponse(for: row, log: spent, now: now)
+                == .escalated(directiveID: "S1", reason: .salvageBodyNotDepleted)
+        )
+    }
+
+    @Test("an escalate-classified salvage stall escalates on sight")
+    func dronesNotRecoveredEscalatesImmediately() {
+        let row = stalledRow(
+            id: "S2", kind: .salvageRun, reason: .dronesNotRecovered, step: "verifying"
+        )
+        #expect(
+            Brain.stallResponse(for: row, log: [], now: Date(timeIntervalSince1970: 0))
+                == .escalated(directiveID: "S2", reason: .dronesNotRecovered)
+        )
+    }
+
+    @Test("a haul stall is managed too")
+    func haulStallsAreManaged() {
+        let row = stalledRow(id: "H1", kind: .haulRun, reason: .commandRejected, step: "confirming")
+        #expect(Brain.brainManagedStall(row) == .commandRejected)
+    }
+
+    /// Deliberately outside the set: a Survey Run's stalls stay the operator's,
+    /// and a restock run's too.
+    @Test(arguments: [DirectiveKind.surveyRun, .restockRun])
+    func otherKindsStayTheOperators(_ kind: DirectiveKind) {
+        let row = stalledRow(id: "Q1", kind: kind, reason: .commandRejected, step: "travelling")
+        #expect(Brain.brainManagedStall(row) == nil)
+        #expect(Brain.stallResponse(for: row, log: [], now: Date(timeIntervalSince1970: 0)) == nil)
+    }
+
+    @Test("a salvage row that is not halted is not a managed stall")
+    func aRunningSalvageRowIsNotAStall() {
+        let row = directiveFixture(id: "S3", kind: .salvageRun, status: .running, deviceCode: "V1")
+        #expect(Brain.brainManagedStall(row) == nil)
+    }
+}
+
 // MARK: - haulReadiness / ensureHaul
 
 private func haulController(_ code: String, tags: [String], directives: [String] = ["ferry"]) -> Device {
