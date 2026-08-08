@@ -2,12 +2,12 @@
 //  SalvageRun.swift
 //  Replicould — DirectiveEngine
 //
-//  Fly a vessel from salvage system to salvage system, mining each down and
-//  planting FTL relays as it goes. Continuous, with no coordination with the Haul
-//  Run that drains the piles behind it. **Staging is the player's job** — the run
-//  uses an AMI controller, drones and relays ALREADY aboard, never stowing and
-//  never adopting, and stalls naming whatever is absent. Pure: time comes from
-//  `world.now`, every effect is the returned `MissionAction`.
+//  Fly a vessel from meshed salvage system to meshed salvage system, mining each
+//  down. Continuous, with no coordination with the Haul Run that drains the piles
+//  behind it. **Staging is the player's job** — the run uses an AMI controller
+//  and drones ALREADY aboard, never stowing and never adopting, and stalls naming
+//  whatever is absent. Pure: time comes from `world.now`, every effect is the
+//  returned `MissionAction`.
 //
 
 import Foundation
@@ -29,12 +29,6 @@ public struct SalvageRun: MissionStepMachine {
     public enum Step {
         public static let preflight = "preflight"
         public static let travelling = "travelling"
-        public static let emplacing = "emplacing"
-        public static let activating = "activating"
-        /// Polls for the dispatched `activate`, backstopped by
-        /// `activationDeadline`. Never dispatches — that would re-stamp
-        /// `stepStartedAt` and reset the clock its own deadline measures from.
-        public static let confirmingRelay = "confirmingRelay"
         /// Put the service bots into the system so they repair the drones while the
         /// vessel tours its bodies. Deployed once per SYSTEM, not once per body:
         /// `service` is system-scoped and the bot cruises to each damaged device.
@@ -58,8 +52,11 @@ public struct SalvageRun: MissionStepMachine {
         public static let stowingBots = "stowingBots"
         /// Read whether the ordered recall landed before ordering the next.
         public static let confirmingBotStow = "confirmingBotStow"
-        public static let restocking = "restocking"
     }
+
+    /// Step names outside this machine's vocabulary that must ADVANCE rather
+    /// than wait. A row carrying one holds a fleet, and `default:` would park it.
+    static let retiredSteps: Set<String> = ["emplacing", "activating", "confirmingRelay", "restocking"]
 
     /// The tag a row falls back to when it carries none of its own.
     public static let defaultFleetTag = "auto:salvage"
@@ -129,9 +126,6 @@ public struct SalvageRun: MissionStepMachine {
         switch directive.step {
         case Step.preflight: return preflight(directive, vessel, world)
         case Step.travelling: return travel(directive, vessel, world)
-        case Step.emplacing: return emplace(directive, vessel, world)
-        case Step.activating: return activate(vessel, world)
-        case Step.confirmingRelay: return confirmRelay(directive, vessel, world)
         case Step.deployingBots: return deployBots(directive, vessel, world)
         case Step.confirmingBotDeploy: return confirmBotDeploy(directive, vessel, world)
         case Step.armingBots: return armBots(directive, vessel, world)
@@ -144,7 +138,8 @@ public struct SalvageRun: MissionStepMachine {
         case Step.repairing: return awaitRepair(directive, vessel, world)
         case Step.stowingBots: return stowBots(directive, vessel, world)
         case Step.confirmingBotStow: return confirmBotStow(directive, vessel, world)
-        case Step.restocking: return restock(directive, vessel, world)
+        case let step where Self.retiredSteps.contains(step):
+            return .advanceStep(nextStep: Step.deployingBots)
         default:
             // Waiting is inert and recoverable; guessing would command the fleet.
             logger.notice("salvage run \(directive.id, privacy: .public): unknown step \(directive.step, privacy: .public) — waiting")
@@ -289,7 +284,7 @@ public struct SalvageRun: MissionStepMachine {
         // An exhausted queue is never `.done`, only the cue to plan the next
         // target. Checked BEFORE the staging guards so a fresh run with an empty
         // queue extends it rather than stalling over staging it has not reached.
-        guard let target = directive.currentTarget else {
+        guard directive.currentTarget != nil else {
             let centre = directive.roamCentre
                 ?? Self.system(of: vessel)
                 ?? Self.hubSystem(in: world)
@@ -308,22 +303,10 @@ public struct SalvageRun: MissionStepMachine {
         guard !drones.isEmpty else {
             return .refreshFleet(tag: tag, thenStall: .noMiningDroneAboard)
         }
-        // Without a relay aboard, a vessel reaching an UNMESHED target would have
-        // to park there for the whole haul to stay commandable — so detour to
-        // restock rather than depart. A meshed target needs no relay.
-        let meshed = SalvageTargetPlanner.meshSystems(in: Array(world.devices.values)).contains(target)
-        let relay = Self.relay(aboard: vessel, in: world)
-        if !meshed, relay == nil {
-            return .advanceStep(nextStep: Step.restocking)
-        }
-        // Only a read can correct a stale POSITIVE. Kept after the restocking
-        // check so a vessel not departing this tick pays for no freshness read.
-        // `.refreshFleet` because one tag read covers vessel, controller and every
-        // drone, and is the only scope that can see a stowed device at all. The
-        // relay belongs in the set — this is the one place that can catch a claim
-        // already stale before the vessel commits to the trip.
-        var stagingRows = [vessel, controller] + drones
-        if let relay { stagingRows.append(relay) }
+        // Only a read can correct a stale POSITIVE. `.refreshFleet` because one
+        // tag read covers vessel, controller and every drone, and is the only
+        // scope that can see a stowed device at all.
+        let stagingRows = [vessel, controller] + drones
         if Self.stagingIsStale(stagingRows, world) {
             return .refreshFleet(tag: tag, thenStall: .unreachableDevice)
         }
@@ -374,18 +357,14 @@ public struct SalvageRun: MissionStepMachine {
         return .wait
     }
 
-    /// Fly `vessel` to `directive`'s current target system, then route it in
-    /// `world` to `emplacing` or, when the system is already meshed, straight to
-    /// `positioning`.
+    /// Fly `vessel` to `directive`'s current target system, then put the service
+    /// bots out. The target is already meshed — the planner offers no other kind.
     private func travel(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
         guard let target = directive.currentTarget else {
             return .advanceStep(nextStep: Step.preflight)
         }
         if Self.system(of: vessel) == target {
-            // Arrived. Skip straight past the emplace step when a relay is
-            // already relaying here — there is nothing to plant.
-            let meshed = SalvageTargetPlanner.meshSystems(in: Array(world.devices.values)).contains(target)
-            return .advanceStep(nextStep: meshed ? Step.deployingBots : Step.emplacing)
+            return .advanceStep(nextStep: Step.deployingBots)
         }
         // An open op means the trip is under way; waiting stops a second travel
         // landing on top of the first.
@@ -398,105 +377,9 @@ public struct SalvageRun: MissionStepMachine {
         )
     }
 
-    /// Fly `vessel` to the target Lagrange point, then deploy the stowed relay.
-    /// `deploy` does not activate, so this always hands off to `Step.activating`.
-    /// The two causes of `lagrangePoint` naming no point stay split: an uncached
-    /// blob is not evidence the system lacks one, and collapsing them permanently
-    /// forfeits emplacement since nothing routes `configuring` back here.
-    private func emplace(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
-        guard let target = directive.currentTarget else {
-            return .advanceStep(nextStep: Step.positioning)
-        }
-        guard let system = world.system(target) else {
-            // Blob not cached yet — bounded wait, then one authoritative read,
-            // then surface. Same handling as `configure` and `verify`.
-            return unresolvedSystem(directive, world, target: target)
-        }
-        guard let point = Self.lagrangePoint(in: system) else {
-            return .advanceStep(nextStep: Step.deployingBots)
-        }
-        guard let relay = Self.relay(aboard: vessel, in: world) else {
-            return .advanceStep(nextStep: Step.restocking)
-        }
-        if vessel.location != point {
-            if world.openOperation(for: vessel.deviceCode) != nil { return .wait }
-            // The `!=` above is the check that misreads a row still lagging the
-            // previous arrival; prove the row post-dates that arrival first.
-            if let unconfirmed = Self.travelPositionUnconfirmed(vessel, world) { return unconfirmed }
-            return .dispatch(
-                kind: .travel, deviceCode: vessel.deviceCode,
-                params: CommandParams(destination: point), nextStep: Step.emplacing
-            )
-        }
-        // No `openOperation` guard: `deploy` is `OperationKind.simple` and creates
-        // no `Operation` row, so the lookup is structurally always nil and the
-        // guard would only make the dispatch look protected.
-        return .dispatch(
-            kind: OperationKind.simple("deploy"), deviceCode: relay.deviceCode,
-            params: CommandParams(), nextStep: Step.activating
-        )
-    }
-
-    /// Issue `activate` once at the relay `vessel` just deployed, resolved through
-    /// `world`, then hand to `confirmingRelay`. Dispatch-only: all polling belongs
-    /// to that step, which is what lets its deadline accumulate.
-    private func activate(_ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
-        // Resolve the relay by where it now IS, not by what is stowed: `deploy`
-        // clears its `stowedInDeviceCode`, so the aboard-query cannot find it.
-        guard let relay = Self.deployedRelay(near: vessel, in: world) else {
-            return .stall(.relayActivationFailed)
-        }
-        return .dispatch(
-            kind: OperationKind.simple("activate"), deviceCode: relay.deviceCode,
-            params: CommandParams(), nextStep: Step.confirmingRelay
-        )
-    }
-
-    /// Floor between confirm-reads of the relay row while this step polls. The
-    /// step is entered once and evaluated every 5 s, so without a floor the read
-    /// below fires on every tick.
+    /// Floor between confirm-reads of a relay row while a mission polls one.
+    /// Read by `RelayRun`, which owns every relay the fleet plants.
     public static let relayPollInterval: TimeInterval = 60
-
-    /// Poll the relay `vessel` deployed and move on once it reports `relaying`,
-    /// backstopped by `activationDeadline`. Must never dispatch: `activate` creates
-    /// no `Operation` row, so a polling step that dispatched would reset the clock
-    /// that deadline measures from and re-issue at the live API forever.
-    private func confirmRelay(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
-        guard let relay = Self.deployedRelay(near: vessel, in: world) else {
-            return .stall(.relayActivationFailed)
-        }
-        // `statusBase`, not `status` — a raw comparison reads a live relay as dead.
-        if relay.statusBase == "relaying" { return settle(directive, relay) }
-        if world.now.timeIntervalSince(directive.stepStartedAt) > Self.activationDeadline {
-            return .stall(.relayActivationFailed)
-        }
-        // Nothing else moves this row — the `relay.*` SSE route only invalidates
-        // mesh freshness — so a bare `.wait` sits on a stale row for the whole
-        // deadline and then stalls on a relay that came up fine. Throttled on the
-        // row's OWN `updatedAt`, which `stepStartedAt` never tracks while polling.
-        if world.now.timeIntervalSince(relay.updatedAt) > Self.relayPollInterval {
-            return .refreshDevices(deviceCodes: [relay.deviceCode], thenStall: nil)
-        }
-        return .wait
-    }
-
-    /// Drop `directive`'s fleet tag from a confirmed `relay`, so later
-    /// `.refreshFleet` calls stop dragging back a tail growing by one relay per
-    /// target. Untag only from THIS confirmation — a relay that deployed but never
-    /// came up is still cargo and still the run's problem. The remaining set is
-    /// computed rather than sent as `[]`, since `updateTags` is DECLARATIVE and
-    /// would otherwise wipe the operator's own tags.
-    private func settle(_ directive: Directive, _ relay: Device) -> MissionAction {
-        let tag = Self.fleetTag(directive)
-        guard relay.hasTag(tag) else {
-            return .advanceStep(nextStep: Step.deployingBots)
-        }
-        return .setDeviceTags(
-            deviceCode: relay.deviceCode,
-            tags: relay.tags.filter { $0 != tag },
-            nextStep: Step.deployingBots
-        )
-    }
 
     // MARK: - Mining loop
 
@@ -1100,40 +983,4 @@ public struct SalvageRun: MissionStepMachine {
         return .stall(.salvageBodyNotDepleted)
     }
 
-    /// The base a run restocks at.
-    public static let baseDesignation = "AINALRAM-BELT-1"
-
-    /// Fly `vessel` home for `directive` once it is out of relays, per `world`,
-    /// then stall for the operator on arrival. This step parks and asks rather
-    /// than loading relays itself, because the engine never stows and never
-    /// adopts. A relay found aboard short-circuits the detour immediately, reached
-    /// base or not, so staging one mid-flight need not wait for a now-pointless
-    /// arrival.
-    private func restock(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
-        if Self.relay(aboard: vessel, in: world) != nil {
-            return .advanceStep(nextStep: Step.preflight)
-        }
-        if vessel.location == Self.baseDesignation {
-            // A tag read before the stall, never a bare stall. This is the one
-            // step whose whole purpose is waiting on an operator changing a stow
-            // column, and it decides from local rows that nothing refreshes while
-            // the run sits here — without the read the operator stows relays, hits
-            // Retry, and the same stale rows re-stall immediately, making Retry a
-            // structural no-op. A tag query is also the only scope that can see a
-            // freshly-stowed device at all: stowing clears `location`.
-            return .refreshFleet(tag: Self.fleetTag(directive), thenStall: .awaitingRelayRestock)
-        }
-        // `.travel` is a TRACKED op kind (it creates an `Operation` row), so this
-        // guard actually fires — unlike the `.simple` verbs elsewhere in this file
-        // — and this same-step dispatch is the safe shape.
-        if world.openOperation(for: vessel.deviceCode) != nil { return .wait }
-        // Same arrival race as the other three travel sites: the equality check
-        // against `baseDesignation` above is decided from a row the arrival's
-        // second transaction may not have reached yet.
-        if let unconfirmed = Self.travelPositionUnconfirmed(vessel, world) { return unconfirmed }
-        return .dispatch(
-            kind: .travel, deviceCode: vessel.deviceCode,
-            params: CommandParams(destination: Self.baseDesignation), nextStep: Step.restocking
-        )
-    }
 }

@@ -216,16 +216,6 @@ struct SalvageRunPreflightTests {
                 == .assignController(deviceCode: "CTRL", nextStep: "travelling"))
     }
 
-    /// The relay is an ENABLER, not an optional extra: without one the run
-    /// would have to park at the target for the whole haul, which is exactly
-    /// what the two-machine split exists to avoid. Out of relays and the
-    /// target needs one, so the vessel routes to base rather than departing.
-    @Test func routesToBaseWhenOutOfRelaysAndTheTargetNeedsOne() {
-        let snapshot = world(devices: [vessel, controller, drone]) // no relay aboard
-        #expect(SalvageRun().nextAction(directive: running(step: "preflight"), world: snapshot)
-                == .advanceStep(nextStep: "restocking"))
-    }
-
     /// The inverse of the routing test above, carried forward from Task 5's
     /// review: an already-meshed target needs no relay, so a vessel with none
     /// aboard must still depart rather than detour to base. Without this test
@@ -319,23 +309,6 @@ struct SalvageRunStagingFreshnessTests {
                 == .assignController(deviceCode: "CTRL", nextStep: "travelling"))
     }
 
-    /// The fix for the Important finding from review: re-deriving
-    /// `relay(aboard:in:)` at `emplace` time only re-reads these same cached
-    /// local rows — it forces no live read, so it cannot catch a claim that
-    /// was already stale before departure. The relay row is folded into THIS
-    /// check instead, alongside `[vessel, controller] + drones`, so a stale
-    /// relay alone — with the rest of the fleet perfectly fresh — still earns
-    /// a read before the vessel commits to a trip it might not actually be
-    /// equipped for.
-    @Test func aStaleRelayRowEarnsAReadBeforeDepartureEvenWhenTheRestOfTheFleetIsFresh() {
-        let staleRelay = device(
-            "RELAY", type: "ftl_relay", stowedIn: "VESSEL", features: ["relay"],
-            updatedAt: fixtureNow.addingTimeInterval(-SalvageRun.stagingFreshness - 1)
-        )
-        let snapshot = world(devices: [vessel, controller, drone, staleRelay]) // vessel/controller/drone fresh
-        #expect(SalvageRun().nextAction(directive: running(step: "preflight"), world: snapshot)
-                == .refreshFleet(tag: "auto:salvage", thenStall: .unreachableDevice))
-    }
 }
 
 // MARK: - Travel
@@ -368,13 +341,6 @@ struct SalvageRunTravelTests {
                 == .advanceStep(nextStep: "deployingBots"))
     }
 
-    /// Arrived at an unmeshed system: go emplace the relay before mining.
-    @Test func goesToEmplaceTheRelayOnArrivalAtAnUnmeshedSystem() {
-        let arrived = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3")
-        let snapshot = world(devices: [arrived, controller, drone, relay])
-        #expect(SalvageRun().nextAction(directive: running(step: "travelling"), world: snapshot)
-                == .advanceStep(nextStep: "emplacing"))
-    }
 }
 
 // MARK: - Unrecognised step
@@ -463,301 +429,6 @@ struct SalvageRunLagrangePointTests {
 }
 
 // MARK: - Emplacement
-
-@Suite("Salvage Run — emplacement")
-struct SalvageRunEmplacementTests {
-    @Test func travelsToALagrangePointBeforeDeploying() {
-        // Relays only work at L4/L5 — the vessel must actually be there, not
-        // merely in the system.
-        let arrived = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3")
-        let world = world(devices: [arrived, controller, drone, relay], systems: ["TOSLIT": toslit])
-        #expect(SalvageRun().nextAction(directive: running(step: "emplacing"), world: world)
-            == .dispatch(kind: .travel, deviceCode: "VESSEL",
-                         params: CommandParams(destination: "TOSLIT-3-L4"), nextStep: "emplacing"))
-    }
-
-    @Test func deploysTheRelayOnceAtTheLagrangePoint() {
-        let atL4 = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3-L4")
-        let world = world(devices: [atL4, controller, drone, relay], systems: ["TOSLIT": toslit])
-        #expect(SalvageRun().nextAction(directive: running(step: "emplacing"), world: world)
-            == .dispatch(kind: .simple("deploy"), deviceCode: "RELAY",
-                         params: CommandParams(), nextStep: "activating"))
-    }
-
-    /// The entry point is PREFERRED over a synthesised planet L4 — distinct
-    /// fixture from `toslit`, whose entry point is nil and whose synthesised
-    /// pick ("TOSLIT-3-L4") would otherwise be indistinguishable from a
-    /// deliberately-chosen entry point. Here the entry point
-    /// ("TOSLIT-6-L4") differs from what the lowest-planet synthesis would
-    /// produce ("TOSLIT-3-L4"), so a pass proves the preference is real.
-    @Test func prefersTheEntryPointOverASynthesisedPlanetL4() {
-        let entryPointToslit = StarSystem(
-            designation: "TOSLIT", entryPoint: "TOSLIT-6-L4",
-            planets: [Planet(designation: "TOSLIT-3", lagrange: [
-                SpecialSite(designation: "TOSLIT-3-L4", kind: .lagrange),
-            ])]
-        )
-        let atEntryPoint = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-6-L4")
-        let world = world(devices: [atEntryPoint, controller, drone, relay], systems: ["TOSLIT": entryPointToslit])
-        #expect(SalvageRun().nextAction(directive: running(step: "emplacing"), world: world)
-            == .dispatch(kind: .simple("deploy"), deviceCode: "RELAY",
-                         params: CommandParams(), nextStep: "activating"))
-    }
-
-    /// Same fixture, vessel not yet there: travel to the entry point rather
-    /// than the synthesised planet L4.
-    @Test func travelsToTheEntryPointRatherThanASynthesisedPlanetL4() {
-        let entryPointToslit = StarSystem(
-            designation: "TOSLIT", entryPoint: "TOSLIT-6-L4",
-            planets: [Planet(designation: "TOSLIT-3", lagrange: [
-                SpecialSite(designation: "TOSLIT-3-L4", kind: .lagrange),
-            ])]
-        )
-        let arrived = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3")
-        let world = world(devices: [arrived, controller, drone, relay], systems: ["TOSLIT": entryPointToslit])
-        #expect(SalvageRun().nextAction(directive: running(step: "emplacing"), world: world)
-            == .dispatch(kind: .travel, deviceCode: "VESSEL",
-                         params: CommandParams(destination: "TOSLIT-6-L4"), nextStep: "emplacing"))
-    }
-
-    @Test func activatesTheDeployedRelayOnceAndMovesToThePollingStep() {
-        // `deploy` does NOT activate — that is a separate command, verified
-        // live against the API. `activating` is dispatch-only: the poll (and
-        // its backstop deadline) live entirely in `confirmingRelay` — see
-        // the reasoning pinned by `waitsRatherThanRedispatchingWhileWithinTheDeadline`.
-        let atL4 = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3-L4")
-        let deployed = device("RELAY", type: "ftl_relay", location: "TOSLIT-3-L4", features: ["relay"], status: "idle")
-        let world = world(devices: [atL4, controller, drone, deployed], systems: ["TOSLIT": toslit])
-        #expect(SalvageRun().nextAction(directive: running(step: "activating"), world: world)
-            == .dispatch(kind: .simple("activate"), deviceCode: "RELAY",
-                         params: CommandParams(), nextStep: "confirmingRelay"))
-    }
-
-    @Test func advancesToTheBotDeployOnceTheRelayIsRelaying() {
-        let atL4 = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3-L4")
-        let up = device("RELAY", type: "ftl_relay", location: "TOSLIT-3-L4", features: ["relay"], status: "relaying")
-        let world = world(devices: [atL4, controller, drone, up], systems: ["TOSLIT": toslit])
-        #expect(SalvageRun().nextAction(directive: running(step: "confirmingRelay"), world: world)
-            == .advanceStep(nextStep: "deployingBots"))
-    }
-
-    /// The relay is now planted infrastructure, not cargo: `auto:salvage`
-    /// earned its place while the relay was stowed (it's how `preflight`'s
-    /// `.refreshFleet` found it), but leaving it tagged means every future tag
-    /// read drags back a growing tail of relays this run planted and will
-    /// never touch again. Confirmed `relaying`, carrying the tag → untag it,
-    /// then move on.
-    @Test func untagsTheRelayOnceItStartsRelaying() {
-        let atL4 = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3-L4")
-        let up = device("RELAY", type: "ftl_relay", location: "TOSLIT-3-L4",
-                        features: ["relay"], status: "relaying", tags: ["auto:salvage"])
-        let world = world(devices: [atL4, controller, drone, up], systems: ["TOSLIT": toslit])
-        #expect(SalvageRun().nextAction(directive: running(step: "confirmingRelay"), world: world)
-            == .setDeviceTags(deviceCode: "RELAY", tags: [], nextStep: "deployingBots"))
-    }
-
-    /// `updateTags` is declarative — it replaces the WHOLE set — so untagging
-    /// must send the relay's remaining tags, never a bare `[]` that would wipe
-    /// anything else the operator put on it.
-    @Test func preservesTheRelaysOtherTagsWhenUntagging() {
-        let atL4 = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3-L4")
-        let up = device("RELAY", type: "ftl_relay", location: "TOSLIT-3-L4", features: ["relay"],
-                        status: "relaying", tags: ["operator:keep", "auto:salvage", "operator:also-keep"])
-        let world = world(devices: [atL4, controller, drone, up], systems: ["TOSLIT": toslit])
-        #expect(SalvageRun().nextAction(directive: running(step: "confirmingRelay"), world: world)
-            == .setDeviceTags(
-                deviceCode: "RELAY", tags: ["operator:keep", "operator:also-keep"], nextStep: "deployingBots"
-            ))
-    }
-
-    /// A non-default `fleetTag` is the tag that must be dropped — the same
-    /// rule `preflight`'s `.refreshFleet` follows via `SalvageRun.fleetTag`.
-    @Test func untagsAgainstTheRowsOwnFleetTagRatherThanTheDefault() {
-        let atL4 = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3-L4")
-        let up = device("RELAY", type: "ftl_relay", location: "TOSLIT-3-L4",
-                        features: ["relay"], status: "relaying", tags: ["auto:salvage-2"])
-        let directive = running(step: "confirmingRelay", fleetTag: "auto:salvage-2")
-        let world = world(devices: [atL4, controller, drone, up], systems: ["TOSLIT": toslit])
-        #expect(SalvageRun().nextAction(directive: directive, world: world)
-            == .setDeviceTags(deviceCode: "RELAY", tags: [], nextStep: "deployingBots"))
-    }
-
-    /// Idempotent: a relay that no longer carries the fleet tag — the run
-    /// relaunched after untagging landed, or the operator removed it by hand —
-    /// must not re-issue a redundant PATCH. `advancesToTheBotDeployOnceTheRelayIsRelaying`
-    /// above already covers this (its fixture carries no tags at all); this
-    /// test pins the property explicitly against a relay that has OTHER tags
-    /// but not this run's own.
-    @Test func advancesPlainlyWhenTheRelayNoLongerCarriesTheFleetTag() {
-        let atL4 = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3-L4")
-        let up = device("RELAY", type: "ftl_relay", location: "TOSLIT-3-L4",
-                        features: ["relay"], status: "relaying", tags: ["operator:keep"])
-        let world = world(devices: [atL4, controller, drone, up], systems: ["TOSLIT": toslit])
-        #expect(SalvageRun().nextAction(directive: running(step: "confirmingRelay"), world: world)
-            == .advanceStep(nextStep: "deployingBots"))
-    }
-
-    /// The property that pins the Critical fix from review: from the polling
-    /// step, a relay that is not yet `relaying` and is still inside the
-    /// deadline must `.wait` — it must NEVER dispatch. The original
-    /// single-step design dispatched `activate` again here, which (per
-    /// `DirectiveExecutor.apply`) re-stamps `stepStartedAt` on every accepted
-    /// dispatch, so the deadline below could never accumulate and this
-    /// assertion would have failed against that shape (it would have seen a
-    /// `.dispatch`, not `.wait`). This is exactly the regression guard the
-    /// review asked for.
-    @Test func waitsRatherThanRedispatchingWhileWithinTheDeadline() {
-        let atL4 = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3-L4")
-        let deployed = device("RELAY", type: "ftl_relay", location: "TOSLIT-3-L4", features: ["relay"], status: "idle")
-        let recent = running(step: "confirmingRelay", stepStartedAt: now.addingTimeInterval(-60))
-        let world = world(devices: [atL4, controller, drone, deployed],
-                          systems: ["TOSLIT": toslit], now: now)
-        #expect(SalvageRun().nextAction(directive: recent, world: world) == .wait)
-    }
-
-    @Test func stallsWhenTheRelayNeverComesUp() {
-        // The backstop. A relay that deployed but never started relaying is a
-        // dead run — the whole point of the trip was the mesh membership.
-        let atL4 = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3-L4")
-        let deployed = device("RELAY", type: "ftl_relay", location: "TOSLIT-3-L4", features: ["relay"], status: "idle")
-        let stale = running(step: "confirmingRelay", stepStartedAt: now.addingTimeInterval(-11 * 60))
-        let world = world(devices: [atL4, controller, drone, deployed],
-                          systems: ["TOSLIT": toslit], now: now)
-        #expect(SalvageRun().nextAction(directive: stale, world: world)
-            == .stall(.relayActivationFailed))
-    }
-
-    /// Nothing else moves the relay row while this step polls: the `relay.*` SSE
-    /// route only invalidates FTL-mesh freshness, and the confirm-read that
-    /// follows `activate` fires before the server has necessarily flipped the
-    /// status. A bare wait could therefore sit on a stale row for the whole ten
-    /// minutes and then stall on a relay that came up fine, so a row that has
-    /// gone unread past `relayPollInterval` earns an authoritative look.
-    @Test func readsTheRelayRowRatherThanWaitingOnAStaleOne() {
-        let atL4 = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3-L4")
-        let stale = device(
-            "RELAY", type: "ftl_relay", location: "TOSLIT-3-L4", features: ["relay"],
-            status: "idle", updatedAt: now.addingTimeInterval(-SalvageRun.relayPollInterval - 1)
-        )
-        let directive = running(step: "confirmingRelay", stepStartedAt: now.addingTimeInterval(-120))
-        let world = world(devices: [atL4, controller, drone, stale],
-                          systems: ["TOSLIT": toslit], now: now)
-        // `thenStall: nil` — a relay still coming up is expected, not a fault,
-        // so a re-ask that still wants a read collapses to a wait rather than
-        // demanding a human.
-        #expect(SalvageRun().nextAction(directive: directive, world: world)
-            == .refreshDevices(deviceCodes: ["RELAY"], thenStall: nil))
-    }
-
-    /// The backend appends a parenthetical parameter to some statuses, so a raw
-    /// `status == "relaying"` reads a live relay as dead — a false
-    /// `relayActivationFailed` on a relay that is up and meshing.
-    /// `Device.statusBase` is the established form.
-    @Test func acceptsARelayingStatusCarryingAParameter() {
-        let atL4 = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3-L4")
-        let up = device("RELAY", type: "ftl_relay", location: "TOSLIT-3-L4",
-                        features: ["relay"], status: "relaying (TOSLIT)")
-        let world = world(devices: [atL4, controller, drone, up], systems: ["TOSLIT": toslit])
-        #expect(SalvageRun().nextAction(directive: running(step: "confirmingRelay"), world: world)
-            == .advanceStep(nextStep: "deployingBots"))
-    }
-
-    /// A `system_hub` carries the `relay` FEATURE — it contains an integrated
-    /// relay, which is why `SalvageTargetPlanner.meshSystems` is right to match
-    /// on the feature. These are dispatch queries though, and a stowed hub
-    /// matched by feature would have had `deploy` issued at it.
-    @Test func neverMistakesAStowedSystemHubForARelay() {
-        let atL4 = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3-L4")
-        let hub = device("HUB", type: "system_hub", stowedIn: "VESSEL", features: ["relay", "hub"])
-        let world = world(devices: [atL4, controller, drone, hub], systems: ["TOSLIT": toslit])
-        #expect(SalvageRun.relay(aboard: atL4, in: world) == nil)
-        // No relay aboard at all, so emplacement reroutes to restocking rather
-        // than deploying the hub.
-        #expect(SalvageRun().nextAction(directive: running(step: "emplacing"), world: world)
-            == .advanceStep(nextStep: "restocking"))
-    }
-
-    /// The same narrowing on the co-location query `activate` and `confirmRelay`
-    /// resolve through: a hub parked at the vessel's own Lagrange point is not
-    /// the relay this run just deployed.
-    @Test func neverMistakesACoLocatedSystemHubForTheDeployedRelay() {
-        let atL4 = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3-L4")
-        let hub = device("HUB", type: "system_hub", location: "TOSLIT-3-L4",
-                         features: ["relay", "hub"], status: "relaying")
-        let world = world(devices: [atL4, controller, drone, hub], systems: ["TOSLIT": toslit])
-        #expect(SalvageRun.deployedRelay(near: atL4, in: world) == nil)
-    }
-
-    /// A system with NO planets at all cannot host a relay — every planet has
-    /// an L4 by construction, so this is the one genuinely unemplaceable case
-    /// left. Degraded outcome (the salvage is still worth taking), not an
-    /// error, so the run mines it unmeshed instead of stalling.
-    @Test func minesUnmeshedWhenTheSystemHasNoPlanets() {
-        let arrived = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3")
-        let world = world(devices: [arrived, controller, drone, relay],
-                          systems: ["TOSLIT": toslitWithNoPlanets])
-        #expect(SalvageRun().nextAction(directive: running(step: "emplacing"), world: world)
-            == .advanceStep(nextStep: "deployingBots"))
-    }
-
-    /// `emplace`'s relay-aboard guard is a backstop for the relay being
-    /// genuinely absent — not a staleness fix (that lives in `preflight`, see
-    /// `aStaleRelayRowEarnsAReadBeforeDepartureEvenWhenTheRestOfTheFleetIsFresh`).
-    /// This pins the backstop itself: no relay anywhere in the world reroutes
-    /// to `restocking` rather than dispatching `deploy` at nothing.
-    @Test func routesToRestockingWhenNoRelayIsAboardAtAll() {
-        let atL4 = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3-L4")
-        let world = world(devices: [atL4, controller, drone], systems: ["TOSLIT": toslit]) // no relay anywhere
-        #expect(SalvageRun().nextAction(directive: running(step: "emplacing"), world: world)
-            == .advanceStep(nextStep: "restocking"))
-    }
-
-    /// The Important fix carried in from Task 7's review: the target's
-    /// `SystemDetail` blob not being cached yet must NOT read as "this system
-    /// has no Lagrange point" — that conflation used to route straight to
-    /// `configuring`, silently and permanently forfeiting relay emplacement
-    /// for the target (nothing routes `configuring` back to `emplacing`).
-    /// Distinct from `minesUnmeshedWhenTheSystemHasNoLagrangePoint` above:
-    /// there `"TOSLIT"` IS present in `world.systems`, just genuinely without
-    /// a point; here it has no entry in `systems` at all.
-    @Test func waitsRatherThanForfeitingEmplacementWhenTheBlobIsntCachedYet() {
-        let arrived = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3")
-        let world = world(devices: [arrived, controller, drone, relay]) // no "TOSLIT" entry in `systems`
-        #expect(SalvageRun().nextAction(directive: running(step: "emplacing"), world: world) == .wait)
-    }
-
-    /// The bound on that wait, mirroring `configure`'s
-    /// `readsTheSystemOnceBeforeGivingUpOnIt`: past `systemResolutionDeadline`
-    /// the run spends ONE authoritative read rather than waiting forever — or
-    /// stalling on a snapshot that Retry could never change.
-    @Test func readsTheSystemOnceBeforeGivingUpDuringEmplacement() {
-        let arrived = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3")
-        let directive = running(
-            step: "emplacing",
-            stepStartedAt: now.addingTimeInterval(-SalvageRun.systemResolutionDeadline - 1)
-        )
-        let world = world(devices: [arrived, controller, drone, relay], now: now) // still no "TOSLIT" entry
-        #expect(SalvageRun().nextAction(directive: directive, world: world)
-            == .refreshSystem(designation: "TOSLIT", nextStep: "emplacing"))
-    }
-
-    /// And once that read has been spent, it surfaces.
-    @Test func stallsWhenTheBlobNeverResolvesDuringEmplacement() {
-        let arrived = device("VESSEL", type: "heaven_vessel", location: "TOSLIT-3")
-        let directive = running(
-            step: "emplacing",
-            stepStartedAt: now.addingTimeInterval(-SalvageRun.systemResolutionDeadline - 1)
-        )
-        let world = world(
-            devices: [arrived, controller, drone, relay],
-            log: [stepStarted("emplacing", at: now.addingTimeInterval(-1_200)),
-                  stepStarted("emplacing", at: now.addingTimeInterval(-601))],
-            now: now
-        )
-        #expect(SalvageRun().nextAction(directive: directive, world: world)
-            == .stall(.salvageSystemUnresolved))
-    }
-}
 
 // MARK: - Mining fixtures
 
@@ -1442,61 +1113,6 @@ struct SalvageRunLoopProgressTests {
 
 // MARK: - Restock
 
-@Suite("Salvage Run — restock")
-struct SalvageRunRestockTests {
-    /// Out of relays: travel to base.
-    @Test func travelsToBaseWhenOutOfRelays() {
-        let world = world(devices: [vessel, controller, drone])
-        #expect(SalvageRun().nextAction(directive: running(step: "restocking"), world: world)
-            == .dispatch(kind: .travel, deviceCode: "VESSEL",
-                         params: CommandParams(destination: "AINALRAM-BELT-1"), nextStep: "restocking"))
-    }
-
-    /// Mid-travel is a wait, never a second travel command stacked on the one
-    /// already in flight — the same tracked-op guard `travel()` uses. Safe as
-    /// a same-step dispatch precisely because `.travel` IS a tracked op kind
-    /// (see the same-step-dispatch-needs-tracked-op memory note).
-    @Test func waitsWhileTheTripToBaseIsUnderway() {
-        let world = world(devices: [vessel, controller, drone],
-                          openOperations: ["VESSEL": operation(kind: .travel)])
-        #expect(SalvageRun().nextAction(directive: running(step: "restocking"), world: world) == .wait)
-    }
-
-    /// The engine does NOT stow — that would loosen the never-stow contract,
-    /// which is its own future design. It parks and asks.
-    ///
-    /// But it reads the fleet first, and that is not decoration: this is the one
-    /// step whose whole purpose is waiting on an operator action that changes a
-    /// stow column, and nothing else refreshes those rows while the run sits
-    /// here. A bare stall made Retry a structural no-op — the operator stows
-    /// relays, hits Retry, and the same stale rows still say none are aboard. A
-    /// tag read is also the only scope that can SEE a freshly stowed device,
-    /// since stowing clears `location`.
-    @Test func readsTheFleetBeforeStallingForRestockAtBase() {
-        let atBase = device("VESSEL", location: "AINALRAM-BELT-1")
-        let world = world(devices: [atBase, controller, drone])
-        #expect(SalvageRun().nextAction(directive: running(step: "restocking"), world: world)
-            == .refreshFleet(tag: "auto:salvage", thenStall: .awaitingRelayRestock))
-    }
-
-    @Test func resumesWhenRelaysAreStowedAndTheRunIsRetried() {
-        let atBase = device("VESSEL", location: "AINALRAM-BELT-1")
-        let world = world(devices: [atBase, controller, drone, relay])
-        #expect(SalvageRun().nextAction(directive: running(step: "restocking"), world: world)
-            == .advanceStep(nextStep: "preflight"))
-    }
-
-    /// A relay found aboard short-circuits the detour immediately, whether or
-    /// not the vessel has physically reached `AINALRAM-BELT-1` yet — staging
-    /// one mid-flight shouldn't force a pointless wait for arrival.
-    @Test func resumesAsSoonAsARelayIsAboardEvenBeforeReachingBase() {
-        let midTrip = device("VESSEL") // no location: still travelling
-        let world = world(devices: [midTrip, controller, drone, relay])
-        #expect(SalvageRun().nextAction(directive: running(step: "restocking"), world: world)
-            == .advanceStep(nextStep: "preflight"))
-    }
-}
-
 // MARK: - Arrival freshness fixtures
 
 /// The instant the incident's travel op closed, on `fixtureNow`'s clock.
@@ -1602,26 +1218,6 @@ struct SalvageRunArrivalFreshnessTests {
 
     // MARK: Site 2 — emplace (destination = the Lagrange point)
 
-    /// Site 2 of 4. The `vessel.location != point` check is what misreads the
-    /// lagging row here, so the gate sits between it and the dispatch.
-    @Test func emplaceWaitsWhenTheVesselRowStillLagsTheArrival() {
-        let snapshot = world(
-            devices: [laggingVessel(at: "TOSLIT-3"), controller, drone, relay],
-            dispatchedOperations: afterArrival(), systems: ["TOSLIT": toslit]
-        )
-        #expect(SalvageRun().nextAction(directive: running(step: "emplacing"), world: snapshot) == .wait)
-    }
-
-    @Test func emplaceStillDispatchesWhenTheRowPostDatesTheArrival() {
-        let snapshot = world(
-            devices: [laggingVessel(at: "TOSLIT-3", updatedAt: arrivalClosedAt), controller, drone, relay],
-            dispatchedOperations: afterArrival(), systems: ["TOSLIT": toslit]
-        )
-        #expect(SalvageRun().nextAction(directive: running(step: "emplacing"), world: snapshot)
-                == .dispatch(kind: .travel, deviceCode: "VESSEL",
-                             params: CommandParams(destination: "TOSLIT-3-L4"), nextStep: "emplacing"))
-    }
-
     // MARK: Site 3 — position (destination = the salvage body)
 
     /// Site 3 of 4 — the site the live incident actually fired at. The hop from
@@ -1669,27 +1265,6 @@ struct SalvageRunArrivalFreshnessTests {
     }
 
     // MARK: Site 4 — restock (destination = base)
-
-    /// Site 4 of 4. Same race, decided against `baseDesignation` instead of a
-    /// target — and this one runs with no relay aboard, so nothing short-circuits
-    /// ahead of the dispatch.
-    @Test func restockWaitsWhenTheVesselRowStillLagsTheArrival() {
-        let snapshot = world(
-            devices: [laggingVessel(at: "TOSLIT-6-5"), controller, drone], // no relay aboard
-            dispatchedOperations: afterArrival()
-        )
-        #expect(SalvageRun().nextAction(directive: running(step: "restocking"), world: snapshot) == .wait)
-    }
-
-    @Test func restockStillDispatchesWhenTheRowPostDatesTheArrival() {
-        let snapshot = world(
-            devices: [laggingVessel(at: "TOSLIT-6-5", updatedAt: arrivalClosedAt), controller, drone],
-            dispatchedOperations: afterArrival()
-        )
-        #expect(SalvageRun().nextAction(directive: running(step: "restocking"), world: snapshot)
-                == .dispatch(kind: .travel, deviceCode: "VESSEL",
-                             params: CommandParams(destination: "AINALRAM-BELT-1"), nextStep: "restocking"))
-    }
 
     // MARK: The cold run
 

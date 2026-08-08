@@ -83,29 +83,22 @@ private let long = repairFixtureNow.addingTimeInterval(-60)
             == .advanceStep(nextStep: SalvageRun.Step.deployingBots))
     }
 
-    @Test func aConfirmedRelayHandsOffToTheBotDeploy() {
-        let relay = repairDevice(
-            "RELAY", type: "ftl_relay", location: "TOSLIT-3",
-            features: ["relay"], status: "relaying"
-        )
-        let w = repairWorld(devices: [vessel, relay])
-        let d = salvageDirective(step: SalvageRun.Step.confirmingRelay, targets: ["TOSLIT"])
+    /// Every retired relay step funnels to the same place, so a row parked on
+    /// one when the surgery shipped moves on instead of freezing with a fleet.
+    @Test(arguments: ["emplacing", "activating", "confirmingRelay", "restocking"])
+    func aRowOnARetiredStepAdvancesToTheBots(_ step: String) {
+        let w = repairWorld(devices: [vessel, plantedRelay])
+        let d = salvageDirective(step: step, targets: ["TOSLIT"])
         #expect(SalvageRun().nextAction(directive: d, world: w)
             == .advanceStep(nextStep: SalvageRun.Step.deployingBots))
     }
 
-    /// The untag still happens on the way through, and still lands on the bots.
-    @Test func aTaggedRelayIsUntaggedOnTheWayToTheBotDeploy() {
-        let relay = repairDevice(
-            "RELAY", type: "ftl_relay", location: "TOSLIT-3",
-            tags: ["operator:keep", salvageTag], features: ["relay"], status: "relaying"
-        )
-        let w = repairWorld(devices: [vessel, relay])
-        let d = salvageDirective(step: SalvageRun.Step.confirmingRelay, targets: ["TOSLIT"])
-        #expect(SalvageRun().nextAction(directive: d, world: w) == .setDeviceTags(
-            deviceCode: "RELAY", tags: ["operator:keep"],
-            nextStep: SalvageRun.Step.deployingBots
-        ))
+    /// An unknown step that is NOT a retired one still waits — the remap must
+    /// not become a catch-all that advances on a typo.
+    @Test func anUnknownStepStillWaits() {
+        let w = repairWorld(devices: [vessel, plantedRelay])
+        let d = salvageDirective(step: "notAStepAtAll", targets: ["TOSLIT"])
+        #expect(SalvageRun().nextAction(directive: d, world: w) == .wait)
     }
 }
 
