@@ -2,12 +2,10 @@
 //  SalvageTargetPlanner.swift
 //  Replicould — DirectiveEngine
 //
-//  Where a Salvage Run goes next. Ranked so the FTL-mesh frontier expands
-//  outward under its own steam: prefer a system already on the mesh, then one
-//  that a single relay would bring onto it, then the richest, then the nearest.
-//
-//  Reachability is one hop only, so a system that needs a relay at a NON-salvage
-//  waypoint before it comes into range is never offered here at all.
+//  Where a Salvage Run goes next: the richest already-meshed salvage system,
+//  then the nearest, then by designation. Never an unmeshed one — `tendMesh` is
+//  the sole mesh authority and meshes ahead of demand, so this run waits for
+//  reach rather than planting a relay to buy it.
 //
 //  Pure by contract — no I/O, no clock, no randomness. Must NOT be a static on a
 //  SwiftUI `View`: pure logic in that position traps with signal 5 under
@@ -24,8 +22,7 @@ public enum SalvageTargetPlanner {
     /// be and still link.
     public static let relayRangeLY: Double = 7.5
 
-    /// One candidate system: where to go, what is there, and whether working it
-    /// costs a relay.
+    /// One candidate system: where to go and what is there.
     public struct Target: Equatable, Sendable {
         /// The system designation the run should aim at next.
         public let system: String
@@ -33,16 +30,10 @@ public enum SalvageTargetPlanner {
         /// not a total: an unassayed site contributes nothing rather than
         /// pretending to be zero.
         public let units: Double
-        /// Whether the system needs a relay planted on arrival: false when it is
-        /// already meshed. Advisory — the run re-derives mesh membership from
-        /// the device rows it holds when the vessel actually arrives, so a mesh
-        /// that changed in flight is honoured rather than this snapshot.
-        public let needsRelay: Bool
 
-        public init(system: String, units: Double, needsRelay: Bool) {
+        public init(system: String, units: Double) {
             self.system = system
             self.units = units
-            self.needsRelay = needsRelay
         }
     }
 
@@ -72,11 +63,9 @@ public enum SalvageTargetPlanner {
         )
     }
 
-    /// The next system to work, or nil when nothing is reachable: the best
-    /// salvage system in `assays`, positioned through `stars`, that is either in
-    /// `meshSystems` or within `relayRange` light-years of a system that is,
-    /// excluding everything in `attempted` and breaking ties by distance from
-    /// `vessel`.
+    /// The next system to work, or nil when no MESHED salvage system is left:
+    /// the richest in `assays` that sits in `meshSystems`, positioned through
+    /// `stars`, excluding `attempted` and breaking ties by distance from `vessel`.
     ///
     /// `attempted` must carry every system this run has already aimed at, not
     /// just the ones it finished — `Directive.targets` is exactly that set, kept
@@ -91,8 +80,7 @@ public enum SalvageTargetPlanner {
         stars: [String: Star],
         meshSystems: Set<String>,
         attempted: Set<String>,
-        vessel: Position?,
-        relayRange: Double = relayRangeLY
+        vessel: Position?
     ) -> Target? {
         // Fold the per-site assays into per-system totals once. `siteType` is
         // filtered rather than assumed: the table is shared with mining assays,
@@ -108,46 +96,36 @@ public enum SalvageTargetPlanner {
             units[assay.system, default: 0] += assay.totals.values.reduce(0, +)
         }
 
-        // The relay positions that define the current frontier.
-        let relayPositions = meshSystems.compactMap { stars[$0]?.position }
-
         var best: Target?
         var bestKey: RankKey?
         for (system, systemUnits) in units {
-            guard let star = stars[system] else { continue }
-            let position = star.position
-            let meshed = meshSystems.contains(system)
-            // One hop means: a relay planted HERE would link to an existing one.
-            let reachable = meshed || relayPositions.contains { $0.distance(to: position) <= relayRange }
-            guard reachable else { continue }
+            // Already meshed is the whole reachability rule: `tendMesh` meshes
+            // ahead of demand, and this run never plants a relay of its own.
+            guard meshSystems.contains(system), let star = stars[system] else { continue }
 
             let key = RankKey(
-                meshedRank: meshed ? 0 : 1,
                 units: systemUnits,
-                distance: vessel.map { $0.distance(to: position) } ?? 0,
+                distance: vessel.map { $0.distance(to: star.position) } ?? 0,
                 designation: system
             )
             if let bestKey, !key.beats(bestKey) { continue }
             bestKey = key
-            best = Target(system: system, units: systemUnits, needsRelay: !meshed)
+            best = Target(system: system, units: systemUnits)
         }
         return best
     }
 
     /// The ranking, in one place so the ordering is total and reproducible:
-    /// meshed first, then most units, then nearest, then designation. The final
-    /// key exists so two equal candidates always resolve the same way across
-    /// evaluations — without it a run could oscillate between them.
+    /// most units, then nearest, then designation. The final key exists so two
+    /// equal candidates always resolve the same way across evaluations —
+    /// without it a run could oscillate between them.
     private struct RankKey {
-        /// 0 for an already-meshed system, 1 for one a relay must be planted at.
-        let meshedRank: Int
         let units: Double
         let distance: Double
         let designation: String
 
         /// Whether `self` outranks `other` under that ordering.
         func beats(_ other: RankKey) -> Bool {
-            if meshedRank != other.meshedRank { return meshedRank < other.meshedRank }
             if units != other.units { return units > other.units }
             if distance != other.distance { return distance < other.distance }
             return designation < other.designation

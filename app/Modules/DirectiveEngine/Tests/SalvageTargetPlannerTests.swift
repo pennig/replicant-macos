@@ -63,24 +63,9 @@ struct SalvageTargetPlannerTests {
             stars: stars, meshSystems: ["HOME", "MESHED"], attempted: [],
             vessel: Position(x: 0, y: 0, z: 0)
         )
-        // Meshed wins on the FIRST key even at 90x less salvage: no relay to
-        // plant and no vessel needed to grant authority afterwards.
-        #expect(target == .init(system: "MESHED", units: 100, needsRelay: false))
-    }
-
-    @Test func prefersAOneHopSystemOverAnUnreachableRicherOne() {
-        let stars = [
-            "HOME": star("HOME", x: 0),
-            "NEAR": star("NEAR", x: 7),      // 7 ly from HOME's relay — inside 7.5
-            "FAR": star("FAR", x: 20),       // nothing within range
-        ]
-        let target = SalvageTargetPlanner.nextTarget(
-            assays: [assay("NEAR", body: "NEAR-1", units: 100),
-                     assay("FAR", body: "FAR-1", units: 9000)],
-            stars: stars, meshSystems: ["HOME"], attempted: [],
-            vessel: Position(x: 0, y: 0, z: 0)
-        )
-        #expect(target == .init(system: "NEAR", units: 100, needsRelay: true))
+        // The richer system is not ranked lower — it is not a candidate at all,
+        // because nothing has meshed it.
+        #expect(target == .init(system: "MESHED", units: 100))
     }
 
     @Test func rejectsASystemMoreThanOneHopOut() {
@@ -94,16 +79,33 @@ struct SalvageTargetPlannerTests {
         ) == nil)
     }
 
-    @Test func theFrontierExpandsAsSystemsJoinTheMesh() {
-        // FAR is 20 ly from HOME but only 6 from NEAR. Once NEAR is meshed it
-        // becomes reachable — this is the bootstrap property the whole design
-        // rests on, so it gets its own test.
+    /// `tendMesh` is the sole mesh authority, so an unmeshed system is not this
+    /// run's to reach however rich it is and however close a relay would sit.
+    /// The run waits for the mesh instead of planting its own.
+    @Test func anUnmeshedSystemIsNeverOfferedEvenWhenItIsTheOnlyValue() {
+        let stars = ["HOME": star("HOME", x: 0), "NEAR": star("NEAR", x: 7)]
+        #expect(SalvageTargetPlanner.nextTarget(
+            assays: [assay("NEAR", body: "NEAR-1", units: 9000)],
+            stars: stars, meshSystems: ["HOME"], attempted: [],
+            vessel: Position(x: 0, y: 0, z: 0)
+        ) == nil)
+    }
+
+    /// The frontier still expands, but on `tendMesh`'s schedule rather than this
+    /// run's: a system becomes workable when IT joins the mesh, not when a
+    /// neighbour close enough to relay to does.
+    @Test func aSystemBecomesWorkableOnlyWhenItselfMeshed() {
         let stars = ["HOME": star("HOME", x: 0), "NEAR": star("NEAR", x: 14), "FAR": star("FAR", x: 20)]
         let assays = [assay("FAR", body: "FAR-1", units: 9000)]
+        // FAR sits 6 ly from meshed NEAR — one relay hop, and still not a target.
         #expect(SalvageTargetPlanner.nextTarget(
             assays: assays, stars: stars, meshSystems: ["HOME", "NEAR"], attempted: [],
             vessel: Position(x: 0, y: 0, z: 0)
-        ) == .init(system: "FAR", units: 9000, needsRelay: true))
+        ) == nil)
+        #expect(SalvageTargetPlanner.nextTarget(
+            assays: assays, stars: stars, meshSystems: ["HOME", "NEAR", "FAR"], attempted: [],
+            vessel: Position(x: 0, y: 0, z: 0)
+        ) == .init(system: "FAR", units: 9000))
     }
 
     @Test func sumsEveryBodysUnitsInASystem() {
@@ -198,7 +200,7 @@ struct SalvageTargetPlannerTests {
             stars: stars, meshSystems: ["HOME", "POOR", "RICH"], attempted: [],
             vessel: Position(x: 0, y: 0, z: 0)
         )
-        #expect(target == .init(system: "POOR", units: 100, needsRelay: false))
+        #expect(target == .init(system: "POOR", units: 100))
     }
 
     /// A system whose only salvage assay is depleted must never be offered —

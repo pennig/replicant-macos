@@ -1489,9 +1489,10 @@ struct DirectiveEngineSalvageRoamTests {
         )
     }
 
-    /// CENTRE is meshed (a relay is up there) and fully scanned; RICH is 5 ly out
-    /// — inside relay range — fully scanned, and the only system carrying assayed
-    /// salvage; NEAR is 1 ly out and UNSCANNED, holding nothing.
+    /// CENTRE and RICH are both meshed and fully scanned; RICH is 5 ly out and
+    /// the only system carrying assayed salvage; NEAR is 1 ly out and UNSCANNED,
+    /// holding nothing. RICH carries its own relay because a Salvage Run works
+    /// only already-meshed systems — `tendMesh` is the sole mesh authority.
     ///
     /// The two planners disagree by construction: `SurveyRoamPlanner` can only
     /// ever pick NEAR (RICH and CENTRE are excluded by `fullyScannedAt != nil`),
@@ -1506,6 +1507,11 @@ struct DirectiveEngineSalvageRoamTests {
             try Device.insert { device("VES1", type: "heaven_vessel", location: "CENTRE-1") }.execute(db)
             try Device.insert {
                 device("RLY1", type: "ftl_relay", location: "CENTRE-1",
+                       features: ["relay"], status: "relaying")
+            }
+            .execute(db)
+            try Device.insert {
+                device("RLY2", type: "ftl_relay", location: "RICH-1",
                        features: ["relay"], status: "relaying")
             }
             .execute(db)
