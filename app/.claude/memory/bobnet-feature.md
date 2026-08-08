@@ -121,11 +121,17 @@ bottom, on send, and on the pill tap, and the view answers it with
 `scrollPosition.scrollTo(edge: .bottom)`. `pendingBottomScroll` is a **mask**
 over "effectively at latest" while such a scroll is in flight, bounded to
 250 ms so it can never stick — a permanently-true mask is what advances a
-read marker under a reader who has scrolled away. The temporary
-`BobnetScrollProbe` logging instrumentation in
-`BobnetChannelMessagesScroll.swift` stays in place past this branch: it is
-the only thing that can see the reported symptom in the running app, since
-the harness could not reproduce it.
+read marker under a reader who has scrolled away.
+
+A temporary `BobnetScrollProbe` OSLog probe carried the diagnosis: the harness
+could not reproduce either symptom, and the log from the running app is what
+named the cause both times. It was removed once the fix was confirmed in the
+app. Restore it from this note's own recipe rather than inventing another —
+one `onScrollGeometryChange` over an `Equatable` struct of
+`contentOffset.y`/`containerSize.height`/`contentSize.height`/`contentInsets`,
+logging `content + topInset` against `containerHeight - bottomInset`. Those two
+numbers being equal *is* correct bottom-alignment, and the `channel` label beside
+`messages.count` is what exposed the selection/data split-brain.
 
 ## `pendingBottomScroll` is a mask; the reducer must never write `isAtLatest`
 
