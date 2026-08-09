@@ -27,4 +27,24 @@ public enum MissionLogBudget {
         }
         return count
     }
+
+    /// The newest command this `dispatch`/`confirm` loop sent, parsed from the
+    /// line `DirectiveExecutor.dispatchSummary` writes — the only record of
+    /// which verb went to which device.
+    public static func lastDispatch(
+        _ world: WorldSnapshot, dispatch: String, confirm: String
+    ) -> (kind: String, deviceCode: String)? {
+        for entry in world.log.reversed() {
+            if entry.kind == .resolved { return nil }
+            if entry.kind == .stepStarted {
+                guard let step = entry.step, step == dispatch || step == confirm else { return nil }
+                continue
+            }
+            guard entry.kind == .commandDispatched, entry.step == confirm else { continue }
+            let words = entry.summary.split(separator: " ")
+            guard words.count >= 4, words[0] == "Dispatched", words[2] == "to" else { return nil }
+            return (String(words[1]), String(words[3]))
+        }
+        return nil
+    }
 }

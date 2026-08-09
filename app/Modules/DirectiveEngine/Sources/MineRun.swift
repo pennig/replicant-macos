@@ -143,8 +143,8 @@ public struct MineRun: MissionStepMachine {
     }
 
     /// The two self-moving members serving `directive`'s belt, resolved at the
-    /// delivery sink. Only a free pair answers `unassignedFleet`, so an
-    /// installed one is identified by its ferry config and the freighter's owner.
+    /// delivery sink. The pair THIS belt already owns is matched first: the tag
+    /// and the sink are shared, so spare free pairs stand there too.
     static func transport(
         of directive: Directive, in world: WorldSnapshot
     ) -> (controller: Device, freighter: Device)? {
@@ -152,23 +152,23 @@ public struct MineRun: MissionStepMachine {
         let sink = HaulRun.deliverySink(in: world)
         let rows = Array(world.devices.values)
         let free = MineRecipe.unassignedFleet(at: sink, in: rows)
-        let controller = free["ami_transport_controller"]?.first
-            ?? rows
+        let controller = rows
             .filter {
                 $0.deviceType == "ami_transport_controller" && $0.hasTag(MineRecipe.fleetTag)
                     && $0.location == sink
                     && $0.currentDirectiveConfig?["collect"]?.stringValue == belt
             }
             .min { $0.deviceCode < $1.deviceCode }
+            ?? free["ami_transport_controller"]?.first
         guard let controller else { return nil }
-        let freighter = free["cargo_freighter"]?.first
-            ?? rows
+        let freighter = rows
             .filter {
                 $0.deviceType == "cargo_freighter" && $0.hasTag(MineRecipe.fleetTag)
                     && $0.location == sink
                     && $0.controllerDeviceCode == controller.deviceCode
             }
             .min { $0.deviceCode < $1.deviceCode }
+            ?? free["cargo_freighter"]?.first
         guard let freighter else { return nil }
         return (controller, freighter)
     }
@@ -468,27 +468,33 @@ public struct MineRun: MissionStepMachine {
         )
     }
 
-    /// Judge the arming just ordered. Same timing as the adopt loop, so the same
-    /// evidence: progress is `2` per settled target plus the pending one's own
-    /// state, and every landed round moves it by at least one.
+    /// Judge the arming just ordered, against the verb that went out: a
+    /// `set_directive` lands at `armState` 1, an `activate` only at 2. A score
+    /// over all five targets would bank a 0-to-2 landing as two rounds' credit.
     private func confirmArm(_ directive: Directive, _ world: WorldSnapshot) -> MissionAction {
         guard let targets = Self.armTargets(of: directive, in: world) else {
             return .refreshFleet(tag: MineRecipe.fleetTag, thenStall: .mineFleetIncomplete)
         }
-        let states = targets.map { Self.armState($0, in: world) }
-        guard let index = states.firstIndex(where: { $0 < 2 }) else {
+        guard targets.contains(where: { Self.armState($0, in: world) < 2 }) else {
             return .advanceStep(nextStep: Step.arming)
         }
-        let rounds = MissionLogBudget.dispatchRounds(
+        let ordered = MissionLogBudget.lastDispatch(
             world, dispatch: Step.arming, confirm: Step.confirmingArm
         )
-        if 2 * index + states[index] >= rounds { return .advanceStep(nextStep: Step.arming) }
-        guard let pending = world.device(targets[index].deviceCode) else {
+        let judged = ordered.flatMap { last in targets.first { $0.deviceCode == last.deviceCode } }
+        let pending = judged ?? targets.first { Self.armState($0, in: world) < 2 }
+        guard let pending, let device = world.device(pending.deviceCode) else {
             return .refreshFleet(tag: MineRecipe.fleetTag, thenStall: .mineFleetIncomplete)
         }
+        if let ordered, judged != nil {
+            let landed = ordered.kind == OperationKind.setDirective.rawValue
+                ? Self.armState(pending, in: world) >= 1
+                : Self.armState(pending, in: world) == 2
+            if landed { return .advanceStep(nextStep: Step.arming) }
+        }
         return Self.confirmLadder(
-            [pending], directive, world, deadline: Self.attachConfirmDeadline,
-            thenStall: pending.deviceType == "service_bot" ? .serviceBotNotArmed : .commandRejected
+            [device], directive, world, deadline: Self.attachConfirmDeadline,
+            thenStall: device.deviceType == "service_bot" ? .serviceBotNotArmed : .commandRejected
         )
     }
 
