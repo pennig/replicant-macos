@@ -2,8 +2,9 @@
 //  MineRun.swift
 //  Replicould — DirectiveEngine
 //
-//  Ferries a printed mine fleet to a belt: attach the nine carried members to
-//  the surge carrier, fly it out, and set them down at the belt.
+//  Installs a printed mine fleet at a belt: attach the nine carried members to
+//  the surge carrier, fly it out, set them down, hand the drones to their
+//  controllers, and put every controller and bot to work.
 //
 
 import Foundation
@@ -52,11 +53,17 @@ public struct MineRun: MissionStepMachine {
     /// How many rows ride the carrier.
     public static let carriedTotal = MineRecipe.carried.reduce(0) { $0 + $1.quantity }
 
+    /// The directive each installed member ends up running. `gather_evenly`
+    /// works the whole belt; `gather_resources` would take one resource type and
+    /// strand the rest, so no builder here names it.
+    public static let miningDirective = "gather_evenly"
+    public static let surveyDirective = "belt_search"
+    public static let serviceDirective = "service"
+
     /// The belt this run delivers to.
     public static func targetBelt(of directive: Directive) -> String? { directive.targets.first }
 
-    /// The one action `directive` calls for against `world`. The last four steps
-    /// belong to the adopt-and-arm half and hold still until it lands.
+    /// The one action `directive` calls for against `world`.
     public func nextAction(directive: Directive, world: WorldSnapshot) -> MissionAction {
         guard let carrier = world.device(directive.deviceCode) else {
             return .stall(.unreachableDevice)
@@ -69,8 +76,10 @@ public struct MineRun: MissionStepMachine {
         case Step.confirmingArrival: return confirmArrival(directive, carrier, world)
         case Step.detaching: return detach(directive, carrier, world)
         case Step.confirmingDetach: return confirmDetach(directive, carrier, world)
-        case Step.adopting, Step.confirmingAdopt, Step.arming, Step.confirmingArm:
-            return .wait
+        case Step.adopting: return adopt(directive, world)
+        case Step.confirmingAdopt: return confirmAdopt(directive, world)
+        case Step.arming: return arm(directive, world)
+        case Step.confirmingArm: return confirmArm(directive, world)
         default:
             logger.notice("mine run \(directive.id, privacy: .public): unknown step \(directive.step, privacy: .public) — waiting")
             return .wait
@@ -113,6 +122,157 @@ public struct MineRun: MissionStepMachine {
             .values
             .flatMap { $0 }
             .sorted { $0.deviceCode < $1.deviceCode }
+    }
+
+    /// The carried members standing at the belt, by type, lowest-coded first.
+    /// Adoption and arming move neither location nor tag, so this roster holds
+    /// still while both loops run — unlike `members(of:in:)`, which does not.
+    static func landed(of directive: Directive, in world: WorldSnapshot) -> [String: [Device]] {
+        guard let belt = targetBelt(of: directive) else { return [:] }
+        var out: [String: [Device]] = [:]
+        for (type, quantity) in MineRecipe.carried {
+            out[type] = world.devices.values
+                .filter {
+                    $0.deviceType == type && $0.hasTag(MineRecipe.fleetTag) && $0.location == belt
+                }
+                .sorted { $0.deviceCode < $1.deviceCode }
+                .prefix(quantity)
+                .map { $0 }
+        }
+        return out
+    }
+
+    /// The two self-moving members serving `directive`'s belt, resolved at the
+    /// delivery sink. Only a free pair answers `unassignedFleet`, so an
+    /// installed one is identified by its ferry config and the freighter's owner.
+    static func transport(
+        of directive: Directive, in world: WorldSnapshot
+    ) -> (controller: Device, freighter: Device)? {
+        guard let belt = targetBelt(of: directive) else { return nil }
+        let sink = HaulRun.deliverySink(in: world)
+        let rows = Array(world.devices.values)
+        let free = MineRecipe.unassignedFleet(at: sink, in: rows)
+        let controller = free["ami_transport_controller"]?.first
+            ?? rows
+            .filter {
+                $0.deviceType == "ami_transport_controller" && $0.hasTag(MineRecipe.fleetTag)
+                    && $0.location == sink
+                    && $0.currentDirectiveConfig?["collect"]?.stringValue == belt
+            }
+            .min { $0.deviceCode < $1.deviceCode }
+        guard let controller else { return nil }
+        let freighter = free["cargo_freighter"]?.first
+            ?? rows
+            .filter {
+                $0.deviceType == "cargo_freighter" && $0.hasTag(MineRecipe.fleetTag)
+                    && $0.location == sink
+                    && $0.controllerDeviceCode == controller.deviceCode
+            }
+            .min { $0.deviceCode < $1.deviceCode }
+        guard let freighter else { return nil }
+        return (controller, freighter)
+    }
+
+    /// The whole installed fleet: every carried slot filled at the belt, plus
+    /// the two controllers and the transport pair the adopt and arm halves both
+    /// have to find in it.
+    private struct Installation {
+        let landed: [String: [Device]]
+        let mining: Device
+        let survey: Device
+        let transport: (controller: Device, freighter: Device)
+    }
+
+    private static func installation(
+        of directive: Directive, in world: WorldSnapshot
+    ) -> Installation? {
+        let landed = landed(of: directive, in: world)
+        guard !MineRecipe.carried.contains(where: { (landed[$0.deviceType]?.count ?? 0) < $0.quantity }),
+              let mining = landed["ami_mining_controller"]?.first,
+              let survey = landed["ami_survey_controller"]?.first,
+              let transport = transport(of: directive, in: world)
+        else { return nil }
+        return Installation(landed: landed, mining: mining, survey: survey, transport: transport)
+    }
+
+    // MARK: - Adoption
+
+    /// One controller and the members it must take under control.
+    struct Adoption: Equatable {
+        let controller: Device
+        let members: [Device]
+
+        var pending: [Device] {
+            members.filter { $0.controllerDeviceCode != controller.deviceCode }
+        }
+    }
+
+    /// The three adoptions in dependency order, or nil when the fleet cannot be
+    /// assembled from local rows.
+    static func adoptions(of directive: Directive, in world: WorldSnapshot) -> [Adoption]? {
+        guard let fleet = installation(of: directive, in: world) else { return nil }
+        return [
+            Adoption(controller: fleet.mining, members: fleet.landed["mining_drone"] ?? []),
+            Adoption(controller: fleet.survey, members: fleet.landed["survey_drone"] ?? []),
+            Adoption(controller: fleet.transport.controller, members: [fleet.transport.freighter]),
+        ]
+    }
+
+    // MARK: - Arming
+
+    /// The five arm targets, in dependency order. Adoption happens strictly
+    /// before arming: an armed controller with no adopted drones coordinates
+    /// nothing.
+    struct ArmTarget: Equatable {
+        let deviceCode: String
+        let directive: String
+        let configuration: [String: JSONValue]?
+    }
+
+    static func armTargets(of directive: Directive, in world: WorldSnapshot) -> [ArmTarget]? {
+        guard let belt = targetBelt(of: directive),
+              let fleet = installation(of: directive, in: world)
+        else { return nil }
+        var out = [
+            ArmTarget(
+                deviceCode: fleet.mining.deviceCode, directive: miningDirective, configuration: nil
+            ),
+            ArmTarget(
+                deviceCode: fleet.survey.deviceCode, directive: surveyDirective, configuration: nil
+            ),
+        ]
+        out += (fleet.landed["service_bot"] ?? []).map {
+            ArmTarget(deviceCode: $0.deviceCode, directive: serviceDirective, configuration: nil)
+        }
+        out.append(ArmTarget(
+            deviceCode: fleet.transport.controller.deviceCode,
+            directive: HaulTargetPlanner.ferry,
+            configuration: [
+                "collect": .string(belt), "deliver": .string(HaulRun.deliverySink(in: world)),
+            ]
+        ))
+        return out
+    }
+
+    /// Whether `device` already runs `target`'s directive and configuration.
+    static func isInForce(_ target: ArmTarget, _ device: Device) -> Bool {
+        guard device.currentDirective == target.directive else { return false }
+        guard let wanted = target.configuration else { return true }
+        let config = device.currentDirectiveConfig
+        guard config?["collect"]?.stringValue == wanted["collect"]?.stringValue else { return false }
+        // The sink is DERIVED, so a hub flickering between dispatch and confirm
+        // would otherwise read a landed ferry as refused.
+        let deliver = config?["deliver"]?.stringValue
+        return deliver == wanted["deliver"]?.stringValue || deliver == HaulRun.deliveryLocation
+    }
+
+    /// How far `target` has got: 0 not in force, 1 in force but not running,
+    /// 2 running. Monotone, so one dispatch that lands raises it by at least one.
+    static func armState(_ target: ArmTarget, in world: WorldSnapshot) -> Int {
+        guard let device = world.device(target.deviceCode), isInForce(target, device) else {
+            return 0
+        }
+        return device.currentDirectiveStatus == "active" ? 2 : 1
     }
 
     // MARK: - Steps
@@ -243,6 +403,92 @@ public struct MineRun: MissionStepMachine {
         return Self.confirmLadder(
             roster, directive, world,
             deadline: Self.attachConfirmDeadline, thenStall: .commandRejected
+        )
+    }
+
+    /// Hand the next controller its members. One command per round: `adopt`
+    /// takes the whole list at once but is immediate, so the dispatch must hand
+    /// to a confirming step.
+    private func adopt(_ directive: Directive, _ world: WorldSnapshot) -> MissionAction {
+        guard let adoptions = Self.adoptions(of: directive, in: world) else {
+            return .refreshFleet(tag: MineRecipe.fleetTag, thenStall: .mineFleetIncomplete)
+        }
+        guard let next = adoptions.first(where: { !$0.pending.isEmpty }) else {
+            return .advanceStep(nextStep: Step.arming)
+        }
+        return .dispatch(
+            kind: .adopt, deviceCode: next.controller.deviceCode,
+            params: CommandParams(devices: next.pending.map(\.deviceCode)),
+            nextStep: Step.confirmingAdopt
+        )
+    }
+
+    /// Judge the adoption just ordered, looping back for the next controller.
+    ///
+    /// The command's own read of the adopted rows lands BEFORE the step is
+    /// stamped, so the loop's round count — not row freshness — proves it landed.
+    private func confirmAdopt(_ directive: Directive, _ world: WorldSnapshot) -> MissionAction {
+        guard let adoptions = Self.adoptions(of: directive, in: world) else {
+            return .refreshFleet(tag: MineRecipe.fleetTag, thenStall: .mineFleetIncomplete)
+        }
+        let done = adoptions.prefix { $0.pending.isEmpty }.count
+        guard done < adoptions.count else { return .advanceStep(nextStep: Step.adopting) }
+        let rounds = MissionLogBudget.dispatchRounds(
+            world, dispatch: Step.adopting, confirm: Step.confirmingAdopt
+        )
+        if done >= rounds { return .advanceStep(nextStep: Step.adopting) }
+        return Self.confirmLadder(
+            adoptions[done].pending, directive, world,
+            deadline: Self.attachConfirmDeadline, thenStall: .commandRejected
+        )
+    }
+
+    /// Put the next target to work: name the directive when it is not in force,
+    /// `activate` when it is but nothing is running. Re-sending the name would
+    /// never touch the status.
+    private func arm(_ directive: Directive, _ world: WorldSnapshot) -> MissionAction {
+        guard let targets = Self.armTargets(of: directive, in: world) else {
+            return .refreshFleet(tag: MineRecipe.fleetTag, thenStall: .mineFleetIncomplete)
+        }
+        guard let pending = targets.first(where: { Self.armState($0, in: world) < 2 }) else {
+            return .done
+        }
+        guard Self.armState(pending, in: world) > 0 else {
+            return .dispatch(
+                kind: .setDirective, deviceCode: pending.deviceCode,
+                params: CommandParams(
+                    directive: pending.directive, configuration: pending.configuration
+                ),
+                nextStep: Step.confirmingArm
+            )
+        }
+        return .dispatch(
+            kind: OperationKind.simple("activate"), deviceCode: pending.deviceCode,
+            params: CommandParams(), nextStep: Step.confirmingArm
+        )
+    }
+
+    /// Judge the arming just ordered. Same timing as the adopt loop, so the same
+    /// evidence: progress is `2` per settled target plus the pending one's own
+    /// state, and every landed round moves it by at least one.
+    private func confirmArm(_ directive: Directive, _ world: WorldSnapshot) -> MissionAction {
+        guard let targets = Self.armTargets(of: directive, in: world) else {
+            return .refreshFleet(tag: MineRecipe.fleetTag, thenStall: .mineFleetIncomplete)
+        }
+        let states = targets.map { Self.armState($0, in: world) }
+        guard let index = states.firstIndex(where: { $0 < 2 }) else {
+            return .advanceStep(nextStep: Step.arming)
+        }
+        let rounds = MissionLogBudget.dispatchRounds(
+            world, dispatch: Step.arming, confirm: Step.confirmingArm
+        )
+        if 2 * index + states[index] >= rounds { return .advanceStep(nextStep: Step.arming) }
+        guard let pending = world.device(targets[index].deviceCode) else {
+            return .refreshFleet(tag: MineRecipe.fleetTag, thenStall: .mineFleetIncomplete)
+        }
+        return Self.confirmLadder(
+            [pending], directive, world, deadline: Self.attachConfirmDeadline,
+            thenStall: pending.deviceType == "service_bot" ? .serviceBotNotArmed : .commandRejected
         )
     }
 

@@ -25,17 +25,28 @@ private let hubLocation = "AINALRAM-3"
 private let targetBelt = "TOSLIT-4-BELT-1"
 private let carrierCode = "SC1"
 
+/// One AMI directive as a device row carries it.
+private typealias InForce = (name: String, status: String, config: [String: JSONValue])
+
 private func mineRow(
     _ code: String, type: String, tags: [String] = [], location: String? = nil,
-    status: String = "idle", attachedTo: String? = nil, features: [String] = [],
+    status: String = "idle", attachedTo: String? = nil, controlledBy: String? = nil,
+    directive: InForce? = nil, commands: [String] = [], features: [String] = [],
     updatedAt: Date = now
 ) -> Device {
-    Device(
+    var detail: [String: JSONValue] = [:]
+    if let directive {
+        detail["ami_directive"] = .object([
+            "name": .string(directive.name), "config": .object(directive.config),
+        ])
+        detail["ami_directive_status"] = .string(directive.status)
+    }
+    return Device(
         deviceCode: code, deviceType: type, replicantCode: "R1", status: status,
         location: location, locationName: nil, operationalCapacity: 100, queueSize: 0,
-        stowedInDeviceCode: nil, controllerDeviceCode: nil,
+        stowedInDeviceCode: nil, controllerDeviceCode: controlledBy,
         attachedToDeviceCode: attachedTo, createdAt: Date(timeIntervalSince1970: 0),
-        availableCommands: [], features: features, tags: tags, detail: .object([:]),
+        availableCommands: commands, features: features, tags: tags, detail: .object(detail),
         updatedAt: updatedAt, firstSeenAt: Date(timeIntervalSince1970: 0)
     )
 }
@@ -84,15 +95,108 @@ private let installedMine = mineRow(
     "X01", type: "ami_mining_controller", tags: [MineRecipe.fleetTag], location: targetBelt
 )
 
+// MARK: Adopt-and-arm fixtures
+
+private let transportCode = "TC1"
+private let freighterCode = "FR1"
+private let memberCodes = (1...9).map { "M\(String(format: "%02d", $0))" }
+
+/// Which controller each carried drone answers to once the adopt half has run.
+private let adoptedByController = [
+    "M02": "M01", "M03": "M01", "M04": "M01", "M06": "M05", "M07": "M05",
+]
+
+/// The nine carried members standing loose at the belt, as `confirmingDetach`
+/// leaves them. `adoptedBy` and `armed` are keyed by member code.
+private func beltFleet(
+    adoptedBy: [String: String] = [:],
+    armed: [String: InForce] = [:],
+    updatedAt: Date = now
+) -> [Device] {
+    var out: [Device] = []
+    var n = 0
+    for (type, quantity) in MineRecipe.carried {
+        for _ in 0..<quantity {
+            n += 1
+            let code = memberCodes[n - 1]
+            out.append(mineRow(
+                code, type: type, tags: [MineRecipe.fleetTag], location: targetBelt,
+                controlledBy: adoptedBy[code], directive: armed[code], updatedAt: updatedAt
+            ))
+        }
+    }
+    return out
+}
+
+/// The two self-moving members, standing at the delivery sink where they are
+/// printed and where the freighter unloads.
+private func transportPair(
+    adopted: Bool = false,
+    ferry: (collect: String, deliver: String, status: String)? = nil,
+    at location: String = HaulRun.deliveryLocation,
+    updatedAt: Date = now
+) -> [Device] {
+    [
+        mineRow(
+            transportCode, type: "ami_transport_controller", tags: [MineRecipe.fleetTag],
+            location: location,
+            directive: ferry.map {
+                (
+                    name: HaulTargetPlanner.ferry, status: $0.status,
+                    config: ["collect": .string($0.collect), "deliver": .string($0.deliver)]
+                )
+            },
+            updatedAt: updatedAt
+        ),
+        mineRow(
+            freighterCode, type: "cargo_freighter", tags: [MineRecipe.fleetTag],
+            location: location, controlledBy: adopted ? transportCode : nil,
+            updatedAt: updatedAt
+        ),
+    ]
+}
+
+/// The four carried arm targets in force and running.
+private let armedCarried: [String: InForce] = [
+    "M01": (name: "gather_evenly", status: "active", config: [:]),
+    "M05": (name: "belt_search", status: "active", config: [:]),
+    "M08": (name: "service", status: "active", config: [:]),
+    "M09": (name: "service", status: "active", config: [:]),
+]
+
+/// `rounds` completed trips round a dispatch/confirm loop, as the timeline
+/// records them.
+private func loopLog(_ dispatch: String, _ confirm: String, rounds: Int) -> [DirectiveLogEntry] {
+    var out: [DirectiveLogEntry] = []
+    for i in 0..<rounds {
+        let base = now.addingTimeInterval(Double(i - rounds) * 10)
+        out.append(logEntry(dispatch, at: base))
+        out.append(logEntry(confirm, at: base.addingTimeInterval(1)))
+    }
+    return out
+}
+
+/// A print-capable device at a meshed location the census shows holding stock —
+/// what makes `HaulRun.deliverySink` resolve to something other than its fallback.
+private let printHub = mineRow(
+    "HUB1", type: "autofactory", location: hubLocation, commands: ["enqueue_print"]
+)
+
+private let hubRelay = mineRow(
+    "RLY2", type: "ftl_relay", location: hubLocation, status: "relaying", features: ["relay"]
+)
+
 private func world(
     devices: [Device],
     openOperations: [String: GameModels.Operation] = [:],
     log: [DirectiveLogEntry] = [],
-    dispatchedOperations: [String: GameModels.Operation] = [:]
+    dispatchedOperations: [String: GameModels.Operation] = [:],
+    footprints: [LocationFootprint] = []
 ) -> WorldSnapshot {
     WorldSnapshot(
         devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
         openOperations: openOperations, log: log, dispatchedOperations: dispatchedOperations,
+        footprints: Dictionary(footprints.map { ($0.location, $0) }, uniquingKeysWith: { _, last in last }),
         now: now
     )
 }
@@ -531,6 +635,344 @@ struct MineRunTests {
         #expect(Set(codes) == Set((1...9).map { "M\(String(format: "%02d", $0))" }))
         #expect(thenStall == nil)
     }
+
+    // MARK: Adopting
+
+    /// `adopt` takes a device list, so one command hands the whole trio over.
+    @Test("the mining controller adopts all three drones in one command")
+    func adoptNamesEveryUnadoptedMiningDrone() {
+        let snapshot = world(
+            devices: beltFleet() + transportPair() + [mineCarrier(location: targetBelt), beltRelay]
+        )
+
+        #expect(
+            MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.adopting), world: snapshot)
+                == .dispatch(
+                    kind: .adopt, deviceCode: "M01",
+                    params: CommandParams(devices: ["M02", "M03", "M04"]),
+                    nextStep: MineRun.Step.confirmingAdopt
+                )
+        )
+    }
+
+    @Test("the survey pair is adopted once the mining trio is")
+    func adoptTakesTheSurveyPairSecond() {
+        let snapshot = world(
+            devices: beltFleet(adoptedBy: ["M02": "M01", "M03": "M01", "M04": "M01"])
+                + transportPair() + [mineCarrier(location: targetBelt), beltRelay]
+        )
+
+        #expect(
+            MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.adopting), world: snapshot)
+                == .dispatch(
+                    kind: .adopt, deviceCode: "M05",
+                    params: CommandParams(devices: ["M06", "M07"]),
+                    nextStep: MineRun.Step.confirmingAdopt
+                )
+        )
+    }
+
+    /// The transport pair stands at the delivery sink, not the belt, and is
+    /// resolved through `MineRecipe.unassignedFleet` there.
+    @Test("the freighter is adopted last")
+    func adoptTakesTheFreighterLast() {
+        let snapshot = world(
+            devices: beltFleet(adoptedBy: adoptedByController) + transportPair()
+                + [mineCarrier(location: targetBelt), beltRelay]
+        )
+
+        #expect(
+            MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.adopting), world: snapshot)
+                == .dispatch(
+                    kind: .adopt, deviceCode: transportCode,
+                    params: CommandParams(devices: [freighterCode]),
+                    nextStep: MineRun.Step.confirmingAdopt
+                )
+        )
+    }
+
+    @Test("a fully adopted fleet arms")
+    func adoptedFleetArms() {
+        let snapshot = world(
+            devices: beltFleet(adoptedBy: adoptedByController) + transportPair(adopted: true)
+                + [mineCarrier(location: targetBelt), beltRelay]
+        )
+
+        #expect(
+            MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.adopting), world: snapshot)
+                == .advanceStep(nextStep: MineRun.Step.arming)
+        )
+    }
+
+    /// Adoption cannot proceed against a fleet the local rows cannot even
+    /// assemble — buy the one scope that sees every tagged member first.
+    @Test("a missing transport pair buys a tag read")
+    func adoptWithoutTransportRefreshesTheTag() {
+        let snapshot = world(
+            devices: beltFleet() + [mineCarrier(location: targetBelt), beltRelay]
+        )
+
+        #expect(
+            MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.adopting), world: snapshot)
+                == .refreshFleet(tag: MineRecipe.fleetTag, thenStall: .mineFleetIncomplete)
+        )
+    }
+
+    // MARK: Confirming an adoption
+
+    /// The command's own read of the adopted rows lands BEFORE the step is
+    /// stamped, so the round count is what proves the adoption landed.
+    @Test("an adoption that landed on a stale row still counts as progress")
+    func landedAdoptionLoops() {
+        let snapshot = world(
+            devices: beltFleet(
+                adoptedBy: ["M02": "M01", "M03": "M01", "M04": "M01"],
+                updatedAt: now.addingTimeInterval(-61)
+            ) + transportPair() + [mineCarrier(location: targetBelt), beltRelay],
+            log: loopLog(MineRun.Step.adopting, MineRun.Step.confirmingAdopt, rounds: 1)
+        )
+
+        #expect(
+            MineRun().nextAction(
+                directive: mineRunRow(step: MineRun.Step.confirmingAdopt), world: snapshot
+            ) == .advanceStep(nextStep: MineRun.Step.adopting)
+        )
+    }
+
+    /// Two rounds ordered and one adoption held: the SECOND has not landed, so
+    /// the ladder holds the loop and names the survey pair.
+    @Test("a second adoption still outstanding engages the ladder")
+    func secondAdoptionEngagesTheLadder() {
+        let snapshot = world(
+            devices: beltFleet(
+                adoptedBy: ["M02": "M01", "M03": "M01", "M04": "M01"],
+                updatedAt: now.addingTimeInterval(-300)
+            ) + transportPair() + [mineCarrier(location: targetBelt), beltRelay],
+            log: loopLog(MineRun.Step.adopting, MineRun.Step.confirmingAdopt, rounds: 2)
+        )
+
+        #expect(
+            MineRun().nextAction(
+                directive: mineRunRow(step: MineRun.Step.confirmingAdopt), world: snapshot
+            ) == .refreshDevices(deviceCodes: ["M06", "M07"], thenStall: nil)
+        )
+    }
+
+    @Test("an adoption past its deadline spends one last read and surfaces")
+    func adoptionDeadlineSurfaces() {
+        let snapshot = world(
+            devices: beltFleet(updatedAt: now.addingTimeInterval(-900)) + transportPair()
+                + [mineCarrier(location: targetBelt), beltRelay],
+            log: loopLog(MineRun.Step.adopting, MineRun.Step.confirmingAdopt, rounds: 1)
+        )
+        let directive = mineRunRow(
+            step: MineRun.Step.confirmingAdopt,
+            stepStartedAt: now.addingTimeInterval(-(MineRun.attachConfirmDeadline + 60))
+        )
+
+        #expect(MineRun().nextAction(directive: directive, world: snapshot)
+                == .refreshDevices(deviceCodes: ["M02", "M03", "M04"], thenStall: .commandRejected))
+    }
+
+    // MARK: Arming
+
+    private func armedWorld(
+        _ armed: [String: InForce],
+        ferry: (collect: String, deliver: String, status: String)? = nil,
+        log: [DirectiveLogEntry] = []
+    ) -> WorldSnapshot {
+        world(
+            devices: beltFleet(adoptedBy: adoptedByController, armed: armed)
+                + transportPair(adopted: true, ferry: ferry)
+                + [mineCarrier(location: targetBelt), beltRelay],
+            log: log
+        )
+    }
+
+    @Test("nothing armed sets the mining controller's directive first")
+    func armStartsWithTheMiningController() {
+        #expect(
+            MineRun().nextAction(
+                directive: mineRunRow(step: MineRun.Step.arming), world: armedWorld([:])
+            ) == .dispatch(
+                kind: .setDirective, deviceCode: "M01",
+                params: CommandParams(directive: "gather_evenly", configuration: nil),
+                nextStep: MineRun.Step.confirmingArm
+            )
+        )
+    }
+
+    /// Right directive, not running: `activate` is what starts it. Re-sending
+    /// the name would never touch the status.
+    @Test("a paused directive is activated, not re-sent")
+    func armActivatesAPausedDirective() {
+        let snapshot = armedWorld(["M01": (name: "gather_evenly", status: "paused", config: [:])])
+
+        #expect(
+            MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.arming), world: snapshot)
+                == .dispatch(
+                    kind: OperationKind.simple("activate"), deviceCode: "M01",
+                    params: CommandParams(), nextStep: MineRun.Step.confirmingArm
+                )
+        )
+    }
+
+    @Test("four armed leaves the ferry, configured for this belt")
+    func armDispatchesTheFerryLast() {
+        #expect(
+            MineRun().nextAction(
+                directive: mineRunRow(step: MineRun.Step.arming), world: armedWorld(armedCarried)
+            ) == .dispatch(
+                kind: .setDirective, deviceCode: transportCode,
+                params: CommandParams(
+                    directive: HaulTargetPlanner.ferry,
+                    configuration: [
+                        "collect": .string(targetBelt),
+                        "deliver": .string(HaulRun.deliveryLocation),
+                    ]
+                ),
+                nextStep: MineRun.Step.confirmingArm
+            )
+        )
+    }
+
+    @Test("all five in force and running finishes the run")
+    func allFiveArmedIsDone() {
+        let snapshot = armedWorld(
+            armedCarried,
+            ferry: (collect: targetBelt, deliver: HaulRun.deliveryLocation, status: "active")
+        )
+
+        #expect(MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.arming), world: snapshot)
+                == .done)
+    }
+
+    /// The sink is DERIVED, so a hub that flickers between dispatch and confirm
+    /// must not read a landed ferry as refused.
+    @Test("a ferry delivering to the fallback sink still reads as in force")
+    func ferryToleratesTheFallbackSink() {
+        let snapshot = world(
+            devices: beltFleet(adoptedBy: adoptedByController, armed: armedCarried)
+                + transportPair(
+                    adopted: true,
+                    ferry: (collect: targetBelt, deliver: HaulRun.deliveryLocation, status: "active"),
+                    at: hubLocation
+                )
+                + [mineCarrier(location: targetBelt), beltRelay, printHub, hubRelay],
+            footprints: [LocationFootprint(
+                location: hubLocation, devices: 0, resources: 5_000, resourceSites: 0,
+                locationEvents: 0, replicants: 0, fetchedAt: now
+            )]
+        )
+
+        #expect(HaulRun.deliverySink(in: snapshot) == hubLocation)
+        #expect(MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.arming), world: snapshot)
+                == .done)
+    }
+
+    /// `gather_resources` mines one resource type and would strand the rest of
+    /// the belt. It is unreachable because no builder here names it.
+    @Test("no arm target ever names gather_resources")
+    func armTargetsNeverNameGatherResources() throws {
+        let snapshot = armedWorld([:])
+        let targets = try #require(MineRun.armTargets(of: mineRunRow(), in: snapshot))
+
+        #expect(targets.map(\.directive) == [
+            "gather_evenly", "belt_search", "service", "service", HaulTargetPlanner.ferry,
+        ])
+        #expect(!targets.contains { $0.directive == "gather_resources" })
+        #expect(targets.map(\.deviceCode) == ["M01", "M05", "M08", "M09", transportCode])
+    }
+
+    // MARK: Confirming an arming
+
+    @Test("every target in force and running goes back to arming")
+    func confirmArmLoopsWhenAllFiveLanded() {
+        let snapshot = armedWorld(
+            armedCarried,
+            ferry: (collect: targetBelt, deliver: HaulRun.deliveryLocation, status: "active"),
+            log: loopLog(MineRun.Step.arming, MineRun.Step.confirmingArm, rounds: 5)
+        )
+
+        #expect(
+            MineRun().nextAction(
+                directive: mineRunRow(step: MineRun.Step.confirmingArm), world: snapshot
+            ) == .advanceStep(nextStep: MineRun.Step.arming)
+        )
+    }
+
+    /// One round ordered, one target armed on a row older than the step stamp:
+    /// the round count is the only evidence the command landed.
+    @Test("an arming that landed on a stale row still counts as progress")
+    func landedArmingLoops() {
+        let snapshot = world(
+            devices: beltFleet(
+                adoptedBy: adoptedByController,
+                armed: ["M01": (name: "gather_evenly", status: "active", config: [:])],
+                updatedAt: now.addingTimeInterval(-61)
+            ) + transportPair(adopted: true, updatedAt: now.addingTimeInterval(-61))
+                + [mineCarrier(location: targetBelt), beltRelay],
+            log: loopLog(MineRun.Step.arming, MineRun.Step.confirmingArm, rounds: 1)
+        )
+
+        #expect(
+            MineRun().nextAction(
+                directive: mineRunRow(step: MineRun.Step.confirmingArm), world: snapshot
+            ) == .advanceStep(nextStep: MineRun.Step.arming)
+        )
+    }
+
+    /// The activate has not landed: the directive is in force but still paused
+    /// after two rounds, so the ladder holds rather than ordering a third.
+    @Test("an activate still outstanding engages the ladder")
+    func outstandingActivateEngagesTheLadder() {
+        let snapshot = armedWorld(
+            ["M01": (name: "gather_evenly", status: "paused", config: [:])],
+            log: loopLog(MineRun.Step.arming, MineRun.Step.confirmingArm, rounds: 2)
+        )
+
+        #expect(
+            MineRun().nextAction(
+                directive: mineRunRow(step: MineRun.Step.confirmingArm), world: snapshot
+            ) == .wait
+        )
+    }
+
+    /// A bot that will not take `service` is its own reason: the fleet reaches
+    /// the belt and mines, but nothing repairs it.
+    @Test("a service bot past its deadline surfaces as unarmed")
+    func unarmedServiceBotSurfaces() {
+        let snapshot = armedWorld(
+            [
+                "M01": (name: "gather_evenly", status: "active", config: [:]),
+                "M05": (name: "belt_search", status: "active", config: [:]),
+            ],
+            log: loopLog(MineRun.Step.arming, MineRun.Step.confirmingArm, rounds: 5)
+        )
+        let directive = mineRunRow(
+            step: MineRun.Step.confirmingArm,
+            stepStartedAt: now.addingTimeInterval(-(MineRun.attachConfirmDeadline + 60))
+        )
+
+        #expect(MineRun().nextAction(directive: directive, world: snapshot)
+                == .refreshDevices(deviceCodes: ["M08"], thenStall: .serviceBotNotArmed))
+    }
+
+    /// Anything but a bot is a plain rejection — the reason has to name the
+    /// device class the operator must look at.
+    @Test("a controller past its deadline surfaces as rejected")
+    func unarmedControllerSurfaces() {
+        let snapshot = armedWorld(
+            [:], log: loopLog(MineRun.Step.arming, MineRun.Step.confirmingArm, rounds: 5)
+        )
+        let directive = mineRunRow(
+            step: MineRun.Step.confirmingArm,
+            stepStartedAt: now.addingTimeInterval(-(MineRun.attachConfirmDeadline + 60))
+        )
+
+        #expect(MineRun().nextAction(directive: directive, world: snapshot)
+                == .refreshDevices(deviceCodes: ["M01"], thenStall: .commandRejected))
+    }
 }
 
 // MARK: - The attach loop through the real engine
@@ -603,6 +1045,74 @@ struct MineRunEngineTests {
                 "every round attaches the NEXT member, so the loop ran nine times")
         #expect(reads.value.isEmpty, "and confirmed each one without buying a device read")
         #expect(reached.value == MineRun.Step.travelling)
+
+        let row = try #require(
+            await database.read { db in try Directive.where { $0.id.eq("D1") }.fetchOne(db) }
+        )
+        #expect(row.status == .running)
+        #expect(row.attentionReason == nil)
+    }
+
+    private func seedForAdoption(_ database: any DatabaseWriter) async throws {
+        try await database.write { db in
+            try Directive.insert { mineRunRow(step: MineRun.Step.adopting) }.execute(db)
+            let rows = beltFleet() + transportPair()
+                + [mineCarrier(location: targetBelt), beltRelay]
+            for row in rows { try Device.upsert { row }.execute(db) }
+        }
+    }
+
+    /// Three adoptions and then arming, with each adopted row landing a second
+    /// BEFORE the step is stamped — what the live affected-device read produces.
+    @Test func theAdoptLoopReachesArmingWithoutAFalseStall() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await seedForAdoption(database)
+        let ordered = LockIsolated<[[String]]>([])
+        let reads = LockIsolated<[String]>([])
+        let reached = LockIsolated("")
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(now)
+            $0.uuid = .incrementing
+            $0.deviceRefresher.refresh = { code, _ in
+                reads.withValue { $0.append(code) }
+                return nil
+            }
+            $0.commandGovernor.dispatch = { kind, controller, params in
+                guard kind == .adopt, let devices = params.devices else {
+                    return .dispatched(.accepted(operationID: nil))
+                }
+                ordered.withValue { $0.append(devices) }
+                let existing = beltFleet() + transportPair()
+                try? await database.write { db in
+                    for code in devices {
+                        guard let row = existing.first(where: { $0.deviceCode == code }) else { continue }
+                        let adopted = mineRow(
+                            code, type: row.deviceType, tags: [MineRecipe.fleetTag],
+                            location: row.location, controlledBy: controller,
+                            updatedAt: now.addingTimeInterval(-1)
+                        )
+                        try Device.upsert { adopted }.execute(db)
+                    }
+                }
+                return .dispatched(.accepted(operationID: nil))
+            }
+        } operation: {
+            let core = DirectiveEngineCore(machines: [MineRun()], tick: .seconds(5))
+            for _ in 0..<12 {
+                await core.evaluateOnce(directiveID: "D1")
+                let now = try await step(database)
+                if now == MineRun.Step.arming {
+                    reached.setValue(now)
+                    break
+                }
+            }
+        }
+
+        #expect(ordered.value == [["M02", "M03", "M04"], ["M06", "M07"], [freighterCode]])
+        #expect(reads.value.isEmpty, "and confirmed each one without buying a device read")
+        #expect(reached.value == MineRun.Step.arming)
 
         let row = try #require(
             await database.read { db in try Directive.where { $0.id.eq("D1") }.fetchOne(db) }
