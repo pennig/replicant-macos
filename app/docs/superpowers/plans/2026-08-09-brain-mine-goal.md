@@ -922,7 +922,9 @@ Verdict tables over `mineReadiness` (idle reasons for each gate, launch when all
 - [ ] **Step 4: Green + full product run** (the widened `brainManagedKinds` may move existing stall-table tests — if `aStalledHolderReadsDifferentlyFromAHealthyOne`-style assertions break, the fix is the assertion, as in the salvage build).
 - [ ] **Step 5: Commit** — `feat(brain): mine readiness, ensureMine, per-mine ferries`
 
----### Task 11: Report and why-view — the mine goal made legible
+---
+
+### Task 11: Report and why-view — the mine goal made legible
 
 **Files:**
 - Modify: `app/Modules/DirectiveEngine/Sources/Brain.swift` (`mineStatus`, `mineHealth`)
