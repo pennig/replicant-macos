@@ -28,23 +28,38 @@ public enum MissionLogBudget {
         return count
     }
 
-    /// The newest command this `dispatch`/`confirm` loop sent, parsed from the
-    /// line `DirectiveExecutor.dispatchSummary` writes — the only record of
-    /// which verb went to which device.
+    /// What the newest command entry in a dispatch/confirm loop run says. The
+    /// three cases are three different demands: judge it, dispatch afresh, or
+    /// refuse to read evidence that does not parse.
+    public enum LastDispatch: Equatable, Sendable {
+        case dispatched(kind: String, deviceCode: String)
+        /// Nothing sent since this run of the loop began — the state a resolved
+        /// stall re-enters on, where only the dispatch step can make progress.
+        case nothingSent
+        case unreadable
+    }
+
+    /// The newest command this `dispatch`/`confirm` loop sent, read off the line
+    /// `DirectiveExecutor.dispatchSummary` writes — the only record of which
+    /// verb went to which device.
     public static func lastDispatch(
         _ world: WorldSnapshot, dispatch: String, confirm: String
-    ) -> (kind: String, deviceCode: String)? {
+    ) -> LastDispatch {
         for entry in world.log.reversed() {
-            if entry.kind == .resolved { return nil }
+            if entry.kind == .resolved { return .nothingSent }
             if entry.kind == .stepStarted {
-                guard let step = entry.step, step == dispatch || step == confirm else { return nil }
+                guard let step = entry.step, step == dispatch || step == confirm else {
+                    return .nothingSent
+                }
                 continue
             }
             guard entry.kind == .commandDispatched, entry.step == confirm else { continue }
             let words = entry.summary.split(separator: " ")
-            guard words.count >= 4, words[0] == "Dispatched", words[2] == "to" else { return nil }
-            return (String(words[1]), String(words[3]))
+            guard words.count >= 4, words[0] == "Dispatched", words[2] == "to" else {
+                return .unreadable
+            }
+            return .dispatched(kind: String(words[1]), deviceCode: String(words[3]))
         }
-        return nil
+        return .nothingSent
     }
 }

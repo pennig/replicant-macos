@@ -194,6 +194,26 @@ private func armLog(_ sent: [(kind: OperationKind, deviceCode: String)]) -> [Dir
     return out
 }
 
+/// What a stall and its resolution leave on the timeline: neither a step stamp
+/// nor a command, both stamped with the step the run is held on.
+private func markerEntry(
+    _ kind: DirectiveLogKind, on step: String, at occurredAt: Date
+) -> DirectiveLogEntry {
+    DirectiveLogEntry(
+        id: "K-\(kind.rawValue)", directiveID: "D1", deviceCode: nil, kind: kind,
+        summary: kind.rawValue, step: step, operationID: nil,
+        eventID: nil, occurredAt: occurredAt
+    )
+}
+
+/// A dispatch entry whose summary does not read as one — the shape a drift in
+/// `DirectiveExecutor.dispatchSummary` would produce.
+private let unreadableDispatch = DirectiveLogEntry(
+    id: "C-X", directiveID: "D1", deviceCode: nil, kind: .commandDispatched,
+    summary: "sent something somewhere", step: MineRun.Step.confirmingArm,
+    operationID: nil, eventID: nil, occurredAt: now.addingTimeInterval(-5)
+)
+
 /// The four carried targets taken in one clean `set_directive` each.
 private let cleanCarriedRounds: [(kind: OperationKind, deviceCode: String)] = [
     (.setDirective, "M01"), (.setDirective, "M05"),
@@ -798,6 +818,26 @@ struct MineRunTests {
         )
     }
 
+    /// The adopt loop's counter reaches zero across a `.resolved` entry, so a
+    /// retried stall hands back to the step that can dispatch — the same
+    /// recovery the arm loop needs its third case for.
+    @Test("a retried adopt stall re-dispatches instead of re-stalling")
+    func retriedAdoptStallReturnsToAdopting() {
+        let snapshot = world(
+            devices: beltFleet() + transportPair() + [mineCarrier(location: targetBelt), beltRelay],
+            log: loopLog(MineRun.Step.adopting, MineRun.Step.confirmingAdopt, rounds: 1) + [
+                markerEntry(.stalled, on: MineRun.Step.confirmingAdopt, at: now.addingTimeInterval(-3)),
+                markerEntry(.resolved, on: MineRun.Step.confirmingAdopt, at: now.addingTimeInterval(-2)),
+            ]
+        )
+
+        #expect(
+            MineRun().nextAction(
+                directive: mineRunRow(step: MineRun.Step.confirmingAdopt), world: snapshot
+            ) == .advanceStep(nextStep: MineRun.Step.adopting)
+        )
+    }
+
     @Test("an adoption past its deadline spends one last read and surfaces")
     func adoptionDeadlineSurfaces() {
         let snapshot = world(
@@ -1048,6 +1088,39 @@ struct MineRunTests {
             armedCarried,
             log: armLog(cleanCarriedRounds + [(.setDirective, transportCode)])
         )
+
+        #expect(
+            MineRun().nextAction(
+                directive: mineRunRow(step: MineRun.Step.confirmingArm), world: snapshot
+            ) == .wait
+        )
+    }
+
+    /// A Retry keeps the step, re-stamps the clock and writes `.resolved`, so
+    /// the loop re-enters holding no record of its own order. Only `arming`
+    /// dispatches, so anything but handing back to it re-stalls unchanged.
+    @Test("a retried arm stall re-dispatches instead of re-stalling")
+    func retriedArmStallReturnsToArming() {
+        let snapshot = armedWorld(
+            [:],
+            log: armLog([(.setDirective, "M01")]) + [
+                markerEntry(.stalled, on: MineRun.Step.confirmingArm, at: now.addingTimeInterval(-3)),
+                markerEntry(.resolved, on: MineRun.Step.confirmingArm, at: now.addingTimeInterval(-2)),
+            ]
+        )
+
+        #expect(
+            MineRun().nextAction(
+                directive: mineRunRow(step: MineRun.Step.confirmingArm), world: snapshot
+            ) == .advanceStep(nextStep: MineRun.Step.arming)
+        )
+    }
+
+    /// Fail closed on evidence that does not parse: a summary the reader cannot
+    /// read is not permission to advance.
+    @Test("an unreadable dispatch line takes the ladder")
+    func unreadableDispatchTakesTheLadder() {
+        let snapshot = armedWorld([:], log: [unreadableDispatch])
 
         #expect(
             MineRun().nextAction(

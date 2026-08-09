@@ -481,19 +481,30 @@ public struct MineRun: MissionStepMachine {
         let ordered = MissionLogBudget.lastDispatch(
             world, dispatch: Step.arming, confirm: Step.confirmingArm
         )
-        let judged = ordered.flatMap { last in targets.first { $0.deviceCode == last.deviceCode } }
-        let pending = judged ?? targets.first { Self.armState($0, in: world) < 2 }
-        guard let pending, let device = world.device(pending.deviceCode) else {
-            return .refreshFleet(tag: MineRecipe.fleetTag, thenStall: .mineFleetIncomplete)
+        if case let .dispatched(kind, deviceCode) = ordered,
+           let judged = targets.first(where: { $0.deviceCode == deviceCode }),
+           let device = world.device(deviceCode) {
+            let landed = kind == OperationKind.setDirective.rawValue
+                ? Self.armState(judged, in: world) >= 1
+                : Self.armState(judged, in: world) == 2
+            return landed ? .advanceStep(nextStep: Step.arming) : Self.armLadder(device, directive, world)
         }
-        if let ordered, judged != nil {
-            let landed = ordered.kind == OperationKind.setDirective.rawValue
-                ? Self.armState(pending, in: world) >= 1
-                : Self.armState(pending, in: world) == 2
-            if landed { return .advanceStep(nextStep: Step.arming) }
-        }
-        return Self.confirmLadder(
-            [device], directive, world, deadline: Self.attachConfirmDeadline,
+        // A resolved stall re-enters holding no record of its own order, and
+        // `arming` is the only step that can send one.
+        if ordered == .nothingSent { return .advanceStep(nextStep: Step.arming) }
+        guard let pending = targets.first(where: { Self.armState($0, in: world) < 2 }),
+              let device = world.device(pending.deviceCode)
+        else { return .refreshFleet(tag: MineRecipe.fleetTag, thenStall: .mineFleetIncomplete) }
+        return Self.armLadder(device, directive, world)
+    }
+
+    /// The confirm ladder for one arm target, named by the device class an
+    /// operator has to go and look at.
+    private static func armLadder(
+        _ device: Device, _ directive: Directive, _ world: WorldSnapshot
+    ) -> MissionAction {
+        confirmLadder(
+            [device], directive, world, deadline: attachConfirmDeadline,
             thenStall: device.deviceType == "service_bot" ? .serviceBotNotArmed : .commandRejected
         )
     }
