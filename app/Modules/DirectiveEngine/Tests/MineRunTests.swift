@@ -6,9 +6,13 @@
 //  the detach at the belt.
 //
 
+import ConcurrencyExtras
+import Dependencies
 import Foundation
+import GameDatabase
 import GameModels
 import GameServices
+import SQLiteData
 import Testing
 import UniverseModels
 import Utils
@@ -344,6 +348,42 @@ struct MineRunTests {
                 == .refreshDevices(deviceCodes: ["M01"], thenStall: .commandRejected))
     }
 
+    /// **The shape production actually produces.** The command's own `.high`
+    /// read of the moved row lands BEFORE the executor stamps the step, so the
+    /// row that proves the attach landed is correct and stale at once.
+    @Test func aStaleButAttachedMemberStillCountsAsProgress() {
+        let snapshot = world(
+            devices: carriedFleet(attached: 1, updatedAt: now.addingTimeInterval(-61))
+                + [mineCarrier(), beltRelay],
+            log: attachLog(rounds: 1)
+        )
+
+        #expect(
+            MineRun().nextAction(
+                directive: mineRunRow(step: MineRun.Step.confirmingAttach), world: snapshot
+            ) == .advanceStep(nextStep: MineRun.Step.attaching)
+        )
+    }
+
+    /// Two rounds ordered and one row aboard: the SECOND attach has not landed,
+    /// so the ladder holds the loop rather than ordering a third.
+    @Test func aSecondAttachStillOutstandingEngagesTheLadder() {
+        let fresh = world(
+            devices: carriedFleet(attached: 1) + [mineCarrier(), beltRelay],
+            log: attachLog(rounds: 2)
+        )
+        let unread = world(
+            devices: carriedFleet(attached: 1, updatedAt: now.addingTimeInterval(-300))
+                + [mineCarrier(), beltRelay],
+            log: attachLog(rounds: 2)
+        )
+        let directive = mineRunRow(step: MineRun.Step.confirmingAttach)
+
+        #expect(MineRun().nextAction(directive: directive, world: fresh) == .wait)
+        #expect(MineRun().nextAction(directive: directive, world: unread)
+                == .refreshDevices(deviceCodes: ["M02"], thenStall: nil))
+    }
+
     /// A fresh row that still shows the member loose is the attach failing, not
     /// a stale read — hold for the deadline rather than re-ordering blindly.
     @Test("a fresh but unattached member waits out the deadline")
@@ -490,5 +530,84 @@ struct MineRunTests {
         }
         #expect(Set(codes) == Set((1...9).map { "M\(String(format: "%02d", $0))" }))
         #expect(thenStall == nil)
+    }
+}
+
+// MARK: - The attach loop through the real engine
+
+/// The attach loop driven end to end through `DirectiveEngineCore` with the
+/// real machine. The loop's progress signal is read off the timeline the
+/// EXECUTOR writes, so only the real interleaving can prove it.
+@Suite("MineRun — the attach loop at the engine", .serialized)
+struct MineRunEngineTests {
+
+    private func seed(_ database: any DatabaseWriter) async throws {
+        try await database.write { db in
+            try Directive.insert { mineRunRow() }.execute(db)
+            for row in carriedFleet() + [mineCarrier(), beltRelay] {
+                try Device.upsert { row }.execute(db)
+            }
+        }
+    }
+
+    private func step(_ database: any DatabaseWriter) async throws -> String {
+        try await database.read { db in
+            try Directive.where { $0.id.eq("D1") }.fetchOne(db)?.step
+        } ?? ""
+    }
+
+    /// Nine rounds of attach and then departure, with each moved row landing a
+    /// second BEFORE the step is stamped — what the live affected-device read
+    /// produces, and the case a verdict table cannot stage.
+    @Test func theAttachLoopReachesTravellingWithoutAFalseStall() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await seed(database)
+        let ordered = LockIsolated<[String]>([])
+        let reads = LockIsolated<[String]>([])
+        let reached = LockIsolated("")
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(now)
+            $0.uuid = .incrementing
+            $0.deviceRefresher.refresh = { code, _ in
+                reads.withValue { $0.append(code) }
+                return nil
+            }
+            $0.commandGovernor.dispatch = { kind, _, params in
+                guard kind == .attach, let code = params.devices?.first,
+                      let row = carriedFleet().first(where: { $0.deviceCode == code })
+                else { return .dispatched(.accepted(operationID: nil)) }
+                ordered.withValue { $0.append(code) }
+                let aboard = mineRow(
+                    code, type: row.deviceType, tags: [MineRecipe.fleetTag],
+                    location: hubLocation, attachedTo: carrierCode,
+                    updatedAt: now.addingTimeInterval(-1)
+                )
+                try? await database.write { db in try Device.upsert { aboard }.execute(db) }
+                return .dispatched(.accepted(operationID: nil))
+            }
+        } operation: {
+            let core = DirectiveEngineCore(machines: [MineRun()], tick: .seconds(5))
+            for _ in 0..<24 {
+                await core.evaluateOnce(directiveID: "D1")
+                let now = try await step(database)
+                if now == MineRun.Step.travelling {
+                    reached.setValue(now)
+                    break
+                }
+            }
+        }
+
+        #expect(ordered.value == (1...9).map { "M\(String(format: "%02d", $0))" },
+                "every round attaches the NEXT member, so the loop ran nine times")
+        #expect(reads.value.isEmpty, "and confirmed each one without buying a device read")
+        #expect(reached.value == MineRun.Step.travelling)
+
+        let row = try #require(
+            await database.read { db in try Directive.where { $0.id.eq("D1") }.fetchOne(db) }
+        )
+        #expect(row.status == .running)
+        #expect(row.attentionReason == nil)
     }
 }
