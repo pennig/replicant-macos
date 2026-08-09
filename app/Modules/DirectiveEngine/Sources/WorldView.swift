@@ -222,7 +222,7 @@ public struct WorldView: Equatable, Sendable {
             }
             let classified = system.belts.compactMap { belt -> BeltInfo? in
                 BeltClass.classify(density: belt.density, richness: belt.richness)
-                    .map { BeltInfo(designation: belt.designation, beltClass: $0) }
+                    .map { BeltInfo(designation: belt.designation, beltClass: $0, richness: belt.richness) }
             }
             if !classified.isEmpty {
                 belts[detail.designation] = classified
