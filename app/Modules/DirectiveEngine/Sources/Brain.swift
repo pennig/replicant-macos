@@ -37,7 +37,7 @@ struct Brain: Sendable {
 
     /// The survey fleet's own opt-in tag, disjoint from `carrierTag` — the two
     /// automations never contend over the same vessel.
-    static let surveyCarrierTag = "auto:survey"
+    static let surveyCarrierTag = SurveyRun.defaultFleetTag
 
     /// How far off its road the brain will send a carrier to fetch a spare relay
     /// rather than print one. Measured from the PLANT SITE, never the hub: the
@@ -282,7 +282,8 @@ struct Brain: Sendable {
                 kind: .surveyRun,
                 status: .running,
                 deviceCode: carrier,
-                controllerCode: nil, roamCentre: roamCentre, fleetTag: nil, sourceRelayCode: nil,
+                controllerCode: nil, roamCentre: roamCentre,
+                fleetTag: SurveyRun.defaultFleetTag, sourceRelayCode: nil,
                 targets: [], targetIndex: 0,
                 step: SurveyRun().firstStep,
                 stepStartedAt: now,

@@ -64,6 +64,9 @@ public struct SurveyRun: MissionStepMachine {
         public static let returning = "returning"
     }
 
+    /// The tag a row falls back to when it carries none of its own.
+    public static let defaultFleetTag = "auto:survey"
+
     /// How long to let the AMI's post-survey recall get going before the first
     /// probe. Short: the point is only to avoid reading state that cannot
     /// possibly have changed yet.
@@ -538,10 +541,16 @@ public struct SurveyRun: MissionStepMachine {
         )
     }
 
+    /// The fleet tag `directive` resolves against, falling back to
+    /// `defaultFleetTag` for a row that carries none of its own.
+    static func fleetTag(_ directive: Directive) -> String {
+        directive.fleetTag ?? Self.defaultFleetTag
+    }
+
     /// Deploy the next service bot still aboard `vessel`, or move on when the
     /// system already has them all.
     private func deployBots(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
-        let aboard = RepairFleet.bots(aboard: vessel, in: world)
+        let aboard = RepairFleet.bots(aboard: vessel, in: world, owner: Self.fleetTag(directive))
         guard let next = aboard.first else { return .advanceStep(nextStep: Step.configuring) }
         // `deploy` is untracked and the confirm step re-stamps `stepStartedAt`, so
         // the log is the only bound on this loop that re-entry cannot rewind.
@@ -570,13 +579,14 @@ public struct SurveyRun: MissionStepMachine {
 
     /// Judge an ordered deploy, looping back for the next bot until none is aboard.
     private func confirmBotDeploy(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
+        let owner = Self.fleetTag(directive)
         let elapsed = world.now.timeIntervalSince(directive.stepStartedAt)
         if elapsed < Self.botProbeDelay { return .wait }
         if elapsed > Self.botConfirmDeadline {
             logger.notice("survey run \(directive.id, privacy: .public): bot deploy unconfirmed — surveying unrepaired")
             return .advanceStep(nextStep: Step.armingBots)
         }
-        let aboard = RepairFleet.bots(aboard: vessel, in: world)
+        let aboard = RepairFleet.bots(aboard: vessel, in: world, owner: owner)
         guard aboard.isEmpty else {
             // A row that has not been read since the deploy was ordered cannot
             // yet show it landing; buy the read rather than a stale claim.
@@ -585,7 +595,7 @@ public struct SurveyRun: MissionStepMachine {
         }
         // `armingBots` judges the DEPLOYED rows, and nothing has read them since
         // the deploy was ordered — a stale one reads armed and skips repair.
-        let deployed = RepairFleet.bots(deployedNear: vessel.location, in: world)
+        let deployed = RepairFleet.bots(deployedNear: vessel.location, in: world, owner: owner)
         return Self.probe(deployed, directive, world) ?? .advanceStep(nextStep: Step.armingBots)
     }
 
@@ -593,7 +603,9 @@ public struct SurveyRun: MissionStepMachine {
     /// directive: `set_directive` first if the name is wrong (never inherited,
     /// like `configure` does), `activate` once the name is right but paused.
     private func armBots(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
-        let deployed = RepairFleet.bots(deployedNear: vessel.location, in: world)
+        let deployed = RepairFleet.bots(
+            deployedNear: vessel.location, in: world, owner: Self.fleetTag(directive)
+        )
         guard let next = deployed.first(where: { !RepairFleet.isArmed($0) }) else {
             return .advanceStep(nextStep: Step.configuring)
         }
@@ -621,7 +633,9 @@ public struct SurveyRun: MissionStepMachine {
         let elapsed = world.now.timeIntervalSince(directive.stepStartedAt)
         if elapsed < Self.botProbeDelay { return .wait }
         if elapsed > Self.botConfirmDeadline { return .stall(.serviceBotNotArmed) }
-        let deployed = RepairFleet.bots(deployedNear: vessel.location, in: world)
+        let deployed = RepairFleet.bots(
+            deployedNear: vessel.location, in: world, owner: Self.fleetTag(directive)
+        )
         // "Everything is armed" is the conclusion that skips repair entirely, so
         // it needs the same proof the mis-armed one does.
         if let probe = Self.probe(deployed, directive, world) { return probe }
@@ -635,10 +649,11 @@ public struct SurveyRun: MissionStepMachine {
     /// Gated on the bots falling IDLE, never a capacity threshold — `service`
     /// repairs to an unquantified level a threshold gate could wait on forever.
     private func awaitRepair(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
+        let owner = Self.fleetTag(directive)
         // A nil location cannot answer the system-scoped query, so it is
         // uncertainty — but only where a bot is actually out there to lose.
         guard let location = vessel.location else {
-            guard RepairFleet.anyBotDeployed(in: world, system: directive.currentTarget) else {
+            guard RepairFleet.anyBotDeployed(in: world, system: directive.currentTarget, owner: owner) else {
                 return .advanceStep(nextStep: Step.stowingBots)
             }
             let elapsed = world.now.timeIntervalSince(directive.stepStartedAt)
@@ -646,11 +661,11 @@ public struct SurveyRun: MissionStepMachine {
             if world.now.timeIntervalSince(vessel.updatedAt) < Self.botProbeInterval { return .wait }
             return .refreshDevices(deviceCodes: [vessel.deviceCode], thenStall: nil)
         }
-        let bots = RepairFleet.bots(deployedNear: location, in: world)
+        let bots = RepairFleet.bots(deployedNear: location, in: world, owner: owner)
         if bots.isEmpty { return .advanceStep(nextStep: Step.stowingBots) }
         // A fleet nothing is worn enough to hold for leaves without paying the
         // probe delay or a single read.
-        if !RepairFleet.needsRepair(RepairFleet.fleet(of: vessel, in: world)) {
+        if !RepairFleet.needsRepair(RepairFleet.fleet(of: vessel, in: world, owner: owner)) {
             return .advanceStep(nextStep: Step.stowingBots)
         }
 
@@ -672,8 +687,9 @@ public struct SurveyRun: MissionStepMachine {
     /// is left. `recall`, not `stow`: `stow` needs the bot beside the vessel, and
     /// a bot that cruised off to repair a drone is not.
     private func stowBots(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
+        let owner = Self.fleetTag(directive)
         guard let location = vessel.location else {
-            guard RepairFleet.anyBotOut(in: world, system: directive.currentTarget) else {
+            guard RepairFleet.anyBotOut(in: world, system: directive.currentTarget, owner: owner) else {
                 return .advanceTarget
             }
             if world.now.timeIntervalSince(directive.stepStartedAt) > Self.recallDeadline {
@@ -682,7 +698,7 @@ public struct SurveyRun: MissionStepMachine {
             if world.now.timeIntervalSince(vessel.updatedAt) < Self.botProbeInterval { return .wait }
             return .refreshDevices(deviceCodes: [vessel.deviceCode], thenStall: nil)
         }
-        let out = RepairFleet.botsOut(near: location, in: world)
+        let out = RepairFleet.botsOut(near: location, in: world, owner: owner)
         guard let next = out.first else { return .advanceTarget }
         if MissionLogBudget.dispatchRounds(world, dispatch: Step.stowingBots, confirm: Step.confirmingBotStow)
             > Self.botDispatchRounds {
@@ -702,17 +718,18 @@ public struct SurveyRun: MissionStepMachine {
 
     /// Judge an ordered recall, looping back for the next bot until none is out.
     private func confirmBotStow(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
+        let owner = Self.fleetTag(directive)
         let elapsed = world.now.timeIntervalSince(directive.stepStartedAt)
         if elapsed < Self.botProbeDelay { return .wait }
         if elapsed > Self.recallDeadline { return .stall(.serviceBotNotRecovered) }
         guard let location = vessel.location else {
-            guard RepairFleet.anyBotOut(in: world, system: directive.currentTarget) else {
+            guard RepairFleet.anyBotOut(in: world, system: directive.currentTarget, owner: owner) else {
                 return .advanceTarget
             }
             if world.now.timeIntervalSince(vessel.updatedAt) < Self.botProbeInterval { return .wait }
             return .refreshDevices(deviceCodes: [vessel.deviceCode], thenStall: nil)
         }
-        let out = RepairFleet.botsOut(near: location, in: world)
+        let out = RepairFleet.botsOut(near: location, in: world, owner: owner)
         if out.isEmpty { return .advanceTarget }
         // A recall cruises the bot home, so wait out its own arrival time — the
         // shape `recover` uses, for the same reason.

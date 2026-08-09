@@ -19,12 +19,12 @@ public enum RepairFleet {
     public static let fleetTagPrefix = "auto:"
 
     /// Whether `bot` answers to the fleet tagged `owner`. A bot wearing a fleet
-    /// tag answers to that fleet alone; one wearing none answers to whoever asks,
-    /// which is what keeps an untagged pair working for a run that has no tag.
+    /// tag answers to that fleet alone; one wearing none answers to whoever asks.
+    /// Both sides compare through `Device.normalizedTag` — see its warning.
     public static func answers(_ bot: Device, to owner: String?) -> Bool {
-        let owned = bot.tags.filter { $0.hasPrefix(fleetTagPrefix) }
+        let owned = bot.tags.map(Device.normalizedTag).filter { $0.hasPrefix(fleetTagPrefix) }
         if owned.isEmpty { return true }
-        return owner.map(owned.contains) ?? false
+        return owner.map { owned.contains(Device.normalizedTag($0)) } ?? false
     }
 
     /// The service bots stowed aboard `vessel` in `world` that answer to `owner`,

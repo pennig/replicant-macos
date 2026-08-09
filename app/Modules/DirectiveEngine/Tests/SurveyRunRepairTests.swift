@@ -418,6 +418,59 @@ import Utils
         }
     }
 
+    /// The live regression: the brain tags the survey bots `auto:survey`, and a
+    /// run resolving no owner saw an empty fleet and silently never deployed.
+    @Test func taggedBotsAboardStillDeployUnderTheDefaultFleetTag() {
+        let vessel = repairDevice("VESSEL", type: "heaven_vessel", location: "SOL-3")
+        let bot = repairDevice(
+            "BOT1", type: "service_bot", location: nil, stowedIn: "VESSEL",
+            directives: ["service"], tags: ["auto:survey"]
+        )
+        let w = repairWorld(devices: [vessel, bot])
+        let d = repairDirective(step: SurveyRun.Step.deployingBots, deviceCode: "VESSEL")
+        #expect(SurveyRun().nextAction(directive: d, world: w) == .dispatch(
+            kind: .simple("deploy"), deviceCode: "BOT1",
+            params: CommandParams(),
+            nextStep: SurveyRun.Step.confirmingBotDeploy
+        ))
+    }
+
+    @Test func aTaggedWorkingBotStillHoldsTheVessel() {
+        let vessel = repairDevice("VESSEL", type: "heaven_vessel", location: "SOL-3")
+        let bot = repairDevice(
+            "BOT1", type: "service_bot", location: "SOL-3", directives: ["service"],
+            tags: ["auto:survey"], repairingTarget: "DRONE1"
+        )
+        let drone = repairDevice("DRONE1", type: "survey_drone", location: nil, stowedIn: "VESSEL", capacity: 30)
+        let w = repairWorld(devices: [vessel, bot, drone])
+        let d = repairDirective(
+            step: SurveyRun.Step.repairing, deviceCode: "VESSEL",
+            stepStartedAt: repairFixtureNow.addingTimeInterval(-60)
+        )
+        #expect(SurveyRun().nextAction(directive: d, world: w) == .wait)
+    }
+
+    @Test func anExplicitFleetTagOverridesTheDefault() {
+        let vessel = repairDevice("VESSEL", type: "heaven_vessel", location: "SOL-3")
+        let mine = repairDevice(
+            "BOT1", type: "service_bot", location: nil, stowedIn: "VESSEL",
+            directives: ["service"], tags: ["auto:custom"]
+        )
+        let theirs = repairDevice(
+            "BOT2", type: "service_bot", location: nil, stowedIn: "VESSEL",
+            directives: ["service"], tags: ["auto:survey"]
+        )
+        let w = repairWorld(devices: [vessel, mine, theirs])
+        let d = repairDirective(
+            step: SurveyRun.Step.deployingBots, deviceCode: "VESSEL", fleetTag: "auto:custom"
+        )
+        #expect(SurveyRun().nextAction(directive: d, world: w) == .dispatch(
+            kind: .simple("deploy"), deviceCode: "BOT1",
+            params: CommandParams(),
+            nextStep: SurveyRun.Step.confirmingBotDeploy
+        ))
+    }
+
     @Test func aRunWithNoBotsWalksTheOriginalPath() {
         let vessel = repairDevice("VESSEL", type: "heaven_vessel", location: "SOL-3")
         let w = repairWorld(devices: [vessel])
