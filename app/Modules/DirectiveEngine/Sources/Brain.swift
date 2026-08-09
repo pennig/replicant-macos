@@ -116,7 +116,7 @@ struct Brain: Sendable {
         let salvage = Self.salvageStatus(directives: snapshot.directives, view: snapshot.view)
         let haul = Self.haulStatus(directives: snapshot.directives, view: snapshot.view)
         let mine = Self.mineStatus(directives: snapshot.directives, view: snapshot.view)
-        let mines = Self.mineHealth(view: snapshot.view)
+        let mines = Self.mineHealth(view: snapshot.view, directives: snapshot.directives)
 
         let escalated = await respondToStalls(snapshot)
         let plan = Self.plan(view: snapshot.view, directives: snapshot.directives)
@@ -1326,9 +1326,11 @@ struct Brain: Sendable {
 
     /// One health reading per installed belt: whether the mining and survey
     /// controllers are actively directed, and whether a tagged transport
-    /// controller is ferrying it. Reads devices only, never directives.
-    static func mineHealth(view: WorldView) -> [BrainMineHealth] {
+    /// controller is ferrying it. A belt a live `mineRun` still targets is
+    /// excluded — `MineRun` lands the fleet before arming any directive.
+    static func mineHealth(view: WorldView, directives: [Directive]) -> [BrainMineHealth] {
         MineRecipe.installedBelts(in: view.devices.values, hub: view.hubLocation)
+            .subtracting(liveMineBelts(directives))
             .sorted()
             .map { belt in
                 let mining = mineBeltController(at: belt, type: "ami_mining_controller", in: view)

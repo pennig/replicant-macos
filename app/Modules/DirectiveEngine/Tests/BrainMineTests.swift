@@ -328,7 +328,7 @@ struct BrainMineHealthTests {
     @Test("all three active reads fully healthy")
     func allActive() {
         #expect(
-            Brain.mineHealth(view: healthWorld())
+            Brain.mineHealth(view: healthWorld(), directives: [])
                 == [BrainMineHealth(belt: mineBelt, miningActive: true, surveyActive: true, ferryInForce: true)]
         )
     }
@@ -336,7 +336,7 @@ struct BrainMineHealthTests {
     @Test("a paused mining directive reads mining inactive, the rest unaffected")
     func lapsedMining() {
         #expect(
-            Brain.mineHealth(view: healthWorld(miningStatus: "paused"))
+            Brain.mineHealth(view: healthWorld(miningStatus: "paused"), directives: [])
                 == [BrainMineHealth(belt: mineBelt, miningActive: false, surveyActive: true, ferryInForce: true)]
         )
     }
@@ -344,14 +344,60 @@ struct BrainMineHealthTests {
     @Test("no transport controller collecting the belt reads ferry not in force")
     func lapsedFerry() {
         #expect(
-            Brain.mineHealth(view: healthWorld(ferryCollect: nil))
+            Brain.mineHealth(view: healthWorld(ferryCollect: nil), directives: [])
                 == [BrainMineHealth(belt: mineBelt, miningActive: true, surveyActive: true, ferryInForce: false)]
         )
     }
 
     @Test("an uninstalled belt reports no health row at all")
     func noInstalledBeltIsEmpty() {
-        #expect(Brain.mineHealth(view: mineWorldView(devices: [mineCarrierDevice()])).isEmpty)
+        #expect(Brain.mineHealth(view: mineWorldView(devices: [mineCarrierDevice()]), directives: []).isEmpty)
+    }
+
+    /// `MineRun` drops the fleet at the belt (making `installedBelts` true)
+    /// BEFORE arming any directive — a real multi-tick window. A live run
+    /// still targeting the belt must read as mid-install, never as a fault.
+    @Test("a belt a live mine run still targets reports no health row at all")
+    func aBeltALiveMineRunTargetsIsExcluded() {
+        let live = directiveFixture(
+            id: "M1", kind: .mineRun, status: .running, deviceCode: mineCarrier,
+            fleetTag: MineRecipe.fleetTag, targets: [mineBelt]
+        )
+        #expect(
+            Brain.mineHealth(view: healthWorld(miningStatus: nil, surveyStatus: nil, ferryCollect: nil), directives: [live])
+                .isEmpty
+        )
+    }
+
+    @Test("the same belt, its mine run completed, reports its real flags")
+    func theSameBeltOnceTheMineRunCompletesReportsRealFlags() {
+        let completed = directiveFixture(
+            id: "M1", kind: .mineRun, status: .completed, deviceCode: mineCarrier,
+            fleetTag: MineRecipe.fleetTag, targets: [mineBelt]
+        )
+        #expect(
+            Brain.mineHealth(view: healthWorld(miningStatus: nil, surveyStatus: nil, ferryCollect: nil), directives: [completed])
+                == [BrainMineHealth(belt: mineBelt, miningActive: false, surveyActive: false, ferryInForce: false)]
+        )
+    }
+}
+
+@Suite("BrainReport — mine defaults")
+struct BrainReportMineDefaultsTests {
+    @Test("mine defaults to idle not evaluated, mines defaults to empty")
+    func defaults() {
+        let report = BrainReport(
+            decision: .idle(reason: "nothing"),
+            ranked: [], hubLocation: nil,
+            limits: BrainLimits(
+                actionsRemaining: 0, actionsLimit: 0, actionsFloor: 0,
+                hubStock: nil, hubStockFetchedAt: nil, spendFloor: 0, rateLimitedAt: nil
+            ),
+            survey: .idle(reason: "none"),
+            observedAt: mineNow
+        )
+        #expect(report.mine == .idle(reason: "not evaluated"))
+        #expect(report.mines == [])
     }
 }
 
