@@ -34,3 +34,17 @@ struct HaulRunVocabularyTests {
         }
     }
 }
+
+@Suite("Mine directive vocabulary")
+struct MineDirectiveVocabularyTests {
+    @Test("the two mine kinds carry list-row titles")
+    func titles() {
+        #expect(DirectiveKind.mineFleetPrint.title == "Mine Fleet Print")
+        #expect(DirectiveKind.mineRun.title == "Mine Run")
+    }
+
+    @Test("an incomplete mine fleet escalates rather than auto-retrying")
+    func disposition() {
+        #expect(DirectiveAttentionReason.mineFleetIncomplete.brainDisposition == .escalate)
+    }
+}
