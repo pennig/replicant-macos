@@ -1,0 +1,197 @@
+---
+name: brain-mine-build
+description: SHIPPED 2026-08-09 — the brain's fifth acting capability, a permanent mine, the build record.
+metadata:
+  type: project
+---
+
+# The brain's mine goal — the build record (2026-08-09)
+
+Plan: `docs/superpowers/plans/2026-08-09-brain-mine-goal.md`.
+The brain's fifth acting capability, after
+[brain-tendmesh-build](brain-tendmesh-build.md),
+[brain-survey-goal-build](brain-survey-goal-build.md), and
+[brain-salvage-build](brain-salvage-build.md) (salvage + haul). Two new mission
+kinds, one new SPM-level enum, no schema change.
+
+## What shipped
+
+- **Two directives.** `mineFleetPrint` — an operator-invoked serial printer:
+  one job per tick against the `MineRecipe` shortfall at the hub, gated on the
+  shared reserve rail so it cannot disagree with `RelayRun`/`RestockRun` about
+  "too poor to print". `mineRun` — installs a printed fleet at a belt through
+  `attach → confirmingAttach → travel → confirmingArrival → detach →
+  confirmingDetach → adopt → confirmingAdopt → arm → confirmingArm`: attach the
+  nine carried members one at a time, fly the loaded carrier out, detach the
+  whole fleet in one command, hand drones to their controllers, then arm every
+  target (mining, survey, two service bots, the transport pair's `ferry`).
+- **`MineRecipe`** — the eleven-device fleet as data (nine carried: one mining
+  controller, three mining drones, one survey controller, two survey drones,
+  two service bots; two self-moving: one transport controller, one cargo
+  freighter), plus the membership queries (`shortfall`, `unassignedFleet`,
+  `installedBelts`, `idleCarrier`) the print run, the mine run, and the
+  brain's readiness verdicts all share.
+- **`MineSitePlanner`** — ranks candidate belts for a new permanent mine:
+  belt class first, then a rares/conductive scarcity bonus (rares ≥ moderate
+  scores 2, conductive ≥ moderate scores 1), then distance from the hub, then
+  designation as the stable tie-break. Hard filters: meshed system, not
+  already occupied, classifiable, placeable.
+- **`HaulRun` pinned-source mode** — a row carrying `targets` drains exactly
+  that one location through exactly its own `deviceCode` controller (`targets.first`
+  is the whole mode switch), beside the existing general drainer.
+- **Brain wiring** — `mineReadiness` (fleet shortfall → idle carrier → site
+  planner, in that order), `ensureMine` (one install at a time — a second
+  would contend for the same free fleet members at the hub), and
+  `ensureMineFerries`, which keeps one PINNED haul row per INSTALLED belt
+  alive, tagged `auto:mine:<belt>` (per-belt, never the bare fleet tag — see
+  below) and skipped for any belt a live `mineRun` still targets, since that
+  run arms the same transport controller from the other side.
+- **Why-view rows + per-mine health** — `mineStatus` reads a live `mineRun`
+  row FIRST (mid-install the fleet is attached/stowed, so re-deriving
+  readiness would misreport its own blocker), else the readiness verdict.
+  `mineHealth` returns one `BrainMineHealth` per installed belt (mining
+  active, survey active, ferry in force), excluding any belt a live install
+  still targets.
+- **The Print Mine Fleet launcher** — a confirm dialog in `DirectivesFeature`
+  rather than its own screen, adopting an already-running print row.
+- **The seam test** — `BrainMineSeamTests`: one real tick through the real
+  `report()` over a real database, plus the two twins that each withdraw
+  exactly one seeded fact (no printed fleet; belt system unmeshed) and prove
+  the report names the right idle reason.
+
+## Where the plan was wrong
+
+**The `confirmingAttach` fresh-evidence ladder the plan called for was
+unimplementable.** The standard "prove `updatedAt >= stepStartedAt`" pattern
+(see [confirm-steps-need-fresh-evidence](confirm-steps-need-fresh-evidence.md))
+needs the confirm-read to land AFTER the step stamp. But `attach`'s own
+dispatch performs a confirm-read of the moved row, and that read lands BEFORE
+`confirmingAttach`'s `stepStartedAt` is written — so the freshness check and
+the success predicate were mutually exclusive: a row proven fresh could never
+also read as landed. Fixed by `MissionLogBudget.dispatchRounds`, which counts
+the CURRENT unbroken run of `dispatch`/`confirm` re-entries straight off the
+directive's own log — a loop-scoped attempt budget the mission's
+re-stamping clock cannot erase — and the same shape closes `confirmAdopt`.
+
+**The arm loop needed per-verb dispatch evidence, not a landing score.** A
+first cut scored all five arm targets by `armState` (0/1/2) and credited
+whichever one changed; review found this banks a 0-to-2 landing (a
+`set_directive` that happened to land already-active) as two rounds' worth of
+progress, over-crediting the budget. The real fix needed to know which VERB
+the loop just sent (`set_directive` only proves `armState >= 1`; `activate`
+alone proves `armState == 2`). A first attempt at fixing this dead-ended: once
+a paused `set_directive` proved unconfirmable, the retry path had nothing to
+re-dispatch against and stalled without making progress. The shipped fix is
+`MissionLogBudget.LastDispatch`, a three-way enum (`.dispatched(kind:device:)`
+/ `.nothingSent` / `.unreadable`) that parses `DirectiveExecutor`'s own
+`dispatchSummary` log line and **fails closed** on anything that doesn't
+parse as `"Dispatched <verb> to <code>"`.
+
+**Transport-pair identification had to prefer the installed pair over the
+free pool.** `MineRun.transport(of:in:)` first tries to match a controller
+already `collect`-configured for the belt; only when none exists does it fall
+back to the lowest-coded free pair. Matching free-first would let a SECOND
+mine's install steal the first mine's already-working ferry pair out from
+under it (the spare-pair hijack) the moment both are printed and idle at the
+hub simultaneously.
+
+**Per-belt ferry `fleetTag` was a deliberate deviation from a fleet-wide
+tag.** `reservedDevices` closes over a row's `fleetTag`, so a single
+`auto:mine` ferry row (matching the print/install tag) would reserve every OTHER
+mine's transport controller too, capping the whole system at one working ferry
+regardless of how many mines are installed. `mineFerryTag(for:)` mints
+`auto:mine:<belt>` instead.
+
+**`mineHealth` needed directives threaded through, not just device rows.** A
+first cut read health off device state alone and false-halted a belt still
+mid-install (attached/stowed members read as an unhealthy mine, not an
+installing one). Fixed by excluding any belt `liveMineBelts(directives)`
+still targets — the same exclusion `mineStatus` and `ensureMineFerries` use.
+
+**The seam test's two twins shared a mutation-coupling trap**, the same one
+[brain-salvage-build](brain-salvage-build.md) and
+[brain-tendmesh-build](brain-tendmesh-build.md) both hit: a twin asserting the
+EXACT reason string a mutated function produces can pass against a mutant that
+breaks the function in a different way but happens to route through the same
+string. Resolved with a second, launch-isolating mutation per twin rather than
+relaxing the assertion.
+
+## Carried forward, not fixed
+
+- **Retry re-arms the attach counter.** `MissionLogBudget.dispatchRounds`
+  stops its backward walk on a `.resolved` log entry and counts it as the loop
+  boundary — the same retry-amplification shape recorded in
+  [brain-salvage-build](brain-salvage-build.md): a brain auto-retry writes
+  exactly that `.resolved` entry, so each retry re-arms the round budget.
+  Bounded (blind re-sends, not unbounded), operator-resolvable.
+- **Pinned ferry mode hardcodes `ferry`.** A pinned source standing in the
+  hub's own system would need `shuttle` instead — today that's a bounded
+  `commandRejected` stall, not a crash or silent misroute.
+- **Pinned mode skips the mesh filter** the general planner applies — bounded
+  the same way.
+- **Live `mineRun` reserves ALL transport controllers** while it installs (the
+  whole recipe's device-reservation scope, not a belt-scoped one), so a NEW
+  ferry for a different belt waits until the install finishes. Self-clearing.
+- **Ferry rows never retire.** A belt that stops producing keeps its pinned
+  `auto:mine:<belt>` haul row alive forever. Additive-policy, no owner.
+- **The pinned ferry row renders as "Nothing reachable" in the Directives
+  list.** Pre-existing fallback gap (see [brain-salvage-build](brain-salvage-build.md)'s
+  parked note) that the first pinned-mode row in production made visible; the
+  correct display is `targets.first`, and no task in this effort owns fixing
+  the list view.
+- **Post-install directive lapses surface in the why-view but are never
+  auto-re-armed.** Deliberate: a lapse (an operator pausing a controller,
+  say) implies deliberate teardown, and the brain does not second-guess it.
+- **`lastDispatch` parses a human-readable log summary line.** A structured
+  field on the dispatch-log entry (verb + device code, typed) would retire
+  this string-parsing coupling; not built this round.
+- **Hand-pass comment audit turned up header-length overages beyond the
+  ledger's own tracked minors** (Task 5 flagged `MineSitePlanner.swift`/
+  `MineSitePlannerTests.swift` at 7/8 lines against the 6-line budget):
+  `MineRecipe.swift` (7), `MineRun.swift` (8), `BrainMineSeamTests.swift` (7),
+  `BrainMineTests.swift` (8), `MineRecipeTests.swift` (7), `MineRunTests.swift`
+  (7) all carry the same one-or-two-line overage, consistent with `Brain.swift`'s
+  own long-standing 9-line header. `check-comments.sh` does not check line
+  counts, only history-pattern regexes — see [comment-policy](comment-policy.md).
+
+## Sign-off (2026-08-09)
+
+`swift build --build-tests` clean from a fresh worktree build.
+Per-product event-stream runs, one output path each, gated on zero
+`issueRecorded` failures, exactly one `runEnded`, and `testStarted` ==
+`testEnded`:
+
+| Product | Tests | Failed | runEnded | started == ended |
+| --- | --- | --- | --- | --- |
+| DirectiveEngineTests | 1,104 | 0 | 1 | yes |
+| DirectivesFeatureTests | 202 | 0 | 1 | yes |
+| GameServicesTests | 250 | 0 | 1 | yes |
+| GameModelsTests | 117 | 0 | 1 | yes |
+| BobnetFeatureTests | 78 | 0 | 1 | yes |
+
+**1,751 tests, zero failures, zero crashed targets.**
+
+`check-comments.sh` over every file this effort touched found only
+pre-existing history-pattern hits, all dated/worded before this effort's
+first commit (0d0d12b) — none were introduced by this build. The one new
+doc comment the mechanical checker flagged (`mineFleetIncomplete`'s "is no
+longer complete") is a false positive: it states a current invariant, not
+history.
+
+LSP `findReferences` on the three anchor symbols, from a build freshly
+populated and re-linked (`./scripts/link-index-store.sh`): `HaulRun.pinnedSource`
+resolved cleanly (8 references across `HaulRun.swift`'s own three call sites
+and `HaulRunTests.swift`). `MineRecipe.shortfall` and `MineSitePlanner.site`
+returned empty from `findReferences` despite `hover` fully resolving both
+declarations in place — the documented cold-per-symbol-index gap, not
+evidence of dead code. Grep fallback confirmed both: `shortfall` is called
+from `MineFleetPrint.swift:56` and `Brain.swift:1203` (inside `mineReadiness`);
+`site` is called from `Brain.swift:1217`, also inside `mineReadiness` — both
+match the plan's expected call graph.
+
+Related: [brain-tendmesh-build](brain-tendmesh-build.md),
+[brain-survey-goal-build](brain-survey-goal-build.md),
+[brain-salvage-build](brain-salvage-build.md),
+[brain-goal-decision-policy](brain-goal-decision-policy.md),
+[brain-robustness-bar](brain-robustness-bar.md),
+[confirm-steps-need-fresh-evidence](confirm-steps-need-fresh-evidence.md).
