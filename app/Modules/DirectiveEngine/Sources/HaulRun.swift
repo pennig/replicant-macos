@@ -147,6 +147,19 @@ public struct HaulRun: MissionStepMachine {
         )
     }
 
+    /// The one collect location a per-mine row is pinned to, or nil for the
+    /// general drainer. A pinned row drives only its own `deviceCode`.
+    public static func pinnedSource(of directive: Directive) -> String? {
+        directive.targets.first
+    }
+
+    private static func pinnedAssignment(_ directive: Directive, at location: String) -> HaulTargetPlanner.Assignment {
+        HaulTargetPlanner.Assignment(
+            controllerCode: directive.deviceCode, location: location,
+            directive: HaulTargetPlanner.ferry
+        )
+    }
+
     /// Whether `world` already reports `assignment` in force on its controller.
     /// Read off the controller's own `ami_directive` block, so the run needs no
     /// column to remember assignments. `confirm` needs the looser check instead.
@@ -207,6 +220,18 @@ public struct HaulRun: MissionStepMachine {
     /// the local rows are empty or stale. Tag scope is the only one that sees every
     /// member regardless of state.
     private func preflight(_ directive: Directive, _ world: WorldSnapshot) -> MissionAction {
+        if Self.pinnedSource(of: directive) != nil {
+            let keeper = world.device(directive.deviceCode)
+            let believable = keeper.map {
+                world.now.timeIntervalSince($0.updatedAt) <= Self.stagingFreshness
+            } ?? false
+            guard believable else {
+                return .refreshDevices(
+                    deviceCodes: [directive.deviceCode], thenStall: .noHaulControllerTagged
+                )
+            }
+            return .advanceStep(nextStep: Step.surveying)
+        }
         let tag = Self.fleetTag(of: directive)
         let found = Self.controllers(in: world, tag: tag)
         let stale = found.isEmpty || found.contains {
@@ -233,6 +258,13 @@ public struct HaulRun: MissionStepMachine {
     /// every controller in `world` already matches. N controllers settle over N
     /// ticks, keeping the one-action-per-tick contract.
     private func assign(_ directive: Directive, _ world: WorldSnapshot) -> MissionAction {
+        if let pinned = Self.pinnedSource(of: directive) {
+            let assignment = Self.pinnedAssignment(directive, at: pinned)
+            if Self.isInForce(assignment, in: world) {
+                return .advanceStep(nextStep: Step.hauling)
+            }
+            return .assignController(deviceCode: assignment.controllerCode, nextStep: Step.dispatching)
+        }
         let tag = Self.fleetTag(of: directive)
         guard !Self.controllers(in: world, tag: tag).isEmpty else {
             // Local silence is not evidence — `noHaulControllerTagged` belongs to a
@@ -261,7 +293,12 @@ public struct HaulRun: MissionStepMachine {
             // tag filter. A configuration problem, not a lull.
             return .stall(.unreachableDevice)
         }
-        guard let pending = Self.plans(directive, world).first(where: { $0.controllerCode == controllerCode }) else {
+        let pending: HaulTargetPlanner.Assignment
+        if let pinned = Self.pinnedSource(of: directive) {
+            pending = Self.pinnedAssignment(directive, at: pinned)
+        } else if let planned = Self.plans(directive, world).first(where: { $0.controllerCode == controllerCode }) {
+            pending = planned
+        } else {
             // Census moved since `assign` ran; let it re-plan.
             return .advanceStep(nextStep: Step.assigning)
         }
