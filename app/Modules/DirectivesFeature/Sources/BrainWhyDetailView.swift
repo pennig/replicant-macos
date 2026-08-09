@@ -72,6 +72,19 @@ public struct BrainWhyDetailView: View {
                     }
                 }
 
+                // Empty until the first mine is installed — unlike `goals`,
+                // there is nothing to report before one exists.
+                if !why.mineHealth.isEmpty {
+                    section("Mine Health") {
+                        ForEach(why.mineHealth) { health in
+                            health.spans
+                                .styled(prose: .rcBody, designation: .rcMono)
+                                .foregroundStyle(goalColor(health.kind))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+
                 // Empty only when prune did not run at all — not when the mesh
                 // is healthy, which is why a tidy mesh still gets a line.
                 if !why.pruneNotes.isEmpty {

@@ -247,6 +247,23 @@ public enum BrainGoalStatus: Equatable, Sendable {
     }
 }
 
+/// One installed mine's health, as `Brain.mineHealth` reads it off live device
+/// rows: whether the mining and survey controllers are actively directed, and
+/// whether a transport controller is ferrying the belt.
+public struct BrainMineHealth: Equatable, Sendable {
+    public let belt: String
+    public let miningActive: Bool
+    public let surveyActive: Bool
+    public let ferryInForce: Bool
+
+    public init(belt: String, miningActive: Bool, surveyActive: Bool, ferryInForce: Bool) {
+        self.belt = belt
+        self.miningActive = miningActive
+        self.surveyActive = surveyActive
+        self.ferryInForce = ferryInForce
+    }
+}
+
 /// One brain tick, as reported to the operator: the `decision` it reached, the
 /// `ranked` field it decided against, the `hubLocation` and `limits` it decided
 /// under, what `prune` saw, and the `observedAt` instant all of that was read.
@@ -282,6 +299,11 @@ public struct BrainReport: Equatable, Sendable {
     public let salvage: BrainGoalStatus
     /// `Brain.ensureHaul`'s verdict for the GENERAL drainer this tick.
     public let haul: BrainGoalStatus
+    /// `Brain.mineStatus`'s verdict this tick: the run installing a NEW mine,
+    /// distinct from `mines`' per-belt health of the ones already standing.
+    public let mine: BrainGoalStatus
+    /// `Brain.mineHealth`'s reading of every installed mine this tick.
+    public let mines: [BrainMineHealth]
     /// The tick's clock reading (`@Dependency(\.date)`, never `Date()`), so a
     /// "recent 429" window is judged against the same instant everything else
     /// on this report was.
@@ -296,6 +318,8 @@ public struct BrainReport: Equatable, Sendable {
         survey: BrainSurveyStatus,
         salvage: BrainGoalStatus = .idle(reason: "not evaluated"),
         haul: BrainGoalStatus = .idle(reason: "not evaluated"),
+        mine: BrainGoalStatus = .idle(reason: "not evaluated"),
+        mines: [BrainMineHealth] = [],
         observedAt: Date
     ) {
         self.decision = decision
@@ -306,6 +330,8 @@ public struct BrainReport: Equatable, Sendable {
         self.survey = survey
         self.salvage = salvage
         self.haul = haul
+        self.mine = mine
+        self.mines = mines
         self.observedAt = observedAt
     }
 }

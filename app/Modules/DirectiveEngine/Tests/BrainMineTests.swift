@@ -34,6 +34,7 @@ private func mineDevice(
     status: String = "idle",
     directives: [String] = [],
     directive: String? = nil,
+    directiveStatus: String? = nil,
     collect: String? = nil
 ) -> Device {
     var detail: [String: JSONValue] = [:]
@@ -44,6 +45,9 @@ private func mineDevice(
         var block: [String: JSONValue] = ["name": .string(directive)]
         if let collect { block["config"] = .object(["collect": .string(collect)]) }
         detail["ami_directive"] = .object(block)
+    }
+    if let directiveStatus {
+        detail["ami_directive_status"] = .string(directiveStatus)
     }
     return Device(
         deviceCode: code, deviceType: type, replicantCode: "R1", status: status,
@@ -241,6 +245,113 @@ struct BrainMineFerryControllerTests {
     func anUntaggedControllerIsNotOffered() {
         let view = mineWorldView(devices: [mineDevice("TC-A", type: mineTransportType, tags: [])])
         #expect(Brain.mineFerryController(for: mineBelt, view: view, directives: []) == nil)
+    }
+}
+
+@Suite("Brain — the mine goal status")
+struct BrainMineStatusTests {
+    @Test("a live running mine run reports launched with its belt as focus")
+    func aLiveRunReportsLaunched() {
+        let view = mineWorldView(devices: minePrintedFleet() + [mineCarrierDevice()])
+        let live = directiveFixture(
+            id: "M1", kind: .mineRun, status: .running, deviceCode: mineCarrier,
+            fleetTag: MineRecipe.fleetTag, targets: [mineBelt]
+        )
+        #expect(
+            Brain.mineStatus(directives: [live], view: view)
+                == .launched(vessel: mineCarrier, focus: mineBelt, status: .running)
+        )
+    }
+
+    @Test("a needsAttention live run carries that status through, not running")
+    func aNeedsAttentionRunReportsHalted() {
+        let view = mineWorldView(devices: minePrintedFleet() + [mineCarrierDevice()])
+        let live = directiveFixture(
+            id: "M1", kind: .mineRun, status: .needsAttention, deviceCode: mineCarrier,
+            fleetTag: MineRecipe.fleetTag, targets: [mineBelt]
+        )
+        #expect(
+            Brain.mineStatus(directives: [live], view: view)
+                == .launched(vessel: mineCarrier, focus: mineBelt, status: .needsAttention)
+        )
+    }
+
+    @Test("a full board with no live run reports ready, not launched")
+    func readyWhenNoLiveRun() {
+        let view = mineWorldView(devices: minePrintedFleet() + [mineCarrierDevice()])
+        #expect(Brain.mineStatus(directives: [], view: view) == .ready(vessel: mineCarrier))
+    }
+
+    @Test("nothing printed reports idle with mineReadiness's own reason")
+    func idleWhenNothingPrinted() {
+        let view = mineWorldView(devices: [mineCarrierDevice()])
+        #expect(
+            Brain.mineStatus(directives: [], view: view) == .idle(reason: "no printed mine fleet")
+        )
+    }
+
+    @Test("a completed run does not count as live, falling through to readiness")
+    func aCompletedRunFallsThroughToReadiness() {
+        let view = mineWorldView(devices: minePrintedFleet() + [mineCarrierDevice()])
+        let completed = directiveFixture(
+            id: "M1", kind: .mineRun, status: .completed, deviceCode: "OTHERCARRIER",
+            fleetTag: MineRecipe.fleetTag, targets: [mineBelt]
+        )
+        #expect(Brain.mineStatus(directives: [completed], view: view) == .ready(vessel: mineCarrier))
+    }
+}
+
+@Suite("Brain — per-mine health")
+struct BrainMineHealthTests {
+    private func healthWorld(
+        miningStatus: String? = "active",
+        surveyStatus: String? = "active",
+        ferryCollect: String? = mineBelt
+    ) -> WorldView {
+        mineWorldView(devices: [
+            mineDevice(
+                "MC1", type: "ami_mining_controller", location: mineBelt,
+                directive: MineRun.miningDirective, directiveStatus: miningStatus
+            ),
+            mineDevice(
+                "SC1", type: "ami_survey_controller", location: mineBelt,
+                directive: MineRun.surveyDirective, directiveStatus: surveyStatus
+            ),
+            mineDevice(
+                "TC1", type: mineTransportType,
+                directive: ferryCollect.map { _ in "ferry" }, directiveStatus: "active",
+                collect: ferryCollect
+            ),
+        ])
+    }
+
+    @Test("all three active reads fully healthy")
+    func allActive() {
+        #expect(
+            Brain.mineHealth(view: healthWorld())
+                == [BrainMineHealth(belt: mineBelt, miningActive: true, surveyActive: true, ferryInForce: true)]
+        )
+    }
+
+    @Test("a paused mining directive reads mining inactive, the rest unaffected")
+    func lapsedMining() {
+        #expect(
+            Brain.mineHealth(view: healthWorld(miningStatus: "paused"))
+                == [BrainMineHealth(belt: mineBelt, miningActive: false, surveyActive: true, ferryInForce: true)]
+        )
+    }
+
+    @Test("no transport controller collecting the belt reads ferry not in force")
+    func lapsedFerry() {
+        #expect(
+            Brain.mineHealth(view: healthWorld(ferryCollect: nil))
+                == [BrainMineHealth(belt: mineBelt, miningActive: true, surveyActive: true, ferryInForce: false)]
+        )
+    }
+
+    @Test("an uninstalled belt reports no health row at all")
+    func noInstalledBeltIsEmpty() {
+        #expect(Brain.mineHealth(view: mineWorldView(devices: [mineCarrierDevice()])).isEmpty)
     }
 }
 

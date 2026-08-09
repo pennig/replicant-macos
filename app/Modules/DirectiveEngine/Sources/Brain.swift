@@ -103,6 +103,7 @@ struct Brain: Sendable {
                 survey: .idle(reason: "world unavailable"),
                 salvage: .idle(reason: "world unavailable"),
                 haul: .idle(reason: "world unavailable"),
+                mine: .idle(reason: "world unavailable"),
                 observedAt: now
             )
         }
@@ -114,6 +115,8 @@ struct Brain: Sendable {
         let survey = Self.surveyStatus(directives: snapshot.directives, view: snapshot.view)
         let salvage = Self.salvageStatus(directives: snapshot.directives, view: snapshot.view)
         let haul = Self.haulStatus(directives: snapshot.directives, view: snapshot.view)
+        let mine = Self.mineStatus(directives: snapshot.directives, view: snapshot.view)
+        let mines = Self.mineHealth(view: snapshot.view)
 
         let escalated = await respondToStalls(snapshot)
         let plan = Self.plan(view: snapshot.view, directives: snapshot.directives)
@@ -136,6 +139,8 @@ struct Brain: Sendable {
             survey: survey,
             salvage: salvage,
             haul: haul,
+            mine: mine,
+            mines: mines,
             observedAt: now
         )
     }
@@ -1297,6 +1302,56 @@ struct Brain: Sendable {
         switch haulReadiness(view: view, directives: directives) {
         case let .launch(controller): return .ready(vessel: controller)
         case let .idle(reason): return .idle(reason: reason)
+        }
+    }
+
+    /// The why-view's mine line: a live `mineRun` FIRST — an installing fleet
+    /// is attached/stowed, so `mineReadiness` would misreport its own blocker
+    /// mid-install — else the readiness verdict, exactly as `haulStatus`.
+    static func mineStatus(directives: [Directive], view: WorldView) -> BrainGoalStatus {
+        if let live = directives.first(where: {
+            $0.kind == .mineRun && owningStatuses.contains($0.status)
+        }) {
+            return .launched(
+                vessel: live.deviceCode,
+                focus: live.currentTarget,
+                status: launchedGoalStatus(live.status)
+            )
+        }
+        switch mineReadiness(view: view, directives: directives) {
+        case let .launch(carrier, _): return .ready(vessel: carrier)
+        case let .idle(reason): return .idle(reason: reason)
+        }
+    }
+
+    /// One health reading per installed belt: whether the mining and survey
+    /// controllers are actively directed, and whether a tagged transport
+    /// controller is ferrying it. Reads devices only, never directives.
+    static func mineHealth(view: WorldView) -> [BrainMineHealth] {
+        MineRecipe.installedBelts(in: view.devices.values, hub: view.hubLocation)
+            .sorted()
+            .map { belt in
+                let mining = mineBeltController(at: belt, type: "ami_mining_controller", in: view)
+                let survey = mineBeltController(at: belt, type: "ami_survey_controller", in: view)
+                return BrainMineHealth(
+                    belt: belt,
+                    miningActive: mining?.currentDirective == MineRun.miningDirective
+                        && mining?.currentDirectiveStatus == "active",
+                    surveyActive: survey?.currentDirective == MineRun.surveyDirective
+                        && survey?.currentDirectiveStatus == "active",
+                    ferryInForce: view.devices.values.contains {
+                        $0.deviceType == mineTransportType && $0.hasTag(MineRecipe.fleetTag)
+                            && $0.currentDirectiveConfig?["collect"]?.stringValue == belt
+                    }
+                )
+            }
+    }
+
+    /// The tagged controller of `type` standing at `belt` — one per installed
+    /// mine by construction.
+    private static func mineBeltController(at belt: String, type: String, in view: WorldView) -> Device? {
+        view.devices.values.first {
+            $0.deviceType == type && $0.hasTag(MineRecipe.fleetTag) && $0.location == belt
         }
     }
 

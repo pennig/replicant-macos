@@ -11,12 +11,14 @@ public struct BrainWhyGoal: Equatable, Sendable, Identifiable {
     public enum Goal: String, Sendable, CaseIterable {
         case salvage
         case haul
+        case mine
 
         /// The label the row reads under.
         public var title: String {
             switch self {
             case .salvage: "Salvage"
             case .haul: "Haul"
+            case .mine: "Mine"
             }
         }
     }
@@ -39,6 +41,24 @@ public struct BrainWhyGoal: Equatable, Sendable, Identifiable {
 
     public init(goal: Goal, kind: Kind, spans: [BrainWhySpan]) {
         self.goal = goal
+        self.kind = kind
+        self.spans = spans
+    }
+}
+
+/// One installed mine's health, one row per belt — distinct from
+/// `BrainWhyGoal`'s single mine-install line, since a fleet can have several
+/// mines standing at once.
+public struct BrainWhyMineHealth: Equatable, Sendable, Identifiable {
+    public let belt: String
+    public let kind: BrainWhyGoal.Kind
+    public let spans: [BrainWhySpan]
+
+    public var id: String { belt }
+    public var text: String { spans.text }
+
+    public init(belt: String, kind: BrainWhyGoal.Kind, spans: [BrainWhySpan]) {
+        self.belt = belt
         self.kind = kind
         self.spans = spans
     }
