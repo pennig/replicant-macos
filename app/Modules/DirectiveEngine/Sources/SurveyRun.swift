@@ -136,8 +136,8 @@ public struct SurveyRun: MissionStepMachine {
         case Step.confirmingBotArm: return confirmBotArm(directive, vessel, world)
         case Step.configuring: return configure(directive, vessel, world)
         case Step.launching: return launch(directive, vessel, world)
-        case Step.awaiting: return awaitCompletion(directive, world)
-        case Step.confirming: return confirm(directive, world)
+        case Step.awaiting: return awaitCompletion(directive, vessel, world)
+        case Step.confirming: return confirm(directive, vessel, world)
         case Step.recovering: return recover(directive, vessel, world)
         case Step.repairing: return awaitRepair(directive, vessel, world)
         case Step.stowingBots: return stowBots(directive, vessel, world)
@@ -199,9 +199,9 @@ public struct SurveyRun: MissionStepMachine {
 
     // MARK: - Completion detection
 
-    /// How long to wait on the `directive.completed` fast path before polling
-    /// the counts anyway. A dropped SSE frame must not strand a run forever, and
-    /// ten minutes keeps the cost to a handful of reads per survey.
+    /// How long to wait on the `directive.completed` fast path before falling
+    /// back to the controller's own row as completion evidence, and the floor
+    /// between the controller reads that fallback buys.
     public static let backstopInterval: TimeInterval = 10 * 60
 
     /// Tolerance when comparing a completion's time against the step's start.
@@ -337,11 +337,10 @@ public struct SurveyRun: MissionStepMachine {
         return .assignController(deviceCode: controller.deviceCode, nextStep: Step.travelling)
     }
 
-    /// Wait out `directive`'s survey against `world`. The controller drives its
-    /// drones server-side, so there is no operation the app created to key off:
-    /// the completion entry the `directive.*` route writes is the fast path, and
-    /// a counts poll after `backstopInterval` is the lost-event backstop.
-    private func awaitCompletion(_ directive: Directive, _ world: WorldSnapshot) -> MissionAction {
+    /// Wait out `directive`'s survey against `world`. The completion entry the
+    /// `directive.*` route writes is the fast path; the controller's own row
+    /// re-stowed aboard `vessel` is the lost-event backstop. Counts never decide.
+    private func awaitCompletion(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
         guard let target = directive.currentTarget else {
             return .advanceStep(nextStep: Step.preflight)
         }
@@ -352,15 +351,26 @@ public struct SurveyRun: MissionStepMachine {
         // out, so no completion is coming and the backstop would poll an empty
         // system every ten minutes until someone noticed. Surface it now.
         if Self.emptyLaunchSeen(directive, world) { return .stall(.launchDeployedNothing) }
-        if world.now.timeIntervalSince(directive.stepStartedAt) > Self.backstopInterval {
+        let elapsed = world.now.timeIntervalSince(directive.stepStartedAt)
+        if elapsed <= Self.backstopInterval { return .wait }
+        guard let controller = claimedController(directive, vessel, world) else { return .wait }
+        // Re-stowed after the launch means the survey is over; the counts
+        // cross-check happens in `confirming`.
+        if controller.stowedInDeviceCode == vessel.deviceCode,
+           controller.updatedAt >= directive.stepStartedAt
+               .addingTimeInterval(-Self.eventTimeSkewTolerance) {
             return .refreshSystem(designation: target, nextStep: Step.confirming)
         }
-        return .wait
+        // One controller read per backstop interval — a survey runs for hours.
+        if world.now.timeIntervalSince(controller.updatedAt) < Self.backstopInterval {
+            return .wait
+        }
+        return .refreshDevices(deviceCodes: [controller.deviceCode], thenStall: nil)
     }
 
     /// Judge `directive`'s current target against `world`'s freshly-read scan
     /// counts: done, contradicted, or still running.
-    private func confirm(_ directive: Directive, _ world: WorldSnapshot) -> MissionAction {
+    private func confirm(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
         guard let target = directive.currentTarget else {
             return .advanceStep(nextStep: Step.preflight)
         }
@@ -370,9 +380,13 @@ public struct SurveyRun: MissionStepMachine {
         if Self.isFullyScanned(world.system(target)) {
             return .advanceStep(nextStep: Step.recovering)
         }
-        // The server SAID it finished and the counts disagree — surface that
-        // rather than advancing over a half-surveyed system.
-        if Self.completionSeen(directive, world) { return .stall(.surveyIncomplete) }
+        // The server said it finished — event or re-stowed controller — and the
+        // counts disagree; surface that rather than advancing over a half-survey.
+        if Self.completionSeen(directive, world)
+            || claimedController(directive, vessel, world)?.stowedInDeviceCode
+                == vessel.deviceCode {
+            return .stall(.surveyIncomplete)
+        }
         // A backstop poll that found it unfinished: nothing ever claimed
         // completion, so there is nothing to disbelieve. Keep waiting.
         return .advanceStep(nextStep: Step.awaiting)

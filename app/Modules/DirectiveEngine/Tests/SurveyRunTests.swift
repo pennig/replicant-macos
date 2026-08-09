@@ -565,6 +565,20 @@ private func emptyLaunchEntry(at occurredAt: Date) -> DirectiveLogEntry {
     )
 }
 
+/// The fleet mid-survey: the controller and its drone are OUT working the
+/// system, nothing stowed aboard — the shape `awaiting` sees for hours.
+private func surveyingFleet(
+    vesselAt location: String = "TAU-2", controllerUpdatedAt: Date = fixtureNow
+) -> [Device] {
+    [
+        device("VES1", type: "transport_hauler", location: location),
+        device("AMI1", type: "ami_survey_controller", location: "TAU-5",
+               directives: ["survey_system"], updatedAt: controllerUpdatedAt),
+        device("DRONE1", type: "survey_drone", location: "TAU-4", controlledBy: "AMI1",
+               updatedAt: controllerUpdatedAt),
+    ]
+}
+
 @Suite("Survey Run — completion detection")
 struct SurveyRunCompletionTests {
     /// No completion yet, inside the backstop window: just wait. Cheap, and the
@@ -664,9 +678,10 @@ struct SurveyRunCompletionTests {
         #expect(SurveyRun().nextAction(directive: directive, world: snapshot) == .wait)
     }
 
-    /// The lost-event backstop: after the interval, poll the counts even with no
-    /// completion event. A dropped SSE frame must not strand the run forever.
-    @Test func backstopPollsAfterTheInterval() {
+    /// The lost-event backstop: a dropped completion frame is recovered from
+    /// the controller's own row — re-stowed aboard the vessel after the launch
+    /// means the survey is over, and the counts cross-check in `confirming`.
+    @Test func backstopAdvancesOnceTheControllerHasReStowed() {
         let directive = run(step: SurveyRun.Step.awaiting, controllerCode: "AMI1",
                             stepStartedAt: Date(timeIntervalSince1970: 900))
         let late = Date(timeIntervalSince1970: 900 + SurveyRun.backstopInterval + 1)
@@ -674,6 +689,65 @@ struct SurveyRunCompletionTests {
             directive: directive,
             world: world(stagedFleet(vesselAt: "TAU-2"), now: late)
         ) == .refreshSystem(designation: "TAU", nextStep: SurveyRun.Step.confirming))
+    }
+
+    /// Scan counts never end the wait on their own: past the backstop with the
+    /// snapshot reading fully scanned but the controller demonstrably still out
+    /// surveying, the run keeps waiting on the controller's row.
+    @Test func backstopIgnoresScanCountsWhileTheControllerIsStillOut() {
+        let directive = run(step: SurveyRun.Step.awaiting, controllerCode: "AMI1",
+                            stepStartedAt: Date(timeIntervalSince1970: 900))
+        let late = Date(timeIntervalSince1970: 900 + SurveyRun.backstopInterval + 1)
+        let scanned = StarSystem(
+            designation: "TAU", planetsScanned: 4, planetsTotal: 4,
+            moonsScanned: 7, moonsTotal: 7
+        )
+        #expect(SurveyRun().nextAction(
+            directive: directive,
+            world: world(surveyingFleet(controllerUpdatedAt: late),
+                         systems: ["TAU": scanned], now: late)
+        ) == .wait)
+    }
+
+    /// A deployed controller whose row nothing has read in a whole backstop
+    /// interval earns one read — its row is the only evidence that can end the
+    /// wait, so it must not be judged from a reading that predates the wait.
+    @Test func backstopBuysAControllerReadOnceItsRowIsStale() {
+        let directive = run(step: SurveyRun.Step.awaiting, controllerCode: "AMI1",
+                            stepStartedAt: Date(timeIntervalSince1970: 900))
+        let late = Date(timeIntervalSince1970: 900 + SurveyRun.backstopInterval + 1)
+        let stale = late.addingTimeInterval(-SurveyRun.backstopInterval - 1)
+        #expect(SurveyRun().nextAction(
+            directive: directive,
+            world: world(surveyingFleet(controllerUpdatedAt: stale), now: late)
+        ) == .refreshDevices(deviceCodes: ["AMI1"], thenStall: nil))
+    }
+
+    /// The throttle on that read: one controller read per backstop interval — a
+    /// survey runs for hours, so a fresher row waits.
+    @Test func backstopThrottlesControllerReadsToTheInterval() {
+        let directive = run(step: SurveyRun.Step.awaiting, controllerCode: "AMI1",
+                            stepStartedAt: Date(timeIntervalSince1970: 900))
+        let late = Date(timeIntervalSince1970: 900 + SurveyRun.backstopInterval + 1)
+        let recent = late.addingTimeInterval(-SurveyRun.backstopInterval + 1)
+        #expect(SurveyRun().nextAction(
+            directive: directive,
+            world: world(surveyingFleet(controllerUpdatedAt: recent), now: late)
+        ) == .wait)
+    }
+
+    /// A stowed claim on a row last read BEFORE this step began is pre-launch
+    /// state, not evidence the survey ended — it earns a read, never the
+    /// re-stowed fast path.
+    @Test func backstopDoesNotTrustAPreLaunchStowedRow() {
+        let directive = run(step: SurveyRun.Step.awaiting, controllerCode: "AMI1",
+                            stepStartedAt: Date(timeIntervalSince1970: 900))
+        let late = Date(timeIntervalSince1970: 900 + SurveyRun.backstopInterval + 1)
+        let preLaunch = Date(timeIntervalSince1970: 800)
+        #expect(SurveyRun().nextAction(
+            directive: directive,
+            world: world(stagedFleet(vesselAt: "TAU-2", updatedAt: preLaunch), now: late)
+        ) == .refreshDevices(deviceCodes: ["AMI1"], thenStall: nil))
     }
 
     /// Counts agree: the target is done — but the run goes to `recovering`
@@ -704,15 +778,28 @@ struct SurveyRunCompletionTests {
                 == .stall(.surveyIncomplete))
     }
 
-    /// A BACKSTOP poll that finds the survey unfinished goes back to waiting —
-    /// nothing claimed completion, so there is nothing to disbelieve.
+    /// A BACKSTOP poll that finds the survey unfinished with the controller
+    /// still out goes back to waiting — nothing claimed completion, so there is
+    /// nothing to disbelieve.
     @Test func backstopDisagreementReturnsToWaiting() {
+        let partial = StarSystem(designation: "TAU", planetsScanned: 2, planetsTotal: 4)
+        let directive = run(step: SurveyRun.Step.confirming, controllerCode: "AMI1")
+        let snapshot = world(surveyingFleet(), systems: ["TAU": partial],
+                             now: Date(timeIntervalSince1970: 1_000))
+        #expect(SurveyRun().nextAction(directive: directive, world: snapshot)
+                == .advanceStep(nextStep: SurveyRun.Step.awaiting))
+    }
+
+    /// A controller home with incomplete counts is the same contradiction as a
+    /// completion event with incomplete counts — the survey ended early, so the
+    /// run stalls rather than waiting on a survey nothing is flying.
+    @Test func confirmingStallsWhenTheControllerIsHomeButCountsDisagree() {
         let partial = StarSystem(designation: "TAU", planetsScanned: 2, planetsTotal: 4)
         let directive = run(step: SurveyRun.Step.confirming, controllerCode: "AMI1")
         let snapshot = world(stagedFleet(vesselAt: "TAU-2"), systems: ["TAU": partial],
                              now: Date(timeIntervalSince1970: 1_000))
         #expect(SurveyRun().nextAction(directive: directive, world: snapshot)
-                == .advanceStep(nextStep: SurveyRun.Step.awaiting))
+                == .stall(.surveyIncomplete))
     }
 }
 
