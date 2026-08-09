@@ -82,6 +82,9 @@ public struct DirectivesFeature {
         /// The new-Haul-Run launcher. Also its own presentation — there is no
         /// picker to fold into `newDirective`, only a report-and-launch dialog.
         @Presents public var newHaulRun: NewHaulRunFeature.State?
+        /// The Print Mine Fleet launcher — a confirm dialog rather than its own
+        /// reducer, since there is no form: nothing to pick, only a fixed print.
+        @Presents public var printMineFleetDialog: ConfirmationDialogState<Action.PrintMineFleet>?
 
         public init(selectedRowID: String? = nil) {
             self.selectedRowID = selectedRowID
@@ -145,6 +148,13 @@ public struct DirectivesFeature {
         case newSalvageRunTapped
         /// Open the new-Haul-Run launcher.
         case newHaulRunTapped
+        /// Open the Print Mine Fleet confirm dialog (or the already-running one).
+        case printMineFleetTapped
+        case printMineFleetDialog(PresentationAction<PrintMineFleet>)
+        /// The confirm effect's insert succeeded.
+        case printMineFleetLaunched(Directive)
+        /// The confirm effect found no eligible print host.
+        case printMineFleetHostMissing
         /// Stall resolution on the selected custom mission (design spec §8).
         case retryTapped
         case skipTargetTapped
@@ -159,12 +169,20 @@ public struct DirectivesFeature {
         case newDirective(PresentationAction<NewDirectiveFeature.Action>)
         case newSalvageRun(PresentationAction<NewSalvageRunFeature.Action>)
         case newHaulRun(PresentationAction<NewHaulRunFeature.Action>)
+
+        @CasePathable
+        public enum PrintMineFleet: Equatable, Sendable {
+            case confirm
+        }
     }
 
     public init() {}
 
     @Dependency(\.commandClient) var commandClient
     @Dependency(\.directiveResolution) var directiveResolution
+    @Dependency(\.defaultDatabase) var database
+    @Dependency(\.date) var date
+    @Dependency(\.uuid) var uuid
 
     public var body: some ReducerOf<Self> {
         BindingReducer()
@@ -237,6 +255,54 @@ public struct DirectivesFeature {
 
             case .newHaulRunTapped:
                 state.newHaulRun = NewHaulRunFeature.State()
+                return .none
+
+            case .printMineFleetTapped:
+                let alreadyRunning = state.directives.contains {
+                    $0.kind == .mineFleetPrint && DirectiveStatus.openCases.contains($0.status)
+                }
+                state.printMineFleetDialog = alreadyRunning
+                    ? Self.alreadyPrintingDialog : Self.confirmPrintDialog
+                return .none
+
+            case .printMineFleetDialog(.presented(.confirm)):
+                let database = self.database
+                let uuid = self.uuid
+                let date = self.date
+                return .run { send in
+                    let devices = (try? await database.read { db in try Device.all.fetchAll(db) }) ?? []
+                    guard let host = devices
+                        .filter({
+                            $0.isPrintHub && $0.deviceType != "heaven_vessel"
+                                && $0.deviceType != "racing_vessel" && $0.location != nil
+                        })
+                        .min(by: { $0.deviceCode < $1.deviceCode })
+                    else {
+                        await send(.printMineFleetHostMissing)
+                        return
+                    }
+                    let directive = Directive(
+                        id: uuid().uuidString, kind: .mineFleetPrint, status: .running,
+                        deviceCode: host.deviceCode, controllerCode: nil, roamCentre: nil,
+                        fleetTag: MineRecipe.fleetTag, sourceRelayCode: nil,
+                        targets: [], targetIndex: 0,
+                        step: MineFleetPrint().firstStep, stepStartedAt: date.now,
+                        returnToOrigin: false, originDesignation: nil,
+                        attentionReason: nil, createdAt: date.now, updatedAt: date.now
+                    )
+                    try? await database.write { db in try Directive.insert { directive }.execute(db) }
+                    logger.info("printing mine fleet \(directive.id, privacy: .public) at \(host.deviceCode, privacy: .public)")
+                    await send(.printMineFleetLaunched(directive))
+                }
+
+            case .printMineFleetDialog:
+                return .none
+
+            case .printMineFleetLaunched:
+                return .none
+
+            case .printMineFleetHostMissing:
+                state.printMineFleetDialog = Self.noHostDialog
                 return .none
 
             case .retryTapped:
@@ -320,6 +386,32 @@ public struct DirectivesFeature {
         .ifLet(\.$newHaulRun, action: \.newHaulRun) {
             NewHaulRunFeature()
         }
+        .ifLet(\.$printMineFleetDialog, action: \.printMineFleetDialog)
+    }
+
+    private static let confirmPrintDialog = ConfirmationDialogState<Action.PrintMineFleet> {
+        TextState("Print a mine fleet?")
+    } actions: {
+        ButtonState(action: .confirm) { TextState("Print") }
+        ButtonState(role: .cancel) { TextState("Cancel") }
+    } message: {
+        TextState(
+            "Eleven devices, 3,455 units from hub stock, plus a surge carrier if none is idle. The brain sites and delivers it when complete."
+        )
+    }
+
+    private static let alreadyPrintingDialog = ConfirmationDialogState<Action.PrintMineFleet> {
+        TextState("Already printing a mine fleet")
+    } actions: {
+        ButtonState(role: .cancel) { TextState("OK") }
+    } message: {
+        TextState("A mine fleet print is already running.")
+    }
+
+    private static let noHostDialog = ConfirmationDialogState<Action.PrintMineFleet> {
+        TextState("No autofactory found at the hub.")
+    } actions: {
+        ButtonState(role: .cancel) { TextState("OK") }
     }
 
     /// Re-run the timeline query for whatever is selected now. Called from BOTH

@@ -8,6 +8,7 @@
 //
 
 import ComposableArchitecture
+import DirectiveEngine
 import Foundation
 import GameDatabase
 import GameModels
@@ -465,6 +466,130 @@ struct DirectivesFeatureTests {
             returnToOrigin: false, originDesignation: "SOL", attentionReason: nil,
             createdAt: Date(timeIntervalSince1970: 0),
             updatedAt: Date(timeIntervalSince1970: 0)
+        )
+    }
+}
+
+@Suite("Directives — Print Mine Fleet")
+@MainActor
+struct PrintMineFleetTests {
+    @Test func tappingPresentsTheConfirmDialog() async throws {
+        let database = try GameDatabase.bootstrap()
+        let store = TestStore(initialState: DirectivesFeature.State()) {
+            DirectivesFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
+        }
+        store.exhaustivity = .off
+
+        await store.send(.printMineFleetTapped)
+        #expect(store.state.printMineFleetDialog?.title == TextState("Print a mine fleet?"))
+        #expect(store.state.printMineFleetDialog?.message == TextState(
+            "Eleven devices, 3,455 units from hub stock, plus a surge carrier if none is idle. The brain sites and delivers it when complete."
+        ))
+    }
+
+    /// Confirming inserts exactly one row, on the lowest-coded eligible host —
+    /// a higher-coded print hub and a lower-coded vessel are both present, so
+    /// picking the wrong one would pass a naive "any print hub" filter.
+    @Test func confirmingInsertsOnTheLowestCodedNonVesselHost() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Device.insert { Self.printHub(code: "HUB2") }.execute(db)
+            try Device.insert { Self.printHub(code: "HUB1") }.execute(db)
+            try Device.insert { Self.printHub(code: "HUB0", deviceType: "heaven_vessel") }.execute(db)
+        }
+        let store = TestStore(initialState: DirectivesFeature.State()) {
+            DirectivesFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
+            $0.uuid = .incrementing
+            $0.date = .constant(Date(timeIntervalSince1970: 500))
+        }
+        store.exhaustivity = .off
+
+        await store.send(.printMineFleetTapped)
+        await store.send(.printMineFleetDialog(.presented(.confirm)))
+        await store.receive(\.printMineFleetLaunched)
+
+        let created = try await database.read { db in try Directive.all.fetchAll(db) }
+        #expect(created.count == 1)
+        #expect(created[0].kind == .mineFleetPrint)
+        #expect(created[0].status == .running)
+        #expect(created[0].deviceCode == "HUB1")
+        #expect(created[0].fleetTag == MineRecipe.fleetTag)
+        #expect(created[0].step == MineFleetPrint().firstStep)
+        #expect(created[0].targets.isEmpty)
+        #expect(created[0].returnToOrigin == false)
+    }
+
+    /// A live `mineFleetPrint` row blocks a second launch: the tap presents an
+    /// already-running dialog instead of the confirm one, and its single
+    /// button inserts nothing.
+    @Test func aLiveRowBlocksLaunchAndInsertsNothing() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Device.insert { Self.printHub(code: "HUB1") }.execute(db)
+            try Directive.insert { Self.mineFleetPrintDirective(id: "D1", status: .running) }.execute(db)
+        }
+        let store = TestStore(initialState: DirectivesFeature.State()) {
+            DirectivesFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
+        }
+        store.exhaustivity = .off
+
+        await store.send(.printMineFleetTapped)
+        #expect(store.state.printMineFleetDialog?.title != TextState("Print a mine fleet?"))
+        await store.send(.printMineFleetDialog(.dismiss))
+
+        let created = try await database.read { db in try Directive.all.fetchAll(db) }
+        #expect(created.count == 1)
+    }
+
+    /// No eligible print host at all: confirming presents an error dialog and
+    /// still inserts nothing.
+    @Test func noPrintHostPresentsAnErrorDialogAndInsertsNothing() async throws {
+        let database = try GameDatabase.bootstrap()
+        let store = TestStore(initialState: DirectivesFeature.State()) {
+            DirectivesFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
+            $0.uuid = .incrementing
+            $0.date = .constant(Date(timeIntervalSince1970: 500))
+        }
+        store.exhaustivity = .off
+
+        await store.send(.printMineFleetTapped)
+        await store.send(.printMineFleetDialog(.presented(.confirm)))
+        await store.receive(\.printMineFleetHostMissing)
+
+        #expect(store.state.printMineFleetDialog?.title == TextState("No autofactory found at the hub."))
+        let created = try await database.read { db in try Directive.all.fetchAll(db) }
+        #expect(created.isEmpty)
+    }
+
+    /// A print-capable device, eligible unless overridden to a vessel type.
+    nonisolated static func printHub(
+        code: String, deviceType: String = "system_hub", location: String = "SOL-1"
+    ) -> Device {
+        Device(
+            deviceCode: code, deviceType: deviceType, replicantCode: "R1", status: "idle",
+            location: location, locationName: nil, operationalCapacity: 100, queueSize: 0,
+            stowedInDeviceCode: nil, controllerDeviceCode: nil, attachedToDeviceCode: nil,
+            createdAt: Date(timeIntervalSince1970: 0), availableCommands: ["enqueue_print"],
+            features: [], tags: [], detail: .object([:]),
+            updatedAt: Date(timeIntervalSince1970: 0), firstSeenAt: Date(timeIntervalSince1970: 0)
+        )
+    }
+
+    nonisolated static func mineFleetPrintDirective(id: String, status: DirectiveStatus) -> Directive {
+        Directive(
+            id: id, kind: .mineFleetPrint, status: status, deviceCode: "HUB1",
+            fleetTag: MineRecipe.fleetTag, targets: [], targetIndex: 0,
+            step: MineFleetPrint().firstStep, stepStartedAt: Date(timeIntervalSince1970: 0),
+            returnToOrigin: false, originDesignation: nil, attentionReason: nil,
+            createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0)
         )
     }
 }
