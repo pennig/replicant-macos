@@ -24,6 +24,9 @@ public struct CommandParams: Sendable, Equatable {
     public var channel: String?
     public var text: String?
     public var index: Int?            // dequeue_print — the queue position to remove
+    public var quantity: Int?         // enqueue_print — units to print
+    /// enqueue_print — tags applied to the printed device (wire key `tags`).
+    public var printTags: [String]?
     /// set_directive — the directive's optional configuration object (e.g. a
     /// survey controller's `{planets, moons, recall}`). Loosely typed since the
     /// shape varies per directive; nil/empty omits it.
@@ -45,6 +48,8 @@ public struct CommandParams: Sendable, Equatable {
         channel: String? = nil,
         text: String? = nil,
         index: Int? = nil,
+        quantity: Int? = nil,
+        printTags: [String]? = nil,
         configuration: [String: JSONValue]? = nil,
         devices: [String]? = nil,
         resources: [String: Int]? = nil
@@ -58,6 +63,8 @@ public struct CommandParams: Sendable, Equatable {
         self.channel = channel
         self.text = text
         self.index = index
+        self.quantity = quantity
+        self.printTags = printTags
         self.configuration = configuration
         self.devices = devices
         self.resources = resources
@@ -74,6 +81,8 @@ public struct CommandParams: Sendable, Equatable {
         if let channel { dict["channel"] = .string(channel) }
         if let text { dict["text"] = .string(text) }
         if let index { dict["index"] = .number(Double(index)) }
+        if let quantity { dict["quantity"] = .number(Double(quantity)) }
+        if let printTags { dict["tags"] = .array(printTags.map(JSONValue.string)) }
         if let configuration, !configuration.isEmpty { dict["configuration"] = .object(configuration) }
         if let devices, !devices.isEmpty { dict["devices"] = .array(devices.map(JSONValue.string)) }
         if let resources, !resources.isEmpty {

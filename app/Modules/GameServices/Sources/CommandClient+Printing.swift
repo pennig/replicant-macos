@@ -12,7 +12,10 @@ import Foundation
 extension CommandClient {
     static func printBody(_ params: CommandParams) throws -> Operations.PostV1DevicesDeviceCode.Input.Body {
         guard let deviceType = params.deviceType else { throw CommandError.missingParameter("device_type") }
-        return .json(.enqueuePrint(.init(command: "enqueue_print", deviceType: deviceType)))
+        return .json(.enqueuePrint(.init(
+            command: "enqueue_print", deviceType: deviceType,
+            quantity: params.quantity, tags: params.printTags
+        )))
     }
 
     static func dequeuePrintBody(_ params: CommandParams) throws -> Operations.PostV1DevicesDeviceCode.Input.Body {
