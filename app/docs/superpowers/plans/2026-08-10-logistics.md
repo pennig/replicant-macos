@@ -969,6 +969,11 @@ public final class LogisticsIngestion: Sendable {
             state = .unavailable
         }
 
+        // Attribute on `deviceCode`, never `controllerCode` or `fleetTag`.
+        // `ensureMineFerries` stamps `controllerCode` only at LAUNCH, so a
+        // pinned row created earlier still carries nil; `deviceCode` holds the
+        // controller on every haul row regardless of vintage.
+        //
         // `kind` is a `DirectiveKind`, not a String — it is `QueryBindable`, so
         // bind the case rather than its raw value.
         let directiveID = (try? await database.read { db in
