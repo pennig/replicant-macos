@@ -14,10 +14,10 @@ public enum HaulYieldStep: Equatable, Sendable {
 }
 
 public enum HaulYieldMachine {
-    /// `openUnits == nil` means this controller has no ledger history, so the
-    /// digest establishes a baseline and decides nothing.
-    public static func step(openUnits: Int?, digest: TransportDigest) -> HaulYieldStep {
-        guard let openUnits else { return .none }
+    /// `openUnits` is the controller's live open-row total (0 when there are
+    /// none) — a nonzero hold at zero history is recorded at first sight, on
+    /// the theory that the units are real even though the moment was missed.
+    public static func step(openUnits: Int, digest: TransportDigest) -> HaulYieldStep {
         let delta = digest.cargoCarried - openUnits
         if delta > 0 {
             guard let source = digest.collect, let deviceCode = digest.activeDeviceCode else {

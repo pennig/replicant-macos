@@ -7,6 +7,9 @@ CREATE INDEX "directive_log_by_directive"
 CREATE UNIQUE INDEX "directive_log_unique_event"
   ON "directiveLogEntries" ("eventID") WHERE "eventID" IS NOT NULL;
 
+CREATE INDEX "haul_yields_by_controller"
+  ON "haulYields" ("controllerCode");
+
 CREATE UNIQUE INDEX "operation_one_open_per_device"
   ON "operations" ("entityCode")
   WHERE "status" IN ('enqueued', 'active');

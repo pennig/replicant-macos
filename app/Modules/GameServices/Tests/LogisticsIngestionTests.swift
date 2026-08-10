@@ -78,8 +78,8 @@ import Utils
                 )
             }
             .execute(db)
-            // One CLOSED row: it gives the controller a history (so the machine
-            // decides rather than seeds) with an open total of zero.
+            // One CLOSED row: a past delivered trip that must not count toward
+            // the controller's open total (closed rows are excluded from it).
             try HaulYield.upsert {
                 HaulYield(
                     id: self.testUUID(9), directiveID: "D1", controllerCode: "8D53C9B1",
@@ -258,5 +258,184 @@ import Utils
         #expect(rows.count == 2)
         #expect(rows[0].followsGap)
         #expect(!rows[1].followsGap)
+    }
+
+    // MARK: - Fix round 1 (review findings)
+
+    @Test func aControllerWithNoLedgerHistoryAtAllStillRecordsAtFirstSight() async throws {
+        let database = try GameDatabase.bootstrap()
+        // No seedDirectiveAndBaseline: the haulYields table holds NOTHING for
+        // this controller, not even a closed row — the fresh-install case.
+        try await database.write { db in
+            try Directive.upsert {
+                Directive(
+                    id: "D1", kind: .haulRun, status: .running,
+                    deviceCode: "8D53C9B1", fleetTag: "auto:mine:ACHERNUR-BELT-1",
+                    targets: ["ACHERNUR-BELT-1"], targetIndex: 0, step: "hauling",
+                    stepStartedAt: Date(timeIntervalSince1970: 0),
+                    returnToOrigin: false, originDesignation: nil, attentionReason: nil,
+                    createdAt: Date(timeIntervalSince1970: 0),
+                    updatedAt: Date(timeIntervalSince1970: 0)
+                )
+            }
+            .execute(db)
+            try Device.upsert { self.freighter(cargo: []) }.execute(db)
+        }
+        let ingestion = LogisticsIngestion()
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.uuid = .incrementing
+            $0.date = .constant(Date(timeIntervalSince1970: 100))
+            $0.deviceRefresher = DeviceRefreshClient { _, _ in
+                self.freighter(cargo: [("structural", 200)])
+            }
+        } operation: {
+            await ingestion.eventRoutes[0].apply(digestEvent(carried: 200, collected: 1))
+        }
+
+        let rows = try await database.read { db in
+            try HaulYield.where { $0.sourceDesignation.eq("ACHERNUR-BELT-1") }.fetchAll(db)
+        }
+        #expect(rows.count == 1)
+        #expect(rows[0].unitsCollected == 200)
+        #expect(rows[0].isOpen)
+    }
+
+    @Test func theRouteOutlivesTheIngestionInstance() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await seedDirectiveAndBaseline(database)
+        var ingestion: LogisticsIngestion? = LogisticsIngestion()
+        let routes = ingestion!.eventRoutes
+        ingestion = nil // drop the last strong reference before invoking the route
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.uuid = .incrementing
+            $0.date = .constant(Date(timeIntervalSince1970: 100))
+            $0.deviceRefresher = DeviceRefreshClient { _, _ in
+                self.freighter(cargo: [("structural", 200), ("rares", 145)])
+            }
+        } operation: {
+            await routes[0].apply(digestEvent(carried: 345, collected: 1))
+        }
+
+        let rows = try await database.read { db in
+            try HaulYield.where { $0.sourceDesignation.eq("ACHERNUR-BELT-1") }.fetchAll(db)
+        }
+        #expect(rows.count == 1)
+        #expect(rows[0].unitsCollected == 345)
+    }
+
+    @Test func attributionPicksTheNewestInForceRunNotAFinishedOne() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            // An older, FINISHED haulRun — must be skipped in favour of the
+            // newer running one below.
+            try Directive.upsert {
+                Directive(
+                    id: "D0", kind: .haulRun, status: .completed,
+                    deviceCode: "8D53C9B1", fleetTag: "auto:mine:ACHERNUR-BELT-1",
+                    targets: ["ACHERNUR-BELT-1"], targetIndex: 1, step: "hauling",
+                    stepStartedAt: Date(timeIntervalSince1970: 0),
+                    returnToOrigin: false, originDesignation: nil, attentionReason: nil,
+                    createdAt: Date(timeIntervalSince1970: 0),
+                    updatedAt: Date(timeIntervalSince1970: 0)
+                )
+            }
+            .execute(db)
+            try Directive.upsert {
+                Directive(
+                    id: "D1", kind: .haulRun, status: .running,
+                    deviceCode: "8D53C9B1", fleetTag: "auto:mine:ACHERNUR-BELT-1",
+                    targets: ["ACHERNUR-BELT-1"], targetIndex: 0, step: "hauling",
+                    stepStartedAt: Date(timeIntervalSince1970: 50),
+                    returnToOrigin: false, originDesignation: nil, attentionReason: nil,
+                    createdAt: Date(timeIntervalSince1970: 50),
+                    updatedAt: Date(timeIntervalSince1970: 50)
+                )
+            }
+            .execute(db)
+            try Device.upsert { self.freighter(cargo: []) }.execute(db)
+        }
+        let ingestion = LogisticsIngestion()
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.uuid = .incrementing
+            $0.date = .constant(Date(timeIntervalSince1970: 100))
+            $0.deviceRefresher = DeviceRefreshClient { _, _ in nil }
+        } operation: {
+            await ingestion.eventRoutes[0].apply(digestEvent(carried: 200, collected: 1))
+        }
+
+        let rows = try await database.read { db in
+            try HaulYield.where { $0.sourceDesignation.eq("ACHERNUR-BELT-1") }.fetchAll(db)
+        }
+        #expect(rows.count == 1)
+        #expect(rows[0].directiveID == "D1")
+    }
+
+    @Test func aFailedDeliveryReadStaysUnavailableRatherThanUpgradingToPartial() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await seedDirectiveAndBaseline(database)
+        try await database.write { db in
+            try HaulYield.upsert {
+                HaulYield(
+                    id: self.testUUID(200), directiveID: "D1", controllerCode: "8D53C9B1",
+                    deviceCode: "F7B455B6", sourceDesignation: "ACHERNUR-BELT-1",
+                    collectedAt: Date(timeIntervalSince1970: 0), unitsCollected: 345,
+                    perType: ResourceCost(), breakdownState: .unavailable
+                )
+            }
+            .execute(db)
+        }
+        let ingestion = LogisticsIngestion()
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.uuid = .incrementing
+            $0.date = .constant(Date(timeIntervalSince1970: 200))
+            $0.deviceRefresher = DeviceRefreshClient { _, _ in nil }
+        } operation: {
+            // Digest delivers 100, but the open row holds 345 — a disagreement
+            // that would demote an `.exact` row, but must not touch `.unavailable`.
+            await ingestion.eventRoutes[0].apply(digestEvent(carried: 245, delivered: 1))
+        }
+
+        let rows = try await database.read { db in
+            try HaulYield.where { $0.sourceDesignation.eq("ACHERNUR-BELT-1") }.fetchAll(db)
+        }
+        #expect(rows[0].breakdownState == .unavailable)
+    }
+
+    @Test func aFailedFleetCountDegradesToPartialRatherThanClaimingExact() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await seedDirectiveAndBaseline(database)
+        // Drop `devices` only: the open-rows read (a different table) still
+        // succeeds, but the fleet-count read inside `recordPickup` now throws.
+        try await database.write { db in
+            try db.execute(sql: "DROP TABLE \"devices\"")
+        }
+        let ingestion = LogisticsIngestion()
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.uuid = .incrementing
+            $0.date = .constant(Date(timeIntervalSince1970: 100))
+            $0.deviceRefresher = DeviceRefreshClient { _, _ in
+                self.freighter(cargo: [("structural", 345)])
+            }
+        } operation: {
+            await ingestion.eventRoutes[0].apply(digestEvent(carried: 345, collected: 1))
+        }
+
+        let rows = try await database.read { db in
+            try HaulYield.where { $0.sourceDesignation.eq("ACHERNUR-BELT-1") }.fetchAll(db)
+        }
+        // The per-type sum matches the delta exactly (345 == 345) — which a
+        // fleet-count default of 1 would report as `.exact`, the bug this guards.
+        #expect(rows[0].perType.total == 345)
+        #expect(rows[0].breakdownState == .partial)
     }
 }

@@ -94,9 +94,8 @@ struct ReplicantApp: App {
         let locationsIngestion = LocationsIngestion()
         for route in MessagesIngestion.eventRoutes { gameSync.registerRoute(route) }
         for route in locationsIngestion.eventRoutes { gameSync.registerRoute(route) }
-        // The haul-yield ledger. An AMI-controlled transport emits no events of
-        // its own, so the controller's digest is the only channel that sees a
-        // pickup at all.
+        // The haul-yield ledger, the controller digest's only channel. Deliberate
+        // exception to the debounce policy above: its `.high` device read runs inline, since the hold must be caught before it changes.
         let logisticsIngestion = LogisticsIngestion()
         for route in logisticsIngestion.eventRoutes { gameSync.registerRoute(route) }
         gameSync.registerRoute(LocationEventsIngestion.eventRoute)

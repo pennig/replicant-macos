@@ -23,10 +23,6 @@ import Testing
         )
     }
 
-    @Test func theFirstDigestOnlySeedsABaseline() {
-        #expect(HaulYieldMachine.step(openUnits: nil, digest: digest(carried: 345)) == .none)
-    }
-
     @Test func aRiseIsAPickup() {
         #expect(
             HaulYieldMachine.step(openUnits: 0, digest: digest(carried: 345, collected: 1))

@@ -21,18 +21,21 @@ public final class LogisticsIngestion: Sendable {
 
     public init() {}
 
+    /// Captures `pendingGap` by value, never `self` — a route must outlive
+    /// whoever constructed this instance.
     public var eventRoutes: [EventRoute] {
-        [
+        let pendingGap = pendingGap
+        return [
             EventRoute(
                 id: "logistics.transportDigest",
                 match: .event("ami.transport.digest"),
-                apply: { [weak self] envelope in await self?.ingest(envelope) },
-                gapRepair: { [weak self] in self?.pendingGap.setValue(true) }
+                apply: { envelope in await Self.ingest(envelope, pendingGap: pendingGap) },
+                gapRepair: { pendingGap.setValue(true) }
             )
         ]
     }
 
-    private func ingest(_ envelope: GameEventEnvelope) async {
+    private static func ingest(_ envelope: GameEventEnvelope, pendingGap: LockIsolated<Bool>) async {
         @Dependency(\.defaultDatabase) var database
         @Dependency(\.date.now) var now
         guard let digest = TransportDigest(envelope: envelope, now: now) else {
@@ -41,36 +44,38 @@ public final class LogisticsIngestion: Sendable {
         }
 
         let open: [HaulYield]
-        let hasHistory: Bool
         do {
-            (open, hasHistory) = try await database.read { db in
-                let all = try HaulYield
-                    .where { $0.controllerCode.eq(digest.controllerCode) }
+            open = try await database.read { db in
+                try HaulYield
+                    .where { $0.controllerCode.eq(digest.controllerCode).and($0.deliveredAt.is(nil)) }
                     .fetchAll(db)
-                return (all.filter(\.isOpen), !all.isEmpty)
             }
         } catch {
             logger.error("ledger read failed: \(error.localizedDescription, privacy: .public)")
             return
         }
 
-        let openUnits = hasHistory ? open.reduce(0) { $0 + $1.unitsCollected } : nil
+        let openUnits = open.reduce(0) { $0 + $1.unitsCollected }
         switch HaulYieldMachine.step(openUnits: openUnits, digest: digest) {
         case .none:
             return
         case let .pickup(units, source, deviceCode):
-            await recordPickup(digest: digest, units: units, source: source, deviceCode: deviceCode, open: open)
+            await recordPickup(
+                digest: digest, units: units, source: source, deviceCode: deviceCode,
+                open: open, pendingGap: pendingGap
+            )
         case let .delivery(units, destination):
             await recordDelivery(digest: digest, units: units, destination: destination, open: open)
         }
     }
 
-    private func recordPickup(
+    private static func recordPickup(
         digest: TransportDigest,
         units: Int,
         source: String,
         deviceCode: String,
-        open: [HaulYield]
+        open: [HaulYield],
+        pendingGap: LockIsolated<Bool>
     ) async {
         @Dependency(\.defaultDatabase) var database
         @Dependency(\.deviceRefresher) var deviceRefresher
@@ -80,14 +85,13 @@ public final class LogisticsIngestion: Sendable {
         let hold = device.map { ResourceCost(wire: Dictionary($0.cargoItems.map { ($0.resourceType, $0.quantity) }, uniquingKeysWith: +)) }
         let previousHold = open.reduce(into: ResourceCost()) { $0.add($1.perType) }
 
-        // `cargo_carried` sums the controller's whole fleet, so a second
-        // freighter nets two devices into one figure. Degrade rather than
-        // report it as measured.
+        // A fleet of >1 nets several holds into one `cargo_carried` figure.
+        // A failed count must not default toward an unearned `.exact`.
         let fleetSize = (try? await database.read { db in
             try Device
                 .where { $0.controllerDeviceCode.eq(digest.controllerCode) }
                 .fetchCount(db)
-        }) ?? 1
+        }) ?? 2
 
         let breakdown: ResourceCost
         let state: HaulYield.BreakdownState
@@ -100,12 +104,16 @@ public final class LogisticsIngestion: Sendable {
             state = .unavailable
         }
 
-        // Attribute on `deviceCode`, never `controllerCode` or `fleetTag`:
-        // `controllerCode` is stamped only at launch (a pinned row created
-        // earlier still carries nil), and `fleetTag` is worn by no device.
+        // `deviceCode`, not `controllerCode` (launch-only stamp) or `fleetTag`
+        // (worn by no device). Newest in-force run — a finished one persists.
         let directiveID = (try? await database.read { db in
             try Directive
-                .where { $0.kind.eq(DirectiveKind.haulRun).and($0.deviceCode.eq(digest.controllerCode)) }
+                .where {
+                    $0.kind.eq(DirectiveKind.haulRun)
+                        .and($0.deviceCode.eq(digest.controllerCode))
+                        .and($0.status.in(DirectiveStatus.openCases))
+                }
+                .order { $0.createdAt.desc() }
                 .fetchOne(db)?
                 .id
         }) ?? nil
@@ -131,7 +139,7 @@ public final class LogisticsIngestion: Sendable {
         }
     }
 
-    private func recordDelivery(
+    private static func recordDelivery(
         digest: TransportDigest,
         units: Int,
         destination: String,
@@ -149,7 +157,7 @@ public final class LogisticsIngestion: Sendable {
                     row.destinationDesignation = destination
                     row.deliveredAt = digest.observedAt
                     row.unitsDelivered = row.unitsCollected
-                    if !reconciles { row.breakdownState = .partial }
+                    if !reconciles && row.breakdownState == .exact { row.breakdownState = .partial }
                     try HaulYield.upsert { row }.execute(db)
                 }
             }

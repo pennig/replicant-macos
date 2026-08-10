@@ -95,4 +95,16 @@ extension HaulYield {
         )
         .execute(db)
     }
+
+    /// A separate migration, not an edit to the table above: the create has
+    /// already shipped. Every digest reads this controller's open rows.
+    public static let addControllerCodeIndex = SchemaMigration("Add index on 'haulYields.controllerCode'") { db in
+        try #sql(
+            """
+            CREATE INDEX "haul_yields_by_controller"
+              ON "haulYields" ("controllerCode")
+            """
+        )
+        .execute(db)
+    }
 }
