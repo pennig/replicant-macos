@@ -70,16 +70,17 @@ private func testUUID(_ n: Int) -> UUID {
         #expect(summary.totalUnits == 500)
     }
 
-    // A second, non-gapped row rules out a `gapCount == tripCount` bug —
-    // with one row of each kind, that confound would also read 1.
+    // 1 gapped vs 2 clean rows: `gapCount == tripCount` and an inverted
+    // `followsGap` predicate both diverge from the correct answer here.
     @Test func gapsAreCountedSoTheChartCanSayItDoesNotKnow() {
         let summary = YieldSummary(
             yields: [
                 yield(day: 0, units: 100, cost: ResourceCost(), followsGap: true),
                 yield(day: 1, units: 50, cost: ResourceCost(), followsGap: false),
+                yield(day: 2, units: 25, cost: ResourceCost(), followsGap: false),
             ],
             range: .all,
-            now: Date(timeIntervalSince1970: 86_400)
+            now: Date(timeIntervalSince1970: 2 * 86_400)
         )
         #expect(summary.gapCount == 1)
     }
