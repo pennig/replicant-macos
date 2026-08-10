@@ -31,7 +31,7 @@ public struct LocationsListView: View {
     /// emitting a node's children only when it's expanded. Cheap to rebuild (a
     /// linear walk producing lightweight structs) and fed to a flat, lazy `List`.
     private var rows: [LocationFlatRow] {
-        LocationTree.flatten(forest, expanded: store.expanded)
+        LocationTree.flatten(forest, expanded: store.expanded, loaded: store.childRows)
     }
 
     public var body: some View {

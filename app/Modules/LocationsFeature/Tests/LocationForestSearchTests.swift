@@ -55,10 +55,10 @@ import UniverseModels
         }
         #expect(value.nodes.map(\.id) == ["SOL", "SOLARIS"])
         let sol = try #require(value.nodes.first { $0.id == "SOL" })
-        #expect(sol.children?.map(\.id) == ["SOL-3"], "the hydrated blob still builds children")
+        #expect(sol.hasChildren, "the summary says there are children to expand into")
         #expect(sol.subtitle?.contains("1/1 scanned") == true)
         let solaris = try #require(value.nodes.first { $0.id == "SOLARIS" })
-        #expect(solaris.children == nil, "census-only, and VEGA's blob must not leak onto it")
+        #expect(!solaris.hasChildren, "census-only, and VEGA's summary must not leak onto it")
     }
 
     /// An empty search still sees every system and every blob.
@@ -71,7 +71,8 @@ import UniverseModels
                 .fetch(db)
         }
         #expect(value.nodes.map(\.id) == ["RIGEL", "SOL", "SOLARIS", "VEGA"])
-        #expect(value.nodes.first { $0.id == "VEGA" }?.children?.map(\.id) == ["VEGA-1"])
+        #expect(value.nodes.first { $0.id == "VEGA" }?.hasChildren == true)
+        #expect(value.nodes.first { $0.id == "RIGEL" }?.hasChildren == false)
     }
 
     /// The explored filter counts a hydrated blob as explored, and that check

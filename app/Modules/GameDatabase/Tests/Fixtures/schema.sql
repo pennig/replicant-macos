@@ -240,4 +240,4 @@ CREATE TABLE "systemDetails" (
   "recon" TEXT NOT NULL DEFAULT 'aware',
   "systemScanned" INTEGER NOT NULL DEFAULT 0,
   "hydratedAt" TEXT NOT NULL
-) STRICT;
+, "summaryJSON" TEXT) STRICT;

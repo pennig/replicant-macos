@@ -62,6 +62,13 @@ public struct LocationsFeature {
         /// row list — a node's children are only emitted when its id is here. Kept
         /// in state so expansion survives tab switches, like sort/filter.
         public var expanded: Set<String>
+        /// A hydrated system's child rows, built the first time it is expanded.
+        /// The forest itself carries only system rows, so this is the one place
+        /// a `systemJSON` blob is decoded for the list.
+        public var childRows: [String: [LocationNode]] = [:]
+        /// `hydratedAt` of the row each entry in `childRows` was built from, so a
+        /// re-hydrated system rebuilds instead of showing stale children.
+        var childRowsBuiltFrom: [String: Date] = [:]
 
         /// Sort / filter selections. Kept in state so they survive tab switches and
         /// drive the `@Fetch` request via `forestRequest`; changes flow through
@@ -157,6 +164,24 @@ public struct LocationsFeature {
             return try? row.system()
         }
 
+        /// Build (or rebuild) a system's child rows from its blob. Only an
+        /// expanded system pays this, and only when its row is newer than the
+        /// rows already built. Bodies are not systems and have no blob of their
+        /// own — their children came with their parent's.
+        mutating func buildChildRowsIfNeeded(for id: String) {
+            guard let row = systemDetails.first(where: { $0.designation == id }) else { return }
+            guard childRowsBuiltFrom[id] != row.hydratedAt else { return }
+            guard let system = try? row.system() else { return }
+            childRows[id] = LocationTree.children(of: system, index: forest.inventoryIndex)
+            childRowsBuiltFrom[id] = row.hydratedAt
+        }
+
+        /// Rebuild every already-expanded system, for when a hydration write
+        /// lands under one.
+        mutating func rebuildExpandedChildRows() {
+            for id in expanded { buildChildRowsIfNeeded(for: id) }
+        }
+
         /// Site designation → original totals, the denominator half of every
         /// amount the inspector renders.
         public var assayTotals: [String: [String: Double]] {
@@ -233,9 +258,10 @@ public struct LocationsFeature {
             case let .toggleExpansion(id):
                 if state.expanded.contains(id) {
                     state.expanded.remove(id)
-                } else {
-                    state.expanded.insert(id)
+                    return .none
                 }
+                state.expanded.insert(id)
+                state.buildChildRowsIfNeeded(for: id)
                 return .none
 
             case .task:
@@ -323,6 +349,9 @@ public struct LocationsFeature {
 
             case let .hydrated(id):
                 state.hydrating.remove(id)
+                // The blob just changed under any expanded system, so the rows
+                // built from the old one are stale.
+                state.rebuildExpandedChildRows()
                 return .none
 
             case let .hydrateFailed(system, message):
@@ -422,7 +451,13 @@ public struct LocationForest: FetchKeyRequest {
 
     public struct Value: Equatable, Sendable {
         public var nodes: [LocationNode] = []
-        public init(nodes: [LocationNode] = []) { self.nodes = nodes }
+        /// The footprint roll-up this forest was built with, carried so a system's
+        /// children are badged against the same overlay its own row was.
+        public var inventoryIndex = LocationInventoryIndex(footprints: [:])
+        public init(nodes: [LocationNode] = [], inventoryIndex: LocationInventoryIndex = .init(footprints: [:])) {
+            self.nodes = nodes
+            self.inventoryIndex = inventoryIndex
+        }
     }
 
     public init(search: String, sort: LocationSort, filter: LocationFilter, activeReplicantCode: String?) {
@@ -439,11 +474,13 @@ public struct LocationForest: FetchKeyRequest {
             .where { $0.designation.like(pattern) }
             .order { $0.designation }
             .fetchAll(db)
-        // The SAME pattern, because a blob can only ever be read through a star
-        // of its own designation — narrowing here is what keeps a keystroke from
-        // decoding the whole table to render a handful of rows.
-        let detailRows = try SystemDetail
+        // The SAME pattern, because a summary can only ever be read through a
+        // star of its own designation. Selecting the two summary columns rather
+        // than the row keeps `systemJSON` out of the query entirely — a collapsed
+        // list never needs it, and it is by far the largest column.
+        let summaryRows = try SystemDetail
             .where { $0.designation.like(pattern) }
+            .select { ($0.designation, $0.summaryJSON) }
             .fetchAll(db)
         let footprintRows = try LocationFootprint.all.fetchAll(db)
         // The probe's position (for distance sort) — the active replicant's current
@@ -457,8 +494,20 @@ public struct LocationForest: FetchKeyRequest {
             try Star.where { $0.designation.eq(code) }.fetchOne(db)
         }
 
-        let details = Dictionary(
-            detailRows.compactMap { row in (try? row.system()).map { (row.designation, $0) } },
+        // A null summary is a row the backfill has not reached; decode that one
+        // blob rather than dropping the system to a census leaf.
+        let decoder = JSONDecoder()
+        let summaries = Dictionary(
+            summaryRows.compactMap { designation, json -> (String, SystemSummary)? in
+                if let json, let summary = try? decoder.decode(SystemSummary.self, from: Data(json.utf8)) {
+                    return (designation, summary)
+                }
+                guard
+                    let row = try? SystemDetail.where { $0.designation.eq(designation) }.fetchOne(db),
+                    let system = try? row.system()
+                else { return nil }
+                return (designation, SystemSummary(system))
+            },
             uniquingKeysWith: { first, _ in first }
         )
         let footprints = Dictionary(
@@ -466,13 +515,16 @@ public struct LocationForest: FetchKeyRequest {
             uniquingKeysWith: { first, _ in first }
         )
 
-        return Value(nodes: LocationTree.forest(
-            stars: stars,
-            details: details,
-            footprints: footprints,
-            myPosition: myStar?.position,
-            filter: filter,
-            sort: sort
-        ))
+        return Value(
+            nodes: LocationTree.forest(
+                stars: stars,
+                summaries: summaries,
+                footprints: footprints,
+                myPosition: myStar?.position,
+                filter: filter,
+                sort: sort
+            ),
+            inventoryIndex: LocationInventoryIndex(footprints: footprints)
+        )
     }
 }

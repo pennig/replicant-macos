@@ -11,6 +11,33 @@ import UniverseModels
 @testable import LocationsFeature
 
 @Suite struct LocationsFeatureTests {
+    /// Composes the tree the way the feature does — rows from stored summaries,
+    /// a system's children built from its blob only once it is expanded — so
+    /// these assertions read against the whole thing rather than half of it.
+    private func tree(
+        stars: [Star],
+        systems: [String: StarSystem],
+        footprints: [String: LocationCounts] = [:],
+        myPosition: Position? = nil,
+        filter: LocationFilter = .all,
+        sort: LocationSort = .alphabetical
+    ) -> [LocationNode] {
+        let index = LocationInventoryIndex(footprints: footprints)
+        return LocationTree.forest(
+            stars: stars,
+            summaries: systems.mapValues(SystemSummary.init),
+            footprints: footprints,
+            myPosition: myPosition,
+            filter: filter,
+            sort: sort
+        ).map { node in
+            guard let system = systems[node.id] else { return node }
+            var expanded = node
+            expanded.children = LocationTree.children(of: system, index: index)
+            return expanded
+        }
+    }
+
     @Test func forestFiltersUnexploredAndBuildsHierarchy() {
         let sol = Star(
             designation: "SOL", spectralType: "G2", color: "yellow-white",
@@ -29,8 +56,8 @@ import UniverseModels
                              moons: [Moon(designation: "SOL-3-1")])]
         )
 
-        let all = LocationTree.forest(
-            stars: [sol, dabah], details: ["SOL": system], footprints: [:],
+        let all = tree(
+            stars: [sol, dabah], systems: ["SOL": system], footprints: [:],
             myPosition: nil, filter: .all, sort: .alphabetical
         )
         #expect(all.map(\.id) == ["DABAH", "SOL"])
@@ -41,8 +68,8 @@ import UniverseModels
         #expect(solNode.children?.first(where: { $0.id == "SOL-3" })?.children?.map(\.id)
             == ["SOL-3-1", "SOL-3-L1", "SOL-3-L2", "SOL-3-L3", "SOL-3-L4", "SOL-3-L5"])
 
-        let explored = LocationTree.forest(
-            stars: [sol, dabah], details: [:], footprints: [:],
+        let explored = tree(
+            stars: [sol, dabah], systems: [:], footprints: [:],
             myPosition: nil, filter: .explored, sort: .alphabetical
         )
         #expect(explored.map(\.id) == ["SOL"])
@@ -69,8 +96,8 @@ import UniverseModels
                              lagrange: [l4])]
         )
 
-        let forest = LocationTree.forest(
-            stars: [star], details: ["SOL": system], footprints: [:],
+        let forest = tree(
+            stars: [star], systems: ["SOL": system], footprints: [:],
             myPosition: nil, filter: .all, sort: .alphabetical
         )
         let planet = try! #require(forest.first?.children?.first { $0.id == "SOL-5" })
@@ -107,8 +134,8 @@ import UniverseModels
             structures: [SpecialSite(designation: "VEGA-MEGA-1", kind: .megastructure)]
         )
 
-        let forest = LocationTree.forest(
-            stars: [vega], details: ["VEGA": system], footprints: [:],
+        let forest = tree(
+            stars: [vega], systems: ["VEGA": system], footprints: [:],
             myPosition: nil, filter: .all, sort: .alphabetical
         )
         let node = try! #require(forest.first)
@@ -142,8 +169,8 @@ import UniverseModels
             ])]
         )
 
-        let forest = LocationTree.forest(
-            stars: [safana], details: ["SAFANA": system], footprints: [:],
+        let forest = tree(
+            stars: [safana], systems: ["SAFANA": system], footprints: [:],
             myPosition: nil, filter: .all, sort: .alphabetical
         )
         let salvage = "wrench.and.screwdriver"
@@ -165,8 +192,8 @@ import UniverseModels
         )
         let footprints = ["RIGEL-2": LocationCounts(resources: 3)]
 
-        let forest = LocationTree.forest(
-            stars: [rigel], details: [:], footprints: footprints,
+        let forest = tree(
+            stars: [rigel], systems: [:], footprints: footprints,
             myPosition: nil, filter: .all, sort: .alphabetical
         )
         let node = try! #require(forest.first)
@@ -190,14 +217,14 @@ import UniverseModels
         )
         let details = ["KRIOS": scanned]
 
-        let explored = LocationTree.forest(
-            stars: [krios], details: details, footprints: [:],
+        let explored = tree(
+            stars: [krios], systems: details, footprints: [:],
             myPosition: nil, filter: .explored, sort: .alphabetical
         )
         #expect(explored.map(\.id) == ["KRIOS"])
 
-        let uncharted = LocationTree.forest(
-            stars: [krios], details: details, footprints: [:],
+        let uncharted = tree(
+            stars: [krios], systems: details, footprints: [:],
             myPosition: nil, filter: .unexplored, sort: .alphabetical
         )
         #expect(uncharted.isEmpty)
