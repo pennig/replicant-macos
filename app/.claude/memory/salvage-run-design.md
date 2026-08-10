@@ -94,6 +94,19 @@ newest `.stalled` timeline entry (the operator could not previously tell WHICH s
 digest's `site_depleted` flag remains un-ingested (body-vs-site ambiguity); the cost is one wasted 13 s cycle
 plus one 5-min grace per out-of-band-depleted site, paid once ever per site.
 
+**Round two, same day (operator-reported: Retry still stalled, and even the hand tour no longer cleared the
+site)**: the first cut healed the ASSAY but not the BLOB — `upsertPlanet` (the function `applying` routes a
+per-body fetch through) kept the cached salvage roster whenever the fresh one was EMPTY (`if
+merged.salvage.isEmpty { merged.salvage = planets[idx].salvage }`), which is precisely a delisting's shape,
+so the blob site was immortal, `nextBody` kept offering it, and `verify` re-stalled — live-confirmed with
+assay `depleted=1` beside a blob still listing the site seconds after the refresh wrote `hydratedAt`. The
+2026-08-06 claim "a per-body fetch replaces the roster" was only ever true for a NON-empty fresh roster,
+and the first cut's test asserted the blob only in that non-empty case — the minimised repro must match the
+incident on EVERY dimension it asserts. Fix: the keep is now recon-gated in `upsertPlanet` AND `upsertMoon`
+(a scanned detail's empty roster is authoritative and erases; an unscanned one is ignorance and keeps —
+`upsertMoon` previously had the inverse hazard, wholesale replace, so an unscanned per-moon fetch could wipe
+cached salvage). This is the fourth member of the richer-body-wins family of stale-salvage keeps.
+
 **AMENDED 2026-08-07 by [[salvage-controller-recall-race]]**: `awaitCompletion`'s "never stalls,
 however long the cycle runs" now has exactly one exception — a `gather_salvage` that reads PAUSED,
 which emits no completion and so would wait forever. `verify` also gained a controller-aboard gate:
