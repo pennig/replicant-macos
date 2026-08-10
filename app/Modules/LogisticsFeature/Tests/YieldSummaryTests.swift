@@ -10,20 +10,25 @@ private func testUUID(_ n: Int) -> UUID {
 }
 
 @Suite struct YieldSummaryTests {
-    private func yield(day: Int, units: Int, cost: ResourceCost, source: String = "A-1", followsGap: Bool = false) -> HaulYield {
+    private func yield(
+        day: Int, units: Int, cost: ResourceCost, source: String = "A-1",
+        state: HaulYield.BreakdownState = .exact, followsGap: Bool = false
+    ) -> HaulYield {
         HaulYield(
             id: testUUID(day), directiveID: "D", controllerCode: "C", deviceCode: "F",
             sourceDesignation: source,
             collectedAt: Date(timeIntervalSince1970: TimeInterval(day) * 86_400),
-            unitsCollected: units, perType: cost, breakdownState: .exact,
+            unitsCollected: units, perType: cost, breakdownState: state,
             followsGap: followsGap
         )
     }
 
+    // The unavailable row's unitsCollected (100) and perType.total (0) disagree,
+    // so summing perType.total instead of unitsCollected would total 200, not 300.
     @Test func itTotalsUnitsAndTrips() {
         let summary = YieldSummary(
             yields: [
-                yield(day: 0, units: 100, cost: ResourceCost(structural: 100)),
+                yield(day: 0, units: 100, cost: ResourceCost(), state: .unavailable),
                 yield(day: 1, units: 200, cost: ResourceCost(rares: 200)),
             ],
             range: .all,
@@ -48,26 +53,35 @@ private func testUUID(_ n: Int) -> UUID {
         #expect(summary.bySource.first?.designation == "MID-1")
     }
 
+    // Both rows carry rares, so the 200 expected here is only reachable by
+    // accumulating (50 + 150) — neither row alone is 200.
     @Test func resourceTotalsKeepDisplayOrder() {
         let summary = YieldSummary(
-            yields: [yield(day: 0, units: 300, cost: ResourceCost(structural: 100, rares: 200))],
+            yields: [
+                yield(day: 0, units: 110, cost: ResourceCost(structural: 60, rares: 50)),
+                yield(day: 1, units: 190, cost: ResourceCost(structural: 40, rares: 150)),
+            ],
             range: .all,
-            now: Date(timeIntervalSince1970: 0)
+            now: Date(timeIntervalSince1970: 86_400)
         )
         #expect(summary.byResource.map(\.key) == ResourceCost.displayOrder.map(\.key))
         #expect(summary.byResource.first { $0.key == "rares" }?.units == 200)
     }
 
+    // Day 9 is one day outside the 30-day cutoff, day 10 lands exactly on it
+    // (kept via `>=`) — an off-by-a-day cutoff or a `>`/`>=` slip moves 1,100.
     @Test func theRangeExcludesOlderRows() {
         let summary = YieldSummary(
             yields: [
-                yield(day: 0, units: 100, cost: ResourceCost()),
-                yield(day: 40, units: 500, cost: ResourceCost()),
+                yield(day: 0, units: 1, cost: ResourceCost(structural: 1)),
+                yield(day: 9, units: 10, cost: ResourceCost(structural: 10)),
+                yield(day: 10, units: 100, cost: ResourceCost(structural: 100)),
+                yield(day: 40, units: 1_000, cost: ResourceCost(structural: 1_000)),
             ],
             range: .month,
             now: Date(timeIntervalSince1970: 40 * 86_400)
         )
-        #expect(summary.totalUnits == 500)
+        #expect(summary.totalUnits == 1_100)
     }
 
     // 1 gapped vs 2 clean rows: `gapCount == tripCount` and an inverted
