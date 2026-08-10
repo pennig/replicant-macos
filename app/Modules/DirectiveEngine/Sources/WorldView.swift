@@ -6,13 +6,10 @@
 //  census positions, live assays and events, uncollected units, the replicants and
 //  the print hub — the single input every brain pass consumes. Wider than the
 //  sibling `WorldSnapshot`, which scopes to one directive because decoding
-//  thousands of `StarSystem` blobs per tick is real cost, so this reads the cheap
-//  tables and touches exactly one blob field.
-//
-//  That field is `beltsBySystem`, and SURVEY is the SOLE bound holding its cost
-//  off — `SystemDetail.systemScanned`, applied in SQL before any blob leaves the
-//  database. Widen it only against a measurement. A malformed blob degrades to
-//  "no belt data for that system" rather than failing the read.
+//  thousands of `StarSystem` blobs per tick is real cost. No blob reaches Swift
+//  here: `beltsBySystem` is projected out of the JSON by SQLite, bounded by
+//  SURVEY (`SystemDetail.systemScanned`). A malformed blob degrades to "no belt
+//  data for that system" rather than failing the read.
 //
 
 import Foundation
@@ -163,12 +160,16 @@ public struct WorldView: Equatable, Sendable {
         // than the whole census.
         let stockpiles = try LocationFootprint.where { $0.resources > 0 }.fetchAll(db)
 
-        // One fetch, two fields: SURVEY is the sole bound on the blob decode,
-        // so the rows that define `surveyedSystems` are exactly the rows
-        // `beltsBySystem` decodes. Reading them once keeps the two from ever
-        // disagreeing about what "surveyed" means.
-        let surveyed = try SystemDetail.where { $0.systemScanned }.fetchAll(db)
-        let belts = Self.beltsBySystem(in: surveyed)
+        // Two reads, one predicate: `systemScanned` is the sole bound and both
+        // queries apply it, inside one transaction, so they cannot disagree
+        // about what "surveyed" means. Neither pulls a blob into memory — the
+        // designations are a column select and the belts are projected by
+        // SQLite out of the JSON.
+        let surveyed = try SystemDetail
+            .where { $0.systemScanned }
+            .select { $0.designation }
+            .fetchAll(db)
+        let belts = try Self.beltsBySystem(in: db)
 
         // The account's own roster — a handful of rows, so the whole-table read
         // is as cheap as the `locationEvents` one above and needs no scoping.
@@ -182,7 +183,7 @@ public struct WorldView: Equatable, Sendable {
             eventSystems: eventSystems,
             hubLocation: hub,
             beltsBySystem: belts,
-            surveyedSystems: Set(surveyed.map(\.designation)),
+            surveyedSystems: Set(surveyed),
             replicantSystems: Set(
                 replicants.compactMap { $0.currentStar.map { SiteAssay.system(of: $0) } }
             ),
@@ -194,56 +195,70 @@ public struct WorldView: Equatable, Sendable {
         )
     }
 
-    /// The bounded belt decode: `candidates`' `systemJSON` blobs, classified
-    /// per system. Pass only rows the caller has already narrowed in SQL —
-    /// SURVEY is the sole bound (see the module doc), and it must be applied
-    /// before any blob leaves the database or the bound buys nothing. Both
-    /// consumers narrow further on their own terms afterwards: grow drops
-    /// meshed systems in `ValueCatalog.build`, prune keeps them.
-    private static func beltsBySystem(in candidates: [SystemDetail]) -> [String: [BeltInfo]] {
-        var belts: [String: [BeltInfo]] = [:]
-        // Failures are tallied, not logged per-row: this loop runs every
-        // 5-second tick, so a permanently-malformed row would flood the log
-        // forever. `firstFailure` keeps one breadcrumb without per-row volume.
-        var failures = 0
-        var firstFailure: String?
-        for detail in candidates {
-            let system: StarSystem
-            do {
-                system = try detail.system()
-            } catch {
-                // One bad row must not take the whole galaxy-wide read down:
-                // degrade to "no belt data for this system" and keep going, the
-                // direction `WorldSnapshot`'s per-directive blob read degrades a
-                // failed decode in.
-                failures += 1
-                if firstFailure == nil { firstFailure = detail.designation }
-                continue
-            }
-            let classified = system.belts.compactMap { belt -> BeltInfo? in
-                BeltClass.classify(density: belt.density, richness: belt.richness)
-                    .map { BeltInfo(designation: belt.designation, beltClass: $0, richness: belt.richness) }
-            }
-            if !classified.isEmpty {
-                belts[detail.designation] = classified
-            }
-        }
+    /// One belt as SQLite projects it out of the blob: the three fields
+    /// `BeltClass.classify` ranks on, and nothing else. `richnessJSON` arrives as
+    /// the JSON text of the object, so it still needs a Swift decode — a tiny one.
+    @Selection
+    struct BeltProjection {
+        let system: String
+        let designation: String
+        let density: String?
+        let richnessJSON: String?
+    }
 
-        // One line per read, whatever the candidate or failure count.
-        if let firstFailure {
-            logger.debug(
-                """
-                belts: decoded \(candidates.count - failures, privacy: .public) surveyed \
-                system blob(s), \(failures, privacy: .public) failed (first: \(firstFailure, privacy: .public))
-                """
-            )
-        } else {
-            logger.debug(
-                "belts: decoded \(candidates.count, privacy: .public) surveyed system blob(s)"
+    /// `beltsBySystem` computed by SQLite instead of by decoding whole blobs:
+    /// `json_each` walks `$.belts` and projects the three ranked fields, so the
+    /// read scales with the belt count rather than with every surveyed system's
+    /// whole object graph. Same survey bound, applied in the same place.
+    static func beltsBySystem(in db: Database) throws -> [String: [BeltInfo]] {
+        // `json_each` is a table-valued function over a TEXT column, which the
+        // query builder cannot type today — `jsonEach()` requires the column to
+        // already carry a JSON representation.
+        //
+        // The `CASE` is what keeps one malformed blob from failing the whole
+        // read: `json_each` raises on invalid JSON, and it must never see any.
+        // A `WHERE json_valid(...)` would depend on the planner filtering before
+        // the join; sanitizing the argument does not.
+        let rows = try #sql(
+            """
+            SELECT \(SystemDetail.designation), \
+            json_extract("belt"."value", '$."designation"'), \
+            json_extract("belt"."value", '$."density"'), \
+            json_extract("belt"."value", '$."richness"') \
+            FROM \(SystemDetail.self), \
+            json_each( \
+            CASE WHEN json_valid(\(SystemDetail.systemJSON)) \
+            THEN \(SystemDetail.systemJSON) ELSE '{}' END, \
+            '$."belts"') AS "belt" \
+            WHERE \(SystemDetail.systemScanned)
+            """,
+            as: BeltProjection.self
+        )
+        .fetchAll(db)
+
+        var belts: [String: [BeltInfo]] = [:]
+        for row in rows {
+            let richness = row.richnessJSON
+                .flatMap { try? Self.richnessDecoder.decode([String: String].self, from: Data($0.utf8)) }
+                ?? [:]
+            guard let beltClass = BeltClass.classify(density: row.density, richness: richness) else { continue }
+            belts[row.system, default: []].append(
+                BeltInfo(designation: row.designation, beltClass: beltClass, richness: richness)
             )
         }
+        // One line per read. A blob SQLite rejected as invalid is absent from
+        // `rows` and so uncounted here — the projection cannot tell it from a
+        // system with no belts.
+        logger.debug(
+            """
+            belts: projected \(rows.count, privacy: .public) belt(s) \
+            over \(belts.count, privacy: .public) system(s)
+            """
+        )
         return belts
     }
+
+    private static let richnessDecoder = JSONDecoder()
 
     /// The single print hub: a print-capable device's location whose system is
     /// meshed AND which `stockByLocation` shows holding resources. **The stock
