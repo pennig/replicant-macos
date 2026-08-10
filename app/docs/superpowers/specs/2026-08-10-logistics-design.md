@@ -54,10 +54,16 @@ it moves cleanly. A real captured sequence for `8D53C9B1`:
 ```
 
 - **`carried` rises** → a pickup. The rise is the units collected.
-- **`carried` falls** → a delivery. It closes the oldest pickup for that
-  controller whose delivery columns are still null. With one freighter per
-  controller there is at most one such row, which is what makes the pairing
-  unambiguous today.
+- **`carried` falls** → a delivery. A delivery empties the hold, so it closes
+  **every** open pickup for that controller (delivery columns still null), not
+  just the newest. A multi-stop load leaves two open rows and one delivery
+  discharges both. When the open rows' `unitsCollected` sum equals the units
+  delivered, each row takes its own figure; when it does not, each is marked
+  `.partial`.
+
+The previous `carried` value is therefore not stored separately — it is the sum
+of `unitsCollected` over that controller's open rows, and zero when none are
+open. The ledger reconstructs its own baseline, so a relaunch needs no memory.
 
 `collect` and `deliver` name the source and destination designations directly.
 Round trips run about ten minutes, and loads observed range 87–411 units.
@@ -244,7 +250,7 @@ not optional polish.
 | Multi-stop load | per-type diffed against previous hold, `breakdownState = .partial` |
 | Delivery with no open pickup | delivery discarded, logged; never invents a pickup |
 | App closed / SSE disconnected | next row carries `followsGap`; data is not recoverable |
-| Digest arrives after delivery already happened | hold reads empty, sum mismatches → `.unavailable` |
+| Digest arrives after delivery already happened | hold reads empty, sum mismatches → `.partial` (the read succeeded; it merely disagreed) |
 | Two freighters on one controller | `carried` is a fleet total and blurs; **not supported** — see below |
 
 **Known limit.** `cargo_carried` is summed across the controller's fleet. Every
