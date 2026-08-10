@@ -225,6 +225,60 @@ struct RelayRunSupersededPrintTests {
     }
 }
 
+// MARK: - The relay in the hold outranks the one this run printed
+
+@Suite("Relay Run — what the carrier holds outranks what it printed")
+struct RelayRunClaimOutranksPrintTests {
+    /// Two printers stand at the hub, so a run's own print can complete AFTER it
+    /// has already taken a spare off the pool and stowed it. Resolution must
+    /// stay on the relay in the hold; following the clone watches a relay that
+    /// is standing on the ground and can never come aboard.
+    @Test("confirmStow follows the relay aboard, not the clone the print named")
+    func stowedRelayOutranksThePrintedClone() {
+        var directive = run("D1", carrier: "V1", createdAt: 0, step: RelayRun.Step.confirmingStow)
+        directive.stepStartedAt = Date(timeIntervalSince1970: 0)  // long past the stow deadline
+        let snapshot = world(
+            devices: [
+                carrier("V1"), hub(),
+                spare("RLY-POOL", location: nil, status: "stowed", stowedIn: "V1"),
+                spare("RLY-PRINT"),
+            ],
+            peers: [directive],
+            dispatched: [printOp(status: .completed, newDeviceCode: "RLY-PRINT")]
+        )
+
+        let action = RelayRun().nextAction(directive: directive, world: snapshot)
+
+        #expect(action == .claimRelay(deviceCode: "RLY-POOL", nextStep: RelayRun.Step.travelling))
+    }
+
+    /// …and the claim is what makes that survive `deploy`, which empties the
+    /// hold and so retires the aboard lookup exactly when the later steps still
+    /// need to know which relay this run is planting.
+    @Test("a stamped claim outlives the deploy that empties the hold")
+    func claimOutlivesTheDeploy() {
+        var directive = run("D1", carrier: "V1", createdAt: 0, step: RelayRun.Step.activating)
+        directive.claimedRelayCode = "RLY-POOL"
+        let point = "VEGA-1-L4"
+        let snapshot = world(
+            devices: [
+                carrier("V1", location: point), hub(),
+                spare("RLY-POOL", location: point),
+                spare("RLY-PRINT"),
+            ],
+            peers: [directive],
+            dispatched: [printOp(status: .completed, newDeviceCode: "RLY-PRINT")]
+        )
+
+        let action = RelayRun().nextAction(directive: directive, world: snapshot)
+
+        #expect(action == .dispatch(
+            kind: OperationKind.simple("activate"), deviceCode: "RLY-POOL",
+            params: CommandParams(), nextStep: RelayRun.Step.confirmingRelay
+        ))
+    }
+}
+
 // MARK: - FIFO
 
 @Suite("Relay Run — the pool is served oldest-first")

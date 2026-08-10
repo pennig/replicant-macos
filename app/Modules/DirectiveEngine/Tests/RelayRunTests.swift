@@ -458,7 +458,7 @@ struct RelayRunAcquireTests {
     @Test func skipsPrintingWhenARelayIsAlreadyAboard() {
         let snapshot = world(devices: [carrier(), hub(), relay(stowedIn: "V1")])
         #expect(RelayRun().nextAction(directive: running(), world: snapshot)
-                == .advanceStep(nextStep: RelayRun.Step.travelling))
+                == .claimRelay(deviceCode: "RLY1", nextStep: RelayRun.Step.travelling))
     }
 
     /// A row carrying `sourceRelayCode` must never fall through into the print
@@ -1095,7 +1095,7 @@ struct RelayRunStowingTests {
             dispatchedOperations: [done.id: done]
         )
         #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.stowing), world: snapshot)
-                == .advanceStep(nextStep: RelayRun.Step.travelling))
+                == .claimRelay(deviceCode: "RLY1", nextStep: RelayRun.Step.travelling))
     }
 
     /// A relay that is neither aboard nor anywhere near the carrier cannot be
@@ -1125,7 +1125,7 @@ struct RelayRunConfirmStowTests {
             dispatchedOperations: [done.id: done]
         )
         #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.confirmingStow), world: snapshot)
-                == .advanceStep(nextStep: RelayRun.Step.travelling))
+                == .claimRelay(deviceCode: "RLY1", nextStep: RelayRun.Step.travelling))
     }
 
     /// Nothing else moves this row: `stow` is immediate and emits no operation,
@@ -1548,6 +1548,11 @@ struct RelayRunSequenceTests {
                 directive.step = next
                 directive.stepStartedAt = fixtureNow
 
+            case let .claimRelay(deviceCode, next):
+                directive.claimedRelayCode = deviceCode
+                directive.step = next
+                directive.stepStartedAt = fixtureNow
+
             case .done:
                 finished = true
 
@@ -1626,6 +1631,11 @@ struct RelayRunSequenceTests {
                 directive.stepStartedAt = fixtureNow
 
             case let .advanceStep(next):
+                directive.step = next
+                directive.stepStartedAt = fixtureNow
+
+            case let .claimRelay(deviceCode, next):
+                directive.claimedRelayCode = deviceCode
                 directive.step = next
                 directive.stepStartedAt = fixtureNow
 

@@ -316,6 +316,10 @@ public struct Directive: Identifiable, Equatable, Sendable {
     /// `deviceCode`, as it always has. An earlier "committed-devices" lease
     /// field was proposed and rejected — do not let this grow into one.
     public var sourceRelayCode: String?
+    /// The relay this run has taken possession of, stamped once it is confirmed
+    /// in the carrier's hold. Resolution reads it ahead of every derived lookup,
+    /// so what the run is carrying cannot be re-decided by a later print.
+    public var claimedRelayCode: String?
     /// The ordered queue of star-system designations still to visit.
     ///
     /// For a continuous run this is append-only HISTORY rather than a plan: the
@@ -358,6 +362,7 @@ public struct Directive: Identifiable, Equatable, Sendable {
         roamCentre: String? = nil,
         fleetTag: String? = nil,
         sourceRelayCode: String? = nil,
+        claimedRelayCode: String? = nil,
         targets: [String],
         targetIndex: Int,
         step: String,
@@ -376,6 +381,7 @@ public struct Directive: Identifiable, Equatable, Sendable {
         self.roamCentre = roamCentre
         self.fleetTag = fleetTag
         self.sourceRelayCode = sourceRelayCode
+        self.claimedRelayCode = claimedRelayCode
         self.targets = targets
         self.targetIndex = targetIndex
         self.step = step
@@ -552,6 +558,17 @@ extension Directive {
         try #sql(
             """
             ALTER TABLE "directives" ADD COLUMN "sourceRelayCode" TEXT
+            """
+        )
+        .execute(db)
+    }
+
+    /// Appended, never folded into the migration above it: that one has shipped
+    /// into real databases, so editing it means it silently never runs again.
+    public static let addClaimedRelayCode = SchemaMigration("Add 'claimedRelayCode' to 'directives'") { db in
+        try #sql(
+            """
+            ALTER TABLE "directives" ADD COLUMN "claimedRelayCode" TEXT
             """
         )
         .execute(db)

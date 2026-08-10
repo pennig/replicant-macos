@@ -89,6 +89,14 @@ enum DirectiveExecutor {
             await move(directive, to: nextStep, controllerCode: deviceCode, deviceCode: deviceCode)
             return true
 
+        case let .claimRelay(deviceCode, nextStep):
+            logger.info("directive \(directive.id, privacy: .public) claims relay \(deviceCode, privacy: .public)")
+            await move(
+                directive, to: nextStep, controllerCode: directive.controllerCode,
+                deviceCode: deviceCode, claimedRelayCode: deviceCode
+            )
+            return true
+
         case let .refreshSystem(designation, nextStep):
             // Best-effort by contract: the endpoint 403s for a system the census
             // has never marked explored, and a failed hydrate leaves `nextStep`
@@ -299,13 +307,17 @@ enum DirectiveExecutor {
         _ directive: Directive,
         to nextStep: String,
         controllerCode: String?,
-        deviceCode: String? = nil
+        deviceCode: String? = nil,
+        claimedRelayCode: String? = nil
     ) async {
         @Dependency(\.date) var date
         @Dependency(\.uuid) var uuid
         var updated = directive
         updated.step = nextStep
         updated.controllerCode = controllerCode
+        // Nil leaves an existing claim standing: every other transition passes
+        // nil, and none of them means "the run has let go of its relay".
+        if let claimedRelayCode { updated.claimedRelayCode = claimedRelayCode }
         updated.stepStartedAt = date.now
         updated.updatedAt = date.now
         await commit(updated, [

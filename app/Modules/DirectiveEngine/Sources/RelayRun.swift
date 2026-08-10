@@ -277,11 +277,19 @@ public struct RelayRun: MissionStepMachine {
            source.deviceType == relayDeviceType {
             return source
         }
-        if let printed = printedRelay(in: world) { return printed }
-        // Aboard BEFORE the pool: once a relay is in the hold it is settled, and
-        // asking the pool first at a hub that still has spares standing on it
-        // would resolve a DIFFERENT relay than the one this run is carrying.
+        // The stamped claim outranks every derived lookup below it, and is the
+        // only one that survives `deploy` emptying the hold.
+        if let code = directive.claimedRelayCode,
+           let claimed = world.device(code),
+           claimed.deviceType == relayDeviceType {
+            return claimed
+        }
+        // Aboard BEFORE the print and the pool: a relay in the hold is settled,
+        // and either of those can name a DIFFERENT relay than the one this run
+        // is carrying — the pool at a hub with spares on it, the print when the
+        // run took stock rather than waiting for its own clone.
         if let aboard = SalvageRun.relay(aboard: carrier, in: world) { return aboard }
+        if let printed = printedRelay(in: world) { return printed }
         // The pool claim, so `stowing` commands exactly the relay `acquire` took.
         // Queue-checked, unlike the co-location fallback below it.
         if let location = carrier.location,
@@ -353,8 +361,8 @@ public struct RelayRun: MissionStepMachine {
         }
         // A relay already aboard is one this run need not print, and is what makes
         // a relaunch mid-run idempotent.
-        if SalvageRun.relay(aboard: carrier, in: world) != nil {
-            return .advanceStep(nextStep: Step.travelling)
+        if let aboard = SalvageRun.relay(aboard: carrier, in: world) {
+            return .claimRelay(deviceCode: aboard.deviceCode, nextStep: Step.travelling)
         }
         // Before the hub lookup, so it holds even where the printer has gone away,
         // and before the rail, since existing stock spends nothing.
@@ -672,7 +680,7 @@ public struct RelayRun: MissionStepMachine {
         // Already aboard — either the co-located carrier took the clone by
         // itself (the composition's premise) or this step is being re-entered.
         if relay.stowedInDeviceCode == carrier.deviceCode {
-            return .advanceStep(nextStep: Step.travelling)
+            return .claimRelay(deviceCode: relay.deviceCode, nextStep: Step.travelling)
         }
         guard let location = carrier.location, relay.location == location else {
             // A relay somewhere else cannot be stowed onto this carrier;
@@ -699,7 +707,7 @@ public struct RelayRun: MissionStepMachine {
             return .stall(.noRelayCoLocated)
         }
         if relay.stowedInDeviceCode == carrier.deviceCode {
-            return .advanceStep(nextStep: Step.travelling)
+            return .claimRelay(deviceCode: relay.deviceCode, nextStep: Step.travelling)
         }
         if world.now.timeIntervalSince(directive.stepStartedAt) > Self.stowDeadline {
             return .stall(.noRelayCoLocated)
