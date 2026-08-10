@@ -77,7 +77,10 @@ public struct RawAPIFeature {
                 else { return .none }
                 state.draft = item.request
                 state.requestError = nil
-                state.responsePane = ResponsePaneFeature.State(response: item.response.asResponse)
+                state.responsePane = ResponsePaneFeature.State(
+                    response: item.response.asResponse,
+                    responseID: item.id
+                )
                 return .none
 
             case .binding:
@@ -117,7 +120,10 @@ public struct RawAPIFeature {
                 )
                 state.$history.withLock { $0.insert(item, at: 0) }
                 state.selectedHistoryID = item.id
-                state.responsePane = ResponsePaneFeature.State(response: captured.asResponse)
+                state.responsePane = ResponsePaneFeature.State(
+                    response: captured.asResponse,
+                    responseID: item.id
+                )
                 return .none
 
             case let .requestFailed(message):

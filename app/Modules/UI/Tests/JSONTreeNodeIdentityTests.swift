@@ -29,17 +29,28 @@ import Utils
         (node.children ?? []).reduce(into: [node.id]) { $0 += ids($1) }
     }
 
-    @Test func rebuildingTheSameValueYieldsTheSameIDs() {
-        #expect(ids(JSONTreeNode(value: payload)) == ids(JSONTreeNode(value: payload)))
+    @Test func rebuildingTheSameDocumentYieldsTheSameIDs() {
+        #expect(
+            ids(JSONTreeNode(documentID: "evt-1", value: payload))
+                == ids(JSONTreeNode(documentID: "evt-1", value: payload))
+        )
+    }
+
+    /// Structurally identical documents must not share a keyspace, or one
+    /// document's collapsed rows apply to the next one selected.
+    @Test func differentDocumentsShareNoIDs() {
+        let first = Set(ids(JSONTreeNode(documentID: "evt-1", value: payload)))
+        let second = Set(ids(JSONTreeNode(documentID: "evt-2", value: payload)))
+        #expect(first.isDisjoint(with: second))
     }
 
     @Test func idsAreUniqueWithinATree() {
-        let all = ids(JSONTreeNode(value: payload))
+        let all = ids(JSONTreeNode(documentID: "evt-1", value: payload))
         #expect(Set(all).count == all.count)
     }
 
     @Test func equalSiblingsStillGetDistinctIDs() {
-        let children = JSONTreeNode(value: .array([.string("x"), .string("x")])).children ?? []
+        let children = JSONTreeNode(documentID: "evt-1", value: .array([.string("x"), .string("x")])).children ?? []
         #expect(children.count == 2)
         #expect(children[0].id != children[1].id)
     }

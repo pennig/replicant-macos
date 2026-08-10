@@ -17,9 +17,9 @@ public struct JSONTreeNode: Identifiable {
         }
     }
 
-    /// The node's ordinal path from the root (`"0"`, `"0.3"`, `"0.3.1"`). Derived
-    /// from position alone, so rebuilding a tree from an equal value reproduces
-    /// every id and the rows keep their identity and expansion state.
+    /// The document id followed by the node's ordinal path (`"evt-9.3.1"`).
+    /// Rebuilding a document reproduces every id, so rows keep their identity and
+    /// expansion state; two documents share none, so neither inherits the other's.
     public let id: String
     let key: Key?
     let value: JSONValue
@@ -28,8 +28,11 @@ public struct JSONTreeNode: Identifiable {
     // its whole subtree.
     let children: [JSONTreeNode]?
 
-    public init(key: Key? = nil, value: JSONValue) {
-        self.init(id: "0", key: key, value: value)
+    /// - Parameter documentID: identity of the JSON being shown. Distinct
+    ///   documents MUST pass distinct values — a shared one lets a collapsed row
+    ///   in the last document collapse the matching row in the next.
+    public init(documentID: String, value: JSONValue) {
+        self.init(id: documentID, key: nil, value: value)
     }
 
     private init(id: String, key: Key?, value: JSONValue) {
