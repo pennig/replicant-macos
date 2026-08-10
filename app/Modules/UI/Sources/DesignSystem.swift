@@ -96,6 +96,29 @@ public extension ShapeStyle where Self == Color {
     static var rcStatusWaiting: Color { Color("StatusWaiting", bundle: rcBundle) }
     static var rcStatusOffline: Color { Color("StatusOffline", bundle: rcBundle) }
 
+    // Data-viz categorical slots, one per resource type. Validated for
+    // adjacent-pair separation in `ResourceCost.displayOrder`; reordering the
+    // mapping breaks that, so keep the pairing as written.
+    static var rcResourceStructural: Color { Color("ResourceStructural", bundle: rcBundle) }
+    static var rcResourceConductive: Color { Color("ResourceConductive", bundle: rcBundle) }
+    static var rcResourceSilicates:  Color { Color("ResourceSilicates",  bundle: rcBundle) }
+    static var rcResourceCarbon:     Color { Color("ResourceCarbon",     bundle: rcBundle) }
+    static var rcResourceRares:      Color { Color("ResourceRares",      bundle: rcBundle) }
+    static var rcResourceVolatiles:  Color { Color("ResourceVolatiles",  bundle: rcBundle) }
+
+    /// The categorical slot for a resource key, muted ink for anything unknown.
+    static func rcResource(_ key: String) -> Color {
+        switch key {
+        case "structural": .rcResourceStructural
+        case "conductive": .rcResourceConductive
+        case "silicates":  .rcResourceSilicates
+        case "carbon":     .rcResourceCarbon
+        case "rares":      .rcResourceRares
+        case "volatiles":  .rcResourceVolatiles
+        default:           .rcTextTertiary
+        }
+    }
+
     // Special
     static var rcNPC:         Color { Color("NPCAccent",   bundle: rcBundle) }
     static var rcDanger:      Color { Color("Danger",      bundle: rcBundle) }
