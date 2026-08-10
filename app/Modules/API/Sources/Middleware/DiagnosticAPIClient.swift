@@ -117,6 +117,9 @@ public struct DiagnosticAPIClient: APIProtocol {
     public func getV1DevicesDeviceCodeLogs(_ input: Operations.GetV1DevicesDeviceCodeLogs.Input) async throws -> Operations.GetV1DevicesDeviceCodeLogs.Output {
         try await DecodingDiagnostics.capture("getV1DevicesDeviceCodeLogs") { try await wrapped.getV1DevicesDeviceCodeLogs(input) }
     }
+    public func postV1DevicesDeviceCodeRetrieve(_ input: Operations.PostV1DevicesDeviceCodeRetrieve.Input) async throws -> Operations.PostV1DevicesDeviceCodeRetrieve.Output {
+        try await DecodingDiagnostics.capture("postV1DevicesDeviceCodeRetrieve") { try await wrapped.postV1DevicesDeviceCodeRetrieve(input) }
+    }
     public func getV1DevicesDeviceCodeNetwork(_ input: Operations.GetV1DevicesDeviceCodeNetwork.Input) async throws -> Operations.GetV1DevicesDeviceCodeNetwork.Output {
         try await DecodingDiagnostics.capture("getV1DevicesDeviceCodeNetwork") { try await wrapped.getV1DevicesDeviceCodeNetwork(input) }
     }
@@ -272,6 +275,12 @@ public struct DiagnosticAPIClient: APIProtocol {
     }
     public func postV1Feedback(_ input: Operations.PostV1Feedback.Input) async throws -> Operations.PostV1Feedback.Output {
         try await DecodingDiagnostics.capture("postV1Feedback") { try await wrapped.postV1Feedback(input) }
+    }
+    public func getV1Tutorials(_ input: Operations.GetV1Tutorials.Input) async throws -> Operations.GetV1Tutorials.Output {
+        try await DecodingDiagnostics.capture("getV1Tutorials") { try await wrapped.getV1Tutorials(input) }
+    }
+    public func getV1TutorialsSlug(_ input: Operations.GetV1TutorialsSlug.Input) async throws -> Operations.GetV1TutorialsSlug.Output {
+        try await DecodingDiagnostics.capture("getV1TutorialsSlug") { try await wrapped.getV1TutorialsSlug(input) }
     }
     public func postV1AdminMessage(_ input: Operations.PostV1AdminMessage.Input) async throws -> Operations.PostV1AdminMessage.Output {
         try await DecodingDiagnostics.capture("postV1AdminMessage") { try await wrapped.postV1AdminMessage(input) }
