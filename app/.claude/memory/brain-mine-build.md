@@ -164,6 +164,16 @@ relaxing the assertion.
   leaving eleven devices parked at a belt mining nothing. A real check would
   ask whether the mining controller is running `MineRun.miningDirective`,
   which is what `Brain.mineHealth` already asks.
+- **`MineFleetPrint` pays the full 30-minute `printDeadline` at EVERY job
+  transition, not just on a dead queue.** The final-review fix that removed the
+  over-print cascade (`printing` advances only on an empty `remaining`) has no
+  "my dispatched type is satisfied, hand back promptly" path — the dispatched
+  type is not statelessly recoverable (a `.print` dispatch logs verb + device,
+  not the `device_type` param). An 8-job fleet build therefore waits ~7 × 30 min
+  of pure deadline on top of print time (~6h total vs ~2.8h). Deliberate trade:
+  wall-clock on an unattended print bought the end of a guaranteed ~28%
+  over-spend. A structured params field on the dispatch log entry would allow
+  the prompt hand-back and retire this.
 - **`installedBelts != hub` makes the hub's own belt structurally invisible**
   to the mine estate: a mine installed there answers no installed query, so
   the goal would re-site it forever. Now guarded at BOTH ends by the final-review
@@ -182,13 +192,15 @@ Per-product event-stream runs, one output path each, gated on zero
 
 | Product | Tests | Failed | runEnded | started == ended |
 | --- | --- | --- | --- | --- |
-| DirectiveEngineTests | 1,104 | 0 | 1 | yes |
+| DirectiveEngineTests | 1,110 | 0 | 1 | yes |
 | DirectivesFeatureTests | 202 | 0 | 1 | yes |
 | GameServicesTests | 250 | 0 | 1 | yes |
 | GameModelsTests | 117 | 0 | 1 | yes |
 | BobnetFeatureTests | 78 | 0 | 1 | yes |
 
-**1,751 tests, zero failures, zero crashed targets.**
+**1,757 tests, zero failures, zero crashed targets.** The DirectiveEngine and
+DirectivesFeature rows are the post-fix-wave re-runs; the other three products
+were untouched by the wave and carry their pre-wave numbers.
 
 `check-comments.sh` over every file this effort touched found only
 pre-existing history-pattern hits, all dated/worded before this effort's
