@@ -39,4 +39,26 @@ public struct TransportDigest: Equatable, Sendable {
         }?["device_code"]?.stringValue
         self.observedAt = envelope.date ?? now
     }
+
+    public init(
+        controllerCode: String,
+        collect: String?,
+        deliver: String?,
+        cargoCarried: Int,
+        cargoCapacity: Int,
+        collectedCount: Int,
+        deliveredCount: Int,
+        activeDeviceCode: String?,
+        observedAt: Date
+    ) {
+        self.controllerCode = controllerCode
+        self.collect = collect
+        self.deliver = deliver
+        self.cargoCarried = cargoCarried
+        self.cargoCapacity = cargoCapacity
+        self.collectedCount = collectedCount
+        self.deliveredCount = deliveredCount
+        self.activeDeviceCode = activeDeviceCode
+        self.observedAt = observedAt
+    }
 }
