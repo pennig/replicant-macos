@@ -94,6 +94,11 @@ struct ReplicantApp: App {
         let locationsIngestion = LocationsIngestion()
         for route in MessagesIngestion.eventRoutes { gameSync.registerRoute(route) }
         for route in locationsIngestion.eventRoutes { gameSync.registerRoute(route) }
+        // The haul-yield ledger. An AMI-controlled transport emits no events of
+        // its own, so the controller's digest is the only channel that sees a
+        // pickup at all.
+        let logisticsIngestion = LogisticsIngestion()
+        for route in logisticsIngestion.eventRoutes { gameSync.registerRoute(route) }
         gameSync.registerRoute(LocationEventsIngestion.eventRoute)
         // Completion lands on the one quest row it names, instead of the
         // `eventRoute` above walking every page of `accounts/events` to find it.
