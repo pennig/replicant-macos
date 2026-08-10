@@ -329,6 +329,13 @@ public enum MarkerSize {
     public static let resourceSwatch: CGFloat = 8
 }
 
+/// Frame heights for `Charts` views — a chart's height is a size like any
+/// other, so it lives here rather than as an inlined `frame(minHeight:)`.
+public enum ChartSize {
+    public static let overTime: CGFloat = 200
+    public static let breakdown: CGFloat = 160
+}
+
 /// Shared motion curves. A disclosure gesture — a section collapsing, a host
 /// opening — reads the same everywhere, so the curve lives here rather than as
 /// a literal at each toggle.
