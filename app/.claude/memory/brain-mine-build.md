@@ -221,15 +221,54 @@ from `MineFleetPrint.swift:56` and `Brain.swift:1203` (inside `mineReadiness`);
 match the plan's expected call graph.
 
 **First live install (ACHERNUR-BELT-1, 2026-08-09/10) surfaced three defects**,
-filed as `.scratch/automation-brain/issues/11–13`: the pinned haul row renders
-"Nothing reachable"/unlocked because `DirectiveRow.merge` only knows the
-tag-resolution path and the row's belt-scoped tag is worn by no device while
-`controllerCode` stays nil (the `isInForce` short-circuit skips the only stamp)
-— ticket 11; the permanent mine's belt controllers have no owning row at all,
-so Reconfigure/Clear is unguarded by design — ticket 12; and `MineFleetPrint`
-over-printed 3 surplus bots + 4 surplus transports because `printDeadline`
-(30 min) undercuts the ~32-min transport job, so every op-close re-decides
-against local rows that haven't synced the clone yet — ticket 13.
+filed as `.scratch/automation-brain/issues/11–13` and **all three FIXED
+2026-08-10**.
+
+**11 — pinned haul row.** `DirectiveRow.merge` knew only the tag-resolution
+path, and a pinned row's belt-scoped tag is worn by no device, so it rendered
+"Nothing reachable" with no designation; `controllerCode` stayed nil so the
+ferry's built-in row was never locked. Fixed by branching on
+`HaulRun.pinnedSource(of:)` (resolve off the row's OWN `deviceCode` via
+`drainedPile`) and stamping `controllerCode` at launch in `ensureMineFerries`.
+The ticket's "the only stamp path is skipped forever" was backwards in a way
+worth knowing: `assign`'s pinned branch emits `.assignController` whenever
+`isInForce` is false, so the lock would have appeared only once the ferry
+started MISBEHAVING. Two adjacent tag-blind surfaces fell out —
+`DirectiveTargetsSection` drew no Assignments section for a pinned row, and
+`DirectiveDetailView` titled every haul run "Haul Run", making two mines
+indistinguishable one click below the list.
+
+**12 — unowned belt controllers.** The lock model assumed every engine-owned
+built-in is held by a live mission's `controllerCode`; the permanent mine has no
+such row by design. Resolved with a **derived predicate**: an in-force directive
+on a device wearing an `auto:` tag and owned by no mission is engine-owned, the
+lowest-sorting tag is the owner, and a belt is claimed only for `auto:mine` at a
+location in `installedBelts` computed over devices with a directive IN FORCE (an
+idle mine fleet at the hub is inventory, not a mine). **The gap was 8 rows, not
+the 2 the ticket named** — six service bots were also editable, and
+`RepairFleet.isArmed` needs `currentDirective == "service"`, so a Clear silently
+disarmed repair on the survey, salvage and mine fleets. The bare tag is now
+load-bearing for a guard; un-tagging is the take-back gesture, documented in
+`app/CONTEXT.md` and in the detail pane's lock note.
+
+**13 — `MineFleetPrint` over-print.** The ticket's arithmetic was wrong and the
+DB verification rewrote the cause. A transport job is **exactly 30m00s**, so
+`printDeadline` does not undercut it — it EQUALS it, buying zero holdback, and
+all 14 dispatches of the install exited on the deadline rather than by finding
+their clones. The real enabling condition was an **SSE delivery backlog of 0 →
+2h08m**: ops closed on the POLL path (which never carries the clone's device
+code) while device rows lagged 28–117 min. Dispatches 1–4 at ~0 lag produced
+exact counts; over-printing began at the first clone landing inside the lag
+window and stopped when the backlog drained. The multi-quantity "settles on the
+first clone" theory is **contradicted** — the qty-2 bot op stayed open across
+both clones. Fixed by porting `RelayRun`'s pattern: `fleetEvidenceIsStale`
+compares the newest `updatedAt` among hub-located rows against
+`stepStartedAt` and buys `.refreshDevicesInSystem` before dispatch.
+**The witness must be `stepStartedAt`, never the op close** — the op closed
+BECAUSE the hub was polled, so `hub.updatedAt ≈ close + 10s` and any
+close-derived watermark is self-satisfying. `RestockRun` shares the race and is
+LESS guarded (its deadline check only logs, then falls through unconditionally);
+scoped out and filed as ticket 14.
 
 Related: [brain-tendmesh-build](brain-tendmesh-build.md),
 [brain-survey-goal-build](brain-survey-goal-build.md),
