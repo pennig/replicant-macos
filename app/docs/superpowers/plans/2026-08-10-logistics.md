@@ -44,6 +44,32 @@
 | `macOS/MainFeature.swift` | content-pane branch |
 | `macOS/ReplicantApp.swift` | route registration |
 
+## As built — Tasks 3 and 4 diverge from their code blocks below
+
+Review caught two Critical defects in the plan's own code. **The shipped code is
+correct; the Task 3 and Task 4 blocks below are not.** Read the source, not them.
+
+1. **The route must not capture `self`.** The blocks below show
+   `apply: { [weak self] … }` with the instance held in a local in
+   `ReplicantApp.swift`. Nothing retains the instance, so it deallocates at
+   function exit and every route becomes a permanent silent no-op. As built,
+   `eventRoutes` lifts `pendingGap` into a local and the closures capture that
+   `LockIsolated` by value, with `ingest`/`recordPickup`/`recordDelivery` as
+   `static` — matching `LocationsIngestion`. A strong `self` capture is NOT the
+   fix; it is a retain cycle through a stored route.
+2. **There is no baseline seed, and `openUnits` is never nil.** The blocks below
+   gate on a `hasHistory` flag derived from the same table this route is the only
+   writer of, so a fresh table can never bootstrap and the ledger stays empty
+   forever. As built, the query filters `deliveredAt IS NULL` in SQL, sums those
+   open rows, and always passes a non-nil `Int`; `HaulYieldMachine.step` takes
+   `openUnits: Int` with no nil branch. Zero means an empty hold. This also
+   removed a full-history JSON decode that ran at digest cadence.
+
+Also as built: attribution filters `DirectiveStatus.openCases` ordered
+`createdAt` descending; `fleetSize` fails closed at `?? 2`; a delivery demotes
+only from `.exact`; and `haulYields.controllerCode` gained its own append-only
+index migration.
+
 **One deviation from the spec's §5:** it lists a separate `HaulYieldClient` for the writes. The writes are three statements used by one caller, so they live in `LogisticsIngestion` and no client is created. Add the seam if a second caller ever appears.
 
 ---
