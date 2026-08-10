@@ -7,12 +7,13 @@ import Testing
         carried: Int,
         collected: Int = 0,
         delivered: Int = 0,
-        device: String? = "F7B455B6"
+        device: String? = "F7B455B6",
+        deliver: String? = "AINALRAM-BELT-1"
     ) -> TransportDigest {
         TransportDigest(
             controllerCode: "8D53C9B1",
             collect: "ACHERNUR-BELT-1",
-            deliver: "AINALRAM-BELT-1",
+            deliver: deliver,
             cargoCarried: carried,
             cargoCapacity: 500,
             collectedCount: collected,
@@ -72,5 +73,19 @@ import Testing
             observedAt: d.observedAt
         )
         #expect(HaulYieldMachine.step(openUnits: 0, digest: d) == .none)
+    }
+
+    @Test func aPickupWithNoActiveDeviceIsNotRecorded() {
+        #expect(
+            HaulYieldMachine.step(openUnits: 0, digest: digest(carried: 345, collected: 1, device: nil))
+                == .none
+        )
+    }
+
+    @Test func aDeliveryWithNoNamedDestinationIsNotRecorded() {
+        #expect(
+            HaulYieldMachine.step(openUnits: 345, digest: digest(carried: 0, delivered: 1, deliver: nil))
+                == .none
+        )
     }
 }
