@@ -126,9 +126,7 @@ Create `app/Modules/GameModels/Sources/HaulYield.swift`:
 //  HaulYield.swift
 //  Replicould — GameModels
 //
-//  One Haul Run pickup: what a transport loaded, where, and when. Delivery
-//  columns fill in when that half is observed. Yields are reconstructed from
-//  digest deltas, never reported, so `breakdownState` says how much to trust.
+//  One Haul Run pickup, reconstructed from digest deltas.
 //
 
 import Foundation
@@ -339,9 +337,7 @@ Expected: FAIL — `cannot find 'TransportDigest' in scope`.
 //  TransportDigest.swift
 //  Replicould — GameServices (shared clients + command engine)
 //
-//  A typed read of `ami.transport.digest`. An AMI-controlled transport emits no
-//  events of its own, so this rollup is the only channel carrying its haul
-//  activity, and `report.cargo_carried` is the figure the ledger differences.
+//  A typed read of `ami.transport.digest` — an AMI transport's only channel.
 //
 
 import API
@@ -528,9 +524,7 @@ The tests construct digests directly. Append to `TransportDigest`:
 //  HaulYieldMachine.swift
 //  Replicould — GameServices (shared clients + command engine)
 //
-//  The whole pickup/delivery decision, as a pure function over the fleet's
-//  carried total. `openUnits` is the ledger's own reconstruction — the sum of a
-//  controller's unclosed pickups — so nothing is held across a relaunch.
+//  The pickup/delivery decision, pure over the fleet's carried total.
 //
 
 import Foundation
@@ -873,9 +867,7 @@ Expected: FAIL — `cannot find 'LogisticsIngestion' in scope`.
 //  LogisticsIngestion.swift
 //  Replicould — GameServices (shared clients + command engine)
 //
-//  The haul-yield ledger's ingestion policy. An AMI-controlled transport is
-//  event-silent, so a pickup is only visible as a rise in the controller
-//  digest's carried total, and its composition only by reading the device then.
+//  Ingestion policy: a pickup is a rise in the digest's carried total.
 //
 
 import Dependencies
@@ -1323,9 +1315,7 @@ Expected: FAIL — no such module `LogisticsFeature`.
 //  LogisticsFeature.swift
 //  Replicould — Logistics feature
 //
-//  The haul-yield ledger: every Haul Run pickup, its composition, and the
-//  charts over it. Rows are reconstructed from digest deltas, so the screen
-//  shows `breakdownState` rather than presenting every figure as measured.
+//  The haul-yield ledger: every Haul Run pickup and the charts over it.
 //
 
 import ComposableArchitecture
@@ -1599,9 +1589,7 @@ Expected: FAIL — `cannot find 'YieldSummary' in scope`.
 //  YieldSummary.swift
 //  Replicould — Logistics feature
 //
-//  Every figure the Logistics screen shows, folded from the ledger rows in one
-//  pass. Pure over its inputs — the clock arrives as `now` — so the charts and
-//  the KPI row are tested without a database or a view.
+//  Every figure the screen shows, folded from the ledger rows in one pass.
 //
 
 import Foundation
@@ -1764,9 +1752,7 @@ Three rules from the spec that are not negotiable here:
 //  YieldCharts.swift
 //  Replicould — Logistics feature
 //
-//  Composition over time, and the two magnitude breakdowns. The categorical
-//  palette clears its gate on ADJACENT pairs only, which is why composition is
-//  a stack and why direct labels are structural rather than decoration.
+//  Composition over time, and the two magnitude breakdowns.
 //
 
 import Charts
