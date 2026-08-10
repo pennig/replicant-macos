@@ -220,6 +220,17 @@ from `MineFleetPrint.swift:56` and `Brain.swift:1203` (inside `mineReadiness`);
 `site` is called from `Brain.swift:1217`, also inside `mineReadiness` — both
 match the plan's expected call graph.
 
+**First live install (ACHERNUR-BELT-1, 2026-08-09/10) surfaced three defects**,
+filed as `.scratch/automation-brain/issues/11–13`: the pinned haul row renders
+"Nothing reachable"/unlocked because `DirectiveRow.merge` only knows the
+tag-resolution path and the row's belt-scoped tag is worn by no device while
+`controllerCode` stays nil (the `isInForce` short-circuit skips the only stamp)
+— ticket 11; the permanent mine's belt controllers have no owning row at all,
+so Reconfigure/Clear is unguarded by design — ticket 12; and `MineFleetPrint`
+over-printed 3 surplus bots + 4 surplus transports because `printDeadline`
+(30 min) undercuts the ~32-min transport job, so every op-close re-decides
+against local rows that haven't synced the clone yet — ticket 13.
+
 Related: [brain-tendmesh-build](brain-tendmesh-build.md),
 [brain-survey-goal-build](brain-survey-goal-build.md),
 [brain-salvage-build](brain-salvage-build.md),
