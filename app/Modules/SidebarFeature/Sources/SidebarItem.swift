@@ -14,7 +14,7 @@ public enum SidebarItem: String, CaseIterable, Identifiable, Hashable, Sendable 
     // Catalog
     case stars, locations, devices, replicants, blueprints, civilisations
     // Operations
-    case directives, locationEvents, printQueue, operationsLog
+    case directives, locationEvents, printQueue, operationsLog, logistics
     // Comms
     case messages, bobnet
 
@@ -32,6 +32,7 @@ public enum SidebarItem: String, CaseIterable, Identifiable, Hashable, Sendable 
         case .locationEvents: "Location Events"
         case .printQueue: "Printing"
         case .operationsLog: "Operations Log"
+        case .logistics: "Logistics"
         case .messages: "Messages"
         case .bobnet: "Bobnet"
         }
@@ -49,6 +50,7 @@ public enum SidebarItem: String, CaseIterable, Identifiable, Hashable, Sendable 
         case .locationEvents: "flag"
         case .printQueue: "printer"
         case .operationsLog: "list.bullet.rectangle"
+        case .logistics: "shippingbox"
         case .messages: "envelope"
         case .bobnet: "bubble.left.and.bubble.right"
         }
@@ -58,7 +60,7 @@ public enum SidebarItem: String, CaseIterable, Identifiable, Hashable, Sendable 
     /// live Operations Log ledger).
     public var hasDetail: Bool {
         switch self {
-        case .operationsLog, .stars: false
+        case .operationsLog, .stars, .logistics: false
         default: true
         }
     }
@@ -75,7 +77,7 @@ public enum SidebarItem: String, CaseIterable, Identifiable, Hashable, Sendable 
 
     public static let groups: [Group] = [
         Group(id: "Catalog", items: [.stars, .locations, .devices, .replicants, .blueprints, .civilisations]),
-        Group(id: "Operations", items: [.directives, .locationEvents, .printQueue, .operationsLog]),
+        Group(id: "Operations", items: [.directives, .locationEvents, .printQueue, .operationsLog, .logistics]),
         Group(id: "Comms", items: [.messages, .bobnet]),
     ]
 }
