@@ -153,6 +153,25 @@ relaxing the assertion.
   (7) all carry the same one-or-two-line overage, consistent with `Brain.swift`'s
   own long-standing 9-line header. `check-comments.sh` does not check line
   counts, only history-pattern regexes — see [comment-policy](comment-policy.md).
+- **`installedBelts` reads true at DETACH, not at arm.** The predicate is
+  "a tagged `ami_mining_controller` standing away from the hub", which is
+  satisfied the instant `MineRun`'s detach lands — several ticks before
+  `adopting`/`arming` have made the fleet do anything. Nothing exploits this
+  today because no path re-enters `preflight` once a run is past it, and
+  `preflight`'s `installedBelts` check is the only reader that retires a row
+  `.done`. But any future skip verb, remap verb, or preflight re-entry would
+  read a landed-but-unarmed fleet as an installed mine and retire the run,
+  leaving eleven devices parked at a belt mining nothing. A real check would
+  ask whether the mining controller is running `MineRun.miningDirective`,
+  which is what `Brain.mineHealth` already asks.
+- **`installedBelts != hub` makes the hub's own belt structurally invisible**
+  to the mine estate: a mine installed there answers no installed query, so
+  the goal would re-site it forever. Now guarded at BOTH ends by the final-review
+  fix wave — `Brain.mineReadiness` unions the hub location into the occupied
+  set, and `MineRun.preflight` stalls `.unreachableDevice` on a target belt
+  equal to the derived hub. The guard is the fix, not the filter: relaxing
+  `installedBelts` to include the hub would break `MineRecipe.unassignedFleet`,
+  which needs the hub's own standing fleet to read as free.
 
 ## Sign-off (2026-08-09)
 

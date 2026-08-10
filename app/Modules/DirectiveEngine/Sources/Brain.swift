@@ -1212,10 +1212,15 @@ struct Brain: Sendable {
             return .idle(reason: "no idle \(MineRecipe.carrierTag) surge carrier")
         }
 
-        let occupied = MineRecipe.installedBelts(in: fleet, hub: hub)
+        // The hub's own belt is a legal site the estate cannot see: every
+        // installed query filters `location != hub`, so a mine there is invisible.
+        let unsitable: Set<String> = [hub]
+        let occupied = unsitable
+            .union(MineRecipe.installedBelts(in: fleet, hub: hub))
             .union(liveMineBelts(directives))
         guard let site = MineSitePlanner.site(view: view, occupiedBelts: occupied) else {
-            return .idle(reason: "no meshed candidate belt")
+            let anyBelt = MineSitePlanner.site(view: view, occupiedBelts: unsitable) != nil
+            return .idle(reason: anyBelt ? "every candidate belt taken" : "no meshed candidate belt")
         }
         return .launch(carrier: carrier.deviceCode, belt: site.belt)
     }
@@ -1260,8 +1265,9 @@ struct Brain: Sendable {
                     && $0.location == hub && !reserved.contains($0.deviceCode)
             }
             .sorted { $0.deviceCode < $1.deviceCode }
-        let collecting = { (device: Device) in
-            device.currentDirectiveConfig?["collect"]?.stringValue
+        let collecting = { (device: Device) -> String? in
+            guard device.currentDirective == HaulTargetPlanner.ferry else { return nil }
+            return device.currentDirectiveConfig?["collect"]?.stringValue
         }
         let chosen = candidates.first { collecting($0) == belt }
             ?? candidates.first { collecting($0) == nil }

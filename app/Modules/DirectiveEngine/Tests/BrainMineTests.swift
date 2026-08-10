@@ -69,9 +69,10 @@ private func minePrintedFleet(at hub: String = mineHub, suffix: String = "") -> 
 }
 
 private func mineCarrierDevice(
-    _ code: String = mineCarrier, status: String = "idle", tags: [String] = [MineRecipe.carrierTag]
+    _ code: String = mineCarrier, status: String = "idle", tags: [String] = [MineRecipe.carrierTag],
+    location: String = mineHub
 ) -> Device {
-    mineDevice(code, type: MineRecipe.carrierDeviceType, tags: tags, status: status)
+    mineDevice(code, type: MineRecipe.carrierDeviceType, tags: tags, location: location, status: status)
 }
 
 private let mineRichBelt = ["SOL": [BeltInfo(designation: mineBelt, beltClass: .rich)]]
@@ -173,10 +174,27 @@ struct BrainMineReadinessTests {
         )
     }
 
+    /// A belt excluded by occupancy reads differently from a board that never
+    /// had a candidate: one is a full estate, the other a mesh that reaches none.
     @Test("a belt already holding an installed mine is not sited a second time")
     func anInstalledBeltIsOccupied() {
         let installed = mineDevice("MC-INSTALLED", type: "ami_mining_controller", location: mineBelt)
         let view = mineWorldView(devices: minePrintedFleet() + [mineCarrierDevice(), installed])
+        #expect(
+            Brain.mineReadiness(view: view, directives: [])
+                == .idle(reason: "every candidate belt taken")
+        )
+    }
+
+    /// `MineRecipe.installedBelts` filters `location != hub`, so a mine standing
+    /// on the hub's own belt is invisible to every installed query — the siting
+    /// must never offer it in the first place.
+    @Test("the hub's own belt is never sited, even as the only candidate")
+    func theHubsOwnBeltIsNeverSited() {
+        let view = mineWorldView(
+            devices: minePrintedFleet(at: mineBelt) + [mineCarrierDevice(location: mineBelt)],
+            hubLocation: mineBelt
+        )
         #expect(
             Brain.mineReadiness(view: view, directives: [])
                 == .idle(reason: "no meshed candidate belt")
@@ -239,6 +257,17 @@ struct BrainMineFerryControllerTests {
             id: "H", kind: .haulRun, deviceCode: "TC-A", targets: ["VEGA-BELT-1"]
         )
         #expect(Brain.mineFerryController(for: mineBelt, view: view, directives: [holder]) == nil)
+    }
+
+    /// `collect` is a `ferry` key. Read off any other directive it names a
+    /// coincidence, not a haul this belt is already getting.
+    @Test("a controller running a non-ferry directive is not the belt's ferry")
+    func aNonFerryDirectiveIsNotAFerry() {
+        let view = mineWorldView(devices: [
+            mineDevice("TC-A", type: mineTransportType, directive: "gather_evenly", collect: mineBelt),
+            mineDevice("TC-B", type: mineTransportType, directive: "ferry", collect: mineBelt),
+        ])
+        #expect(Brain.mineFerryController(for: mineBelt, view: view, directives: []) == "TC-B")
     }
 
     @Test("an untagged transport controller belongs to no mine")

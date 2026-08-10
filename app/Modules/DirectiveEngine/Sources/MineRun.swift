@@ -284,6 +284,10 @@ public struct MineRun: MissionStepMachine {
     ) -> MissionAction {
         guard let belt = Self.targetBelt(of: directive) else { return .stall(.unreachableDevice) }
         let rows = Array(world.devices.values)
+        let hub = RelayRun.hubLocation(in: world)
+        // A mine on the hub's own belt is invisible to `installedBelts`, which
+        // filters `location != hub`: a row aimed there is malformed by construction.
+        if belt == hub { return .stall(.unreachableDevice) }
         // Off the mesh nothing at the belt can be commanded, and that is not a
         // fleet gap: `.mineFleetIncomplete` is reserved for those.
         guard SalvageTargetPlanner.meshSystems(in: rows).contains(SiteAssay.system(of: belt)) else {
@@ -296,9 +300,7 @@ public struct MineRun: MissionStepMachine {
             // that sees an attached or stowed member, so buy it before stalling.
             return .refreshFleet(tag: MineRecipe.fleetTag, thenStall: .mineFleetIncomplete)
         }
-        if MineRecipe.installedBelts(in: rows, hub: RelayRun.hubLocation(in: world)).contains(belt) {
-            return .done
-        }
+        if MineRecipe.installedBelts(in: rows, hub: hub).contains(belt) { return .done }
         return .advanceStep(nextStep: Step.attaching)
     }
 

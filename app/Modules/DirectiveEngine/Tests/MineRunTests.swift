@@ -408,6 +408,26 @@ struct MineRunTests {
         #expect(MineRun().nextAction(directive: mineRunRow(), world: snapshot) == .done)
     }
 
+    /// A mine on the hub's own belt is invisible to `MineRecipe.installedBelts`,
+    /// which filters `location != hub` — so a row aimed there is malformed.
+    @Test("a target belt that is the hub's own location stalls")
+    func theHubsOwnBeltStalls() {
+        let hubOnTheBelt = mineRow(
+            "HUB2", type: "autofactory", location: targetBelt, commands: ["enqueue_print"]
+        )
+        let snapshot = world(
+            devices: carriedFleet() + [mineCarrier(), beltRelay, hubOnTheBelt],
+            footprints: [LocationFootprint(
+                location: targetBelt, devices: 0, resources: 5_000, resourceSites: 0,
+                locationEvents: 0, replicants: 0, fetchedAt: now
+            )]
+        )
+
+        #expect(RelayRun.hubLocation(in: snapshot) == targetBelt)
+        #expect(MineRun().nextAction(directive: mineRunRow(), world: snapshot)
+                == .stall(.unreachableDevice))
+    }
+
     @Test("a staged fleet at a meshed belt starts attaching")
     func stagedFleetAdvances() {
         let snapshot = world(devices: carriedFleet() + [mineCarrier(), beltRelay])

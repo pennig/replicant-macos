@@ -51,18 +51,12 @@ public struct MineFleetPrint: MissionStepMachine {
     // MARK: - Deciding
 
     /// Recipe slots not yet standing free at `location`, plus the carrier slot
-    /// when no carrier — tagged or not — is idle there to fly the fleet out.
+    /// whenever `MineRecipe.idleCarrier` — the launcher's own query — finds none.
     static func remaining(at location: String, in world: WorldSnapshot) -> [String: Int] {
         var missing = MineRecipe.shortfall(at: location, in: world.devices.values)
-        guard MineRecipe.idleCarrier(at: location, in: world.devices.values) == nil else {
-            return missing
+        if MineRecipe.idleCarrier(at: location, in: world.devices.values) == nil {
+            missing[MineRecipe.carrierDeviceType] = 1
         }
-        let spare = world.devices.values.contains {
-            $0.deviceType == MineRecipe.carrierDeviceType
-                && !$0.hasTag(MineRecipe.carrierTag)
-                && $0.location == location && $0.status == "idle"
-        }
-        if !spare { missing[MineRecipe.carrierDeviceType] = 1 }
         return missing
     }
 
@@ -114,20 +108,19 @@ public struct MineFleetPrint: MissionStepMachine {
 
     // MARK: - Waiting on the clones
 
-    /// Wait for the printed rows to appear at `hub`'s location, then hand back to
-    /// `stocking`. Count-based, so a superseded print op cannot strand it: any row
-    /// filling a recipe slot counts, whichever job produced it.
+    /// Wait for the printed rows to appear at `hub`'s location. A multi-quantity
+    /// job settles its op on the FIRST clone, so only a full fleet or the
+    /// deadline hands back to `stocking` — an op-close proves nothing.
     private func printing(_ directive: Directive, _ hub: Device, _ world: WorldSnapshot) -> MissionAction {
         guard let location = hub.location else { return .stall(.unreachableDevice) }
         if Self.remaining(at: location, in: world).isEmpty {
             return .advanceStep(nextStep: Step.stocking)
         }
         if world.openOperation(for: hub.deviceCode) != nil { return .wait }
-        // No open op and slots still empty: the clone landed and the shortfall
-        // moved, or the print failed — either way, re-decide.
-        if world.now.timeIntervalSince(directive.stepStartedAt) > RestockRun.printDeadline {
-            logger.notice("mine fleet print \(directive.id, privacy: .public): print produced nothing within the deadline — re-deciding")
+        if world.now.timeIntervalSince(directive.stepStartedAt) <= RestockRun.printDeadline {
+            return .wait
         }
+        logger.notice("mine fleet print \(directive.id, privacy: .public): print produced nothing within the deadline — re-deciding")
         return .advanceStep(nextStep: Step.stocking)
     }
 

@@ -227,4 +227,49 @@ struct MineFleetPrintTests {
 
         #expect(MineFleetPrint().nextAction(directive: directive, world: snapshot) == .wait)
     }
+
+    /// A quantity-3 job settles its op on the FIRST clone, so an op-close is no
+    /// evidence the job finished — the residual is still draining server-side,
+    /// and re-deciding here re-dispatches the whole quantity.
+    @Test("a closed op with the quantity still draining holds rather than re-dispatching")
+    func printingHoldsWhileTheQuantityDrains() {
+        let landed = printedFleet().filter { !["M03", "M04"].contains($0.deviceCode) }
+        let directive = printRun(step: MineFleetPrint.Step.printing)
+        let snapshot = world(devices: landed + [hub(), carrier()])
+
+        #expect(MineRecipe.shortfall(at: hubLocation, in: snapshot.devices.values)
+                == ["mining_drone": 2])
+        #expect(MineFleetPrint().nextAction(directive: directive, world: snapshot) == .wait)
+    }
+
+    /// The deadline is the only way back to `stocking` while slots stand empty:
+    /// a queue that produced nothing in half an hour is not draining.
+    @Test("a print that produces nothing within the deadline re-decides")
+    func printingRedecidesPastTheDeadline() {
+        let directive = printRun(
+            step: MineFleetPrint.Step.printing,
+            stepStartedAt: now.addingTimeInterval(-(RestockRun.printDeadline + 60))
+        )
+        let snapshot = world(devices: printedFleet(omitting: "mining_drone") + [hub(), carrier()])
+
+        #expect(MineFleetPrint().nextAction(directive: directive, world: snapshot)
+                == .advanceStep(nextStep: MineFleetPrint.Step.stocking))
+    }
+
+    /// The carrier slot is filled by the TAGGED carrier the launcher flies and
+    /// `MineRecipe.idleCarrier` finds — nothing tags a spare, so an untagged
+    /// hull retiring this row `.done` would leave the goal carrier-less forever.
+    @Test("an untagged idle surge carrier does not fill the carrier slot")
+    func anUntaggedCarrierDoesNotFillTheSlot() {
+        let snapshot = world(devices: printedFleet() + [hub(), carrier(tagged: false)])
+
+        #expect(MineFleetPrint().nextAction(directive: printRun(), world: snapshot) == .dispatch(
+            kind: .print, deviceCode: "AF1",
+            params: CommandParams(
+                deviceType: MineRecipe.carrierDeviceType, quantity: 1,
+                printTags: [MineRecipe.carrierTag]
+            ),
+            nextStep: MineFleetPrint.Step.printing
+        ))
+    }
 }
