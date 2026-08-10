@@ -524,9 +524,7 @@ let package = Package(
             name: "LogisticsFeature",
             dependencies: [
                 "GameModels",
-                "GameServices",
                 "UI",
-                "Utils",
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
                 .product(name: "SQLiteData", package: "sqlite-data"),
             ],

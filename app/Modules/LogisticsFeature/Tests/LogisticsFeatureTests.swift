@@ -15,15 +15,22 @@ private func testUUID(_ n: Int) -> UUID {
 @Suite struct LogisticsFeatureTests {
     @Test func theLedgerLoadsNewestFirst() async throws {
         let database = try GameDatabase.bootstrap()
+        // Deliberately decorrelated from id, insertion, and unitsCollected
+        // order, so only a `collectedAt` sort reproduces this expectation.
+        let fixture: [(id: Int, collectedAt: TimeInterval, units: Int)] = [
+            (id: 2, collectedAt: 200, units: 900),
+            (id: 0, collectedAt: 300, units: 100),
+            (id: 1, collectedAt: 100, units: 500),
+        ]
         try await database.write { db in
-            for index in 0..<3 {
+            for row in fixture {
                 try HaulYield.upsert {
                     HaulYield(
-                        id: testUUID(index), directiveID: "D1", controllerCode: "C",
+                        id: testUUID(row.id), directiveID: "D1", controllerCode: "C",
                         deviceCode: "F", sourceDesignation: "ACHERNUR-BELT-1",
-                        collectedAt: Date(timeIntervalSince1970: TimeInterval(index)),
-                        unitsCollected: 100 * (index + 1),
-                        perType: ResourceCost(structural: 100 * (index + 1)),
+                        collectedAt: Date(timeIntervalSince1970: row.collectedAt),
+                        unitsCollected: row.units,
+                        perType: ResourceCost(structural: row.units),
                         breakdownState: .exact
                     )
                 }
@@ -37,6 +44,6 @@ private func testUUID(_ n: Int) -> UUID {
         } operation: {
             LogisticsFeature.State()
         }
-        #expect(state.yields.map(\.unitsCollected) == [300, 200, 100])
+        #expect(state.yields.map(\.unitsCollected) == [100, 900, 500])
     }
 }

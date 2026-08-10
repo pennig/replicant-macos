@@ -18,10 +18,11 @@ struct HaulYieldRow: View {
             Text(yield.sourceDesignation).font(.rcBodyEmphMono)
             Spacer()
             ForEach(ResourceCost.displayOrder, id: \.key) { slot in
-                let amount = yield.perType.amount(forKey: slot.key)
+                let amount = yield.perType.amount(for: slot.key)
                 if amount > 0 {
                     HStack(spacing: Space.xs) {
-                        Circle().fill(Color.rcResource(slot.key)).frame(width: 8, height: 8)
+                        Circle().fill(Color.rcResource(slot.key))
+                            .frame(width: MarkerSize.resourceSwatch, height: MarkerSize.resourceSwatch)
                         Text("\(amount)").font(.rcMonoSmall)
                     }
                 }

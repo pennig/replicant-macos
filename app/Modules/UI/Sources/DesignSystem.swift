@@ -326,6 +326,7 @@ public enum RowGutter {
 /// by `DeviceRow`.
 public enum MarkerSize {
     public static let attentionDot: CGFloat = 6
+    public static let resourceSwatch: CGFloat = 8
 }
 
 /// Shared motion curves. A disclosure gesture — a section collapsing, a host

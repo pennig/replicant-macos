@@ -42,3 +42,11 @@ public struct LogisticsView: View {
         .navigationTitle("Logistics")
     }
 }
+
+// Only caller of this List treatment; promote to UI/ListStyles.swift if a
+// second one appears.
+private extension View {
+    func rcListStyle() -> some View {
+        listStyle(.plain).scrollContentBackground(.hidden)
+    }
+}
