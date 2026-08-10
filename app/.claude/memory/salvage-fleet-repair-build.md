@@ -121,11 +121,13 @@ exactly when it is needed.
   arrival now traverses three dispatch pairs, so this build adds three new ways
   for a service-bot problem to stop salvage. Survey has the same shape; there it
   costs a survey, here it costs the mining that funds the mesh.
-- **`SurveyRun` has no `fleetTag` concept at all**, so it passes `owner: nil`
+- ~~**`SurveyRun` has no `fleetTag` concept at all**, so it passes `owner: nil`
   forever. Tagging survey's bots `auto:survey` — the natural operator move once
   tagging is the ownership signal — makes them invisible to Survey at BOTH ends.
   Symmetric, so nothing is abandoned, but it is silent no-repair on the run that
-  shipped first. Give `SurveyRun` a fleet tag before tagging its bots.
+  shipped first. Give `SurveyRun` a fleet tag before tagging its bots.~~
+  **FIRED LIVE and CLOSED** — the bots were tagged and the survey fleet went
+  unrepaired from 2026-08-07 05:14; see [[survey-repair-fleet-tag]].
 - **No test drives `SalvageRun` through `DirectiveEngineCore`.** Every test calls
   `nextAction` directly and hand-builds the log for the round budgets, so nothing
   proves the production pair actually EMITS the `.stepStarted` rows those budgets

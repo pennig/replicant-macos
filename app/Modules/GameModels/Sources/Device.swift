@@ -179,6 +179,11 @@ public extension Device {
     /// An FTL relay that is presently meshing its system. Capability, not type
     /// (includes an integrated system_hub relay); status matched via statusBase.
     var isActiveRelay: Bool { features.contains("relay") && statusBase == "relaying" }
+
+    /// A hull that can carry a fleet: cradles other devices aboard and surges
+    /// between systems. Capability, not a deviceType match — every vessel class
+    /// with both features qualifies.
+    var isCarrierHull: Bool { features.contains("cradle") && features.contains("surge") }
 }
 
 // MARK: - Tags

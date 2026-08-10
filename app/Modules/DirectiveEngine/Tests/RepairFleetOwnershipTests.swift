@@ -53,6 +53,16 @@ private func taggedBot(_ code: String, _ tags: [String]) -> Device {
         #expect(!RepairFleet.answers(bot, to: "auto:haul"))
     }
 
+    /// Tags carry operator casing, so both sides must compare through
+    /// `Device.normalizedTag` or a hand-tagged bot escapes its fleet.
+    @Test func ownershipSurvivesCaseAndWhitespaceDrift() {
+        let bot = taggedBot("BOT1", ["Auto:Survey"])
+        #expect(RepairFleet.answers(bot, to: "auto:survey"))
+        #expect(!RepairFleet.answers(bot, to: "auto:salvage"))
+        #expect(!RepairFleet.answers(bot, to: nil))
+        #expect(RepairFleet.answers(taggedBot("BOT2", ["auto:survey"]), to: " Auto:Survey "))
+    }
+
     /// Both ends of the round trip must filter identically — a bot deployed
     /// under one predicate and recalled under a narrower one is abandoned.
     @Test func theAboardAndDeployedQueriesScopeIdentically() {

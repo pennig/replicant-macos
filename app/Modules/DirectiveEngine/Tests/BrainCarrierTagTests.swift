@@ -23,16 +23,19 @@ private let hubLocation = "AINALRAM-BELT-1"
 
 private func vessel(
     _ code: String,
+    type: String = "heaven_vessel",
     tags: [String] = [],
     location: String? = hubLocation,
-    status: String = "idle"
+    status: String = "idle",
+    features: [String] = carrierHullFeatures,
+    availableCommands: [String] = []
 ) -> Device {
     Device(
-        deviceCode: code, deviceType: Brain.carrierDeviceType, replicantCode: "R1", status: status,
+        deviceCode: code, deviceType: type, replicantCode: "R1", status: status,
         location: location, locationName: nil, operationalCapacity: 100, queueSize: 0,
         stowedInDeviceCode: nil, controllerDeviceCode: nil, attachedToDeviceCode: nil,
-        createdAt: Date(timeIntervalSince1970: 0), availableCommands: [],
-        features: [], tags: tags, detail: .object([:]),
+        createdAt: Date(timeIntervalSince1970: 0), availableCommands: availableCommands,
+        features: features, tags: tags, detail: .object([:]),
         updatedAt: Date(timeIntervalSince1970: 10_000), firstSeenAt: Date(timeIntervalSince1970: 0)
     )
 }
@@ -133,5 +136,110 @@ struct BrainCarrierTagTests {
         )
 
         #expect(blocker == "no free carrier at \(hubLocation)")
+    }
+}
+
+@Suite("Brain — the carrier gate is capability, not type")
+struct BrainCarrierHullGateTests {
+    /// The live fleet's shape: the operator's tendMesh carrier is a
+    /// `racing_vessel` with the identical feature set. The type string must
+    /// not matter — cradle + surge is what makes it a carrier.
+    @Test("an idle tagged racing vessel at the hub is a free carrier")
+    func racingVesselIsAFreeCarrier() {
+        let devices = fleet([vessel("R1", type: "racing_vessel", tags: [Brain.carrierTag])])
+
+        #expect(
+            Brain.freeCarrier(at: hubLocation, devices: devices, reserved: [])?.deviceCode == "R1"
+        )
+        #expect(Brain.isFreeCarrier(devices["R1"]!, at: hubLocation, reserved: []))
+    }
+
+    /// A tagged racing vessel that is merely busy is a CANDIDATE the blocker
+    /// explains per-vessel — never folded into "untagged".
+    @Test("a busy tagged racing vessel gets a per-vessel clause, not untagged")
+    func busyRacingVesselGetsAPerVesselClause() {
+        let devices = fleet([
+            vessel("R1", type: "racing_vessel", tags: [Brain.carrierTag], status: "travelling")
+        ])
+
+        let blocker = Brain.carrierBlocker(
+            at: hubLocation, devices: devices, reserved: [], directives: []
+        )
+
+        #expect(blocker.contains("R1 is travelling"))
+        #expect(!blocker.contains("untagged"))
+    }
+
+    /// A tag on a hull that cannot carry the fleet is a misapplied opt-in —
+    /// the remedy is moving the tag, so the device is named as such.
+    @Test("a tagged non-carrier is named as tagged but not a carrier hull")
+    func taggedNonCarrierIsNamedMistagged() {
+        let devices = fleet([
+            vessel(
+                "P1", type: "propulsor", tags: [Brain.carrierTag],
+                features: ["cruise", "stow", "diversion"]
+            )
+        ])
+
+        let blocker = Brain.carrierBlocker(
+            at: hubLocation, devices: devices, reserved: [], directives: []
+        )
+
+        #expect(blocker.contains("P1"))
+        #expect(blocker.contains("not a carrier hull"))
+        #expect(!blocker.contains("untagged"))
+    }
+
+    /// Moving the tag is a location-independent remedy, so a mistagged device
+    /// is named wherever it stands — stowed (nil location) included.
+    @Test("a stowed tagged non-carrier is still named")
+    func stowedTaggedNonCarrierIsStillNamed() {
+        let devices = fleet([
+            vessel(
+                "P1", type: "propulsor", tags: [Brain.carrierTag], location: nil,
+                features: ["cruise", "stow", "diversion"]
+            )
+        ])
+
+        let blocker = Brain.carrierBlocker(
+            at: hubLocation, devices: devices, reserved: [], directives: []
+        )
+
+        #expect(blocker.contains("P1"))
+        #expect(blocker.contains("not a carrier hull"))
+    }
+}
+
+@Suite("Brain — the restock host must never be a carrier hull")
+struct BrainRestockHostGateTests {
+    private func view(_ devices: [Device]) -> WorldView {
+        WorldView(
+            devices: fleet(devices), starPositions: [:], meshSystems: [],
+            salvageUnits: [:], eventSystems: [], hubLocation: hubLocation,
+            now: Date(timeIntervalSince1970: 10_000)
+        )
+    }
+
+    /// `A1` sorts before `B1`, so only the carrier-hull exclusion — not code
+    /// order — can hand the restock to the autofactory.
+    @Test("a print-capable racing vessel yields the restock to the autofactory")
+    func printCapableRacingVesselYieldsToTheAutofactory() {
+        let racing = vessel(
+            "A1", type: "racing_vessel", availableCommands: ["enqueue_print"]
+        )
+        let factory = vessel(
+            "B1", type: "autofactory", features: [], availableCommands: ["enqueue_print"]
+        )
+
+        #expect(Brain.restockHost(in: view([racing, factory]))?.deviceCode == "B1")
+    }
+
+    @Test("a lone print-capable racing vessel hosts no restock at all")
+    func loneRacingVesselHostsNothing() {
+        let racing = vessel(
+            "A1", type: "racing_vessel", availableCommands: ["enqueue_print"]
+        )
+
+        #expect(Brain.restockHost(in: view([racing])) == nil)
     }
 }

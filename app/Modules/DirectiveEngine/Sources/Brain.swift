@@ -31,8 +31,6 @@ struct Brain: Sendable {
     /// `WorldView`'s snapshot and every `TestClock` test.
     let now: Date
 
-    static let carrierDeviceType = "heaven_vessel"
-
     /// Opt-in with NO fallback to "any free vessel": an untagged fleet means the
     /// brain launches nothing and says so. Compare only through `Device.hasTag` —
     /// a raw `tags.contains` refuses the vessel that was just opted in.
@@ -40,7 +38,7 @@ struct Brain: Sendable {
 
     /// The survey fleet's own opt-in tag, disjoint from `carrierTag` — the two
     /// automations never contend over the same vessel.
-    static let surveyCarrierTag = "auto:survey"
+    static let surveyCarrierTag = SurveyRun.defaultFleetTag
 
     /// How far off its road the brain will send a carrier to fetch a spare relay
     /// rather than print one. Measured from the PLANT SITE, never the hub: the
@@ -292,7 +290,8 @@ struct Brain: Sendable {
                 kind: .surveyRun,
                 status: .running,
                 deviceCode: carrier,
-                controllerCode: nil, roamCentre: roamCentre, fleetTag: nil, sourceRelayCode: nil,
+                controllerCode: nil, roamCentre: roamCentre,
+                fleetTag: SurveyRun.defaultFleetTag, sourceRelayCode: nil,
                 targets: [], targetIndex: 0,
                 step: SurveyRun().firstStep,
                 stepStartedAt: now,
@@ -435,12 +434,12 @@ struct Brain: Sendable {
     }
 
     /// The device a restock run may be hosted on: the lowest-coded print-capable
-    /// device at `view`'s hub that is NOT a carrier. Hosting it on a carrier
+    /// device at `view`'s hub that is NOT a carrier hull. Hosting it on a carrier
     /// would reserve that vessel out of the fleet permanently.
     static func restockHost(in view: WorldView) -> Device? {
         guard let hub = view.hubLocation else { return nil }
         return view.devices.values
-            .filter { $0.isPrintHub && $0.location == hub && $0.deviceType != carrierDeviceType }
+            .filter { $0.isPrintHub && $0.location == hub && !$0.isCarrierHull }
             .min { $0.deviceCode < $1.deviceCode }
     }
 
@@ -959,9 +958,19 @@ struct Brain: Sendable {
         at hub: String, devices: [String: Device], reserved: Set<String>, directives: [Directive]
     ) -> String {
         let hulls = devices.values
-            .filter { $0.deviceType == carrierDeviceType && $0.location == hub }
+            .filter { $0.isCarrierHull && $0.location == hub }
             .sorted { $0.deviceCode < $1.deviceCode }
-        guard !hulls.isEmpty else { return "no free carrier at \(hub)" }
+        // A tag on a non-carrier hull is a misapplied opt-in, not an untagged
+        // fleet. Moving the tag is location-independent, so the scan is fleet-wide.
+        let mistagged = devices.values
+            .filter { !$0.isCarrierHull && $0.hasTag(carrierTag) }
+            .sorted { $0.deviceCode < $1.deviceCode }
+        guard !hulls.isEmpty else {
+            guard let clause = mistaggedClause(mistagged, tag: carrierTag) else {
+                return "no free carrier at \(hub)"
+            }
+            return "no free carrier at \(hub) — \(clause)"
+        }
 
         // Untagged is its own state, not folded into the per-vessel clauses
         // below: those explain why a vessel the brain MAY fly is unavailable,
@@ -969,9 +978,9 @@ struct Brain: Sendable {
         // remedy and would otherwise read as "all busy".
         let candidates = hulls.filter { $0.hasTag(carrierTag) }
         guard !candidates.isEmpty else {
-            let names = hulls.prefix(2).map(\.deviceCode).joined(separator: ", ")
-            let rest = hulls.count > 2 ? " +\(hulls.count - 2) more" : ""
-            return "no vessel at \(hub) is tagged \(carrierTag) — \(names)\(rest) \(hulls.count == 1 ? "is" : "are") untagged"
+            let untagged = "no carrier hull at \(hub) is tagged \(carrierTag) — \(list(hulls.map(\.deviceCode))) \(hulls.count == 1 ? "is" : "are") untagged"
+            guard let clause = mistaggedClause(mistagged, tag: carrierTag) else { return untagged }
+            return "\(untagged); \(clause)"
         }
 
         let clauses = candidates.map {
@@ -979,6 +988,16 @@ struct Brain: Sendable {
         }
         let rest = clauses.count > 2 ? " +\(clauses.count - 2) more" : ""
         return "no free carrier at \(hub) — \(clauses.prefix(2).joined(separator: "; "))\(rest)"
+    }
+
+    /// Devices wearing `tag` that are not carrier hulls, as one clause: two
+    /// named in device-code order, the rest counted. Nil when there are none.
+    private static func mistaggedClause(_ mistagged: [Device], tag: String) -> String? {
+        guard !mistagged.isEmpty else { return nil }
+        let predicate = mistagged.count == 1
+            ? "is tagged \(tag) but is not a carrier hull"
+            : "are tagged \(tag) but are not carrier hulls"
+        return "\(list(mistagged.map(\.deviceCode))) \(predicate)"
     }
 
     /// What is wrong with ONE candidate carrier `device`, tested against
@@ -1049,7 +1068,7 @@ struct Brain: Sendable {
     /// The freedom test over ONE `device`, extracted so the confirm-fresh gate
     /// applies exactly the predicate the ranking applied rather than a cousin of it.
     static func isFreeCarrier(_ device: Device, at hub: String, reserved: Set<String>) -> Bool {
-        device.deviceType == carrierDeviceType
+        device.isCarrierHull
             && device.hasTag(carrierTag)
             && device.location == hub
             && !device.isBusy
@@ -1116,11 +1135,19 @@ struct Brain: Sendable {
     static func salvageReadiness(view: WorldView, directives: [Directive]) -> SalvageReadiness {
         let reserved = reservedDevices(directives: directives, devices: view.devices)
         guard let carrier = view.devices.values
-            .filter({ $0.deviceType == carrierDeviceType && $0.hasTag(salvageCarrierTag) })
+            .filter({ $0.isCarrierHull && $0.hasTag(salvageCarrierTag) })
             .filter({ !reserved.contains($0.deviceCode) })
             .min(by: { $0.deviceCode < $1.deviceCode })
         else {
-            return .idle(reason: "no \(salvageCarrierTag) vessel")
+            // A tag on a non-carrier hull is named — its remedy is moving the
+            // tag, not tagging the fleet.
+            let mistagged = view.devices.values
+                .filter { !$0.isCarrierHull && $0.hasTag(salvageCarrierTag) }
+                .sorted { $0.deviceCode < $1.deviceCode }
+            guard let clause = mistaggedClause(mistagged, tag: salvageCarrierTag) else {
+                return .idle(reason: "no \(salvageCarrierTag) vessel")
+            }
+            return .idle(reason: "no \(salvageCarrierTag) vessel — \(clause)")
         }
 
         // Judged through `SalvageRun`'s own queries, so the brain and the
@@ -1403,20 +1430,28 @@ struct Brain: Sendable {
     /// survey never co-locates at a hub the way `freeCarrier` requires.
     private static func surveyCarrier(devices: [String: Device]) -> Device? {
         devices.values
-            .filter { $0.deviceType == carrierDeviceType && $0.hasTag(surveyCarrierTag) }
+            .filter { $0.isCarrierHull && $0.hasTag(surveyCarrierTag) }
             .min { $0.deviceCode < $1.deviceCode }
     }
 
     /// Mirrors `carrierBlocker`'s register: names the candidates and that they
-    /// are untagged, never a bare "unavailable".
+    /// are untagged (or tagged on a non-carrier), never a bare "unavailable".
     private static func surveyCarrierBlocker(devices: [String: Device]) -> String {
         let hulls = devices.values
-            .filter { $0.deviceType == carrierDeviceType }
+            .filter(\.isCarrierHull)
             .sorted { $0.deviceCode < $1.deviceCode }
-        guard !hulls.isEmpty else { return "no vessel is tagged \(surveyCarrierTag)" }
-        let names = hulls.prefix(2).map(\.deviceCode).joined(separator: ", ")
-        let rest = hulls.count > 2 ? " +\(hulls.count - 2) more" : ""
-        return "no vessel is tagged \(surveyCarrierTag) — \(names)\(rest) \(hulls.count == 1 ? "is" : "are") untagged"
+        let mistagged = devices.values
+            .filter { !$0.isCarrierHull && $0.hasTag(surveyCarrierTag) }
+            .sorted { $0.deviceCode < $1.deviceCode }
+        guard !hulls.isEmpty else {
+            guard let clause = mistaggedClause(mistagged, tag: surveyCarrierTag) else {
+                return "no vessel is tagged \(surveyCarrierTag)"
+            }
+            return "no carrier hull — \(clause)"
+        }
+        let untagged = "no carrier hull is tagged \(surveyCarrierTag) — \(list(hulls.map(\.deviceCode))) \(hulls.count == 1 ? "is" : "are") untagged"
+        guard let clause = mistaggedClause(mistagged, tag: surveyCarrierTag) else { return untagged }
+        return "\(untagged); \(clause)"
     }
 
     // MARK: - The rationale

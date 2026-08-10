@@ -18,6 +18,19 @@ import UniverseModels
 
 // MARK: - Device seeds
 
+/// The live vessel classes' shared feature set — what `Device.isCarrierHull`
+/// (cradle + surge) reads a carrier off. Mirrors real payloads.
+let carrierHullFeatures = ["surge", "cruise", "system_scan", "mine", "cradle", "print", "census"]
+
+/// The feature set a fixture of `type` ships with when a test names none —
+/// both vessel classes carry the identical live set; everything else is bare.
+func fixtureFeatures(for type: String) -> [String] {
+    switch type {
+    case "heaven_vessel", "racing_vessel": carrierHullFeatures
+    default: []
+    }
+}
+
 /// A minimal device row; defaults read as idle and undeployed. `updatedAt`
 /// defaults to the epoch — "arbitrarily stale", right for the pure-ranking tests.
 /// **A test driving a MISSION must set it**, or `acquire` refuses to trust the hub
@@ -27,23 +40,24 @@ func deviceFixture(
     type: String = "heaven_vessel",
     location: String? = nil,
     status: String = "idle",
-    features: [String] = [],
+    features: [String]? = nil,
     availableCommands: [String] = [],
     tags: [String] = [],
     stowedIn: String? = nil,
     updatedAt: Date = Date(timeIntervalSince1970: 0)
 ) -> Device {
-    // A carrier wears `Brain.carrierTag` unless the test says otherwise, which
-    // keeps "a vessel the brain may fly" in one place. An explicit `tags:` still
-    // expresses anything else, including the untagged fleet `BrainCarrierTagTests`
-    // builds directly — so the gate is never proved by its own default.
-    let resolved = (type == Brain.carrierDeviceType && tags.isEmpty) ? [Brain.carrierTag] : tags
+    // A carrier hull wears `Brain.carrierTag` unless the test says otherwise,
+    // which keeps "a vessel the brain may fly" in one place. Keyed on the
+    // resolved features — the gate is capability, so the default is too.
+    let resolvedFeatures = features ?? fixtureFeatures(for: type)
+    let isCarrierShaped = resolvedFeatures.contains("cradle") && resolvedFeatures.contains("surge")
+    let resolved = (isCarrierShaped && tags.isEmpty) ? [Brain.carrierTag] : tags
     return Device(
         deviceCode: code, deviceType: type, replicantCode: "R1", status: status,
         location: location, locationName: nil, operationalCapacity: 100, queueSize: 0,
         stowedInDeviceCode: stowedIn, controllerDeviceCode: nil, attachedToDeviceCode: nil,
         createdAt: Date(timeIntervalSince1970: 0), availableCommands: availableCommands,
-        features: features, tags: resolved, detail: .object([:]),
+        features: resolvedFeatures, tags: resolved, detail: .object([:]),
         updatedAt: updatedAt, firstSeenAt: Date(timeIntervalSince1970: 0)
     )
 }
@@ -55,7 +69,7 @@ func seedDevice(
     type: String = "heaven_vessel",
     location: String? = nil,
     status: String = "idle",
-    features: [String] = [],
+    features: [String]? = nil,
     availableCommands: [String] = [],
     tags: [String] = [],
     stowedIn: String? = nil,
