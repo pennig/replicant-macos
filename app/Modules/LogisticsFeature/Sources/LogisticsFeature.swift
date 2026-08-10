@@ -18,6 +18,12 @@ public struct LogisticsFeature {
         @FetchAll(HaulYield.order { $0.collectedAt.desc() }) public var yields: [HaulYield]
         public var range: TimeRange = .month
         public init() {}
+
+        // Not `public`: `YieldSummary` is internal, and this is read only by
+        // `LogisticsView` in the same module.
+        var summary: YieldSummary {
+            YieldSummary(yields: yields, range: range, now: Date())
+        }
     }
 
     public enum TimeRange: String, CaseIterable, Equatable, Hashable, Sendable {

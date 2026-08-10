@@ -18,6 +18,7 @@ public struct LogisticsView: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: Space.m) {
             RCSectionHeader("Haul Yields")
+            YieldKPIRow(summary: store.summary)
             RCSegmentedControl(
                 selection: $store.range,
                 options: LogisticsFeature.TimeRange.allCases,
