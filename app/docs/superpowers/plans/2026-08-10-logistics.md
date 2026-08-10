@@ -1299,13 +1299,14 @@ import Testing
                 .execute(db)
             }
         }
-        let store = await withDependencies {
+        // `@FetchAll` fetches at init, so the ordering is assertable without
+        // sending anything.
+        let state = withDependencies {
             $0.defaultDatabase = database
         } operation: {
-            TestStore(initialState: LogisticsFeature.State()) { LogisticsFeature() }
+            LogisticsFeature.State()
         }
-        await store.send(.task)
-        #expect(store.state.yields.first?.unitsCollected == 300)
+        #expect(state.yields.map(\.unitsCollected) == [300, 200, 100])
     }
 }
 ```
@@ -1362,18 +1363,14 @@ public struct LogisticsFeature {
 
     public enum Action: BindableAction {
         case binding(BindingAction<State>)
-        case task
     }
 
     public init() {}
 
+    // `@FetchAll` loads and stays live on its own, so there is no load action
+    // and no `.task` — adding one would be a no-op the view still called.
     public var body: some ReducerOf<Self> {
         BindingReducer()
-        Reduce { _, action in
-            switch action {
-            case .binding, .task: return .none
-            }
-        }
     }
 }
 ```
@@ -1468,7 +1465,6 @@ public struct LogisticsView: View {
         }
         .padding(Space.m)
         .navigationTitle("Logistics")
-        .task { await store.send(.task).finish() }
     }
 }
 ```
@@ -1611,7 +1607,7 @@ Expected: FAIL — `cannot find 'YieldSummary' in scope`.
 import Foundation
 import GameModels
 
-struct YieldSummary: Equatable {
+struct YieldSummary {
     let totalUnits: Int
     let tripCount: Int
     let unitsPerDay: Double
@@ -1619,11 +1615,6 @@ struct YieldSummary: Equatable {
     let bySource: [(designation: String, units: Int)]
     let byDay: [(day: Date, perType: ResourceCost)]
     let gapCount: Int
-
-    static func == (lhs: YieldSummary, rhs: YieldSummary) -> Bool {
-        lhs.totalUnits == rhs.totalUnits && lhs.tripCount == rhs.tripCount
-            && lhs.gapCount == rhs.gapCount
-    }
 
     init(yields: [HaulYield], range: LogisticsFeature.TimeRange, now: Date, calendar: Calendar = .current) {
         let cutoff = range.days.map { now.addingTimeInterval(-Double($0) * 86_400) }
@@ -1663,7 +1654,7 @@ struct YieldSummary: Equatable {
 }
 ```
 
-`Equatable` is hand-written because the tuple arrays are not synthesizable. It compares the scalar totals only, which is all the tests assert on.
+`YieldSummary` is deliberately NOT `Equatable`. It is a computed property on `State`, never stored, so `State`'s own `Equatable` does not reach it — and a hand-written `==` over tuple arrays would have to compare a subset of the fields, which is a broken `Equatable` rather than a convenient one.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
