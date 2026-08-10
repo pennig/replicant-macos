@@ -11,7 +11,9 @@ import Foundation
 import Testing
 @testable import DirectivesFeature
 
-private func report(salvage: BrainGoalStatus, haul: BrainGoalStatus) -> BrainReport {
+private func report(
+    salvage: BrainGoalStatus, haul: BrainGoalStatus, mine: BrainGoalStatus = .idle(reason: "not evaluated")
+) -> BrainReport {
     BrainReport(
         decision: .idle(reason: "nothing"),
         ranked: [], hubLocation: "SOL-3",
@@ -21,9 +23,14 @@ private func report(salvage: BrainGoalStatus, haul: BrainGoalStatus) -> BrainRep
             spendFloor: 35_078, rateLimitedAt: nil
         ),
         survey: .idle(reason: "none"),
-        salvage: salvage, haul: haul,
+        salvage: salvage, haul: haul, mine: mine,
         observedAt: Date(timeIntervalSince1970: 0)
     )
+}
+
+private func mineText(_ status: BrainGoalStatus) -> String {
+    let r = report(salvage: .idle(reason: "none"), haul: .idle(reason: "none"), mine: status)
+    return BrainWhy.goalLine(.mine, status: status, report: r).text
 }
 
 private func salvageText(_ status: BrainGoalStatus) -> String {
@@ -100,5 +107,58 @@ struct BrainWhyGoalTests {
             report: report(salvage: .idle(reason: "none"), haul: .idle(reason: "none"))
         )
         #expect(line.spans.contains { $0 == .designation("ALPAHARD") })
+    }
+
+    @Test("the mine line names its belt and its carrier")
+    func theMineLineNamesItsBeltAndCarrier() {
+        #expect(
+            mineText(.launched(vessel: "SC1", focus: "SOL-BELT-1", status: .running))
+                == "installing at SOL-BELT-1 — carrier SC1"
+        )
+        #expect(mineText(.ready(vessel: "SC1")) == "ready to launch — carrier SC1")
+        #expect(mineText(.idle(reason: "no printed mine fleet")) == "no printed mine fleet")
+    }
+
+    @Test("a halted mine install states the belt, never an active verb")
+    func aHaltedMineInstallStatesThePlace() {
+        let halted = mineText(.launched(vessel: "SC1", focus: "SOL-BELT-1", status: .needsAttention))
+        #expect(halted == "halted, last SOL-BELT-1 — carrier SC1")
+        #expect(!halted.contains("installing"))
+    }
+}
+
+@Suite("The per-mine health line")
+struct BrainWhyMineHealthTests {
+    @Test("a fully healthy mine reads running, with no issues named")
+    func aHealthyMineReadsRunning() {
+        let health = BrainMineHealth(belt: "SOL-BELT-1", miningActive: true, surveyActive: true, ferryInForce: true)
+        let row = BrainWhy.mineHealthLine(health)
+        #expect(row.kind == .running)
+        #expect(row.text == "mining, surveying and ferrying SOL-BELT-1")
+    }
+
+    /// The card-phrasing rule: `kind` alone carries "halted" — the spans state
+    /// only the static fact, never restating the status as an active verb.
+    @Test("a lapsed mining directive is halted and names exactly that")
+    func aLapsedMiningDirectiveIsHalted() {
+        let health = BrainMineHealth(belt: "SOL-BELT-1", miningActive: false, surveyActive: true, ferryInForce: true)
+        let row = BrainWhy.mineHealthLine(health)
+        #expect(row.kind == .halted)
+        #expect(row.text == "mining directive inactive at SOL-BELT-1")
+        #expect(!row.text.contains("halted"))
+    }
+
+    @Test("a belt with no ferry names that fact by itself")
+    func aBeltWithNoFerryNamesThatFact() {
+        let health = BrainMineHealth(belt: "SOL-BELT-1", miningActive: true, surveyActive: true, ferryInForce: false)
+        let row = BrainWhy.mineHealthLine(health)
+        #expect(row.kind == .halted)
+        #expect(row.text == "no ferry in force at SOL-BELT-1")
+    }
+
+    @Test("designations render in the mono token")
+    func designationsAreTagged() {
+        let health = BrainMineHealth(belt: "SOL-BELT-1", miningActive: true, surveyActive: true, ferryInForce: true)
+        #expect(BrainWhy.mineHealthLine(health).spans.contains { $0 == .designation("SOL-BELT-1") })
     }
 }

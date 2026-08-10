@@ -25,6 +25,8 @@ public enum DirectiveKind: String, Codable, Equatable, Sendable, CaseIterable, Q
     /// Keeps idle FTL relays standing at the print hub, ahead of demand.
     /// Owned by the HUB device, not a carrier — a print needs no vessel.
     case restockRun
+    case mineFleetPrint
+    case mineRun
 
     /// The list row's label, e.g. "Survey Run".
     public var title: String {
@@ -34,6 +36,8 @@ public enum DirectiveKind: String, Codable, Equatable, Sendable, CaseIterable, Q
         case .salvageRun: "Salvage Run"
         case .haulRun: "Haul Run"
         case .restockRun: "Relay Restock"
+        case .mineFleetPrint: "Mine Fleet Print"
+        case .mineRun: "Mine Run"
         }
     }
 }
@@ -147,6 +151,9 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
     /// needed to move on. Its recall leg outlives `directive.completed`, which
     /// tracks the DRONES, so departing now leaves it chasing the vessel.
     case miningControllerNotRecovered
+    /// The mine fleet the run was launched for is no longer complete at the hub —
+    /// a member was taken, lost, or re-tasked between siting and attachment.
+    case mineFleetIncomplete
 
     /// The stall panel's headline.
     public var displayName: String {
@@ -173,6 +180,7 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
         case .serviceBotNotRecovered: "Service bot not recovered"
         case .miningDirectivePaused: "Mining directive paused"
         case .miningControllerNotRecovered: "Mining controller not recovered"
+        case .mineFleetIncomplete: "Mine fleet incomplete"
         }
     }
 
@@ -225,6 +233,8 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
             "The mining controller's salvage directive is paused, so its deployed drones are idle. Resume it from the device inspector — that recalls the drones — then retry."
         case .miningControllerNotRecovered:
             "The mining controller is still travelling back to the vessel. Retry once it's stowed aboard; departing without it strands it in this system."
+        case .mineFleetIncomplete:
+            "The auto:mine fleet at the hub is missing members. Re-run Mine Fleet Print to top it up, or re-tag the missing devices, then retry."
         }
     }
 }
@@ -255,7 +265,7 @@ public extension DirectiveAttentionReason {
              .noMiningDroneAboard, .noRelayCoLocated, .dronesNotRecovered,
              .launchDeployedNothing, .noHaulControllerTagged, .awaitingRelayRestock,
              .repairUnfinished, .serviceBotNotArmed, .serviceBotNotRecovered,
-             .miningDirectivePaused, .miningControllerNotRecovered:
+             .miningDirectivePaused, .miningControllerNotRecovered, .mineFleetIncomplete:
             return .escalate
         }
     }

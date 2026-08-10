@@ -14,7 +14,10 @@ import GameModels
 /// The registered mission machines, and the two lookups over them.
 public enum MissionRegistry {
     /// Every mission the app can run.
-    public static let machines: [any MissionStepMachine] = [SurveyRun(), SalvageRun(), HaulRun(), RelayRun(), RestockRun()]
+    public static let machines: [any MissionStepMachine] = [
+        SurveyRun(), SalvageRun(), HaulRun(), RelayRun(), RestockRun(), MineFleetPrint(),
+        MineRun(),
+    ]
 
     /// The machine registered for `kind`, or nil when none is — which the
     /// engine reads as "leave every row of that kind alone".

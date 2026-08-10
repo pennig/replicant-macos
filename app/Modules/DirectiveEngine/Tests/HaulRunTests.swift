@@ -1234,3 +1234,193 @@ struct HaulRunDerivedSinkTests {
         #expect(HaulRun.drainedPile(of: current, delivery: HaulRun.deliverySink(in: world)) == "ALPAHARD-7")
     }
 }
+
+// MARK: - Pinned source
+
+/// A row carrying `targets` is a per-mine ferry keeper: exactly its own
+/// `deviceCode` controller, at exactly `targets[0]`. Fixtures here are local on
+/// purpose — a shared helper would rebind the suites above.
+@Suite("HaulRun — pinned-source mode")
+struct HaulRunPinnedTests {
+
+    private let pinnedBelt = "ATIANFU-BELT-1"
+    private let richestPile = "AINALRAM-2"
+    private let runnerUpPile = "AINALRAM-3"
+
+    private func keeper(
+        _ code: String,
+        currentDirective: String? = nil,
+        currentConfig: [String: JSONValue]? = nil,
+        updatedAt: Date = fixtureNow
+    ) -> Device {
+        var detail: [String: JSONValue] = [
+            "available_directives": .array(["delivery", "ferry", "shuttle"].map(JSONValue.string)),
+        ]
+        if let currentDirective {
+            detail["ami_directive"] = .object([
+                "name": .string(currentDirective),
+                "config": .object(currentConfig ?? [:]),
+            ])
+        }
+        return Device(
+            deviceCode: code, deviceType: "ami_transport_controller", replicantCode: "R1",
+            status: "coordinating", location: "ATIANFU-1-L4", locationName: nil,
+            operationalCapacity: 100, queueSize: 0,
+            stowedInDeviceCode: nil, controllerDeviceCode: nil, attachedToDeviceCode: nil,
+            createdAt: Date(timeIntervalSince1970: 0), availableCommands: [],
+            features: ["ami"], tags: [HaulRun.defaultFleetTag], detail: .object(detail),
+            updatedAt: updatedAt, firstSeenAt: Date(timeIntervalSince1970: 0)
+        )
+    }
+
+    private func beacon(at location: String) -> Device {
+        Device(
+            deviceCode: "MESH-\(location)", deviceType: "ftl_relay", replicantCode: "R1",
+            status: "relaying", location: location, locationName: nil,
+            operationalCapacity: 100, queueSize: 0,
+            stowedInDeviceCode: nil, controllerDeviceCode: nil, attachedToDeviceCode: nil,
+            createdAt: Date(timeIntervalSince1970: 0), availableCommands: [],
+            features: ["relay"], tags: [], detail: .object([:]),
+            updatedAt: fixtureNow, firstSeenAt: Date(timeIntervalSince1970: 0)
+        )
+    }
+
+    private func pile(_ location: String, _ resources: Int) -> LocationFootprint {
+        LocationFootprint(
+            location: location, devices: 0, resources: resources, resourceSites: 0,
+            locationEvents: 0, replicants: 0, fetchedAt: fixtureNow
+        )
+    }
+
+    /// Two piles in the delivery system outrank the pinned belt, so the planner
+    /// pairs C1 with the richest and C2 with the runner-up — never the belt.
+    private func twoPileWorld(controllers: [Device]) -> WorldSnapshot {
+        let devices = controllers + [beacon(at: "AINALRAM-1-L4"), beacon(at: "ATIANFU-1-L4")]
+        return WorldSnapshot(
+            devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
+            openOperations: [:],
+            log: [],
+            footprints: Dictionary(
+                [pile(richestPile, 9_000), pile(runnerUpPile, 5_000), pile(pinnedBelt, 100)]
+                    .map { ($0.location, $0) },
+                uniquingKeysWith: { _, last in last }
+            ),
+            now: fixtureNow
+        )
+    }
+
+    private func keeperRun(
+        step: String,
+        deviceCode: String,
+        targets: [String],
+        controllerCode: String? = nil
+    ) -> Directive {
+        Directive(
+            id: "D9", kind: .haulRun, status: .running, deviceCode: deviceCode,
+            controllerCode: controllerCode,
+            fleetTag: HaulRun.defaultFleetTag, targets: targets, targetIndex: 0, step: step,
+            stepStartedAt: fixtureNow, returnToOrigin: false,
+            originDesignation: nil, attentionReason: nil,
+            createdAt: fixtureNow, updatedAt: fixtureNow
+        )
+    }
+
+    /// `targets.first` is the whole mode switch.
+    @Test func pinnedSourceIsTheFirstTarget() {
+        let keeperRow = keeperRun(step: HaulRun.Step.assigning, deviceCode: "C2", targets: [pinnedBelt])
+        let drainerRow = keeperRun(step: HaulRun.Step.assigning, deviceCode: "C1", targets: [])
+        #expect(HaulRun.pinnedSource(of: keeperRow) == pinnedBelt)
+        #expect(HaulRun.pinnedSource(of: drainerRow) == nil)
+    }
+
+    /// Case 1: the pinned row claims ITS OWN controller even though the planner
+    /// would rank C1 first against the richer pile.
+    @Test func pinnedAssigningClaimsItsOwnController() {
+        let action = HaulRun().nextAction(
+            directive: keeperRun(step: HaulRun.Step.assigning, deviceCode: "C2", targets: [pinnedBelt]),
+            world: twoPileWorld(controllers: [keeper("C1"), keeper("C2")])
+        )
+        #expect(action == .assignController(deviceCode: "C2", nextStep: HaulRun.Step.dispatching))
+    }
+
+    /// Case 2: it ferries the pinned belt into the derived sink — not the
+    /// runner-up pile the planner would have handed C2.
+    @Test func pinnedDispatchingCommandsTheBelt() {
+        let world = twoPileWorld(controllers: [keeper("C1"), keeper("C2")])
+        let action = HaulRun().nextAction(
+            directive: keeperRun(
+                step: HaulRun.Step.dispatching, deviceCode: "C2",
+                targets: [pinnedBelt], controllerCode: "C2"
+            ),
+            world: world
+        )
+        #expect(action == .dispatch(
+            kind: .setDirective,
+            deviceCode: "C2",
+            params: CommandParams(directive: HaulTargetPlanner.ferry, configuration: [
+                "collect": .string(pinnedBelt),
+                "deliver": .string(HaulRun.deliverySink(in: world)),
+            ]),
+            nextStep: HaulRun.Step.confirming
+        ))
+    }
+
+    /// Case 3: already running exactly that ferry config, so the keeper idles
+    /// rather than re-commanding itself every cycle.
+    @Test func pinnedAssigningIdlesWhenTheFerryIsAlreadyInForce() {
+        let settled = keeper(
+            "C2", currentDirective: HaulTargetPlanner.ferry,
+            currentConfig: [
+                "collect": .string(pinnedBelt),
+                "deliver": .string(HaulRun.deliveryLocation),
+            ]
+        )
+        let action = HaulRun().nextAction(
+            directive: keeperRun(step: HaulRun.Step.assigning, deviceCode: "C2", targets: [pinnedBelt]),
+            world: twoPileWorld(controllers: [keeper("C1"), settled])
+        )
+        #expect(action == .advanceStep(nextStep: HaulRun.Step.hauling))
+    }
+
+    /// Case 4, the scoping guard: an empty `targets` is the general drainer, and
+    /// over this same world it still follows the planner to the richest pile.
+    @Test func aGeneralRunOverTheSameWorldStillFollowsThePlanner() {
+        let world = twoPileWorld(controllers: [keeper("C1"), keeper("C2")])
+        let action = HaulRun().nextAction(
+            directive: keeperRun(
+                step: HaulRun.Step.dispatching, deviceCode: "C1",
+                targets: [], controllerCode: "C1"
+            ),
+            world: world
+        )
+        #expect(action == .dispatch(
+            kind: .setDirective,
+            deviceCode: "C1",
+            params: CommandParams(directive: HaulTargetPlanner.shuttle, configuration: [
+                "collect": .string(richestPile),
+                "deliver": .string(HaulRun.deliverySink(in: world)),
+            ]),
+            nextStep: HaulRun.Step.confirming
+        ))
+    }
+
+    /// Case 5: a stale keeper buys a read of THAT device, not a whole-tag sweep
+    /// that would return every general-drainer controller too.
+    @Test func pinnedPreflightRefreshesOnlyItsOwnController() {
+        let stale = keeper("C2", updatedAt: fixtureNow.addingTimeInterval(-3_600))
+        let action = HaulRun().nextAction(
+            directive: keeperRun(step: HaulRun.Step.preflight, deviceCode: "C2", targets: [pinnedBelt]),
+            world: twoPileWorld(controllers: [keeper("C1"), stale])
+        )
+        #expect(action == .refreshDevices(deviceCodes: ["C2"], thenStall: .noHaulControllerTagged))
+    }
+
+    /// A fresh keeper needs no read at all.
+    @Test func pinnedPreflightAdvancesOnAFreshController() {
+        let action = HaulRun().nextAction(
+            directive: keeperRun(step: HaulRun.Step.preflight, deviceCode: "C2", targets: [pinnedBelt]),
+            world: twoPileWorld(controllers: [keeper("C1"), keeper("C2")])
+        )
+        #expect(action == .advanceStep(nextStep: HaulRun.Step.surveying))
+    }
+}

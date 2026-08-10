@@ -77,7 +77,7 @@ enum DirectiveTargetsSection: Equatable {
             // `targetIndex` never advances here, so a delivery mark would sit
             // unchecked against demand that is genuinely being met.
             return directive.targets.isEmpty ? .empty : .demand(directive.targets)
-        case .surveyRun, .salvageRun, .relayRun:
+        case .surveyRun, .salvageRun, .relayRun, .mineFleetPrint, .mineRun:
             break
         }
         if directive.roamCentre != nil { return .coverage(coverage(directive)) }

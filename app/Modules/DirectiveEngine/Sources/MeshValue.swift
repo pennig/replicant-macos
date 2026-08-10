@@ -59,10 +59,13 @@ public enum BeltClass: Int, Comparable, CaseIterable, Sendable {
 public struct BeltInfo: Equatable, Sendable {
     public let designation: String
     public let beltClass: BeltClass
+    /// Raw per-type richness qualifiers (`scarce`…`rich`), as the wire carries them.
+    public let richness: [String: String]
 
-    public init(designation: String, beltClass: BeltClass) {
+    public init(designation: String, beltClass: BeltClass, richness: [String: String] = [:]) {
         self.designation = designation
         self.beltClass = beltClass
+        self.richness = richness
     }
 }
 

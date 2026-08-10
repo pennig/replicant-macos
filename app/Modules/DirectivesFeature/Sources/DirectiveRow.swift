@@ -171,8 +171,8 @@ public enum DirectiveRow: Equatable, Identifiable, Sendable {
                     return "\(count) system\(count == 1 ? "" : "s") drained"
                 case .surveyRun, .relayRun:
                     return "\(directive.targetIndex) surveyed"
-                case .haulRun, .restockRun:
-                    // Both handled above, before the queue readouts.
+                case .haulRun, .restockRun, .mineFleetPrint, .mineRun:
+                    // Handled above, or never roams — no queue to walk here.
                     return nil
                 }
             }

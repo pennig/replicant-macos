@@ -60,9 +60,13 @@ public struct BrainWhy: Equatable, Sendable {
     /// from `topGoalGate`'s grow/prune story. Never absent, the same
     /// discipline `limitPressure` follows for the rails.
     public var survey: BrainWhySurvey
-    /// The two production liveness goals, salvage first. Never absent, for the
+    /// The production liveness goals, salvage first. Never absent, for the
     /// same reason `survey` is not.
     public var goals: [BrainWhyGoal]
+    /// One line per installed mine, health read fresh off device rows —
+    /// distinct from `goals`' single mine-install line. Empty when no mine
+    /// stands yet, which is the ordinary pre-first-mine state.
+    public var mineHealth: [BrainWhyMineHealth]
     /// Where the brain's two standing rails stand right now, plus a recent
     /// 429 when there is one.
     ///
@@ -86,6 +90,7 @@ public struct BrainWhy: Equatable, Sendable {
         pruneNotes: [BrainWhyPruneNote] = [],
         survey: BrainWhySurvey,
         goals: [BrainWhyGoal] = [],
+        mineHealth: [BrainWhyMineHealth] = [],
         limitPressure: [BrainWhyPressure],
         isEscalated: Bool
     ) {
@@ -94,6 +99,7 @@ public struct BrainWhy: Equatable, Sendable {
         self.pruneNotes = pruneNotes
         self.survey = survey
         self.goals = goals
+        self.mineHealth = mineHealth
         self.limitPressure = limitPressure
         self.isEscalated = isEscalated
     }
@@ -128,7 +134,9 @@ public struct BrainWhy: Equatable, Sendable {
             goals: [
                 goalLine(.salvage, status: report.salvage, report: report),
                 goalLine(.haul, status: report.haul, report: report),
+                goalLine(.mine, status: report.mine, report: report),
             ],
+            mineHealth: report.mines.map(mineHealthLine),
             limitPressure: pressure(in: report),
             isEscalated: isEscalated(report.decision)
         )
@@ -399,18 +407,19 @@ public struct BrainWhy: Equatable, Sendable {
 
     // MARK: - Salvage and haul
 
-    /// Both liveness goals render through one builder: they answer the same
-    /// question over different fleets. A halted or paused run states its focus
-    /// as a static place, never with an active verb.
+    /// All three liveness goals render through one builder: they answer the
+    /// same question over different fleets. A halted or paused run states its
+    /// focus as a static place, never with an active verb.
     static func goalLine(
         _ goal: BrainWhyGoal.Goal, status: BrainGoalStatus, report: BrainReport
     ) -> BrainWhyGoal {
-        let verb = goal == .salvage ? "working " : "delivering to "
+        let verb = activityVerb(for: goal)
+        let vesselLabel = vesselLabel(for: goal)
         switch status {
         case let .launched(vessel, focus, launched):
-            let tail: [BrainWhySpan] = [.prose(" — \(goal == .salvage ? "carrier" : "controller") \(vessel)")]
+            let tail: [BrainWhySpan] = [.prose(" — \(vesselLabel) \(vessel)")]
             guard let focus else {
-                let idleActivity: [BrainWhySpan] = [.prose(goal == .salvage ? "no target yet" : "no sink resolved")]
+                let idleActivity: [BrainWhySpan] = [.prose(noFocusText(for: goal))]
                 return BrainWhyGoal(goal: goal, kind: kind(for: launched), spans: prefix(launched) + idleActivity + tail)
             }
             switch launched {
@@ -430,13 +439,36 @@ public struct BrainWhy: Equatable, Sendable {
         case let .ready(vessel):
             return BrainWhyGoal(
                 goal: goal, kind: .ready,
-                spans: [.prose("ready to launch — \(goal == .salvage ? "carrier" : "controller") \(vessel)")]
+                spans: [.prose("ready to launch — \(vesselLabel) \(vessel)")]
             )
         case let .idle(reason):
             return BrainWhyGoal(
                 goal: goal, kind: .idle,
                 spans: .spans(in: reason, designations: knownDesignations(in: report))
             )
+        }
+    }
+
+    private static func activityVerb(for goal: BrainWhyGoal.Goal) -> String {
+        switch goal {
+        case .salvage: "working "
+        case .haul: "delivering to "
+        case .mine: "installing at "
+        }
+    }
+
+    private static func vesselLabel(for goal: BrainWhyGoal.Goal) -> String {
+        switch goal {
+        case .salvage, .mine: "carrier"
+        case .haul: "controller"
+        }
+    }
+
+    private static func noFocusText(for goal: BrainWhyGoal.Goal) -> String {
+        switch goal {
+        case .salvage: "no target yet"
+        case .haul: "no sink resolved"
+        case .mine: "no belt yet"
         }
     }
 
@@ -454,6 +486,28 @@ public struct BrainWhy: Equatable, Sendable {
         case .needsAttention: [.prose("halted — ")]
         case .paused: [.prose("paused — ")]
         }
+    }
+
+    // MARK: - Mine health
+
+    /// A mine's per-belt health line: a status and a static fact, never a
+    /// status and an active verb. Any false flag renders `.halted`, naming
+    /// exactly what lapsed — `kind` alone carries the word "halted".
+    static func mineHealthLine(_ health: BrainMineHealth) -> BrainWhyMineHealth {
+        guard health.miningActive, health.surveyActive, health.ferryInForce else {
+            var issues: [String] = []
+            if !health.miningActive { issues.append("mining directive inactive") }
+            if !health.surveyActive { issues.append("survey directive inactive") }
+            if !health.ferryInForce { issues.append("no ferry in force") }
+            return BrainWhyMineHealth(
+                belt: health.belt, kind: .halted,
+                spans: [.prose("\(issues.joined(separator: ", ")) at ")] + [.designation(health.belt)]
+            )
+        }
+        return BrainWhyMineHealth(
+            belt: health.belt, kind: .running,
+            spans: [.prose("mining, surveying and ferrying "), .designation(health.belt)]
+        )
     }
 
     // MARK: - Limit pressure

@@ -5,7 +5,8 @@
 //  The automation brain's evaluation entry point, ticked by
 //  `DirectiveEngineCore.tickBrain()`: one tick reads the world, answers halted
 //  missions of the kinds in `brainManagedKinds`, launches at most one Relay Run,
-//  and keeps one restock, survey, salvage and general haul run alive. A PURE
+//  keeps one restock, survey, salvage, haul and mine run alive, and one pinned
+//  ferry row per installed mine beside them. A PURE
 //  SELECTOR — it inserts directives and drives the `retry`/`cancel` resolution
 //  verbs, nothing else. STATELESS between ticks: a tick is a pure function of
 //  `(WorldView, directive rows)`. Not an actor, so ranking cannot block the
@@ -100,6 +101,7 @@ struct Brain: Sendable {
                 survey: .idle(reason: "world unavailable"),
                 salvage: .idle(reason: "world unavailable"),
                 haul: .idle(reason: "world unavailable"),
+                mine: .idle(reason: "world unavailable"),
                 observedAt: now
             )
         }
@@ -111,6 +113,8 @@ struct Brain: Sendable {
         let survey = Self.surveyStatus(directives: snapshot.directives, view: snapshot.view)
         let salvage = Self.salvageStatus(directives: snapshot.directives, view: snapshot.view)
         let haul = Self.haulStatus(directives: snapshot.directives, view: snapshot.view)
+        let mine = Self.mineStatus(directives: snapshot.directives, view: snapshot.view)
+        let mines = Self.mineHealth(view: snapshot.view, directives: snapshot.directives)
 
         let escalated = await respondToStalls(snapshot)
         let plan = Self.plan(view: snapshot.view, directives: snapshot.directives)
@@ -119,6 +123,8 @@ struct Brain: Sendable {
         await ensureSurvey(snapshot: snapshot, database: database)
         await ensureSalvage(snapshot: snapshot, database: database)
         await ensureHaul(snapshot: snapshot, database: database)
+        await ensureMine(snapshot: snapshot, database: database)
+        await ensureMineFerries(snapshot: snapshot, database: database)
 
         return await BrainReport(
             decision: decision,
@@ -131,6 +137,8 @@ struct Brain: Sendable {
             survey: survey,
             salvage: salvage,
             haul: haul,
+            mine: mine,
+            mines: mines,
             observedAt: now
         )
     }
@@ -351,6 +359,77 @@ struct Brain: Sendable {
                 attentionReason: nil,
                 createdAt: now, updatedAt: now
             )
+        }
+    }
+
+    /// Install one mine fleet at a time — a second install would contend for the
+    /// same free fleet members standing at the hub.
+    private func ensureMine(snapshot: Snapshot, database: any DatabaseWriter) async {
+        guard case let .launch(carrier, belt) = Self.mineReadiness(
+            view: snapshot.view, directives: snapshot.directives
+        ) else { return }
+
+        @Dependency(\.uuid) var uuid
+        await ensureOne(.mineRun, snapshot: snapshot, database: database) {
+            Directive(
+                id: uuid().uuidString,
+                kind: .mineRun,
+                status: .running,
+                deviceCode: carrier,
+                controllerCode: nil,
+                roamCentre: nil,
+                fleetTag: MineRecipe.fleetTag,
+                sourceRelayCode: nil,
+                targets: [belt], targetIndex: 0,
+                step: MineRun().firstStep,
+                stepStartedAt: now,
+                returnToOrigin: false,
+                originDesignation: snapshot.view.hubLocation.map { SiteAssay.system(of: $0) },
+                attentionReason: nil,
+                createdAt: now, updatedAt: now
+            )
+        }
+    }
+
+    /// Keep one PINNED haul row draining each installed mine, beside the general
+    /// drainer. A belt a live `mineRun` still targets is skipped — that run arms
+    /// the same transport controller, from the other side.
+    private func ensureMineFerries(snapshot: Snapshot, database: any DatabaseWriter) async {
+        let view = snapshot.view
+        let belts = MineRecipe.installedBelts(in: view.devices.values, hub: view.hubLocation)
+            .subtracting(Self.liveMineBelts(snapshot.directives))
+            .sorted()
+        guard !belts.isEmpty else { return }
+
+        @Dependency(\.uuid) var uuid
+        for belt in belts {
+            await ensureOne(
+                .haulRun,
+                matching: { $0.targets.first == belt },
+                snapshot: snapshot,
+                database: database
+            ) {
+                guard let controller = Self.mineFerryController(
+                    for: belt, view: view, directives: snapshot.directives
+                ) else { return nil }
+                return Directive(
+                    id: uuid().uuidString,
+                    kind: .haulRun,
+                    status: .running,
+                    deviceCode: controller,
+                    controllerCode: nil,
+                    roamCentre: nil,
+                    fleetTag: Self.mineFerryTag(for: belt),
+                    sourceRelayCode: nil,
+                    targets: [belt], targetIndex: 0,
+                    step: HaulRun().firstStep,
+                    stepStartedAt: now,
+                    returnToOrigin: false,
+                    originDesignation: view.hubLocation.map { SiteAssay.system(of: $0) },
+                    attentionReason: nil,
+                    createdAt: now, updatedAt: now
+                )
+            }
         }
     }
 
@@ -688,7 +767,9 @@ struct Brain: Sendable {
     /// The kinds the brain launches and may therefore answer for. `surveyRun`
     /// and `restockRun` stay out: a survey verdict has no stall case at all, and
     /// a restock stall is the hub's, not a mission the brain can retry into.
-    static let brainManagedKinds: Set<DirectiveKind> = [.relayRun, .salvageRun, .haulRun]
+    static let brainManagedKinds: Set<DirectiveKind> = [
+        .relayRun, .salvageRun, .haulRun, .mineRun,
+    ]
 
     /// The reason `directive` is halted on, when the brain may answer it. Kind is
     /// the whole membership rule — the brain adopts every row of a kind it
@@ -1127,6 +1208,99 @@ struct Brain: Sendable {
         return .launch(controller: controller.deviceCode)
     }
 
+    // MARK: - Mine readiness
+
+    /// A carrier and the belt to install a permanent mine at, or a named idle.
+    enum MineReadiness: Equatable, Sendable {
+        case launch(carrier: String, belt: String)
+        case idle(reason: String)
+    }
+
+    /// The device type that drives a mine's freighter. Matched on TYPE, since a
+    /// freshly printed controller carries no directive vocabulary yet.
+    static let mineTransportType = "ami_transport_controller"
+
+    /// The mine verdict for `view`. Takes `directives` for `haulReadiness`'s
+    /// reason — a carrier another row holds must not be reported ready — and to
+    /// keep a belt a live install already targets out of the siting.
+    static func mineReadiness(view: WorldView, directives: [Directive]) -> MineReadiness {
+        guard let hub = view.hubLocation else { return .idle(reason: "no recognised hub") }
+
+        let fleet = view.devices.values
+        let shortfall = MineRecipe.shortfall(at: hub, in: fleet)
+        guard shortfall.isEmpty else {
+            return .idle(reason: mineFleetBlocker(shortfall, at: hub, in: fleet))
+        }
+
+        let reserved = reservedDevices(directives: directives, devices: view.devices)
+        guard let carrier = MineRecipe.idleCarrier(
+            at: hub, in: fleet.filter { !reserved.contains($0.deviceCode) }
+        ) else {
+            return .idle(reason: "no idle \(MineRecipe.carrierTag) surge carrier")
+        }
+
+        // The hub's own belt is a legal site the estate cannot see: every
+        // installed query filters `location != hub`, so a mine there is invisible.
+        let unsitable: Set<String> = [hub]
+        let occupied = unsitable
+            .union(MineRecipe.installedBelts(in: fleet, hub: hub))
+            .union(liveMineBelts(directives))
+        guard let site = MineSitePlanner.site(view: view, occupiedBelts: occupied) else {
+            let anyBelt = MineSitePlanner.site(view: view, occupiedBelts: unsitable) != nil
+            return .idle(reason: anyBelt ? "every candidate belt taken" : "no meshed candidate belt")
+        }
+        return .launch(carrier: carrier.deviceCode, belt: site.belt)
+    }
+
+    /// The belts a live `mineRun` is installing at.
+    static func liveMineBelts(_ directives: [Directive]) -> Set<String> {
+        Set(
+            directives
+                .filter { $0.kind == .mineRun && owningStatuses.contains($0.status) }
+                .flatMap(\.targets)
+        )
+    }
+
+    /// Nothing printed reads differently from a fleet part-way printed.
+    private static func mineFleetBlocker(
+        _ shortfall: [String: Int], at hub: String, in devices: some Sequence<Device>
+    ) -> String {
+        let standing = MineRecipe.unassignedFleet(at: hub, in: devices)
+            .values
+            .reduce(0) { $0 + $1.count }
+        guard standing > 0 else { return "no printed mine fleet" }
+        let missing = shortfall.sorted { $0.key < $1.key }.map { "\($0.key)×\($0.value)" }
+        return "mine fleet incomplete — missing \(missing.joined(separator: ", "))"
+    }
+
+    /// The fleet tag a per-mine ferry row wears. Per BELT, never the bare
+    /// `MineRecipe.fleetTag`: `reservedDevices` closes over a row's tag, so a
+    /// fleet-wide one would reserve every other mine's controller forever.
+    static func mineFerryTag(for belt: String) -> String { "\(MineRecipe.fleetTag):\(belt)" }
+
+    /// The transport controller to drain `belt` through: the one already ferrying
+    /// it, else the lowest-coded free one. Both arms skip a controller another
+    /// live row holds, so this never offers one `ensureOne` would decline.
+    static func mineFerryController(
+        for belt: String, view: WorldView, directives: [Directive]
+    ) -> String? {
+        guard let hub = view.hubLocation else { return nil }
+        let reserved = reservedDevices(directives: directives, devices: view.devices)
+        let candidates = view.devices.values
+            .filter {
+                $0.deviceType == mineTransportType && $0.hasTag(MineRecipe.fleetTag)
+                    && $0.location == hub && !reserved.contains($0.deviceCode)
+            }
+            .sorted { $0.deviceCode < $1.deviceCode }
+        let collecting = { (device: Device) -> String? in
+            guard device.currentDirective == HaulTargetPlanner.ferry else { return nil }
+            return device.currentDirectiveConfig?["collect"]?.stringValue
+        }
+        let chosen = candidates.first { collecting($0) == belt }
+            ?? candidates.first { collecting($0) == nil }
+        return chosen?.deviceCode
+    }
+
     /// The why-view's salvage line. Reads an already-live row FIRST: once a run
     /// owns the fleet its own tag reserves the carrier, so re-deriving would
     /// report "no vessel" about the vessel the operator is looking at.
@@ -1161,6 +1335,58 @@ struct Brain: Sendable {
         switch haulReadiness(view: view, directives: directives) {
         case let .launch(controller): return .ready(vessel: controller)
         case let .idle(reason): return .idle(reason: reason)
+        }
+    }
+
+    /// The why-view's mine line: a live `mineRun` FIRST — an installing fleet
+    /// is attached/stowed, so `mineReadiness` would misreport its own blocker
+    /// mid-install — else the readiness verdict, exactly as `haulStatus`.
+    static func mineStatus(directives: [Directive], view: WorldView) -> BrainGoalStatus {
+        if let live = directives.first(where: {
+            $0.kind == .mineRun && owningStatuses.contains($0.status)
+        }) {
+            return .launched(
+                vessel: live.deviceCode,
+                focus: live.currentTarget,
+                status: launchedGoalStatus(live.status)
+            )
+        }
+        switch mineReadiness(view: view, directives: directives) {
+        case let .launch(carrier, _): return .ready(vessel: carrier)
+        case let .idle(reason): return .idle(reason: reason)
+        }
+    }
+
+    /// One health reading per installed belt: whether the mining and survey
+    /// controllers are actively directed, and whether a tagged transport
+    /// controller is ferrying it. A belt a live `mineRun` still targets is
+    /// excluded — `MineRun` lands the fleet before arming any directive.
+    static func mineHealth(view: WorldView, directives: [Directive]) -> [BrainMineHealth] {
+        MineRecipe.installedBelts(in: view.devices.values, hub: view.hubLocation)
+            .subtracting(liveMineBelts(directives))
+            .sorted()
+            .map { belt in
+                let mining = mineBeltController(at: belt, type: "ami_mining_controller", in: view)
+                let survey = mineBeltController(at: belt, type: "ami_survey_controller", in: view)
+                return BrainMineHealth(
+                    belt: belt,
+                    miningActive: mining?.currentDirective == MineRun.miningDirective
+                        && mining?.currentDirectiveStatus == "active",
+                    surveyActive: survey?.currentDirective == MineRun.surveyDirective
+                        && survey?.currentDirectiveStatus == "active",
+                    ferryInForce: view.devices.values.contains {
+                        $0.deviceType == mineTransportType && $0.hasTag(MineRecipe.fleetTag)
+                            && $0.currentDirectiveConfig?["collect"]?.stringValue == belt
+                    }
+                )
+            }
+    }
+
+    /// The tagged controller of `type` standing at `belt` — one per installed
+    /// mine by construction.
+    private static func mineBeltController(at belt: String, type: String, in view: WorldView) -> Device? {
+        view.devices.values.first {
+            $0.deviceType == type && $0.hasTag(MineRecipe.fleetTag) && $0.location == belt
         }
     }
 
