@@ -66,9 +66,23 @@ public struct MineFleetPrint: MissionStepMachine {
         MineRecipe.all.map(\.deviceType) + [MineRecipe.carrierDeviceType]
     }
 
-    /// Start one print at `hub`'s location, or decline. **Every declining branch
-    /// is a `.wait`, never a `.stall`** — short stock idles against a hub buffer
-    /// that refills from salvage. The one stall is a hub with no location.
+    /// Whether every row `remaining(at:)` judges predates this step. `printing`
+    /// hands back only once the print op has closed, so such rows are rows from
+    /// before the clone landed — and a landed clone reads as an empty slot.
+    static func fleetEvidenceIsStale(
+        _ directive: Directive, at location: String, in world: WorldSnapshot
+    ) -> Bool {
+        let newest = world.devices.values
+            .filter { $0.location == location }
+            .map(\.updatedAt)
+            .max()
+        guard let newest else { return true }
+        return newest < directive.stepStartedAt
+    }
+
+    /// Start one print at `hub`'s location, or decline. Short stock idles against a
+    /// hub buffer that refills from salvage; only an unreadable hub — gone from the
+    /// fleet, without a location, or a sweep that will not land — escalates.
     private func stocking(_ directive: Directive, _ hub: Device, _ world: WorldSnapshot) -> MissionAction {
         guard let location = hub.location else { return .stall(.unreachableDevice) }
 
@@ -86,6 +100,12 @@ public struct MineFleetPrint: MissionStepMachine {
             return .refreshFootprint(nextStep: Step.stocking, thenStall: nil)
         }
         if rail.printStockIsShort(at: location, world) { return .wait }
+
+        // Last moment before an irreversible spend, and the one read that can
+        // settle it: a clone is PRESENT at the hub, so one scoped sweep sees it.
+        if Self.fleetEvidenceIsStale(directive, at: location, in: world) {
+            return .refreshDevicesInSystem(designation: location, thenStall: .unreachableDevice)
+        }
 
         guard let type = Self.jobOrder.first(where: { missing[$0] != nil }),
               let quantity = missing[type]
@@ -109,8 +129,8 @@ public struct MineFleetPrint: MissionStepMachine {
     // MARK: - Waiting on the clones
 
     /// Wait for the printed rows to appear at `hub`'s location. A multi-quantity
-    /// job settles its op on the FIRST clone, so only a full fleet or the
-    /// deadline hands back to `stocking` — an op-close proves nothing.
+    /// job may settle one op per clone, so only a full fleet or the deadline hands
+    /// back to `stocking` — an op-close proves nothing about the rows.
     private func printing(_ directive: Directive, _ hub: Device, _ world: WorldSnapshot) -> MissionAction {
         guard let location = hub.location else { return .stall(.unreachableDevice) }
         if Self.remaining(at: location, in: world).isEmpty {
