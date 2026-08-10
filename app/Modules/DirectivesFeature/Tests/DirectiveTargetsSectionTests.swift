@@ -59,13 +59,14 @@ private func controller(
 private func run(
     kind: DirectiveKind,
     status: DirectiveStatus = .running,
+    deviceCode: String = "VESSEL1",
     targets: [String] = [],
     targetIndex: Int = 0,
     roamCentre: String? = nil,
     fleetTag: String? = nil
 ) -> Directive {
     Directive(
-        id: "D1", kind: kind, status: status, deviceCode: "VESSEL1",
+        id: "D1", kind: kind, status: status, deviceCode: deviceCode,
         roamCentre: roamCentre, fleetTag: fleetTag,
         targets: targets, targetIndex: targetIndex, step: "surveying",
         stepStartedAt: Date(timeIntervalSince1970: 0),
@@ -196,6 +197,24 @@ struct DirectiveTargetsSectionTests {
         else { return #expect(Bool(false), "expected assignments") }
         #expect(assignments.count == 2)
         #expect(DirectiveTargetsSection.section(for: run(kind: .haulRun), devices: devices) == .empty)
+    }
+
+    /// A pinned per-mine row is resolved by `deviceCode`: its per-belt tag is
+    /// worn by nothing, so the tag query would draw no section over a ferry
+    /// that is hauling — the same blindness the list row carried.
+    @Test func aPinnedHaulRunReportsItsOwnFerry() {
+        let devices = [
+            controller(code: "FERRY1", tags: ["auto:mine"], collecting: "ACHERNUR-BELT-1"),
+            controller(code: "HAUL1", collecting: "SOL-3"),
+        ]
+        let directive = run(
+            kind: .haulRun, deviceCode: "FERRY1",
+            targets: ["ACHERNUR-BELT-1"], fleetTag: "auto:mine:ACHERNUR-BELT-1"
+        )
+        guard case let .assignments(_, assignments) = DirectiveTargetsSection.section(for: directive, devices: devices)
+        else { return #expect(Bool(false), "expected assignments") }
+        #expect(assignments.map(\.controllerCode) == ["FERRY1"])
+        #expect(assignments.map(\.collecting) == ["ACHERNUR-BELT-1"])
     }
 
     /// The empty "Targets" header the pane used to draw over a Haul Run is now

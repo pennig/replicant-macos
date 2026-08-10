@@ -16,17 +16,44 @@ import Foundation
 import GameModels
 import Utils
 
-/// The custom mission currently driving a built-in AMI directive. Present only
-/// while that mission is live — the engine set the directive, so the user must
-/// not Reconfigure or Clear it out from under a step that is waiting on it.
+/// What owns a built-in AMI directive — the engine set it, so the user must not
+/// Reconfigure or Clear it out from under the work waiting on it.
 public struct DirectiveOwner: Equatable, Sendable {
-    public let directiveID: String
-    /// The mission's display title, e.g. "Survey Run" — what the badge says.
-    public let kindTitle: String
+    /// Which of the two ownerships holds the directive.
+    public enum Holder: Equatable, Sendable {
+        /// A live custom mission, via `Directive.controllerCode`.
+        case mission(id: String)
+        /// The device's own `auto:` fleet tag, when no mission row holds it.
+        case fleetTag(String)
+    }
 
-    public init(directiveID: String, kindTitle: String) {
-        self.directiveID = directiveID
-        self.kindTitle = kindTitle
+    public let holder: Holder
+    /// What the badge names: the mission's kind title, or the automation the
+    /// tag enrols the device in.
+    public let title: String
+    /// Where that automation works, when the fleet establishes a site for it.
+    public let designation: String?
+
+    public init(holder: Holder, title: String, designation: String? = nil) {
+        self.holder = holder
+        self.title = title
+        self.designation = designation
+    }
+
+    /// The row's second line while this owner holds it.
+    public var summary: String {
+        switch holder {
+        case .mission: "driven by \(title)"
+        case .fleetTag: "part of the \(title)"
+        }
+    }
+
+    /// One line naming the owner in a refusal log.
+    public var logDescription: String {
+        switch holder {
+        case let .mission(id): "driven by directive \(id)"
+        case let .fleetTag(tag): "part of the \(title), via \(tag)"
+        }
     }
 }
 
@@ -40,7 +67,7 @@ public struct BuiltInDirective: Equatable, Identifiable, Sendable {
     public let config: JSONValue?
     /// The drones this controller is running, with their live status.
     public let controlledDevices: [Device.ControlledDevice]
-    /// Set when a live mission is driving this directive (see `DirectiveOwner`).
+    /// Set when the engine owns this directive (see `DirectiveOwner`).
     public let drivenBy: DirectiveOwner?
 
     public var id: String { deviceCode }
@@ -108,15 +135,20 @@ public enum DirectiveRow: Equatable, Identifiable, Sendable {
     /// The designation half of the headline — a mission's current target, or nil
     /// (built-in rows name a directive, never a place).
     ///
-    /// A Haul Run's target comes from `haulTarget` rather than the queue: it has
-    /// no queue, and this is the run that most needs the designation in a MONO
-    /// token (house rule), which is exactly what this half of the headline
+    /// A general Haul Run's target comes from `haulTarget` rather than the queue:
+    /// it has no queue, and this is the run that most needs the designation in a
+    /// MONO token (house rule), which is exactly what this half of the headline
     /// renders. The subtitle names the work; this names the place.
     public var headlineDesignation: String? {
         switch self {
         case let .custom(directive, haulTarget):
-            directive.kind == .haulRun ? haulTarget : directive.currentTarget
-        case .builtIn: nil
+            guard directive.kind == .haulRun else { return directive.currentTarget }
+            // A pinned row names the pile it is pinned to whether or not its
+            // ferry has taken the config yet; the subtitle carries that half.
+            return HaulRun.pinnedSource(of: directive) ?? haulTarget
+        // A built-in row names a directive, not a place — except when its owner
+        // works one, which is what tells two installed mines apart.
+        case let .builtIn(builtIn): return builtIn.drivenBy?.designation
         }
     }
 
@@ -149,6 +181,11 @@ public enum DirectiveRow: Equatable, Identifiable, Sendable {
             // itself renders as `headlineDesignation`, in mono per the house
             // rule.
             if directive.kind == .haulRun {
+                // A pinned row always names its pile, so "Nothing reachable"
+                // would be false; report whether the ferry has taken it.
+                if let pinned = HaulRun.pinnedSource(of: directive) {
+                    return haulTarget == pinned ? "Hauling belt inventory" : "Pointing the ferry"
+                }
                 return haulTarget == nil ? "Nothing reachable" : "Hauling"
             }
             // Restock has no queue to walk either: its `targets` are the DEMAND
@@ -179,7 +216,7 @@ public enum DirectiveRow: Equatable, Identifiable, Sendable {
             let progress = directive.progress
             return "\(progress.completed)/\(progress.total)"
         case let .builtIn(builtIn):
-            if let owner = builtIn.drivenBy { return "driven by \(owner.kindTitle)" }
+            if let owner = builtIn.drivenBy { return owner.summary }
             let count = builtIn.controlledDevices.count
             return count > 0 ? "\(count) controlled" : nil
         }
@@ -193,8 +230,8 @@ public enum DirectiveRow: Equatable, Identifiable, Sendable {
 
     /// Merge the two sources into one ordered list. `devices` contributes a row
     /// for each device with a directive in force; `directives` contributes one
-    /// per custom mission. A built-in row whose controller a live mission is
-    /// driving carries that mission as `drivenBy`.
+    /// per custom mission. A built-in row the engine owns — by a live mission's
+    /// `controllerCode`, else by the device's own fleet tag — carries `drivenBy`.
     ///
     /// `devices` also feeds a Haul Run's `haulTarget` — see the `.custom` case.
     /// Both sources are already in hand here, which is why this is the one place
@@ -206,12 +243,23 @@ public enum DirectiveRow: Equatable, Identifiable, Sendable {
                   owningStatuses.contains(directive.status)
             else { return }
             owners[controller] = DirectiveOwner(
-                directiveID: directive.id,
-                kindTitle: directive.kind.title
+                holder: .mission(id: directive.id),
+                title: directive.kind.title
             )
         }
         let custom = directives.map { directive -> DirectiveRow in
             guard directive.kind == .haulRun else { return .custom(directive) }
+            if HaulRun.pinnedSource(of: directive) != nil {
+                // A pinned row drives its OWN device, and its per-belt tag is
+                // worn by nothing — the tag lookup below cannot see its ferry.
+                let ferry = devices.first { $0.deviceCode == directive.deviceCode }
+                return .custom(
+                    directive,
+                    haulTarget: ferry.flatMap {
+                        HaulRun.drainedPile(of: $0, delivery: HaulRun.deliveryLocation)
+                    }
+                )
+            }
             // Resolved by TAG, exactly as the machine resolves its working set
             // on every evaluation — the row must agree with what the run is
             // actually commanding, and the tag is the operator's opt-in.
@@ -226,6 +274,11 @@ public enum DirectiveRow: Equatable, Identifiable, Sendable {
                 )
             )
         }
+        // A mine stands where a tagged mining controller is RUNNING one; a
+        // fleet still idle at the hub is inventory, not a mine.
+        let belts = MineRecipe.installedBelts(
+            in: devices.filter { $0.currentDirective?.isEmpty == false }, hub: nil
+        )
         let builtIn = devices.compactMap { device -> DirectiveRow? in
             guard let directive = device.currentDirective, !directive.isEmpty else { return nil }
             return .builtIn(
@@ -235,10 +288,36 @@ public enum DirectiveRow: Equatable, Identifiable, Sendable {
                     directive: directive,
                     config: device.currentDirectiveConfig,
                     controlledDevices: device.controlledDevices,
-                    drivenBy: owners[device.deviceCode]
+                    drivenBy: owners[device.deviceCode] ?? fleetOwner(of: device, belts: belts)
                 )
             )
         }
         return custom + builtIn
+    }
+
+    /// The owner of a device the engine drives with no mission row to hold it —
+    /// the permanent mine's belt controllers, and every service bot an armed
+    /// fleet left standing. Untagging the device is the take-back gesture.
+    static func fleetOwner(of device: Device, belts: Set<String>) -> DirectiveOwner? {
+        guard let tag = device.tags
+            .map(Device.normalizedTag)
+            .filter({ $0.hasPrefix(RepairFleet.fleetTagPrefix) })
+            .min()
+        else { return nil }
+        // Only a device standing at an installed belt can claim that mine; the
+        // ferry lives at the delivery sink, which is nobody's mine.
+        let belt = device.location.flatMap { belts.contains($0) ? $0 : nil }
+        return DirectiveOwner(
+            holder: .fleetTag(tag),
+            title: automationTitle(tag),
+            designation: tag == MineRecipe.fleetTag ? belt : nil
+        )
+    }
+
+    /// The automation a fleet tag enrols a device in, phrased for the row: the
+    /// suffix reads as the fleet, and a mine is a place rather than a fleet.
+    static func automationTitle(_ tag: String) -> String {
+        let name = tag.dropFirst(RepairFleet.fleetTagPrefix.count).prefix { $0 != ":" }
+        return name == "mine" ? "mine" : "\(name) fleet"
     }
 }

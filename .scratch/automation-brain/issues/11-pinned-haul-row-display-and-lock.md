@@ -1,7 +1,7 @@
 # 11 — Pinned Haul Run row: false "Nothing reachable", no destination, ferry not locked
 
 Type: task
-Status: ready-for-agent
+Status: resolved
 
 ## Symptom (observed live 2026-08-10)
 
@@ -64,3 +64,48 @@ tag-driven general drainer.
   while the pinned row is live.
 - General drainer row behaviour unchanged (tag path still serves it).
 - `DirectiveRowTests` cover both pinned-row cases; existing tests green.
+
+## Answer (2026-08-10)
+
+Both holes closed, plus two adjacent ones the fix exposed.
+
+**Display.** `DirectiveRow.merge` branches on `HaulRun.pinnedSource(of:)` and
+resolves a pinned row's target from its **own `deviceCode`** via
+`HaulRun.drainedPile(of:delivery:)` rather than the tag lookup;
+`headlineDesignation` returns `HaulRun.pinnedSource(of:) ?? haulTarget`, so the
+belt renders whether or not the ferry has taken the config. The subtitle is
+`"Hauling belt inventory"` in force and `"Pointing the ferry"` before —
+`"Nothing reachable"` is now unreachable for a pinned row. The tag-driven
+general drainer path is untouched.
+
+**Lock.** `Brain.ensureMineFerries` stamps `controllerCode: controller` at
+launch. `reservedDevices` is provably unchanged (the stamped controller *is* the
+row's `deviceCode`, which it already inserted) and that equality is asserted by
+a test.
+
+**Wording (the optional third item).** Operator's call: the belt must be
+discoverable per-row, treated like the general drainer — `Haul Run →
+ACHERNUR-BELT-1` in the headline plus subtitle `Hauling belt inventory`. Goal
+vocabulary ("mine") stays out of the Directives list.
+
+**Two adjacent holes found and closed.** `DirectiveTargetsSection` had the
+identical tag-blindness — a pinned row drew no Assignments section at all,
+falsifying its own doc's promise to mirror `DirectiveRow.subtitle`. And
+`DirectiveDetailView` rendered `directive.kind.title`, plain "Haul Run" for
+every haul run, so two mines were indistinguishable one click deeper than the
+list; it now takes the row's `headlineDesignation` and renders it in
+`.rcTitleMono` beside the title, with `navigationTitle` composed from
+`DirectiveRow.title` (which its own doc already said existed for that).
+
+### Correction to the analysis above
+
+"The only stamp path is skipped **forever**" is overstated, and the truth is
+worse: `HaulRun.assign`'s pinned branch emits `.assignController` whenever
+`isInForce` is false, so the stamp is unreachable *exactly while the ferry is
+healthy*. The lock would have appeared only once the run started misbehaving.
+Stamping at launch is still the right fix.
+
+**Known limit, pre-existing and shared with the general path:** `merge` has no
+`WorldSnapshot`, so it confirms against the hard-coded `HaulRun.deliveryLocation`
+rather than the live hub. Correct today; if the hub moves, a working pinned
+ferry reads "Pointing the ferry" forever.

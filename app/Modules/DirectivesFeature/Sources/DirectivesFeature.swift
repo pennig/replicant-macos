@@ -201,7 +201,7 @@ public struct DirectivesFeature {
                 // mission. Guarded in the reducer, not only by the view's
                 // `.disabled`, so no future keyboard or menu path slips past.
                 guard builtIn.drivenBy == nil else {
-                    logger.notice("reconfigure refused on \(builtIn.deviceCode, privacy: .public): driven by directive \(builtIn.drivenBy?.directiveID ?? "-", privacy: .public)")
+                    logger.notice("reconfigure refused on \(builtIn.deviceCode, privacy: .public): \(builtIn.drivenBy?.logDescription ?? "-", privacy: .public)")
                     return .none
                 }
                 guard let device = state.selectedDevice else { return .none }
@@ -212,7 +212,7 @@ public struct DirectivesFeature {
             case .clearTapped:
                 guard case let .builtIn(builtIn) = state.selectedRow else { return .none }
                 guard builtIn.drivenBy == nil else {
-                    logger.notice("clear refused on \(builtIn.deviceCode, privacy: .public): driven by directive \(builtIn.drivenBy?.directiveID ?? "-", privacy: .public)")
+                    logger.notice("clear refused on \(builtIn.deviceCode, privacy: .public): \(builtIn.drivenBy?.logDescription ?? "-", privacy: .public)")
                     return .none
                 }
                 return .send(.clearConfirmed(deviceCode: builtIn.deviceCode))

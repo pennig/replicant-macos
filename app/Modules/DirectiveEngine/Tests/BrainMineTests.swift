@@ -571,6 +571,33 @@ struct BrainEnsureMineFerriesTests {
         #expect(general.targets.isEmpty)
     }
 
+    /// The stamp must land at LAUNCH: `assign`'s in-force short-circuit skips
+    /// `.assignController` forever on a ferry the `mineRun` already armed, so
+    /// the row would otherwise never own its controller and the built-in row
+    /// would never lock. The reservation set is unchanged — `deviceCode`
+    /// already reserves the same device.
+    @Test func theFerryRowOwnsItsControllerFromLaunch() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try seedMineWorld(db)
+            try self.seedInstalledMine(db, belt: mineBelt, controller: "MC1", transport: "TC1")
+        }
+
+        await mineTick(database)
+
+        let ferry = try #require(try await mineDirectives(database).first { $0.kind == .haulRun })
+        #expect(ferry.controllerCode == "TC1")
+        #expect(ferry.deviceCode == "TC1")
+        let devices = try await database.read { db in try Device.all.fetchAll(db) }
+        let byCode = Dictionary(uniqueKeysWithValues: devices.map { ($0.deviceCode, $0) })
+        var unstamped = ferry
+        unstamped.controllerCode = nil
+        #expect(
+            Brain.reservedDevices(directives: [ferry], devices: byCode)
+                == Brain.reservedDevices(directives: [unstamped], devices: byCode)
+        )
+    }
+
     @Test func aSecondTickAddsNoSecondFerry() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in
