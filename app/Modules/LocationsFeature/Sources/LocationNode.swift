@@ -128,6 +128,38 @@ public struct LocationFlatRow: Identifiable, Equatable, Sendable {
     }
 }
 
+// MARK: - Inventory index
+
+/// The `LocationFootprint` overlay rolled up by designation: stored resources at
+/// each location, and at each location *or anywhere beneath it*. Built once per
+/// forest so a row answers "holds anything?" with a lookup — the tree asks that
+/// question of every system, and the footprint table is galaxy-wide.
+struct LocationInventoryIndex: Equatable, Sendable {
+    private var own: [String: Double] = [:]
+    private var rolled: [String: Double] = [:]
+
+    init(footprints: [String: LocationCounts]) {
+        for (location, counts) in footprints where counts.resources > 0 {
+            let resources = Double(counts.resources)
+            own[location, default: 0] += resources
+            // Credit every ancestor designation: `SOL-3-L4` also counts toward
+            // `SOL-3` and `SOL`. Splitting on the separator is what keeps `SOL`
+            // from claiming `SOLARIS-1`.
+            var segments = location.split(separator: "-")
+            while !segments.isEmpty {
+                rolled[segments.joined(separator: "-"), default: 0] += resources
+                segments.removeLast()
+            }
+        }
+    }
+
+    /// Resources stored exactly at this location.
+    func resources(at designation: String) -> Double { own[designation] ?? 0 }
+
+    /// Resources stored at this location or anywhere beneath it.
+    func rolledUp(at designation: String) -> Double { rolled[designation] ?? 0 }
+}
+
 // MARK: - Builder
 
 public enum LocationTree {
@@ -178,32 +210,42 @@ public enum LocationTree {
             }
         }
 
-        let sorted = filtered.sorted { a, b in
-            switch sort {
-            case .alphabetical:
-                return a.designation < b.designation
-            case .distance:
-                return distance(a, myPosition) < distance(b, myPosition)
-            case .inventory:
-                let ia = inventoryTotal(a.designation, details, footprints)
-                let ib = inventoryTotal(b.designation, details, footprints)
+        let index = LocationInventoryIndex(footprints: footprints)
+
+        let sorted: [Star]
+        switch sort {
+        case .alphabetical:
+            sorted = filtered.sorted { $0.designation < $1.designation }
+        case .distance:
+            sorted = filtered.sorted { distance($0, myPosition) < distance($1, myPosition) }
+        case .inventory:
+            // Key each system once rather than per comparison: the roll-up walks a
+            // hydrated system's whole structure, which a comparator would repeat
+            // O(n log n) times.
+            let keys = Dictionary(
+                filtered.map { ($0.designation, inventoryTotal($0.designation, details, index)) },
+                uniquingKeysWith: { first, _ in first }
+            )
+            sorted = filtered.sorted { a, b in
+                let ia = keys[a.designation] ?? 0
+                let ib = keys[b.designation] ?? 0
                 return ia == ib ? a.designation < b.designation : ia > ib
             }
         }
 
         return sorted.map { star in
-            node(for: star, detail: details[star.designation], footprints: footprints)
+            node(for: star, detail: details[star.designation], index)
         }
     }
 
     // MARK: System node
 
-    static func node(for star: Star, detail: StarSystem?, footprints: [String: LocationCounts]) -> LocationNode {
+    static func node(for star: Star, detail: StarSystem?, _ index: LocationInventoryIndex) -> LocationNode {
         guard let system = detail else {
             // Census-only: uncharted or charted-but-not-hydrated. Leaf. It carries
             // no hydrated inventory, but the footprint overlay can still flag that
             // it holds resources before it's been scanned.
-            let inventory = hasInventory(star.designation, own: [], footprints: footprints, includeDescendants: true)
+            let inventory = hasInventory(star.designation, own: [], index: index, includeDescendants: true)
             return LocationNode(
                 id: star.designation,
                 kind: .system,
@@ -215,21 +257,21 @@ public enum LocationTree {
             )
         }
 
-        let children = system.belts.map { beltNode($0, footprints) }
-            + system.planets.map { planetNode($0, footprints) }
-            + system.structures.map { objectNode($0, footprints) }
+        let children = system.belts.map { beltNode($0, index) }
+            + system.planets.map { planetNode($0, index) }
+            + system.structures.map { objectNode($0, index) }
         return LocationNode(
             id: system.designation,
             kind: .system,
             title: system.name ?? system.designation,
             subtitle: systemSubtitle(star: star, system: system),
             recon: system.recon,
-            badges: systemBadges(system, footprints: footprints),
+            badges: systemBadges(system, index: index),
             children: children.isEmpty ? nil : children
         )
     }
 
-    static func planetNode(_ p: Planet, _ footprints: [String: LocationCounts]) -> LocationNode {
+    static func planetNode(_ p: Planet, _ index: LocationInventoryIndex) -> LocationNode {
         // A planet's badges reflect it *and* its moons and Lagrange points, so
         // sites/salvage/devices/inventory held beneath it still flag the planet row
         // while it's collapsed.
@@ -240,12 +282,12 @@ public enum LocationTree {
         // Moons first, then the five Lagrange points. Every planet has L1–L5 with
         // deterministic designations (`SYSTEM-n-L[1-5]`); any hydrated detail
         // (holdings, stationed devices) overlays by designation.
-        let children = p.moons.map { moonNode($0, footprints) }
+        let children = p.moons.map { moonNode($0, index) }
             + (1...5).map { n -> LocationNode in
                 let code = "\(p.designation)-L\(n)"
                 return lagrangeNode(code: code, point: n,
                                     hydrated: p.lagrange.first { $0.designation == code },
-                                    footprints)
+                                    index)
             }
         return LocationNode(
             id: p.designation,
@@ -256,7 +298,7 @@ public enum LocationTree {
             recon: p.recon,
             badges: bodyBadges(
                 sites: p.allResourceSites.count, salvage: p.allSalvageSites.count, devices: devices,
-                hasInventory: hasInventory(p.designation, own: inventory, footprints: footprints, includeDescendants: true)
+                hasInventory: hasInventory(p.designation, own: inventory, index: index, includeDescendants: true)
             ),
             children: children
         )
@@ -266,7 +308,7 @@ public enum LocationTree {
     /// `hydrated` `SpecialSite` supplies stationed-device and inventory badges once
     /// its per-location detail has been fetched. L4/L5 are the stable points.
     static func lagrangeNode(
-        code: String, point: Int, hydrated: SpecialSite?, _ footprints: [String: LocationCounts]
+        code: String, point: Int, hydrated: SpecialSite?, _ index: LocationInventoryIndex
     ) -> LocationNode {
         LocationNode(
             id: code,
@@ -277,12 +319,12 @@ public enum LocationTree {
             badges: bodyBadges(
                 sites: 0, salvage: 0, devices: hydrated?.devices.count ?? 0,
                 hasInventory: hasInventory(code, own: hydrated?.inventory ?? [],
-                                           footprints: footprints, includeDescendants: false)
+                                           index: index, includeDescendants: false)
             )
         )
     }
 
-    static func moonNode(_ m: Moon, _ footprints: [String: LocationCounts]) -> LocationNode {
+    static func moonNode(_ m: Moon, _ index: LocationInventoryIndex) -> LocationNode {
         LocationNode(
             id: m.designation,
             kind: .moon,
@@ -291,12 +333,12 @@ public enum LocationTree {
             recon: m.recon,
             badges: bodyBadges(
                 sites: m.sites.count, salvage: m.salvage.count, devices: m.devices.count,
-                hasInventory: hasInventory(m.designation, own: m.inventory, footprints: footprints, includeDescendants: false)
+                hasInventory: hasInventory(m.designation, own: m.inventory, index: index, includeDescendants: false)
             )
         )
     }
 
-    static func beltNode(_ b: Belt, _ footprints: [String: LocationCounts]) -> LocationNode {
+    static func beltNode(_ b: Belt, _ index: LocationInventoryIndex) -> LocationNode {
         LocationNode(
             id: b.designation,
             kind: .belt,
@@ -305,12 +347,12 @@ public enum LocationTree {
             recon: .scanned,
             badges: bodyBadges(
                 sites: b.sites.count, salvage: 0, devices: 0,
-                hasInventory: hasInventory(b.designation, own: b.inventory, footprints: footprints, includeDescendants: false)
+                hasInventory: hasInventory(b.designation, own: b.inventory, index: index, includeDescendants: false)
             )
         )
     }
 
-    static func objectNode(_ s: SpecialSite, _ footprints: [String: LocationCounts]) -> LocationNode {
+    static func objectNode(_ s: SpecialSite, _ index: LocationInventoryIndex) -> LocationNode {
         LocationNode(
             id: s.designation,
             kind: .object,
@@ -319,14 +361,14 @@ public enum LocationTree {
             recon: .scanned,
             badges: bodyBadges(
                 sites: 0, salvage: 0, devices: 0,
-                hasInventory: hasInventory(s.designation, own: s.inventory, footprints: footprints, includeDescendants: false)
+                hasInventory: hasInventory(s.designation, own: s.inventory, index: index, includeDescendants: false)
             )
         )
     }
 
     // MARK: Badges & subtitles
 
-    static func systemBadges(_ s: StarSystem, footprints: [String: LocationCounts]) -> [LocationBadge] {
+    static func systemBadges(_ s: StarSystem, index: LocationInventoryIndex) -> [LocationBadge] {
         var out: [LocationBadge] = []
         let sites = s.allResourceSites.count
         let salvage = s.allSalvageSites.count
@@ -336,7 +378,7 @@ public enum LocationTree {
         if salvage > 0 { out.append(.init(symbol: "wrench.and.screwdriver", count: salvage)) }
         if shops > 0 { out.append(.init(symbol: "cart", count: shops)) }
         if devices > 0 { out.append(.init(symbol: "circle.hexagongrid", count: devices)) }
-        if hasInventory(s.designation, own: s.allInventory, footprints: footprints, includeDescendants: true) {
+        if hasInventory(s.designation, own: s.allInventory, index: index, includeDescendants: true) {
             out.append(inventoryBadge)
         }
         return out
@@ -361,17 +403,13 @@ public enum LocationTree {
     static func hasInventory(
         _ designation: String,
         own inventory: [InventoryItem],
-        footprints: [String: LocationCounts],
+        index: LocationInventoryIndex,
         includeDescendants: Bool
     ) -> Bool {
         if !inventory.isEmpty { return true }
-        if includeDescendants {
-            let prefix = designation + "-"
-            return footprints.contains { location, counts in
-                (location == designation || location.hasPrefix(prefix)) && counts.resources > 0
-            }
-        }
-        return (footprints[designation]?.resources ?? 0) > 0
+        return includeDescendants
+            ? index.rolledUp(at: designation) > 0
+            : index.resources(at: designation) > 0
     }
 
     static func censusSubtitle(_ star: Star) -> String {
@@ -412,17 +450,12 @@ public enum LocationTree {
     static func inventoryTotal(
         _ designation: String,
         _ details: [String: StarSystem],
-        _ footprints: [String: LocationCounts]
+        _ index: LocationInventoryIndex
     ) -> Double {
         if let system = details[designation] {
             let rolled = system.totalInventoryQuantity
             if rolled > 0 { return rolled }
         }
-        let prefix = designation + "-"
-        return footprints.reduce(0.0) { sum, entry in
-            (entry.key == designation || entry.key.hasPrefix(prefix))
-                ? sum + Double(entry.value.resources)
-                : sum
-        }
+        return index.rolledUp(at: designation)
     }
 }
