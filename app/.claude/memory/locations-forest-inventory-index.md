@@ -42,8 +42,29 @@ dictionary lookups. Splitting on the separator (not `hasPrefix`) is what keeps
 against the exact scan it replaces over that trap. The inventory sort additionally
 keys each system once before sorting instead of per comparison.
 
+**Second fix, same day — the search term narrows the blob read too.** The star
+query filtered on the search term but `SystemDetail.all` did not, so typing "SO"
+decoded all 264 blobs to render the ten systems that could match. A blob is only
+ever read through a star of its own designation, so binding one `like` pattern
+and applying it to both queries is exact. Whole fetch, measured release-build:
+
+    search "S"        102 ms →  49 ms
+    search "SO"        88 ms →  12 ms
+    search "SOL"       81 ms →   9 ms
+    search "SOLARIS"   82 ms →   8 ms
+    search ""         129 ms → 133 ms   (unchanged: `%%` matches everything)
+
+The budget is **<150 ms, tighter on the search flow** — so the typing path now
+has an order of magnitude of headroom and the empty-search path has about two
+weeks of it. `LocationForestSearchTests` guards the invariant the narrowing
+rests on: if the two predicates ever drift apart, a hydrated system silently
+downgrades to a census leaf, which no existing test would have caught.
+
 **The remaining floor is the blob decode**, 0.072–0.089 s for 264 rows, and it
-grows linearly with charted systems (142 → 264 in four days). This is the same
+grows linearly with charted systems (142 → 264 in four days). It is now the
+whole of the empty-search cost that isn't the 34 ms `stars` read, so the
+initial-load path — opening the tab, clearing the field, changing sort/filter,
+switching the active replicant — is what the JSON projection would buy next. This is the same
 `systemJSON` decode escape hatch [brain-survey-goal-build](brain-survey-goal-build.md)
 flagged for `WorldView.read`, and the same automation drives both numbers.
 `NewStarMapFeature`'s `SystemDecodeCache` is the shape to reuse when it bites.
