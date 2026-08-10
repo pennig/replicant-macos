@@ -118,6 +118,15 @@ struct LocationsClientHydrateBodyTests {
         )))
         let stored = try await storedAssay(database, id: "MEREDIANA-3-SAL-1")
         #expect(stored?.depleted == true)
+
+        let blob = try await database.read { db in
+            try SystemDetail.where { $0.designation.eq("MEREDIANA") }.fetchOne(db)
+        }
+        let sites = try #require(try blob?.system()).knownSalvageSites.map(\.designation)
+        #expect(
+            !sites.contains("MEREDIANA-3-SAL-1"),
+            "a scanned empty roster is authoritative — the blob must drop the site"
+        )
     }
 
     /// A site the fresh roster still lists is live: its assay stays untouched.

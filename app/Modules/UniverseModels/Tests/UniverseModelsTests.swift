@@ -278,6 +278,58 @@ import Testing
         #expect(moon.salvage.map(\.depleted) == [true])
     }
 
+    @Test func bodyRefetchDropsADelistedSite() {
+        // The server delists a drained site, so a SCANNED detail's empty
+        // roster is authoritative and must erase the cached site.
+        let cached = StarSystem(
+            designation: "MEREDIANA",
+            planets: [Planet(
+                designation: "MEREDIANA-3", recon: .scanned,
+                salvage: [SalvageSite(designation: "MEREDIANA-3-SAL-1", name: "Power Core Remnant")]
+            )]
+        )
+        let fresh = Planet(designation: "MEREDIANA-3", recon: .scanned, salvage: [])
+
+        let merged = cached.applying(.planet(fresh))
+        #expect(merged.planets.first?.salvage.isEmpty == true)
+        #expect(merged.salvageBodies.isEmpty)
+    }
+
+    @Test func unscannedBodyRefetchKeepsCachedSalvage() {
+        // An unscanned detail's empty roster is ignorance, not depletion.
+        let cached = StarSystem(
+            designation: "MEREDIANA",
+            planets: [Planet(
+                designation: "MEREDIANA-3", recon: .scanned,
+                salvage: [SalvageSite(designation: "MEREDIANA-3-SAL-1", name: "Power Core Remnant")]
+            )]
+        )
+        let fresh = Planet(designation: "MEREDIANA-3", recon: .visited, salvage: [])
+
+        let merged = cached.applying(.planet(fresh))
+        #expect(merged.planets.first?.salvage.map(\.designation) == ["MEREDIANA-3-SAL-1"])
+    }
+
+    @Test func moonRefetchDropsADelistedSiteButUnscannedKeeps() {
+        let cached = StarSystem(
+            designation: "MEREDIANA",
+            planets: [Planet(
+                designation: "MEREDIANA-2", recon: .scanned,
+                moons: [Moon(
+                    designation: "MEREDIANA-2-1", recon: .scanned,
+                    salvage: [SalvageSite(designation: "MEREDIANA-2-1-SAL-1", name: "Wreck")]
+                )]
+            )]
+        )
+        let scannedEmpty = Moon(designation: "MEREDIANA-2-1", recon: .scanned, salvage: [])
+        let dropped = cached.applying(.moon(scannedEmpty))
+        #expect(dropped.planets.first?.moons.first?.salvage.isEmpty == true)
+
+        let unscannedEmpty = Moon(designation: "MEREDIANA-2-1", recon: .visited, salvage: [])
+        let kept = cached.applying(.moon(unscannedEmpty))
+        #expect(kept.planets.first?.moons.first?.salvage.map(\.designation) == ["MEREDIANA-2-1-SAL-1"])
+    }
+
     @Test func planetSalvageDecodesAsOwnType() throws {
         // BETSU-3 roster entry carries a salvage site (research station).
         let raw = try decode(Self.betsuStarJSON)

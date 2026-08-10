@@ -1024,10 +1024,13 @@ extension StarSystem {
 
     private mutating func upsertPlanet(_ p: Planet) {
         if let idx = planets.firstIndex(where: { $0.designation == p.designation }) {
-            // Preserve already-known salvage/lagrange from the roster if the
-            // detail response didn't repeat them.
+            // An UNSCANNED detail's empty salvage is ignorance — keep the cache.
+            // A scanned empty roster is authoritative: the server delists a
+            // drained site, so keeping the cache would make it immortal.
             var merged = p
-            if merged.salvage.isEmpty { merged.salvage = planets[idx].salvage }
+            if merged.salvage.isEmpty, merged.recon != .scanned {
+                merged.salvage = planets[idx].salvage
+            }
             if merged.lagrange.isEmpty { merged.lagrange = planets[idx].lagrange }
             // A planet-level fetch lists its moons as bare stubs (no salvage,
             // sites, or physical) — merging them in verbatim would wipe the richer
@@ -1068,7 +1071,13 @@ extension StarSystem {
 extension Planet {
     fileprivate mutating func upsertMoon(_ m: Moon) {
         if let idx = moons.firstIndex(where: { $0.designation == m.designation }) {
-            moons[idx] = m
+            // Same salvage rule as `upsertPlanet`: only a SCANNED detail's
+            // empty roster may erase what the cache knows.
+            var merged = m
+            if merged.salvage.isEmpty, merged.recon != .scanned {
+                merged.salvage = moons[idx].salvage
+            }
+            moons[idx] = merged
         } else {
             moons.append(m)
         }
