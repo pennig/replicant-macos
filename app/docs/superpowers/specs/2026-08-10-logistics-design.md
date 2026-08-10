@@ -122,7 +122,9 @@ HaulYield
   sourceDesignation       TEXT     — digest `report.collect`
   collectedAt             DATE
   unitsCollected          INTEGER  — digest `carried` delta, authoritative
-  perType                 JSON     — [resource_type: units]
+  perType                 JSON     — ResourceCost (the existing typed six-field
+                                     struct, with its `init(wire:)` and
+                                     `displayOrder`; not a loose dictionary)
   breakdownState          TEXT     — exact | partial | unavailable
   destinationDesignation  TEXT?    — digest `report.deliver`, filled on delivery
   deliveredAt             DATE?
@@ -185,14 +187,19 @@ design system has no categorical ramp — one accent, seven *reserved* status
 colors — so six new colorsets are added to `Colors.xcassets` as a deliberate
 extension for charts. Assignment is fixed and never cycled.
 
-| Slot | Light | Dark |
+Slot order **is** `ResourceCost.displayOrder`, the canonical six-resource
+ordering the blueprint radar chart already uses. The validator scores *adjacent*
+pairs, so the mapping is chosen to make that sequence the validated one — the two
+greens must not sit next to each other:
+
+| Slot (display order) | Light | Dark |
 |---|---|---|
 | structural | `#2a78d6` | `#3987e5` |
 | conductive | `#eb6834` | `#d95926` |
 | silicates | `#1baf7a` | `#199e70` |
-| rares | `#4a3aa7` | `#9085e9` |
-| volatiles | `#e87ba4` | `#d55181` |
-| carbon | `#008300` | `#008300` |
+| carbon | `#4a3aa7` | `#9085e9` |
+| rares | `#e87ba4` | `#d55181` |
+| volatiles | `#008300` | `#008300` |
 
 Validated with the dataviz validator against the app's real surfaces —
 `ContentBackground` `#F9F5EE` light, `#0D1018` dark:
@@ -201,6 +208,24 @@ Validated with the dataviz validator against the app's real surfaces —
   deutan, tritan 26.6) and normal-vision floor (27.6) all pass. Contrast warns
   below 3:1 for three slots, relieved by direct labels and the ledger table.
 - **Dark:** all six checks pass, contrast included.
+
+**The gate is adjacent pairs, and that is not a shortcut — it is the correct gate
+for the forms used here.** Stacked bars and columns are *adjacent* forms: a
+reader separates a segment from the ones touching it. Under `--pairs all` this
+palette FAILS in both modes (normal-vision floor 12.9 light, 9.8 dark; CVD ΔE 3.2
+light, 1.6 dark), which is expected for six categorical hues and is why the
+skill caps all-pairs forms at three series.
+
+**Consequence, and it is binding: no all-pairs categorical form may be added to
+this feature** — no scatter, bubble, choropleth, or six-colour small multiples.
+Composition is shown as a stacked column and nothing else. Any future chart that
+needs to separate all six at once must fold to "Other", facet, or drop to a
+sequential hue.
+
+Swapping the slot mapping into `displayOrder` naively — leaving carbon on the
+green and silicates on the aqua — puts `#1baf7a` next to `#008300` and drops the
+normal-vision floor to 15.6, against a hard-fail line of 15. Re-run the validator
+after any change to the mapping, not just to the hexes.
 
 Yellow was deliberately excluded. The obvious slot-4 yellow (`#eda100`) sits on
 top of the app's amber accent (`#D19317` / `#FFB23E`), so a series would read as
