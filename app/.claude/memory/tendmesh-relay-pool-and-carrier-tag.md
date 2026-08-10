@@ -151,5 +151,43 @@ brain change, suspect a fixture whose premise no longer holds.
 - The engine test suite is ~700 tests and takes ~10 minutes — it is SLOW, not
   hung. Do not conclude a hang from an empty event stream in the first minutes.
 
+## The claim was never actually written down (2026-08-10)
+
+"Ownership is decided by the CLAIM, not by provenance" was aspirational. Nothing
+persisted a claim, so `relay(for:)` re-derived it every tick from mutable state,
+and it still ranked `printedRelay` — pure provenance — ABOVE the relay in the
+hold. A second live stall came straight out of that gap.
+
+A second autofactory now stands at the hub, so two prints run at once. The
+`restockRun` printed on one, the Relay Run on the other, and they completed ten
+seconds apart. When the run evaluated, its own clone's OPERATION had landed but
+its DEVICE ROW had not — `printedRelay` returns nil on a code with no row — so
+resolution fell through to the pool and it claimed and stowed the restock's
+relay. Seconds later its own clone's row arrived, `printedRelay` started
+answering, and every later tick asked whether THAT relay was aboard. It was
+standing at the belt. Five minutes of `stowDeadline`, then `noRelayCoLocated`,
+next to a hold with a relay in it.
+
+**Retry cannot clear a resolution bug.** It re-stamps `stepStartedAt` and re-runs
+the identical lookup, so the row stalled again on the same 5-minute clock. The
+diagnostic tell is `confirmStow` spending its refresh on a device code that is
+not the one the `stow` dispatch entry names.
+
+So the claim is now a real column, `directives.claimedRelayCode`, stamped by a
+new `MissionAction.claimRelay` at the three sites where a relay is confirmed in
+the hold (`acquire`'s already-aboard branch, `stowing`'s, and `confirmStow`'s
+success). Resolution order is `sourceRelayCode → claimedRelayCode → aboard →
+printedRelay → pool → deployed`.
+
+**The claim, not the reorder, is what carries the run past `deploy`.** Moving
+`aboard` above `printedRelay` fixes the stall but only until the relay leaves the
+hold — after which `aboard` goes nil and provenance would win again, pointing
+`activate` at a relay parked at the hub. Ordering alone would have planted the
+wrong relay in the right system.
+
+Not a defect worth chasing: the run consuming a spare while its own print is in
+flight leaves the clone parked as pool stock, and `restockRun` counts parked
+spares against `idleCap`, so it prints one fewer next round. Nothing is wasted.
+
 Related: [[brain-tendmesh-build]], [[brain-executor-seam]], [[haul-run-design]]
 (the `auto:haul` tag this one is modelled on), [[device-tags-and-control-range]].

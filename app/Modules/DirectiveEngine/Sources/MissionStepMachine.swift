@@ -28,6 +28,10 @@ public enum MissionAction: Equatable, Sendable {
     /// Record the AMI controller this run is driving in `Directive.controllerCode`,
     /// then move to `nextStep`. That badges and locks the controller's built-in row.
     case assignController(deviceCode: String, nextStep: String)
+    /// Record the relay this run has taken possession of in
+    /// `Directive.claimedRelayCode`, then move to `nextStep`. Carries no lease:
+    /// it fixes which relay the run means, nothing about who may command it.
+    case claimRelay(deviceCode: String, nextStep: String)
     /// Re-read `locations/{star}`, persist it, then move to `nextStep`. Best-effort:
     /// the endpoint 403s for a system the census has never marked explored, and the
     /// engine swallows that — a stale cache only costs the machine one evaluation.
