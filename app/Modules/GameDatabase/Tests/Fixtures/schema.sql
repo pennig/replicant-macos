@@ -130,6 +130,22 @@ CREATE TABLE "ftlLinks" (
   "updatedAt" TEXT NOT NULL
 , "distanceLy" REAL, "rangeA" REAL, "rangeB" REAL) STRICT;
 
+CREATE TABLE "haulYields" (
+  "id" TEXT PRIMARY KEY NOT NULL,
+  "directiveID" TEXT NOT NULL DEFAULT '',
+  "controllerCode" TEXT NOT NULL DEFAULT '',
+  "deviceCode" TEXT NOT NULL DEFAULT '',
+  "sourceDesignation" TEXT NOT NULL DEFAULT '',
+  "collectedAt" TEXT NOT NULL,
+  "unitsCollected" INTEGER NOT NULL DEFAULT 0,
+  "perType" TEXT NOT NULL DEFAULT '{}',
+  "breakdownState" TEXT NOT NULL DEFAULT 'unavailable',
+  "destinationDesignation" TEXT,
+  "deliveredAt" TEXT,
+  "unitsDelivered" INTEGER,
+  "followsGap" INTEGER NOT NULL DEFAULT 0
+) STRICT;
+
 CREATE TABLE "knownReplicants" (
   "replicantCode" TEXT PRIMARY KEY NOT NULL,
   "name" TEXT NOT NULL DEFAULT '',

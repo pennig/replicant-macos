@@ -51,6 +51,7 @@ import Testing
         "Add 'depleted' to 'siteAssays'",
         "Add link metrics to 'ftlLinks'",
         "Add 'sourceRelayCode' to 'directives'",
+        "Create 'haulYields' table",
     ]
 
     @Test func manifestMatchesTheFrozenList() {
