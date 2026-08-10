@@ -433,12 +433,18 @@ public struct LocationForest: FetchKeyRequest {
     }
 
     public func fetch(_ db: Database) throws -> Value {
-        // Empty search → `contains("")` matches every system.
+        // Empty search → `%%` matches every system.
+        let pattern = "%\(search)%"
         let stars = try Star
-            .where { $0.designation.contains(search) }
+            .where { $0.designation.like(pattern) }
             .order { $0.designation }
             .fetchAll(db)
-        let detailRows = try SystemDetail.all.fetchAll(db)
+        // The SAME pattern, because a blob can only ever be read through a star
+        // of its own designation — narrowing here is what keeps a keystroke from
+        // decoding the whole table to render a handful of rows.
+        let detailRows = try SystemDetail
+            .where { $0.designation.like(pattern) }
+            .fetchAll(db)
         let footprintRows = try LocationFootprint.all.fetchAll(db)
         // The probe's position (for distance sort) — the active replicant's current
         // star, resolved the same way as `State.activeReplicant`: prefer the stored
