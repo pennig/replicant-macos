@@ -21,7 +21,7 @@ struct EventLogDetailView: View {
                 header(event)
                     .padding(Space.m)
                 Divider()
-                JSONTreeView(node: JSONTreeNode(value: event.envelopeJSON))
+                JSONTreeView(node: JSONTreeNode(documentID: event.id, value: event.envelopeJSON))
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         } else {

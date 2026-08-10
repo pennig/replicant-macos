@@ -6,7 +6,7 @@ import Utils
 // live here, apart from `JSONTreeView`'s implementation.
 
 #Preview {
-    JSONTreeView(node: .init(value: .object([
+    JSONTreeView(node: .init(documentID: "nested-object", value: .object([
         "foo": .string("bar"),
         "wat": .null,
         "nah": .object([:]),
@@ -40,7 +40,7 @@ import Utils
 }
 
 #Preview {
-    JSONTreeView(node: .init(value: .array([
+    JSONTreeView(node: .init(documentID: "legs", value: .array([
         .object([
             "departed_at": .string("2026-05-29T18:45:12Z"),
             "arrived_at": .string("2026-05-30T07:22:59Z"),
@@ -54,16 +54,16 @@ import Utils
 
 #Preview {
     VStack {
-        JSONTreeView(node: .init(value: .string("Hello, world!")))
+        JSONTreeView(node: .init(documentID: "scalar-string", value: .string("Hello, world!")))
         Divider()
-        JSONTreeView(node: .init(value: .bool(false)))
+        JSONTreeView(node: .init(documentID: "scalar-bool", value: .bool(false)))
         Divider()
-        JSONTreeView(node: .init(value: .number(12.56)))
+        JSONTreeView(node: .init(documentID: "scalar-number", value: .number(12.56)))
         Divider()
-        JSONTreeView(node: .init(value: .null))
+        JSONTreeView(node: .init(documentID: "scalar-null", value: .null))
         Divider()
-        JSONTreeView(node: .init(value: .array([.string("foo"), .string("bar")])))
+        JSONTreeView(node: .init(documentID: "flat-array", value: .array([.string("foo"), .string("bar")])))
         Divider()
-        JSONTreeView(node: .init(value: .object(["foo": .string("bar"), "bar": .null])))
+        JSONTreeView(node: .init(documentID: "flat-object", value: .object(["foo": .string("bar"), "bar": .null])))
     }.background(.rcWindowBackground)
 }

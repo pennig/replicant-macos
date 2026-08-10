@@ -55,11 +55,14 @@ public struct ResponsePaneFeature {
     @ObservableState
     public struct State: Equatable {
         var response: Response
+        /// Identifies which response is on screen. Distinct per response, so no
+        /// two of them share tree-row ids or each other's expansion state.
+        var responseID: UUID
         var contentSelection: ResponseContentSelection = .tree
-        
+
         var jsonTreeNode: JSONTreeNode {
             let value = try? JSONDecoder().decode(JSONValue.self, from: response.data)
-            return JSONTreeNode(value: value ?? .null)
+            return JSONTreeNode(documentID: responseID.uuidString, value: value ?? .null)
         }
     }
 
@@ -137,7 +140,7 @@ public struct ResponsePaneView: View {
 
 #Preview {
     ResponsePaneView(
-        store: Store(initialState: .init(response: .mock)){
+        store: Store(initialState: .init(response: .mock, responseID: UUID())){
             ResponsePaneFeature()
         }
     ).background(.rcWindowBackground)
