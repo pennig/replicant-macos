@@ -74,6 +74,26 @@ spent — in the common race the late frame lands during the grace and the run a
 Worst-case latency to a GENUINE never-drains stall is ~2× the grace (the read's re-entry re-stamps
 `stepStartedAt`). The stall stayed Retry-clearable throughout, exactly as the 2026-08-06 fix intended.
 
+**Amended 2026-08-09 (the MEREDIANA-3-SAL-1 delisted-site stall)**: the same stall fired a THIRD time with
+both prior fixes intact, and this root was invisible to every local depletion path. The server **DELISTS** a
+fully-drained salvage site — `GET locations/{body}` returns `resource_sites: []` with the site simply absent,
+never `depleted: true` (verified live by comparing TONGRA-5-56, present with `site_type: "salvage"`, against
+ALNIYATUM-4-29 minutes after we drained it, absent). MEREDIANA-3-SAL-1 was depleted out-of-band — discovered
+2026-07-27, never mined by this account, no `salvage.depleted` frame ever received — so the assay held its
+original 510 units, the planner kept targeting it, the AMI cycle completed in 13 s (`ami.mining.digest` said
+`site_depleted: true`, `resources: {}`), and `sameBodyAgain`'s one star-level `.refreshSystem` read could
+never observe the absence (`mergingSalvage` keeps cached sites when fresh is empty, and `hydrateSystem`'s
+assay sink iterates only present-and-flagged sites). Retry-proof by construction; the brain burned its 3
+retries identically. Fix: (1) `LocationsClient.hydrateBody` now marks the durable assay depleted for every
+salvage assay on the fetched body absent from a SCANNED fresh roster (`BodyDetail.scannedSalvageRoster` — nil
+when unscanned, so ignorance never reads as depletion; scoped strictly to the fetched body, never its moons);
+(2) `sameBodyAgain` spends its one read on a new `MissionAction.refreshBody` (per-body, the only endpoint
+that can witness a delisting) instead of `.refreshSystem`; (3) `MissionAction.stall` gained `detail:` — the
+salvage stall now names the body, shown mono in `DirectiveStallPanel` via `DirectiveStallDetail` parsing the
+newest `.stalled` timeline entry (the operator could not previously tell WHICH site a stall meant). The
+digest's `site_depleted` flag remains un-ingested (body-vs-site ambiguity); the cost is one wasted 13 s cycle
+plus one 5-min grace per out-of-band-depleted site, paid once ever per site.
+
 **AMENDED 2026-08-07 by [[salvage-controller-recall-race]]**: `awaitCompletion`'s "never stalls,
 however long the cycle runs" now has exactly one exception — a `gather_salvage` that reads PAUSED,
 which emits no completion and so would wait forever. `verify` also gained a controller-aboard gate:

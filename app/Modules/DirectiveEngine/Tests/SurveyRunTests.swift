@@ -197,7 +197,7 @@ private func run(
 /// step itself.
 private func stallReason(_ action: MissionAction) -> DirectiveAttentionReason? {
     switch action {
-    case let .stall(reason): return reason
+    case let .stall(reason, _): return reason
     case let .refreshDevices(_, thenStall): return thenStall
     default: return nil
     }

@@ -1085,6 +1085,16 @@ extension BodyDetail {
         case .special(let s): s.designation
         }
     }
+
+    /// The salvage roster when this body is SCANNED, else nil — an unscanned
+    /// body's empty roster is ignorance, never evidence a site is gone.
+    public var scannedSalvageRoster: [SalvageSite]? {
+        switch self {
+        case .planet(let p): p.recon == .scanned ? p.salvage : nil
+        case .moon(let m): m.recon == .scanned ? m.salvage : nil
+        case .belt, .special: nil
+        }
+    }
 }
 
 // MARK: - Recon ordering (for filter/sort)

@@ -1077,9 +1077,10 @@ struct SalvageRunLoopProgressTests {
 
     /// The body just worked is still the richest live one past the grace.
     /// Rather than re-launching at it — which is what the loop did forever —
-    /// read the system authoritatively: the common cause is a stale `depleted`
-    /// flag, and the read repairs it.
-    @Test func readsTheSystemWhenTheBodyJustWorkedComesBackAgain() {
+    /// read the BODY authoritatively: the server delists a depleted site, and
+    /// only the per-body endpoint can observe the absence (`.refreshSystem`'s
+    /// star-level payload carries no salvage arrays for these bodies at all).
+    @Test func readsTheBodyWhenTheBodyJustWorkedComesBackAgain() {
         let directive = running(
             step: "verifying",
             stepStartedAt: fixtureNow.addingTimeInterval(-SalvageRun.depletionPropagationGrace - 1)
@@ -1087,12 +1088,12 @@ struct SalvageRunLoopProgressTests {
         let world = world(devices: [atSystem, worked("TOSLIT-6-5"), drone],
                           systems: ["TOSLIT": miningToslit], siteAssays: miningToslitAssays)
         #expect(SalvageRun().nextAction(directive: directive, world: world)
-            == .refreshSystem(designation: "TOSLIT", nextStep: "verifying"))
+            == .refreshBody(system: "TOSLIT", body: "TOSLIT-6-5", nextStep: "verifying"))
     }
 
     /// Once that read has been spent and the body is STILL on offer, the run
-    /// surfaces instead of looping. A stall the operator can Skip past beats an
-    /// invisible command loop against the live API.
+    /// surfaces instead of looping — naming the body, so the operator can tell
+    /// WHICH site the run means without touring the system by hand.
     @Test func stallsWhenAWorkedBodyNeverDrains() {
         let directive = running(
             step: "verifying",
@@ -1105,7 +1106,7 @@ struct SalvageRunLoopProgressTests {
             systems: ["TOSLIT": miningToslit], siteAssays: miningToslitAssays
         )
         #expect(SalvageRun().nextAction(directive: directive, world: world)
-            == .stall(.salvageBodyNotDepleted))
+            == .stall(.salvageBodyNotDepleted, detail: "TOSLIT-6-5"))
     }
 
     /// Progress looks like this: the body just worked has dropped out, and the

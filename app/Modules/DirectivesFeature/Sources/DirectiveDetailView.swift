@@ -208,6 +208,7 @@ public struct DirectiveDetailView: View {
                 if directive.status == .needsAttention, let reason = directive.attentionReason {
                     DirectiveStallPanel(
                         reason: reason,
+                        detail: DirectiveStallDetail.detail(for: reason, in: store.timeline.entries),
                         retry: { store.send(.retryTapped) },
                         skip: { store.send(.skipTargetTapped) },
                         cancel: { store.send(.cancelRunTapped) }

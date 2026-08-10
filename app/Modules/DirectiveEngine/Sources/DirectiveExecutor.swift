@@ -100,6 +100,13 @@ enum DirectiveExecutor {
             await move(directive, to: nextStep, controllerCode: directive.controllerCode)
             return true
 
+        case let .refreshBody(system, body, nextStep):
+            // Best-effort by contract, same reasoning as `.refreshSystem` above.
+            @Dependency(\.locationsClient) var locationsClient
+            try? await locationsClient.hydrateBody(systemDesignation: system, bodyDesignation: body)
+            await move(directive, to: nextStep, controllerCode: directive.controllerCode)
+            return true
+
         case let .setDeviceTags(deviceCode, tags, nextStep):
             // Best-effort by contract, same reasoning as `.refreshSystem` above:
             // the real work this action follows (a relay planted and meshing)
@@ -145,8 +152,8 @@ enum DirectiveExecutor {
             logger.error("directive \(directive.id, privacy: .public): unresolved extendQueue reached the executor — leaving the row untouched")
             return true
 
-        case let .stall(reason):
-            await stall(directive, reason: reason, detail: nil)
+        case let .stall(reason, detail):
+            await stall(directive, reason: reason, detail: detail)
             return false
 
         case .advanceTarget:

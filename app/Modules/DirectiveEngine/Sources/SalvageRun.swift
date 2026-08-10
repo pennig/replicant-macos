@@ -934,7 +934,7 @@ public struct SalvageRun: MissionStepMachine {
             // More bodies here — unless the next one is what the cycle that just
             // ended was already working.
             guard body != Self.workedBody(controller) else {
-                return sameBodyAgain(directive, world, target: target)
+                return sameBodyAgain(directive, world, target: target, body: body)
             }
             return .advanceStep(nextStep: Step.positioning)
         case .unresolved:
@@ -967,8 +967,8 @@ public struct SalvageRun: MissionStepMachine {
         return controller.currentDirectiveConfig?["location"]?.stringValue
     }
 
-    /// How many `locations/{star}` reads the loop may spend on a body that came
-    /// back unchanged before surfacing it. One: the read is authoritative.
+    /// How many per-body reads the loop may spend on a body that came back
+    /// unchanged before surfacing it. One: the read is authoritative.
     public static let bodyProgressAttempts = 1
 
     /// How long `verify` waits before treating a still-on-offer worked body as
@@ -976,19 +976,19 @@ public struct SalvageRun: MissionStepMachine {
     /// real finish, so a read spent sooner asks a server not yet caught up.
     public static let depletionPropagationGrace: TimeInterval = 5 * 60
 
-    /// The mining loop's terminator, ordered grace → one `.refreshSystem` → stall:
-    /// a body leaves the candidate set only when `salvage.depleted` flips it, and
-    /// a read spent inside the propagation window asks a server not yet caught up.
+    /// The mining loop's terminator, ordered grace → one `.refreshBody` → stall.
+    /// The per-body read, never `.refreshSystem`: the server DELISTS a depleted
+    /// site, and only the per-body endpoint's roster can observe the absence.
     private func sameBodyAgain(
-        _ directive: Directive, _ world: WorldSnapshot, target: String
+        _ directive: Directive, _ world: WorldSnapshot, target: String, body: String
     ) -> MissionAction {
         if world.now.timeIntervalSince(directive.stepStartedAt) <= Self.depletionPropagationGrace {
             return .wait
         }
         if Self.stepEntryCount(directive, world) <= Self.bodyProgressAttempts {
-            return .refreshSystem(designation: target, nextStep: Step.verifying)
+            return .refreshBody(system: target, body: body, nextStep: Step.verifying)
         }
-        return .stall(.salvageBodyNotDepleted)
+        return .stall(.salvageBodyNotDepleted, detail: body)
     }
 
 }

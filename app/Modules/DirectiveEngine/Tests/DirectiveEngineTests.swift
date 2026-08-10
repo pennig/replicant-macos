@@ -462,6 +462,65 @@ struct DirectiveEngineTests {
         }
     }
 
+    /// `.refreshBody` performs the per-body read — the only one that can observe
+    /// a DELISTED salvage site — then advances.
+    @Test func refreshBodyReadsThenAdvances() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { mission(step: "awaiting") }.execute(db)
+        }
+        let asked = LockIsolated<String?>(nil)
+        let core = DirectiveEngineCore(
+            machines: [ScriptedMachine([.refreshBody(system: "SOL", body: "SOL-3", nextStep: "verifying")])],
+            tick: .seconds(5)
+        )
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.locationsClient.system = { designation in
+                StarSystem(designation: designation)
+            }
+            $0.locationsClient.body = { designation in
+                asked.setValue(designation)
+                return .planet(Planet(designation: designation, recon: .scanned))
+            }
+        } operation: {
+            await core.evaluateOnce(directiveID: "D1")
+            #expect(asked.value == "SOL-3")
+            let directive = try await database.read { db in
+                try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+            }
+            #expect(directive?.step == "verifying")
+        }
+    }
+
+    /// A body read that fails still advances — best-effort, exactly like
+    /// `.refreshSystem`, so a transient miss cannot strand the mission.
+    @Test func refreshBodyAdvancesEvenWhenTheReadFails() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { mission(step: "awaiting") }.execute(db)
+        }
+        let core = DirectiveEngineCore(
+            machines: [ScriptedMachine([.refreshBody(system: "SOL", body: "SOL-3", nextStep: "verifying")])],
+            tick: .seconds(5)
+        )
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.locationsClient.system = { _ in throw LocationsError.noReplicantInSystem }
+            $0.locationsClient.body = { _ in throw LocationsError.notFound }
+        } operation: {
+            await core.evaluateOnce(directiveID: "D1")
+            let directive = try await database.read { db in
+                try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+            }
+            #expect(directive?.step == "verifying")
+        }
+    }
+
     /// `.setDeviceTags` PATCHes the new set, confirm-reads the device, then
     /// advances — modeled on `.refreshSystem`, but with a follow-up read
     /// instead of a preceding one.

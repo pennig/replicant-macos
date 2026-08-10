@@ -203,6 +203,9 @@ extension LocationsClient {
         }
     }
 
+    /// Fetch one body's scanned detail, fold it into the cached system blob,
+    /// and mark the durable assay of any salvage site the scanned roster no
+    /// longer lists — the server delists a drained site rather than flagging it.
     public func hydrateBody(systemDesignation: String, bodyDesignation: String) async throws {
         @Dependency(\.defaultDatabase) var database
         @Dependency(\.date.now) var now
@@ -218,6 +221,21 @@ extension LocationsClient {
         let merged = assembled
         try await database.write { db in
             try SystemDetail.persist(system: merged, at: now, in: db)
+            try markDelistedAssaysDepleted(body: bodyDesignation, fresh: detail, in: db)
+        }
+    }
+
+    /// Deplete the assay of every salvage site on the fetched body that the
+    /// fresh SCANNED roster omits. An unscanned body's empty roster is
+    /// ignorance, not depletion, and reads as nil here — no inference runs.
+    private func markDelistedAssaysDepleted(
+        body: String, fresh detail: BodyDetail, in db: Database
+    ) throws {
+        guard let roster = detail.scannedSalvageRoster else { return }
+        let present = Set(roster.map(\.designation))
+        let assays = try SiteAssay.where { $0.body.eq(body) }.fetchAll(db)
+        for assay in assays where assay.siteType == "salvage" && !present.contains(assay.id) {
+            try markAssayDepleted(site: assay.id, in: db)
         }
     }
 
@@ -446,13 +464,10 @@ extension LocationsClient {
     }
 
     /// Scoped, one-way `UPDATE` of `SiteAssay.depleted` for exactly one site —
-    /// deliberately never a full upsert. A site with no assay row was never
-    /// assayed, and the Salvage Run planner only ever counts assayed sites, so
-    /// there's nothing to mark in that case and this is a silent no-op.
-    /// Shared by the two paths a site is ever observed spent: the
-    /// `salvage.depleted` event (`markSalvageDepleted`) and a location
-    /// re-fetch that reports a site as depleted (`hydrateSystem`). Never call
-    /// this to set `false` — `depleted` never clears.
+    /// never an upsert (no assay row → silent no-op), never cleared. Shared by
+    /// the three paths a site is observed spent: the `salvage.depleted` event,
+    /// a re-fetch reporting `depleted` (`hydrateSystem`), and a scanned roster
+    /// omitting the site (`hydrateBody` — the server delists a drained site).
     private func markAssayDepleted(site: String, in db: Database) throws {
         try SiteAssay.where { $0.id.eq(site) }
             .update { $0.depleted = #bind(true) }

@@ -32,6 +32,10 @@ public enum MissionAction: Equatable, Sendable {
     /// the endpoint 403s for a system the census has never marked explored, and the
     /// engine swallows that — a stale cache only costs the machine one evaluation.
     case refreshSystem(designation: String, nextStep: String)
+    /// Re-read one body (`LocationsClient.hydrateBody`), persist it, then move to
+    /// `nextStep`. Best-effort like `.refreshSystem` — and the only read that can
+    /// observe a DELISTED salvage site, which the star-level payload never carries.
+    case refreshBody(system: String, body: String, nextStep: String)
     /// Re-read the whole stockpile census, persist it, then ask the machine
     /// again against the fresh `world.footprints`. Resolved by the engine.
     ///
@@ -82,7 +86,8 @@ public enum MissionAction: Equatable, Sendable {
     case setDeviceTags(deviceCode: String, tags: [String], nextStep: String)
     /// Pause and surface. The engine sets `needsAttention` plus the typed reason
     /// and stops evaluating until the user resolves it. Never auto-retried.
-    case stall(DirectiveAttentionReason)
+    /// `detail` names the specific subject (a body designation, a server message).
+    case stall(DirectiveAttentionReason, detail: String?)
     /// The queue is empty and this is a CONTINUOUS run: pick the next system from
     /// the census around `centre`, append it to `targets`, and carry on. Resolved by
     /// `DirectiveEngineCore`, which owns the read and the write.
@@ -96,6 +101,13 @@ public enum MissionAction: Equatable, Sendable {
     case advanceTarget
     /// The whole run is finished.
     case done
+}
+
+extension MissionAction {
+    /// A detail-less stall, so the common construction site stays `.stall(reason)`.
+    public static func stall(_ reason: DirectiveAttentionReason) -> MissionAction {
+        .stall(reason, detail: nil)
+    }
 }
 
 /// Everything a mission's target planner may read, gathered by the engine in one

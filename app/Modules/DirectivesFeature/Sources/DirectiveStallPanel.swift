@@ -17,6 +17,8 @@ import UI
 
 struct DirectiveStallPanel: View {
     let reason: DirectiveAttentionReason
+    /// The specific subject, when the stall named one — a designation code.
+    let detail: String?
     let retry: () -> Void
     let skip: () -> Void
     let cancel: () -> Void
@@ -31,6 +33,11 @@ struct DirectiveStallPanel: View {
                     .font(.rcBodyEmph)
                     .foregroundStyle(.rcTextPrimary)
                 Spacer(minLength: 0)
+            }
+            if let detail {
+                Text(detail)
+                    .font(.rcMonoSmall)
+                    .foregroundStyle(.rcTextSecondary)
             }
             Text(reason.guidance)
                 .font(.rcCaption)

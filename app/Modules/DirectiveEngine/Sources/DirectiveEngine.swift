@@ -695,7 +695,7 @@ actor DirectiveEngineCore {
 
         guard !paid.contains(kind) else {
             let collapsed = Self.collapse(action)
-            if case let .stall(confirmed) = collapsed {
+            if case let .stall(confirmed, _) = collapsed {
                 logger.notice("directive \(directive.id, privacy: .public): fresh reads confirm \(confirmed.rawValue, privacy: .public)")
             } else {
                 logger.debug("directive \(directive.id, privacy: .public): fresh reads still unresolved — \(String(describing: collapsed), privacy: .public)")
