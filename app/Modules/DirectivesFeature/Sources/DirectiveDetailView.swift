@@ -95,7 +95,7 @@ public struct DirectiveDetailView: View {
                 case let .builtIn(builtIn):
                     builtInDetail(builtIn)
                 case let .custom(directive, _):
-                    customDetail(directive)
+                    customDetail(directive, designation: store.selectedRow?.headlineDesignation)
                 case nil:
                     RCContentUnavailableView("No Selection", systemImage: "square.dashed")
                 }
@@ -147,7 +147,7 @@ public struct DirectiveDetailView: View {
                         Image(systemName: "lock.fill")
                             .font(.system(size: IconSize.s))
                             .foregroundStyle(.rcTextTertiary)
-                        Text("Driven by \(owner.kindTitle) — Reconfigure and Clear are disabled while the mission is running.")
+                        ownerNote(owner)
                             .font(.rcCaption)
                             .foregroundStyle(.rcTextSecondary)
                     }
@@ -166,6 +166,21 @@ public struct DirectiveDetailView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .navigationTitle(BlueprintPresentation.displayName(builtIn.directive))
+    }
+
+    /// Why the row is locked, and — for a tag-owned one — the take-back gesture.
+    /// A designation renders in a mono token (house rule), so the sentence is
+    /// composed rather than interpolated whole.
+    private func ownerNote(_ owner: DirectiveOwner) -> Text {
+        switch owner.holder {
+        case .mission:
+            return Text("Driven by \(owner.title) — Reconfigure and Clear are disabled while the mission is running.")
+        case let .fleetTag(tag):
+            let place = owner.designation.map { Text(" at \(Text($0).font(.rcMonoSmall))") } ?? Text("")
+            return Text(
+                "Part of the \(owner.title)\(place) — Reconfigure and Clear are disabled while its directive is in force. Remove the \(Text(tag).font(.rcMonoSmall)) tag from this device to take it back."
+            )
+        }
     }
 
     /// One controlled drone: its code (mono — it's a designation), type, and
@@ -192,12 +207,13 @@ public struct DirectiveDetailView: View {
     /// written now so the branch is real rather than a fatalError waiting to
     /// happen if a row is ever hand-inserted.
     @ViewBuilder
-    private func customDetail(_ directive: Directive) -> some View {
+    private func customDetail(_ directive: Directive, designation: String?) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Space.l) {
                 HStack(alignment: .top, spacing: Space.s) {
                     header(
                         title: directive.kind.title,
+                        designation: designation,
                         subtitle: directive.deviceCode,
                         caption: directive.status.displayName
                     )
@@ -240,7 +256,7 @@ public struct DirectiveDetailView: View {
             .padding(Space.xl)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .navigationTitle(directive.kind.title)
+        .navigationTitle(store.selectedRow?.title ?? directive.kind.title)
     }
 
     // MARK: Targets
@@ -401,11 +417,23 @@ public struct DirectiveDetailView: View {
 
     // MARK: Shared chrome
 
-    private func header(title: String, subtitle: String, caption: String) -> some View {
+    /// `designation` names the place this run works, in a mono token (house
+    /// rule) — it is what tells two runs of the same kind apart.
+    private func header(
+        title: String, designation: String? = nil, subtitle: String, caption: String
+    ) -> some View {
         VStack(alignment: .leading, spacing: Space.xxs) {
-            Text(title)
-                .font(.rcTitle)
-                .foregroundStyle(.rcTextPrimary)
+            HStack(spacing: Space.xs) {
+                Text(title)
+                    .font(.rcTitle)
+                    .foregroundStyle(.rcTextPrimary)
+                if let designation {
+                    Text("→").font(.rcTitle).foregroundStyle(.rcTextTertiary)
+                    Text(designation)
+                        .font(.rcTitleMono)
+                        .foregroundStyle(.rcTextPrimary)
+                }
+            }
             HStack(spacing: Space.xs) {
                 Text(subtitle)
                     .font(.rcMonoSmall)

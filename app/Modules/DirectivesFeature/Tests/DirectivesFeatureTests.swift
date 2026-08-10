@@ -196,6 +196,34 @@ struct DirectivesFeatureTests {
         #expect(dispatched.value == false)
     }
 
+    /// The same refusal on a row owned by its fleet tag alone. The permanent
+    /// mine's belt controllers have no mission row to hold them, so without
+    /// this one Clear silently breaks the mine.
+    @Test func fleetTaggedRowRefusesReconfigureAndClear() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Device.insert {
+                Self.controller(code: "AMI1", directive: "belt_search", tags: [MineRecipe.fleetTag])
+            }.execute(db)
+        }
+        let dispatched = LockIsolated(false)
+        let store = TestStore(initialState: DirectivesFeature.State(selectedRowID: "builtin:AMI1")) {
+            DirectivesFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
+            $0.commandClient.dispatch = { _, _, _ in
+                dispatched.setValue(true)
+                return .accepted(operationID: nil)
+            }
+        }
+        store.exhaustivity = .off
+
+        await store.send(.reconfigureTapped)
+        #expect(store.state.composer == nil)
+        await store.send(.clearTapped)
+        #expect(dispatched.value == false)
+    }
+
     /// The composer's confirmation dispatches `set_directive` at the controller
     /// the composer was opened on, carrying the chosen directive and its config.
     /// This is the feature's headline write — the one path whose regression
@@ -429,7 +457,9 @@ struct DirectivesFeatureTests {
     /// directive is always included, alongside a second option so the shape
     /// matches a real survey controller's `["survey_system", "belt_search"]`
     /// pairing (see `GameServices/Tests/DeviceDirectiveTests.swift`).
-    nonisolated static func controller(code: String, directive: String) -> Device {
+    nonisolated static func controller(
+        code: String, directive: String, tags: [String] = []
+    ) -> Device {
         let availableDirectives = [directive] + (["survey_system", "belt_search"].filter { $0 != directive })
         return Device(
             deviceCode: code,
@@ -446,7 +476,7 @@ struct DirectivesFeatureTests {
             createdAt: Date(timeIntervalSince1970: 0),
             availableCommands: ["set_directive", "clear_directive"],
             features: [],
-            tags: [],
+            tags: tags,
             detail: .object([
                 "ami_directive": .object(["name": .string(directive)]),
                 "available_directives": .array(availableDirectives.map(JSONValue.string)),

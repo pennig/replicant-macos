@@ -43,6 +43,12 @@ Design records live in `.claude/memory/`; engineering rules in `app/CLAUDE.md`.
   (finite round-robin drain); a **mine** site never does, so it needs a **dedicated, persistent
   Haul Run per site**. There is no separate resupply goal. (`shuttle` is this generalised
   Haul Run — the resupply executor — not a Relay-Run co-engine.)
+- **Fleet tag** — an `auto:<automation>` device tag: the operator's **opt-in**, and the only
+  way a run resolves its working set. It is also the **lock**: a tagged device whose AMI
+  directive is in force reads as engine-owned in the Directives list, so Reconfigure and Clear
+  are refused on it — the permanent mine's belt controllers have no mission row to hold them.
+  **Removing the tag is the take-back gesture**, and the only one; it hands the device back to
+  the operator and makes it invisible to the automation at the same time.
 - **Acquisition priority** — the order goals compete for *surplus* devices/budget:
   protect-committed-value → `fulfillEvent` → production (`mine`/`salvage`) → `tendMesh` → `survey`.
 - **Sustenance priority (liveness floor)** — the *inverted* protection that keeps the enabling

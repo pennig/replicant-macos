@@ -117,8 +117,17 @@ enum DirectiveTargetsSection: Equatable {
     /// Each controller of `directive`'s fleet and the pile it drains, resolved
     /// through `HaulRun`'s own queries so the readout matches what the run acts on.
     private static func assignments(for directive: Directive, devices: [Device]) -> [Assignment] {
-        let tag = directive.fleetTag ?? HaulRun.defaultFleetTag
-        return HaulRun.controllers(in: devices, tag: tag).map { controller in
+        let fleet: [Device]
+        if HaulRun.pinnedSource(of: directive) != nil {
+            // A pinned row drives its OWN device, and its per-belt tag is worn
+            // by nothing — the tag query would find no ferry at all.
+            fleet = devices.filter { $0.deviceCode == directive.deviceCode }
+        } else {
+            fleet = HaulRun.controllers(
+                in: devices, tag: directive.fleetTag ?? HaulRun.defaultFleetTag
+            )
+        }
+        return fleet.map { controller in
             Assignment(
                 controllerCode: controller.deviceCode,
                 // The fallback sink: this section has no `WorldSnapshot`.

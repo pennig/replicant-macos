@@ -417,7 +417,9 @@ struct Brain: Sendable {
                     kind: .haulRun,
                     status: .running,
                     deviceCode: controller,
-                    controllerCode: nil,
+                    // Stamped at LAUNCH, not by `.assignController`: a ferry the
+                    // `mineRun` already armed short-circuits `assign` forever.
+                    controllerCode: controller,
                     roamCentre: nil,
                     fleetTag: Self.mineFerryTag(for: belt),
                     sourceRelayCode: nil,
