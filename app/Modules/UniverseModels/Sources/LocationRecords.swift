@@ -37,18 +37,24 @@ public struct SystemDetail: Identifiable, Equatable, Sendable {
     public var systemScanned: Bool
     /// When this detail was last hydrated from the API.
     public var hydratedAt: Date
+    /// `SystemSummary`, JSON-encoded — what a collapsed catalog row needs, so the
+    /// list never decodes `systemJSON`. Nil on a row written before the column
+    /// existed; readers fall back to decoding the blob, so correctness never
+    /// depends on the backfill having run.
+    public var summaryJSON: String?
 
     public var id: String { designation }
 
     public init(
         designation: String, systemJSON: String, recon: String,
-        systemScanned: Bool, hydratedAt: Date
+        systemScanned: Bool, hydratedAt: Date, summaryJSON: String? = nil
     ) {
         self.designation = designation
         self.systemJSON = systemJSON
         self.recon = recon
         self.systemScanned = systemScanned
         self.hydratedAt = hydratedAt
+        self.summaryJSON = summaryJSON
     }
 }
 
@@ -56,20 +62,35 @@ extension SystemDetail {
     private static let encoder = JSONEncoder()
     private static let decoder = JSONDecoder()
 
-    /// Wrap a mapped `StarSystem` as a persisted row, stamping `hydratedAt`.
+    /// Wrap a mapped `StarSystem` as a persisted row, stamping `hydratedAt` and
+    /// the row summary. This is the only place the summary is computed, which is
+    /// what keeps it from drifting from the blob it summarizes.
     public init(system: StarSystem, hydratedAt: Date) throws {
         self.init(
             designation: system.designation,
             systemJSON: String(decoding: try Self.encoder.encode(system), as: UTF8.self),
             recon: system.recon.rawValue,
             systemScanned: system.systemScanned,
-            hydratedAt: hydratedAt
+            hydratedAt: hydratedAt,
+            summaryJSON: String(
+                decoding: try Self.encoder.encode(SystemSummary(system)), as: UTF8.self
+            )
         )
     }
 
     /// Decode the stored blob back into the domain `StarSystem`.
     public func system() throws -> StarSystem {
         try Self.decoder.decode(StarSystem.self, from: Data(systemJSON.utf8))
+    }
+
+    /// The stored row summary, falling back to computing it from the blob when
+    /// the column is empty (a row written before it existed, or one whose
+    /// backfill has not run).
+    public func summary() throws -> SystemSummary {
+        if let summaryJSON {
+            return try Self.decoder.decode(SystemSummary.self, from: Data(summaryJSON.utf8))
+        }
+        return SystemSummary(try system())
     }
 }
 
@@ -238,6 +259,35 @@ extension SystemDetail {
             """
         )
         .execute(db)
+    }
+
+    /// Adds the row-summary column. Nullable with no default: a null means "not
+    /// summarized yet", which `summary()` answers by decoding the blob.
+    public static let addSummaryJSON = SchemaMigration("Add 'summaryJSON' to 'systemDetails'") { db in
+        try #sql(#"ALTER TABLE "systemDetails" ADD COLUMN "summaryJSON" TEXT"#).execute(db)
+    }
+
+    /// Fills the summary for every row written before the column existed.
+    /// Decoding here rather than computing the roll-ups in SQL is deliberate —
+    /// the accessors are the one definition, and a SQL twin of them would be a
+    /// second one to keep in step.
+    public static let backfillSummaryJSON = SchemaMigration(
+        "Backfill 'summaryJSON' on 'systemDetails'"
+    ) { db in
+        let rows = try SystemDetail.where { $0.summaryJSON.is(nil) }.fetchAll(db)
+        let encoder = JSONEncoder()
+        for row in rows {
+            // A blob that will not decode keeps a null summary and is read
+            // through the same fallback, so one bad row cannot fail the upgrade.
+            guard let system = try? row.system(),
+                  let encoded = try? encoder.encode(SystemSummary(system))
+            else { continue }
+            let json = String(decoding: encoded, as: UTF8.self)
+            try SystemDetail
+                .where { $0.designation.eq(row.designation) }
+                .update { $0.summaryJSON = #bind(json) }
+                .execute(db)
+        }
     }
 }
 

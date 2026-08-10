@@ -42,8 +42,50 @@ dictionary lookups. Splitting on the separator (not `hasPrefix`) is what keeps
 against the exact scan it replaces over that trap. The inventory sort additionally
 keys each system once before sorting instead of per comparison.
 
-**The remaining floor is the blob decode**, 0.072–0.089 s for 264 rows, and it
-grows linearly with charted systems (142 → 264 in four days). This is the same
+**Second fix, same day — the search term narrows the blob read too.** The star
+query filtered on the search term but `SystemDetail.all` did not, so typing "SO"
+decoded all 264 blobs to render the ten systems that could match. A blob is only
+ever read through a star of its own designation, so binding one `like` pattern
+and applying it to both queries is exact. Whole fetch, measured release-build:
+
+    search "S"        102 ms →  49 ms
+    search "SO"        88 ms →  12 ms
+    search "SOL"       81 ms →   9 ms
+    search "SOLARIS"   82 ms →   8 ms
+    search ""         129 ms → 133 ms   (unchanged: `%%` matches everything)
+
+The budget is **<150 ms, tighter on the search flow** — so the typing path now
+has an order of magnitude of headroom and the empty-search path has about two
+weeks of it. `LocationForestSearchTests` guards the invariant the narrowing
+rests on: if the two predicates ever drift apart, a hydrated system silently
+downgrades to a census leaf, which no existing test would have caught.
+
+**Third fix — the blob decode is gone entirely.** `SystemSummary` (name, recon,
+scan counts, the four badge counts, inventory total, `hasChildren`) is stamped
+into a `summaryJSON` column by the same `SystemDetail.persist` that writes the
+blob, and a system's children are built from its blob only on expansion, cached
+against `hydratedAt`. Empty search **133 ms → 46 ms**, and — the point — it no
+longer grows with charted systems. Migration plus backfill of 264 rows: 189 ms,
+once. Null summary falls back to decoding that row, so correctness never
+depended on the backfill running.
+
+**A read-time SQL projection was measured and REJECTED**, which reverses what
+[json-projection-over-blob-decode](json-projection-over-blob-decode.md) bought
+for belts. The roll-ups need eleven path-scoped `json_each` subqueries (they are
+not expressible as a `json_tree` key filter — `SpecialSite` carries `devices` and
+`inventory` that `allDevices`/`allInventory` must *exclude* at some levels), and
+each re-parses the blob: **122 ms against the 72 ms decode it would replace.**
+The rule that falls out: SQLite projection wins when one pass over one array
+answers the question, and loses to a Swift decode as soon as several nested paths
+must be walked separately. Write-time also removes the correctness risk, since
+the summary is computed by the same accessors the tree uses.
+
+**The roll-ups were widened at the same time** (2026-08-10, Matt's call): a
+system's `allDevices` now counts belts, Lagrange points and structures, and
+`allInventory` counts Lagrange points and structures — all of which it missed,
+while the planet row beneath it *already* counted its own Lagrange points. So
+system-row device and inventory badges were quietly under-reporting before this.
+The backfill applies the widened counts to existing rows. This is the same
 `systemJSON` decode escape hatch [brain-survey-goal-build](brain-survey-goal-build.md)
 flagged for `WorldView.read`, and the same automation drives both numbers.
 `NewStarMapFeature`'s `SystemDecodeCache` is the shape to reuse when it bites.

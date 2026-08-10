@@ -707,6 +707,42 @@ public struct StarSystem: Identifiable, Equatable, Sendable, Codable {
     }
 }
 
+// MARK: - Row summary
+
+/// Everything a collapsed catalog row shows about a hydrated system, so the list
+/// can render without decoding the blob. Stamped at write time from the roll-ups
+/// below — never recomputed from a parallel definition, which is the whole point
+/// of it living beside them.
+public struct SystemSummary: Equatable, Sendable, Codable {
+    public var name: String?
+    public var recon: Recon
+    public var planetsScanned: Int?
+    public var planetsTotal: Int?
+    public var planetCount: Int
+    public var siteCount: Int
+    public var salvageCount: Int
+    public var shopCount: Int
+    public var deviceCount: Int
+    public var inventoryTotal: Double
+    /// Whether the system has any child row at all (belt, planet or structure),
+    /// so a collapsed row draws its chevron without its children being built.
+    public var hasChildren: Bool
+
+    public init(_ system: StarSystem) {
+        name = system.name
+        recon = system.recon
+        planetsScanned = system.planetsScanned
+        planetsTotal = system.planetsTotal
+        planetCount = system.planets.count
+        siteCount = system.allResourceSites.count
+        salvageCount = system.allSalvageSites.count
+        shopCount = system.shops.count
+        deviceCount = system.allDevices.count
+        inventoryTotal = system.totalInventoryQuantity
+        hasChildren = !(system.belts.isEmpty && system.planets.isEmpty && system.structures.isEmpty)
+    }
+}
+
 // MARK: - Roll-ups ("interesting information bubbles up")
 
 extension StarSystem {
@@ -782,15 +818,20 @@ extension StarSystem {
         return nil
     }
 
-    /// Every device stationed anywhere in the system.
+    /// Every device stationed anywhere in the system — belts, planets, moons,
+    /// Lagrange points and structures. Every container that can host one.
     public var allDevices: [LocatedDevice] {
-        planets.flatMap { $0.devices + $0.moons.flatMap(\.devices) }
+        belts.flatMap(\.devices)
+            + planets.flatMap { $0.devices + $0.moons.flatMap(\.devices) + $0.lagrange.flatMap(\.devices) }
+            + structures.flatMap(\.devices)
     }
 
-    /// Every stored inventory item anywhere in the system.
+    /// Every stored inventory item anywhere in the system — belts, planets,
+    /// moons, Lagrange points and structures.
     public var allInventory: [InventoryItem] {
         belts.flatMap(\.inventory)
-            + planets.flatMap { $0.inventory + $0.moons.flatMap(\.inventory) }
+            + planets.flatMap { $0.inventory + $0.moons.flatMap(\.inventory) + $0.lagrange.flatMap(\.inventory) }
+            + structures.flatMap(\.inventory)
     }
 
     /// Total stored resource quantity — the "Inventory" sort key.
