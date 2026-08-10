@@ -53,6 +53,12 @@ extension View {
     public func rcSidebarRow(isSelected: Bool, isPressed: Bool = false, style: SelectableListStyle) -> some View {
         modifier(RCSidebarRowStyle(isSelected: isSelected, explicitStyle: style, explicitPressed: isPressed))
     }
+
+    /// Strips native `List` chrome (background, insets) so a plain, unselectable
+    /// row list reads as part of the app's own surfaces rather than a system list.
+    public func rcListStyle() -> some View {
+        listStyle(.plain).scrollContentBackground(.hidden)
+    }
 }
 
 public struct RCSidebarRowStyle: ViewModifier {

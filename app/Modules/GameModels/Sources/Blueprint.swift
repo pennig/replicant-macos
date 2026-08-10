@@ -178,6 +178,19 @@ public struct ResourceCost: Codable, Equatable, Sendable {
         rares += other.rares; conductive += other.conductive; volatiles += other.volatiles
     }
 
+    /// The field for a `displayOrder` key; zero for anything unknown.
+    public func amount(forKey key: String) -> Int {
+        switch key {
+        case "structural": structural
+        case "conductive": conductive
+        case "silicates": silicates
+        case "carbon": carbon
+        case "rares": rares
+        case "volatiles": volatiles
+        default: 0
+        }
+    }
+
     /// Per-field difference, floored at zero so a shrunk hold never reads negative.
     public func subtracting(_ other: ResourceCost) -> ResourceCost {
         ResourceCost(
