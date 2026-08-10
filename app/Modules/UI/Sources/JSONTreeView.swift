@@ -17,16 +17,23 @@ public struct JSONTreeNode: Identifiable {
         }
     }
 
-    public let id = UUID()
+    /// The node's ordinal path from the root (`"0"`, `"0.3"`, `"0.3.1"`). Derived
+    /// from position alone, so rebuilding a tree from an equal value reproduces
+    /// every id and the rows keep their identity and expansion state.
+    public let id: String
     let key: Key?
     let value: JSONValue
 
-    // Built once at init so identities stay stable across re-renders. A
-    // computed property would mint fresh UUIDs on every access and break
-    // List diffing/expansion state.
+    // Built once at init rather than computed, so reading a node doesn't rebuild
+    // its whole subtree.
     let children: [JSONTreeNode]?
 
     public init(key: Key? = nil, value: JSONValue) {
+        self.init(id: "0", key: key, value: value)
+    }
+
+    private init(id: String, key: Key?, value: JSONValue) {
+        self.id = id
         self.key = key
         self.value = value
 
@@ -34,12 +41,12 @@ public struct JSONTreeNode: Identifiable {
         case .null, .bool, .number, .string:
             self.children = nil
         case .array(let array):
-            self.children = array.enumerated().map {
-                JSONTreeNode(key: .index($0), value: $1)
+            self.children = array.enumerated().map { index, element in
+                JSONTreeNode(id: "\(id).\(index)", key: .index(index), value: element)
             }
         case .object(let dict):
-            self.children = dict.sorted { $0.key < $1.key }.map {
-                JSONTreeNode(key: .property($0.key), value: $0.value)
+            self.children = dict.sorted { $0.key < $1.key }.enumerated().map { index, pair in
+                JSONTreeNode(id: "\(id).\(index)", key: .property(pair.key), value: pair.value)
             }
         }
     }
@@ -56,7 +63,7 @@ extension EnvironmentValues {
 /// subtree being torn down when an ancestor collapses. Keyed by the node's
 /// stable `id`; absence means "use the initial default".
 @Observable final class JSONExpansionStore {
-    var overrides: [UUID: Bool] = [:]
+    var overrides: [String: Bool] = [:]
 }
 
 /// One rendered line in the flattened tree. A container contributes a
@@ -79,7 +86,7 @@ private struct JSONFlatRow: Identifiable {
     // Node id alone isn't unique: a container's opening and closing lines share
     // it, so pair it with the kind for a stable per-line identity.
     struct RowID: Hashable {
-        let node: UUID
+        let node: String
         let kind: Kind
     }
     var id: RowID { RowID(node: node.id, kind: kind) }
