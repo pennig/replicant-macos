@@ -45,25 +45,15 @@ public struct LogisticsView: View {
                             monospacedLabels: true
                         )
                     }
-                    List {
+                    LazyVStack(alignment: .leading, spacing: Space.xs) {
                         ForEach(store.yields) { yield in
                             HaulYieldRow(yield: yield)
                         }
                     }
-                    .scrollDisabled(true)
-                    .rcListStyle()
                 }
             }
             .padding(Space.m)
         }
         .navigationTitle("Logistics")
-    }
-}
-
-// Only caller of this List treatment; promote to UI/ListStyles.swift if a
-// second one appears.
-private extension View {
-    func rcListStyle() -> some View {
-        listStyle(.plain).scrollContentBackground(.hidden)
     }
 }

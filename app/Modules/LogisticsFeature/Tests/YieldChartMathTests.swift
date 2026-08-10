@@ -4,9 +4,8 @@ import Testing
 @testable import LogisticsFeature
 
 @Suite struct YieldChartMathTests {
-    // Every nonzero field present, in insertion order that does NOT match
-    // `displayOrder` — only an order derived from `displayOrder` itself
-    // reproduces this sequence.
+    // Nonzero fields in insertion order that does NOT match `displayOrder` —
+    // only an order derived from `displayOrder` itself reproduces this.
     @Test func pointsFollowDisplayOrderAndDropZeros() {
         let day = Date(timeIntervalSince1970: 0)
         let cost = ResourceCost(carbon: 0, silicates: 5, structural: 10, rares: 0, conductive: 20, volatiles: 0)
@@ -22,8 +21,8 @@ import Testing
         #expect(points.first?.id == "12345.0-structural")
     }
 
-    // Two days, each with a clearly distinct winner — catches an
-    // implementation that finds one global maximum instead of one per day.
+    // Day A's max is day B's min and vice versa, so a dedup'd/sorted key-set
+    // assertion can't tell them apart — this pins each day's labelled id directly.
     @Test func labelsExactlyOneSegmentPerDay() {
         let dayA = Date(timeIntervalSince1970: 0)
         let dayB = Date(timeIntervalSince1970: 86_400)
@@ -32,9 +31,9 @@ import Testing
             (day: dayB, perType: ResourceCost(structural: 5, rares: 200)),
         ])
         let labelled = YieldChartMath.labelledIDs(points)
-        let labelledKeys = points.filter { labelled.contains($0.id) }.map(\.key).sorted()
-        #expect(labelled.count == 2)
-        #expect(labelledKeys == ["rares", "structural"])
+        let structuralA = points.first { $0.day == dayA && $0.key == "structural" }!.id
+        let raresB = points.first { $0.day == dayB && $0.key == "rares" }!.id
+        #expect(labelled == [structuralA, raresB])
     }
 
     // A tie must resolve toward `displayOrder`'s earlier entry (structural
