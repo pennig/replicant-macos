@@ -270,7 +270,26 @@ close-derived watermark is self-satisfying. `RestockRun` shares the race and is
 LESS guarded (its deadline check only logs, then falls through unconditionally);
 scoped out and filed as ticket 14.
 
+## Fourth live defect: the carrier never came home
+
+`MineRun` ended at `arming`, so the surge carrier stayed at the belt it had
+just stocked. `MineFleetPrint.remaining` adds a carrier slot whenever
+`MineRecipe.idleCarrier` finds none idle AT THE HUB, so every install after the
+first printed a fresh one — two idle tagged carriers parked at two belts and a
+third on the print queue when it was caught. Fixed by a `returning` step
+reached from `arming`, mirroring `RelayRun.returnHome` exactly, with
+`Brain.ensureMine` launching `returnToOrigin: true` (it was `false`, the same
+value the launch site had carried since day one).
+
+Two consequences worth knowing. The run now stays `running` through the flight
+home, so `ensureMineFerries` defers that belt's pinned haul row by one travel
+leg — harmless, since `arm` already put the ferry directive on the controller.
+And the residual: a Print Mine Fleet clicked WHILE a carrier is out still sees
+no idle carrier at the hub and prints one, because the slot is judged on
+presence at the hub rather than on a carrier committed to a live `mineRun`.
+
 Related: [brain-tendmesh-build](brain-tendmesh-build.md),
+[relay-return-and-restock](relay-return-and-restock.md),
 [brain-survey-goal-build](brain-survey-goal-build.md),
 [brain-salvage-build](brain-salvage-build.md),
 [brain-goal-decision-policy](brain-goal-decision-policy.md),
