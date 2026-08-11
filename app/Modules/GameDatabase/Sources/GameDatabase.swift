@@ -82,6 +82,7 @@ public enum GameDatabase {
         TheatrePin.createTheatrePins,
         Star.addStarRegion,
         Star.addStarHasHub,
+        Directive.addTheatreDepot,
     ]
 
     /// Builds a migrator from `entries`. The parameter exists so tests can

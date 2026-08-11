@@ -362,6 +362,9 @@ public struct Directive: Identifiable, Equatable, Sendable {
     /// The last transition, and the retention purge's clock: a terminal row is
     /// destroyed a `purgeWindow` past this, so clearing must not re-stamp it.
     public var updatedAt: Date
+    /// The depot of the theatre this row serves. Nil on rows written before the
+    /// column existed; `Brain.adoptTheatres` fills those in.
+    public var theatreDepot: String?
 
     public init(
         id: String,
@@ -382,7 +385,8 @@ public struct Directive: Identifiable, Equatable, Sendable {
         attentionReason: DirectiveAttentionReason?,
         deletedAt: Date? = nil,
         createdAt: Date,
-        updatedAt: Date
+        updatedAt: Date,
+        theatreDepot: String? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -403,6 +407,7 @@ public struct Directive: Identifiable, Equatable, Sendable {
         self.deletedAt = deletedAt
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.theatreDepot = theatreDepot
     }
 
     /// Progress through the queue, for the list row's "m/n" readout. Counts
@@ -618,6 +623,17 @@ extension Directive {
         try #sql(
             """
             ALTER TABLE "directives" ADD COLUMN "deletedAt" TEXT
+            """
+        )
+        .execute(db)
+    }
+
+    /// Appended, never folded into the migration above it: that one has shipped
+    /// into real databases, so editing it means it silently never runs again.
+    public static let addTheatreDepot = SchemaMigration("Add 'theatreDepot' to 'directives'") { db in
+        try #sql(
+            """
+            ALTER TABLE "directives" ADD COLUMN "theatreDepot" TEXT
             """
         )
         .execute(db)

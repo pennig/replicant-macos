@@ -207,7 +207,7 @@ private let graz = Position(x: -14.0, y: -30.0, z: -5.0)
 private let omerope = Position(x: -291.87, y: -125.98, z: 106.32)
 private let denebed = Position(x: -292.55, y: -125.42, z: 113.41)
 
-private func twoTheatreView() -> WorldView {
+func twoTheatreView() -> WorldView {
     WorldView(
         devices: [:],
         starPositions: ["AINALRAM": ainalram, "GRAZ": graz, "OMEROPE": omerope, "DENEBED": denebed],

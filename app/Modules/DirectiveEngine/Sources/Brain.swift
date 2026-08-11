@@ -59,7 +59,7 @@ struct Brain: Sendable {
     func report() async -> BrainReport {
         @Dependency(\.defaultDatabase) var database
 
-        let snapshot: Snapshot
+        var snapshot: Snapshot
         do {
             snapshot = try await database.read { db in
                 let directives = try Directive.all.fetchAll(db)
@@ -106,6 +106,8 @@ struct Brain: Sendable {
             )
         }
 
+        snapshot = await adoptTheatreStamps(snapshot, database: database)
+
         // Read before `ensureSurvey` acts, mirroring `ranked`/`hubLocation`:
         // the report states the tick's SNAPSHOT, not its write. A verdict of
         // `.ready` here launches inside `ensureSurvey` below on this very
@@ -140,6 +142,42 @@ struct Brain: Sendable {
             mine: mine,
             mines: mines,
             observedAt: now
+        )
+    }
+
+    /// Stamp `snapshot`'s adopted rows with their depot before any goal below
+    /// runs. Re-checks inside the transaction: a stamp applied since the
+    /// snapshot was read must not be overwritten.
+    private func adoptTheatreStamps(_ snapshot: Snapshot, database: any DatabaseWriter) async -> Snapshot {
+        guard !Task.isCancelled else { return snapshot }
+        let stamps = Self.adoptTheatres(directives: snapshot.directives, view: snapshot.view)
+        guard !stamps.isEmpty else { return snapshot }
+
+        do {
+            try await database.write { db in
+                for stamp in stamps {
+                    guard var row = try Directive.where({ $0.id.eq(stamp.id) }).fetchOne(db),
+                          row.theatreDepot == nil
+                    else { continue }
+                    row.theatreDepot = stamp.depot
+                    try Directive.upsert { row }.execute(db)
+                }
+            }
+        } catch {
+            logger.error("theatre adoption failed: \(error)")
+            return snapshot
+        }
+
+        let byID = Dictionary(uniqueKeysWithValues: stamps.map { ($0.id, $0.depot) })
+        var directives = snapshot.directives
+        for index in directives.indices {
+            if let depot = byID[directives[index].id] {
+                directives[index].theatreDepot = depot
+            }
+        }
+        return Snapshot(
+            view: snapshot.view, directives: directives,
+            log: snapshot.log, hubFootprint: snapshot.hubFootprint
         )
     }
 
@@ -545,6 +583,27 @@ struct Brain: Sendable {
         /// Read for the why-view's reserve-floor line only; the rail itself is
         /// enforced by `RelayRun` at the moment it would print.
         let hubFootprint: LocationFootprint?
+    }
+
+    // MARK: - Theatre adoption
+
+    /// Rows needing a `theatreDepot` and the depot to stamp on each. Pure — the
+    /// caller writes. A row whose theatre cannot be decided is left for the
+    /// operator rather than guessed: a wrong stamp sends a carrier to the wrong
+    /// depot, and an absent one only declines to act.
+    static func adoptTheatres(
+        directives: [Directive], view: WorldView
+    ) -> [(id: String, depot: String)] {
+        let operational = view.theatres.filter(\.isOperational)
+        return directives.compactMap { row in
+            guard row.theatreDepot == nil else { return nil }
+            if let origin = row.originDesignation,
+               let theatre = view.theatre(servicing: origin) {
+                return (row.id, theatre.depot)
+            }
+            guard operational.count == 1 else { return nil }
+            return (row.id, operational[0].depot)
+        }
     }
 
     // MARK: - The greedy pass
