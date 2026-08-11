@@ -41,9 +41,13 @@ struct DirectivesClearFinishedTests {
         )
     }
 
-    nonisolated private static func entry(_ id: String, directiveID: String) -> DirectiveLogEntry {
+    nonisolated private static func entry(
+        _ id: String,
+        directiveID: String? = nil,
+        deviceCode: String? = nil
+    ) -> DirectiveLogEntry {
         DirectiveLogEntry(
-            id: id, directiveID: directiveID, deviceCode: nil, kind: .resolved,
+            id: id, directiveID: directiveID, deviceCode: deviceCode, kind: .resolved,
             summary: "something happened", step: "surveying", operationID: nil,
             eventID: nil, occurredAt: Date(timeIntervalSince1970: 0)
         )
@@ -304,6 +308,27 @@ struct DirectivesClearFinishedTests {
         let rows = try await database.read { db in try Directive.all.fetchAll(db) }
         #expect(marked == 0)
         #expect(rows.isEmpty)
+    }
+
+    /// The purge's entry delete is scoped by directive id. A device-scoped
+    /// entry (`directiveID` nil) and another directive's entry must both
+    /// survive a purge that is only entitled to touch one directive's own.
+    @Test func purgeOnlyTouchesTheDoomedDirectivesOwnEntries() async throws {
+        let now = Date(timeIntervalSince1970: 10_000_000)
+        let stale = now.addingTimeInterval(-DirectiveResolutionClient.purgeWindow - 60)
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { Self.run("OLD", .completed, updatedAt: stale) }.execute(db)
+            try Directive.insert { Self.run("LIVE", .running, updatedAt: stale) }.execute(db)
+            try DirectiveLogEntry.insert { Self.entry("E-OLD", directiveID: "OLD") }.execute(db)
+            try DirectiveLogEntry.insert { Self.entry("E-LIVE", directiveID: "LIVE") }.execute(db)
+            try DirectiveLogEntry.insert { Self.entry("E-DEVICE", deviceCode: "V1") }.execute(db)
+        }
+
+        await Self.clearFinished(in: database, now: now)
+
+        let entries = try await database.read { db in try DirectiveLogEntry.all.fetchAll(db) }
+        #expect(Set(entries.map(\.id)) == ["E-LIVE", "E-DEVICE"])
     }
 }
 

@@ -149,9 +149,8 @@ extension DirectiveResolutionClient: DependencyKey {
                         .fetchAll(db)
                         .map(\.id)
                     if !doomed.isEmpty {
-                        // Entries first, then the rows they point at, in ONE
-                        // transaction — every timeline query is keyed by
-                        // directive id, so an orphan entry is unreachable.
+                        // Entries before the rows they point at, one transaction:
+                        // a timeline query is keyed by directive id, so an orphan is unreachable.
                         let scoped = doomed.map(Optional.some)
                         try DirectiveLogEntry.where { $0.directiveID.in(scoped) }.delete().execute(db)
                         try Directive.where { $0.id.in(doomed) }.delete().execute(db)
