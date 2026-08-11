@@ -2,14 +2,8 @@
 //  DirectivesClearAndBrainTests.swift
 //  Replicould — Directives feature
 //
-//  Two housekeeping surfaces on the Directives list:
-//
-//    • clearing finished runs — the only place this app deletes directive rows,
-//      so what it must NOT delete is the interesting half;
-//    • the brain selection — the header strip is now a doorway into the detail
-//      pane rather than the report itself, and it shares one `selectedRowID`
-//      with the rows so the two can never both be showing.
-//
+//  Clearing finished runs — a mark, not a deletion — and the brain selection,
+//  which shares one `selectedRowID` with the rows.
 
 import ComposableArchitecture
 import DirectiveEngine
@@ -24,20 +18,30 @@ import Utils
 @Suite("Directives — clearing finished runs")
 @MainActor
 struct DirectivesClearFinishedTests {
-    nonisolated private static func run(_ id: String, _ status: DirectiveStatus) -> Directive {
+    nonisolated private static func run(
+        _ id: String,
+        _ status: DirectiveStatus,
+        updatedAt: Date = Date(timeIntervalSince1970: 0),
+        deletedAt: Date? = nil
+    ) -> Directive {
         Directive(
             id: id, kind: .surveyRun, status: status, deviceCode: "V-\(id)",
             targets: ["TAU"], targetIndex: 0, step: "surveying",
             stepStartedAt: Date(timeIntervalSince1970: 0),
             returnToOrigin: false, originDesignation: "SOL", attentionReason: nil,
+            deletedAt: deletedAt,
             createdAt: Date(timeIntervalSince1970: 0),
-            updatedAt: Date(timeIntervalSince1970: 0)
+            updatedAt: updatedAt
         )
     }
 
-    nonisolated private static func entry(_ id: String, directiveID: String) -> DirectiveLogEntry {
+    nonisolated private static func entry(
+        _ id: String,
+        directiveID: String? = nil,
+        deviceCode: String? = nil
+    ) -> DirectiveLogEntry {
         DirectiveLogEntry(
-            id: id, directiveID: directiveID, deviceCode: nil, kind: .resolved,
+            id: id, directiveID: directiveID, deviceCode: deviceCode, kind: .resolved,
             summary: "something happened", step: "surveying", operationID: nil,
             eventID: nil, occurredAt: Date(timeIntervalSince1970: 0)
         )
@@ -45,19 +49,22 @@ struct DirectivesClearFinishedTests {
 
     /// `liveValue` resolves `@Dependency(\.defaultDatabase)` at call time, so a
     /// bare call would write to the ambient database rather than this test's.
-    nonisolated private static func clearFinished(in database: any DatabaseWriter) async -> Int {
+    nonisolated private static func clearFinished(
+        in database: any DatabaseWriter,
+        now: Date = Date(timeIntervalSince1970: 5_000)
+    ) async -> Int {
         await withDependencies {
             $0.defaultDatabase = database
+            $0.date = .constant(now)
         } operation: {
             await DirectiveResolutionClient.liveValue.clearFinished()
         }
     }
 
-    /// One run of every status, so the verb's boundary is proved in both
-    /// directions at once: the two terminal ones go, the three that still OWN
-    /// devices stay. Deleting an owning row would hand its carrier back to the
-    /// brain mid-flight.
-    @Test func clearsOnlyTheTerminalRuns() async throws {
+    /// One run of every status, so the boundary is proved both ways: the two
+    /// terminal ones are marked and the three that still OWN devices are not —
+    /// marking one would hide a carrier the operator needs to see.
+    @Test func marksOnlyTheTerminalRuns() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in
             for status in DirectiveStatus.allCases {
@@ -67,26 +74,67 @@ struct DirectivesClearFinishedTests {
 
         await Self.clearFinished(in: database)
 
-        let left = try await database.read { db in try Directive.all.fetchAll(db) }
-        #expect(Set(left.map(\.status)) == [.running, .needsAttention, .paused])
+        let rows = try await database.read { db in try Directive.all.fetchAll(db) }
+        #expect(rows.count == DirectiveStatus.allCases.count, "nothing is destroyed")
+        let marked = Set(rows.filter { $0.deletedAt != nil }.map(\.status))
+        #expect(marked == [.completed, .cancelled])
     }
 
-    /// The timelines go with them. A finished run's entries are reachable only
-    /// through its id, so leaving them behind would strand rows nothing can
-    /// read or ever prune.
-    @Test func clearsTheTimelinesToo() async throws {
+    /// The timelines stay. They are the whole reason the row is kept — a marked
+    /// run's steps are the diagnostics the operator comes back for.
+    @Test func keepsTheTimelines() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in
-            try Directive.insert { Self.run("GONE", .completed) }.execute(db)
+            try Directive.insert { Self.run("HIDDEN", .completed) }.execute(db)
             try Directive.insert { Self.run("STAYS", .running) }.execute(db)
-            try DirectiveLogEntry.insert { Self.entry("E1", directiveID: "GONE") }.execute(db)
+            try DirectiveLogEntry.insert { Self.entry("E1", directiveID: "HIDDEN") }.execute(db)
             try DirectiveLogEntry.insert { Self.entry("E2", directiveID: "STAYS") }.execute(db)
         }
 
         await Self.clearFinished(in: database)
 
         let entries = try await database.read { db in try DirectiveLogEntry.all.fetchAll(db) }
-        #expect(entries.map(\.directiveID) == ["STAYS"])
+        #expect(Set(entries.compactMap(\.directiveID)) == ["HIDDEN", "STAYS"])
+    }
+
+    /// `updatedAt` is the purge clock. Stamping it on the mark would restart
+    /// that clock, turning "finished over a month ago" into "deleted over a
+    /// month ago" — a different retention policy than the one chosen.
+    @Test func markingLeavesUpdatedAtAlone() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { Self.run("A", .completed) }.execute(db)
+        }
+
+        await Self.clearFinished(in: database)
+
+        let row = try await database.read { db in
+            try Directive.where { $0.id.eq("A") }.fetchOne(db)
+        }
+        #expect(row?.updatedAt == Date(timeIntervalSince1970: 0))
+        #expect(row?.deletedAt != nil)
+    }
+
+    /// A second click must not move an already-marked row's `deletedAt`, and
+    /// must not count it again — the toolbar's number is what leaves the list.
+    @Test func aSecondClearNeitherRestampsNorRecounts() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { Self.run("A", .completed) }.execute(db)
+        }
+
+        let first = await Self.clearFinished(in: database)
+        let stamped = try await database.read { db in
+            try Directive.where { $0.id.eq("A") }.fetchOne(db)?.deletedAt
+        }
+        let second = await Self.clearFinished(in: database, now: Date(timeIntervalSince1970: 9_000))
+        let restamped = try await database.read { db in
+            try Directive.where { $0.id.eq("A") }.fetchOne(db)?.deletedAt
+        }
+
+        #expect(first == 1)
+        #expect(second == 0)
+        #expect(stamped == restamped)
     }
 
     @Test func reportsHowManyItCleared() async throws {
@@ -117,7 +165,7 @@ struct DirectivesClearFinishedTests {
         #expect(left.count == 1)
     }
 
-    /// The count the toolbar shows is the count the verb would delete — read
+    /// The count the toolbar shows is the count the verb would hide — read
     /// through the same `finishedStatuses` set, so the label cannot drift from
     /// the behaviour.
     @Test func theOfferedCountMatchesWhatWouldGo() async throws {
@@ -137,9 +185,9 @@ struct DirectivesClearFinishedTests {
         #expect(store.state.finishedCount == 2)
     }
 
-    /// A selection pointing at a run that is about to be deleted must not
-    /// survive the clear — the detail pane would be left rendering a row that
-    /// no longer exists.
+    /// A selection pointing at a run that is about to leave the list must not
+    /// survive the clear — the detail pane would be left rendering a row the
+    /// list has already dropped.
     @Test func clearingDropsASelectionThatIsAboutToVanish() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in
@@ -172,6 +220,133 @@ struct DirectivesClearFinishedTests {
 
         await store.send(.clearFinishedTapped)
         #expect(store.state.selectedRowID == "custom:LIVE")
+    }
+
+    /// The purge is what makes the mark affordable. A terminal run finished
+    /// more than `purgeWindow` ago goes for good, and its timeline with it.
+    @Test func purgesTerminalRunsPastTheWindow() async throws {
+        let now = Date(timeIntervalSince1970: 10_000_000)
+        let stale = now.addingTimeInterval(-Directive.purgeWindow - 60)
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { Self.run("OLD", .completed, updatedAt: stale) }.execute(db)
+            try DirectiveLogEntry.insert { Self.entry("E1", directiveID: "OLD") }.execute(db)
+        }
+
+        await Self.clearFinished(in: database, now: now)
+
+        let rows = try await database.read { db in try Directive.all.fetchAll(db) }
+        let entries = try await database.read { db in try DirectiveLogEntry.all.fetchAll(db) }
+        #expect(rows.isEmpty)
+        #expect(entries.isEmpty)
+    }
+
+    /// An open run is never purged however old. It still owns its devices, and
+    /// a mission whose row vanished mid-flight would strand every one of them.
+    @Test func neverPurgesAnOpenRunHoweverOld() async throws {
+        let now = Date(timeIntervalSince1970: 10_000_000)
+        let ancient = now.addingTimeInterval(-Directive.purgeWindow * 12)
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            for status in DirectiveStatus.openCases {
+                try Directive.insert {
+                    Self.run(status.rawValue, status, updatedAt: ancient)
+                }
+                .execute(db)
+            }
+        }
+
+        await Self.clearFinished(in: database, now: now)
+
+        let rows = try await database.read { db in try Directive.all.fetchAll(db) }
+        #expect(rows.count == DirectiveStatus.openCases.count)
+    }
+
+    /// Inside the window a terminal run is marked, not purged — that is the
+    /// month of diagnostics the whole change exists to keep.
+    @Test func keepsTerminalRunsInsideTheWindow() async throws {
+        let now = Date(timeIntervalSince1970: 10_000_000)
+        let recent = now.addingTimeInterval(-Directive.purgeWindow + 60)
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { Self.run("YOUNG", .completed, updatedAt: recent) }.execute(db)
+            try DirectiveLogEntry.insert { Self.entry("E1", directiveID: "YOUNG") }.execute(db)
+        }
+
+        await Self.clearFinished(in: database, now: now)
+
+        let row = try await database.read { db in
+            try Directive.where { $0.id.eq("YOUNG") }.fetchOne(db)
+        }
+        let entries = try await database.read { db in try DirectiveLogEntry.all.fetchAll(db) }
+        #expect(row?.deletedAt != nil)
+        #expect(entries.count == 1)
+    }
+
+    /// The purge does not depend on there being anything to mark — which is
+    /// what lets the same primitive run on `DirectiveRetention`'s hourly sweep,
+    /// where nothing is ever marked.
+    @Test func purgesEvenWithNothingToMark() async throws {
+        let now = Date(timeIntervalSince1970: 10_000_000)
+        let stale = now.addingTimeInterval(-Directive.purgeWindow - 60)
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert {
+                Self.run("OLD", .completed, updatedAt: stale, deletedAt: stale)
+            }
+            .execute(db)
+        }
+
+        let marked = await Self.clearFinished(in: database, now: now)
+
+        let rows = try await database.read { db in try Directive.all.fetchAll(db) }
+        #expect(marked == 0)
+        #expect(rows.isEmpty)
+    }
+
+    /// The purge's entry delete is scoped by directive id. A device-scoped
+    /// entry (`directiveID` nil) and another directive's entry must both
+    /// survive a purge that is only entitled to touch one directive's own.
+    @Test func purgeOnlyTouchesTheDoomedDirectivesOwnEntries() async throws {
+        let now = Date(timeIntervalSince1970: 10_000_000)
+        let stale = now.addingTimeInterval(-Directive.purgeWindow - 60)
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { Self.run("OLD", .completed, updatedAt: stale) }.execute(db)
+            try Directive.insert { Self.run("LIVE", .running, updatedAt: stale) }.execute(db)
+            try DirectiveLogEntry.insert { Self.entry("E-OLD", directiveID: "OLD") }.execute(db)
+            try DirectiveLogEntry.insert { Self.entry("E-LIVE", directiveID: "LIVE") }.execute(db)
+            try DirectiveLogEntry.insert { Self.entry("E-DEVICE", deviceCode: "V1") }.execute(db)
+        }
+
+        await Self.clearFinished(in: database, now: now)
+
+        let entries = try await database.read { db in try DirectiveLogEntry.all.fetchAll(db) }
+        #expect(Set(entries.map(\.id)) == ["E-LIVE", "E-DEVICE"])
+    }
+
+    /// The list is the only surface that filters on the mark. The row is still
+    /// in the table — every engine query is status-scoped and still sees it.
+    @Test func theListHidesMarkedRunsButTheTableKeepsThem() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert {
+                Self.run("HIDDEN", .completed, deletedAt: Date(timeIntervalSince1970: 1))
+            }
+            .execute(db)
+            try Directive.insert { Self.run("SHOWN", .completed) }.execute(db)
+        }
+        let store = TestStore(initialState: DirectivesFeature.State()) {
+            DirectivesFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
+        }
+        store.exhaustivity = .off
+
+        #expect(store.state.directives.map(\.id) == ["SHOWN"])
+        #expect(store.state.finishedCount == 1)
+        let all = try await database.read { db in try Directive.all.fetchAll(db) }
+        #expect(all.count == 2)
     }
 }
 

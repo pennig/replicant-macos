@@ -92,4 +92,19 @@ struct DirectiveLogRetentionTests {
         #expect(await DirectiveLogRetention.sweep(database, now: now) == 0)
         #expect(try await remainingIDs(database) == ["ami"])
     }
+
+    /// The window is a month, pinned in literal days so constant changes must
+    /// be deliberate. A finished run's timeline is the diagnostics a cleared
+    /// row is kept for, outliving the 7-day operations ledger.
+    @Test func keepsAFinishedRunsTimelineForAMonth() async throws {
+        let database = try await seed([directive("D1", status: .completed)], [
+            entry("day10", directiveID: "D1", occurredAt: now.addingTimeInterval(-10 * 86_400)),
+            entry("day40", directiveID: "D1", occurredAt: now.addingTimeInterval(-40 * 86_400)),
+        ])
+
+        let deleted = await DirectiveLogRetention.sweep(database, now: now)
+
+        #expect(deleted == 1)
+        #expect(try await remainingIDs(database) == ["day10"])
+    }
 }

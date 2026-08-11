@@ -120,12 +120,13 @@ actor DeadlineScheduler {
                 await sweepContinuousOps(now: now)
             }
 
-            // Housekeeping: age finished ops out of a table nothing else prunes.
+            // Housekeeping: age finished rows out of tables nothing else prunes.
             if lastRetentionSweepAt.map({ now.timeIntervalSince($0) >= retentionSweepInterval }) ?? true {
                 lastRetentionSweepAt = now
                 @Dependency(\.defaultDatabase) var database
                 await OperationRetention.sweep(database, now: now)
                 await DirectiveLogRetention.sweep(database, now: now)
+                await DirectiveRetention.sweep(database, now: now)
             }
 
             let upcoming = await openDatedOps()

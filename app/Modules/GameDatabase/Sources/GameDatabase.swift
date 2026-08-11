@@ -78,6 +78,7 @@ public enum GameDatabase {
         SystemDetail.backfillSummaryJSON,
         HaulYield.createHaulYields,
         HaulYield.addControllerCodeIndex,
+        Directive.addDeletedAt,
     ]
 
     /// Builds a migrator from `entries`. The parameter exists so tests can

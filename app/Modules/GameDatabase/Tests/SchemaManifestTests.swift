@@ -56,6 +56,7 @@ import Testing
         "Backfill 'summaryJSON' on 'systemDetails'",
         "Create 'haulYields' table",
         "Add index on 'haulYields.controllerCode'",
+        "Add 'deletedAt' to 'directives'",
     ]
 
     @Test func manifestMatchesTheFrozenList() {

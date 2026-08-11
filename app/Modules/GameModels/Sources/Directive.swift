@@ -55,6 +55,10 @@ public enum DirectiveStatus: String, Codable, Equatable, Sendable, CaseIterable,
     /// live or later-resumed mission may still read (see `DirectiveLogRetention`).
     public static let openCases: [DirectiveStatus] = [.running, .needsAttention, .paused]
 
+    /// completed + cancelled — a run that owns no device, so it is the only
+    /// kind `Directive.purgeFinished` may destroy.
+    public static let finishedCases: [DirectiveStatus] = [.completed, .cancelled]
+
     /// The pane's label. Without this the detail view renders the raw case name
     /// ("needsAttention") straight at the user.
     public var displayName: String {
@@ -350,7 +354,13 @@ public struct Directive: Identifiable, Equatable, Sendable {
     public var originDesignation: String?
     /// Set only while `status == .needsAttention`.
     public var attentionReason: DirectiveAttentionReason?
+    /// When the operator cleared this run from the Directives list. Nil means
+    /// visible. Purely presentational — the row stays readable to every query
+    /// that does not filter on it.
+    public var deletedAt: Date?
     public var createdAt: Date
+    /// The last transition, and the retention purge's clock: a terminal row is
+    /// destroyed a `purgeWindow` past this, so clearing must not re-stamp it.
     public var updatedAt: Date
 
     public init(
@@ -370,6 +380,7 @@ public struct Directive: Identifiable, Equatable, Sendable {
         returnToOrigin: Bool,
         originDesignation: String?,
         attentionReason: DirectiveAttentionReason?,
+        deletedAt: Date? = nil,
         createdAt: Date,
         updatedAt: Date
     ) {
@@ -389,6 +400,7 @@ public struct Directive: Identifiable, Equatable, Sendable {
         self.returnToOrigin = returnToOrigin
         self.originDesignation = originDesignation
         self.attentionReason = attentionReason
+        self.deletedAt = deletedAt
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -488,6 +500,32 @@ public struct DirectiveLogEntry: Identifiable, Equatable, Sendable {
     }
 }
 
+// MARK: - Retention
+
+extension Directive {
+    /// How long a finished run survives before the purge destroys it. Measured
+    /// from `updatedAt` — when the run finished, not when the operator cleared
+    /// it, so clearing cannot postpone the purge.
+    public static let purgeWindow: TimeInterval = 30 * 24 * 60 * 60
+
+    /// Destroy every terminal run last touched before `cutoff` and its
+    /// timeline, in the caller's transaction, returning how many rows went. The
+    /// terminal set is deliberately not a parameter: an open run owns devices.
+    public static func purgeFinished(before cutoff: Date, in db: Database) throws -> Int {
+        let doomed = try Directive
+            .where { $0.status.in(DirectiveStatus.finishedCases) && $0.updatedAt < cutoff }
+            .fetchAll(db)
+            .map(\.id)
+        guard !doomed.isEmpty else { return 0 }
+        // Entries before the rows they point at: every timeline query is keyed
+        // by directive id, so an orphan entry is unreachable forever.
+        let scoped = doomed.map(Optional.some)
+        try DirectiveLogEntry.where { $0.directiveID.in(scoped) }.delete().execute(db)
+        try Directive.where { $0.id.in(doomed) }.delete().execute(db)
+        return doomed.count
+    }
+}
+
 // MARK: - Schema
 
 extension Directive {
@@ -569,6 +607,17 @@ extension Directive {
         try #sql(
             """
             ALTER TABLE "directives" ADD COLUMN "claimedRelayCode" TEXT
+            """
+        )
+        .execute(db)
+    }
+
+    /// Appended, never folded into the migration above it: that one has shipped
+    /// into real databases, so editing it means it silently never runs again.
+    public static let addDeletedAt = SchemaMigration("Add 'deletedAt' to 'directives'") { db in
+        try #sql(
+            """
+            ALTER TABLE "directives" ADD COLUMN "deletedAt" TEXT
             """
         )
         .execute(db)

@@ -217,6 +217,28 @@ struct DirectiveResolutionTests {
         #expect(try await entries(database).isEmpty)
     }
 
+    /// `updatedAt` is the retention purge's clock, so a finished run's must
+    /// stay frozen at the moment it finished. No verb applies from a terminal
+    /// status, which is what keeps it there.
+    @Test func noVerbMovesAFinishedRunsPurgeClock() async throws {
+        let database = try await seed(stalled(status: .completed))
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 5_000))
+            $0.uuid = .incrementing
+            $0.directiveResolution = .liveValue
+        } operation: {
+            @Dependency(\.directiveResolution) var resolution
+            await resolution.retry("D1")
+            await resolution.skipTarget("D1")
+            await resolution.cancel("D1")
+            await resolution.pause("D1")
+            await resolution.resume("D1")
+        }
+        #expect(try await load(database)?.updatedAt == Date(timeIntervalSince1970: 0))
+        #expect(try await entries(database).isEmpty)
+    }
+
     /// A missing directive id is a no-op, not a crash.
     @Test func unknownDirectiveIsANoOp() async throws {
         let database = try GameDatabase.bootstrap()
