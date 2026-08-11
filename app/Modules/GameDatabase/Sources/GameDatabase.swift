@@ -74,6 +74,7 @@ public enum GameDatabase {
         FTLLinkRecord.addLinkMetrics,
         Directive.addSourceRelayCode,
         Directive.addClaimedRelayCode,
+        Directive.addDeletedAt,
     ]
 
     /// Builds a migrator from `entries`. The parameter exists so tests can

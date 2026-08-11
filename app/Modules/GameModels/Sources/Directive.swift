@@ -350,6 +350,10 @@ public struct Directive: Identifiable, Equatable, Sendable {
     public var originDesignation: String?
     /// Set only while `status == .needsAttention`.
     public var attentionReason: DirectiveAttentionReason?
+    /// When the operator cleared this run from the Directives list. Nil means
+    /// visible. Purely presentational — the row stays readable to every query
+    /// that does not filter on it.
+    public var deletedAt: Date?
     public var createdAt: Date
     public var updatedAt: Date
 
@@ -370,6 +374,7 @@ public struct Directive: Identifiable, Equatable, Sendable {
         returnToOrigin: Bool,
         originDesignation: String?,
         attentionReason: DirectiveAttentionReason?,
+        deletedAt: Date? = nil,
         createdAt: Date,
         updatedAt: Date
     ) {
@@ -389,6 +394,7 @@ public struct Directive: Identifiable, Equatable, Sendable {
         self.returnToOrigin = returnToOrigin
         self.originDesignation = originDesignation
         self.attentionReason = attentionReason
+        self.deletedAt = deletedAt
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -569,6 +575,17 @@ extension Directive {
         try #sql(
             """
             ALTER TABLE "directives" ADD COLUMN "claimedRelayCode" TEXT
+            """
+        )
+        .execute(db)
+    }
+
+    /// Appended, never folded into the migration above it: that one has shipped
+    /// into real databases, so editing it means it silently never runs again.
+    public static let addDeletedAt = SchemaMigration("Add 'deletedAt' to 'directives'") { db in
+        try #sql(
+            """
+            ALTER TABLE "directives" ADD COLUMN "deletedAt" TEXT
             """
         )
         .execute(db)

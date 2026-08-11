@@ -52,6 +52,7 @@ import Testing
         "Add link metrics to 'ftlLinks'",
         "Add 'sourceRelayCode' to 'directives'",
         "Add 'claimedRelayCode' to 'directives'",
+        "Add 'deletedAt' to 'directives'",
     ]
 
     @Test func manifestMatchesTheFrozenList() {
