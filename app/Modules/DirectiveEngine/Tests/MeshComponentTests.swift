@@ -2,8 +2,8 @@
 //  MeshComponentTests.swift
 //  Replicould — DirectiveEngine
 //
-//  `MeshGraph.components(of:)`: disjoint clusters stay disjoint, a bridging
-//  system merges them, and a system the census cannot place stands alone.
+//  `MeshGraph.components(of:)`: disjoint clusters, a bridging merge, and an
+//  unplaceable system standing alone.
 //
 
 import Foundation

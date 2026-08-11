@@ -361,9 +361,7 @@ public extension MeshGraph {
     }
 
     /// Connected components over `systems`, each labelled by its own smallest
-    /// designation. A system this graph cannot place neighbours nothing and so
-    /// stands alone — the safe reading, since an unplaceable system must never
-    /// inherit another's reachability.
+    /// designation. A system this graph cannot place stands alone.
     func components(of systems: Set<String>) -> [String: String] {
         var labels: [String: String] = [:]
         for seed in systems.sorted() where labels[seed] == nil {
