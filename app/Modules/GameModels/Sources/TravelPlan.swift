@@ -24,6 +24,8 @@ public struct TravelPlan: Sendable, Equatable, Codable {
     /// Total interstellar distance across the route, in light-years (0 for an
     /// intra-system hop).
     public var totalDistanceLy: Double?
+    /// Whether a System Hub sped up the route (up to 25% faster).
+    public var hubBonus: Bool?
     /// The route, in order.
     public var route: [Leg]
 
@@ -33,6 +35,7 @@ public struct TravelPlan: Sendable, Equatable, Codable {
         destinationType: String? = nil,
         totalTimeSeconds: Double? = nil,
         totalDistanceLy: Double? = nil,
+        hubBonus: Bool? = nil,
         route: [Leg] = []
     ) {
         self.finalDestination = finalDestination
@@ -40,6 +43,7 @@ public struct TravelPlan: Sendable, Equatable, Codable {
         self.destinationType = destinationType
         self.totalTimeSeconds = totalTimeSeconds
         self.totalDistanceLy = totalDistanceLy
+        self.hubBonus = hubBonus
         self.route = route
     }
 
@@ -99,6 +103,7 @@ public struct TravelPlan: Sendable, Equatable, Codable {
         case destinationType = "destination_type"
         case totalTimeSeconds = "total_time_seconds"
         case totalDistanceLy = "total_distance_ly"
+        case hubBonus = "hub_bonus"
     }
 
     public init(from decoder: any Decoder) throws {
@@ -108,6 +113,7 @@ public struct TravelPlan: Sendable, Equatable, Codable {
         destinationType = try container.decodeIfPresent(String.self, forKey: .destinationType)
         totalTimeSeconds = try container.decodeIfPresent(Double.self, forKey: .totalTimeSeconds)
         totalDistanceLy = try container.decodeIfPresent(Double.self, forKey: .totalDistanceLy)
+        hubBonus = try container.decodeIfPresent(Bool.self, forKey: .hubBonus)
         route = try container.decodeIfPresent([Leg].self, forKey: .route) ?? []
     }
 }

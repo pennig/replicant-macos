@@ -95,9 +95,25 @@ public struct TravelPlanSheet: View {
         case let .loaded(plan):
             VStack(alignment: .leading, spacing: Space.l) {
                 summary(plan)
+                if plan.hubBonus == true { hubBonusBadge }
                 routeList(plan)
             }
         }
+    }
+
+    /// Flags a System Hub–assisted route — up to 25% faster than the plain leg.
+    private var hubBonusBadge: some View {
+        HStack(spacing: Space.xs) {
+            Image(systemName: "bolt.fill")
+                .font(.system(size: IconSize.s, weight: .semibold))
+            Text("Hub bonus applied")
+                .font(.rcCaption)
+        }
+        .foregroundStyle(.rcAccent)
+        .padding(.horizontal, Space.s)
+        .padding(.vertical, Space.xs)
+        .background(Capsule().fill(.rcAccentMuted))
+        .overlay(Capsule().strokeBorder(.rcAccentBorder, lineWidth: Hairline.thin))
     }
 
     // MARK: Loaded — summary + legs

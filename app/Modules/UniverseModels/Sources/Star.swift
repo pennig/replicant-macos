@@ -32,6 +32,8 @@ public struct Star: Identifiable, Equatable, Sendable {
     public var createdAt: Date
     public var firstVisitedAt: Date?
     public var fullyScannedAt: Date?
+    public var region: String?
+    public var hasHub: Bool
 
     public var id: String { designation }
     public var position: Position { Position(x: positionX, y: positionY, z: positionZ) }
@@ -46,7 +48,9 @@ public struct Star: Identifiable, Equatable, Sendable {
             estimatedPlanets: estimatedPlanets,
             explored: explored,
             hasLife: hasLife,
-            entryPoint: entryPoint
+            entryPoint: entryPoint,
+            region: region,
+            hasHub: hasHub
         )
     }
 
@@ -63,7 +67,9 @@ public struct Star: Identifiable, Equatable, Sendable {
         entryPoint: String?,
         createdAt: Date,
         firstVisitedAt: Date? = nil,
-        fullyScannedAt: Date? = nil
+        fullyScannedAt: Date? = nil,
+        region: String? = nil,
+        hasHub: Bool = false
     ) {
         self.designation = designation
         self.spectralType = spectralType
@@ -78,6 +84,8 @@ public struct Star: Identifiable, Equatable, Sendable {
         self.createdAt = createdAt
         self.firstVisitedAt = firstVisitedAt
         self.fullyScannedAt = fullyScannedAt
+        self.region = region
+        self.hasHub = hasHub
     }
 }
 
@@ -96,7 +104,9 @@ extension Star {
             explored: item.explored,
             hasLife: item.hasLife,
             entryPoint: item.entryPoint,
-            createdAt: createdAt
+            createdAt: createdAt,
+            region: item.region,
+            hasHub: item.hasHub
         )
     }
 }
@@ -167,6 +177,26 @@ extension Star {
                        >= json_extract("systemJSON", '$.moonsTotal')
                   )
               )
+            """
+        )
+        .execute(db)
+    }
+
+    /// Adds the census `region` column — nullable, mirroring the payload.
+    public static let addStarRegion = SchemaMigration("Add 'region' to 'stars'") { db in
+        try #sql(
+            """
+            ALTER TABLE "stars" ADD COLUMN "region" TEXT
+            """
+        )
+        .execute(db)
+    }
+
+    /// Adds the census `hasHub` flag — non-nullable, mirroring the payload.
+    public static let addStarHasHub = SchemaMigration("Add 'hasHub' to 'stars'") { db in
+        try #sql(
+            """
+            ALTER TABLE "stars" ADD COLUMN "hasHub" INTEGER NOT NULL DEFAULT 0
             """
         )
         .execute(db)

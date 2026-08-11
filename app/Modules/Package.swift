@@ -407,6 +407,7 @@ let package = Package(
                 "GameModels",
                 "GameServices",
                 "GameSession",
+                "UniverseModels",
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
                 .product(name: "HTTPTypes", package: "swift-http-types"),
                 .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime"),

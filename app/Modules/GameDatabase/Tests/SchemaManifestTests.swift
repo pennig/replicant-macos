@@ -58,6 +58,8 @@ import Testing
         "Add index on 'haulYields.controllerCode'",
         "Add 'deletedAt' to 'directives'",
         "Create 'theatrePins'",
+        "Add 'region' to 'stars'",
+        "Add 'hasHub' to 'stars'",
     ]
 
     @Test func manifestMatchesTheFrozenList() {

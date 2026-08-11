@@ -11,8 +11,8 @@
 import Foundation
 
 /// A charted star as it appears in the stars list. Mirrors
-/// `app_schemas_stars_StarItemSchema` (camelCased). `hasLife` and `entryPoint`
-/// are nullable in the schema.
+/// `app_schemas_stars_StarItemSchema` (camelCased). `hasLife`, `entryPoint`,
+/// and `region` are nullable in the schema; `hasHub` is not.
 public struct StarItem: Equatable, Sendable, Codable {
     public var designation: String
     public var spectralType: String
@@ -22,6 +22,8 @@ public struct StarItem: Equatable, Sendable, Codable {
     public var explored: Bool
     public var hasLife: Bool?
     public var entryPoint: String?
+    public var region: String?
+    public var hasHub: Bool
 
     public init(
         designation: String,
@@ -31,7 +33,9 @@ public struct StarItem: Equatable, Sendable, Codable {
         estimatedPlanets: Int,
         explored: Bool,
         hasLife: Bool?,
-        entryPoint: String?
+        entryPoint: String?,
+        region: String? = nil,
+        hasHub: Bool = false
     ) {
         self.designation = designation
         self.spectralType = spectralType
@@ -41,5 +45,7 @@ public struct StarItem: Equatable, Sendable, Codable {
         self.explored = explored
         self.hasLife = hasLife
         self.entryPoint = entryPoint
+        self.region = region
+        self.hasHub = hasHub
     }
 }

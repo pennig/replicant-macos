@@ -251,7 +251,7 @@ CREATE TABLE "stars" (
   "createdAt" TEXT NOT NULL,
   "firstVisitedAt" TEXT,
   "fullyScannedAt" TEXT
-) STRICT;
+, "region" TEXT, "hasHub" INTEGER NOT NULL DEFAULT 0) STRICT;
 
 CREATE TABLE "systemDetails" (
   "designation" TEXT PRIMARY KEY NOT NULL,

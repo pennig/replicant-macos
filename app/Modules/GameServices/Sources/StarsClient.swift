@@ -218,7 +218,9 @@ extension StarItem {
             estimatedPlanets: schema.estimatedPlanets ?? 0,
             explored: false,
             hasLife: nil,
-            entryPoint: schema.entryPoint
+            entryPoint: schema.entryPoint,
+            region: schema.region,
+            hasHub: schema.hasHub ?? false
         )
     }
 
@@ -231,7 +233,9 @@ extension StarItem {
             estimatedPlanets: schema.estimatedPlanets ?? 0,
             explored: schema.explored ?? false,
             hasLife: schema.hasLife,
-            entryPoint: schema.entryPoint
+            entryPoint: schema.entryPoint,
+            region: schema.region,
+            hasHub: schema.hasHub ?? false
         )
     }
 }

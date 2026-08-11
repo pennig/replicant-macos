@@ -80,6 +80,8 @@ public enum GameDatabase {
         HaulYield.addControllerCodeIndex,
         Directive.addDeletedAt,
         TheatrePin.createTheatrePins,
+        Star.addStarRegion,
+        Star.addStarHasHub,
     ]
 
     /// Builds a migrator from `entries`. The parameter exists so tests can
