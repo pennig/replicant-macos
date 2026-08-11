@@ -124,7 +124,7 @@ struct DirectivesClearFinishedTests {
         let stamped = try await database.read { db in
             try Directive.where { $0.id.eq("A") }.fetchOne(db)?.deletedAt
         }
-        let second = await Self.clearFinished(in: database)
+        let second = await Self.clearFinished(in: database, now: Date(timeIntervalSince1970: 9_000))
         let restamped = try await database.read { db in
             try Directive.where { $0.id.eq("A") }.fetchOne(db)?.deletedAt
         }
