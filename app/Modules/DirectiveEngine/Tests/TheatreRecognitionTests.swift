@@ -201,3 +201,102 @@ struct TheatreRecognitionTests {
         #expect(pin?.isOperational == false)
     }
 }
+
+private let ainalram = Position(x: -11.25, y: -37.09, z: -7.68)
+private let graz = Position(x: -14.0, y: -30.0, z: -5.0)
+private let omerope = Position(x: -291.87, y: -125.98, z: 106.32)
+private let denebed = Position(x: -292.55, y: -125.42, z: 113.41)
+
+private func twoTheatreView() -> WorldView {
+    WorldView(
+        devices: [:],
+        starPositions: ["AINALRAM": ainalram, "GRAZ": graz, "OMEROPE": omerope, "DENEBED": denebed],
+        meshSystems: ["AINALRAM", "GRAZ", "OMEROPE", "DENEBED"],
+        salvageUnits: [:],
+        eventSystems: [],
+        hubLocation: nil,
+        theatres: [
+            Theatre(depot: "AINALRAM-BELT-1", system: "AINALRAM", origin: .derived,
+                    readiness: .operational, stock: 40_000),
+            Theatre(depot: "DENEBED-BELT-1", system: "DENEBED", origin: .pinned,
+                    readiness: .operational, stock: 900),
+        ],
+        components: ["AINALRAM": "AINALRAM", "GRAZ": "AINALRAM",
+                     "OMEROPE": "DENEBED", "DENEBED": "DENEBED"],
+        now: Date(timeIntervalSince1970: 5_000)
+    )
+}
+
+@Suite("Theatre resolvers")
+struct TheatreResolverTests {
+    @Test("Inward resolution refuses a theatre in another component")
+    func inwardRespectsComponent() {
+        let view = twoTheatreView()
+        #expect(view.theatre(servicing: "GRAZ")?.depot == "AINALRAM-BELT-1")
+        #expect(view.theatre(servicing: "OMEROPE")?.depot == "DENEBED-BELT-1")
+    }
+
+    @Test("Inward resolution returns nil for a system in no serviced component")
+    func inwardNilOffComponent() {
+        let view = twoTheatreView()
+        #expect(view.theatre(servicing: "NOWHERE") == nil)
+    }
+
+    @Test("Outward resolution ignores components and takes the nearest")
+    func outwardIgnoresComponents() {
+        let view = twoTheatreView()
+        #expect(view.theatre(nearest: "OMEROPE")?.depot == "DENEBED-BELT-1")
+        #expect(view.theatre(nearest: "GRAZ")?.depot == "AINALRAM-BELT-1")
+    }
+
+    @Test("Two theatres in ONE component both pass the filter; distance decides")
+    func sharedComponentResolvesByDistance() {
+        let view = WorldView(
+            devices: [:],
+            starPositions: ["AINALRAM": ainalram, "GRAZ": graz],
+            meshSystems: ["AINALRAM", "GRAZ"],
+            salvageUnits: [:], eventSystems: [], hubLocation: nil,
+            theatres: [
+                Theatre(depot: "AINALRAM-BELT-1", system: "AINALRAM", origin: .derived,
+                        readiness: .operational, stock: 40_000),
+                Theatre(depot: "GRAZ-1-L4", system: "GRAZ", origin: .pinned,
+                        readiness: .operational, stock: 100),
+            ],
+            components: ["AINALRAM": "AINALRAM", "GRAZ": "AINALRAM"],
+            now: Date(timeIntervalSince1970: 5_000)
+        )
+
+        #expect(view.theatre(servicing: "GRAZ")?.depot == "GRAZ-1-L4")
+        #expect(view.theatre(servicing: "AINALRAM")?.depot == "AINALRAM-BELT-1")
+    }
+
+    @Test("A claimed theatre is never returned by either resolver")
+    func claimedIsInvisible() {
+        let view = WorldView(
+            devices: [:], starPositions: ["OMEROPE": omerope],
+            meshSystems: [], salvageUnits: [:], eventSystems: [], hubLocation: nil,
+            theatres: [
+                Theatre(depot: "OMEROPE-BELT-1", system: "OMEROPE", origin: .pinned,
+                        readiness: .claimed(missing: [.offMesh]), stock: 900),
+            ],
+            components: ["OMEROPE": "OMEROPE"],
+            now: Date(timeIntervalSince1970: 5_000)
+        )
+
+        #expect(view.theatre(servicing: "OMEROPE") == nil)
+        #expect(view.theatre(nearest: "OMEROPE") == nil)
+    }
+
+    @Test("Passing only hubLocation synthesises one operational theatre")
+    func legacyInitStillWorks() {
+        let view = WorldView(
+            devices: [:], starPositions: ["AINALRAM": ainalram],
+            meshSystems: ["AINALRAM"], salvageUnits: [:], eventSystems: [],
+            hubLocation: "AINALRAM-BELT-1",
+            now: Date(timeIntervalSince1970: 5_000)
+        )
+
+        #expect(view.theatres.map(\.depot) == ["AINALRAM-BELT-1"])
+        #expect(view.theatre(servicing: "AINALRAM")?.depot == "AINALRAM-BELT-1")
+    }
+}

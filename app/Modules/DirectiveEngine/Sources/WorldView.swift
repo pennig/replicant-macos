@@ -47,6 +47,11 @@ public struct WorldView: Equatable, Sendable {
     /// rather than from `Directive.originDesignation`, which is a bare system
     /// designation and travels to an entry point an L4 away from the printer.
     public let hubLocation: String?
+    /// Every recognised theatre this tick, ordered by depot. Replaces the single
+    /// `hubLocation`, which remains only until ticket 10 retires it.
+    public let theatres: [Theatre]
+    /// System → mesh-component label, from `MeshGraph.components(of:)`.
+    public let components: [String: String]
     /// System → its belts, classified, for every SURVEYED system whether meshed or
     /// not: prune needs the belts of systems already REACHED, or a reached mine's
     /// own relay reads as useless. A system whose belts all fail to classify is
@@ -86,6 +91,8 @@ public struct WorldView: Equatable, Sendable {
         salvageUnits: [String: Double],
         eventSystems: Set<String>,
         hubLocation: String?,
+        theatres: [Theatre]? = nil,
+        components: [String: String] = [:],
         beltsBySystem: [String: [BeltInfo]] = [:],
         surveyedSystems: Set<String> = [],
         replicantSystems: Set<String> = [],
@@ -99,6 +106,16 @@ public struct WorldView: Equatable, Sendable {
         self.salvageUnits = salvageUnits
         self.eventSystems = eventSystems
         self.hubLocation = hubLocation
+        // Absent `theatres` synthesises one theatre at `hubLocation`, plus its
+        // own singleton component if `components` is absent too.
+        let synthesisedTheatres = theatres ?? hubLocation.map {
+            [Theatre(depot: $0, system: SiteAssay.system(of: $0), origin: .derived,
+                     readiness: .operational, stock: 0)]
+        } ?? []
+        self.theatres = synthesisedTheatres
+        self.components = theatres == nil && components.isEmpty
+            ? Dictionary(uniqueKeysWithValues: synthesisedTheatres.map { ($0.system, $0.system) })
+            : components
         self.beltsBySystem = beltsBySystem
         self.surveyedSystems = surveyedSystems
         self.replicantSystems = replicantSystems
@@ -142,17 +159,25 @@ public struct WorldView: Equatable, Sendable {
             events.filter(\.isActive).map { SiteAssay.system(of: $0.location) }
         )
 
-        // The census rows for the print-capable locations, and only those — a
-        // handful of codes, never the whole table. Read in the SAME transaction
-        // as the devices, so the hub can never be recognised from a stockpile
-        // reading belonging to a different instant than the printer that
-        // justifies it.
+        // The census rows for every candidate depot — print-capable locations,
+        // pinned locations, and system_hub locations — read in the SAME
+        // transaction as the devices, so recognition can never mix a stockpile
+        // reading with a different instant's printer or pin.
         let printLocations = Set(allDevices.filter(\.isPrintHub).compactMap(\.location))
-        let hubStock: [String: Int] = printLocations.isEmpty ? [:] : try LocationFootprint
-            .where { $0.location.in(Array(printLocations)) }
+        let pins = try TheatrePin.all.fetchAll(db)
+        let hubDeviceLocations = Set(allDevices.filter { $0.deviceType == "system_hub" }.compactMap(\.location))
+        let stockLocations = printLocations.union(pins.map(\.location)).union(hubDeviceLocations)
+        let hubStock: [String: Int] = stockLocations.isEmpty ? [:] : try LocationFootprint
+            .where { $0.location.in(Array(stockLocations)) }
             .fetchAll(db)
             .reduce(into: [:]) { $0[$1.location] = $1.resources }
         let hub = Self.hubLocation(in: allDevices, meshSystems: mesh, stockByLocation: hubStock)
+
+        let componentLabels = MeshGraph(positions: positions).components(of: mesh)
+        let theatres = TheatreRegistry.recognise(
+            devices: allDevices, pins: pins, meshSystems: mesh,
+            components: componentLabels, stockByLocation: hubStock
+        )
 
         // Bounded in SQL to rows actually holding units. The table carries a
         // row per location the fleet has ever looked at and most of them are
@@ -182,6 +207,8 @@ public struct WorldView: Equatable, Sendable {
             salvageUnits: salvage,
             eventSystems: eventSystems,
             hubLocation: hub,
+            theatres: theatres,
+            components: componentLabels,
             beltsBySystem: belts,
             surveyedSystems: Set(surveyed),
             replicantSystems: Set(
@@ -193,6 +220,34 @@ public struct WorldView: Equatable, Sendable {
             },
             now: now
         )
+    }
+
+    /// Inward: same mesh component, then nearest. Operational only.
+    public func theatre(servicing system: String) -> Theatre? {
+        let component = components[system]
+        return nearestTheatre(to: system) { components[$0.system] != nil && components[$0.system] == component }
+    }
+
+    /// Outward: nearest by straight-line distance, no component filter. Operational only.
+    public func theatre(nearest system: String) -> Theatre? {
+        nearestTheatre(to: system) { _ in true }
+    }
+
+    /// Ranks both resolvers; they differ only by `admits`. Orders by
+    /// (distance, depot) for a stable result.
+    private func nearestTheatre(
+        to system: String, admits: (Theatre) -> Bool
+    ) -> Theatre? {
+        guard let origin = starPositions[system] else { return nil }
+        return theatres
+            .filter { $0.isOperational && admits($0) }
+            .compactMap { theatre -> (Double, Theatre)? in
+                guard let position = starPositions[theatre.system] else { return nil }
+                return (origin.distance(to: position), theatre)
+            }
+            .min { lhs, rhs in
+                lhs.0 == rhs.0 ? lhs.1.depot < rhs.1.depot : lhs.0 < rhs.0
+            }?.1
     }
 
     /// One belt as SQLite projects it out of the blob: the three fields
