@@ -3,7 +3,7 @@
 //  Replicould — DirectiveEngine
 //
 //  Ranks candidate belts for a new permanent mine: class, then a rares/conductive
-//  scarcity bonus, then distance from the hub, then designation.
+//  scarcity bonus, then distance from the nearest theatre, then designation.
 //
 
 import Foundation
@@ -37,16 +37,15 @@ public enum MineSitePlanner {
     }
 
     /// The best belt for a new mine, or nil when nothing passes the hard
-    /// filters: meshed system, not in `occupiedBelts`, classifiable, placeable.
+    /// filters: meshed, unoccupied, classifiable, placeable. Ranked OUTWARD
+    /// from each candidate's own nearest theatre — there is no row to read.
     public static func site(view: WorldView, occupiedBelts: Set<String>) -> Candidate? {
-        guard let hub = view.hubLocation,
-              let hubPosition = view.starPositions[SiteAssay.system(of: hub)]
-        else { return nil }
-
         var candidates: [Candidate] = []
         for (system, belts) in view.beltsBySystem {
             guard view.meshSystems.contains(system),
-                  let position = view.starPositions[system]
+                  let position = view.starPositions[system],
+                  let theatre = view.theatre(nearest: system),
+                  let originPosition = view.starPositions[theatre.system]
             else { continue }
             for belt in belts where !occupiedBelts.contains(belt.designation) {
                 candidates.append(Candidate(
@@ -54,7 +53,7 @@ public enum MineSitePlanner {
                     system: system,
                     beltClass: belt.beltClass,
                     scarceBonus: scarceBonus(richness: belt.richness),
-                    distanceLY: hubPosition.distance(to: position)
+                    distanceLY: originPosition.distance(to: position)
                 ))
             }
         }

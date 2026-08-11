@@ -149,7 +149,7 @@ public struct MineRun: MissionStepMachine {
         of directive: Directive, in world: WorldSnapshot
     ) -> (controller: Device, freighter: Device)? {
         guard let belt = targetBelt(of: directive) else { return nil }
-        let sink = HaulRun.deliverySink(in: world)
+        let sink = HaulRun.deliverySink(in: world, for: directive)
         let rows = Array(world.devices.values)
         let free = MineRecipe.unassignedFleet(at: sink, in: rows)
         let controller = rows
@@ -248,7 +248,7 @@ public struct MineRun: MissionStepMachine {
             deviceCode: fleet.transport.controller.deviceCode,
             directive: HaulTargetPlanner.ferry,
             configuration: [
-                "collect": .string(belt), "deliver": .string(HaulRun.deliverySink(in: world)),
+                "collect": .string(belt), "deliver": .string(HaulRun.deliverySink(in: world, for: directive)),
             ]
         ))
         return out
@@ -284,7 +284,7 @@ public struct MineRun: MissionStepMachine {
     ) -> MissionAction {
         guard let belt = Self.targetBelt(of: directive) else { return .stall(.unreachableDevice) }
         let rows = Array(world.devices.values)
-        let hub = RelayRun.hubLocation(in: world)
+        let hub = RelayRun.theatreDepot(in: world, for: directive)
         // A mine on the hub's own belt is invisible to `installedBelts`, which
         // filters `location != hub`: a row aimed there is malformed by construction.
         if belt == hub { return .stall(.unreachableDevice) }

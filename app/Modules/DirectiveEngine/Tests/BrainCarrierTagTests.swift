@@ -231,7 +231,8 @@ struct BrainRestockHostGateTests {
             "B1", type: "autofactory", features: [], availableCommands: ["enqueue_print"]
         )
 
-        #expect(Brain.restockHost(in: view([racing, factory]))?.deviceCode == "B1")
+        let world = view([racing, factory])
+        #expect(Brain.restockHost(in: world, theatre: world.theatres[0])?.deviceCode == "B1")
     }
 
     @Test("a lone print-capable racing vessel hosts no restock at all")
@@ -240,6 +241,7 @@ struct BrainRestockHostGateTests {
             "A1", type: "racing_vessel", availableCommands: ["enqueue_print"]
         )
 
-        #expect(Brain.restockHost(in: view([racing])) == nil)
+        let world = view([racing])
+        #expect(Brain.restockHost(in: world, theatre: world.theatres[0]) == nil)
     }
 }

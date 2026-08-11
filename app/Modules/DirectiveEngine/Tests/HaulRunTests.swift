@@ -79,15 +79,20 @@ private func world(
     log: [DirectiveLogEntry] = [],
     now: Date = fixtureNow
 ) -> WorldSnapshot {
-    let components = Dictionary(
-        uniqueKeysWithValues: SalvageTargetPlanner.meshSystems(in: devices).map { ($0, "MESH") }
+    let mesh = SalvageTargetPlanner.meshSystems(in: devices)
+    let components = Dictionary(uniqueKeysWithValues: mesh.map { ($0, "MESH") })
+    let footprintsByLocation = Dictionary(footprints.map { ($0.location, $0) }, uniquingKeysWith: { _, last in last })
+    let theatres = TheatreRegistry.recognise(
+        devices: devices, pins: [], meshSystems: mesh,
+        components: components, stockByLocation: footprintsByLocation.mapValues(\.resources)
     )
     return WorldSnapshot(
         devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
         openOperations: [:],
         log: log,
-        footprints: Dictionary(footprints.map { ($0.location, $0) }, uniquingKeysWith: { _, last in last }),
+        footprints: footprintsByLocation,
         components: components,
+        theatres: theatres,
         now: now
     )
 }
@@ -155,7 +160,8 @@ private func run(
     step: String,
     stepStartedAt: Date = fixtureNow,
     fleetTag: String? = HaulRun.defaultFleetTag,
-    controllerCode: String? = nil
+    controllerCode: String? = nil,
+    theatreDepot: String? = nil
 ) -> Directive {
     Directive(
         id: "D1", kind: .haulRun, status: .running, deviceCode: "C1",
@@ -163,7 +169,7 @@ private func run(
         fleetTag: fleetTag, targets: [], targetIndex: 0, step: step,
         stepStartedAt: stepStartedAt, returnToOrigin: false,
         originDesignation: nil, attentionReason: nil,
-        createdAt: fixtureNow, updatedAt: fixtureNow
+        createdAt: fixtureNow, updatedAt: fixtureNow, theatreDepot: theatreDepot
     )
 }
 
@@ -1184,14 +1190,19 @@ struct HaulRunDerivedSinkTests {
         )
     }
 
+    /// A row stamped with `depot` — the theatre a directive's own row names.
+    private func rowNaming(_ depot: String?) -> Directive {
+        run(step: HaulRun.Step.hauling, theatreDepot: depot)
+    }
+
     @Test("the sink follows the recognised hub")
     func theSinkFollowsTheHub() {
-        #expect(HaulRun.deliverySink(in: worldWithHubAt("SOL-3-1")) == "SOL-3-1")
+        #expect(HaulRun.deliverySink(in: worldWithHubAt("SOL-3-1"), for: rowNaming("SOL-3-1")) == "SOL-3-1")
     }
 
     @Test("no hub falls back to the constant rather than delivering nowhere")
     func noHubFallsBackToTheConstant() {
-        #expect(HaulRun.deliverySink(in: world(devices: [])) == HaulRun.deliveryLocation)
+        #expect(HaulRun.deliverySink(in: world(devices: []), for: rowNaming(nil)) == HaulRun.deliveryLocation)
     }
 
     /// The two checks part company here, and both answers are wanted.
@@ -1212,11 +1223,12 @@ struct HaulRunDerivedSinkTests {
             ]
         )
         let world = worldWithHubAt("SOL-3-1", controllers: [stale])
+        let row = rowNaming("SOL-3-1")
         let assignment = HaulTargetPlanner.Assignment(
             controllerCode: "C1", location: "ALPAHARD-7", directive: "ferry"
         )
-        #expect(HaulRun.isInForce(assignment, in: world) == false, "the run must repoint it")
-        #expect(HaulRun.hasTakenSomeHaulConfig(stale, delivery: HaulRun.deliverySink(in: world)))
+        #expect(HaulRun.isInForce(assignment, in: world, for: row) == false, "the run must repoint it")
+        #expect(HaulRun.hasTakenSomeHaulConfig(stale, delivery: HaulRun.deliverySink(in: world, for: row)))
     }
 
     /// A foreign sink is neither in force nor ours, so it never masquerades as
@@ -1228,7 +1240,7 @@ struct HaulRunDerivedSinkTests {
             currentConfig: ["collect": .string("ALPAHARD-7"), "deliver": .string("ELSEWHERE-9")]
         )
         let world = worldWithHubAt("SOL-3-1", controllers: [foreign])
-        #expect(HaulRun.hasTakenSomeHaulConfig(foreign, delivery: HaulRun.deliverySink(in: world)) == false)
+        #expect(HaulRun.hasTakenSomeHaulConfig(foreign, delivery: HaulRun.deliverySink(in: world, for: rowNaming("SOL-3-1"))) == false)
     }
 
     /// A controller still on the fallback keeps reading as ours, which is what
@@ -1243,7 +1255,7 @@ struct HaulRunDerivedSinkTests {
             ]
         )
         let world = worldWithHubAt("SOL-3-1", controllers: [onFallback])
-        #expect(HaulRun.drainedPile(of: onFallback, delivery: HaulRun.deliverySink(in: world)) == "ALPAHARD-7")
+        #expect(HaulRun.drainedPile(of: onFallback, delivery: HaulRun.deliverySink(in: world, for: rowNaming("SOL-3-1"))) == "ALPAHARD-7")
     }
 
     @Test("a controller configured against the derived hub reads as in force")
@@ -1256,8 +1268,9 @@ struct HaulRunDerivedSinkTests {
             ]
         )
         let world = worldWithHubAt("SOL-3-1", controllers: [current])
-        #expect(HaulRun.hasTakenSomeHaulConfig(current, delivery: HaulRun.deliverySink(in: world)))
-        #expect(HaulRun.drainedPile(of: current, delivery: HaulRun.deliverySink(in: world)) == "ALPAHARD-7")
+        let row = rowNaming("SOL-3-1")
+        #expect(HaulRun.hasTakenSomeHaulConfig(current, delivery: HaulRun.deliverySink(in: world, for: row)))
+        #expect(HaulRun.drainedPile(of: current, delivery: HaulRun.deliverySink(in: world, for: row)) == "ALPAHARD-7")
     }
 }
 
@@ -1373,19 +1386,17 @@ struct HaulRunPinnedTests {
     /// runner-up pile the planner would have handed C2.
     @Test func pinnedDispatchingCommandsTheBelt() {
         let world = twoPileWorld(controllers: [keeper("C1"), keeper("C2")])
-        let action = HaulRun().nextAction(
-            directive: keeperRun(
-                step: HaulRun.Step.dispatching, deviceCode: "C2",
-                targets: [pinnedBelt], controllerCode: "C2"
-            ),
-            world: world
+        let directive = keeperRun(
+            step: HaulRun.Step.dispatching, deviceCode: "C2",
+            targets: [pinnedBelt], controllerCode: "C2"
         )
+        let action = HaulRun().nextAction(directive: directive, world: world)
         #expect(action == .dispatch(
             kind: .setDirective,
             deviceCode: "C2",
             params: CommandParams(directive: HaulTargetPlanner.ferry, configuration: [
                 "collect": .string(pinnedBelt),
-                "deliver": .string(HaulRun.deliverySink(in: world)),
+                "deliver": .string(HaulRun.deliverySink(in: world, for: directive)),
             ]),
             nextStep: HaulRun.Step.confirming
         ))
@@ -1412,19 +1423,17 @@ struct HaulRunPinnedTests {
     /// over this same world it still follows the planner to the richest pile.
     @Test func aGeneralRunOverTheSameWorldStillFollowsThePlanner() {
         let world = twoPileWorld(controllers: [keeper("C1"), keeper("C2")])
-        let action = HaulRun().nextAction(
-            directive: keeperRun(
-                step: HaulRun.Step.dispatching, deviceCode: "C1",
-                targets: [], controllerCode: "C1"
-            ),
-            world: world
+        let directive = keeperRun(
+            step: HaulRun.Step.dispatching, deviceCode: "C1",
+            targets: [], controllerCode: "C1"
         )
+        let action = HaulRun().nextAction(directive: directive, world: world)
         #expect(action == .dispatch(
             kind: .setDirective,
             deviceCode: "C1",
             params: CommandParams(directive: HaulTargetPlanner.shuttle, configuration: [
                 "collect": .string(richestPile),
-                "deliver": .string(HaulRun.deliverySink(in: world)),
+                "deliver": .string(HaulRun.deliverySink(in: world, for: directive)),
             ]),
             nextStep: HaulRun.Step.confirming
         ))

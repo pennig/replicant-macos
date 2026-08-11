@@ -54,22 +54,30 @@ private func anchorWorld(hub: String?) -> WorldSnapshot {
             )
         )
     }
+    let footprintsByLocation = Dictionary(footprints.map { ($0.location, $0) }, uniquingKeysWith: { _, last in last })
+    let mesh = SalvageTargetPlanner.meshSystems(in: devices)
+    let components = Dictionary(uniqueKeysWithValues: mesh.map { ($0, $0) })
+    let theatres = TheatreRegistry.recognise(
+        devices: devices, pins: [], meshSystems: mesh,
+        components: components, stockByLocation: footprintsByLocation.mapValues(\.resources)
+    )
     return WorldSnapshot(
         devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
         openOperations: [:],
-        footprints: Dictionary(footprints.map { ($0.location, $0) }, uniquingKeysWith: { _, last in last }),
+        footprints: footprintsByLocation,
+        theatres: theatres,
         now: anchorNow
     )
 }
 
-private func anchorDirective() -> Directive {
+private func anchorDirective(theatreDepot: String? = nil) -> Directive {
     Directive(
         id: "S1", kind: .salvageRun, status: .running, deviceCode: "V1",
         controllerCode: nil, roamCentre: nil, fleetTag: SalvageRun.defaultFleetTag,
         sourceRelayCode: nil, targets: [], targetIndex: 0,
         step: SalvageRun.Step.preflight, stepStartedAt: anchorNow,
         returnToOrigin: false, originDesignation: nil, attentionReason: nil,
-        createdAt: anchorNow, updatedAt: anchorNow
+        createdAt: anchorNow, updatedAt: anchorNow, theatreDepot: theatreDepot
     )
 }
 
@@ -80,7 +88,7 @@ struct SalvageRunHubAnchorTests {
     @Test("a row with no roam centre anchors on the hub's system")
     func theAnchorIsTheHubsSystem() {
         let action = SalvageRun().nextAction(
-            directive: anchorDirective(), world: anchorWorld(hub: "SOL-3-1")
+            directive: anchorDirective(theatreDepot: "SOL-3-1"), world: anchorWorld(hub: "SOL-3-1")
         )
         #expect(action == .extendQueue(centre: "SOL"))
     }
@@ -103,9 +111,12 @@ struct SalvageRunHubAnchorTests {
         var devices = world.devices
         devices["V1"] = anchorDevice("V1", type: "heaven_vessel", location: "ALPAHARD-7")
         world = WorldSnapshot(
-            devices: devices, openOperations: [:], footprints: world.footprints, now: anchorNow
+            devices: devices, openOperations: [:], footprints: world.footprints,
+            theatres: world.theatres, now: anchorNow
         )
-        let action = SalvageRun().nextAction(directive: anchorDirective(), world: world)
+        let action = SalvageRun().nextAction(
+            directive: anchorDirective(theatreDepot: "SOL-3-1"), world: world
+        )
         #expect(action == .extendQueue(centre: "ALPAHARD"))
     }
 }

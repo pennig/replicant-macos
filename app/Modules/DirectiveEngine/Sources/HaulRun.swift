@@ -113,10 +113,10 @@ public struct HaulRun: MissionStepMachine {
         directive.fleetTag ?? defaultFleetTag
     }
 
-    /// Where this run delivers: the recognised hub, or `deliveryLocation` when
-    /// no hub is on the mesh. One recognition rule, shared with `RelayRun`.
-    public static func deliverySink(in world: WorldSnapshot) -> String {
-        RelayRun.hubLocation(in: world) ?? deliveryLocation
+    /// Where `directive` delivers: its own theatre's depot, or `deliveryLocation`
+    /// when the row is unstamped or its theatre is non-operational.
+    public static func deliverySink(in world: WorldSnapshot, for directive: Directive) -> String {
+        RelayRun.theatreDepot(in: world, for: directive) ?? deliveryLocation
     }
 
     /// The stockpile `controller` is draining, or nil when it runs no config
@@ -144,7 +144,7 @@ public struct HaulRun: MissionStepMachine {
             footprints: world.footprints.mapValues(\.resources),
             components: world.components,
             positions: world.starPositions,
-            delivery: deliverySink(in: world)
+            delivery: deliverySink(in: world, for: directive)
         )
     }
 
@@ -164,13 +164,15 @@ public struct HaulRun: MissionStepMachine {
     /// Whether `world` already reports `assignment` in force on its controller.
     /// Read off the controller's own `ami_directive` block, so the run needs no
     /// column to remember assignments. `confirm` needs the looser check instead.
-    static func isInForce(_ assignment: HaulTargetPlanner.Assignment, in world: WorldSnapshot) -> Bool {
+    static func isInForce(
+        _ assignment: HaulTargetPlanner.Assignment, in world: WorldSnapshot, for directive: Directive
+    ) -> Bool {
         guard let controller = world.device(assignment.controllerCode),
               controller.currentDirective == assignment.directive,
               let config = controller.currentDirectiveConfig
         else { return false }
         return config["collect"]?.stringValue == assignment.location
-            && config["deliver"]?.stringValue == deliverySink(in: world)
+            && config["deliver"]?.stringValue == deliverySink(in: world, for: directive)
     }
 
     /// Whether `controller` runs ANY config this run could have issued, whichever
@@ -261,7 +263,7 @@ public struct HaulRun: MissionStepMachine {
     private func assign(_ directive: Directive, _ world: WorldSnapshot) -> MissionAction {
         if let pinned = Self.pinnedSource(of: directive) {
             let assignment = Self.pinnedAssignment(directive, at: pinned)
-            if Self.isInForce(assignment, in: world) {
+            if Self.isInForce(assignment, in: world, for: directive) {
                 return .advanceStep(nextStep: Step.hauling)
             }
             return .assignController(deviceCode: assignment.controllerCode, nextStep: Step.dispatching)
@@ -273,7 +275,7 @@ public struct HaulRun: MissionStepMachine {
             return .refreshFleet(tag: tag, thenStall: .noHaulControllerTagged)
         }
         let assignments = Self.plans(directive, world)
-        guard let pending = assignments.first(where: { !Self.isInForce($0, in: world) }) else {
+        guard let pending = assignments.first(where: { !Self.isInForce($0, in: world, for: directive) }) else {
             // Never `.done`: the Salvage Run keeps making new piles under this one,
             // so an empty frontier is a lull.
             return .advanceStep(nextStep: Step.hauling)
@@ -303,7 +305,7 @@ public struct HaulRun: MissionStepMachine {
             // Census moved since `assign` ran; let it re-plan.
             return .advanceStep(nextStep: Step.assigning)
         }
-        if Self.isInForce(pending, in: world) {
+        if Self.isInForce(pending, in: world, for: directive) {
             return .advanceStep(nextStep: Step.assigning)
         }
         guard Self.dispatchAttemptCount(directive, world, controllerCode: controllerCode) <= Self.dispatchAttemptLimit else {
@@ -316,7 +318,7 @@ public struct HaulRun: MissionStepMachine {
             deviceCode: pending.controllerCode,
             params: CommandParams(directive: pending.directive, configuration: [
                 "collect": .string(pending.location),
-                "deliver": .string(Self.deliverySink(in: world)),
+                "deliver": .string(Self.deliverySink(in: world, for: directive)),
             ]),
             nextStep: Step.confirming
         )
@@ -349,7 +351,7 @@ public struct HaulRun: MissionStepMachine {
             }
             return .wait
         }
-        if Self.hasTakenSomeHaulConfig(controller, delivery: Self.deliverySink(in: world)) {
+        if Self.hasTakenSomeHaulConfig(controller, delivery: Self.deliverySink(in: world, for: directive)) {
             return .advanceStep(nextStep: Step.assigning)
         }
         if world.now.timeIntervalSince(directive.stepStartedAt) < Self.confirmDeadline {

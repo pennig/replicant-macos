@@ -246,6 +246,18 @@ private let hubRelay = mineRow(
     "RLY2", type: "ftl_relay", location: hubLocation, status: "relaying", features: ["relay"]
 )
 
+/// Theatres derived the same way `WorldSnapshot.read` does — off `devices` and
+/// `footprints` alone, each meshed system its own component — so a fixture
+/// stocking a printer resolves a theatre exactly as production would.
+private func theatres(devices: [Device], footprints: [String: LocationFootprint]) -> [Theatre] {
+    let mesh = SalvageTargetPlanner.meshSystems(in: devices)
+    let components = Dictionary(uniqueKeysWithValues: mesh.map { ($0, $0) })
+    return TheatreRegistry.recognise(
+        devices: devices, pins: [], meshSystems: mesh,
+        components: components, stockByLocation: footprints.mapValues(\.resources)
+    )
+}
+
 private func world(
     devices: [Device],
     openOperations: [String: GameModels.Operation] = [:],
@@ -253,26 +265,31 @@ private func world(
     dispatchedOperations: [String: GameModels.Operation] = [:],
     footprints: [LocationFootprint] = []
 ) -> WorldSnapshot {
-    WorldSnapshot(
+    let footprintsByLocation = Dictionary(footprints.map { ($0.location, $0) }, uniquingKeysWith: { _, last in last })
+    return WorldSnapshot(
         devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
         openOperations: openOperations, log: log, dispatchedOperations: dispatchedOperations,
-        footprints: Dictionary(footprints.map { ($0.location, $0) }, uniquingKeysWith: { _, last in last }),
+        footprints: footprintsByLocation,
+        theatres: theatres(devices: devices, footprints: footprintsByLocation),
         now: now
     )
 }
 
+/// `theatreDepot` defaults to the file's canonical hub so a fixture that
+/// recognises one there resolves it without every call site stamping it.
 private func mineRunRow(
     step: String = MineRun.Step.preflight,
     targets: [String] = [targetBelt],
     stepStartedAt: Date = now.addingTimeInterval(-60),
-    deviceCode: String = carrierCode
+    deviceCode: String = carrierCode,
+    theatreDepot: String? = hubLocation
 ) -> Directive {
     Directive(
         id: "D1", kind: .mineRun, status: .running, deviceCode: deviceCode,
         controllerCode: nil, roamCentre: nil, fleetTag: MineRecipe.fleetTag, sourceRelayCode: nil,
         targets: targets, targetIndex: 0, step: step, stepStartedAt: stepStartedAt,
         returnToOrigin: false, originDesignation: nil, attentionReason: nil,
-        createdAt: now.addingTimeInterval(-600), updatedAt: now
+        createdAt: now.addingTimeInterval(-600), updatedAt: now, theatreDepot: theatreDepot
     )
 }
 
@@ -423,8 +440,9 @@ struct MineRunTests {
             )]
         )
 
-        #expect(RelayRun.hubLocation(in: snapshot) == targetBelt)
-        #expect(MineRun().nextAction(directive: mineRunRow(), world: snapshot)
+        let row = mineRunRow(theatreDepot: targetBelt)
+        #expect(RelayRun.theatreDepot(in: snapshot, for: row) == targetBelt)
+        #expect(MineRun().nextAction(directive: row, world: snapshot)
                 == .stall(.unreachableDevice))
     }
 
@@ -965,7 +983,7 @@ struct MineRunTests {
             )]
         )
 
-        #expect(HaulRun.deliverySink(in: snapshot) == hubLocation)
+        #expect(HaulRun.deliverySink(in: snapshot, for: mineRunRow()) == hubLocation)
         #expect(MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.arming), world: snapshot)
                 == .done)
     }

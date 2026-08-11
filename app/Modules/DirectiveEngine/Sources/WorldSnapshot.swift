@@ -78,6 +78,9 @@ public struct WorldSnapshot: Equatable, Sendable {
     /// System → mesh-component label (`MeshGraph.components(of:)`), so a haul
     /// candidate is filtered to the delivering theatre's own component.
     public let components: [String: String]
+    /// Every recognised theatre, mirroring `WorldView.theatres` — the same
+    /// `TheatreRegistry` call, so the two views cannot disagree.
+    public let theatres: [Theatre]
     /// The other in-force directives, INCLUDING this one — the rows a mission
     /// needs to see to know what its siblings already own.
     ///
@@ -121,6 +124,7 @@ public struct WorldSnapshot: Equatable, Sendable {
         footprints: [String: LocationFootprint] = [:],
         starPositions: [String: Position] = [:],
         components: [String: String] = [:],
+        theatres: [Theatre] = [],
         peers: [Directive] = [],
         now: Date
     ) {
@@ -134,6 +138,7 @@ public struct WorldSnapshot: Equatable, Sendable {
         self.footprints = footprints
         self.starPositions = starPositions
         self.components = components
+        self.theatres = theatres
         self.peers = peers
         self.now = now
     }
@@ -146,6 +151,14 @@ public struct WorldSnapshot: Equatable, Sendable {
     /// out of `wanted` scope or failed to decode — the two are indistinguishable
     /// here, and both mean "this mission cannot prove anything about it".
     public func system(_ designation: String) -> StarSystem? { systems[designation] }
+
+    /// The depot of the theatre `directive` serves, resolved off its own row —
+    /// nil when the row is unstamped or names a non-operational depot. Never
+    /// falls back to another theatre.
+    public func theatreDepot(for directive: Directive) -> String? {
+        guard let depot = directive.theatreDepot else { return nil }
+        return theatres.first { $0.depot == depot && $0.isOperational }?.depot
+    }
 
     /// One consistent read of everything a mission reasons over, taken from
     /// `database` at the instant `now` and scoped to `directive` — its targets,
@@ -237,6 +250,14 @@ public struct WorldSnapshot: Equatable, Sendable {
             let mesh = SalvageTargetPlanner.meshSystems(in: devices)
             let components = MeshGraph(positions: starPositions).components(of: mesh)
 
+            // Same `TheatreRegistry` call `WorldView.read` makes — two lists
+            // of theatres in one process would be a real hazard.
+            let pins = try TheatrePin.all.fetchAll(db)
+            let theatres = TheatreRegistry.recognise(
+                devices: devices, pins: pins, meshSystems: mesh,
+                components: components, stockByLocation: footprints.mapValues(\.resources)
+            )
+
             return WorldSnapshot(
                 devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
                 openOperations: Dictionary(operations.map { ($0.entityCode, $0) }, uniquingKeysWith: { _, last in last }),
@@ -248,6 +269,7 @@ public struct WorldSnapshot: Equatable, Sendable {
                 footprints: footprints,
                 starPositions: starPositions,
                 components: components,
+                theatres: theatres,
                 peers: peers,
                 now: now
             )

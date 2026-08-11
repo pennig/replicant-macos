@@ -901,7 +901,7 @@ public struct RelayRun: MissionStepMachine {
     /// an exact match. No hub to fly to is `.done`, not a stall — the relay is
     /// planted and the deliverable is met.
     private func returnHome(_ directive: Directive, _ carrier: Device, _ world: WorldSnapshot) -> MissionAction {
-        guard let hub = Self.hubLocation(in: world) else {
+        guard let hub = Self.theatreDepot(in: world, for: directive) else {
             logger.notice("relay run \(directive.id, privacy: .public): no hub to return to — leaving the carrier where it stands")
             return .done
         }
@@ -915,19 +915,10 @@ public struct RelayRun: MissionStepMachine {
         )
     }
 
-    /// The hub as the BRAIN recognises it, read off `world`, a mission's own
-    /// snapshot.
-    ///
-    /// One rule, two callers: `WorldView.hubLocation` is the definition (a
-    /// print-capable device at a meshed location the census shows holding
-    /// resources), and this adapts a `WorldSnapshot` to it. A second copy of the
-    /// rule here is exactly how the return leg would drift from the launch site.
-    static func hubLocation(in world: WorldSnapshot) -> String? {
-        let devices = Array(world.devices.values)
-        return WorldView.hubLocation(
-            in: devices,
-            meshSystems: SalvageTargetPlanner.meshSystems(in: devices),
-            stockByLocation: world.footprints.mapValues(\.resources)
-        )
+    /// The depot of the theatre `directive` serves, resolved off its own row
+    /// through `world` — never a second recognition rule, or the return leg
+    /// could drift from the theatre that launched it.
+    static func theatreDepot(in world: WorldSnapshot, for directive: Directive) -> String? {
+        world.theatreDepot(for: directive)
     }
 }

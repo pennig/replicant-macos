@@ -97,16 +97,31 @@ private func healthyCensus(fetchedAt: Date = now) -> [String: LocationFootprint]
     census(BrainCeiling.aggregateSpendFloor * 2, fetchedAt: fetchedAt)
 }
 
+/// Theatres derived the same way `WorldSnapshot.read` does — off `devices` and
+/// `footprints` alone, each meshed system its own component — so a fixture
+/// stocking a printer resolves a theatre exactly as production would.
+private func theatres(devices: [Device], footprints: [String: LocationFootprint]) -> [Theatre] {
+    let mesh = SalvageTargetPlanner.meshSystems(in: devices)
+    let components = Dictionary(uniqueKeysWithValues: mesh.map { ($0, $0) })
+    return TheatreRegistry.recognise(
+        devices: devices, pins: [], meshSystems: mesh,
+        components: components, stockByLocation: footprints.mapValues(\.resources)
+    )
+}
+
 private func world(
     devices: [Device],
     openOperations: [String: GameModels.Operation] = [:],
     footprints: [String: LocationFootprint]? = nil,
     at instant: Date = now
 ) -> WorldSnapshot {
-    WorldSnapshot(
+    let resolvedFootprints = footprints ?? healthyCensus()
+    return WorldSnapshot(
         devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
         openOperations: openOperations, log: [], dispatchedOperations: [:],
-        systems: [:], siteAssays: [:], footprints: footprints ?? healthyCensus(), peers: [], now: instant
+        systems: [:], siteAssays: [:], footprints: resolvedFootprints,
+        theatres: theatres(devices: devices, footprints: resolvedFootprints),
+        peers: [], now: instant
     )
 }
 
@@ -117,19 +132,22 @@ private func openOp(_ entity: String, kind: OperationKind) -> [String: GameModel
     )]
 }
 
+/// `theatreDepot` defaults to the file's canonical hub so a fixture that
+/// recognises one there resolves it without every call site stamping it.
 private func relayRun(
     step: String,
     carrier code: String = "V1",
     returnToOrigin: Bool,
     target: String = "VEGA",
-    stepStartedAt: Date = Date(timeIntervalSince1970: 9_900)
+    stepStartedAt: Date = Date(timeIntervalSince1970: 9_900),
+    theatreDepot: String? = hubLocation
 ) -> Directive {
     Directive(
         id: "D1", kind: .relayRun, status: .running, deviceCode: code,
         controllerCode: nil, roamCentre: nil, fleetTag: nil, sourceRelayCode: nil,
         targets: [target], targetIndex: 0, step: step, stepStartedAt: stepStartedAt,
         returnToOrigin: returnToOrigin, originDesignation: hubSystem, attentionReason: nil,
-        createdAt: Date(timeIntervalSince1970: 9_000), updatedAt: now
+        createdAt: Date(timeIntervalSince1970: 9_000), updatedAt: now, theatreDepot: theatreDepot
     )
 }
 
@@ -137,14 +155,15 @@ private func restockRun(
     step: String = RestockRun.Step.stocking,
     hub code: String = "AF1",
     targets: [String],
-    stepStartedAt: Date = Date(timeIntervalSince1970: 9_900)
+    stepStartedAt: Date = Date(timeIntervalSince1970: 9_900),
+    theatreDepot: String? = hubLocation
 ) -> Directive {
     Directive(
         id: "R1", kind: .restockRun, status: .running, deviceCode: code,
         controllerCode: nil, roamCentre: nil, fleetTag: nil, sourceRelayCode: nil,
         targets: targets, targetIndex: 0, step: step, stepStartedAt: stepStartedAt,
         returnToOrigin: false, originDesignation: hubSystem, attentionReason: nil,
-        createdAt: Date(timeIntervalSince1970: 9_000), updatedAt: now
+        createdAt: Date(timeIntervalSince1970: 9_000), updatedAt: now, theatreDepot: theatreDepot
     )
 }
 
@@ -258,36 +277,42 @@ struct RelayRunReturnLegTests {
     }
 }
 
-// MARK: - The hub seam
+// MARK: - The theatre seam
 
-@Suite("Hub recognition — one rule, both callers")
+@Suite("Theatre resolution — one rule, every reader")
 struct HubRecognitionSeamTests {
 
-    /// The brain launches from `WorldView.hubLocation` and the return leg flies
-    /// to `RelayRun.hubLocation`. **If those two ever disagree, a run flies
-    /// "home" to somewhere the next launch will not look**, and the fleet stalls
-    /// with a carrier parked one location away from the printer. So the second
-    /// is an adapter over the first rather than a second copy of the rule, and
-    /// this pins that they answer identically on the same world.
-    @Test("the mission's view of the hub is the brain's view of the hub", arguments: [
+    /// The mission reads a `WorldSnapshot`; the brain reads a `WorldView`. Both
+    /// carry theatres from the same `TheatreRegistry` call, so for EVERY
+    /// directive the two must name the same depot — a disagreement flies a
+    /// carrier to a place the next launch will not look.
+    @Test("for each directive, the mission's resolver and the brain's name the same depot", arguments: [
         ("a stocked printer in a meshed system", BrainCeiling.aggregateSpendFloor * 2, hubLocation, String?.some(hubLocation)),
         ("a printer whose location holds nothing", 0, hubLocation, String?.none),
         ("a printer in an unmeshed system", BrainCeiling.aggregateSpendFloor * 2, "ELSEWHERE-BELT-1", String?.none),
     ])
-    func bothCallersAgree(_ label: String, stock: Int, printerAt: String, expected: String?) {
+    func bothReadersAgree(_ label: String, stock: Int, printerAt: String, expected: String?) {
         let devices = [
             hub(location: printerAt),
             liveRelay("REL0", at: hubLocation),
             carrier(location: hubLocation),
         ]
-        let snapshot = world(devices: devices, footprints: census(stock, at: printerAt))
-
-        let fromMission = RelayRun.hubLocation(in: snapshot)
-        let fromBrain = WorldView.hubLocation(
-            in: devices,
-            meshSystems: SalvageTargetPlanner.meshSystems(in: devices),
-            stockByLocation: snapshot.footprints.mapValues(\.resources)
+        let footprints = census(stock, at: printerAt)
+        let recognised = theatres(devices: devices, footprints: footprints)
+        let deviceMap = Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last })
+        let snapshot = WorldSnapshot(
+            devices: deviceMap, openOperations: [:], footprints: footprints,
+            theatres: recognised, now: now
         )
+        let view = WorldView(
+            devices: deviceMap, starPositions: [:],
+            meshSystems: SalvageTargetPlanner.meshSystems(in: devices),
+            salvageUnits: [:], eventSystems: [], hubLocation: nil, theatres: recognised, now: now
+        )
+        let directive = relayRun(step: RelayRun.Step.returning, returnToOrigin: true, theatreDepot: printerAt)
+
+        let fromMission = RelayRun.theatreDepot(in: snapshot, for: directive)
+        let fromBrain = view.theatres.first { $0.depot == directive.theatreDepot && $0.isOperational }?.depot
 
         #expect(fromMission == expected, "\(label): the mission's answer")
         #expect(fromMission == fromBrain, "\(label): and it is the brain's answer")

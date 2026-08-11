@@ -213,10 +213,11 @@ public struct SalvageRun: MissionStepMachine {
         device.location.map { SiteAssay.system(of: $0) }
     }
 
-    /// The hub's SYSTEM. `RelayRun.hubLocation` names a LOCATION, and a location
-    /// in a roam-centre slot aims the census read at a site rather than a star.
-    static func hubSystem(in world: WorldSnapshot) -> String? {
-        RelayRun.hubLocation(in: world).map { SiteAssay.system(of: $0) }
+    /// `directive`'s theatre depot's SYSTEM. `RelayRun.theatreDepot` names a
+    /// LOCATION, and a location in a roam-centre slot aims the census read at
+    /// a site rather than a star.
+    static func hubSystem(in world: WorldSnapshot, for directive: Directive) -> String? {
+        RelayRun.theatreDepot(in: world, for: directive).map { SiteAssay.system(of: $0) }
     }
 
     /// Whether `controller` is actually working `gather_salvage`. The name alone
@@ -290,7 +291,7 @@ public struct SalvageRun: MissionStepMachine {
         guard directive.currentTarget != nil else {
             let centre = directive.roamCentre
                 ?? Self.system(of: vessel)
-                ?? Self.hubSystem(in: world)
+                ?? Self.hubSystem(in: world, for: directive)
                 ?? Self.baseSystem
             return .extendQueue(centre: centre)
         }

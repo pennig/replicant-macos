@@ -181,84 +181,92 @@ struct Brain: Sendable {
         )
     }
 
-    /// Keep exactly one restock run alive at the hub, writing `plan`'s ranked
-    /// first hops minus anything in flight onto its `targets`. The brain writes
-    /// the DEMAND, the run does the printing. **Never hosted on a carrier** — a
-    /// persistent directive reserves its device, which would park that vessel out
-    /// of the fleet forever and no grow could launch.
+    /// Keep exactly one restock run alive per operational theatre, writing
+    /// `plan`'s ranked hops nearest to it onto its `targets`. The brain writes
+    /// the DEMAND — **never hosted on a carrier**, which this would reserve permanently.
     private func tendRestock(
         plan: Plan, snapshot: Snapshot, decision: BrainDecision, database: any DatabaseWriter
     ) async {
         guard !Task.isCancelled else { return }
-        guard let host = Self.restockHost(in: snapshot.view) else { return }
-
-        // Targets the brain still wants meshed and nothing is already flying to.
+        let view = snapshot.view
         let inFlight = Self.inFlightTargets(snapshot.directives)
-        let demand = plan.ranked.map(\.firstHop).filter { !inFlight.contains($0) }
-
-        let existing = snapshot.directives.first {
-            $0.kind == .restockRun && Self.owningStatuses.contains($0.status)
-        }
-        // No targets, nothing to print FOR, so no run is created. An existing
-        // one is left alone rather than cancelled: demand comes and goes as
-        // systems mesh, and a row that deleted itself every quiet tick would
-        // churn the list and lose its timeline.
-        guard existing != nil || !demand.isEmpty else { return }
-        // One action per tick, the discipline `plan` and `respondToStalls` keep.
-        // Creating this row is an action, so a tick that has just committed a
-        // launch does not also take it; the next tick creates restock against a
-        // ledger that contains the launch. Updating an EXISTING row's demand
-        // below is bookkeeping, not an action, and is not deferred.
-        if existing == nil, case .dispatch = decision { return }
-        if let existing {
-            // Only write when the list actually moved — a row rewritten every
-            // tick would churn the timeline and every `@FetchAll` observing it.
-            guard existing.targets != demand else { return }
-            do {
-                try await database.write { db in
-                    guard var row = try Directive.where({ $0.id.eq(existing.id) }).fetchOne(db) else { return }
-                    row.targets = demand
-                    row.updatedAt = self.now
-                    try Directive.upsert { row }.execute(db)
-                }
-            } catch {
-                logger.error("restock demand update failed: \(error)")
-            }
-            return
-        }
 
         @Dependency(\.uuid) var uuid
-        let directive = Directive(
-            id: uuid().uuidString,
-            kind: .restockRun,
-            status: .running,
-            deviceCode: host.deviceCode,
-            controllerCode: nil, roamCentre: nil, fleetTag: nil, sourceRelayCode: nil,
-            targets: demand, targetIndex: 0,
-            step: RestockRun().firstStep,
-            stepStartedAt: now,
-            returnToOrigin: false,
-            originDesignation: host.location.map { SiteAssay.system(of: $0) },
-            attentionReason: nil,
-            createdAt: now, updatedAt: now
-        )
-        do {
-            try await database.write { db in
-                // Re-check inside the transaction: the read and the write are
-                // separate steps, so a restock created by the previous tick
-                // could have landed in between.
-                let live = try Directive
-                    .where { $0.kind.eq(DirectiveKind.restockRun) }
-                    .fetchAll(db)
-                    .contains { Self.owningStatuses.contains($0.status) }
-                guard !live else { return }
-                try Directive.insert { directive }.execute(db)
-                logger.info(
-                    "restock \(directive.id, privacy: .public) launched on \(host.deviceCode, privacy: .public)"
-                )
+        for theatre in view.theatres.filter(\.isOperational) {
+            guard let host = Self.restockHost(in: view, theatre: theatre) else { continue }
+
+            // Wanted-meshed, not in flight, nearest to THIS theatre — OUTWARD,
+            // since an unmeshed hop shares no `servicing` component with anything.
+            let demand = plan.ranked
+                .map(\.firstHop)
+                .filter { !inFlight.contains($0) && view.theatre(nearest: $0)?.depot == theatre.depot }
+
+            let existing = snapshot.directives.first {
+                $0.kind == .restockRun && Self.owningStatuses.contains($0.status)
+                    && $0.theatreDepot == theatre.depot
             }
-        } catch {
-            logger.error("restock launch failed: \(error)")
+            // No targets, nothing to print FOR, so no run is created. An existing
+            // one is left alone rather than cancelled: demand comes and goes as
+            // systems mesh, and a row that deleted itself every quiet tick would
+            // churn the list and lose its timeline.
+            guard existing != nil || !demand.isEmpty else { continue }
+            // One launch per tick per theatre — a tick that just committed a
+            // grow launch does not also launch a restock here.
+            if existing == nil, case .dispatch = decision { continue }
+            if let existing {
+                // Only write when the list actually moved — a row rewritten
+                // every tick would churn the timeline and every `@FetchAll`
+                // observing it.
+                guard existing.targets != demand else { continue }
+                do {
+                    try await database.write { db in
+                        guard var row = try Directive.where({ $0.id.eq(existing.id) }).fetchOne(db) else { return }
+                        row.targets = demand
+                        row.updatedAt = self.now
+                        try Directive.upsert { row }.execute(db)
+                    }
+                } catch {
+                    logger.error("restock demand update failed: \(error)")
+                }
+                continue
+            }
+
+            let directive = Directive(
+                id: uuid().uuidString,
+                kind: .restockRun,
+                status: .running,
+                deviceCode: host.deviceCode,
+                controllerCode: nil, roamCentre: nil, fleetTag: nil, sourceRelayCode: nil,
+                targets: demand, targetIndex: 0,
+                step: RestockRun().firstStep,
+                stepStartedAt: now,
+                returnToOrigin: false,
+                originDesignation: host.location.map { SiteAssay.system(of: $0) },
+                attentionReason: nil,
+                createdAt: now, updatedAt: now,
+                theatreDepot: theatre.depot
+            )
+            do {
+                try await database.write { db in
+                    // Re-check inside the transaction: the read and the write
+                    // are separate steps, so a restock created by the previous
+                    // tick could have landed in between.
+                    let live = try Directive
+                        .where { $0.kind.eq(DirectiveKind.restockRun) }
+                        .fetchAll(db)
+                        .contains { Self.owningStatuses.contains($0.status) && $0.theatreDepot == theatre.depot }
+                    guard !live else { return }
+                    try Directive.insert { directive }.execute(db)
+                    logger.info(
+                        """
+                        restock \(directive.id, privacy: .public) launched on \
+                        \(host.deviceCode, privacy: .public) for \(theatre.depot, privacy: .public)
+                        """
+                    )
+                }
+            } catch {
+                logger.error("restock launch failed: \(error)")
+            }
         }
     }
 
@@ -493,12 +501,11 @@ struct Brain: Sendable {
     }
 
     /// The device a restock run may be hosted on: the lowest-coded print-capable
-    /// device at `view`'s hub that is NOT a carrier hull. Hosting it on a carrier
-    /// would reserve that vessel out of the fleet permanently.
-    static func restockHost(in view: WorldView) -> Device? {
-        guard let hub = view.hubLocation else { return nil }
-        return view.devices.values
-            .filter { $0.isPrintHub && $0.location == hub && !$0.isCarrierHull }
+    /// device at `theatre`'s depot that is NOT a carrier hull. Hosting it on a
+    /// carrier would reserve that vessel out of the fleet permanently.
+    static func restockHost(in view: WorldView, theatre: Theatre) -> Device? {
+        view.devices.values
+            .filter { $0.isPrintHub && $0.location == theatre.depot && !$0.isCarrierHull }
             .min { $0.deviceCode < $1.deviceCode }
     }
 
