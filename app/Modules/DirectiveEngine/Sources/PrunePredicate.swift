@@ -44,7 +44,7 @@ public struct ReclaimableRelay: Equatable, Sendable {
 /// the FACT that caused them, never a bare flag, because every prune statement an
 /// operator sees is meant to be checkable against the map.
 public enum PruneDeclineReason: Equatable, Sendable {
-    /// No print hub, or its system is off-mesh — nothing to root the paths at.
+    /// No operational theatre — nothing to root any component's union at.
     case noAnchor
     /// The census cannot place systems the judgement depends on, named sorted.
     case censusIncomplete(systems: [String])
@@ -96,13 +96,10 @@ public enum PrunePredicate {
             )
         }
 
-        // No anchor to root the union at: nothing can be judged useless, so
-        // nothing is. An unrooted search returns an empty union, which reads
-        // as "reclaim the entire mesh" — the exact failure this capability
-        // must not have.
-        guard let anchor = view.hubLocation.map({ SiteAssay.system(of: $0) }) else {
-            return decline(.noAnchor)
-        }
+        // No theatre anywhere: nothing can root a union, so nothing is judged
+        // useless — an unrooted search would read as "reclaim the entire mesh".
+        let anchors = view.theatres.filter(\.isOperational)
+        guard !anchors.isEmpty else { return decline(.noAnchor) }
 
         // CENSUS-COVERAGE PRECONDITION, global rather than per-relay: the hole
         // breaks the union DOWNSTREAM too, so a per-relay check would save the
@@ -113,18 +110,38 @@ public enum PrunePredicate {
         // Asked of `graph.canPlace`, never `view.starPositions`: the search reads
         // the graph's own positions, so a filtered graph must DECLINE.
         let targets = servedSystems(in: view)
+        let anchorSystems = Set(anchors.map(\.system))
         let mustBePlaceable = view.meshSystems
             .union(relays.compactMap { $0.location.map { SiteAssay.system(of: $0) } })
-            .union([anchor])
+            .union(anchorSystems)
             .union(targets)
         let unplaceable = mustBePlaceable.filter { !graph.canPlace($0) }.sorted()
         guard unplaceable.isEmpty else { return decline(.censusIncomplete(systems: unplaceable)) }
 
-        var union = graph.pathUnion(to: targets, from: [anchor], free: view.meshSystems)
-        // Already in the union whenever any target is reachable; inserting it
-        // unconditionally covers the no-live-value-anywhere case, where an empty
-        // union would offer up the relay linking the mesh to its own replicant.
-        union.insert(anchor)
+        // One union PER COMPONENT, rooted at that component's own theatres and
+        // judged only against its own targets. Separate per-anchor searches
+        // unioned together only ever ADD pinned systems — the safe direction.
+        var unionByComponent: [String: Set<String>] = [:]
+        for anchor in anchors {
+            guard let component = view.components[anchor.system] else { continue }
+            // A target's component is nil when it is not yet meshed — keep it
+            // as a candidate rather than dropping it; only a target KNOWN to
+            // belong elsewhere is excluded.
+            let localTargets = targets.filter {
+                view.components[$0] == nil || view.components[$0] == component
+            }
+            var union = graph.pathUnion(to: localTargets, from: [anchor.system], free: view.meshSystems)
+            union.insert(anchor.system)
+            unionByComponent[component, default: []].formUnion(union)
+        }
+
+        // An unanchored component is unjudged, and unjudged is pinned, ONLY
+        // while it holds something worth protecting — nothing to protect
+        // means nothing for that caution to be conservative about.
+        let anchoredComponents = Set(unionByComponent.keys)
+        let unanchoredComponentsWithValue = Set(view.components.values)
+            .subtracting(anchoredComponents)
+            .filter { component in targets.contains { view.components[$0] == component } }
 
         var pinned: Set<String> = []
         var reclaimable: [ReclaimableRelay] = []
@@ -136,7 +153,19 @@ public enum PrunePredicate {
                 pinned.insert(relay.deviceCode)
                 continue
             }
-            if union.contains(system) {
+            guard let component = view.components[system] else {
+                pinned.insert(relay.deviceCode)
+                continue
+            }
+            if let union = unionByComponent[component] {
+                if union.contains(system) {
+                    pinned.insert(relay.deviceCode)
+                } else {
+                    reclaimable.append(
+                        ReclaimableRelay(deviceCode: relay.deviceCode, system: system)
+                    )
+                }
+            } else if unanchoredComponentsWithValue.contains(component) {
                 pinned.insert(relay.deviceCode)
             } else {
                 reclaimable.append(
