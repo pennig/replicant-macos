@@ -47,9 +47,8 @@ public struct DirectivesListView: View {
                 .help("Launch a new mission")
             }
             ToolbarItem {
-                // The count is in the title rather than a bare "Clear": the
-                // number that leaves the list should be readable before the
-                // click, not after it.
+                // Count in title: the number leaving the list should be readable
+                // before the click, not after.
                 Button("Clear \(store.finishedCount) Finished", systemImage: "trash") {
                     store.send(.clearFinishedTapped)
                 }

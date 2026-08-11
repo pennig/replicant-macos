@@ -121,9 +121,9 @@ public struct DirectivesFeature {
         /// on its own, with no second piece of state to keep in step.
         public var isBrainSelected: Bool { selectedRowID == DirectivesFeature.brainSelectionID }
 
-        /// How many runs `clearFinished` would delete. Drives both the menu
-        /// item's label and whether it is offered at all, so the count the
-        /// operator reads is the count that goes.
+        /// How many finished runs will be cleared (marked for deletion). Drives
+        /// the menu item's label and gates whether it is offered. Rows persist
+        /// a month before removal.
         public var finishedCount: Int {
             directives.count { DirectiveResolutionClient.finishedStatuses.contains($0.status) }
         }
@@ -333,10 +333,8 @@ public struct DirectivesFeature {
                 return .none
 
             case .clearFinishedTapped:
-                // Drop a selection pointing at a row that is about to leave the
-                // list, so the detail pane cannot be left rendering a hidden
-                // run. Done here rather than after the write: `directives` is a
-                // live query, so the rows vanish the moment it commits.
+                // Drop a selection to a finishing run before the write: directives
+                // is a live query, so rows vanish the moment it commits.
                 if case let .custom(directive, _) = state.selectedRow,
                    DirectiveResolutionClient.finishedStatuses.contains(directive.status) {
                     state.selectedRowID = nil
