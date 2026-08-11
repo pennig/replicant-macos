@@ -44,9 +44,13 @@ public struct DirectivesFeature {
         @FetchAll(Device.order { $0.deviceCode }, animation: .default)
         public var devices: [Device]
 
-        /// Custom missions, newest first.
+        /// Custom missions the operator has not cleared, newest first. A
+        /// cleared run keeps its row and its timeline; it just leaves the list.
         @ObservationStateIgnored
-        @FetchAll(Directive.order { $0.createdAt.desc() }, animation: .default)
+        @FetchAll(
+            Directive.where { $0.deletedAt.is(nil) }.order { $0.createdAt.desc() },
+            animation: .default
+        )
         public var directives: [Directive]
 
         /// The selected row's timeline — a mission's steps, or a built-in
@@ -161,7 +165,7 @@ public struct DirectivesFeature {
         case cancelRunTapped
         case pauseTapped
         case resumeTapped
-        /// Delete every finished (`.completed`/`.cancelled`) run and its timeline.
+        /// Clear every finished (`.completed`/`.cancelled`) run from the list.
         case clearFinishedTapped
         /// Show the brain's full report in the detail pane.
         case brainTapped
@@ -329,10 +333,10 @@ public struct DirectivesFeature {
                 return .none
 
             case .clearFinishedTapped:
-                // Drop a selection pointing at a row that is about to go, so the
-                // detail pane cannot be left rendering a deleted run. Done here
-                // rather than after the write: `directives` is a live query, so
-                // the rows vanish from under the view the moment it commits.
+                // Drop a selection pointing at a row that is about to leave the
+                // list, so the detail pane cannot be left rendering a hidden
+                // run. Done here rather than after the write: `directives` is a
+                // live query, so the rows vanish the moment it commits.
                 if case let .custom(directive, _) = state.selectedRow,
                    DirectiveResolutionClient.finishedStatuses.contains(directive.status) {
                     state.selectedRowID = nil

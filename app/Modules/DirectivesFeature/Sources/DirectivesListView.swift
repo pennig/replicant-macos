@@ -47,15 +47,15 @@ public struct DirectivesListView: View {
                 .help("Launch a new mission")
             }
             ToolbarItem {
-                // The count is in the title rather than a bare "Clear": this
-                // deletes rows and their timelines for good, so the number that
-                // goes should be readable before the click, not after it.
+                // The count is in the title rather than a bare "Clear": the
+                // number that leaves the list should be readable before the
+                // click, not after it.
                 Button("Clear \(store.finishedCount) Finished", systemImage: "trash") {
                     store.send(.clearFinishedTapped)
                 }
                 .labelStyle(.iconOnly)
                 .disabled(store.finishedCount == 0)
-                .help("Delete completed and cancelled runs and their timelines")
+                .help("Clear completed and cancelled runs from the list — kept for a month, then removed")
             }
         }
         // Feature-tier sheets: @Presents + scope, never .sheet(isPresented:).

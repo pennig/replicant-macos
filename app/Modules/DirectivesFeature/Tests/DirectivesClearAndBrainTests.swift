@@ -192,9 +192,9 @@ struct DirectivesClearFinishedTests {
         #expect(store.state.finishedCount == 2)
     }
 
-    /// A selection pointing at a run that is about to be deleted must not
-    /// survive the clear — the detail pane would be left rendering a row that
-    /// no longer exists.
+    /// A selection pointing at a run that is about to leave the list must not
+    /// survive the clear — the detail pane would be left rendering a row the
+    /// list has already dropped.
     @Test func clearingDropsASelectionThatIsAboutToVanish() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in
@@ -329,6 +329,30 @@ struct DirectivesClearFinishedTests {
 
         let entries = try await database.read { db in try DirectiveLogEntry.all.fetchAll(db) }
         #expect(Set(entries.map(\.id)) == ["E-LIVE", "E-DEVICE"])
+    }
+
+    /// The list is the only surface that filters on the mark. The row is still
+    /// in the table — every engine query is status-scoped and still sees it.
+    @Test func theListHidesMarkedRunsButTheTableKeepsThem() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert {
+                Self.run("HIDDEN", .completed, deletedAt: Date(timeIntervalSince1970: 1))
+            }
+            .execute(db)
+            try Directive.insert { Self.run("SHOWN", .completed) }.execute(db)
+        }
+        let store = TestStore(initialState: DirectivesFeature.State()) {
+            DirectivesFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
+        }
+        store.exhaustivity = .off
+
+        #expect(store.state.directives.map(\.id) == ["SHOWN"])
+        #expect(store.state.finishedCount == 1)
+        let all = try await database.read { db in try Directive.all.fetchAll(db) }
+        #expect(all.count == 2)
     }
 }
 
