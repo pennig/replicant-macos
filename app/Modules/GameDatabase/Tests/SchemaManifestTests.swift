@@ -54,6 +54,8 @@ import Testing
         "Add 'claimedRelayCode' to 'directives'",
         "Add 'summaryJSON' to 'systemDetails'",
         "Backfill 'summaryJSON' on 'systemDetails'",
+        "Create 'haulYields' table",
+        "Add index on 'haulYields.controllerCode'",
     ]
 
     @Test func manifestMatchesTheFrozenList() {

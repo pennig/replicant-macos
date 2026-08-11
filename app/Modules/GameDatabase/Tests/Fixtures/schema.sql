@@ -7,6 +7,9 @@ CREATE INDEX "directive_log_by_directive"
 CREATE UNIQUE INDEX "directive_log_unique_event"
   ON "directiveLogEntries" ("eventID") WHERE "eventID" IS NOT NULL;
 
+CREATE INDEX "haul_yields_by_controller"
+  ON "haulYields" ("controllerCode");
+
 CREATE UNIQUE INDEX "operation_one_open_per_device"
   ON "operations" ("entityCode")
   WHERE "status" IN ('enqueued', 'active');
@@ -129,6 +132,22 @@ CREATE TABLE "ftlLinks" (
   "b" TEXT NOT NULL,
   "updatedAt" TEXT NOT NULL
 , "distanceLy" REAL, "rangeA" REAL, "rangeB" REAL) STRICT;
+
+CREATE TABLE "haulYields" (
+  "id" TEXT PRIMARY KEY NOT NULL,
+  "directiveID" TEXT NOT NULL DEFAULT '',
+  "controllerCode" TEXT NOT NULL DEFAULT '',
+  "deviceCode" TEXT NOT NULL DEFAULT '',
+  "sourceDesignation" TEXT NOT NULL DEFAULT '',
+  "collectedAt" TEXT NOT NULL,
+  "unitsCollected" INTEGER NOT NULL DEFAULT 0,
+  "perType" TEXT NOT NULL DEFAULT '{}',
+  "breakdownState" TEXT NOT NULL DEFAULT 'unavailable',
+  "destinationDesignation" TEXT,
+  "deliveredAt" TEXT,
+  "unitsDelivered" INTEGER,
+  "followsGap" INTEGER NOT NULL DEFAULT 0
+) STRICT;
 
 CREATE TABLE "knownReplicants" (
   "replicantCode" TEXT PRIMARY KEY NOT NULL,

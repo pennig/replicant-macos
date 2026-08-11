@@ -96,6 +96,28 @@ public extension ShapeStyle where Self == Color {
     static var rcStatusWaiting: Color { Color("StatusWaiting", bundle: rcBundle) }
     static var rcStatusOffline: Color { Color("StatusOffline", bundle: rcBundle) }
 
+    // Data-viz categorical slots, one per resource type — order fixed by
+    // `ResourceCost.displayOrder`; reordering breaks adjacent-pair separation.
+    static var rcResourceStructural: Color { Color("ResourceStructural", bundle: rcBundle) }
+    static var rcResourceConductive: Color { Color("ResourceConductive", bundle: rcBundle) }
+    static var rcResourceSilicates:  Color { Color("ResourceSilicates",  bundle: rcBundle) }
+    static var rcResourceCarbon:     Color { Color("ResourceCarbon",     bundle: rcBundle) }
+    static var rcResourceRares:      Color { Color("ResourceRares",      bundle: rcBundle) }
+    static var rcResourceVolatiles:  Color { Color("ResourceVolatiles",  bundle: rcBundle) }
+
+    /// The categorical slot for a resource key, muted ink for anything unknown.
+    static func rcResource(_ key: String) -> Color {
+        switch key {
+        case "structural": .rcResourceStructural
+        case "conductive": .rcResourceConductive
+        case "silicates":  .rcResourceSilicates
+        case "carbon":     .rcResourceCarbon
+        case "rares":      .rcResourceRares
+        case "volatiles":  .rcResourceVolatiles
+        default:           .rcTextTertiary
+        }
+    }
+
     // Special
     static var rcNPC:         Color { Color("NPCAccent",   bundle: rcBundle) }
     static var rcDanger:      Color { Color("Danger",      bundle: rcBundle) }
@@ -303,6 +325,14 @@ public enum RowGutter {
 /// by `DeviceRow`.
 public enum MarkerSize {
     public static let attentionDot: CGFloat = 6
+    public static let resourceSwatch: CGFloat = 8
+}
+
+/// Frame heights for `Charts` views — a chart's height is a size like any
+/// other, so it lives here rather than as an inlined `frame(minHeight:)`.
+public enum ChartSize {
+    public static let overTime: CGFloat = 200
+    public static let breakdown: CGFloat = 160
 }
 
 /// Shared motion curves. A disclosure gesture — a section collapsing, a host
