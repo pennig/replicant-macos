@@ -36,6 +36,10 @@ public enum MissionAction: Equatable, Sendable {
     /// the endpoint 403s for a system the census has never marked explored, and the
     /// engine swallows that — a stale cache only costs the machine one evaluation.
     case refreshSystem(designation: String, nextStep: String)
+    /// Scan `designation` through the replicant standing in it, persist the
+    /// result, then move to `nextStep`. The only source of a system's scan counts,
+    /// and best-effort: no replicant there, or a failed POST, just moves on.
+    case scanSystem(designation: String, nextStep: String)
     /// Re-read one body (`LocationsClient.hydrateBody`), persist it, then move to
     /// `nextStep`. Best-effort like `.refreshSystem` — and the only read that can
     /// observe a DELISTED salvage site, which the star-level payload never carries.

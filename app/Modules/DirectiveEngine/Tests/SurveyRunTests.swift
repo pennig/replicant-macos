@@ -803,6 +803,116 @@ struct SurveyRunCompletionTests {
     }
 }
 
+// MARK: - The system scan the counts depend on
+
+/// `planets_scanned`/`planets_total` reach `GET locations/{star}` only once the
+/// system itself has been scanned, and the survey drones never scan it — so a
+/// completed survey whose counts are ABSENT is a missing system scan, not a
+/// half-done survey, and the run buys the scan rather than stalling on it.
+@Suite("Survey Run — system scan")
+struct SurveyRunSystemScanTests {
+    /// The LAONROCK shape: the survey finished, the location payload carries no
+    /// counts at all, so the run goes and scans instead of stalling.
+    @Test func confirmingScansWhenTheCountsAreAbsent() {
+        let unscanned = StarSystem(designation: "TAU")
+        let directive = run(step: SurveyRun.Step.confirming, controllerCode: "AMI1")
+        let snapshot = world(
+            stagedFleet(vesselAt: "TAU-2"),
+            log: [completionEntry(at: Date(timeIntervalSince1970: 950))],
+            systems: ["TAU": unscanned], now: Date(timeIntervalSince1970: 1_000)
+        )
+        #expect(SurveyRun().nextAction(directive: directive, world: snapshot)
+                == .advanceStep(nextStep: SurveyRun.Step.scanning))
+    }
+
+    /// A system the catalogue holds nothing at all for is the same question.
+    @Test func confirmingScansWhenTheSystemIsUnknown() {
+        let directive = run(step: SurveyRun.Step.confirming, controllerCode: "AMI1")
+        let snapshot = world(
+            stagedFleet(vesselAt: "TAU-2"),
+            log: [completionEntry(at: Date(timeIntervalSince1970: 950))],
+            now: Date(timeIntervalSince1970: 1_000)
+        )
+        #expect(SurveyRun().nextAction(directive: directive, world: snapshot)
+                == .advanceStep(nextStep: SurveyRun.Step.scanning))
+    }
+
+    /// The scanning step itself asks the engine for the replicant scan.
+    @Test func scanningIssuesTheReplicantScan() {
+        let directive = run(step: SurveyRun.Step.scanning, controllerCode: "AMI1")
+        let snapshot = world(stagedFleet(vesselAt: "TAU-2"),
+                             now: Date(timeIntervalSince1970: 1_000))
+        #expect(SurveyRun().nextAction(directive: directive, world: snapshot)
+                == .scanSystem(designation: "TAU", nextStep: SurveyRun.Step.confirming))
+    }
+
+    /// A scan that keeps failing must not buy a POST every tick forever: once the
+    /// loop has spent its rounds, the run surfaces the incomplete survey.
+    @Test func confirmingStallsOnceTheScanBudgetIsSpent() {
+        let unscanned = StarSystem(designation: "TAU")
+        let directive = run(step: SurveyRun.Step.confirming, controllerCode: "AMI1")
+        var entries = [completionEntry(at: Date(timeIntervalSince1970: 950))]
+        for round in 0..<SurveyRun.scanRounds {
+            entries.append(scanLoopEntry(SurveyRun.Step.scanning, at: .init(timeIntervalSince1970: 960 + Double(round) * 2)))
+            entries.append(scanLoopEntry(SurveyRun.Step.confirming, at: .init(timeIntervalSince1970: 961 + Double(round) * 2)))
+        }
+        let snapshot = world(
+            stagedFleet(vesselAt: "TAU-2"), log: entries,
+            systems: ["TAU": unscanned], now: Date(timeIntervalSince1970: 1_000)
+        )
+        #expect(SurveyRun().nextAction(directive: directive, world: snapshot)
+                == .stall(.surveyIncomplete))
+    }
+
+    /// Retry writes a `.resolved` entry, which ends the run of the loop the budget
+    /// counts — so a human retry buys a fresh scan rather than re-stalling on the
+    /// spot, which is what the old `confirming` could never do.
+    @Test func retryReArmsTheScan() {
+        let unscanned = StarSystem(designation: "TAU")
+        let directive = run(step: SurveyRun.Step.confirming, controllerCode: "AMI1")
+        var entries = [completionEntry(at: Date(timeIntervalSince1970: 950))]
+        for round in 0..<SurveyRun.scanRounds {
+            entries.append(scanLoopEntry(SurveyRun.Step.scanning, at: .init(timeIntervalSince1970: 960 + Double(round) * 2)))
+            entries.append(scanLoopEntry(SurveyRun.Step.confirming, at: .init(timeIntervalSince1970: 961 + Double(round) * 2)))
+        }
+        entries.append(DirectiveLogEntry(
+            id: "LR", directiveID: "D1", deviceCode: nil, kind: .resolved,
+            summary: "Retried confirming", step: SurveyRun.Step.confirming,
+            operationID: nil, eventID: nil, occurredAt: Date(timeIntervalSince1970: 990)
+        ))
+        let snapshot = world(
+            stagedFleet(vesselAt: "TAU-2"), log: entries,
+            systems: ["TAU": unscanned], now: Date(timeIntervalSince1970: 1_000)
+        )
+        #expect(SurveyRun().nextAction(directive: directive, world: snapshot)
+                == .advanceStep(nextStep: SurveyRun.Step.scanning))
+    }
+
+    /// A system that HAS been scanned and is genuinely half-surveyed keeps the old
+    /// behaviour: counts that exist and disagree are a real contradiction, and no
+    /// amount of re-scanning changes them.
+    @Test func aScannedButPartialSystemStillStalls() {
+        let partial = StarSystem(
+            designation: "TAU", systemScanned: true, planetsScanned: 2, planetsTotal: 4)
+        let directive = run(step: SurveyRun.Step.confirming, controllerCode: "AMI1")
+        let snapshot = world(
+            stagedFleet(vesselAt: "TAU-2"),
+            log: [completionEntry(at: Date(timeIntervalSince1970: 950))],
+            systems: ["TAU": partial], now: Date(timeIntervalSince1970: 1_000)
+        )
+        #expect(SurveyRun().nextAction(directive: directive, world: snapshot)
+                == .stall(.surveyIncomplete))
+    }
+}
+
+private func scanLoopEntry(_ step: String, at occurredAt: Date) -> DirectiveLogEntry {
+    DirectiveLogEntry(
+        id: "LS-\(step)-\(occurredAt.timeIntervalSince1970)", directiveID: "D1",
+        deviceCode: nil, kind: .stepStarted, summary: "Step: \(step)", step: step,
+        operationID: nil, eventID: nil, occurredAt: occurredAt
+    )
+}
+
 // MARK: - Drone recovery
 
 /// The vessel must not leave until the recall has actually landed its drones.
