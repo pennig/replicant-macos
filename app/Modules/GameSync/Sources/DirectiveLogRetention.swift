@@ -14,9 +14,10 @@ import SQLiteData
 private let logger = Logger(subsystem: "name.pennig.replicould", category: "GameSync")
 
 enum DirectiveLogRetention {
-    /// How long a finished run's timeline stays browsable, matching
-    /// `OperationRetention.window` so the two ledgers age together.
-    static let window: TimeInterval = 7 * 24 * 60 * 60
+    /// How long a finished run's timeline stays browsable. A month, matching
+    /// the directive rows' own purge window — a cleared run is kept for its
+    /// diagnostics, and the timeline is the diagnostics.
+    static let window: TimeInterval = 30 * 24 * 60 * 60
 
     /// Delete stale log entries older than `window`, returning how many went.
     ///
