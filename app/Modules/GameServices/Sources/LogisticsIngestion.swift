@@ -16,6 +16,11 @@ import Utils
 private let logger = Logger(subsystem: "name.pennig.replicould", category: "LogisticsIngestion")
 
 public final class LogisticsIngestion: Sendable {
+    /// Below this many remaining reads, skip the `.high` device read rather
+    /// than let `RateLimitGovernor.acquire` sleep the router's dispatch path.
+    /// Matches `PollCoordinator`'s own budget floor.
+    static let readsBudgetFloor = 12
+
     /// Raised by `gapRepair`, lowered by the first row that carries it.
     private let pendingGap = LockIsolated(false)
 
@@ -79,9 +84,19 @@ public final class LogisticsIngestion: Sendable {
     ) async {
         @Dependency(\.defaultDatabase) var database
         @Dependency(\.deviceRefresher) var deviceRefresher
+        @Dependency(\.gameClient) var gameClient
         @Dependency(\.uuid) var uuid
 
-        let device = await deviceRefresher.refresh(deviceCode, .high)
+        // `.high` bypasses the coordinator's own floor into a sleeping
+        // `RateLimitGovernor.acquire` — check first so pressure skips the read, not the router.
+        let budget = await gameClient.budget(.reads)
+        let device: Device?
+        if budget.remaining <= Self.readsBudgetFloor {
+            logger.notice("pickup at \(source, privacy: .public): reads budget \(budget.remaining) at/below floor \(Self.readsBudgetFloor) — skipping device read")
+            device = nil
+        } else {
+            device = await deviceRefresher.refresh(deviceCode, .high)
+        }
         let hold = device.map { ResourceCost(wire: Dictionary($0.cargoItems.map { ($0.resourceType, $0.quantity) }, uniquingKeysWith: +)) }
         let previousHold = open.reduce(into: ResourceCost()) { $0.add($1.perType) }
 

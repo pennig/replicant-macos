@@ -96,9 +96,8 @@ public extension ShapeStyle where Self == Color {
     static var rcStatusWaiting: Color { Color("StatusWaiting", bundle: rcBundle) }
     static var rcStatusOffline: Color { Color("StatusOffline", bundle: rcBundle) }
 
-    // Data-viz categorical slots, one per resource type. Validated for
-    // adjacent-pair separation in `ResourceCost.displayOrder`; reordering the
-    // mapping breaks that, so keep the pairing as written.
+    // Data-viz categorical slots, one per resource type — order fixed by
+    // `ResourceCost.displayOrder`; reordering breaks adjacent-pair separation.
     static var rcResourceStructural: Color { Color("ResourceStructural", bundle: rcBundle) }
     static var rcResourceConductive: Color { Color("ResourceConductive", bundle: rcBundle) }
     static var rcResourceSilicates:  Color { Color("ResourceSilicates",  bundle: rcBundle) }

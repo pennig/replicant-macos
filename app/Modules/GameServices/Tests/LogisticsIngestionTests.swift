@@ -3,6 +3,7 @@ import ComposableArchitecture
 import Foundation
 import GameDatabase
 import GameModels
+import GameSession
 import SQLiteData
 import Testing
 import Utils
@@ -40,6 +41,15 @@ import Utils
 
     private func testUUID(_ n: Int) -> UUID {
         UUID(uuidString: String(format: "00000000-0000-0000-0000-%012X", n))!
+    }
+
+    /// Plenty of headroom above `LogisticsIngestion.readsBudgetFloor`, so a
+    /// pickup's device read proceeds — the floor-pressure case gets its own test.
+    private func ampleGameClient() -> GameClient {
+        GameClient(
+            make: { ReplicantSpace.client(apiKey: "") },
+            budget: { _ in RateLimitGovernor.Snapshot(limit: 120, remaining: 100, resetAt: nil) }
+        )
     }
 
     /// The freighter, holding whatever `cargo` the case needs.
@@ -106,6 +116,7 @@ import Utils
             $0.defaultDatabase = database
             $0.uuid = .incrementing
             $0.date = .constant(Date(timeIntervalSince1970: 100))
+            $0.gameClient = ampleGameClient()
             $0.deviceRefresher = DeviceRefreshClient { code, priority in
                 #expect(code == "F7B455B6")
                 #expect(priority == .high)
@@ -135,6 +146,7 @@ import Utils
             $0.defaultDatabase = database
             $0.uuid = .incrementing
             $0.date = .constant(Date(timeIntervalSince1970: 100))
+            $0.gameClient = ampleGameClient()
             $0.deviceRefresher = DeviceRefreshClient { _, _ in nil }
         } operation: {
             await ingestion.eventRoutes[0].apply(digestEvent(carried: 345, collected: 1))
@@ -157,6 +169,7 @@ import Utils
             $0.defaultDatabase = database
             $0.uuid = .incrementing
             $0.date = .constant(Date(timeIntervalSince1970: 100))
+            $0.gameClient = ampleGameClient()
             $0.deviceRefresher = DeviceRefreshClient { _, _ in
                 self.freighter(cargo: [("structural", 11)])
             }
@@ -218,6 +231,7 @@ import Utils
             $0.defaultDatabase = database
             $0.uuid = .incrementing
             $0.date = .constant(Date(timeIntervalSince1970: 100))
+            $0.gameClient = ampleGameClient()
             $0.deviceRefresher = DeviceRefreshClient { _, _ in
                 self.freighter(cargo: [("structural", 200), ("rares", 145)])
             }
@@ -243,6 +257,7 @@ import Utils
             $0.defaultDatabase = database
             $0.uuid = .incrementing
             $0.date = .constant(Date(timeIntervalSince1970: 100))
+            $0.gameClient = ampleGameClient()
             $0.deviceRefresher = DeviceRefreshClient { _, _ in nil }
         } operation: {
             await ingestion.eventRoutes[0].gapRepair()
@@ -287,6 +302,7 @@ import Utils
             $0.defaultDatabase = database
             $0.uuid = .incrementing
             $0.date = .constant(Date(timeIntervalSince1970: 100))
+            $0.gameClient = ampleGameClient()
             $0.deviceRefresher = DeviceRefreshClient { _, _ in
                 self.freighter(cargo: [("structural", 200)])
             }
@@ -313,6 +329,7 @@ import Utils
             $0.defaultDatabase = database
             $0.uuid = .incrementing
             $0.date = .constant(Date(timeIntervalSince1970: 100))
+            $0.gameClient = ampleGameClient()
             $0.deviceRefresher = DeviceRefreshClient { _, _ in
                 self.freighter(cargo: [("structural", 200), ("rares", 145)])
             }
@@ -364,6 +381,7 @@ import Utils
             $0.defaultDatabase = database
             $0.uuid = .incrementing
             $0.date = .constant(Date(timeIntervalSince1970: 100))
+            $0.gameClient = ampleGameClient()
             $0.deviceRefresher = DeviceRefreshClient { _, _ in nil }
         } operation: {
             await ingestion.eventRoutes[0].apply(digestEvent(carried: 200, collected: 1))
@@ -423,6 +441,7 @@ import Utils
             $0.defaultDatabase = database
             $0.uuid = .incrementing
             $0.date = .constant(Date(timeIntervalSince1970: 100))
+            $0.gameClient = ampleGameClient()
             $0.deviceRefresher = DeviceRefreshClient { _, _ in
                 self.freighter(cargo: [("structural", 345)])
             }
@@ -437,5 +456,40 @@ import Utils
         // fleet-count default of 1 would report as `.exact`, the bug this guards.
         #expect(rows[0].perType.total == 345)
         #expect(rows[0].breakdownState == .partial)
+    }
+
+    @Test func aFloorPressuredBudgetWritesUnavailableWithoutReadingTheDevice() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await seedDirectiveAndBaseline(database)
+        let ingestion = LogisticsIngestion()
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.uuid = .incrementing
+            $0.date = .constant(Date(timeIntervalSince1970: 100))
+            $0.gameClient = GameClient(
+                make: { ReplicantSpace.client(apiKey: "") },
+                budget: { _ in
+                    RateLimitGovernor.Snapshot(
+                        limit: 120, remaining: LogisticsIngestion.readsBudgetFloor, resetAt: nil
+                    )
+                }
+            )
+            // Fails the test if the device read is issued at all — the whole
+            // point of the budget check is to skip it under pressure.
+            $0.deviceRefresher = DeviceRefreshClient { _, _ in
+                Issue.record("device refresher must not be called under budget pressure")
+                return nil
+            }
+        } operation: {
+            await ingestion.eventRoutes[0].apply(digestEvent(carried: 345, collected: 1))
+        }
+
+        let rows = try await database.read { db in
+            try HaulYield.where { $0.sourceDesignation.eq("ACHERNUR-BELT-1") }.fetchAll(db)
+        }
+        #expect(rows[0].unitsCollected == 345)
+        #expect(rows[0].breakdownState == .unavailable)
+        #expect(rows[0].perType == ResourceCost())
     }
 }

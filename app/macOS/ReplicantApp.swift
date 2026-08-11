@@ -94,8 +94,8 @@ struct ReplicantApp: App {
         let locationsIngestion = LocationsIngestion()
         for route in MessagesIngestion.eventRoutes { gameSync.registerRoute(route) }
         for route in locationsIngestion.eventRoutes { gameSync.registerRoute(route) }
-        // The haul-yield ledger, the controller digest's only channel. Deliberate
-        // exception to the debounce policy above: its `.high` device read runs inline, since the hold must be caught before it changes.
+        // The haul-yield ledger, the controller digest's only channel. Its `.high`
+        // device read is budget-gated inline, degrading to `.unavailable` under pressure.
         let logisticsIngestion = LogisticsIngestion()
         for route in logisticsIngestion.eventRoutes { gameSync.registerRoute(route) }
         gameSync.registerRoute(LocationEventsIngestion.eventRoute)

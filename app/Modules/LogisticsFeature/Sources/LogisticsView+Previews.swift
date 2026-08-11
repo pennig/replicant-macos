@@ -27,7 +27,7 @@ private func seededDatabase(rows: [HaulYield] = HaulYield.previewRows) -> any Da
 
 extension HaulYield {
     fileprivate static let previewRows: [HaulYield] = {
-        let day: (Int) -> Date = { Date(timeIntervalSince1970: TimeInterval(20 - $0) * 86_400) }
+        let day: (Int) -> Date = { Date().addingTimeInterval(-TimeInterval($0) * 86_400) }
         return [
             HaulYield(
                 id: UUID(), directiveID: "D1", controllerCode: "AMI-01", deviceCode: "VES-7F3A2",

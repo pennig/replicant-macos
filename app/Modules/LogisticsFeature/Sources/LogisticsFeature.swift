@@ -12,17 +12,24 @@ import SQLiteData
 
 @Reducer
 public struct LogisticsFeature {
+    /// How many rows the ledger observes at once, newest first — the same
+    /// bounded-`@FetchAll` precedent as `EventLogFeature.displayLimit`, guarding
+    /// against the same AttributeGraph "exhausted data space" failure mode.
+    public static let displayLimit = 1000
+
     @ObservableState
     public struct State: Equatable {
         @ObservationStateIgnored
-        @FetchAll(HaulYield.order { $0.collectedAt.desc() }) public var yields: [HaulYield]
+        @FetchAll(HaulYield.order { $0.collectedAt.desc() }.limit(LogisticsFeature.displayLimit))
+        public var yields: [HaulYield]
         public var range: TimeRange = .month
         public init() {}
 
         // Not `public`: `YieldSummary` is internal, and this is read only by
         // `LogisticsView` in the same module.
         var summary: YieldSummary {
-            YieldSummary(yields: yields, range: range, now: Date())
+            @Dependency(\.date.now) var now
+            return YieldSummary(yields: yields, range: range, now: now)
         }
     }
 

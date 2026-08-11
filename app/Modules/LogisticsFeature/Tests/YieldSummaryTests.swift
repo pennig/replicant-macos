@@ -84,6 +84,19 @@ private func testUUID(_ n: Int) -> UUID {
         #expect(summary.totalUnits == 1_100)
     }
 
+    // The ledger table renders `summary.rows`, not the unfiltered input — so a
+    // range-filtered chart set and a full-table ledger can't silently diverge.
+    @Test func rowsExposesOnlyTheRangeFilteredSetTheChartsUse() {
+        let inRange = yield(day: 40, units: 1, cost: ResourceCost(structural: 1))
+        let outOfRange = yield(day: 0, units: 1_000, cost: ResourceCost(structural: 1_000))
+        let summary = YieldSummary(
+            yields: [inRange, outOfRange],
+            range: .month,
+            now: Date(timeIntervalSince1970: 40 * 86_400)
+        )
+        #expect(summary.rows.map(\.id) == [inRange.id])
+    }
+
     // 1 gapped vs 2 clean rows: `gapCount == tripCount` and an inverted
     // `followsGap` predicate both diverge from the correct answer here.
     @Test func gapsAreCountedSoTheChartCanSayItDoesNotKnow() {

@@ -2,9 +2,7 @@
 //  HaulYield.swift
 //  Replicould — GameModels
 //
-//  One Haul Run pickup: what a transport loaded, where, and when. Delivery
-//  columns fill in when that half is observed. Yields are reconstructed from
-//  digest deltas, never reported, so `breakdownState` says how much to trust.
+//  One Haul Run pickup, reconstructed from digest deltas — `breakdownState` says how much to trust.
 //
 
 import Foundation

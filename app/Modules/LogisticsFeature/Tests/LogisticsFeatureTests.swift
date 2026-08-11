@@ -46,4 +46,30 @@ private func testUUID(_ n: Int) -> UUID {
         }
         #expect(state.yields.map(\.unitsCollected) == [100, 900, 500])
     }
+
+    // An unbounded `@FetchAll` over this never-pruned table is the exact shape
+    // that crashed EventLogFeature (AttributeGraph "exhausted data space").
+    @Test func theLedgerQueryIsBoundedAtDisplayLimit() async throws {
+        let database = try GameDatabase.bootstrap()
+        let overflow = LogisticsFeature.displayLimit + 5
+        try await database.write { db in
+            for id in 0..<overflow {
+                try HaulYield.upsert {
+                    HaulYield(
+                        id: testUUID(id), directiveID: "D1", controllerCode: "C",
+                        deviceCode: "F", sourceDesignation: "ACHERNUR-BELT-1",
+                        collectedAt: Date(timeIntervalSince1970: TimeInterval(id)),
+                        unitsCollected: 1, perType: ResourceCost(), breakdownState: .exact
+                    )
+                }
+                .execute(db)
+            }
+        }
+        let state = withDependencies {
+            $0.defaultDatabase = database
+        } operation: {
+            LogisticsFeature.State()
+        }
+        #expect(state.yields.count == LogisticsFeature.displayLimit)
+    }
 }

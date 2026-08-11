@@ -16,10 +16,14 @@ struct YieldSummary {
     let bySource: [(designation: String, units: Int)]
     let byDay: [(day: Date, perType: ResourceCost)]
     let gapCount: Int
+    /// The same range-filtered rows the charts fold — the ledger table reads
+    /// this instead of the unfiltered `LogisticsFeature.State.yields`.
+    let rows: [HaulYield]
 
     init(yields: [HaulYield], range: LogisticsFeature.TimeRange, now: Date, calendar: Calendar = .current) {
         let cutoff = range.days.map { now.addingTimeInterval(-Double($0) * 86_400) }
         let rows = cutoff.map { limit in yields.filter { $0.collectedAt >= limit } } ?? yields
+        self.rows = rows
 
         totalUnits = rows.reduce(0) { $0 + $1.unitsCollected }
         tripCount = rows.count

@@ -5,13 +5,14 @@ import Utils
 @testable import GameServices
 
 @Suite struct TransportDigestTests {
-    private func envelope(_ payload: [String: JSONValue]) -> GameEventEnvelope {
+    private func envelope(_ payload: [String: JSONValue], createdAt: String? = nil) -> GameEventEnvelope {
         GameEventEnvelope(
             id: "1-0",
             category: "ami",
             event: "ami.transport.digest",
             deviceCode: "8D53C9B1",
-            payload: payload
+            payload: payload,
+            createdAt: createdAt
         )
     }
 
@@ -58,5 +59,23 @@ import Utils
         )
         #expect(digest.cargoCarried == 0)
         #expect(digest.activeDeviceCode == nil)
+    }
+
+    // `collectedAt` is stamped from `observedAt` and drives calendar
+    // day-bucketing, so a regression to always-`now` would silently re-date
+    // every row without either branch being separately covered.
+    @Test func observedAtUsesTheEnvelopesCreatedAtWhenItParses() throws {
+        let e = envelope(["report": .object([:])], createdAt: "2026-08-01T12:00:00Z")
+        let now = Date(timeIntervalSince1970: 0)
+        let digest = try #require(TransportDigest(envelope: e, now: now))
+        #expect(digest.observedAt == e.date)
+        #expect(digest.observedAt != now)
+    }
+
+    @Test func observedAtFallsBackToNowWhenCreatedAtIsAbsent() throws {
+        let e = envelope(["report": .object([:])])
+        let now = Date(timeIntervalSince1970: 12_345)
+        let digest = try #require(TransportDigest(envelope: e, now: now))
+        #expect(digest.observedAt == now)
     }
 }
