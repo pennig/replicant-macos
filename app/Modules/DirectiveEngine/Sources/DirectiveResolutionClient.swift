@@ -37,14 +37,9 @@ public struct DirectiveResolutionClient: Sendable {
     public var pause: @Sendable (_ directiveID: String) async -> Void
     /// Hand paused directive `directiveID` back to the engine.
     public var resume: @Sendable (_ directiveID: String) async -> Void
-    /// Mark every finished run — `.completed` and `.cancelled` — cleared from
-    /// the list, then destroy any finished run older than `purgeWindow` along
-    /// with its timeline. Returns how many rows were newly marked.
-    ///
-    /// **Terminal statuses only, and that is a safety property, not a filter.**
-    /// `.running`, `.needsAttention` and `.paused` all still OWN devices
-    /// (`Brain.owningStatuses`), so hiding or destroying one would take a live
-    /// carrier off the operator's only view of it.
+    /// Mark every finished run cleared from the list and purge the ones past
+    /// `Directive.purgeWindow`, returning how many were newly marked. Terminal
+    /// statuses only (`app/.claude/memory/directive-soft-delete-retention.md`).
     public var clearFinished: @Sendable () async -> Int
 
     /// Each closure implements the property of the same name — `retry`,
@@ -66,14 +61,10 @@ public struct DirectiveResolutionClient: Sendable {
         self.clearFinished = clearFinished
     }
 
-    /// The statuses `clearFinished` deletes. Public so the UI can count exactly
-    /// what the verb would remove instead of re-deciding it.
-    public static let finishedStatuses: Set<DirectiveStatus> = [.completed, .cancelled]
-
-    /// How long a finished run survives before a Clear destroys it outright.
-    /// Measured from `updatedAt` — when the run finished, not when it was
-    /// marked, so marking cannot postpone the purge.
-    public static let purgeWindow: TimeInterval = 30 * 24 * 60 * 60
+    /// The statuses `clearFinished` hides. Public so the UI counts exactly what
+    /// the verb would hide instead of re-deciding what "finished" means, and a
+    /// set because `DirectiveStatus.finishedCases` is the one definition of it.
+    public static let finishedStatuses = Set(DirectiveStatus.finishedCases)
 }
 
 extension DirectiveResolutionClient: DependencyKey {
@@ -131,7 +122,7 @@ extension DirectiveResolutionClient: DependencyKey {
             @Dependency(\.defaultDatabase) var database
             @Dependency(\.date) var date
             let now = date.now
-            let cutoff = now.addingTimeInterval(-purgeWindow)
+            let cutoff = now.addingTimeInterval(-Directive.purgeWindow)
             do {
                 return try await database.write { db in
                     let unmarked = Directive.where {
@@ -144,17 +135,9 @@ extension DirectiveResolutionClient: DependencyKey {
                         try unmarked.update { $0.deletedAt = #bind(now) }.execute(db)
                         logger.info("marked \(marked) finished directive(s) cleared")
                     }
-                    let doomed = try Directive
-                        .where { $0.status.in(Array(finishedStatuses)) && $0.updatedAt < cutoff }
-                        .fetchAll(db)
-                        .map(\.id)
-                    if !doomed.isEmpty {
-                        // Entries before the rows they point at, one transaction:
-                        // a timeline query is keyed by directive id, so an orphan is unreachable.
-                        let scoped = doomed.map(Optional.some)
-                        try DirectiveLogEntry.where { $0.directiveID.in(scoped) }.delete().execute(db)
-                        try Directive.where { $0.id.in(doomed) }.delete().execute(db)
-                        logger.info("purged \(doomed.count) directive(s) past the retention window")
+                    let purged = try Directive.purgeFinished(before: cutoff, in: db)
+                    if purged > 0 {
+                        logger.info("purged \(purged) directive(s) past the retention window")
                     }
                     return marked
                 }

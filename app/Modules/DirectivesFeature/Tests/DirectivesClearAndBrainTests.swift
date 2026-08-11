@@ -2,14 +2,8 @@
 //  DirectivesClearAndBrainTests.swift
 //  Replicould — Directives feature
 //
-//  Two housekeeping surfaces on the Directives list:
-//
-//    • clearing finished runs — a mark, not a deletion, so what it must NOT
-//      hide is the interesting half;
-//    • the brain selection — the header strip is now a doorway into the detail
-//      pane rather than the report itself, and it shares one `selectedRowID`
-//      with the rows so the two can never both be showing.
-//
+//  Clearing finished runs — a mark, not a deletion — and the brain selection,
+//  which shares one `selectedRowID` with the rows.
 
 import ComposableArchitecture
 import DirectiveEngine
@@ -67,10 +61,9 @@ struct DirectivesClearFinishedTests {
         }
     }
 
-    /// One run of every status, so the verb's boundary is proved in both
-    /// directions at once: the two terminal ones are marked, the three that
-    /// still OWN devices are not. Marking an owning row would hide a carrier
-    /// the operator still needs to see.
+    /// One run of every status, so the boundary is proved both ways: the two
+    /// terminal ones are marked and the three that still OWN devices are not —
+    /// marking one would hide a carrier the operator needs to see.
     @Test func marksOnlyTheTerminalRuns() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in
@@ -172,7 +165,7 @@ struct DirectivesClearFinishedTests {
         #expect(left.count == 1)
     }
 
-    /// The count the toolbar shows is the count the verb would delete — read
+    /// The count the toolbar shows is the count the verb would hide — read
     /// through the same `finishedStatuses` set, so the label cannot drift from
     /// the behaviour.
     @Test func theOfferedCountMatchesWhatWouldGo() async throws {
@@ -233,7 +226,7 @@ struct DirectivesClearFinishedTests {
     /// more than `purgeWindow` ago goes for good, and its timeline with it.
     @Test func purgesTerminalRunsPastTheWindow() async throws {
         let now = Date(timeIntervalSince1970: 10_000_000)
-        let stale = now.addingTimeInterval(-DirectiveResolutionClient.purgeWindow - 60)
+        let stale = now.addingTimeInterval(-Directive.purgeWindow - 60)
         let database = try GameDatabase.bootstrap()
         try await database.write { db in
             try Directive.insert { Self.run("OLD", .completed, updatedAt: stale) }.execute(db)
@@ -252,7 +245,7 @@ struct DirectivesClearFinishedTests {
     /// a mission whose row vanished mid-flight would strand every one of them.
     @Test func neverPurgesAnOpenRunHoweverOld() async throws {
         let now = Date(timeIntervalSince1970: 10_000_000)
-        let ancient = now.addingTimeInterval(-DirectiveResolutionClient.purgeWindow * 12)
+        let ancient = now.addingTimeInterval(-Directive.purgeWindow * 12)
         let database = try GameDatabase.bootstrap()
         try await database.write { db in
             for status in DirectiveStatus.openCases {
@@ -273,7 +266,7 @@ struct DirectivesClearFinishedTests {
     /// month of diagnostics the whole change exists to keep.
     @Test func keepsTerminalRunsInsideTheWindow() async throws {
         let now = Date(timeIntervalSince1970: 10_000_000)
-        let recent = now.addingTimeInterval(-DirectiveResolutionClient.purgeWindow + 60)
+        let recent = now.addingTimeInterval(-Directive.purgeWindow + 60)
         let database = try GameDatabase.bootstrap()
         try await database.write { db in
             try Directive.insert { Self.run("YOUNG", .completed, updatedAt: recent) }.execute(db)
@@ -290,11 +283,12 @@ struct DirectivesClearFinishedTests {
         #expect(entries.count == 1)
     }
 
-    /// The purge runs even when there is nothing new to mark, so a click on a
-    /// quiet list still does the housekeeping.
+    /// The purge does not depend on there being anything to mark — which is
+    /// what lets the same primitive run on `DirectiveRetention`'s hourly sweep,
+    /// where nothing is ever marked.
     @Test func purgesEvenWithNothingToMark() async throws {
         let now = Date(timeIntervalSince1970: 10_000_000)
-        let stale = now.addingTimeInterval(-DirectiveResolutionClient.purgeWindow - 60)
+        let stale = now.addingTimeInterval(-Directive.purgeWindow - 60)
         let database = try GameDatabase.bootstrap()
         try await database.write { db in
             try Directive.insert {
@@ -315,7 +309,7 @@ struct DirectivesClearFinishedTests {
     /// survive a purge that is only entitled to touch one directive's own.
     @Test func purgeOnlyTouchesTheDoomedDirectivesOwnEntries() async throws {
         let now = Date(timeIntervalSince1970: 10_000_000)
-        let stale = now.addingTimeInterval(-DirectiveResolutionClient.purgeWindow - 60)
+        let stale = now.addingTimeInterval(-Directive.purgeWindow - 60)
         let database = try GameDatabase.bootstrap()
         try await database.write { db in
             try Directive.insert { Self.run("OLD", .completed, updatedAt: stale) }.execute(db)
