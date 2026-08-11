@@ -49,6 +49,9 @@ moment a relay is planted there:
    It does not collide with `roamCentre`, which is a *point* one Survey Run expands from — a
    Theatre is the region, and its depot supplies the `roamCentre`. It does not collide with the
    game's System Hub device.
+5. **Haul distance is bounded economically, in the ranking.** `HaulTargetPlanner` ranks candidate
+   piles by units per round-trip rather than raw units, so a rich distant pile loses to a modest
+   near one without any hard cutoff. See *Haul ranking* below for why topology cannot carry this.
 
 ## Domain model
 
@@ -147,6 +150,19 @@ the measurement as a memory note when the first hub lands.
 Component identifiers are per-tick and derived; nothing persists them. Directives store a depot
 designation, so a component relabelling between ticks cannot churn directive rows.
 
+### Several theatres may share one component
+
+This is the expected arrangement, not a tolerated one. Measured against the live fleet on
+2026-08-11, all **205 relaying-relay systems form a single component** at 7.5 ly, and still one at
+15 ly — spanning a ~60 ly ball (widest pair `GNOMEN`↔`SOL` at 59.5 ly; `SOL` sits 39.5 ly from
+`AINALRAM`, median 17.8 ly). The operator's stated direction is a single mesh over every useful
+star, so the shared case is the steady state and disjointness must never be assumed anywhere.
+
+Consequently the component filter rejects very little. Its remaining job is refusing an assignment
+that is physically impossible — the 316 ly ferry into the `OMEROPE` pocket — and every question of
+*which* theatre serves a system is settled by distance. Any invariant that would only hold for
+disjoint theatres is a bug in this design, and the tests below pin the shared case directly.
+
 ## Resolvers
 
 ```swift
@@ -165,11 +181,38 @@ filter, and keeping them one function is what stops them drifting apart. Both ra
 `(distance, depot designation)` so the order is total and stable across ticks. Both consider
 only `.operational` theatres.
 
+## Haul ranking
+
+`HaulTargetPlanner.assignments` currently orders candidate piles by raw units —
+`lhs.value > rhs.value`, designation as tie-break — with no distance term anywhere. One theatre
+hides the consequence, because there is nowhere else to deliver and the mesh is only 60 ly across.
+A galaxy-wide mesh removes both mitigations at once: the component filter stops rejecting
+anything, and the general drainer will send a ferry after the richest pile it can see however far
+away it is.
+
+Topology cannot fix this. A mesh that spans the galaxy says every pile is reachable, which is true
+and useless. The bound has to live in the ranking:
+
+```
+rank(pile) = units / (2 · d(pile, theatre.depot) · secondsPerLy)
+```
+
+No cutoff, so a large enough pile still justifies a long trip, which is the correct behaviour.
+Ordering stays total by falling back to designation on ties, preserving the anti-thrash property
+the current sort exists for (`HaulTargetPlanner.swift:80-84`).
+
+`secondsPerLy` needs its own derivation before it is written down, in the manner
+`Brain.reclaimRangeLY` was derived — that constant came from trading a 370-unit relay and its
+~800 s print against `2 · d` of travel. The observations recorded in
+`travel-is-cheap-vs-survey` (1–3 min typical, 467 s worst observed) are a starting point and not
+a calibration; measure against real ferry legs and record the result as a memory note.
+
 ## Call-site migration
 
 | Site | Today | Becomes |
 | --- | --- | --- |
 | `HaulTargetPlanner.swift:78` | both ends in `meshSystems` | both ends in the delivering theatre's component |
+| `HaulTargetPlanner.swift:80-84` | ranks piles by raw units | ranks by units per round-trip (see *Haul ranking*) |
 | `PrunePredicate.swift:103,123` | one union rooted at the single hub | one union per theatre over its own component; a relay is reclaimable only if useless in its own theatre's union |
 | `WorldView.swift:275` | single richest print location globally | tier 3 of recognition, applied per component |
 | `Brain.ensureOne` | one `salvageRun`/`haulRun`/`relayRun` globally, scoped by kind | one per theatre, scoped by (kind, theatre) |
@@ -242,6 +285,12 @@ Every designation rendered in monospace, per the naming rule in `app/CLAUDE.md`.
   merges them in one tick.
 - `HaulTargetPlanner`: a pile in another component is never assigned. Pin this with the real
   `OMEROPE`/`AINALRAM` numbers — it is the 316 ly regression.
+- `HaulTargetPlanner`: two theatres sharing one component each drain their own nearer piles, and a
+  pile equidistant from both resolves the same way on every evaluation. This is the shared-mesh
+  case and it is the one the live fleet is actually in.
+- `HaulTargetPlanner`: a rich distant pile loses to a modest near one, and a pile large enough to
+  pay for the trip still wins. Both directions, or the ranking is only tested where it agrees with
+  the old one.
 - `PrunePredicate`: with two theatres, neither theatre's relays are reclaimable on account of the
   other's unreachability. Extends the existing whole-mesh-reclaim test to a second component.
 - Recognition ordering: pin beats hub beats derived; a component with no theatre gets a derived
@@ -269,3 +318,6 @@ never by parsing console text.
 - Retry amplification (recorded in `brain-salvage-build`: a brain retry re-arms the mission's own
   re-entry budget) is untouched and gets multiplied by theatre count.
 - The 15 ly System Hub range is from the docs and unmeasured; see the `min` assumption above.
+- `secondsPerLy` in the haul ranking is uncalibrated. Until it is measured the ranking should ship
+  behind the existing raw-units order as the fallback, so a wrong constant degrades to today's
+  behaviour rather than to no haulage at all.
