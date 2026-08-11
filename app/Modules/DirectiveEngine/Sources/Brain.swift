@@ -606,10 +606,9 @@ struct Brain: Sendable {
 
     // MARK: - Theatre adoption
 
-    /// Rows needing a `theatreDepot` and the depot to stamp on each. Pure — the
-    /// caller writes. A row whose theatre cannot be decided is left for the
-    /// operator rather than guessed: a wrong stamp sends a carrier to the wrong
-    /// depot, and an absent one only declines to act.
+    /// Rows needing a `theatreDepot` and the depot to stamp on each. Pure —
+    /// the caller writes. A row whose theatre cannot be decided is left
+    /// unstamped rather than guessed.
     static func adoptTheatres(
         directives: [Directive], view: WorldView
     ) -> [(id: String, depot: String)] {

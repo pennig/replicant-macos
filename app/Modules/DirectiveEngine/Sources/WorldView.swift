@@ -159,10 +159,8 @@ public struct WorldView: Equatable, Sendable {
             events.filter(\.isActive).map { SiteAssay.system(of: $0.location) }
         )
 
-        // The census rows for every candidate depot — print-capable locations,
-        // pinned locations, and system_hub locations — read in the SAME
-        // transaction as the devices, so recognition can never mix a stockpile
-        // reading with a different instant's printer or pin.
+        // Candidate depot locations: print-capable, pinned, and system_hub
+        // device locations, read in the same transaction as the devices.
         let printLocations = Set(allDevices.filter(\.isPrintHub).compactMap(\.location))
         let pins = try TheatrePin.all.fetchAll(db)
         let hubDeviceLocations = Set(allDevices.filter { $0.deviceType == "system_hub" }.compactMap(\.location))
