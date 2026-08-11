@@ -37,13 +37,13 @@ public struct DirectiveResolutionClient: Sendable {
     public var pause: @Sendable (_ directiveID: String) async -> Void
     /// Hand paused directive `directiveID` back to the engine.
     public var resume: @Sendable (_ directiveID: String) async -> Void
-    /// Delete every finished run — `.completed` and `.cancelled` — and its
-    /// timeline, returning how many rows went.
+    /// Mark every finished run — `.completed` and `.cancelled` — cleared from
+    /// the list, returning how many were newly marked. Rows and timelines stay.
     ///
     /// **Terminal statuses only, and that is a safety property, not a filter.**
     /// `.running`, `.needsAttention` and `.paused` all still OWN devices
-    /// (`Brain.owningStatuses`), so deleting one would silently release its
-    /// carrier to the brain mid-flight.
+    /// (`Brain.owningStatuses`), so hiding one would take a live carrier off
+    /// the operator's only view of it.
     public var clearFinished: @Sendable () async -> Int
 
     /// Each closure implements the property of the same name — `retry`,
@@ -123,25 +123,20 @@ extension DirectiveResolutionClient: DependencyKey {
         },
         clearFinished: {
             @Dependency(\.defaultDatabase) var database
+            @Dependency(\.date) var date
+            let now = date.now
             do {
                 return try await database.write { db in
-                    let finished = try Directive
-                        .where { $0.status.in(Array(finishedStatuses)) }
-                        .fetchAll(db)
-                    guard !finished.isEmpty else { return 0 }
-                    let ids = finished.map(\.id)
-                    // The timeline entries first, then the rows they point at,
-                    // in ONE transaction — a half-applied clear would leave
-                    // orphan log rows that nothing can ever reach or prune,
-                    // since every timeline query is keyed by directive id.
-                    // `directiveID` is nullable (a log entry can be device-scoped
-                    // rather than run-scoped), so the operand list has to be
-                    // optional too for the comparison to type-check.
-                    let scoped = ids.map(Optional.some)
-                    try DirectiveLogEntry.where { $0.directiveID.in(scoped) }.delete().execute(db)
-                    try Directive.where { $0.id.in(ids) }.delete().execute(db)
-                    logger.info("cleared \(finished.count) finished directive(s)")
-                    return finished.count
+                    let unmarked = Directive.where {
+                        $0.status.in(Array(finishedStatuses)) && $0.deletedAt.is(nil)
+                    }
+                    let marked = try unmarked.fetchAll(db).count
+                    guard marked > 0 else { return 0 }
+                    // Deliberately not `updatedAt`: that column is the purge
+                    // clock, and re-stamping it would restart the month.
+                    try unmarked.update { $0.deletedAt = #bind(now) }.execute(db)
+                    logger.info("marked \(marked) finished directive(s) cleared")
+                    return marked
                 }
             } catch {
                 logger.error("clear finished failed: \(error)")
