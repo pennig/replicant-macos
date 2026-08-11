@@ -38,12 +38,13 @@ public struct DirectiveResolutionClient: Sendable {
     /// Hand paused directive `directiveID` back to the engine.
     public var resume: @Sendable (_ directiveID: String) async -> Void
     /// Mark every finished run — `.completed` and `.cancelled` — cleared from
-    /// the list, returning how many were newly marked. Rows and timelines stay.
+    /// the list, then destroy any finished run older than `purgeWindow` along
+    /// with its timeline. Returns how many rows were newly marked.
     ///
     /// **Terminal statuses only, and that is a safety property, not a filter.**
     /// `.running`, `.needsAttention` and `.paused` all still OWN devices
-    /// (`Brain.owningStatuses`), so hiding one would take a live carrier off
-    /// the operator's only view of it.
+    /// (`Brain.owningStatuses`), so hiding or destroying one would take a live
+    /// carrier off the operator's only view of it.
     public var clearFinished: @Sendable () async -> Int
 
     /// Each closure implements the property of the same name — `retry`,
@@ -68,6 +69,11 @@ public struct DirectiveResolutionClient: Sendable {
     /// The statuses `clearFinished` deletes. Public so the UI can count exactly
     /// what the verb would remove instead of re-deciding it.
     public static let finishedStatuses: Set<DirectiveStatus> = [.completed, .cancelled]
+
+    /// How long a finished run survives before a Clear destroys it outright.
+    /// Measured from `updatedAt` — when the run finished, not when it was
+    /// marked, so marking cannot postpone the purge.
+    public static let purgeWindow: TimeInterval = 30 * 24 * 60 * 60
 }
 
 extension DirectiveResolutionClient: DependencyKey {
@@ -125,17 +131,32 @@ extension DirectiveResolutionClient: DependencyKey {
             @Dependency(\.defaultDatabase) var database
             @Dependency(\.date) var date
             let now = date.now
+            let cutoff = now.addingTimeInterval(-purgeWindow)
             do {
                 return try await database.write { db in
                     let unmarked = Directive.where {
                         $0.status.in(Array(finishedStatuses)) && $0.deletedAt.is(nil)
                     }
                     let marked = try unmarked.fetchAll(db).count
-                    guard marked > 0 else { return 0 }
-                    // Deliberately not `updatedAt`: that column is the purge
-                    // clock, and re-stamping it would restart the month.
-                    try unmarked.update { $0.deletedAt = #bind(now) }.execute(db)
-                    logger.info("marked \(marked) finished directive(s) cleared")
+                    if marked > 0 {
+                        // Deliberately not `updatedAt`: that column is the purge
+                        // clock, and re-stamping it would restart the month.
+                        try unmarked.update { $0.deletedAt = #bind(now) }.execute(db)
+                        logger.info("marked \(marked) finished directive(s) cleared")
+                    }
+                    let doomed = try Directive
+                        .where { $0.status.in(Array(finishedStatuses)) && $0.updatedAt < cutoff }
+                        .fetchAll(db)
+                        .map(\.id)
+                    if !doomed.isEmpty {
+                        // Entries first, then the rows they point at, in ONE
+                        // transaction — every timeline query is keyed by
+                        // directive id, so an orphan entry is unreachable.
+                        let scoped = doomed.map(Optional.some)
+                        try DirectiveLogEntry.where { $0.directiveID.in(scoped) }.delete().execute(db)
+                        try Directive.where { $0.id.in(doomed) }.delete().execute(db)
+                        logger.info("purged \(doomed.count) directive(s) past the retention window")
+                    }
                     return marked
                 }
             } catch {

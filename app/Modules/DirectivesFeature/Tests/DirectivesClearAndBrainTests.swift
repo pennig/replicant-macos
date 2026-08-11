@@ -24,14 +24,20 @@ import Utils
 @Suite("Directives — clearing finished runs")
 @MainActor
 struct DirectivesClearFinishedTests {
-    nonisolated private static func run(_ id: String, _ status: DirectiveStatus) -> Directive {
+    nonisolated private static func run(
+        _ id: String,
+        _ status: DirectiveStatus,
+        updatedAt: Date = Date(timeIntervalSince1970: 0),
+        deletedAt: Date? = nil
+    ) -> Directive {
         Directive(
             id: id, kind: .surveyRun, status: status, deviceCode: "V-\(id)",
             targets: ["TAU"], targetIndex: 0, step: "surveying",
             stepStartedAt: Date(timeIntervalSince1970: 0),
             returnToOrigin: false, originDesignation: "SOL", attentionReason: nil,
+            deletedAt: deletedAt,
             createdAt: Date(timeIntervalSince1970: 0),
-            updatedAt: Date(timeIntervalSince1970: 0)
+            updatedAt: updatedAt
         )
     }
 
@@ -217,6 +223,87 @@ struct DirectivesClearFinishedTests {
 
         await store.send(.clearFinishedTapped)
         #expect(store.state.selectedRowID == "custom:LIVE")
+    }
+
+    /// The purge is what makes the mark affordable. A terminal run finished
+    /// more than `purgeWindow` ago goes for good, and its timeline with it.
+    @Test func purgesTerminalRunsPastTheWindow() async throws {
+        let now = Date(timeIntervalSince1970: 10_000_000)
+        let stale = now.addingTimeInterval(-DirectiveResolutionClient.purgeWindow - 60)
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { Self.run("OLD", .completed, updatedAt: stale) }.execute(db)
+            try DirectiveLogEntry.insert { Self.entry("E1", directiveID: "OLD") }.execute(db)
+        }
+
+        await Self.clearFinished(in: database, now: now)
+
+        let rows = try await database.read { db in try Directive.all.fetchAll(db) }
+        let entries = try await database.read { db in try DirectiveLogEntry.all.fetchAll(db) }
+        #expect(rows.isEmpty)
+        #expect(entries.isEmpty)
+    }
+
+    /// An open run is never purged however old. It still owns its devices, and
+    /// a mission whose row vanished mid-flight would strand every one of them.
+    @Test func neverPurgesAnOpenRunHoweverOld() async throws {
+        let now = Date(timeIntervalSince1970: 10_000_000)
+        let ancient = now.addingTimeInterval(-DirectiveResolutionClient.purgeWindow * 12)
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            for status in DirectiveStatus.openCases {
+                try Directive.insert {
+                    Self.run(status.rawValue, status, updatedAt: ancient)
+                }
+                .execute(db)
+            }
+        }
+
+        await Self.clearFinished(in: database, now: now)
+
+        let rows = try await database.read { db in try Directive.all.fetchAll(db) }
+        #expect(rows.count == DirectiveStatus.openCases.count)
+    }
+
+    /// Inside the window a terminal run is marked, not purged — that is the
+    /// month of diagnostics the whole change exists to keep.
+    @Test func keepsTerminalRunsInsideTheWindow() async throws {
+        let now = Date(timeIntervalSince1970: 10_000_000)
+        let recent = now.addingTimeInterval(-DirectiveResolutionClient.purgeWindow + 60)
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { Self.run("YOUNG", .completed, updatedAt: recent) }.execute(db)
+            try DirectiveLogEntry.insert { Self.entry("E1", directiveID: "YOUNG") }.execute(db)
+        }
+
+        await Self.clearFinished(in: database, now: now)
+
+        let row = try await database.read { db in
+            try Directive.where { $0.id.eq("YOUNG") }.fetchOne(db)
+        }
+        let entries = try await database.read { db in try DirectiveLogEntry.all.fetchAll(db) }
+        #expect(row?.deletedAt != nil)
+        #expect(entries.count == 1)
+    }
+
+    /// The purge runs even when there is nothing new to mark, so a click on a
+    /// quiet list still does the housekeeping.
+    @Test func purgesEvenWithNothingToMark() async throws {
+        let now = Date(timeIntervalSince1970: 10_000_000)
+        let stale = now.addingTimeInterval(-DirectiveResolutionClient.purgeWindow - 60)
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert {
+                Self.run("OLD", .completed, updatedAt: stale, deletedAt: stale)
+            }
+            .execute(db)
+        }
+
+        let marked = await Self.clearFinished(in: database, now: now)
+
+        let rows = try await database.read { db in try Directive.all.fetchAll(db) }
+        #expect(marked == 0)
+        #expect(rows.isEmpty)
     }
 }
 
