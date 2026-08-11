@@ -75,8 +75,9 @@ public enum TheatreRegistry {
             byComponent[component, default: []].insert(location)
         }
         for (component, candidates) in byComponent.sorted(by: { $0.key < $1.key }) {
-            guard !servedComponents.contains(component), let depot = richest(among: candidates) else { continue }
-            guard !claimedSystems.contains(SiteAssay.system(of: depot)) else { continue }
+            guard !servedComponents.contains(component) else { continue }
+            let unclaimed = candidates.filter { !claimedSystems.contains(SiteAssay.system(of: $0)) }
+            guard let depot = richest(among: unclaimed) else { continue }
             result.append(theatre(depot: depot, origin: .derived))
         }
 

@@ -181,4 +181,23 @@ struct TheatreRecognitionTests {
         #expect(first.count == 1)
         #expect(first[0].depot == "AINALRAM-BELT-1")
     }
+
+    @Test("A claimed system's stock does not block a poorer sibling in the same component from deriving")
+    func claimedRichSystemDoesNotBlockSiblingDerivation() {
+        let theatres = TheatreRegistry.recognise(
+            devices: [printer("AF1", at: "AINALRAM-BELT-1"), printer("AF2", at: "GRAZ-BELT-1")],
+            pins: [TheatrePin(location: "AINALRAM-2-L4", createdAt: .distantPast)],
+            meshSystems: ["AINALRAM", "GRAZ"],
+            components: ["AINALRAM": "AINALRAM", "GRAZ": "AINALRAM"],
+            stockByLocation: ["AINALRAM-BELT-1": 40_000, "GRAZ-BELT-1": 900]
+        )
+
+        let graz = theatres.first { $0.depot == "GRAZ-BELT-1" }
+        #expect(graz?.origin == .derived)
+        #expect(graz?.isOperational == true)
+
+        let pin = theatres.first { $0.depot == "AINALRAM-2-L4" }
+        #expect(pin?.origin == .pinned)
+        #expect(pin?.isOperational == false)
+    }
 }
