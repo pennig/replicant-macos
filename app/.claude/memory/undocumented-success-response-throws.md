@@ -37,6 +37,15 @@ That scan on 2.3.3 (2026-07-30) finds **nine** besides the fixed one — `GET /v
 decorator names them), so they are latent rather than live. Anyone wiring one of these up must
 declare its 200 first, or the very first successful call will throw.
 
+**2.5.0 (2026-08-10) added two more, and they were caught by reading the upgrade diff rather than by a
+throw:** `GET /v1/tutorials` and `GET /v1/tutorials/{slug}` both shipped `default`-only. Live probes
+confirm real 200 bodies (a `tutorials` array of seven; a detail with `steps[]`), so both were patched
+with a declared 200 in `openapi-2.5.0-edits.json` — see [[openapi-spec-layout]]. Re-running the scan
+on `openapi-2.5.0-edits.json` still finds exactly the same **nine** latent operations listed below,
+none of them called from app code. **Make the scan a standing step of every spec upgrade**: a
+`default`-only block on a NEW path is free to fix at upgrade time and expensive to find later, since
+the endpoint fails only for whoever first wires it up.
+
 **How to test it** without POSTing to the live account (which mutates real game state — see the
 `probe-api` skill): drive the generated client with a canned `ClientTransport` returning the real
 200 body, as `GameServices/Tests/LocationEventsClientTests.swift` does. That test also guards the

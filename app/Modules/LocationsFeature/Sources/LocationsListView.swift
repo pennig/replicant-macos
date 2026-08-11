@@ -6,11 +6,8 @@
 //  (belts + planets) → moons, filterable by explored/uncharted and sortable by
 //  name, distance-from-probe, or inventory.
 //
-//  Performance notes (the census is >10k systems):
-//    - The tree is built OFF the render path: a detached task recomputes it into
-//      `@State` only when its inputs actually change (`forestKey`), never per
-//      body evaluation. Selection/scroll no longer rebuild 5,770 nodes.
-//    - Search + filter are pushed into the SQL query so the built set shrinks.
+//  The census is >10k systems: the tree is built off the render path by the
+//  state's `@Fetch` request, and search is pushed into its SQL.
 //
 
 import ComposableArchitecture
@@ -34,7 +31,7 @@ public struct LocationsListView: View {
     /// emitting a node's children only when it's expanded. Cheap to rebuild (a
     /// linear walk producing lightweight structs) and fed to a flat, lazy `List`.
     private var rows: [LocationFlatRow] {
-        LocationTree.flatten(forest, expanded: store.expanded)
+        LocationTree.flatten(forest, expanded: store.expanded, loaded: store.childRows)
     }
 
     public var body: some View {

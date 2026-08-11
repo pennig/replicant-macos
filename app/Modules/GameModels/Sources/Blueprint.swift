@@ -167,6 +167,28 @@ public struct ResourceCost: Codable, Equatable, Sendable {
     public static func overallMaximum(across costs: [ResourceCost]) -> Int {
         costs.flatMap { cost in displayOrder.map { cost.amount(for: $0.key) } }.max() ?? 0
     }
+
+    /// Sum across the six fields.
+    public var total: Int {
+        carbon + silicates + structural + rares + conductive + volatiles
+    }
+
+    public mutating func add(_ other: ResourceCost) {
+        carbon += other.carbon; silicates += other.silicates; structural += other.structural
+        rares += other.rares; conductive += other.conductive; volatiles += other.volatiles
+    }
+
+    /// Per-field difference, floored at zero so a shrunk hold never reads negative.
+    public func subtracting(_ other: ResourceCost) -> ResourceCost {
+        ResourceCost(
+            carbon: Swift.max(0, carbon - other.carbon),
+            silicates: Swift.max(0, silicates - other.silicates),
+            structural: Swift.max(0, structural - other.structural),
+            rares: Swift.max(0, rares - other.rares),
+            conductive: Swift.max(0, conductive - other.conductive),
+            volatiles: Swift.max(0, volatiles - other.volatiles)
+        )
+    }
 }
 
 // MARK: - Mapping

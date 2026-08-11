@@ -74,6 +74,10 @@ public enum GameDatabase {
         FTLLinkRecord.addLinkMetrics,
         Directive.addSourceRelayCode,
         Directive.addClaimedRelayCode,
+        SystemDetail.addSummaryJSON,
+        SystemDetail.backfillSummaryJSON,
+        HaulYield.createHaulYields,
+        HaulYield.addControllerCodeIndex,
         Directive.addDeletedAt,
     ]
 

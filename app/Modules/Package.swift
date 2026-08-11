@@ -26,6 +26,7 @@ let package = Package(
         .library(name: "LocationEventsFeature", targets: ["LocationEventsFeature"]),
         .library(name: "LocationsFeature", targets: ["LocationsFeature"]),
         .library(name: "LoginFeature", targets: ["LoginFeature"]),
+        .library(name: "LogisticsFeature", targets: ["LogisticsFeature"]),
         .library(name: "MessagesFeature", targets: ["MessagesFeature"]),
         .library(name: "NewStarMapFeature", targets: ["NewStarMapFeature", "CStarMapShaderTypes"]),
         .library(name: "PrintingUI", targets: ["PrintingUI"]),
@@ -518,6 +519,27 @@ let package = Package(
                 "LoginFeature",
             ],
             path: "LoginFeature/Tests"
+        ),
+        .target(
+            name: "LogisticsFeature",
+            dependencies: [
+                "GameModels",
+                "UI",
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "SQLiteData", package: "sqlite-data"),
+            ],
+            path: "LogisticsFeature/Sources"
+        ),
+        .testTarget(
+            name: "LogisticsFeatureTests",
+            dependencies: [
+                "GameDatabase",
+                "GameModels",
+                "LogisticsFeature",
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "SQLiteData", package: "sqlite-data"),
+            ],
+            path: "LogisticsFeature/Tests"
         ),
         .target(
             name: "MessagesFeature",

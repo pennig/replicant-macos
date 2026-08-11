@@ -22,6 +22,7 @@ import EventLogFeature
 import GameModels
 import LocationEventsFeature
 import LocationsFeature
+import LogisticsFeature
 import MessagesFeature
 import NewStarMapFeature
 import PrintQueueFeature
@@ -76,6 +77,8 @@ struct MainFeature {
         var locationEvents: LocationEventsFeature.State
         /// The Print Queue (Operations) — printers with an active job or queue.
         var printQueue: PrintQueueFeature.State
+        /// The haul-yield ledger (Operations) — every Haul Run pickup + charts.
+        var logistics: LogisticsFeature.State
         /// The Replicants directory — the account's own replicants plus every
         /// other player and NPC known in the galaxy.
         var replicantDirectory: ReplicantsFeature.State
@@ -100,6 +103,7 @@ struct MainFeature {
             self.locations = LocationsFeature.State()
             self.locationEvents = LocationEventsFeature.State()
             self.printQueue = PrintQueueFeature.State()
+            self.logistics = LogisticsFeature.State()
             self.replicantDirectory = ReplicantsFeature.State()
         }
     }
@@ -126,6 +130,7 @@ struct MainFeature {
         case locations(LocationsFeature.Action)
         case locationEvents(LocationEventsFeature.Action)
         case printQueue(PrintQueueFeature.Action)
+        case logistics(LogisticsFeature.Action)
         case replicantDirectory(ReplicantsFeature.Action)
 
         enum Delegate {
@@ -174,6 +179,9 @@ struct MainFeature {
         Scope(state: \.printQueue, action: \.printQueue) {
             PrintQueueFeature()
         }
+        Scope(state: \.logistics, action: \.logistics) {
+            LogisticsFeature()
+        }
         Scope(state: \.replicantDirectory, action: \.replicantDirectory) {
             ReplicantsFeature()
         }
@@ -213,7 +221,7 @@ struct MainFeature {
                 state.devices.selectedDeviceCode = code
                 return .none
 
-            case .sidebar, .account, .messages, .bobnet, .rawAPI, .eventLog, .newStarMap, .devices, .blueprints, .civilisations, .directives, .locations, .locationEvents, .printQueue, .replicantDirectory:
+            case .sidebar, .account, .messages, .bobnet, .rawAPI, .eventLog, .newStarMap, .devices, .blueprints, .civilisations, .directives, .locations, .locationEvents, .printQueue, .logistics, .replicantDirectory:
                 return .none
             }
         }
@@ -331,6 +339,11 @@ struct MainView: View {
         store.scope(state: \.printQueue, action: \.printQueue)
     }
 
+    /// The Logistics haul-yield ledger store, scoped from the main session.
+    private var logisticsStore: StoreOf<LogisticsFeature> {
+        store.scope(state: \.logistics, action: \.logistics)
+    }
+
     /// The Replicants directory store, scoped from the main session.
     private var replicantsStore: StoreOf<ReplicantsFeature> {
         store.scope(state: \.replicantDirectory, action: \.replicantDirectory)
@@ -360,6 +373,8 @@ struct MainView: View {
             ReplicantsListView(store: replicantsStore)
         } else if store.sidebar.category == .operationsLog {
             ActivityView()
+        } else if store.sidebar.category == .logistics {
+            LogisticsView(store: logisticsStore)
         } else if store.sidebar.category == .bobnet {
             BobnetChannelsView(store: bobnetStore)
         } else if let category = store.sidebar.category {

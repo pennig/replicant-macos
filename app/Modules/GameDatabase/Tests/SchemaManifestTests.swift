@@ -52,6 +52,10 @@ import Testing
         "Add link metrics to 'ftlLinks'",
         "Add 'sourceRelayCode' to 'directives'",
         "Add 'claimedRelayCode' to 'directives'",
+        "Add 'summaryJSON' to 'systemDetails'",
+        "Backfill 'summaryJSON' on 'systemDetails'",
+        "Create 'haulYields' table",
+        "Add index on 'haulYields.controllerCode'",
         "Add 'deletedAt' to 'directives'",
     ]
 
