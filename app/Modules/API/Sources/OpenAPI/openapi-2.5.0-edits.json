@@ -26,6 +26,11 @@
             "type": "object",
             "description": "Errors",
             "additionalProperties": {}
+          },
+          "error": {
+            "type": "string",
+            "description": "Error message",
+            "nullable": true
           }
         },
         "additionalProperties": false

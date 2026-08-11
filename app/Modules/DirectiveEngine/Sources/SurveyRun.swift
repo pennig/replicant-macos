@@ -52,6 +52,8 @@ public struct SurveyRun: MissionStepMachine {
         public static let awaiting = "awaiting"
         /// Check the target's scan counts against the claimed completion.
         public static let confirming = "confirming"
+        /// Scan the system itself, which is what puts counts in the payload.
+        public static let scanning = "scanning"
         /// Hold the vessel until every recalled drone is back aboard.
         public static let recovering = "recovering"
         /// Hold the vessel while the service bots finish what they are repairing.
@@ -101,6 +103,11 @@ public struct SurveyRun: MissionStepMachine {
     /// re-issued once.
     public static let botDispatchRounds = 6
 
+    /// The cap on system-scan attempts per visit to `confirming`. One POST covers
+    /// the honest case; the rest rides out a transient. A retry writes `.resolved`,
+    /// which ends the run of the loop and re-arms the whole budget.
+    public static let scanRounds = 3
+
     /// How old a row backing a POSITIVE staging finding may be and still be
     /// believed without an authoritative re-read.
     ///
@@ -141,6 +148,7 @@ public struct SurveyRun: MissionStepMachine {
         case Step.launching: return launch(directive, vessel, world)
         case Step.awaiting: return awaitCompletion(directive, vessel, world)
         case Step.confirming: return confirm(directive, vessel, world)
+        case Step.scanning: return scanSystem(directive)
         case Step.recovering: return recover(directive, vessel, world)
         case Step.repairing: return awaitRepair(directive, vessel, world)
         case Step.stowingBots: return stowBots(directive, vessel, world)
@@ -388,11 +396,31 @@ public struct SurveyRun: MissionStepMachine {
         if Self.completionSeen(directive, world)
             || claimedController(directive, vessel, world)?.stowedInDeviceCode
                 == vessel.deviceCode {
+            // No counts AT ALL is a different fact from counts that fall short:
+            // the payload carries them only once the system has been scanned, and
+            // the drones scan bodies, never the system. Buy the scan first.
+            if world.system(target)?.planetsTotal == nil, scanRoundsSpent(world) < Self.scanRounds {
+                return .advanceStep(nextStep: Step.scanning)
+            }
             return .stall(.surveyIncomplete)
         }
         // A backstop poll that found it unfinished: nothing ever claimed
         // completion, so there is nothing to disbelieve. Keep waiting.
         return .advanceStep(nextStep: Step.awaiting)
+    }
+
+    /// Ask the engine to scan `directive`'s current target.
+    private func scanSystem(_ directive: Directive) -> MissionAction {
+        guard let target = directive.currentTarget else {
+            return .advanceStep(nextStep: Step.preflight)
+        }
+        return .scanSystem(designation: target, nextStep: Step.confirming)
+    }
+
+    /// Scans already spent in this unbroken run of the `scanning`/`confirming`
+    /// loop. Off the log because `stepStartedAt` re-stamps on every hop.
+    private func scanRoundsSpent(_ world: WorldSnapshot) -> Int {
+        MissionLogBudget.dispatchRounds(world, dispatch: Step.scanning, confirm: Step.confirming)
     }
 
     /// Hold `vessel` until `world` shows the AMI's recall has landed every drone

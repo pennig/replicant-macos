@@ -108,6 +108,23 @@ enum DirectiveExecutor {
             await move(directive, to: nextStep, controllerCode: directive.controllerCode)
             return true
 
+        case let .scanSystem(designation, nextStep):
+            // Best-effort by contract, same reasoning as `.refreshSystem` above.
+            // The endpoint scans the replicant's OWN system, so it is only correct
+            // to call with one standing in `designation` — none means no scan.
+            @Dependency(\.defaultDatabase) var database
+            @Dependency(\.locationsClient) var locationsClient
+            let scanner = try? await database.read { db in
+                try Replicant.where { $0.currentStar.eq(designation) }.fetchOne(db)
+            }
+            if let code = scanner?.replicantCode, !code.isEmpty {
+                try? await locationsClient.scanAndPersist(replicantCode: code)
+            } else {
+                logger.notice("directive \(directive.id, privacy: .public): no replicant in \(designation, privacy: .public) to scan with")
+            }
+            await move(directive, to: nextStep, controllerCode: directive.controllerCode)
+            return true
+
         case let .refreshBody(system, body, nextStep):
             // Best-effort by contract, same reasoning as `.refreshSystem` above.
             @Dependency(\.locationsClient) var locationsClient
