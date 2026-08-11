@@ -72,6 +72,12 @@ public struct WorldSnapshot: Equatable, Sendable {
     /// machine needs `fetchedAt` too: `surveying` gates its refresh on how
     /// stale the census is, which a bare `[String: Int]` cannot answer.
     public let footprints: [String: LocationFootprint]
+    /// Census star position, by system designation — the geometry the Haul
+    /// Run's round-trip ranking reads. Whole-table, like `footprints`.
+    public let starPositions: [String: Position]
+    /// System → mesh-component label (`MeshGraph.components(of:)`), so a haul
+    /// candidate is filtered to the delivering theatre's own component.
+    public let components: [String: String]
     /// The other in-force directives, INCLUDING this one — the rows a mission
     /// needs to see to know what its siblings already own.
     ///
@@ -113,6 +119,8 @@ public struct WorldSnapshot: Equatable, Sendable {
         systems: [String: StarSystem] = [:],
         siteAssays: [String: [String: Double]] = [:],
         footprints: [String: LocationFootprint] = [:],
+        starPositions: [String: Position] = [:],
+        components: [String: String] = [:],
         peers: [Directive] = [],
         now: Date
     ) {
@@ -124,6 +132,8 @@ public struct WorldSnapshot: Equatable, Sendable {
         self.systems = systems
         self.siteAssays = siteAssays
         self.footprints = footprints
+        self.starPositions = starPositions
+        self.components = components
         self.peers = peers
         self.now = now
     }
@@ -218,6 +228,15 @@ public struct WorldSnapshot: Equatable, Sendable {
                 footprintRows.map { ($0.location, $0) }, uniquingKeysWith: { _, last in last }
             )
 
+            // Same geometry `WorldView.read` computes: a haul candidate must
+            // sit in the delivering theatre's own mesh COMPONENT, not merely be meshed.
+            let stars = try Star.all.fetchAll(db)
+            let starPositions = Dictionary(
+                stars.map { ($0.designation, $0.position) }, uniquingKeysWith: { _, last in last }
+            )
+            let mesh = SalvageTargetPlanner.meshSystems(in: devices)
+            let components = MeshGraph(positions: starPositions).components(of: mesh)
+
             return WorldSnapshot(
                 devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
                 openOperations: Dictionary(operations.map { ($0.entityCode, $0) }, uniquingKeysWith: { _, last in last }),
@@ -227,6 +246,8 @@ public struct WorldSnapshot: Equatable, Sendable {
                 systems: systems,
                 siteAssays: siteAssays,
                 footprints: footprints,
+                starPositions: starPositions,
+                components: components,
                 peers: peers,
                 now: now
             )

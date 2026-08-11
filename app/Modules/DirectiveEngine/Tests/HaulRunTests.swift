@@ -70,17 +70,24 @@ private func footprint(_ location: String, _ resources: Int, at fetchedAt: Date 
     )
 }
 
+/// Every meshed system in one shared component, since these fixtures test
+/// reachability and ranking-by-size, not multi-component geometry — the star
+/// geometry itself is `MultiTheatreHaulTests`' job.
 private func world(
     devices: [Device],
     footprints: [LocationFootprint] = [],
     log: [DirectiveLogEntry] = [],
     now: Date = fixtureNow
 ) -> WorldSnapshot {
-    WorldSnapshot(
+    let components = Dictionary(
+        uniqueKeysWithValues: SalvageTargetPlanner.meshSystems(in: devices).map { ($0, "MESH") }
+    )
+    return WorldSnapshot(
         devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
         openOperations: [:],
         log: log,
         footprints: Dictionary(footprints.map { ($0.location, $0) }, uniquingKeysWith: { _, last in last }),
+        components: components,
         now: now
     )
 }
@@ -161,6 +168,22 @@ private func run(
 }
 
 private let meshed = [relay(at: "AINALRAM-1-L4"), relay(at: "ATIANFU-1-L4")]
+
+/// A census row at `x` light-years out along the X axis — close enough
+/// together (within `SalvageTargetPlanner.relayRangeLY`) to land in one mesh
+/// component when the two are both used.
+private func star(_ designation: String, x: Double) -> Star {
+    Star(
+        designation: designation, spectralType: "G", color: "yellow",
+        positionX: x, positionY: 0, positionZ: 0, estimatedPlanets: 3,
+        explored: false, hasLife: nil, entryPoint: nil,
+        createdAt: Date(timeIntervalSince1970: 0), firstVisitedAt: nil, fullyScannedAt: nil
+    )
+}
+
+/// `AINALRAM` and `ATIANFU`, close enough to share a mesh component — the
+/// `Star` rows a real `WorldSnapshot.read` needs to place `meshed`'s two relays.
+private let meshedStars = [star("AINALRAM", x: 0), star("ATIANFU", x: 5)]
 
 @Suite("Haul Run")
 struct HaulRunTests {
@@ -331,13 +354,13 @@ struct HaulRunTests {
             ]
         )
         let c2 = controller("C2")
-        // A second reachable pile in the ALREADY-meshed delivery system
-        // (AINALRAM) — no extra relay needed, and richer than nothing.
+        // A second CROSS-system pile: a same-system one now ranks `.infinity`
+        // regardless of size, which would collide with this test's premise.
         let action = HaulRun().nextAction(
             directive: run(step: HaulRun.Step.assigning, controllerCode: "C1"),
             world: world(
-                devices: [settledC1, c2] + meshed,
-                footprints: [footprint("ATIANFU-BELT-1", 3_537), footprint("AINALRAM-2", 900)]
+                devices: [settledC1, c2] + meshed + [relay(at: "SHERATANON-10-L4")],
+                footprints: [footprint("ATIANFU-BELT-1", 3_537), footprint("SHERATANON-6-1", 900)]
             )
         )
         #expect(action == .assignController(deviceCode: "C2", nextStep: HaulRun.Step.dispatching))
@@ -958,6 +981,9 @@ struct HaulRunEndToEndTests {
         try await database.write { db in
             for device in [controller("C1")] + meshed {
                 try Device.insert { device }.execute(db)
+            }
+            for star in meshedStars {
+                try Star.insert { star }.execute(db)
             }
             for pile in [
                 footprint("ATIANFU-BELT-1", 3_537),

@@ -44,44 +44,50 @@ public enum HaulTargetPlanner {
     /// come here instead.
     public static let shuttle = "shuttle"
 
-    /// One distinct pile per controller, richest first: each controller in
-    /// `controllers` is paired with the next-best location in `footprints` it
-    /// may legally drain into `delivery`, given the mesh membership in
-    /// `meshSystems`.
-    ///
-    /// `footprints` is designation → total units, straight off
-    /// `LocationFootprint.resources`. Recompute it from scratch every cycle and
-    /// never cache it: the census moves under the run as the Salvage Run mines
-    /// and the haulers drain, so a remembered ranking is wrong within minutes.
-    ///
-    /// Surplus controllers are returned NO assignment rather than being doubled
-    /// up onto the richest pile — two controllers on one pile put their drones in
-    /// contention for the same units, and an idle controller is the cheaper
-    /// failure.
+    /// Travel seconds per light-year, for the round-trip ranking. UNCALIBRATED —
+    /// see the residual in the spec.
+    public static let secondsPerLy: Double = 30
+
+    /// One distinct pile per controller, richest-per-round-trip first, filtered to
+    /// `delivery`'s mesh component. Recompute `footprints` fresh each cycle, never
+    /// cache — and leave surplus controllers unassigned rather than sharing a pile.
     public static func assignments(
         controllers: [Device],
         footprints: [String: Int],
-        meshSystems: Set<String>,
-        delivery: String
+        components: [String: String],
+        positions: [String: Position],
+        delivery: String,
+        secondsPerLy: Double = HaulTargetPlanner.secondsPerLy
     ) -> [Assignment] {
         let deliverySystem = SiteAssay.system(of: delivery)
+        let deliveryComponent = components[deliverySystem]
+
+        func roundTripRank(_ location: String, units: Int) -> Double {
+            let system = SiteAssay.system(of: location)
+            guard system != deliverySystem else { return .infinity }
+            guard let from = positions[system], let to = positions[deliverySystem] else {
+                // Unplaceable: degrade to raw units rather than dropping a real
+                // pile because the census has a hole.
+                return Double(units)
+            }
+            let seconds = 2 * from.distance(to: to) * secondsPerLy
+            return seconds > 0 ? Double(units) / seconds : .infinity
+        }
 
         let candidates = footprints
             .filter { location, units in
                 guard units > 0, location != delivery else { return false }
                 let system = SiteAssay.system(of: location)
-                // Same system: `shuttle`, and the mesh is irrelevant because
-                // nothing crosses a star. Different system: `ferry`, which needs
-                // BOTH ends meshed — the delivery end included, since a mesh is
-                // only useful if the destination is on it too.
+                // Same system is always `shuttle` (nothing crosses a star);
+                // cross-system `ferry` needs both ends in the SAME component.
                 if system == deliverySystem { return true }
-                return meshSystems.contains(system) && meshSystems.contains(deliverySystem)
+                return components[system] != nil && components[system] == deliveryComponent
             }
-            // Richest first, then designation so the order is TOTAL. Without the
-            // tiebreak two equally-rich piles could swap places between
-            // evaluations and the run would re-issue `set_directive` forever.
+            // Richest-per-round-trip first, designation as tie-break — a TOTAL
+            // order, or two equally-ranked piles could thrash `set_directive`.
             .sorted { lhs, rhs in
-                lhs.value != rhs.value ? lhs.value > rhs.value : lhs.key < rhs.key
+                let (l, r) = (roundTripRank(lhs.key, units: lhs.value), roundTripRank(rhs.key, units: rhs.value))
+                return l != r ? l > r : lhs.key < rhs.key
             }
 
         // Controllers sorted so the same controller keeps the same rank across

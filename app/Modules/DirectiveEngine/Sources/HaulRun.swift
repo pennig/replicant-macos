@@ -142,7 +142,8 @@ public struct HaulRun: MissionStepMachine {
         HaulTargetPlanner.assignments(
             controllers: controllers(in: world, tag: fleetTag(of: directive)),
             footprints: world.footprints.mapValues(\.resources),
-            meshSystems: SalvageTargetPlanner.meshSystems(in: Array(world.devices.values)),
+            components: world.components,
+            positions: world.starPositions,
             delivery: deliverySink(in: world)
         )
     }

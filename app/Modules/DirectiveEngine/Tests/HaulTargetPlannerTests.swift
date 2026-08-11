@@ -48,6 +48,12 @@ private func relay(at location: String) -> Device {
     device("RLY-\(location)", type: "ftl_relay", location: location, status: "relaying", features: ["relay"])
 }
 
+/// Every meshed system in one shared component, since these fixtures test
+/// reachability and ranking-by-size, not multi-component geometry.
+private func components(for devices: [Device]) -> [String: String] {
+    Dictionary(uniqueKeysWithValues: SalvageTargetPlanner.meshSystems(in: devices).map { ($0, "MESH") })
+}
+
 private let delivery = "AINALRAM-BELT-1"
 
 @Suite("Haul target planner")
@@ -55,13 +61,13 @@ struct HaulTargetPlannerTests {
 
     /// The headline: the richest reachable pile goes to the first controller.
     @Test func itPicksTheRichestReachablePile() {
-        let mesh = SalvageTargetPlanner.meshSystems(in: [
+        let relays = [
             relay(at: "AINALRAM-1-L4"), relay(at: "ATIANFU-1-L4"), relay(at: "SHERATANON-10-L4"),
-        ])
+        ]
         let plans = HaulTargetPlanner.assignments(
             controllers: [controller("C1")],
             footprints: ["ATIANFU-BELT-1": 3_537, "SHERATANON-6-1": 294, "SHERATANON-7-4": 61],
-            meshSystems: mesh,
+            components: components(for: relays), positions: [:],
             delivery: delivery
         )
         #expect(plans == [
@@ -72,11 +78,11 @@ struct HaulTargetPlannerTests {
     /// The delivery location is never its own source — collecting from the place
     /// you deliver to is a no-op loop.
     @Test func itNeverCollectsFromTheDeliveryLocation() {
-        let mesh = SalvageTargetPlanner.meshSystems(in: [relay(at: "AINALRAM-1-L4")])
+        let relays = [relay(at: "AINALRAM-1-L4")]
         let plans = HaulTargetPlanner.assignments(
             controllers: [controller("C1")],
             footprints: [delivery: 59_230],
-            meshSystems: mesh,
+            components: components(for: relays), positions: [:],
             delivery: delivery
         )
         #expect(plans.isEmpty)
@@ -85,13 +91,13 @@ struct HaulTargetPlannerTests {
     /// An empty pile is not a candidate — this is also how a drained pile stops
     /// being worked, since nothing records "finished".
     @Test func itIgnoresEmptyPiles() {
-        let mesh = SalvageTargetPlanner.meshSystems(in: [
+        let relays = [
             relay(at: "AINALRAM-1-L4"), relay(at: "ATIANFU-1-L4"),
-        ])
+        ]
         let plans = HaulTargetPlanner.assignments(
             controllers: [controller("C1")],
             footprints: ["ATIANFU-BELT-1": 0],
-            meshSystems: mesh,
+            components: components(for: relays), positions: [:],
             delivery: delivery
         )
         #expect(plans.isEmpty)
@@ -100,13 +106,13 @@ struct HaulTargetPlannerTests {
     /// Ferry's own requirement: an unmeshed system cannot be a source, however
     /// rich it is. TENEGSHE holds 80 units and no relay.
     @Test func itSkipsUnmeshedSystemsHoweverRich() {
-        let mesh = SalvageTargetPlanner.meshSystems(in: [
+        let relays = [
             relay(at: "AINALRAM-1-L4"), relay(at: "SHERATANON-10-L4"),
-        ])
+        ]
         let plans = HaulTargetPlanner.assignments(
             controllers: [controller("C1")],
             footprints: ["TENEGSHE-3": 9_999, "SHERATANON-6-1": 294],
-            meshSystems: mesh,
+            components: components(for: relays), positions: [:],
             delivery: delivery
         )
         #expect(plans == [
@@ -121,11 +127,11 @@ struct HaulTargetPlannerTests {
     /// `&&` for `||` is caught by `itSkipsUnmeshedSystemsHoweverRich`; DELETING
     /// the delivery half was caught by nothing until this test.)
     @Test func itSkipsAPileWhenTheDeliverySystemIsUnmeshed() {
-        let mesh = SalvageTargetPlanner.meshSystems(in: [relay(at: "ATIANFU-1-L4")])
+        let relays = [relay(at: "ATIANFU-1-L4")]
         let plans = HaulTargetPlanner.assignments(
             controllers: [controller("C1")],
             footprints: ["ATIANFU-BELT-1": 3_537],
-            meshSystems: mesh,
+            components: components(for: relays), positions: [:],
             delivery: delivery
         )
         #expect(plans.isEmpty)
@@ -137,7 +143,7 @@ struct HaulTargetPlannerTests {
         let plans = HaulTargetPlanner.assignments(
             controllers: [controller("C1")],
             footprints: ["AINALRAM-4": 500],
-            meshSystems: [],
+            components: [:], positions: [:],
             delivery: delivery
         )
         #expect(plans == [
@@ -148,13 +154,13 @@ struct HaulTargetPlannerTests {
     /// Two controllers never share a pile — their drones would contend for the
     /// same units.
     @Test func controllersGetDistinctPilesInRankOrder() {
-        let mesh = SalvageTargetPlanner.meshSystems(in: [
+        let relays = [
             relay(at: "AINALRAM-1-L4"), relay(at: "ATIANFU-1-L4"), relay(at: "SHERATANON-10-L4"),
-        ])
+        ]
         let plans = HaulTargetPlanner.assignments(
             controllers: [controller("C2"), controller("C1")],
             footprints: ["ATIANFU-BELT-1": 3_537, "SHERATANON-6-1": 294, "SHERATANON-7-4": 61],
-            meshSystems: mesh,
+            components: components(for: relays), positions: [:],
             delivery: delivery
         )
         // Controllers sort by code, so C1 takes the richest.
@@ -166,13 +172,13 @@ struct HaulTargetPlannerTests {
 
     /// Surplus controllers get nothing rather than doubling up (spec §5).
     @Test func surplusControllersAreLeftUnassigned() {
-        let mesh = SalvageTargetPlanner.meshSystems(in: [
+        let relays = [
             relay(at: "AINALRAM-1-L4"), relay(at: "ATIANFU-1-L4"),
-        ])
+        ]
         let plans = HaulTargetPlanner.assignments(
             controllers: [controller("C1"), controller("C2"), controller("C3")],
             footprints: ["ATIANFU-BELT-1": 3_537],
-            meshSystems: mesh,
+            components: components(for: relays), positions: [:],
             delivery: delivery
         )
         #expect(plans.count == 1)
@@ -182,13 +188,13 @@ struct HaulTargetPlannerTests {
     /// Equal piles resolve by designation, so the order is total and an
     /// evaluation never oscillates between two equally-rich candidates.
     @Test func equalPilesResolveByDesignation() {
-        let mesh = SalvageTargetPlanner.meshSystems(in: [
+        let relays = [
             relay(at: "AINALRAM-1-L4"), relay(at: "ATIANFU-1-L4"),
-        ])
+        ]
         let plans = HaulTargetPlanner.assignments(
             controllers: [controller("C1"), controller("C2")],
             footprints: ["ATIANFU-BELT-2": 100, "ATIANFU-BELT-1": 100],
-            meshSystems: mesh,
+            components: components(for: relays), positions: [:],
             delivery: delivery
         )
         #expect(plans.map(\.location) == ["ATIANFU-BELT-1", "ATIANFU-BELT-2"])
@@ -200,7 +206,7 @@ struct HaulTargetPlannerTests {
         let plans = HaulTargetPlanner.assignments(
             controllers: [controller("C1")],
             footprints: ["TENEGSHE-3": 80],
-            meshSystems: [],
+            components: [:], positions: [:],
             delivery: delivery
         )
         #expect(plans.isEmpty)
