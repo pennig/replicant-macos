@@ -383,7 +383,7 @@ struct Brain: Sendable {
                 targets: [belt], targetIndex: 0,
                 step: MineRun().firstStep,
                 stepStartedAt: now,
-                returnToOrigin: false,
+                returnToOrigin: true,
                 originDesignation: snapshot.view.hubLocation.map { SiteAssay.system(of: $0) },
                 attentionReason: nil,
                 createdAt: now, updatedAt: now
