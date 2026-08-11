@@ -144,7 +144,8 @@ func directiveFixture(
     deviceCode: String,
     controllerCode: String? = nil,
     fleetTag: String? = nil,
-    targets: [String] = []
+    targets: [String] = [],
+    theatreDepot: String? = nil
 ) -> Directive {
     Directive(
         id: id, kind: kind, status: status, deviceCode: deviceCode,
@@ -152,11 +153,14 @@ func directiveFixture(
         sourceRelayCode: nil, targets: targets, targetIndex: 0,
         step: "step", stepStartedAt: Date(timeIntervalSince1970: 0),
         returnToOrigin: false, originDesignation: nil, attentionReason: nil,
-        createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0)
+        createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0),
+        theatreDepot: theatreDepot
     )
 }
 
-/// `directiveFixture`, inserted.
+/// `directiveFixture`, inserted. `theatreDepot` defaults to `growHubLocation`
+/// — the depot every `seedGrowableWorld` caller actually derives — so a
+/// tick's adoption pass finds nothing to stamp on a row seeded pre-tick.
 func seedDirective(
     _ db: Database,
     id: String,
@@ -165,12 +169,14 @@ func seedDirective(
     deviceCode: String,
     controllerCode: String? = nil,
     fleetTag: String? = nil,
-    targets: [String] = []
+    targets: [String] = [],
+    theatreDepot: String? = growHubLocation
 ) throws {
     try Directive.insert {
         directiveFixture(
             id: id, kind: kind, status: status, deviceCode: deviceCode,
-            controllerCode: controllerCode, fleetTag: fleetTag, targets: targets
+            controllerCode: controllerCode, fleetTag: fleetTag, targets: targets,
+            theatreDepot: theatreDepot
         )
     }.execute(db)
 }
