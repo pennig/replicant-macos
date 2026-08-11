@@ -141,7 +141,7 @@ func directiveFixture(
     id: String,
     kind: DirectiveKind = .salvageRun,
     status: DirectiveStatus = .running,
-    deviceCode: String,
+    deviceCode: String = "V1",
     controllerCode: String? = nil,
     fleetTag: String? = nil,
     targets: [String] = [],

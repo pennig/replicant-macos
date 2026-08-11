@@ -384,6 +384,7 @@ struct BrainEnsureSalvageTests {
             directives: [],          // read BEFORE either insert, and never refreshed
             log: [:], hubFootprint: nil
         )
+        let theatre = try #require(stale.view.theatres.first { $0.isOperational })
         // Each call names a DIFFERENT vessel. With one vessel the reservation
         // guard would refuse the second call and the liveness check would never
         // be reached — the two guards overlap, and only this separates them.
@@ -393,10 +394,10 @@ struct BrainEnsureSalvageTests {
             $0.uuid = .incrementing
         } operation: {
             for vessel in ["SALV1", "SALV2"] {
-                await brain.ensureOne(.salvageRun, snapshot: stale, database: database) {
+                await brain.ensureOne(.salvageRun, theatre: theatre, snapshot: stale, database: database) {
                     directiveFixture(
                         id: "ROW-\(vessel)", kind: .salvageRun,
-                        deviceCode: vessel, fleetTag: nil
+                        deviceCode: vessel, fleetTag: nil, theatreDepot: theatre.depot
                     )
                 }
             }

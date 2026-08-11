@@ -262,20 +262,23 @@ struct Brain: Sendable {
         }
     }
 
-    /// Keep exactly one live directive of `kind` that `matching` accepts,
-    /// building one through `build` when none is. `matching` narrows liveness
-    /// past kind alone — the general haul drainer is one row among its siblings.
+    /// Keep exactly one live directive of `kind` in `theatre` that `matching`
+    /// accepts, building one through `build` when none is. `matching` narrows
+    /// liveness past kind alone.
     func ensureOne(
         _ kind: DirectiveKind,
+        theatre: Theatre,
         matching: @escaping @Sendable (Directive) -> Bool = { _ in true },
         snapshot: Snapshot,
         database: any DatabaseWriter,
         build: () -> Directive?
     ) async {
         guard !Task.isCancelled else { return }
-        let live = snapshot.directives.contains {
-            $0.kind == kind && Self.owningStatuses.contains($0.status) && matching($0)
+        let owns: @Sendable (Directive) -> Bool = {
+            $0.kind == kind && Self.owningStatuses.contains($0.status)
+                && $0.theatreDepot == theatre.depot && matching($0)
         }
+        let live = snapshot.directives.contains(where: owns)
         guard !live else { return }
         guard let directive = build() else { return }
 
@@ -287,9 +290,7 @@ struct Brain: Sendable {
                 let rows = try Directive.all.fetchAll(db)
                 let devices = try Device.all.fetchAll(db)
                     .reduce(into: [String: Device]()) { $0[$1.deviceCode] = $1 }
-                let live = rows.contains {
-                    $0.kind == kind && Self.owningStatuses.contains($0.status) && matching($0)
-                }
+                let live = rows.contains(where: owns)
                 guard !live else { return }
                 // A device another directive of ANY kind already owns is not
                 // this one's to commit — kind-scoped liveness cannot see that.
@@ -316,122 +317,137 @@ struct Brain: Sendable {
         }
     }
 
-    /// Keep exactly one Survey Run roaming — `tendRestock`'s sibling. Nothing
-    /// preempts it: `.needsAttention`/`.paused` count as live so the brain
-    /// never relaunches around a halted run or an operator's own pause.
+    /// Keep exactly one Survey Run roaming per operational theatre —
+    /// `tendRestock`'s sibling. `.needsAttention`/`.paused` count as live so the
+    /// brain never relaunches around a halted run or an operator's own pause.
     private func ensureSurvey(snapshot: Snapshot, database: any DatabaseWriter) async {
         guard case let .launch(carrier, roamCentre) = Self.surveyReadiness(view: snapshot.view) else { return }
         @Dependency(\.uuid) var uuid
-        await ensureOne(.surveyRun, snapshot: snapshot, database: database) {
-            Directive(
-                id: uuid().uuidString,
-                kind: .surveyRun,
-                status: .running,
-                deviceCode: carrier,
-                controllerCode: nil, roamCentre: roamCentre,
-                fleetTag: SurveyRun.defaultFleetTag, sourceRelayCode: nil,
-                targets: [], targetIndex: 0,
-                step: SurveyRun().firstStep,
-                stepStartedAt: now,
-                returnToOrigin: false,
-                originDesignation: snapshot.view.devices[carrier]?.location.map { SiteAssay.system(of: $0) },
-                attentionReason: nil,
-                createdAt: now, updatedAt: now
-            )
+        for theatre in snapshot.view.theatres.filter(\.isOperational) {
+            await ensureOne(.surveyRun, theatre: theatre, snapshot: snapshot, database: database) {
+                Directive(
+                    id: uuid().uuidString,
+                    kind: .surveyRun,
+                    status: .running,
+                    deviceCode: carrier,
+                    controllerCode: nil, roamCentre: roamCentre,
+                    fleetTag: SurveyRun.defaultFleetTag, sourceRelayCode: nil,
+                    targets: [], targetIndex: 0,
+                    step: SurveyRun().firstStep,
+                    stepStartedAt: now,
+                    returnToOrigin: false,
+                    originDesignation: snapshot.view.devices[carrier]?.location.map { SiteAssay.system(of: $0) },
+                    attentionReason: nil,
+                    createdAt: now, updatedAt: now,
+                    theatreDepot: theatre.depot
+                )
+            }
         }
     }
 
-    /// Keep exactly one Salvage Run working — `ensureSurvey`'s sibling. The run
-    /// is continuous and picks its own targets, so liveness is the whole job.
+    /// Keep exactly one Salvage Run working per operational theatre —
+    /// `ensureSurvey`'s sibling. The run is continuous and picks its own
+    /// targets, so liveness is the whole job.
     private func ensureSalvage(snapshot: Snapshot, database: any DatabaseWriter) async {
         guard case let .launch(carrier, roamCentre) = Self.salvageReadiness(
             view: snapshot.view, directives: snapshot.directives
         ) else { return }
 
         @Dependency(\.uuid) var uuid
-        await ensureOne(.salvageRun, snapshot: snapshot, database: database) {
-            Directive(
-                id: uuid().uuidString,
-                kind: .salvageRun,
-                status: .running,
-                deviceCode: carrier,
-                controllerCode: nil,
-                roamCentre: roamCentre,
-                fleetTag: SalvageRun.defaultFleetTag,
-                sourceRelayCode: nil,
-                targets: [], targetIndex: 0,
-                step: SalvageRun().firstStep,
-                stepStartedAt: now,
-                returnToOrigin: false,
-                originDesignation: snapshot.view.devices[carrier]?.location.map { SiteAssay.system(of: $0) },
-                attentionReason: nil,
-                createdAt: now, updatedAt: now
-            )
+        for theatre in snapshot.view.theatres.filter(\.isOperational) {
+            await ensureOne(.salvageRun, theatre: theatre, snapshot: snapshot, database: database) {
+                Directive(
+                    id: uuid().uuidString,
+                    kind: .salvageRun,
+                    status: .running,
+                    deviceCode: carrier,
+                    controllerCode: nil,
+                    roamCentre: roamCentre,
+                    fleetTag: SalvageRun.defaultFleetTag,
+                    sourceRelayCode: nil,
+                    targets: [], targetIndex: 0,
+                    step: SalvageRun().firstStep,
+                    stepStartedAt: now,
+                    returnToOrigin: false,
+                    originDesignation: snapshot.view.devices[carrier]?.location.map { SiteAssay.system(of: $0) },
+                    attentionReason: nil,
+                    createdAt: now, updatedAt: now,
+                    theatreDepot: theatre.depot
+                )
+            }
         }
     }
 
-    /// Keep exactly one GENERAL haul run alive. Scoped by fleet tag, not kind:
-    /// `mine`'s future per-site rows carry their own tags, so they neither
-    /// satisfy this rule nor get relaunched around by it.
+    /// Keep exactly one GENERAL haul run alive per operational theatre. Scoped
+    /// by fleet tag, not kind: `mine`'s per-site rows carry their own tags, so
+    /// they neither satisfy this rule nor get relaunched around by it.
     private func ensureHaul(snapshot: Snapshot, database: any DatabaseWriter) async {
         guard case let .launch(controller) = Self.haulReadiness(view: snapshot.view, directives: snapshot.directives) else { return }
 
         @Dependency(\.uuid) var uuid
-        await ensureOne(
-            .haulRun, matching: Self.isGeneralHaul, snapshot: snapshot, database: database
-        ) {
-            Directive(
-                id: uuid().uuidString,
-                kind: .haulRun,
-                status: .running,
-                deviceCode: controller,
-                controllerCode: nil,
-                roamCentre: nil,
-                fleetTag: HaulRun.defaultFleetTag,
-                sourceRelayCode: nil,
-                targets: [], targetIndex: 0,
-                step: HaulRun().firstStep,
-                stepStartedAt: now,
-                returnToOrigin: false,
-                originDesignation: snapshot.view.hubLocation.map { SiteAssay.system(of: $0) },
-                attentionReason: nil,
-                createdAt: now, updatedAt: now
-            )
+        for theatre in snapshot.view.theatres.filter(\.isOperational) {
+            await ensureOne(
+                .haulRun, theatre: theatre, matching: Self.isGeneralHaul,
+                snapshot: snapshot, database: database
+            ) {
+                Directive(
+                    id: uuid().uuidString,
+                    kind: .haulRun,
+                    status: .running,
+                    deviceCode: controller,
+                    controllerCode: nil,
+                    roamCentre: nil,
+                    fleetTag: HaulRun.defaultFleetTag,
+                    sourceRelayCode: nil,
+                    targets: [], targetIndex: 0,
+                    step: HaulRun().firstStep,
+                    stepStartedAt: now,
+                    returnToOrigin: false,
+                    originDesignation: snapshot.view.hubLocation.map { SiteAssay.system(of: $0) },
+                    attentionReason: nil,
+                    createdAt: now, updatedAt: now,
+                    theatreDepot: theatre.depot
+                )
+            }
         }
     }
 
-    /// Install one mine fleet at a time — a second install would contend for the
-    /// same free fleet members standing at the hub.
+    /// Install one mine fleet at a time per operational theatre — a second
+    /// install would contend for the same free fleet members standing at the
+    /// hub.
     private func ensureMine(snapshot: Snapshot, database: any DatabaseWriter) async {
         guard case let .launch(carrier, belt) = Self.mineReadiness(
             view: snapshot.view, directives: snapshot.directives
         ) else { return }
 
         @Dependency(\.uuid) var uuid
-        await ensureOne(.mineRun, snapshot: snapshot, database: database) {
-            Directive(
-                id: uuid().uuidString,
-                kind: .mineRun,
-                status: .running,
-                deviceCode: carrier,
-                controllerCode: nil,
-                roamCentre: nil,
-                fleetTag: MineRecipe.fleetTag,
-                sourceRelayCode: nil,
-                targets: [belt], targetIndex: 0,
-                step: MineRun().firstStep,
-                stepStartedAt: now,
-                returnToOrigin: false,
-                originDesignation: snapshot.view.hubLocation.map { SiteAssay.system(of: $0) },
-                attentionReason: nil,
-                createdAt: now, updatedAt: now
-            )
+        for theatre in snapshot.view.theatres.filter(\.isOperational) {
+            await ensureOne(.mineRun, theatre: theatre, snapshot: snapshot, database: database) {
+                Directive(
+                    id: uuid().uuidString,
+                    kind: .mineRun,
+                    status: .running,
+                    deviceCode: carrier,
+                    controllerCode: nil,
+                    roamCentre: nil,
+                    fleetTag: MineRecipe.fleetTag,
+                    sourceRelayCode: nil,
+                    targets: [belt], targetIndex: 0,
+                    step: MineRun().firstStep,
+                    stepStartedAt: now,
+                    returnToOrigin: false,
+                    originDesignation: snapshot.view.hubLocation.map { SiteAssay.system(of: $0) },
+                    attentionReason: nil,
+                    createdAt: now, updatedAt: now,
+                    theatreDepot: theatre.depot
+                )
+            }
         }
     }
 
     /// Keep one PINNED haul row draining each installed mine, beside the general
-    /// drainer. A belt a live `mineRun` still targets is skipped — that run arms
-    /// the same transport controller, from the other side.
+    /// drainer. A belt a live `mineRun` still targets, or that resolves no
+    /// servicing theatre, is skipped.
     private func ensureMineFerries(snapshot: Snapshot, database: any DatabaseWriter) async {
         let view = snapshot.view
         let belts = MineRecipe.installedBelts(in: view.devices.values, hub: view.hubLocation)
@@ -441,8 +457,10 @@ struct Brain: Sendable {
 
         @Dependency(\.uuid) var uuid
         for belt in belts {
+            guard let theatre = view.theatre(servicing: SiteAssay.system(of: belt)) else { continue }
             await ensureOne(
                 .haulRun,
+                theatre: theatre,
                 matching: { $0.targets.first == belt },
                 snapshot: snapshot,
                 database: database
@@ -467,7 +485,8 @@ struct Brain: Sendable {
                     returnToOrigin: false,
                     originDesignation: view.hubLocation.map { SiteAssay.system(of: $0) },
                     attentionReason: nil,
-                    createdAt: now, updatedAt: now
+                    createdAt: now, updatedAt: now,
+                    theatreDepot: theatre.depot
                 )
             }
         }
