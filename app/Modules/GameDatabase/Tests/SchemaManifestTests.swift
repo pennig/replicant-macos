@@ -57,6 +57,7 @@ import Testing
         "Create 'haulYields' table",
         "Add index on 'haulYields.controllerCode'",
         "Add 'deletedAt' to 'directives'",
+        "Create 'theatrePins'",
     ]
 
     @Test func manifestMatchesTheFrozenList() {

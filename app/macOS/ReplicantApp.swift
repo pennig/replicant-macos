@@ -269,6 +269,14 @@ struct ReplicantApp: App {
                 UserDefaultsEventCursorStore().clear()
             })
         )
+        // Theatre pins are account-scoped: a second account must not inherit
+        // the first's pinned depots.
+        accountManager.registerHandler(
+            SessionLifecycleHandler(id: "theatrePins", onLogout: {
+                @Dependency(\.defaultDatabase) var database
+                try? await database.write { db in try TheatrePin.delete().execute(db) }
+            })
+        )
         // Deliberately NOT cleared: `EventLog` — the SSE diagnostic ledger is
         // user-managed by design (cleared via the Event Log window's button),
         // and keeping it across sessions is part of its taxonomy-discovery job.

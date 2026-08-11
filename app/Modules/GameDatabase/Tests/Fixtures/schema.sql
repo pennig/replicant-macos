@@ -260,3 +260,8 @@ CREATE TABLE "systemDetails" (
   "systemScanned" INTEGER NOT NULL DEFAULT 0,
   "hydratedAt" TEXT NOT NULL
 , "summaryJSON" TEXT) STRICT;
+
+CREATE TABLE "theatrePins" (
+  "location" TEXT PRIMARY KEY NOT NULL,
+  "createdAt" TEXT NOT NULL
+) STRICT;
