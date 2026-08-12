@@ -732,14 +732,16 @@ struct BrainWidenedStallTests {
 
 // MARK: - haulReadiness / ensureHaul
 
-private func haulController(_ code: String, tags: [String], directives: [String] = ["ferry"]) -> Device {
+private func haulController(
+    _ code: String, tags: [String], directives: [String] = ["ferry"], location: String? = nil
+) -> Device {
     var detail: [String: JSONValue] = [:]
     if !directives.isEmpty {
         detail["available_directives"] = .array(directives.map(JSONValue.string))
     }
     return Device(
         deviceCode: code, deviceType: "ami_transport_controller", replicantCode: "R1",
-        status: "idle", location: nil, locationName: nil, operationalCapacity: 100, queueSize: 0,
+        status: "idle", location: location, locationName: nil, operationalCapacity: 100, queueSize: 0,
         stowedInDeviceCode: nil, controllerDeviceCode: nil, attachedToDeviceCode: nil,
         createdAt: Date(timeIntervalSince1970: 0), availableCommands: [], features: [],
         tags: tags, detail: .object(detail),
@@ -757,33 +759,85 @@ private func haulView(devices: [Device], depot: String? = "SOL-3") -> WorldView 
     )
 }
 
+/// The single-theatre fixtures' theatre — depot `SOL-3`, matching
+/// `haulView(depot:)`'s default single-theatre setup.
+private let solTheatre = Theatre(depot: "SOL-3", system: "SOL", origin: .derived, readiness: .operational, stock: 0)
+
+/// Two independent theatres in separate mesh components, mirroring
+/// `twoTheatreSalvageView` for haul controllers instead of salvage fleets.
+private func twoTheatreHaulView(
+    solControllers: [Device], vegaControllers: [Device]
+) -> (view: WorldView, sol: Theatre, vega: Theatre) {
+    let sol = Theatre(depot: "SOL-3", system: "SOL", origin: .derived, readiness: .operational, stock: 0)
+    let vega = Theatre(depot: "VEGA-3", system: "VEGA", origin: .pinned, readiness: .operational, stock: 0)
+    let devices = solControllers + vegaControllers
+    let view = WorldView(
+        devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
+        starPositions: ["SOL": Position(x: 0, y: 0, z: 0), "VEGA": Position(x: 300, y: 300, z: 300)],
+        meshSystems: ["SOL", "VEGA"], salvageUnits: [:], eventSystems: [],
+        theatres: [sol, vega], components: ["SOL": "SOL", "VEGA": "VEGA"], now: salvageEnsureNow
+    )
+    return (view, sol, vega)
+}
+
 @Suite("Brain — the haul readiness verdict")
 struct BrainHaulReadinessTests {
     @Test("a tagged ferry controller with a hub launches on the lowest code")
     func theLowestCodedControllerLaunches() {
         let view = haulView(devices: [
-            haulController("T2", tags: [HaulRun.defaultFleetTag]),
-            haulController("T1", tags: [HaulRun.defaultFleetTag]),
+            haulController("T2", tags: [HaulRun.defaultFleetTag], location: "SOL-1"),
+            haulController("T1", tags: [HaulRun.defaultFleetTag], location: "SOL-1"),
         ])
-        #expect(Brain.haulReadiness(view: view, directives: []) == .launch(controller: "T1"))
+        #expect(Brain.haulReadiness(view: view, directives: [], theatre: solTheatre) == .launch(controller: "T1"))
     }
 
     @Test("an untagged controller is idle — untagging is the operator's off-switch")
     func anUntaggedControllerIsIdle() {
-        let view = haulView(devices: [haulController("T1", tags: [])])
-        #expect(Brain.haulReadiness(view: view, directives: []) == .idle(reason: "no free auto:haul controller offering ferry"))
+        let view = haulView(devices: [haulController("T1", tags: [], location: "SOL-1")])
+        #expect(
+            Brain.haulReadiness(view: view, directives: [], theatre: solTheatre)
+                == .idle(reason: "no free auto:haul controller offering ferry")
+        )
     }
 
     @Test("a tagged device that does not offer ferry is not a haul controller")
     func aNonFerryDeviceIsIdle() {
-        let view = haulView(devices: [haulController("T1", tags: [HaulRun.defaultFleetTag], directives: [])])
-        #expect(Brain.haulReadiness(view: view, directives: []) == .idle(reason: "no free auto:haul controller offering ferry"))
+        let view = haulView(devices: [
+            haulController("T1", tags: [HaulRun.defaultFleetTag], directives: [], location: "SOL-1"),
+        ])
+        #expect(
+            Brain.haulReadiness(view: view, directives: [], theatre: solTheatre)
+                == .idle(reason: "no free auto:haul controller offering ferry")
+        )
     }
 
-    @Test("no operational theatre is idle rather than hauling to a stale constant")
-    func noHubIsIdle() {
-        let view = haulView(devices: [haulController("T1", tags: [HaulRun.defaultFleetTag])], depot: nil)
-        #expect(Brain.haulReadiness(view: view, directives: []) == .idle(reason: "no operational theatre"))
+    /// A theatre with no controller of its own idles, and must not call SOL's
+    /// tagged, ferry-offering controller untagged just because VEGA can't see it.
+    @Test("a theatre with no controller of its own idles without consuming the other theatre's controller")
+    func theatreWithNoOwnControllerIdlesWithoutConsumingTheOther() {
+        let (view, sol, vega) = twoTheatreHaulView(
+            solControllers: [haulController("T1", tags: [HaulRun.defaultFleetTag], location: "SOL-1")],
+            vegaControllers: []
+        )
+        guard case let .idle(reason) = Brain.haulReadiness(view: view, directives: [], theatre: vega) else {
+            Issue.record("expected VEGA to idle — it owns no controller")
+            return
+        }
+        #expect(reason == "no free \(HaulRun.defaultFleetTag) controller offering ferry")
+        #expect(!reason.contains("T1"))
+        #expect(Brain.haulReadiness(view: view, directives: [], theatre: sol) == .launch(controller: "T1"))
+    }
+
+    /// Two theatres, each with its own tagged, ferry-offering controller: each
+    /// theatre's own verdict names its OWN controller, independent of the other.
+    @Test("two theatres each with their own controller each launch their own")
+    func twoTheatresEachWithTheirOwnControllerEachLaunchTheirOwn() {
+        let (view, sol, vega) = twoTheatreHaulView(
+            solControllers: [haulController("T1", tags: [HaulRun.defaultFleetTag], location: "SOL-1")],
+            vegaControllers: [haulController("T2", tags: [HaulRun.defaultFleetTag], location: "VEGA-1")]
+        )
+        #expect(Brain.haulReadiness(view: view, directives: [], theatre: sol) == .launch(controller: "T1"))
+        #expect(Brain.haulReadiness(view: view, directives: [], theatre: vega) == .launch(controller: "T2"))
     }
 
     /// The forward-shaping rule `mine` will rely on. A liveness rule written
@@ -803,11 +857,24 @@ struct BrainHaulReadinessTests {
     }
 }
 
+// MARK: - `Brain.haulStatus` — the why-view's verdict
+
+@Suite("Brain — the haul status for the why-view")
+struct BrainHaulStatusTests {
+    @Test("no operational theatre reports idle, naming that")
+    func noOperationalTheatreReportsIdle() {
+        let view = haulView(devices: [haulController("T1", tags: [HaulRun.defaultFleetTag])], depot: nil)
+        #expect(Brain.haulStatus(directives: [], view: view) == .idle(reason: "no operational theatre"))
+    }
+}
+
 @Suite("Brain — ensureHaul")
 struct BrainEnsureHaulTests {
     private func seedHaulReadyWorld(_ db: Database) throws {
         try seedGrowableWorld(db, carriers: [], salvage: [:])
-        try Device.insert { haulController("T1", tags: [HaulRun.defaultFleetTag]) }.execute(db)
+        try Device.insert {
+            haulController("T1", tags: [HaulRun.defaultFleetTag], location: growHubLocation)
+        }.execute(db)
     }
 
     @Test func aTaggedControllerAndAHubLaunchOneGeneralDrainer() async throws {
@@ -854,5 +921,27 @@ struct BrainEnsureHaulTests {
         #expect(hauls.count == 2)
         #expect(hauls.filter { $0.fleetTag == HaulRun.defaultFleetTag }.count == 1)
         #expect(hauls.contains { $0.id == "PERSITE" })
+    }
+
+    /// An idle theatre must `continue`, not `return`. Depot designations sort
+    /// `SOL-3` before `VEGA-3`, so SOL (no haul controller) is visited first
+    /// and must not suppress VEGA's (fully ready) launch.
+    @Test func anIdleTheatreDoesNotSuppressAReadyOnesLaunch() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try seedGrowableWorld(db, carriers: [], salvage: [:])
+            try seedSecondTheatre(db)
+            try Device.insert {
+                haulController("T2", tags: [HaulRun.defaultFleetTag], location: secondTheatreHubLocation)
+            }.execute(db)
+        }
+
+        await salvageEnsureTick(database)
+
+        let hauls = try await salvageEnsureDirectives(database).filter { $0.kind == .haulRun }
+        let haul = try #require(hauls.first)
+        #expect(hauls.count == 1)
+        #expect(haul.deviceCode == "T2")
+        #expect(haul.theatreDepot == secondTheatreHubLocation)
     }
 }

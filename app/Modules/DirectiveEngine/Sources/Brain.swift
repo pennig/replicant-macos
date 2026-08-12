@@ -391,10 +391,11 @@ struct Brain: Sendable {
     /// by fleet tag, not kind: `mine`'s per-site rows carry their own tags, so
     /// they neither satisfy this rule nor get relaunched around by it.
     private func ensureHaul(snapshot: Snapshot, database: any DatabaseWriter) async {
-        guard case let .launch(controller) = Self.haulReadiness(view: snapshot.view, directives: snapshot.directives) else { return }
-
         @Dependency(\.uuid) var uuid
         for theatre in snapshot.view.theatres.filter(\.isOperational) {
+            guard case let .launch(controller) = Self.haulReadiness(
+                view: snapshot.view, directives: snapshot.directives, theatre: theatre
+            ) else { continue }
             await ensureOne(
                 .haulRun, theatre: theatre, matching: Self.isGeneralHaul,
                 snapshot: snapshot, database: database
@@ -1291,19 +1292,17 @@ struct Brain: Sendable {
         (directive.fleetTag ?? HaulRun.defaultFleetTag) == HaulRun.defaultFleetTag
     }
 
-    /// The haul verdict for `view`. `HaulRun.controllers` already sorts by code,
-    /// so the choice is reproducible across ticks. Takes `directives` for the
-    /// same reason `salvageReadiness` does — without it the verdict reports
-    /// ready for a controller `ensureOne` will decline every tick, forever.
-    static func haulReadiness(view: WorldView, directives: [Directive]) -> HaulReadiness {
+    /// The haul verdict for `theatre`. `HaulRun.controllers` already sorts by
+    /// code, so the choice is reproducible; the pool is scoped to devices
+    /// `theatre` owns, so two theatres never fight over one controller.
+    static func haulReadiness(view: WorldView, directives: [Directive], theatre: Theatre) -> HaulReadiness {
         let reserved = reservedDevices(directives: directives, devices: view.devices)
         guard let controller = HaulRun.controllers(
             in: view.devices.values, tag: HaulRun.defaultFleetTag
-        ).first(where: { !reserved.contains($0.deviceCode) }) else {
+        )
+        .filter({ owningTheatre(of: $0, view: view)?.depot == theatre.depot })
+        .first(where: { !reserved.contains($0.deviceCode) }) else {
             return .idle(reason: "no free \(HaulRun.defaultFleetTag) controller offering ferry")
-        }
-        guard view.theatres.contains(where: \.isOperational) else {
-            return .idle(reason: "no operational theatre")
         }
         return .launch(controller: controller.deviceCode)
     }
@@ -1436,7 +1435,10 @@ struct Brain: Sendable {
                 status: launchedGoalStatus(live.status)
             )
         }
-        switch haulReadiness(view: view, directives: directives) {
+        guard let theatre = view.theatres.first(where: \.isOperational) else {
+            return .idle(reason: "no operational theatre")
+        }
+        switch haulReadiness(view: view, directives: directives, theatre: theatre) {
         case let .launch(controller): return .ready(vessel: controller)
         case let .idle(reason): return .idle(reason: reason)
         }
