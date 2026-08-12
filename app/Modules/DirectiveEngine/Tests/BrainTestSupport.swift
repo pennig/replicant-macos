@@ -365,12 +365,25 @@ func seedMalformedSystemDetail(_ db: Database, system: String) throws {
     }.execute(db)
 }
 
+// MARK: - Single-theatre `WorldView` fixtures
+
+/// The retired `hubLocation:` shim's replacement: one operational `Theatre`
+/// at `depot` plus its own singleton mesh component. `depot: nil` yields no
+/// theatre, matching the old `hubLocation: nil`.
+func singleOperationalTheatre(depot: String?) -> (theatres: [Theatre], components: [String: String]) {
+    guard let depot else { return ([], [:]) }
+    let system = SiteAssay.system(of: depot)
+    return (
+        [Theatre(depot: depot, system: system, origin: .derived, readiness: .operational, stock: 0)],
+        [system: system]
+    )
+}
+
 // MARK: - Whole-world seeds
 
-/// Where the growable world's print hub and its carriers stand. A location
-/// inside the meshed `SOL` system (`SiteAssay.system(of:)` reads everything
-/// before the first hyphen), which is what makes `WorldView.hubLocation`
-/// non-nil — an off-mesh hub is deliberately invisible to the brain.
+/// Where the growable world's print hub and its carriers stand, inside the
+/// meshed `SOL` system — what makes it a recognised, operational theatre. An
+/// off-mesh hub is deliberately invisible to the brain.
 let growHubLocation = "SOL-3"
 
 /// The fixtures' census timestamp. Matches the `now` the pure-ranking helpers
@@ -392,12 +405,8 @@ func seedGrowableWorld(
     try seedRelay(db, code: "REL1", location: "SOL")
     try seedStar(db, designation: "SOL", x: 0, y: 0, z: 0)
     try seedPrintHub(db, code: "HUB1", location: growHubLocation)
-    // A hub is a print-capable device at a location the census shows holding
-    // resources — BOTH halves (`WorldView.hubLocation`). Without the stockpile
-    // row `HUB1` is just a printer standing somewhere, the brain recognises no
-    // hub, and every grow test here silently stops testing growth. Stocked well
-    // clear of the reserve floor so the rail is never what a test trips over;
-    // `BrainCeilingTests` owns the rail's own thresholds.
+    // A theatre needs BOTH a print-capable device and a stocked location —
+    // skip the stockpile and no theatre is recognised, silently disabling growth.
     try seedHubStockpile(db, location: growHubLocation, resources: BrainCeiling.aggregateSpendFloor * 2)
     for code in carriers {
         try seedDevice(db, code: code, type: "heaven_vessel", location: growHubLocation)
@@ -415,7 +424,7 @@ func seedGrowableWorld(
 }
 
 /// A census row — what makes a location a STOCKPILE, and so what makes a
-/// print-capable device standing on it a hub (`WorldView.hubLocation`).
+/// print-capable device standing on it a recognised theatre.
 ///
 /// `fetchedAt` defaults to the fixtures' own clock reading. Hub RECOGNITION
 /// ignores a row's age entirely — it asks only whether the location holds
@@ -458,14 +467,8 @@ func seedStockpile(
 // MARK: - Prune worlds
 
 /// A hub-anchored `WorldView` for prune analysis. `meshSystems` is DERIVED from
-/// the relay rows via the production predicate, never hand-set — a fixture that
-/// could claim a system is meshed with no relay in it would let a prune test pass
-/// against a world production cannot produce. `hub` names the hub's SYSTEM, and
-/// the resulting `hubLocation` is nil unless that system is genuinely meshed.
-/// `surveyed` defaults to every placed system, so the unknown-value clause stays
-/// quiet in tests that are not about it. `replicants` defaults to EMPTY rather
-/// than `[hub]`: the co-location the old design assumed is exactly what this
-/// parameter exists to break.
+/// the relay rows, never hand-set. `hub` names the hub's SYSTEM; no theatre is
+/// recognised unless that system is genuinely meshed.
 func prunableWorld(
     positions: [String: Position],
     relays: [String: String],
@@ -489,16 +492,17 @@ func prunableWorld(
     }
     let devices = relayDevices + fleetDevices
     let mesh = SalvageTargetPlanner.meshSystems(in: relayDevices)
-    // Real per-system labels, not `WorldView.init`'s synthesised single-entry
-    // fallback — every meshed system needs a component, not just the hub's.
+    // Real per-system labels, not a synthesised single-entry fallback — every
+    // meshed system needs a component, not just the hub's.
     let components = MeshGraph(positions: positions).components(of: mesh)
+    let theatre = singleOperationalTheatre(depot: hub.flatMap { mesh.contains($0) ? "\($0)-3" : nil })
     return WorldView(
         devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
         starPositions: positions,
         meshSystems: mesh,
         salvageUnits: salvage,
         eventSystems: events,
-        hubLocation: hub.flatMap { mesh.contains($0) ? "\($0)-3" : nil },
+        theatres: theatre.theatres,
         components: components,
         beltsBySystem: belts,
         surveyedSystems: surveyed ?? Set(positions.keys),
@@ -531,7 +535,7 @@ func seedLocationEvent(
 /// `.empty(meshSystems:)`, then layer in only the fields a test cares about
 /// via `.with(...)`.
 extension WorldView {
-    /// An otherwise-blank snapshot — every collection empty, no hub, `now`
+    /// An otherwise-blank snapshot — every collection empty, no theatre, `now`
     /// pinned to the epoch for determinism. `meshSystems` is the one field
     /// worth defaulting at the call site since nearly every brain test names
     /// at least one already-meshed system.
@@ -542,7 +546,6 @@ extension WorldView {
             meshSystems: meshSystems,
             salvageUnits: [:],
             eventSystems: [],
-            hubLocation: nil,
             beltsBySystem: [:],
             now: Date(timeIntervalSince1970: 0)
         )
@@ -565,7 +568,8 @@ extension WorldView {
             meshSystems: meshSystems,
             salvageUnits: salvageUnits ?? self.salvageUnits,
             eventSystems: eventSystems ?? self.eventSystems,
-            hubLocation: hubLocation,
+            theatres: theatres,
+            components: components,
             beltsBySystem: beltsBySystem ?? self.beltsBySystem,
             surveyedSystems: surveyedSystems ?? self.surveyedSystems,
             stockpileUnits: stockpileUnits ?? self.stockpileUnits,

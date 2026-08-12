@@ -265,7 +265,7 @@ public struct BrainMineHealth: Equatable, Sendable {
 }
 
 /// One brain tick, as reported to the operator: the `decision` it reached, the
-/// `ranked` field it decided against, the `hubLocation` and `limits` it decided
+/// `ranked` field it decided against, the `theatres` and `limits` it decided
 /// under, what `prune` saw, and the `observedAt` instant all of that was read.
 public struct BrainReport: Equatable, Sendable {
     /// What the tick did — already committed by the time this is published.
@@ -278,12 +278,10 @@ public struct BrainReport: Equatable, Sendable {
     /// candidate it was deferred for, and `.dispatch` carries no field on those
     /// ticks. On a dispatch tick the two are the same list by construction.
     public let ranked: [GrowCandidate]
-    /// The print hub's location this tick, when there is one on the mesh.
-    /// Present so the why-view can render the designations embedded in a gate
-    /// like "no free carrier at SOL-3" in monospace — the projection matches
-    /// against codes it was TOLD, never against a guess at what a code looks
-    /// like.
-    public let hubLocation: String?
+    /// Every recognised theatre this tick. Present so the why-view can render
+    /// designations embedded in a gate like "no free carrier at SOL-3" in
+    /// monospace — matching against codes it was TOLD, never a guess.
+    public let theatres: [Theatre]
     /// The rails, as read this tick.
     public let limits: BrainLimits
     /// What prune saw, or nil on a tick that never got as far as judging — no
@@ -312,7 +310,7 @@ public struct BrainReport: Equatable, Sendable {
     public init(
         decision: BrainDecision,
         ranked: [GrowCandidate],
-        hubLocation: String?,
+        theatres: [Theatre],
         limits: BrainLimits,
         prune: BrainPrune? = nil,
         survey: BrainSurveyStatus,
@@ -324,7 +322,7 @@ public struct BrainReport: Equatable, Sendable {
     ) {
         self.decision = decision
         self.ranked = ranked
-        self.hubLocation = hubLocation
+        self.theatres = theatres
         self.limits = limits
         self.prune = prune
         self.survey = survey

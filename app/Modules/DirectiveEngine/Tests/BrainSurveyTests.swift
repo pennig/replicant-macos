@@ -48,16 +48,18 @@ private func surveyReadinessDevice(
 
 private func surveyReadinessView(
     devices: [Device],
-    hubLocation: String? = nil,
+    depot: String? = nil,
     starPositions: [String: Position] = [:]
 ) -> WorldView {
-    WorldView(
+    let theatre = singleOperationalTheatre(depot: depot)
+    return WorldView(
         devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
         starPositions: starPositions,
         meshSystems: [],
         salvageUnits: [:],
         eventSystems: [],
-        hubLocation: hubLocation,
+        theatres: theatre.theatres,
+        components: theatre.components,
         now: surveyFixtureNow
     )
 }
@@ -80,7 +82,7 @@ struct BrainSurveyTests {
     func readyToLaunch() {
         let view = surveyReadinessView(
             devices: surveyReadinessStagedFleet(),
-            hubLocation: "AINALRAM-BELT-1",
+            depot: "AINALRAM-BELT-1",
             starPositions: ["AINALRAM": Position(x: 0, y: 0, z: 0)]
         )
 
@@ -91,7 +93,7 @@ struct BrainSurveyTests {
     func untaggedFleetIdles() {
         let devices = [surveyReadinessDevice("V1", type: "heaven_vessel")]
         let view = surveyReadinessView(
-            devices: devices, hubLocation: "AINALRAM-BELT-1",
+            devices: devices, depot: "AINALRAM-BELT-1",
             starPositions: ["AINALRAM": Position(x: 0, y: 0, z: 0)]
         )
 
@@ -107,7 +109,7 @@ struct BrainSurveyTests {
     func noControllerAboardIdles() {
         let devices = [surveyReadinessDevice("V1", type: "heaven_vessel", tags: [Brain.surveyCarrierTag])]
         let view = surveyReadinessView(
-            devices: devices, hubLocation: "AINALRAM-BELT-1",
+            devices: devices, depot: "AINALRAM-BELT-1",
             starPositions: ["AINALRAM": Position(x: 0, y: 0, z: 0)]
         )
 
@@ -128,7 +130,7 @@ struct BrainSurveyTests {
             ),
         ]
         let view = surveyReadinessView(
-            devices: devices, hubLocation: "AINALRAM-BELT-1",
+            devices: devices, depot: "AINALRAM-BELT-1",
             starPositions: ["AINALRAM": Position(x: 0, y: 0, z: 0)]
         )
 
@@ -145,7 +147,7 @@ struct BrainSurveyTests {
     func unknownRoamCentreIdles() {
         let view = surveyReadinessView(
             devices: surveyReadinessStagedFleet(),
-            hubLocation: "AINALRAM-BELT-1",
+            depot: "AINALRAM-BELT-1",
             starPositions: [:]
         )
 
@@ -160,7 +162,7 @@ struct BrainSurveyTests {
     func unresolvedAnchorIdles() {
         let view = surveyReadinessView(
             devices: surveyReadinessStagedFleet(),
-            hubLocation: nil,
+            depot: nil,
             starPositions: [:]
         )
 
@@ -179,7 +181,7 @@ struct BrainSurveyTests {
             surveyReadinessDevice("P1", type: "propulsor", tags: [Brain.surveyCarrierTag]),
         ]
         let view = surveyReadinessView(
-            devices: devices, hubLocation: "AINALRAM-BELT-1",
+            devices: devices, depot: "AINALRAM-BELT-1",
             starPositions: ["AINALRAM": Position(x: 0, y: 0, z: 0)]
         )
 
@@ -198,7 +200,7 @@ struct BrainSurveyTests {
     func mistaggedOnlyFleetNamesTheDevice() {
         let devices = [surveyReadinessDevice("P1", type: "propulsor", tags: [Brain.surveyCarrierTag])]
         let view = surveyReadinessView(
-            devices: devices, hubLocation: "AINALRAM-BELT-1",
+            devices: devices, depot: "AINALRAM-BELT-1",
             starPositions: ["AINALRAM": Position(x: 0, y: 0, z: 0)]
         )
 
@@ -221,7 +223,7 @@ struct BrainSurveyTests {
             surveyReadinessDevice("DRONE1", type: "survey_drone", stowedIn: "V1", controllerDeviceCode: "AMI1"),
         ]
         let view = surveyReadinessView(
-            devices: devices, hubLocation: "AINALRAM-BELT-1",
+            devices: devices, depot: "AINALRAM-BELT-1",
             starPositions: ["AINALRAM": Position(x: 0, y: 0, z: 0)]
         )
 
@@ -246,7 +248,7 @@ struct BrainSurveyStatusTests {
         )
         // A view that would otherwise idle — proves the live row is checked
         // FIRST, not merely that it wins when readiness also says launch.
-        let view = surveyReadinessView(devices: [], hubLocation: nil)
+        let view = surveyReadinessView(devices: [], depot: nil)
 
         #expect(
             Brain.surveyStatus(directives: [live], view: view)
@@ -271,7 +273,7 @@ struct BrainSurveyStatusTests {
             stepStartedAt: surveyFixtureNow, returnToOrigin: false, originDesignation: nil,
             attentionReason: nil, createdAt: surveyFixtureNow, updatedAt: surveyFixtureNow
         )
-        let view = surveyReadinessView(devices: [], hubLocation: nil)
+        let view = surveyReadinessView(devices: [], depot: nil)
 
         #expect(
             Brain.surveyStatus(directives: [live], view: view)
@@ -285,7 +287,7 @@ struct BrainSurveyStatusTests {
     func aReadyFleetReportsReady() {
         let view = surveyReadinessView(
             devices: surveyReadinessStagedFleet(),
-            hubLocation: "AINALRAM-BELT-1",
+            depot: "AINALRAM-BELT-1",
             starPositions: ["AINALRAM": Position(x: 0, y: 0, z: 0)]
         )
         #expect(
@@ -299,7 +301,7 @@ struct BrainSurveyStatusTests {
     @Test("an unready fleet with no live row reports idle with the named reason")
     func anUnreadyFleetReportsIdle() {
         let devices = [surveyReadinessDevice("V1", type: "heaven_vessel")]
-        let view = surveyReadinessView(devices: devices, hubLocation: nil)
+        let view = surveyReadinessView(devices: devices, depot: nil)
 
         guard case let .idle(status) = Brain.surveyStatus(directives: [], view: view),
               case let .idle(readiness) = Brain.surveyReadiness(view: view)

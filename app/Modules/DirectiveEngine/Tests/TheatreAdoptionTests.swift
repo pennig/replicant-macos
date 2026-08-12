@@ -63,7 +63,6 @@ private func singleTheatreView() -> WorldView {
         meshSystems: ["AINALRAM"],
         salvageUnits: [:],
         eventSystems: [],
-        hubLocation: nil,
         theatres: [
             Theatre(depot: "AINALRAM-BELT-1", system: "AINALRAM", origin: .derived,
                     readiness: .operational, stock: 40_000),

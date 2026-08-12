@@ -79,18 +79,20 @@ private let mineRichBelt = ["SOL": [BeltInfo(designation: mineBelt, beltClass: .
 
 private func mineWorldView(
     devices: [Device],
-    hubLocation: String? = mineHub,
+    depot: String? = mineHub,
     belts: [String: [BeltInfo]] = mineRichBelt,
     meshSystems: Set<String> = ["SOL"],
     starPositions: [String: Position] = ["SOL": Position(x: 0, y: 0, z: 0)]
 ) -> WorldView {
-    WorldView(
+    let theatre = singleOperationalTheatre(depot: depot)
+    return WorldView(
         devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
         starPositions: starPositions,
         meshSystems: meshSystems,
         salvageUnits: [:],
         eventSystems: [],
-        hubLocation: hubLocation,
+        theatres: theatre.theatres,
+        components: theatre.components,
         beltsBySystem: belts,
         now: mineNow
     )
@@ -107,12 +109,12 @@ struct BrainMineReadinessTests {
         )
     }
 
-    @Test("no recognised hub is idle before anything else is asked")
+    @Test("no operational theatre is idle before anything else is asked")
     func noHubIsIdle() {
         let view = mineWorldView(
-            devices: minePrintedFleet() + [mineCarrierDevice()], hubLocation: nil
+            devices: minePrintedFleet() + [mineCarrierDevice()], depot: nil
         )
-        #expect(Brain.mineReadiness(view: view, directives: []) == .idle(reason: "no recognised hub"))
+        #expect(Brain.mineReadiness(view: view, directives: []) == .idle(reason: "no operational theatre"))
     }
 
     @Test("nothing printed reads differently from a fleet part-way printed")
@@ -193,7 +195,7 @@ struct BrainMineReadinessTests {
     func theHubsOwnBeltIsNeverSited() {
         let view = mineWorldView(
             devices: minePrintedFleet(at: mineBelt) + [mineCarrierDevice(location: mineBelt)],
-            hubLocation: mineBelt
+            depot: mineBelt
         )
         #expect(
             Brain.mineReadiness(view: view, directives: [])
@@ -237,7 +239,7 @@ struct BrainMineFerryControllerTests {
             mineDevice("TC-B", type: mineTransportType, directive: "ferry", collect: mineBelt),
         ])
         #expect(
-            Brain.mineFerryController(for: mineBelt, view: view, directives: []) == "TC-B"
+            Brain.mineFerryController(for: mineBelt, at: mineHub, view: view, directives: []) == "TC-B"
         )
     }
 
@@ -247,7 +249,7 @@ struct BrainMineFerryControllerTests {
             mineDevice("TC-A", type: mineTransportType, directive: "ferry", collect: "VEGA-BELT-1"),
             mineDevice("TC-B", type: mineTransportType),
         ])
-        #expect(Brain.mineFerryController(for: mineBelt, view: view, directives: []) == "TC-B")
+        #expect(Brain.mineFerryController(for: mineBelt, at: mineHub, view: view, directives: []) == "TC-B")
     }
 
     @Test("a controller another directive holds is not offered")
@@ -256,7 +258,7 @@ struct BrainMineFerryControllerTests {
         let holder = directiveFixture(
             id: "H", kind: .haulRun, deviceCode: "TC-A", targets: ["VEGA-BELT-1"]
         )
-        #expect(Brain.mineFerryController(for: mineBelt, view: view, directives: [holder]) == nil)
+        #expect(Brain.mineFerryController(for: mineBelt, at: mineHub, view: view, directives: [holder]) == nil)
     }
 
     /// `collect` is a `ferry` key. Read off any other directive it names a
@@ -267,13 +269,13 @@ struct BrainMineFerryControllerTests {
             mineDevice("TC-A", type: mineTransportType, directive: "gather_evenly", collect: mineBelt),
             mineDevice("TC-B", type: mineTransportType, directive: "ferry", collect: mineBelt),
         ])
-        #expect(Brain.mineFerryController(for: mineBelt, view: view, directives: []) == "TC-B")
+        #expect(Brain.mineFerryController(for: mineBelt, at: mineHub, view: view, directives: []) == "TC-B")
     }
 
     @Test("an untagged transport controller belongs to no mine")
     func anUntaggedControllerIsNotOffered() {
         let view = mineWorldView(devices: [mineDevice("TC-A", type: mineTransportType, tags: [])])
-        #expect(Brain.mineFerryController(for: mineBelt, view: view, directives: []) == nil)
+        #expect(Brain.mineFerryController(for: mineBelt, at: mineHub, view: view, directives: []) == nil)
     }
 }
 
@@ -417,7 +419,7 @@ struct BrainReportMineDefaultsTests {
     func defaults() {
         let report = BrainReport(
             decision: .idle(reason: "nothing"),
-            ranked: [], hubLocation: nil,
+            ranked: [], theatres: [],
             limits: BrainLimits(
                 actionsRemaining: 0, actionsLimit: 0, actionsFloor: 0,
                 hubStock: nil, hubStockFetchedAt: nil, spendFloor: 0, rateLimitedAt: nil

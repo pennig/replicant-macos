@@ -607,12 +607,12 @@ public struct BrainWhy: Equatable, Sendable {
     private static func knownDesignations(in report: BrainReport) -> Set<String> {
         var codes = Set(report.ranked.flatMap { [$0.firstHop] + $0.servedTargets })
         if case let .dispatch(goal, _) = report.decision { codes.insert(goal.target) }
-        if let hub = report.hubLocation {
-            codes.insert(hub)
+        for theatre in report.theatres {
+            codes.insert(theatre.depot)
             // The survey roam centre — `Brain.surveyReadiness` derives it the
             // same way, so an idle reason naming it (the census-miss case)
             // still tags mono without a second field to carry it.
-            codes.insert(SiteAssay.system(of: hub))
+            codes.insert(theatre.system)
         }
         return codes
     }

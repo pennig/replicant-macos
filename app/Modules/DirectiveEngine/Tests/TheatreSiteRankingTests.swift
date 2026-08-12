@@ -70,7 +70,6 @@ private func valueBesideHomeTheatre() -> WorldView {
         meshSystems: ["AINALRAM"],
         salvageUnits: ["GRAZ": 5_000, "OMEROPE": 500],
         eventSystems: [],
-        hubLocation: nil,
         theatres: [
             Theatre(depot: "AINALRAM-1", system: "AINALRAM", origin: .derived,
                     readiness: .operational, stock: 40_000),
@@ -91,7 +90,6 @@ private func twoUnservicedClusters() -> WorldView {
         meshSystems: [],
         salvageUnits: ["OMEROPE": 5_000, "DENEBED": 300],
         eventSystems: [],
-        hubLocation: nil,
         theatres: [],
         now: Date(timeIntervalSince1970: 0)
     )
@@ -108,7 +106,6 @@ private func equalClustersOneWithReplicant() -> WorldView {
         meshSystems: [],
         salvageUnits: ["VESTA": 1_000, "KRONOS": 1_000],
         eventSystems: [],
-        hubLocation: nil,
         theatres: [],
         replicantSystems: ["VESTA"],
         now: Date(timeIntervalSince1970: 0)
@@ -127,7 +124,6 @@ private func candidateBesideExistingTheatre() -> WorldView {
         meshSystems: ["AINALRAM"],
         salvageUnits: [:],
         eventSystems: [],
-        hubLocation: nil,
         theatres: [
             Theatre(depot: "AINALRAM-1", system: "AINALRAM", origin: .derived,
                     readiness: .operational, stock: 40_000),
@@ -145,7 +141,6 @@ private func unsurveyedRichCluster() -> WorldView {
         meshSystems: [],
         salvageUnits: ["OMEROPE": 5_000],
         eventSystems: [],
-        hubLocation: nil,
         theatres: [],
         now: Date(timeIntervalSince1970: 0)
     )

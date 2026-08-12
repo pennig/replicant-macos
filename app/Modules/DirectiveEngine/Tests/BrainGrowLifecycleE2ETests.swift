@@ -39,7 +39,7 @@ private let liftoff = Date(timeIntervalSince1970: 1_000_000)
 
 private let tickSeconds: TimeInterval = 5
 
-/// Inside the meshed `SOL` system, which makes `WorldView.hubLocation` non-nil.
+/// Inside the meshed `SOL` system, which makes it a recognised theatre.
 private let hubLocation = "SOL-3"
 
 private let target = "VEGA"

@@ -378,8 +378,7 @@ struct BrainGrowTests {
 
     /// No print hub at all — the relay has nowhere to come from, so there is
     /// nothing to launch however rich the target. (An off-mesh hub reads the
-    /// same way: `WorldView.hubLocation` is nil unless the hub's system is
-    /// meshed.)
+    /// same way: no theatre is recognised unless the hub's system is meshed.)
     @Test func idlesWithNoPrintHubOnTheMesh() async throws {
         let database = try GameDatabase.bootstrap()
         let uuid = UUIDGenerator.incrementing
@@ -388,7 +387,7 @@ struct BrainGrowTests {
             try Device.delete().where { $0.deviceCode.eq("HUB1") }.execute(db)
         }
 
-        #expect(await decide(database, uuid: uuid) == .idle(reason: "no print hub on the mesh"))
+        #expect(await decide(database, uuid: uuid) == .idle(reason: "no operational theatre"))
         #expect(try await relayRuns(database).isEmpty)
     }
 

@@ -26,6 +26,7 @@ import GameDatabase
 import GameModels
 import Sharing
 import Testing
+import UniverseModels
 @testable import DirectivesFeature
 
 /// The exact sentence `Brain.rationale(for:)` produces for the `vega` fixture.
@@ -88,16 +89,19 @@ struct BrainWhyViewTests {
     static func report(
         _ decision: BrainDecision,
         ranked: [GrowCandidate] = [],
-        hubLocation: String? = "SOL-3",
+        depot: String? = "SOL-3",
         limits: BrainLimits = calmLimits(),
         prune: BrainPrune? = nil,
         survey: BrainSurveyStatus = idleSurvey,
         observedAt: Date = now
     ) -> BrainReport {
-        BrainReport(
+        let theatres = depot.map {
+            [Theatre(depot: $0, system: SiteAssay.system(of: $0), origin: .derived, readiness: .operational, stock: 0)]
+        } ?? []
+        return BrainReport(
             decision: decision,
             ranked: ranked,
-            hubLocation: hubLocation,
+            theatres: theatres,
             limits: limits,
             prune: prune,
             survey: survey,
@@ -872,7 +876,7 @@ struct BrainWhyViewTests {
         let idle = BrainWhy.from(
             report: Self.report(
                 .idle(reason: "no grow or prune work"),
-                hubLocation: "AINALRAM-BELT-1",
+                depot: "AINALRAM-BELT-1",
                 survey: .idle(reason: "roam centre AINALRAM is not in the census")
             )
         )
@@ -928,7 +932,7 @@ struct BrainWhyViewTests {
     /// the brain emits most often when the fleet is busy.
     @Test func theHubDesignationInAnIdleGateIsTagged() {
         let why = BrainWhy.from(
-            report: Self.report(.idle(reason: "no free carrier at SOL-3"), hubLocation: "SOL-3")
+            report: Self.report(.idle(reason: "no free carrier at SOL-3"), depot: "SOL-3")
         )
         #expect(why.topGoalGate == [.prose("idle — no free carrier at "), .designation("SOL-3")])
     }

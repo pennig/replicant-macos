@@ -42,13 +42,8 @@ public struct WorldView: Equatable, Sendable {
     /// Systems holding at least one live (`LocationEvent.isActive`) location
     /// event.
     public let eventSystems: Set<String>
-    /// The print hub's LOCATION (`SOL-3-1`, not the bare system), non-nil only when
-    /// its system is meshed. **The one hub recognition rule** — re-derive from here
-    /// rather than from `Directive.originDesignation`, which is a bare system
-    /// designation and travels to an entry point an L4 away from the printer.
-    public let hubLocation: String?
-    /// Every recognised theatre this tick, ordered by depot. Replaces the single
-    /// `hubLocation`, which remains only until ticket 10 retires it.
+    /// Every recognised theatre this tick, ordered by depot — `TheatreRegistry`'s
+    /// one rule for what counts as a hub.
     public let theatres: [Theatre]
     /// System → mesh-component label, from `MeshGraph.components(of:)`.
     public let components: [String: String]
@@ -90,8 +85,7 @@ public struct WorldView: Equatable, Sendable {
         meshSystems: Set<String>,
         salvageUnits: [String: Double],
         eventSystems: Set<String>,
-        hubLocation: String?,
-        theatres: [Theatre]? = nil,
+        theatres: [Theatre] = [],
         components: [String: String] = [:],
         beltsBySystem: [String: [BeltInfo]] = [:],
         surveyedSystems: Set<String> = [],
@@ -105,17 +99,8 @@ public struct WorldView: Equatable, Sendable {
         self.meshSystems = meshSystems
         self.salvageUnits = salvageUnits
         self.eventSystems = eventSystems
-        self.hubLocation = hubLocation
-        // Absent `theatres` synthesises one theatre at `hubLocation`, plus its
-        // own singleton component if `components` is absent too.
-        let synthesisedTheatres = theatres ?? hubLocation.map {
-            [Theatre(depot: $0, system: SiteAssay.system(of: $0), origin: .derived,
-                     readiness: .operational, stock: 0)]
-        } ?? []
-        self.theatres = synthesisedTheatres
-        self.components = theatres == nil && components.isEmpty
-            ? Dictionary(uniqueKeysWithValues: synthesisedTheatres.map { ($0.system, $0.system) })
-            : components
+        self.theatres = theatres
+        self.components = components
         self.beltsBySystem = beltsBySystem
         self.surveyedSystems = surveyedSystems
         self.replicantSystems = replicantSystems
@@ -169,7 +154,6 @@ public struct WorldView: Equatable, Sendable {
             .where { $0.location.in(Array(stockLocations)) }
             .fetchAll(db)
             .reduce(into: [:]) { $0[$1.location] = $1.resources }
-        let hub = Self.hubLocation(in: allDevices, meshSystems: mesh, stockByLocation: hubStock)
 
         let componentLabels = MeshGraph(positions: positions).components(of: mesh)
         let theatres = TheatreRegistry.recognise(
@@ -204,7 +188,6 @@ public struct WorldView: Equatable, Sendable {
             meshSystems: mesh,
             salvageUnits: salvage,
             eventSystems: eventSystems,
-            hubLocation: hub,
             theatres: theatres,
             components: componentLabels,
             beltsBySystem: belts,
@@ -312,32 +295,4 @@ public struct WorldView: Equatable, Sendable {
     }
 
     private static let richnessDecoder = JSONDecoder()
-
-    /// The single print hub: a print-capable device's location whose system is
-    /// meshed AND which `stockByLocation` shows holding resources. **The stock
-    /// clause is not an optimisation — without it the hub follows the carrier
-    /// around**, since `isPrintHub` is a capability predicate every HEAVEN vessel
-    /// satisfies, so a carrier that flies off becomes its own hub and the brain
-    /// relocates with it.
-    ///
-    /// **`> 0`, not "above the reserve floor".** Recognition asks whether this is a
-    /// stockpile at all; adequacy is the rail's judgement. Folding the floor in
-    /// makes a dipping hub vanish, turning "idle until supply recovers" into "there
-    /// is no hub". Richest first, designation as tie-break — a TOTAL order, so a
-    /// stateless brain names the same hub every tick.
-    static func hubLocation(
-        in devices: [Device], meshSystems: Set<String>, stockByLocation: [String: Int]
-    ) -> String? {
-        let candidates = Set(
-            devices
-                .filter(\.isPrintHub)
-                .compactMap(\.location)
-                .filter { meshSystems.contains(SiteAssay.system(of: $0)) }
-                .filter { (stockByLocation[$0] ?? 0) > 0 }
-        )
-        return candidates.max {
-            let (left, right) = (stockByLocation[$0] ?? 0, stockByLocation[$1] ?? 0)
-            return left == right ? $0 > $1 : left < right
-        }
-    }
 }

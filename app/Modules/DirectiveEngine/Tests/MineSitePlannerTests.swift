@@ -16,11 +16,13 @@ private func siteView(
     belts: [String: [BeltInfo]],
     meshSystems: Set<String>,
     positions: [String: Position],
-    hub: String? = "AINALRAM-BELT-1"
+    depot: String? = "AINALRAM-BELT-1"
 ) -> WorldView {
-    WorldView(
+    let theatre = singleOperationalTheatre(depot: depot)
+    return WorldView(
         devices: [:], starPositions: positions, meshSystems: meshSystems,
-        salvageUnits: [:], eventSystems: [], hubLocation: hub,
+        salvageUnits: [:], eventSystems: [],
+        theatres: theatre.theatres, components: theatre.components,
         beltsBySystem: belts, now: Date(timeIntervalSince1970: 1_750_000_000)
     )
 }
@@ -85,7 +87,7 @@ struct MineSitePlannerTests {
     func noHubNoSite() {
         let noHub = siteView(
             belts: ["S": [belt("S-BELT-1", .rich)]], meshSystems: ["S"],
-            positions: ["S": .init(x: 5, y: 0, z: 0)], hub: nil
+            positions: ["S": .init(x: 5, y: 0, z: 0)], depot: nil
         )
         #expect(MineSitePlanner.site(view: noHub, occupiedBelts: []) == nil)
     }

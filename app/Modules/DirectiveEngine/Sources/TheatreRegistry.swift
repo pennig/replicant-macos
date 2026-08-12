@@ -37,7 +37,7 @@ public enum TheatreRegistry {
         }
 
         /// Richest stocked print location among `candidates`, designation as the
-        /// tie-break — the rule `WorldView.hubLocation` has always used.
+        /// tie-break — a TOTAL order, so recognition names the same depot every tick.
         func richest(among candidates: Set<String>) -> String? {
             candidates
                 .filter { printLocations.contains($0) && (stockByLocation[$0] ?? 0) > 0 }

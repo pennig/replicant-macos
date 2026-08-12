@@ -58,18 +58,20 @@ private func salvageStagedFleet(carrier: String = "V1") -> [Device] {
 
 private func salvageView(
     devices: [Device],
-    hubLocation: String? = "AINALRAM-BELT-1",
+    depot: String? = "AINALRAM-BELT-1",
     starPositions: [String: Position] = ["AINALRAM": Position(x: 0, y: 0, z: 0)],
     meshSystems: Set<String> = ["AINALRAM", "ALPAHARD"],
     salvageUnits: [String: Double] = ["ALPAHARD": 900]
 ) -> WorldView {
-    WorldView(
+    let theatre = singleOperationalTheatre(depot: depot)
+    return WorldView(
         devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
         starPositions: starPositions,
         meshSystems: meshSystems,
         salvageUnits: salvageUnits,
         eventSystems: [],
-        hubLocation: hubLocation,
+        theatres: theatre.theatres,
+        components: theatre.components,
         now: salvageFixtureNow
     )
 }
@@ -159,12 +161,12 @@ struct BrainSalvageReadinessTests {
         )
     }
 
-    @Test("no recognised hub means no roam centre, so idle")
+    @Test("no operational theatre means no roam centre, so idle")
     func noHubIsIdle() {
-        let view = salvageView(devices: salvageStagedFleet(), hubLocation: nil)
+        let view = salvageView(devices: salvageStagedFleet(), depot: nil)
         #expect(
             Brain.salvageReadiness(view: view, directives: [])
-                == .idle(reason: "the anchor has no resolvable location")
+                == .idle(reason: "no operational theatre")
         )
     }
 
@@ -620,12 +622,13 @@ private func haulController(_ code: String, tags: [String], directives: [String]
     )
 }
 
-private func haulView(devices: [Device], hubLocation: String? = "SOL-3") -> WorldView {
-    WorldView(
+private func haulView(devices: [Device], depot: String? = "SOL-3") -> WorldView {
+    let theatre = singleOperationalTheatre(depot: depot)
+    return WorldView(
         devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
         starPositions: ["SOL": Position(x: 0, y: 0, z: 0)],
         meshSystems: ["SOL"], salvageUnits: [:], eventSystems: [],
-        hubLocation: hubLocation, now: salvageEnsureNow
+        theatres: theatre.theatres, components: theatre.components, now: salvageEnsureNow
     )
 }
 
@@ -652,10 +655,10 @@ struct BrainHaulReadinessTests {
         #expect(Brain.haulReadiness(view: view, directives: []) == .idle(reason: "no free auto:haul controller offering ferry"))
     }
 
-    @Test("no hub on the mesh is idle rather than hauling to a stale constant")
+    @Test("no operational theatre is idle rather than hauling to a stale constant")
     func noHubIsIdle() {
-        let view = haulView(devices: [haulController("T1", tags: [HaulRun.defaultFleetTag])], hubLocation: nil)
-        #expect(Brain.haulReadiness(view: view, directives: []) == .idle(reason: "no print hub on the mesh"))
+        let view = haulView(devices: [haulController("T1", tags: [HaulRun.defaultFleetTag])], depot: nil)
+        #expect(Brain.haulReadiness(view: view, directives: []) == .idle(reason: "no operational theatre"))
     }
 
     /// The forward-shaping rule `mine` will rely on. A liveness rule written

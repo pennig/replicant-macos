@@ -86,7 +86,6 @@ private func twoComponentWorld() -> WorldView {
         meshSystems: ["AINALRAM", "DENEBED", "OMEROPE"],
         salvageUnits: ["OMEROPE": 500],
         eventSystems: [],
-        hubLocation: "AINALRAM-BELT-1",
         theatres: [
             Theatre(depot: "AINALRAM-BELT-1", system: "AINALRAM", origin: .derived,
                     readiness: .operational, stock: 40_000),
@@ -114,7 +113,6 @@ private func pocketWithoutTheatre() -> WorldView {
         meshSystems: ["AINALRAM", "OMEROPE"],
         salvageUnits: ["OMEROPE": 500],
         eventSystems: [],
-        hubLocation: "AINALRAM-BELT-1",
         theatres: [
             Theatre(depot: "AINALRAM-BELT-1", system: "AINALRAM", origin: .derived,
                     readiness: .operational, stock: 40_000),
@@ -140,7 +138,6 @@ private func emptyPocketWorld() -> WorldView {
         meshSystems: ["AINALRAM", "OMEROPE"],
         salvageUnits: [:],
         eventSystems: [],
-        hubLocation: "AINALRAM-BELT-1",
         theatres: [
             Theatre(depot: "AINALRAM-BELT-1", system: "AINALRAM", origin: .derived,
                     readiness: .operational, stock: 40_000),
@@ -171,7 +168,6 @@ private func homeWithSpurRelay() -> WorldView {
         meshSystems: ["HOME", "VALUE", "SPUR"],
         salvageUnits: ["VALUE": 500],
         eventSystems: [],
-        hubLocation: "HOME-BELT-1",
         theatres: [
             Theatre(depot: "HOME-BELT-1", system: "HOME", origin: .derived,
                     readiness: .operational, stock: 40_000),
@@ -205,7 +201,6 @@ private func twoTheatresOneComponent() -> WorldView {
         meshSystems: ["THEATRE-A", "BETWEEN", "VALUE", "THEATRE-B"],
         salvageUnits: ["VALUE": 500],
         eventSystems: [],
-        hubLocation: "THEATRE-A-BELT-1",
         theatres: [
             Theatre(depot: "THEATRE-A-BELT-1", system: "THEATRE-A", origin: .derived,
                     readiness: .operational, stock: 40_000),

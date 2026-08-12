@@ -83,8 +83,8 @@ struct Brain: Sendable {
                     log: log,
                     // Same transaction as everything else: a stock figure from a
                     // different instant than the devices describes no real world.
-                    hubFootprint: try view.hubLocation.flatMap { hub in
-                        try LocationFootprint.where { $0.location.eq(hub) }.fetchOne(db)
+                    hubFootprint: try view.theatres.first(where: \.isOperational).flatMap { theatre in
+                        try LocationFootprint.where { $0.location.eq(theatre.depot) }.fetchOne(db)
                     }
                 )
             }
@@ -95,7 +95,7 @@ struct Brain: Sendable {
             return await BrainReport(
                 decision: .idle(reason: "world unavailable"),
                 ranked: [],
-                hubLocation: nil,
+                theatres: [],
                 limits: Self.limits(hubFootprint: nil),
                 survey: .idle(reason: "world unavailable"),
                 salvage: .idle(reason: "world unavailable"),
@@ -107,7 +107,7 @@ struct Brain: Sendable {
 
         snapshot = await adoptTheatreStamps(snapshot, database: database)
 
-        // Read before `ensureSurvey` acts, mirroring `ranked`/`hubLocation`:
+        // Read before `ensureSurvey` acts, mirroring `ranked`/`theatres`:
         // the report states the tick's SNAPSHOT, not its write. A verdict of
         // `.ready` here launches inside `ensureSurvey` below on this very
         // tick — the next tick's fresh read is what turns it `.launched`.
@@ -130,7 +130,7 @@ struct Brain: Sendable {
         return await BrainReport(
             decision: decision,
             ranked: plan.ranked,
-            hubLocation: snapshot.view.hubLocation,
+            theatres: snapshot.view.theatres,
             limits: Self.limits(hubFootprint: snapshot.hubFootprint),
             prune: Self.pruneReport(
                 plan: plan, decision: decision, directives: snapshot.directives
@@ -410,7 +410,7 @@ struct Brain: Sendable {
                     step: HaulRun().firstStep,
                     stepStartedAt: now,
                     returnToOrigin: false,
-                    originDesignation: snapshot.view.hubLocation.map { SiteAssay.system(of: $0) },
+                    originDesignation: theatre.system,
                     attentionReason: nil,
                     createdAt: now, updatedAt: now,
                     theatreDepot: theatre.depot
@@ -443,7 +443,7 @@ struct Brain: Sendable {
                     step: MineRun().firstStep,
                     stepStartedAt: now,
                     returnToOrigin: false,
-                    originDesignation: snapshot.view.hubLocation.map { SiteAssay.system(of: $0) },
+                    originDesignation: theatre.system,
                     attentionReason: nil,
                     createdAt: now, updatedAt: now,
                     theatreDepot: theatre.depot
@@ -457,7 +457,7 @@ struct Brain: Sendable {
     /// servicing theatre, is skipped.
     private func ensureMineFerries(snapshot: Snapshot, database: any DatabaseWriter) async {
         let view = snapshot.view
-        let belts = MineRecipe.installedBelts(in: view.devices.values, hub: view.hubLocation)
+        let belts = Self.installedMineBelts(view: view)
             .subtracting(Self.liveMineBelts(snapshot.directives))
             .sorted()
         guard !belts.isEmpty else { return }
@@ -473,7 +473,7 @@ struct Brain: Sendable {
                 database: database
             ) {
                 guard let controller = Self.mineFerryController(
-                    for: belt, view: view, directives: snapshot.directives
+                    for: belt, at: theatre.depot, view: view, directives: snapshot.directives
                 ) else { return nil }
                 return Directive(
                     id: uuid().uuidString,
@@ -490,12 +490,21 @@ struct Brain: Sendable {
                     step: HaulRun().firstStep,
                     stepStartedAt: now,
                     returnToOrigin: false,
-                    originDesignation: view.hubLocation.map { SiteAssay.system(of: $0) },
+                    originDesignation: theatre.system,
                     attentionReason: nil,
                     createdAt: now, updatedAt: now,
                     theatreDepot: theatre.depot
                 )
             }
+        }
+    }
+
+    /// Every belt an installed mine occupies, across every operational theatre:
+    /// `MineRecipe.installedBelts` excludes only one depot at a time, so this
+    /// unions its result over each theatre's own.
+    static func installedMineBelts(view: WorldView) -> Set<String> {
+        view.theatres.filter(\.isOperational).reduce(into: Set<String>()) { belts, theatre in
+            belts.formUnion(MineRecipe.installedBelts(in: view.devices.values, hub: theatre.depot))
         }
     }
 
@@ -712,11 +721,12 @@ struct Brain: Sendable {
             return .idle(reason: "every grow candidate is already in flight", ranked: ranked, prune: prune)
         }
 
-        // `hubLocation` is already nil for an OFF-MESH hub, so this one guard
-        // covers both "no printer" and "a printer we cannot reach".
-        guard let hub = view.hubLocation else {
-            return .idle(reason: "no print hub on the mesh", ranked: ranked, prune: prune)
+        // No operational theatre reachable from the candidate covers both "no
+        // printer" and "a printer we cannot reach".
+        guard let theatre = view.theatre(nearest: candidate.firstHop) else {
+            return .idle(reason: "no operational theatre", ranked: ranked, prune: prune)
         }
+        let hub = theatre.depot
 
         let reserved = reservedDevices(directives: directives, devices: view.devices)
         guard let carrier = freeCarrier(at: hub, devices: view.devices, reserved: reserved) else {
@@ -734,7 +744,7 @@ struct Brain: Sendable {
             ranked: ranked,
             carrier: carrier.deviceCode,
             hub: hub,
-            origin: SiteAssay.system(of: hub),
+            origin: theatre.system,
             source: reclaimSource(
                 analysis: prune, view: view, graph: graph, target: candidate.firstHop,
                 carrier: carrier, directives: directives
@@ -1190,11 +1200,11 @@ struct Brain: Sendable {
         }
 
         // The anchor replicant and the print hub are co-located by construction
-        // (nothing enforces it), so the hub's location stands in for the anchor's.
-        guard let hub = view.hubLocation else {
-            return .idle(reason: "the anchor has no resolvable location")
+        // (nothing enforces it), so the theatre's system stands in for the anchor's.
+        guard let theatre = view.theatres.first(where: \.isOperational) else {
+            return .idle(reason: "no operational theatre")
         }
-        let centre = SiteAssay.system(of: hub)
+        let centre = theatre.system
         guard view.starPositions[centre] != nil else {
             return .idle(reason: "roam centre \(centre) is not in the census")
         }
@@ -1247,10 +1257,10 @@ struct Brain: Sendable {
             )
         }
 
-        guard let hub = view.hubLocation else {
-            return .idle(reason: "the anchor has no resolvable location")
+        guard let theatre = view.theatres.first(where: \.isOperational) else {
+            return .idle(reason: "no operational theatre")
         }
-        let centre = SiteAssay.system(of: hub)
+        let centre = theatre.system
         guard view.starPositions[centre] != nil else {
             return .idle(reason: "roam centre \(centre) is not in the census")
         }
@@ -1287,8 +1297,8 @@ struct Brain: Sendable {
         ).first(where: { !reserved.contains($0.deviceCode) }) else {
             return .idle(reason: "no free \(HaulRun.defaultFleetTag) controller offering ferry")
         }
-        guard view.hubLocation != nil else {
-            return .idle(reason: "no print hub on the mesh")
+        guard view.theatres.contains(where: \.isOperational) else {
+            return .idle(reason: "no operational theatre")
         }
         return .launch(controller: controller.deviceCode)
     }
@@ -1309,7 +1319,9 @@ struct Brain: Sendable {
     /// reason — a carrier another row holds must not be reported ready — and to
     /// keep a belt a live install already targets out of the siting.
     static func mineReadiness(view: WorldView, directives: [Directive]) -> MineReadiness {
-        guard let hub = view.hubLocation else { return .idle(reason: "no recognised hub") }
+        guard let hub = view.theatres.first(where: \.isOperational)?.depot else {
+            return .idle(reason: "no operational theatre")
+        }
 
         let fleet = view.devices.values
         let shortfall = MineRecipe.shortfall(at: hub, in: fleet)
@@ -1363,13 +1375,12 @@ struct Brain: Sendable {
     /// fleet-wide one would reserve every other mine's controller forever.
     static func mineFerryTag(for belt: String) -> String { "\(MineRecipe.fleetTag):\(belt)" }
 
-    /// The transport controller to drain `belt` through: the one already ferrying
-    /// it, else the lowest-coded free one. Both arms skip a controller another
-    /// live row holds, so this never offers one `ensureOne` would decline.
+    /// The transport controller at `hub` to drain `belt` through: the one
+    /// already ferrying it, else the lowest-coded free one. Both arms skip a
+    /// controller another live row holds, so `ensureOne` never declines it.
     static func mineFerryController(
-        for belt: String, view: WorldView, directives: [Directive]
+        for belt: String, at hub: String, view: WorldView, directives: [Directive]
     ) -> String? {
-        guard let hub = view.hubLocation else { return nil }
         let reserved = reservedDevices(directives: directives, devices: view.devices)
         let candidates = view.devices.values
             .filter {
@@ -1413,7 +1424,7 @@ struct Brain: Sendable {
         }) {
             return .launched(
                 vessel: live.deviceCode,
-                focus: view.hubLocation,
+                focus: live.theatreDepot,
                 status: launchedGoalStatus(live.status)
             )
         }
@@ -1447,7 +1458,7 @@ struct Brain: Sendable {
     /// controller is ferrying it. A belt a live `mineRun` still targets is
     /// excluded — `MineRun` lands the fleet before arming any directive.
     static func mineHealth(view: WorldView, directives: [Directive]) -> [BrainMineHealth] {
-        MineRecipe.installedBelts(in: view.devices.values, hub: view.hubLocation)
+        installedMineBelts(view: view)
             .subtracting(liveMineBelts(directives))
             .sorted()
             .map { belt in

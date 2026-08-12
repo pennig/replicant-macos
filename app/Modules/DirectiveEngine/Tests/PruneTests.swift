@@ -382,7 +382,8 @@ struct PruneTests {
         world = WorldView(
             devices: devices, starPositions: world.starPositions, meshSystems: world.meshSystems,
             salvageUnits: world.salvageUnits, eventSystems: world.eventSystems,
-            hubLocation: world.hubLocation, beltsBySystem: world.beltsBySystem,
+            theatres: world.theatres, components: world.components,
+            beltsBySystem: world.beltsBySystem,
             surveyedSystems: world.surveyedSystems, now: world.now
         )
         let analysis = PrunePredicate.analyse(view: world, graph: MeshGraph(positions: positions))

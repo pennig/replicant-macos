@@ -66,7 +66,7 @@ struct WorldViewTests {
     /// The print hub surfaces only when its system is meshed — an off-mesh hub
     /// is a later concern (escalate/unsupported, per the 06 design), not
     /// something the brain can dispatch a `deliver` toward yet.
-    @Test func hubLocationSurfacesOnlyWhenMeshed() async throws {
+    @Test func theatreSurfacesOnlyWhenMeshed() async throws {
         let db = try GameDatabase.bootstrap()
         try await db.write { db in
             try seedRelay(db, code: "R1", location: "SOL-3-L4", status: "relaying")
@@ -74,7 +74,8 @@ struct WorldViewTests {
             try seedHubStockpile(db, location: "SOL-3", resources: 50_000)
         }
         let meshed = try await db.read { try WorldView.read(from: $0, now: Date()) }
-        #expect(meshed.hubLocation == "SOL-3")
+        #expect(meshed.theatres.map(\.depot) == ["SOL-3"])
+        #expect(meshed.theatres[0].isOperational)
 
         let db2 = try GameDatabase.bootstrap()
         try await db2.write { db in
@@ -82,7 +83,7 @@ struct WorldViewTests {
             try seedHubStockpile(db, location: "VEGA-3", resources: 50_000)
         }
         let unmeshed = try await db2.read { try WorldView.read(from: $0, now: Date()) }
-        #expect(unmeshed.hubLocation == nil)
+        #expect(unmeshed.theatres.isEmpty)
     }
 
     /// **A print-capable device standing on nothing is not a hub.**
@@ -107,7 +108,7 @@ struct WorldViewTests {
 
         let view = try await db.read { try WorldView.read(from: $0, now: Date()) }
 
-        #expect(view.hubLocation == nil)
+        #expect(view.theatres.isEmpty)
     }
 
     /// …and when a real stockpile IS present, the richest one wins — a total
@@ -127,7 +128,10 @@ struct WorldViewTests {
 
         let view = try await db.read { try WorldView.read(from: $0, now: Date()) }
 
-        #expect(view.hubLocation == "SOL-3", "the autofactory's stocked location, not the vessel's scraps")
+        #expect(
+            view.theatres.map(\.depot) == ["SOL-3"],
+            "the autofactory's stocked location, not the vessel's scraps"
+        )
     }
 
     /// Devices come back keyed by code, the whole fleet — the brain's ranking
@@ -151,7 +155,7 @@ struct WorldViewTests {
         #expect(view.meshSystems.isEmpty)
         #expect(view.salvageUnits.isEmpty)
         #expect(view.eventSystems.isEmpty)
-        #expect(view.hubLocation == nil)
+        #expect(view.theatres.isEmpty)
         #expect(view.beltsBySystem.isEmpty)
         #expect(view.replicantSystems.isEmpty)
         #expect(view.replicantHostDevices.isEmpty)

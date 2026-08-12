@@ -33,7 +33,7 @@ import Utils
 /// test in a refresh-then-stall loop instead of reaching the rail under test.
 private let liftoff = Date(timeIntervalSince1970: 2_000_000)
 
-/// Inside the meshed `SOL` system, which makes `WorldView.hubLocation` non-nil.
+/// Inside the meshed `SOL` system, which makes it a recognised theatre.
 private let hubLocation = "SOL-3"
 
 private let target = "VEGA"

@@ -76,7 +76,7 @@ struct MissionTheatreTests {
             devices: [:],
             starPositions: ["HOME": .init(x: 0, y: 0, z: 0), "FRONTIER": .init(x: 5, y: 0, z: 0)],
             meshSystems: ["HOME", "FRONTIER"],
-            salvageUnits: [:], eventSystems: [], hubLocation: nil,
+            salvageUnits: [:], eventSystems: [],
             theatres: [Theatre(
                 depot: "HOME-BELT-1", system: "HOME", origin: .derived,
                 readiness: .operational, stock: 1_000

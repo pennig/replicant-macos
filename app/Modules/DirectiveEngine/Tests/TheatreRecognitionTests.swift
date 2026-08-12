@@ -214,7 +214,6 @@ func twoTheatreView() -> WorldView {
         meshSystems: ["AINALRAM", "GRAZ", "OMEROPE", "DENEBED"],
         salvageUnits: [:],
         eventSystems: [],
-        hubLocation: nil,
         theatres: [
             Theatre(depot: "AINALRAM-BELT-1", system: "AINALRAM", origin: .derived,
                     readiness: .operational, stock: 40_000),
@@ -255,7 +254,7 @@ struct TheatreResolverTests {
             devices: [:],
             starPositions: ["AINALRAM": ainalram, "GRAZ": graz],
             meshSystems: ["AINALRAM", "GRAZ"],
-            salvageUnits: [:], eventSystems: [], hubLocation: nil,
+            salvageUnits: [:], eventSystems: [],
             theatres: [
                 Theatre(depot: "AINALRAM-BELT-1", system: "AINALRAM", origin: .derived,
                         readiness: .operational, stock: 40_000),
@@ -274,7 +273,7 @@ struct TheatreResolverTests {
     func claimedIsInvisible() {
         let view = WorldView(
             devices: [:], starPositions: ["OMEROPE": omerope],
-            meshSystems: [], salvageUnits: [:], eventSystems: [], hubLocation: nil,
+            meshSystems: [], salvageUnits: [:], eventSystems: [],
             theatres: [
                 Theatre(depot: "OMEROPE-BELT-1", system: "OMEROPE", origin: .pinned,
                         readiness: .claimed(missing: [.offMesh]), stock: 900),
@@ -285,18 +284,5 @@ struct TheatreResolverTests {
 
         #expect(view.theatre(servicing: "OMEROPE") == nil)
         #expect(view.theatre(nearest: "OMEROPE") == nil)
-    }
-
-    @Test("Passing only hubLocation synthesises one operational theatre")
-    func legacyInitStillWorks() {
-        let view = WorldView(
-            devices: [:], starPositions: ["AINALRAM": ainalram],
-            meshSystems: ["AINALRAM"], salvageUnits: [:], eventSystems: [],
-            hubLocation: "AINALRAM-BELT-1",
-            now: Date(timeIntervalSince1970: 5_000)
-        )
-
-        #expect(view.theatres.map(\.depot) == ["AINALRAM-BELT-1"])
-        #expect(view.theatre(servicing: "AINALRAM")?.depot == "AINALRAM-BELT-1")
     }
 }

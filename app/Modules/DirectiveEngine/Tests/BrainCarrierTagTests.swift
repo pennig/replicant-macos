@@ -215,7 +215,8 @@ struct BrainRestockHostGateTests {
     private func view(_ devices: [Device]) -> WorldView {
         WorldView(
             devices: fleet(devices), starPositions: [:], meshSystems: [],
-            salvageUnits: [:], eventSystems: [], hubLocation: hubLocation,
+            salvageUnits: [:], eventSystems: [],
+            theatres: singleOperationalTheatre(depot: hubLocation).theatres,
             now: Date(timeIntervalSince1970: 10_000)
         )
     }
