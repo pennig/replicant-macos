@@ -95,4 +95,30 @@ struct ResourceHeadroomTests {
         )
         #expect(headroom.weights == ["conductive": 2, "silicates": 1])
     }
+
+    @Test("an explicit zero-demand entry never enters coverage or takes a slot")
+    func zeroDemandEntryIsFiltered() {
+        let headroom = ResourceHeadroom.derive(
+            stock: ["conductive": 1000, "volatiles": 2000, "silicates": 500],
+            demand: ["conductive": 10, "volatiles": 10, "silicates": 0, "structural": 0],
+            freshness: now,
+            now: now
+        )
+        #expect(headroom.weights == ["conductive": 2, "volatiles": 1])
+        #expect(headroom.coverage == ["conductive": 100, "volatiles": 200])
+        #expect(headroom.coverage["silicates"] == nil)
+        #expect(headroom.coverage["structural"] == nil)
+    }
+
+    @Test("a reading exactly at the staleness bound still counts as fresh")
+    func stalenessBoundIsInclusive() {
+        let headroom = ResourceHeadroom.derive(
+            stock: ["silicates": 500, "volatiles": 1000],
+            demand: ["silicates": 50, "volatiles": 200],
+            freshness: now.addingTimeInterval(-ResourceHeadroom.stalenessBound),
+            now: now
+        )
+        #expect(headroom.isFallback == false)
+        #expect(headroom.weights == ["volatiles": 2, "silicates": 1])
+    }
 }
