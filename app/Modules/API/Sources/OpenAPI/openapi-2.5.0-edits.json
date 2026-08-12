@@ -2366,6 +2366,9 @@
           "location": {
             "type": "string"
           },
+          "location_type": {
+            "type": "string"
+          },
           "origin": {
             "type": "string"
           },
@@ -2438,13 +2441,25 @@
             "type": "string"
           },
           "availability": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "cycle_time_seconds": {
             "type": "integer"
           },
           "density": {
+            "type": "string",
+            "nullable": true
+          },
+          "site": {
             "type": "string"
+          },
+          "designation": {
+            "type": "string"
+          },
+          "salvage_type": {
+            "type": "string",
+            "nullable": true
           },
           "resources_mined": {
             "type": "integer"
