@@ -1302,6 +1302,9 @@ struct HaulRunPinnedTests {
     private let pinnedBelt = "ATIANFU-BELT-1"
     private let richestPile = "AINALRAM-2"
     private let runnerUpPile = "AINALRAM-3"
+    /// Shares a system with the fallback delivery sink — an entry-point depot
+    /// frees a belt exactly this shape after Task 1-7's theatre work.
+    private let sameSystemBelt = "AINALRAM-9-BELT-1"
 
     private func keeper(
         _ code: String,
@@ -1417,6 +1420,43 @@ struct HaulRunPinnedTests {
             ]),
             nextStep: HaulRun.Step.confirming
         ))
+    }
+
+    /// A pile sharing the sink's system must arm `shuttle` — a same-system
+    /// `ferry` is malformed, so the keeper must not command one.
+    @Test func pinnedDispatchingArmsShuttleForASameSystemPile() {
+        let world = twoPileWorld(controllers: [keeper("C1"), keeper("C2")])
+        let directive = keeperRun(
+            step: HaulRun.Step.dispatching, deviceCode: "C2",
+            targets: [sameSystemBelt], controllerCode: "C2"
+        )
+        let action = HaulRun().nextAction(directive: directive, world: world)
+        #expect(action == .dispatch(
+            kind: .setDirective,
+            deviceCode: "C2",
+            params: CommandParams(directive: HaulTargetPlanner.shuttle, configuration: [
+                "collect": .string(sameSystemBelt),
+                "deliver": .string(HaulRun.deliverySink(in: world, for: directive)),
+            ]),
+            nextStep: HaulRun.Step.confirming
+        ))
+    }
+
+    /// A `shuttle` already in force must read as settled — re-arming it with
+    /// `ferry` every tick is the same-step-dispatch failure shape.
+    @Test func pinnedAssigningIdlesWhenTheShuttleIsAlreadyInForce() {
+        let settled = keeper(
+            "C2", currentDirective: HaulTargetPlanner.shuttle,
+            currentConfig: [
+                "collect": .string(sameSystemBelt),
+                "deliver": .string(HaulRun.deliveryLocation),
+            ]
+        )
+        let action = HaulRun().nextAction(
+            directive: keeperRun(step: HaulRun.Step.assigning, deviceCode: "C2", targets: [sameSystemBelt]),
+            world: twoPileWorld(controllers: [keeper("C1"), settled])
+        )
+        #expect(action == .advanceStep(nextStep: HaulRun.Step.hauling))
     }
 
     /// Case 3: already running exactly that ferry config, so the keeper idles

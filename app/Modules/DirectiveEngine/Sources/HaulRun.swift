@@ -165,10 +165,12 @@ public struct HaulRun: MissionStepMachine {
         directive.targets.first
     }
 
-    private static func pinnedAssignment(_ directive: Directive, at location: String) -> HaulTargetPlanner.Assignment {
+    private static func pinnedAssignment(
+        _ directive: Directive, at location: String, in world: WorldSnapshot
+    ) -> HaulTargetPlanner.Assignment {
         HaulTargetPlanner.Assignment(
             controllerCode: directive.deviceCode, location: location,
-            directive: HaulTargetPlanner.ferry
+            directive: HaulTargetPlanner.verb(from: location, to: deliverySink(in: world, for: directive))
         )
     }
 
@@ -276,7 +278,7 @@ public struct HaulRun: MissionStepMachine {
         // repoint cargo at the fallback sink — wait for it to recover.
         guard !world.theatreWentClaimed(for: directive) else { return .wait }
         if let pinned = Self.pinnedSource(of: directive) {
-            let assignment = Self.pinnedAssignment(directive, at: pinned)
+            let assignment = Self.pinnedAssignment(directive, at: pinned, in: world)
             if Self.isInForce(assignment, in: world, for: directive) {
                 return .advanceStep(nextStep: Step.hauling)
             }
@@ -313,7 +315,7 @@ public struct HaulRun: MissionStepMachine {
         }
         let pending: HaulTargetPlanner.Assignment
         if let pinned = Self.pinnedSource(of: directive) {
-            pending = Self.pinnedAssignment(directive, at: pinned)
+            pending = Self.pinnedAssignment(directive, at: pinned, in: world)
         } else if let planned = Self.plans(directive, world).first(where: { $0.controllerCode == controllerCode }) {
             pending = planned
         } else {

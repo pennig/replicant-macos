@@ -44,6 +44,12 @@ public enum HaulTargetPlanner {
     /// come here instead.
     public static let shuttle = "shuttle"
 
+    /// `shuttle` when `origin` and `delivery` share a system, `ferry`
+    /// otherwise — the one rule every dispatcher must agree on.
+    public static func verb(from origin: String, to delivery: String) -> String {
+        SiteAssay.system(of: origin) == SiteAssay.system(of: delivery) ? shuttle : ferry
+    }
+
     /// Travel seconds per light-year, for the round-trip ranking. UNCALIBRATED —
     /// see the residual in the spec.
     public static let secondsPerLy: Double = 30
@@ -96,11 +102,10 @@ public enum HaulTargetPlanner {
         let ordered = controllers.sorted { $0.deviceCode < $1.deviceCode }
 
         return zip(ordered, candidates).map { controller, candidate in
-            let system = SiteAssay.system(of: candidate.key)
-            return Assignment(
+            Assignment(
                 controllerCode: controller.deviceCode,
                 location: candidate.key,
-                directive: system == deliverySystem ? shuttle : ferry
+                directive: verb(from: candidate.key, to: delivery)
             )
         }
     }

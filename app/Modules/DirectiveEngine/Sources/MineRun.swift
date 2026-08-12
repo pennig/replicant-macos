@@ -247,12 +247,11 @@ public struct MineRun: MissionStepMachine {
         out += (fleet.landed["service_bot"] ?? []).map {
             ArmTarget(deviceCode: $0.deviceCode, directive: serviceDirective, configuration: nil)
         }
+        let sink = HaulRun.deliverySink(in: world, for: directive)
         out.append(ArmTarget(
             deviceCode: fleet.transport.controller.deviceCode,
-            directive: HaulTargetPlanner.ferry,
-            configuration: [
-                "collect": .string(belt), "deliver": .string(HaulRun.deliverySink(in: world, for: directive)),
-            ]
+            directive: HaulTargetPlanner.verb(from: belt, to: sink),
+            configuration: ["collect": .string(belt), "deliver": .string(sink)]
         ))
         return out
     }

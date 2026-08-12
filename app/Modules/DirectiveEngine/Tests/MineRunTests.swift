@@ -23,6 +23,9 @@ import Utils
 private let now = Date(timeIntervalSince1970: 1_750_000_000)
 private let hubLocation = "AINALRAM-3"
 private let targetBelt = "TOSLIT-4-BELT-1"
+/// Shares a system with `HaulRun.deliveryLocation` — the shape an entry-point
+/// depot frees up as a same-system candidate.
+private let sameSystemBelt = "AINALRAM-9-BELT-1"
 private let carrierCode = "SC1"
 
 /// One AMI directive as a device row carries it.
@@ -109,6 +112,7 @@ private let adoptedByController = [
 /// The nine carried members standing loose at the belt, as `confirmingDetach`
 /// leaves them. `adoptedBy` and `armed` are keyed by member code.
 private func beltFleet(
+    at location: String = targetBelt,
     adoptedBy: [String: String] = [:],
     armed: [String: InForce] = [:],
     updatedAt: Date = now
@@ -120,7 +124,7 @@ private func beltFleet(
             n += 1
             let code = memberCodes[n - 1]
             out.append(mineRow(
-                code, type: type, tags: [MineRecipe.fleetTag], location: targetBelt,
+                code, type: type, tags: [MineRecipe.fleetTag], location: location,
                 controlledBy: adoptedBy[code], directive: armed[code], updatedAt: updatedAt
             ))
         }
@@ -132,6 +136,7 @@ private func beltFleet(
 /// printed and where the freighter unloads.
 private func transportPair(
     adopted: Bool = false,
+    directive: String = HaulTargetPlanner.ferry,
     ferry: (collect: String, deliver: String, status: String)? = nil,
     at location: String = HaulRun.deliveryLocation,
     updatedAt: Date = now
@@ -142,7 +147,7 @@ private func transportPair(
             location: location,
             directive: ferry.map {
                 (
-                    name: HaulTargetPlanner.ferry, status: $0.status,
+                    name: directive, status: $0.status,
                     config: ["collect": .string($0.collect), "deliver": .string($0.deliver)]
                 )
             },
@@ -1046,6 +1051,46 @@ struct MineRunTests {
         ])
         #expect(!targets.contains { $0.directive == "gather_resources" })
         #expect(targets.map(\.deviceCode) == ["M01", "M05", "M08", "M09", transportCode])
+    }
+
+    /// A belt sharing the depot's own system must arm `shuttle` — an
+    /// entry-point depot frees exactly this candidate at distance 0.0, and a
+    /// same-system `ferry` is malformed.
+    @Test("the ferry arm target becomes shuttle for a same-system belt")
+    func armTargetsChooseShuttleForASameSystemBelt() throws {
+        let snapshot = world(
+            devices: beltFleet(at: sameSystemBelt, adoptedBy: adoptedByController, armed: [:])
+                + transportPair(adopted: true)
+                + [mineCarrier(location: sameSystemBelt)]
+        )
+        let row = mineRunRow(targets: [sameSystemBelt])
+        let targets = try #require(MineRun.armTargets(of: row, in: snapshot))
+        let transport = try #require(targets.first { $0.deviceCode == transportCode })
+
+        #expect(transport.directive == HaulTargetPlanner.shuttle)
+        #expect(transport.configuration?["collect"]?.stringValue == sameSystemBelt)
+        #expect(transport.configuration?["deliver"]?.stringValue == HaulRun.deliverySink(in: snapshot, for: row))
+    }
+
+    /// A `shuttle` already in force must finish the run rather than being
+    /// re-armed with `ferry` every tick — the recorded same-step-dispatch
+    /// failure shape.
+    @Test("a shuttle already in force finishes the run")
+    func shuttleInForceFinishesTheRun() {
+        let snapshot = world(
+            devices: beltFleet(at: sameSystemBelt, adoptedBy: adoptedByController, armed: armedCarried)
+                + transportPair(
+                    adopted: true, directive: HaulTargetPlanner.shuttle,
+                    ferry: (collect: sameSystemBelt, deliver: HaulRun.deliveryLocation, status: "active")
+                )
+                + [mineCarrier(location: sameSystemBelt)]
+        )
+
+        #expect(
+            MineRun().nextAction(
+                directive: mineRunRow(step: MineRun.Step.arming, targets: [sameSystemBelt]), world: snapshot
+            ) == .done
+        )
     }
 
     // MARK: Confirming an arming
