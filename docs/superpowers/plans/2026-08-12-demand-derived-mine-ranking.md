@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - **Design source of truth:** `docs/superpowers/specs/2026-08-12-demand-derived-mine-ranking-design.md`.
-- **Comment budget is hard:** file header ≤ 6 lines, `///` doc ≤ 3 lines, inline `//` ≤ 2 lines. No dated history, no rejected alternatives, no live-fleet snapshots (device codes, current stock figures), no provenance pointers. Verify with `./app/scripts/check-comments.sh <paths>` from the repo root (paths repo-root relative) — exit 0 is a floor, not proof.
+- **Comment budget is hard:** file header ≤ 6 lines, `///` doc ≤ 3 lines, inline `//` ≤ 2 lines. Blank `///` lines and `//` separator lines COUNT against the budget; the two-line `//  <Name>.swift` / `//  Replicould — <Module>` banner is EXEMPT (`docs/superpowers/comment-cleanup-standard.md`). No dated history, no rejected alternatives, no live-fleet snapshots (device codes, current stock figures), no provenance pointers. Verify with `./app/scripts/check-comments.sh <paths>` from the repo root (paths repo-root relative) — exit 0 is a floor, not proof, since it is eleven regexes with no notion of line counts or prose.
 - **Migrations are append-only.** New migration appends to `GameDatabase.manifest`; never edit or reorder a shipped one.
 - **Logging:** `os.Logger` only, subsystem `name.pennig.replicould`, category = module/service name.
 - **Loud test defaults:** a shared client's `testValue` uses `unimplemented(...)`; rich fixtures belong on `previewValue`.
