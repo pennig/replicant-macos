@@ -107,10 +107,9 @@ import UniverseModels
         }
     }
 
-    /// Round-trips a `StarItem` through the production `Star.upsertCatalogue`
-    /// path `NewStarMapFeature` calls, over a row already seeded with stale,
-    /// conflicting values — so a `doUpdate` that drops a column would leave
-    /// the stale value standing rather than trivially passing on a bare insert.
+    /// Seeds a stale, conflicting row, then round-trips through the
+    /// production `Star.upsertCatalogue` path — so this test exercises
+    /// real conflict resolution, not a bare insert.
     private func persistedStar(_ item: StarItem) async throws -> UniverseModels.Star {
         let database = try GameDatabase.bootstrap()
         let stale = UniverseModels.Star(

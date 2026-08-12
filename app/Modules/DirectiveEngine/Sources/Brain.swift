@@ -1337,9 +1337,8 @@ struct Brain: Sendable {
             return .idle(reason: "no idle \(MineRecipe.carrierTag) surge carrier")
         }
 
-        // Every operational theatre's own depot is a legal site the estate
-        // cannot see: every installed query filters those locations out, so
-        // a mine at any of them is invisible.
+        // Every operational theatre's depot is excluded: it's belt-shaped,
+        // so a mine sited there is invisible to every installed-belt query.
         let depots = Set(view.theatres.filter(\.isOperational).map(\.depot))
         let occupied = depots
             .union(MineRecipe.installedBelts(in: fleet, hubs: depots))
