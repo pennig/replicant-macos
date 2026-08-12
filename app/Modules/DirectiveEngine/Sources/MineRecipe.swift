@@ -75,7 +75,8 @@ public enum MineRecipe {
     }
 
     /// Belts holding an installed mine: locations of tagged mining controllers
-    /// standing away from the hub.
+    /// standing away from the hub. Safe only for a single-theatre-scoped
+    /// check — never for a global installed/occupied set; use `hubs:` there.
     public static func installedBelts(
         in devices: some Sequence<Device>, hub: String?
     ) -> Set<String> {

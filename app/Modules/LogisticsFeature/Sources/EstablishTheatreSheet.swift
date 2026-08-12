@@ -22,16 +22,24 @@ public struct EstablishTheatreSheet {
 
     @ObservableState
     public struct State: Equatable {
-        public var location: String
+        /// Read-only context only — a bare system is never a legal depot, so
+        /// it is never written into `location` for the operator to accept unread.
+        public var suggestedSystem: String?
+        public var location = ""
         public var isSaving = false
         public var errorMessage: String?
 
         public init(suggestedSystem: String? = nil) {
-            self.location = suggestedSystem ?? ""
+            self.suggestedSystem = suggestedSystem
         }
 
+        /// Blank refuses, and so does the bare candidate system re-typed
+        /// verbatim — no device ever reports itself at a bare system code.
         public var canEstablish: Bool {
-            !location.trimmingCharacters(in: .whitespaces).isEmpty && !isSaving
+            let trimmed = location.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty, !isSaving else { return false }
+            if let suggestedSystem { return trimmed.uppercased() != suggestedSystem.uppercased() }
+            return true
         }
     }
 
@@ -109,7 +117,11 @@ struct EstablishTheatreSheetView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Space.l) {
             header
-            RCField("Depot location", text: $store.location, placeholder: "e.g. OMEROPE-BELT-1", mono: true)
+            RCField("Depot location", text: $store.location, placeholder: placeholderExample, mono: true)
+            Text("A theatre's depot is a specific location within the system — a bare system designation can never resolve.")
+                .font(.rcCaption)
+                .foregroundStyle(.rcTextTertiary)
+                .fixedSize(horizontal: false, vertical: true)
             costCard
             if let error = store.errorMessage {
                 Label(error, systemImage: "exclamationmark.triangle.fill")
@@ -124,9 +136,19 @@ struct EstablishTheatreSheetView: View {
         .background(Color.rcWindowBackground)
     }
 
+    private var placeholderExample: String {
+        store.suggestedSystem.map { "e.g. \($0)-BELT-1" } ?? "e.g. OMEROPE-BELT-1"
+    }
+
     private var header: some View {
         VStack(alignment: .leading, spacing: Space.xs) {
             Text("Establish a Theatre").font(.rcTitle).foregroundStyle(.rcTextPrimary)
+            if let system = store.suggestedSystem {
+                HStack(spacing: 4) {
+                    Text("Candidate system").font(.rcCaption).foregroundStyle(.rcTextTertiary)
+                    Text(system).font(.rcBodyEmphMono).foregroundStyle(.rcTextPrimary)
+                }
+            }
             Text("Pins the depot. Recognition — a print-capable device, stock, and mesh — completes it on the next tick.")
                 .font(.rcCaption)
                 .foregroundStyle(.rcTextTertiary)

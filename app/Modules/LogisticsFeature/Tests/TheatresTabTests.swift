@@ -76,7 +76,9 @@ struct EstablishTheatreSheetTests {
     @Test("Confirming writes a pin and nothing else, then delegates and dismisses")
     func confirmingWritesAPin() async throws {
         let database = try GameDatabase.bootstrap()
-        let store = TestStore(initialState: EstablishTheatreSheet.State(suggestedSystem: "OMEROPE-BELT-1")) {
+        var initial = EstablishTheatreSheet.State(suggestedSystem: "OMEROPE")
+        initial.location = "OMEROPE-BELT-1"
+        let store = TestStore(initialState: initial) {
             EstablishTheatreSheet()
         } withDependencies: {
             $0.defaultDatabase = database
@@ -98,6 +100,18 @@ struct EstablishTheatreSheetTests {
         var state = EstablishTheatreSheet.State()
         state.location = "   "
         #expect(!state.canEstablish)
+    }
+
+    @Test("A candidate's bare system is never pre-filled and cannot itself be confirmed")
+    func bareSystemNeverEstablishable() {
+        var state = EstablishTheatreSheet.State(suggestedSystem: "OMEROPE")
+        #expect(state.location.isEmpty)
+        state.location = "OMEROPE"
+        #expect(!state.canEstablish)
+        state.location = "omerope"
+        #expect(!state.canEstablish)
+        state.location = "OMEROPE-BELT-1"
+        #expect(state.canEstablish)
     }
 }
 
@@ -147,7 +161,7 @@ struct TheatresTabFeatureTests {
         await store.send(\.binding.tab, .yields) { $0.tab = .yields }
     }
 
-    @Test("Establish opens the sheet, pre-filled from a candidate's system")
+    @Test("Establish opens the sheet with the candidate's system as read-only context, unfilled")
     func establishTappedPresentsSheet() async throws {
         let database = try GameDatabase.bootstrap()
         let store = TestStore(initialState: LogisticsFeature.State()) {
@@ -172,7 +186,8 @@ struct TheatresTabFeatureTests {
         }
         store.exhaustivity = .off
 
-        await store.send(.establishTapped(system: "OMEROPE-BELT-1"))
+        await store.send(.establishTapped(system: "OMEROPE"))
+        await store.send(.establishTheatre(.presented(.binding(.set(\.location, "OMEROPE-BELT-1")))))
         await store.send(.establishTheatre(.presented(.confirmTapped)))
         await store.receive(\.establishTheatre.presented.pinWritten)
         await store.receive(\.establishTheatre.presented.delegate)

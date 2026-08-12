@@ -1338,8 +1338,9 @@ struct Brain: Sendable {
         // The hub's own belt is a legal site the estate cannot see: every
         // installed query filters `location != hub`, so a mine there is invisible.
         let unsitable: Set<String> = [hub]
+        let depots = Set(view.theatres.filter(\.isOperational).map(\.depot))
         let occupied = unsitable
-            .union(MineRecipe.installedBelts(in: fleet, hub: hub))
+            .union(MineRecipe.installedBelts(in: fleet, hubs: depots))
             .union(liveMineBelts(directives))
         guard let site = MineSitePlanner.site(view: view, occupiedBelts: occupied) else {
             let anyBelt = MineSitePlanner.site(view: view, occupiedBelts: unsitable) != nil

@@ -228,6 +228,33 @@ struct BrainMineReadinessTests {
                 == .launch(carrier: mineCarrier, belt: "VEGA-BELT-1")
         )
     }
+
+    /// A second operational theatre's own depot can be belt-shaped
+    /// (`Theatre.swift`'s own `AINALRAM-BELT-1` example): a fleet staged
+    /// there must not read as an installed, occupying mine.
+    @Test("a staged fleet at a second theatre's own depot is not occupied")
+    func aSecondTheatresStagedFleetIsNotOccupied() {
+        let hubA = "HUB-A-DEPOT"
+        let hubB = "HUB-B-BELT-1"
+        let devices = minePrintedFleet(at: hubA) + [mineCarrierDevice(location: hubA)]
+            + [mineDevice("MC-STAGED-B", type: "ami_mining_controller", location: hubB)]
+        let view = WorldView(
+            devices: Dictionary(uniqueKeysWithValues: devices.map { ($0.deviceCode, $0) }),
+            starPositions: ["HUB-A": Position(x: 0, y: 0, z: 0), "HUB-B": Position(x: 1, y: 0, z: 0)],
+            meshSystems: ["HUB-A", "HUB-B"],
+            salvageUnits: [:], eventSystems: [],
+            theatres: [
+                Theatre(depot: hubA, system: "HUB-A", origin: .derived, readiness: .operational, stock: 0),
+                Theatre(depot: hubB, system: "HUB-B", origin: .derived, readiness: .operational, stock: 0),
+            ],
+            beltsBySystem: ["HUB-B": [BeltInfo(designation: hubB, beltClass: .rich)]],
+            now: mineNow
+        )
+        #expect(
+            Brain.mineReadiness(view: view, directives: [])
+                == .launch(carrier: mineCarrier, belt: hubB)
+        )
+    }
 }
 
 @Suite("Brain — the mine ferry controller")

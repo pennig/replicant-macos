@@ -45,10 +45,14 @@ struct TheatreSiteRankingTests {
         #expect(TheatreSiteRanking.rank(view: view) == TheatreSiteRanking.rank(view: view))
     }
 
+    /// NELLURN is surveyed with no belts and a small local salvage pile — a
+    /// score OMEROPE's unsurveyed discount alone must outscore to place first.
+    /// A zero discount would drop OMEROPE below NELLURN and fail this.
     @Test("An unsurveyed candidate is offered, flagged, and discounted rather than dropped")
     func unsurveyedStillOffered() {
-        let ranked = TheatreSiteRanking.rank(view: unsurveyedRichCluster())
-        #expect(ranked.contains { $0.system == "OMEROPE" && !$0.isSurveyed })
+        let ranked = TheatreSiteRanking.rank(view: unsurveyedRichCluster(), limit: 1)
+        #expect(ranked.map(\.system) == ["OMEROPE"])
+        #expect(ranked.first?.isSurveyed == false)
     }
 }
 
@@ -132,16 +136,23 @@ private func candidateBesideExistingTheatre() -> WorldView {
     )
 }
 
-/// OMEROPE holds real salvage value but has never been surveyed, so its
-/// belts are unknown rather than absent.
+/// OMEROPE has never been surveyed, so its belts are unknown rather than
+/// absent, and carries no salvage of its own — its whole score is the
+/// unsurveyed discount. NELLURN, 100 ly off (out of either's reach), is
+/// surveyed with no belts but a little local salvage, scoring just below
+/// what the discount alone gives OMEROPE.
 private func unsurveyedRichCluster() -> WorldView {
     WorldView(
         devices: [:],
-        starPositions: ["OMEROPE": Position(x: 0, y: 0, z: 0)],
+        starPositions: [
+            "OMEROPE": Position(x: 0, y: 0, z: 0),
+            "NELLURN": Position(x: 100, y: 0, z: 0),
+        ],
         meshSystems: [],
-        salvageUnits: ["OMEROPE": 5_000],
+        salvageUnits: ["NELLURN": 3],
         eventSystems: [],
         theatres: [],
+        surveyedSystems: ["NELLURN"],
         now: Date(timeIntervalSince1970: 0)
     )
 }
