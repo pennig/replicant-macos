@@ -90,9 +90,8 @@ struct Brain: Sendable {
             }
         } catch {
             logger.error("world read failed: \(error)")
-            // The governor is process-local and still readable, and a tick that
-            // could not reach the database is exactly when an operator wants to
-            // know whether we are rate-limited.
+            // The governor is process-local and still readable — exactly when
+            // an operator wants to know whether we are rate-limited.
             return await BrainReport(
                 decision: .idle(reason: "world unavailable"),
                 ranked: [],
@@ -183,7 +182,7 @@ struct Brain: Sendable {
 
     /// Keep exactly one restock run alive per operational theatre, writing
     /// `plan`'s ranked hops nearest to it onto its `targets`. The brain writes
-    /// the DEMAND — **never hosted on a carrier**, which this would reserve permanently.
+    /// the DEMAND — **never hosted on a carrier**, which this would reserve for good.
     private func tendRestock(
         plan: Plan, snapshot: Snapshot, decision: BrainDecision, database: any DatabaseWriter
     ) async {

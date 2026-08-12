@@ -282,40 +282,46 @@ struct RelayRunReturnLegTests {
 @Suite("Theatre resolution — one rule, every reader")
 struct HubRecognitionSeamTests {
 
-    /// The mission reads a `WorldSnapshot`; the brain reads a `WorldView`. Both
-    /// carry theatres from the same `TheatreRegistry` call, so for EVERY
-    /// directive the two must name the same depot — a disagreement flies a
-    /// carrier to a place the next launch will not look.
-    @Test("for each directive, the mission's resolver and the brain's name the same depot", arguments: [
-        ("a stocked printer in a meshed system", BrainCeiling.aggregateSpendFloor * 2, hubLocation, String?.some(hubLocation)),
-        ("a printer whose location holds nothing", 0, hubLocation, String?.none),
-        ("a printer in an unmeshed system", BrainCeiling.aggregateSpendFloor * 2, "ELSEWHERE-BELT-1", String?.none),
-    ])
-    func bothReadersAgree(_ label: String, stock: Int, printerAt: String, expected: String?) {
-        let devices = [
-            hub(location: printerAt),
-            liveRelay("REL0", at: hubLocation),
-            carrier(location: hubLocation),
+    /// `WorldView.read` and `WorldSnapshot.read` are two INDEPENDENT
+    /// `TheatreRegistry.recognise` calls over the same tables — a fixture
+    /// built by hand from one shared theatre list cannot exercise that seam.
+    @Test("for each directive, WorldView.read and WorldSnapshot.read name the same depot")
+    func bothReadPathsAgree() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Device.insert { hub() }.execute(db)
+            try Device.insert { liveRelay("REL0", at: hubLocation) }.execute(db)
+            try Device.insert { carrier(location: hubLocation) }.execute(db)
+            try LocationFootprint.insert { census(
+                BrainCeiling.aggregateSpendFloor * 2, at: hubLocation
+            )[hubLocation]! }.execute(db)
+            // Off any candidate depot: in `WorldSnapshot`'s whole-table read
+            // but not `WorldView`'s narrowed query — a real read difference.
+            try LocationFootprint.insert {
+                LocationFootprint(
+                    location: "ELSEWHERE-9", devices: 0, resources: 999_999,
+                    resourceSites: 0, locationEvents: 0, replicants: 0, fetchedAt: now
+                )
+            }.execute(db)
+        }
+
+        let view = try await database.read { db in try WorldView.read(from: db, now: now) }
+
+        let directives = [
+            relayRun(step: RelayRun.Step.returning, returnToOrigin: true, theatreDepot: hubLocation),
+            relayRun(step: RelayRun.Step.returning, returnToOrigin: true, theatreDepot: nil),
+            relayRun(step: RelayRun.Step.returning, returnToOrigin: true, theatreDepot: "GONE-BELT-1"),
         ]
-        let footprints = census(stock, at: printerAt)
-        let recognised = theatres(devices: devices, footprints: footprints)
-        let deviceMap = Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last })
-        let snapshot = WorldSnapshot(
-            devices: deviceMap, openOperations: [:], footprints: footprints,
-            theatres: recognised, now: now
-        )
-        let view = WorldView(
-            devices: deviceMap, starPositions: [:],
-            meshSystems: SalvageTargetPlanner.meshSystems(in: devices),
-            salvageUnits: [:], eventSystems: [], hubLocation: nil, theatres: recognised, now: now
-        )
-        let directive = relayRun(step: RelayRun.Step.returning, returnToOrigin: true, theatreDepot: printerAt)
 
-        let fromMission = RelayRun.theatreDepot(in: snapshot, for: directive)
-        let fromBrain = view.theatres.first { $0.depot == directive.theatreDepot && $0.isOperational }?.depot
-
-        #expect(fromMission == expected, "\(label): the mission's answer")
-        #expect(fromMission == fromBrain, "\(label): and it is the brain's answer")
+        for directive in directives {
+            let snapshot = try await WorldSnapshot.read(from: database, now: now, directive: directive)
+            let fromMission = RelayRun.theatreDepot(in: snapshot, for: directive)
+            let fromBrain = view.theatres.first { $0.depot == directive.theatreDepot && $0.isOperational }?.depot
+            #expect(fromMission == fromBrain, "theatreDepot \(directive.theatreDepot ?? "nil"): mission vs brain")
+        }
+        // The positive case is worth pinning to a value, not just to agreement.
+        let home = try await WorldSnapshot.read(from: database, now: now, directive: directives[0])
+        #expect(RelayRun.theatreDepot(in: home, for: directives[0]) == hubLocation)
     }
 }
 

@@ -118,15 +118,13 @@ public enum PrunePredicate {
         let unplaceable = mustBePlaceable.filter { !graph.canPlace($0) }.sorted()
         guard unplaceable.isEmpty else { return decline(.censusIncomplete(systems: unplaceable)) }
 
-        // One union PER COMPONENT, rooted at that component's own theatres and
-        // judged only against its own targets. Separate per-anchor searches
-        // unioned together only ever ADD pinned systems — the safe direction.
+        // One union PER COMPONENT, rooted at that component's own theatres —
+        // separate per-anchor searches unioned together only ever ADD pins.
         var unionByComponent: [String: Set<String>] = [:]
         for anchor in anchors {
             guard let component = view.components[anchor.system] else { continue }
-            // A target's component is nil when it is not yet meshed — keep it
-            // as a candidate rather than dropping it; only a target KNOWN to
-            // belong elsewhere is excluded.
+            // Nil-component targets (not yet meshed) stay candidates; only a
+            // target KNOWN to belong elsewhere is excluded.
             let localTargets = targets.filter {
                 view.components[$0] == nil || view.components[$0] == component
             }
@@ -135,9 +133,8 @@ public enum PrunePredicate {
             unionByComponent[component, default: []].formUnion(union)
         }
 
-        // An unanchored component is unjudged, and unjudged is pinned, ONLY
-        // while it holds something worth protecting — nothing to protect
-        // means nothing for that caution to be conservative about.
+        // An unanchored component is pinned ONLY while it holds something
+        // worth protecting — nothing to protect, nothing to be cautious about.
         let anchoredComponents = Set(unionByComponent.keys)
         let unanchoredComponentsWithValue = Set(view.components.values)
             .subtracting(anchoredComponents)

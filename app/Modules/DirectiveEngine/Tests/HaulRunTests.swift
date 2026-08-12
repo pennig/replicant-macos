@@ -126,8 +126,8 @@ private func stepStartedEntry(
 private func healthyPass(size n: Int) -> (directive: Directive, world: WorldSnapshot) {
     let codes = (1...n).map { "C\($0)" }
     let locations = (1...n).map { "AINALRAM-\($0 + 1)" }
-    // Richest first, so `assign`'s ranking pairs sorted controller k with
-    // sorted-by-units candidate k: C1 gets the richest pile, C(n) the least.
+    // Every pile is same-system, so round-trip ranking ties them at
+    // `.infinity` — order comes from the designation tie-break, not richness.
     let footprints = zip(locations, (1...n).reversed()).map { footprint($0, $1 * 1_000) }
     let devices = codes.enumerated().map { index, code -> Device in
         guard index < n - 1 else { return controller(code) } // the n-th: never dispatched

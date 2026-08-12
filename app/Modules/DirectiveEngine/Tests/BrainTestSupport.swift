@@ -489,9 +489,8 @@ func prunableWorld(
     }
     let devices = relayDevices + fleetDevices
     let mesh = SalvageTargetPlanner.meshSystems(in: relayDevices)
-    // Real per-system labels, not the synthesised single-entry fallback
-    // `WorldView.init` falls back to: every meshed system needs a component,
-    // not just the hub's own.
+    // Real per-system labels, not `WorldView.init`'s synthesised single-entry
+    // fallback — every meshed system needs a component, not just the hub's.
     let components = MeshGraph(positions: positions).components(of: mesh)
     return WorldView(
         devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),

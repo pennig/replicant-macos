@@ -68,11 +68,8 @@ struct MissionTheatreTests {
         #expect(RelayRun.theatreDepot(in: snapshot, for: stale) == nil)
     }
 
-    /// `MineSitePlanner` has no directive row to read a depot from, so it must
-    /// rank OUTWARD from the nearest theatre — never `theatre(servicing:)`,
-    /// which is component-scoped and would refuse a belt on the frontier
-    /// before any relay chain has linked its system into an existing theatre's
-    /// own mesh component.
+    /// `MineSitePlanner` has no directive row to read a depot from, so it
+    /// ranks OUTWARD from the nearest theatre, never an inward, scoped one.
     @Test("Mine site ranking uses the NEAREST theatre, even off its own mesh component")
     func mineRankingIsOutward() {
         let view = WorldView(
