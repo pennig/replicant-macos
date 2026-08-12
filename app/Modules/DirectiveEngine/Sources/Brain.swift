@@ -706,10 +706,8 @@ struct Brain: Sendable {
     }
 
     /// Rank `view`'s grow candidates, drop the ones `directives` says are in
-    /// flight, take the best remaining. ONE launch per tick, so in-tick double
-    /// allocation is structurally impossible rather than guarded. The gates are
-    /// ordered so the why-view can distinguish "nothing worth reaching" from
-    /// "nothing free to send".
+    /// flight, and walk what remains for the first whose theatre has a free
+    /// carrier. ONE launch per tick, so in-tick double allocation is structurally impossible.
     static func plan(view: WorldView, directives: [Directive]) -> Plan {
         guard !view.meshSystems.isEmpty else {
             // Nil, not an empty partition — prune has not declined, it has not
@@ -728,40 +726,42 @@ struct Brain: Sendable {
         }
 
         let inFlight = inFlightTargets(directives)
-        guard let candidate = ranked.first(where: { !inFlight.contains($0.firstHop) }) else {
+        let contenders = ranked.filter { !inFlight.contains($0.firstHop) }
+        guard !contenders.isEmpty else {
             return .idle(reason: "every grow candidate is already in flight", ranked: ranked, prune: prune)
         }
 
-        // No operational theatre reachable from the candidate covers both "no
-        // printer" and "a printer we cannot reach".
-        guard let theatre = view.theatre(nearest: candidate.firstHop) else {
-            return .idle(reason: "no operational theatre", ranked: ranked, prune: prune)
-        }
-        let hub = theatre.depot
-
         let reserved = reservedDevices(directives: directives, devices: view.devices)
-        guard let carrier = freeCarrier(at: hub, devices: view.devices, reserved: reserved) else {
-            return .idle(
-                reason: carrierBlocker(
-                    at: hub, devices: view.devices, reserved: reserved, directives: directives
-                ),
+        // Walks in ranked order: the first candidate whose theatre has a free
+        // carrier grows, rather than idling the whole pass on the top one's blocker.
+        var blocked: String?
+        for candidate in contenders {
+            // No operational theatre reachable covers both "no printer" and "a
+            // printer we cannot reach" — try the next candidate rather than idling.
+            guard let theatre = view.theatre(nearest: candidate.firstHop) else { continue }
+            let hub = theatre.depot
+            guard let carrier = freeCarrier(at: hub, devices: view.devices, reserved: reserved) else {
+                if blocked == nil {
+                    blocked = carrierBlocker(at: hub, devices: view.devices, reserved: reserved, directives: directives)
+                }
+                continue
+            }
+
+            return .grow(
+                goal: Goal(kind: .tendMesh, target: candidate.firstHop, rationale: rationale(for: candidate)),
                 ranked: ranked,
+                carrier: carrier.deviceCode,
+                hub: hub,
+                origin: theatre.system,
+                source: reclaimSource(
+                    analysis: prune, view: view, graph: graph, target: candidate.firstHop,
+                    carrier: carrier, directives: directives
+                ),
                 prune: prune
             )
         }
 
-        return .grow(
-            goal: Goal(kind: .tendMesh, target: candidate.firstHop, rationale: rationale(for: candidate)),
-            ranked: ranked,
-            carrier: carrier.deviceCode,
-            hub: hub,
-            origin: theatre.system,
-            source: reclaimSource(
-                analysis: prune, view: view, graph: graph, target: candidate.firstHop,
-                carrier: carrier, directives: directives
-            ),
-            prune: prune
-        )
+        return .idle(reason: blocked ?? "no operational theatre", ranked: ranked, prune: prune)
     }
 
     // MARK: - Sourcing the relay

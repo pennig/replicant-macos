@@ -802,3 +802,73 @@ struct BrainCarrierBlockerTests {
         }
     }
 }
+
+private let growAcrossTheatresNow = Date(timeIntervalSince1970: 5_000)
+
+/// Two theatres, each nearest a different one-hop grow candidate: `HUBX-1`
+/// beside `CANDA` (3 ly from mesh source `SOL`), `HUBY-1` beside `CANDB` (6
+/// ly) — so ranking orders `CANDA` first while each stays its own nearest theatre.
+private func twoTheatreGrowView(
+    carrierAtHubX: Device?, carrierAtHubY: Device?
+) -> (view: WorldView, hubX: Theatre, hubY: Theatre) {
+    let hubX = Theatre(depot: "HUBX-1", system: "HUBX", origin: .derived, readiness: .operational, stock: 0)
+    let hubY = Theatre(depot: "HUBY-1", system: "HUBY", origin: .derived, readiness: .operational, stock: 0)
+    let devices = [carrierAtHubX, carrierAtHubY].compactMap { $0 }
+    let view = WorldView(
+        devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
+        starPositions: [
+            "SOL": Position(x: 0, y: 0, z: 0),
+            "CANDA": Position(x: 3, y: 0, z: 0),
+            "CANDB": Position(x: 6, y: 0, z: 0),
+            "HUBX": Position(x: 3, y: 0, z: 1),
+            "HUBY": Position(x: 6, y: 0, z: 1),
+        ],
+        meshSystems: ["SOL"],
+        salvageUnits: ["CANDA": 500, "CANDB": 500],
+        eventSystems: [],
+        theatres: [hubX, hubY],
+        now: growAcrossTheatresNow
+    )
+    return (view, hubX, hubY)
+}
+
+@Suite("Brain — grow walks past a blocked candidate")
+struct BrainGrowFallthroughTests {
+    /// Two candidates, the nearer's theatre carrier-less and the further's
+    /// free. The pass must reach past the nearer's blocker to the candidate
+    /// whose own theatre can actually send something.
+    @Test func aBlockedNearerTheatreFallsThroughToAFurtherCandidate() {
+        let (view, _, hubY) = twoTheatreGrowView(
+            carrierAtHubX: nil,
+            carrierAtHubY: deviceFixture(code: "VY", location: "HUBY-1")
+        )
+
+        guard case let .grow(goal, ranked, carrier, hub, origin, _, _) = Brain.plan(view: view, directives: []) else {
+            Issue.record("expected a grow")
+            return
+        }
+        #expect(ranked.map(\.firstHop) == ["CANDA", "CANDB"], "CANDA ranks first on hop distance alone")
+        #expect(goal.target == "CANDB", "CANDA's own theatre has no carrier, so the pass reaches past it")
+        #expect(carrier == "VY")
+        #expect(hub == hubY.depot)
+        #expect(origin == hubY.system)
+    }
+
+    /// Every candidate's theatre is carrier-less: idle names the FIRST
+    /// blocked candidate's own `carrierBlocker` — a concrete holder, never a
+    /// generic sentence that could describe any hub.
+    @Test func allCandidatesCarrierLessIdlesWithTheFirstOnesBlocker() {
+        let held = deviceFixture(code: "VX", location: "HUBX-1")
+        let busy = deviceFixture(code: "VY", location: "HUBY-1", status: "travelling")
+        let (view, hubX, _) = twoTheatreGrowView(carrierAtHubX: held, carrierAtHubY: busy)
+        let directives = [directiveFixture(id: "RUN1", kind: .relayRun, status: .running, deviceCode: "VX")]
+
+        let decision = Brain.plan(view: view, directives: directives)
+        guard case let .idle(reason, ranked, _) = decision else {
+            Issue.record("expected idle")
+            return
+        }
+        #expect(ranked.map(\.firstHop) == ["CANDA", "CANDB"])
+        #expect(reason == "no free carrier at \(hubX.depot) — VX is held by relay run RUN1 (running)")
+    }
+}
