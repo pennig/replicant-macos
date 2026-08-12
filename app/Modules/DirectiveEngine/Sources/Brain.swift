@@ -359,12 +359,11 @@ struct Brain: Sendable {
     /// `ensureSurvey`'s sibling. The run is continuous and picks its own
     /// targets, so liveness is the whole job.
     private func ensureSalvage(snapshot: Snapshot, database: any DatabaseWriter) async {
-        guard case let .launch(carrier, roamCentre) = Self.salvageReadiness(
-            view: snapshot.view, directives: snapshot.directives
-        ) else { return }
-
         @Dependency(\.uuid) var uuid
         for theatre in snapshot.view.theatres.filter(\.isOperational) {
+            guard case let .launch(carrier, roamCentre) = Self.salvageReadiness(
+                view: snapshot.view, directives: snapshot.directives, theatre: theatre
+            ) else { continue }
             await ensureOne(.salvageRun, theatre: theatre, snapshot: snapshot, database: database) {
                 Directive(
                     id: uuid().uuidString,
@@ -1232,18 +1231,19 @@ struct Brain: Sendable {
     /// in through the tag can never disagree with the vessel carrying it.
     static let salvageCarrierTag = SalvageRun.defaultFleetTag
 
-    /// The salvage verdict for `view`. Takes `directives` as well, unlike
-    /// `surveyReadiness`: the carrier must be free of any OTHER kind's hold, and
-    /// an empty list would make that gate vacuous rather than lenient.
-    static func salvageReadiness(view: WorldView, directives: [Directive]) -> SalvageReadiness {
+    /// The salvage verdict for `theatre`. Takes `directives` too — the carrier
+    /// must be free of any other kind's hold — and the pool is scoped to
+    /// devices `theatre` owns, so two theatres never fight over one vessel.
+    static func salvageReadiness(view: WorldView, directives: [Directive], theatre: Theatre) -> SalvageReadiness {
         let reserved = reservedDevices(directives: directives, devices: view.devices)
         guard let carrier = view.devices.values
             .filter({ $0.isCarrierHull && $0.hasTag(salvageCarrierTag) })
+            .filter({ owningTheatre(of: $0, view: view)?.depot == theatre.depot })
             .filter({ !reserved.contains($0.deviceCode) })
             .min(by: { $0.deviceCode < $1.deviceCode })
         else {
-            // A tag on a non-carrier hull is named — its remedy is moving the
-            // tag, not tagging the fleet.
+            // A tag on a non-carrier hull is a misapplied opt-in, not an untagged
+            // fleet. Moving the tag is location-independent, so the scan is fleet-wide.
             let mistagged = view.devices.values
                 .filter { !$0.isCarrierHull && $0.hasTag(salvageCarrierTag) }
                 .sorted { $0.deviceCode < $1.deviceCode }
@@ -1265,9 +1265,6 @@ struct Brain: Sendable {
             )
         }
 
-        guard let theatre = view.theatres.first(where: \.isOperational) else {
-            return .idle(reason: "no operational theatre")
-        }
         let centre = theatre.system
         guard view.starPositions[centre] != nil else {
             return .idle(reason: "roam centre \(centre) is not in the census")
@@ -1418,7 +1415,10 @@ struct Brain: Sendable {
                 status: launchedGoalStatus(live.status)
             )
         }
-        switch salvageReadiness(view: view, directives: directives) {
+        guard let theatre = view.theatres.first(where: \.isOperational) else {
+            return .idle(reason: "no operational theatre")
+        }
+        switch salvageReadiness(view: view, directives: directives, theatre: theatre) {
         case let .launch(carrier, _): return .ready(vessel: carrier)
         case let .idle(reason): return .idle(reason: reason)
         }

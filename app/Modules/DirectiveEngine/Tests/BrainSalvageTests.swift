@@ -25,6 +25,7 @@ private func salvageDevice(
     _ code: String,
     type: String,
     tags: [String] = [],
+    location: String? = nil,
     stowedIn: String? = nil,
     controllerDeviceCode: String? = nil,
     directives: [String] = []
@@ -35,7 +36,7 @@ private func salvageDevice(
     }
     return Device(
         deviceCode: code, deviceType: type, replicantCode: "R1", status: "idle",
-        location: nil, locationName: nil, operationalCapacity: 100, queueSize: 0,
+        location: location, locationName: nil, operationalCapacity: 100, queueSize: 0,
         stowedInDeviceCode: stowedIn, controllerDeviceCode: controllerDeviceCode,
         attachedToDeviceCode: nil, createdAt: Date(timeIntervalSince1970: 0),
         availableCommands: [], features: fixtureFeatures(for: type), tags: tags,
@@ -46,15 +47,50 @@ private func salvageDevice(
 
 /// A fully staged salvage vessel: tagged, a mining controller stowed aboard
 /// offering `gather_salvage`, and one drone that controller has adopted.
-private func salvageStagedFleet(carrier: String = "V1") -> [Device] {
+/// `location` is what `Brain.owningTheatre` resolves the carrier through.
+private func salvageStagedFleet(carrier: String = "V1", location: String? = "AINALRAM-1") -> [Device] {
     [
-        salvageDevice(carrier, type: "heaven_vessel", tags: [Brain.salvageCarrierTag]),
+        salvageDevice(carrier, type: "heaven_vessel", tags: [Brain.salvageCarrierTag], location: location),
         salvageDevice(
             "AMI1", type: "ami_mining_controller", stowedIn: carrier, directives: ["gather_salvage"]
         ),
         salvageDevice("DRONE1", type: "mining_drone", stowedIn: carrier, controllerDeviceCode: "AMI1"),
     ]
 }
+
+/// Two independent theatres in separate mesh components, each carrying the
+/// given fleet's devices at its own system. Component separation makes
+/// `owningTheatre` resolve each fleet to its own theatre unambiguously.
+private func twoTheatreSalvageView(
+    ainalramFleet: [Device], denebedFleet: [Device],
+    meshSystems: Set<String> = ["AINALRAM", "DENEBED"],
+    salvageUnits: [String: Double] = [:]
+) -> (view: WorldView, ainalram: Theatre, denebed: Theatre) {
+    let ainalram = Theatre(
+        depot: "AINALRAM-BELT-1", system: "AINALRAM", origin: .derived, readiness: .operational, stock: 0
+    )
+    let denebed = Theatre(
+        depot: "DENEBED-BELT-1", system: "DENEBED", origin: .pinned, readiness: .operational, stock: 0
+    )
+    let devices = ainalramFleet + denebedFleet
+    let view = WorldView(
+        devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
+        starPositions: ["AINALRAM": Position(x: 0, y: 0, z: 0), "DENEBED": Position(x: 100, y: 100, z: 100)],
+        meshSystems: meshSystems,
+        salvageUnits: salvageUnits,
+        eventSystems: [],
+        theatres: [ainalram, denebed],
+        components: ["AINALRAM": "AINALRAM", "DENEBED": "DENEBED"],
+        now: salvageFixtureNow
+    )
+    return (view, ainalram, denebed)
+}
+
+/// The single-theatre fixtures' theatre — depot `AINALRAM-BELT-1`, matching
+/// `salvageView(depot:)`'s default single-theatre setup.
+private let ainalramTheatre = Theatre(
+    depot: "AINALRAM-BELT-1", system: "AINALRAM", origin: .derived, readiness: .operational, stock: 0
+)
 
 private func salvageView(
     devices: [Device],
@@ -82,7 +118,7 @@ struct BrainSalvageReadinessTests {
     func readyToLaunch() {
         let view = salvageView(devices: salvageStagedFleet())
         #expect(
-            Brain.salvageReadiness(view: view, directives: [])
+            Brain.salvageReadiness(view: view, directives: [], theatre: ainalramTheatre)
                 == .launch(carrier: "V1", roamCentre: "AINALRAM")
         )
     }
@@ -92,14 +128,14 @@ struct BrainSalvageReadinessTests {
     @Test("a tagged, staged racing vessel is a salvage carrier")
     func racingVesselIsASalvageCarrier() {
         let view = salvageView(devices: [
-            salvageDevice("V1", type: "racing_vessel", tags: [Brain.salvageCarrierTag]),
+            salvageDevice("V1", type: "racing_vessel", tags: [Brain.salvageCarrierTag], location: "AINALRAM-1"),
             salvageDevice(
                 "AMI1", type: "ami_mining_controller", stowedIn: "V1", directives: ["gather_salvage"]
             ),
             salvageDevice("DRONE1", type: "mining_drone", stowedIn: "V1", controllerDeviceCode: "AMI1"),
         ])
         #expect(
-            Brain.salvageReadiness(view: view, directives: [])
+            Brain.salvageReadiness(view: view, directives: [], theatre: ainalramTheatre)
                 == .launch(carrier: "V1", roamCentre: "AINALRAM")
         )
     }
@@ -112,7 +148,7 @@ struct BrainSalvageReadinessTests {
             salvageDevice("F1", type: "cargo_freighter", tags: [Brain.salvageCarrierTag])
         ])
         #expect(
-            Brain.salvageReadiness(view: view, directives: [])
+            Brain.salvageReadiness(view: view, directives: [], theatre: ainalramTheatre)
                 == .idle(reason: "no \(Brain.salvageCarrierTag) vessel — F1 is tagged \(Brain.salvageCarrierTag) but is not a carrier hull")
         )
     }
@@ -121,7 +157,7 @@ struct BrainSalvageReadinessTests {
     func untaggedVesselIsIdle() {
         let view = salvageView(devices: [salvageDevice("V1", type: "heaven_vessel", tags: [])])
         #expect(
-            Brain.salvageReadiness(view: view, directives: [])
+            Brain.salvageReadiness(view: view, directives: [], theatre: ainalramTheatre)
                 == .idle(reason: "no auto:salvage vessel")
         )
     }
@@ -131,7 +167,7 @@ struct BrainSalvageReadinessTests {
         let view = salvageView(devices: salvageStagedFleet())
         let holder = directiveFixture(id: "R1", kind: .relayRun, deviceCode: "V1")
         #expect(
-            Brain.salvageReadiness(view: view, directives: [holder])
+            Brain.salvageReadiness(view: view, directives: [holder], theatre: ainalramTheatre)
                 == .idle(reason: "no auto:salvage vessel")
         )
     }
@@ -139,10 +175,10 @@ struct BrainSalvageReadinessTests {
     @Test("a tagged carrier with no mining controller aboard is idle, never a stall")
     func noControllerIsIdle() {
         let view = salvageView(
-            devices: [salvageDevice("V1", type: "heaven_vessel", tags: [Brain.salvageCarrierTag])]
+            devices: [salvageDevice("V1", type: "heaven_vessel", tags: [Brain.salvageCarrierTag], location: "AINALRAM-1")]
         )
         #expect(
-            Brain.salvageReadiness(view: view, directives: [])
+            Brain.salvageReadiness(view: view, directives: [], theatre: ainalramTheatre)
                 == .idle(reason: "V1 has no mining controller aboard")
         )
     }
@@ -150,32 +186,29 @@ struct BrainSalvageReadinessTests {
     @Test("a controller with no adopted drone aboard is idle and names both codes")
     func noDroneIsIdle() {
         let view = salvageView(devices: [
-            salvageDevice("V1", type: "heaven_vessel", tags: [Brain.salvageCarrierTag]),
+            salvageDevice("V1", type: "heaven_vessel", tags: [Brain.salvageCarrierTag], location: "AINALRAM-1"),
             salvageDevice(
                 "AMI1", type: "ami_mining_controller", stowedIn: "V1", directives: ["gather_salvage"]
             ),
         ])
         #expect(
-            Brain.salvageReadiness(view: view, directives: [])
+            Brain.salvageReadiness(view: view, directives: [], theatre: ainalramTheatre)
                 == .idle(reason: "V1's controller AMI1 has adopted no drone aboard")
         )
     }
 
-    @Test("no operational theatre means no roam centre, so idle")
-    func noHubIsIdle() {
-        let view = salvageView(devices: salvageStagedFleet(), depot: nil)
-        #expect(
-            Brain.salvageReadiness(view: view, directives: [])
-                == .idle(reason: "no operational theatre")
+    /// `salvageReadiness` takes an arbitrary `Theatre` — one whose `system`
+    /// disagrees with its own `depot`'s real system still resolves a carrier
+    /// (matched on depot), so this seam can still reach the census guard.
+    @Test("a roam centre the census does not know idles, naming it")
+    func unknownRoamCentreIdles() {
+        let view = salvageView(devices: salvageStagedFleet())
+        let mismatchedTheatre = Theatre(
+            depot: "AINALRAM-BELT-1", system: "GHOST", origin: .derived, readiness: .operational, stock: 0
         )
-    }
-
-    @Test("a roam centre the census cannot place is idle and names it")
-    func anUnplaceableCentreIsIdle() {
-        let view = salvageView(devices: salvageStagedFleet(), starPositions: [:])
         #expect(
-            Brain.salvageReadiness(view: view, directives: [])
-                == .idle(reason: "roam centre AINALRAM is not in the census")
+            Brain.salvageReadiness(view: view, directives: [], theatre: mismatchedTheatre)
+                == .idle(reason: "roam centre GHOST is not in the census")
         )
     }
 
@@ -190,7 +223,7 @@ struct BrainSalvageReadinessTests {
             salvageUnits: ["FARAWAY": 9_000]
         )
         #expect(
-            Brain.salvageReadiness(view: view, directives: [])
+            Brain.salvageReadiness(view: view, directives: [], theatre: ainalramTheatre)
                 == .idle(reason: "no meshed salvage system with units left")
         )
     }
@@ -199,7 +232,7 @@ struct BrainSalvageReadinessTests {
     func depletedSalvageIsIdle() {
         let view = salvageView(devices: salvageStagedFleet(), salvageUnits: ["ALPAHARD": 0])
         #expect(
-            Brain.salvageReadiness(view: view, directives: [])
+            Brain.salvageReadiness(view: view, directives: [], theatre: ainalramTheatre)
                 == .idle(reason: "no meshed salvage system with units left")
         )
     }
@@ -208,15 +241,66 @@ struct BrainSalvageReadinessTests {
     func theLowestCodedCarrierWins() {
         var devices = salvageStagedFleet(carrier: "V1")
         devices.append(
-            salvageDevice("A0", type: "heaven_vessel", tags: [Brain.salvageCarrierTag])
+            salvageDevice("A0", type: "heaven_vessel", tags: [Brain.salvageCarrierTag], location: "AINALRAM-2")
         )
         // `A0` sorts first but is unstaged, so the verdict names ITS blocker —
         // proving the carrier is chosen before staging is judged.
         let view = salvageView(devices: devices)
         #expect(
-            Brain.salvageReadiness(view: view, directives: [])
+            Brain.salvageReadiness(view: view, directives: [], theatre: ainalramTheatre)
                 == .idle(reason: "A0 has no mining controller aboard")
         )
+    }
+
+    /// A theatre with no carrier of its own idles, and must not call
+    /// AINALRAM's tagged, staged carrier untagged just because DENEBED
+    /// can't see it.
+    @Test("a theatre with no carrier of its own idles without consuming the other theatre's carrier")
+    func theatreWithNoOwnCarrierIdlesWithoutConsumingTheOther() {
+        let (view, ainalram, denebed) = twoTheatreSalvageView(
+            ainalramFleet: salvageStagedFleet(carrier: "VA", location: "AINALRAM-1"),
+            denebedFleet: [],
+            salvageUnits: ["AINALRAM": 500]
+        )
+
+        guard case let .idle(reason) = Brain.salvageReadiness(view: view, directives: [], theatre: denebed) else {
+            Issue.record("expected DENEBED to idle — it owns no carrier")
+            return
+        }
+        #expect(reason == "no \(Brain.salvageCarrierTag) vessel")
+        #expect(!reason.contains("VA"))
+        #expect(
+            Brain.salvageReadiness(view: view, directives: [], theatre: ainalram)
+                == .launch(carrier: "VA", roamCentre: "AINALRAM")
+        )
+    }
+
+    /// The mistagged clause stays fleet-wide even where carrier selection is
+    /// theatre-scoped — a stowed device has no location, so `owningTheatre`
+    /// can't place it in ANY theatre's pool, AINALRAM's included.
+    @Test("a location-less mistagged device is still named in a multi-theatre world")
+    func locationlessMistaggedDeviceIsStillNamedAcrossTheatres() {
+        let (view, ainalram, _) = twoTheatreSalvageView(
+            ainalramFleet: [salvageDevice("F1", type: "cargo_freighter", tags: [Brain.salvageCarrierTag])],
+            denebedFleet: []
+        )
+
+        guard case let .idle(reason) = Brain.salvageReadiness(view: view, directives: [], theatre: ainalram) else {
+            Issue.record("expected idle")
+            return
+        }
+        #expect(reason.contains("F1 is tagged \(Brain.salvageCarrierTag) but is not a carrier hull"))
+    }
+}
+
+// MARK: - `Brain.salvageStatus` — the why-view's verdict
+
+@Suite("Brain — the salvage status for the why-view")
+struct BrainSalvageStatusTests {
+    @Test("no operational theatre reports idle, naming that")
+    func noOperationalTheatreReportsIdle() {
+        let view = salvageView(devices: [], depot: nil)
+        #expect(Brain.salvageStatus(directives: [], view: view) == .idle(reason: "no operational theatre"))
     }
 }
 
@@ -227,7 +311,7 @@ private let salvageEnsureCarrier = "SALV1"
 private let salvageEnsureHubSystem = "SOL"
 
 private func seedSalvageEnsureDevice(
-    _ db: Database, code: String, type: String, tags: [String] = [],
+    _ db: Database, code: String, type: String, tags: [String] = [], location: String? = nil,
     stowedIn: String? = nil, controllerDeviceCode: String? = nil, directives: [String] = []
 ) throws {
     var detail: [String: JSONValue] = [:]
@@ -237,7 +321,7 @@ private func seedSalvageEnsureDevice(
     try Device.insert {
         Device(
             deviceCode: code, deviceType: type, replicantCode: "R1", status: "idle",
-            location: nil, locationName: nil, operationalCapacity: 100, queueSize: 0,
+            location: location, locationName: nil, operationalCapacity: 100, queueSize: 0,
             stowedInDeviceCode: stowedIn, controllerDeviceCode: controllerDeviceCode,
             attachedToDeviceCode: nil, createdAt: Date(timeIntervalSince1970: 0),
             availableCommands: [], features: fixtureFeatures(for: type), tags: tags,
@@ -247,9 +331,13 @@ private func seedSalvageEnsureDevice(
     }.execute(db)
 }
 
-private func seedSalvageEnsureFleet(_ db: Database, carrier: String = salvageEnsureCarrier) throws {
+/// A fully staged, tagged salvage fleet standing at `location` — what
+/// `owningTheatre` resolves the carrier through.
+private func seedSalvageEnsureFleet(
+    _ db: Database, carrier: String = salvageEnsureCarrier, location: String = growHubLocation
+) throws {
     try seedSalvageEnsureDevice(
-        db, code: carrier, type: "heaven_vessel", tags: [Brain.salvageCarrierTag]
+        db, code: carrier, type: "heaven_vessel", tags: [Brain.salvageCarrierTag], location: location
     )
     try seedSalvageEnsureDevice(
         db, code: "AMI1", type: "ami_mining_controller", stowedIn: carrier, directives: ["gather_salvage"]
@@ -281,6 +369,20 @@ private func salvageEnsureTick(_ database: any DatabaseWriter) async {
     }
 }
 
+private let secondTheatreSystem = "VEGA"
+private let secondTheatreHubLocation = "VEGA-3"
+private let secondTheatreCarrier = "SALV2"
+
+/// A second, independently meshed hub far enough from `SOL` to form its own
+/// mesh component — `seedGrowableWorld`'s shape, reproduced at `VEGA` rather
+/// than shared with it, so it derives its own operational theatre.
+private func seedSecondTheatre(_ db: Database) throws {
+    try seedRelay(db, code: "REL2", location: secondTheatreSystem)
+    try seedStar(db, designation: secondTheatreSystem, x: 300, y: 300, z: 300)
+    try seedPrintHub(db, code: "HUB2", location: secondTheatreHubLocation)
+    try seedHubStockpile(db, location: secondTheatreHubLocation, resources: BrainCeiling.aggregateSpendFloor * 2)
+}
+
 @Suite("Brain — ensureSalvage")
 struct BrainEnsureSalvageTests {
     @Test func readyFleetWithNoLiveSalvageInsertsExactlyOneRow() async throws {
@@ -301,6 +403,29 @@ struct BrainEnsureSalvageTests {
         // Claimed at preflight, never eager-written — an eager one goes stale.
         #expect(salvage.controllerCode == nil)
         #expect(salvage.returnToOrigin == false)
+    }
+
+    /// An idle theatre must `continue`, not `return`. Depot designations sort
+    /// `SOL-3` before `VEGA-3`, so SOL (no salvage fleet) is visited first
+    /// and must not suppress VEGA's (fully staged) launch.
+    @Test func anIdleTheatreDoesNotSuppressAReadyOnesLaunch() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try seedGrowableWorld(db, carriers: [], salvage: [:])
+            try seedSecondTheatre(db)
+            try seedSalvageAssay(db, id: "SITE-VEGA", system: secondTheatreSystem, totals: ["metal": 900])
+            try seedSalvageEnsureFleet(db, carrier: secondTheatreCarrier, location: secondTheatreHubLocation)
+        }
+
+        await salvageEnsureTick(database)
+
+        let directives = try await salvageEnsureDirectives(database)
+        let salvage = try #require(directives.first)
+        #expect(directives.count == 1)
+        #expect(salvage.kind == .salvageRun)
+        #expect(salvage.deviceCode == secondTheatreCarrier)
+        #expect(salvage.roamCentre == secondTheatreSystem)
+        #expect(salvage.theatreDepot == secondTheatreHubLocation)
     }
 
     @Test func aSecondTickWithTheLaunchedRowStillLiveInsertsNothing() async throws {
@@ -443,7 +568,7 @@ struct BrainEnsureSalvageTests {
             // One hull, both opt-in tags, staged for both automations.
             try seedSalvageEnsureDevice(
                 db, code: "BOTH", type: "heaven_vessel",
-                tags: [Brain.salvageCarrierTag, Brain.surveyCarrierTag]
+                tags: [Brain.salvageCarrierTag, Brain.surveyCarrierTag], location: growHubLocation
             )
             try seedSalvageEnsureDevice(
                 db, code: "AMI1", type: "ami_mining_controller", stowedIn: "BOTH",
