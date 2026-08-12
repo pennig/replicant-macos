@@ -413,6 +413,34 @@ struct BrainMineHealthTests {
     }
 }
 
+@Suite("Brain — installed mine belts across theatres")
+struct BrainInstalledMineBeltsAcrossTheatresTests {
+    /// A printed, undispatched fleet is tagged `auto:mine` and standing at ITS
+    /// OWN depot by construction — a second operational theatre must not make
+    /// that depot read as an installed belt.
+    @Test("a fleet staged at one theatre's depot is never a belt because a second theatre exists")
+    func stagedFleetAtOneDepotIsNeverABeltElsewhere() {
+        let hubA = "HUB-A-BELT-1"
+        let hubB = "HUB-B-BELT-1"
+        let realBelt = "HUB-A-ORE-BELT-1"
+        let devices = [
+            mineDevice("MC-STAGED", type: "ami_mining_controller", location: hubA),
+            mineDevice("MC-INSTALLED", type: "ami_mining_controller", location: realBelt),
+        ]
+        let view = WorldView(
+            devices: Dictionary(uniqueKeysWithValues: devices.map { ($0.deviceCode, $0) }),
+            starPositions: [:], meshSystems: [], salvageUnits: [:], eventSystems: [],
+            theatres: [
+                Theatre(depot: hubA, system: "HUB-A", origin: .derived, readiness: .operational, stock: 0),
+                Theatre(depot: hubB, system: "HUB-B", origin: .derived, readiness: .operational, stock: 0),
+            ],
+            now: mineNow
+        )
+
+        #expect(Brain.installedMineBelts(view: view) == [realBelt])
+    }
+}
+
 @Suite("BrainReport — mine defaults")
 struct BrainReportMineDefaultsTests {
     @Test("mine defaults to idle not evaluated, mines defaults to empty")

@@ -499,13 +499,12 @@ struct Brain: Sendable {
         }
     }
 
-    /// Every belt an installed mine occupies, across every operational theatre:
-    /// `MineRecipe.installedBelts` excludes only one depot at a time, so this
-    /// unions its result over each theatre's own.
+    /// Every belt an installed mine occupies, excluding every operational
+    /// theatre's depot in ONE pass — an undispatched printed fleet is tagged
+    /// and standing at its own depot, exactly what would look installed.
     static func installedMineBelts(view: WorldView) -> Set<String> {
-        view.theatres.filter(\.isOperational).reduce(into: Set<String>()) { belts, theatre in
-            belts.formUnion(MineRecipe.installedBelts(in: view.devices.values, hub: theatre.depot))
-        }
+        let depots = Set(view.theatres.filter(\.isOperational).map(\.depot))
+        return MineRecipe.installedBelts(in: view.devices.values, hubs: depots)
     }
 
     /// The device a restock run may be hosted on: the lowest-coded print-capable
@@ -1424,7 +1423,7 @@ struct Brain: Sendable {
         }) {
             return .launched(
                 vessel: live.deviceCode,
-                focus: live.theatreDepot,
+                focus: live.theatreDepot ?? HaulRun.deliveryLocation,
                 status: launchedGoalStatus(live.status)
             )
         }

@@ -79,11 +79,20 @@ public enum MineRecipe {
     public static func installedBelts(
         in devices: some Sequence<Device>, hub: String?
     ) -> Set<String> {
+        installedBelts(in: devices, hubs: hub.map { [$0] } ?? [])
+    }
+
+    /// `installedBelts(in:hub:)` generalised to every depot in `hubs` at
+    /// once — filtering one exclusion set, never unioning several: a union
+    /// per theatre would re-admit each depot through every OTHER pass.
+    public static func installedBelts(
+        in devices: some Sequence<Device>, hubs: Set<String>
+    ) -> Set<String> {
         Set(
             devices
                 .filter { $0.deviceType == "ami_mining_controller" && $0.hasTag(fleetTag) }
                 .compactMap(\.location)
-                .filter { $0 != hub }
+                .filter { !hubs.contains($0) }
         )
     }
 

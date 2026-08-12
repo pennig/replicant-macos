@@ -367,9 +367,9 @@ func seedMalformedSystemDetail(_ db: Database, system: String) throws {
 
 // MARK: - Single-theatre `WorldView` fixtures
 
-/// The retired `hubLocation:` shim's replacement: one operational `Theatre`
-/// at `depot` plus its own singleton mesh component. `depot: nil` yields no
-/// theatre, matching the old `hubLocation: nil`.
+/// One operational `Theatre` at `depot` plus its own singleton mesh
+/// component, for a test that needs exactly one hub. `depot: nil` yields no
+/// theatre.
 func singleOperationalTheatre(depot: String?) -> (theatres: [Theatre], components: [String: String]) {
     guard let depot else { return ([], [:]) }
     let system = SiteAssay.system(of: depot)
@@ -466,9 +466,10 @@ func seedStockpile(
 
 // MARK: - Prune worlds
 
-/// A hub-anchored `WorldView` for prune analysis. `meshSystems` is DERIVED from
-/// the relay rows, never hand-set. `hub` names the hub's SYSTEM; no theatre is
-/// recognised unless that system is genuinely meshed.
+/// A hub-anchored `WorldView` for prune analysis. `hub` names the hub's
+/// SYSTEM; no theatre is recognised unless that system is genuinely meshed.
+/// See `app/.claude/memory/prunable-world-fixture-contract.md` for the
+/// `meshSystems`/`replicants` caller contracts.
 func prunableWorld(
     positions: [String: Position],
     relays: [String: String],
@@ -492,8 +493,7 @@ func prunableWorld(
     }
     let devices = relayDevices + fleetDevices
     let mesh = SalvageTargetPlanner.meshSystems(in: relayDevices)
-    // Real per-system labels, not a synthesised single-entry fallback — every
-    // meshed system needs a component, not just the hub's.
+    // Every meshed system needs its own component label, not just the hub's.
     let components = MeshGraph(positions: positions).components(of: mesh)
     let theatre = singleOperationalTheatre(depot: hub.flatMap { mesh.contains($0) ? "\($0)-3" : nil })
     return WorldView(
