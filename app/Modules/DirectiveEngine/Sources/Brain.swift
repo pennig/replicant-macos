@@ -1544,15 +1544,15 @@ struct Brain: Sendable {
     }
 
     /// Mirrors `carrierBlocker`'s register: names candidates as untagged (or
-    /// tagged on a non-carrier), scoped to `theatre`'s own devices — the same
-    /// pool `surveyCarrier` ranged over — never another theatre's.
+    /// tagged on a non-carrier), the hull pool scoped to `theatre` — the same
+    /// pool `surveyCarrier` ranged over.
     private static func surveyCarrierBlocker(view: WorldView, theatre: Theatre) -> String {
-        let owned = view.devices.values
-            .filter { owningTheatre(of: $0, view: view)?.depot == theatre.depot }
-        let hulls = owned
-            .filter(\.isCarrierHull)
+        let hulls = view.devices.values
+            .filter { $0.isCarrierHull && owningTheatre(of: $0, view: view)?.depot == theatre.depot }
             .sorted { $0.deviceCode < $1.deviceCode }
-        let mistagged = owned
+        // A tag on a non-carrier hull is a misapplied opt-in, not an untagged
+        // fleet. Moving the tag is location-independent, so the scan is fleet-wide.
+        let mistagged = view.devices.values
             .filter { !$0.isCarrierHull && $0.hasTag(surveyCarrierTag) }
             .sorted { $0.deviceCode < $1.deviceCode }
         guard !hulls.isEmpty else {

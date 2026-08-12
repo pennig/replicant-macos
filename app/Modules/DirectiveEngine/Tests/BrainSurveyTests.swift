@@ -209,7 +209,7 @@ struct BrainSurveyTests {
     func untaggedHullsAndMistaggedDeviceAreBothNamed() {
         let devices = [
             surveyReadinessDevice("V1", type: "heaven_vessel", location: "AINALRAM-1"),
-            surveyReadinessDevice("P1", type: "propulsor", tags: [Brain.surveyCarrierTag], location: "AINALRAM-1"),
+            surveyReadinessDevice("P1", type: "propulsor", tags: [Brain.surveyCarrierTag]),
         ]
         let view = surveyReadinessView(
             devices: devices, depot: "AINALRAM-BELT-1",
@@ -229,9 +229,7 @@ struct BrainSurveyTests {
     /// test the survey gate does not run.
     @Test("a mistagged-only fleet names the device, not a freedom test")
     func mistaggedOnlyFleetNamesTheDevice() {
-        let devices = [
-            surveyReadinessDevice("P1", type: "propulsor", tags: [Brain.surveyCarrierTag], location: "AINALRAM-1"),
-        ]
+        let devices = [surveyReadinessDevice("P1", type: "propulsor", tags: [Brain.surveyCarrierTag])]
         let view = surveyReadinessView(
             devices: devices, depot: "AINALRAM-BELT-1",
             starPositions: ["AINALRAM": Position(x: 0, y: 0, z: 0)]
@@ -276,9 +274,8 @@ struct BrainSurveyTests {
         #expect(Brain.surveyReadiness(view: view, theatre: denebed) == .launch(carrier: "VB", roamCentre: "DENEBED"))
     }
 
-    /// A theatre with no carrier of its own idles — it must not fall back to
-    /// a carrier that belongs to a different theatre, and its reason must not
-    /// call AINALRAM's tagged, staged `VA` untagged just because DENEBED can't
+    /// A theatre with no carrier of its own idles, and must not call
+    /// AINALRAM's tagged, staged `VA` untagged just because DENEBED can't
     /// see it.
     @Test("a theatre with no carrier of its own idles without consuming the other theatre's carrier")
     func theatreWithNoOwnCarrierIdlesWithoutConsumingTheOther() {
@@ -294,6 +291,23 @@ struct BrainSurveyTests {
         #expect(reason == "no vessel is tagged \(Brain.surveyCarrierTag)")
         #expect(!reason.contains("VA"))
         #expect(Brain.surveyReadiness(view: view, theatre: ainalram) == .launch(carrier: "VA", roamCentre: "AINALRAM"))
+    }
+
+    /// The mistagged clause stays fleet-wide even where carrier selection is
+    /// theatre-scoped — a stowed device has no location, so `owningTheatre`
+    /// can't place it in ANY theatre's pool, AINALRAM's included.
+    @Test("a location-less mistagged device is still named in a multi-theatre world")
+    func locationlessMistaggedDeviceIsStillNamedAcrossTheatres() {
+        let (view, ainalram, _) = twoTheatreSurveyView(
+            ainalramFleet: [surveyReadinessDevice("P1", type: "propulsor", tags: [Brain.surveyCarrierTag])],
+            denebedFleet: []
+        )
+
+        guard case let .idle(reason) = Brain.surveyReadiness(view: view, theatre: ainalram) else {
+            Issue.record("expected idle")
+            return
+        }
+        #expect(reason.contains("P1 is tagged \(Brain.surveyCarrierTag) but is not a carrier hull"))
     }
 }
 
