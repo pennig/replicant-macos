@@ -6,10 +6,12 @@
 //
 
 import ComposableArchitecture
+import DirectiveEngine
 import Foundation
 import GameModels
 import SQLiteData
 import SwiftUI
+import UniverseModels
 
 private func seededDatabase(rows: [HaulYield] = HaulYield.previewRows) -> any DatabaseWriter {
     let database = try! SQLiteData.defaultDatabase()
@@ -94,4 +96,62 @@ extension HaulYield {
     LogisticsView(store: Store(initialState: LogisticsFeature.State()) { LogisticsFeature() })
         .frame(width: 900, height: 600)
         .preferredColorScheme(.dark)
+}
+
+private func theatresState() -> LogisticsFeature.State {
+    var state = LogisticsFeature.State()
+    state.tab = .theatres
+    state.theatres = [
+        TheatreRowModel(
+            theatre: Theatre(
+                depot: "AINALRAM-1", system: "AINALRAM", origin: .systemHub("HUB1"),
+                readiness: .operational, stock: 41_200
+            ),
+            componentSize: 6, directiveCount: 3
+        ),
+        TheatreRowModel(
+            theatre: Theatre(
+                depot: "OMEROPE-BELT-1", system: "OMEROPE", origin: .pinned,
+                readiness: .claimed(missing: [.noPrintCapableDevice, .noStock, .offMesh]), stock: 0
+            )
+        ),
+    ]
+    // `Candidate`'s initializer is internal to `DirectiveEngine`, so the fixture
+    // is ranked from a real `WorldView` rather than constructed by hand.
+    state.candidates = TheatreSiteRanking.rank(view: WorldView(
+        devices: [:],
+        starPositions: ["AINALRAM": Position(x: 0, y: 0, z: 0), "GRAZ": Position(x: 22, y: 0, z: 0)],
+        meshSystems: [], salvageUnits: ["GRAZ": 5_400], eventSystems: [],
+        theatres: state.theatres.map(\.theatre), replicantSystems: ["GRAZ"],
+        now: Date(timeIntervalSince1970: 0)
+    ))
+    return state
+}
+
+#Preview("Theatres — Dark") {
+    let _ = prepareDependencies { $0.defaultDatabase = seededDatabase(rows: []) }
+    LogisticsView(store: Store(initialState: theatresState()) { LogisticsFeature() })
+        .frame(width: 900, height: 900)
+        .preferredColorScheme(.dark)
+}
+
+#Preview("Theatres — Light") {
+    let _ = prepareDependencies { $0.defaultDatabase = seededDatabase(rows: []) }
+    LogisticsView(store: Store(initialState: theatresState()) { LogisticsFeature() })
+        .frame(width: 900, height: 900)
+        .preferredColorScheme(.light)
+}
+
+#Preview("Establish Sheet — Dark") {
+    EstablishTheatreSheetView(
+        store: Store(initialState: EstablishTheatreSheet.State(suggestedSystem: "GRAZ")) { EstablishTheatreSheet() }
+    )
+    .preferredColorScheme(.dark)
+}
+
+#Preview("Establish Sheet — Light") {
+    EstablishTheatreSheetView(
+        store: Store(initialState: EstablishTheatreSheet.State(suggestedSystem: "GRAZ")) { EstablishTheatreSheet() }
+    )
+    .preferredColorScheme(.light)
 }

@@ -524,6 +524,7 @@ let package = Package(
         .target(
             name: "LogisticsFeature",
             dependencies: [
+                "DirectiveEngine",
                 "GameModels",
                 "UI",
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
@@ -534,6 +535,7 @@ let package = Package(
         .testTarget(
             name: "LogisticsFeatureTests",
             dependencies: [
+                "DirectiveEngine",
                 "GameDatabase",
                 "GameModels",
                 "LogisticsFeature",

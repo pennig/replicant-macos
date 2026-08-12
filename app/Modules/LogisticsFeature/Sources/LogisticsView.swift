@@ -16,8 +16,20 @@ public struct LogisticsView: View {
     }
 
     public var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            RCSegmentedControl(selection: $store.tab, options: LogisticsFeature.Tab.allCases, label: \.title)
+                .padding(Space.m)
+            switch store.tab {
+            case .yields: yieldsTab
+            case .theatres: TheatresTab(store: store)
+            }
+        }
+        .navigationTitle("Logistics")
+    }
+
+    private var yieldsTab: some View {
         let summary = store.summary
-        ScrollView {
+        return ScrollView {
             VStack(alignment: .leading, spacing: Space.m) {
                 RCSectionHeader("Haul Yields")
                 YieldKPIRow(summary: summary)
@@ -55,6 +67,5 @@ public struct LogisticsView: View {
             }
             .padding(Space.m)
         }
-        .navigationTitle("Logistics")
     }
 }
