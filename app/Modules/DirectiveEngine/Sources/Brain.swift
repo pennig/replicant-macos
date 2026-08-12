@@ -1316,6 +1316,23 @@ struct Brain: Sendable {
     /// freshly printed controller carries no directive vocabulary yet.
     static let mineTransportType = "ami_transport_controller"
 
+    /// This tick's mine-siting weights: open-event demand plus the standing
+    /// print reserve, divided into depot stock.
+    static func siteWeights(
+        stock: [String: Double],
+        events: [LocationEvent],
+        bills: [String: ResourceCost],
+        freshness: Date?,
+        now: Date
+    ) -> ResourceHeadroom {
+        let demand = ResourceDemand.compute(
+            events: events, bills: bills, reserveFloors: BrainCeiling.reserveFloors
+        )
+        return ResourceHeadroom.derive(
+            stock: stock, demand: demand.total, freshness: freshness, now: now
+        )
+    }
+
     /// The mine verdict for `view`. Takes `directives` for `haulReadiness`'s
     /// reason — a carrier another row holds must not be reported ready — and to
     /// keep a belt a live install already targets out of the siting.
@@ -1343,10 +1360,30 @@ struct Brain: Sendable {
         let occupied = depots
             .union(MineRecipe.installedBelts(in: fleet, hubs: depots))
             .union(liveMineBelts(directives))
-        guard let site = MineSitePlanner.site(view: view, occupiedBelts: occupied) else {
-            let anyBelt = MineSitePlanner.site(view: view, occupiedBelts: depots) != nil
+        let headroom = siteWeights(
+            stock: view.theatreStock, events: view.locationEvents,
+            bills: view.blueprintBills, freshness: view.theatreStockFreshness, now: view.now
+        )
+        guard let site = MineSitePlanner.site(
+            view: view, occupiedBelts: occupied, headroom: headroom
+        ) else {
+            let anyBelt = MineSitePlanner.site(
+                view: view, occupiedBelts: depots, headroom: headroom
+            ) != nil
             return .idle(reason: anyBelt ? "every candidate belt taken" : "no meshed candidate belt")
         }
+
+        let boosted = headroom.weights
+            .sorted { $0.value == $1.value ? $0.key < $1.key : $0.value > $1.value }
+            .map { "\($0.key)+\($0.value)" }
+            .joined(separator: " ")
+        logger.debug(
+            """
+            mine siting: \(site.belt, privacy: .public) \
+            boosting \(boosted, privacy: .public)\
+            \(headroom.isFallback ? " (static)" : "", privacy: .public)
+            """
+        )
         return .launch(carrier: carrier.deviceCode, belt: site.belt)
     }
 

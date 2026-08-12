@@ -82,7 +82,10 @@ private func mineWorldView(
     depot: String? = mineHub,
     belts: [String: [BeltInfo]] = mineRichBelt,
     meshSystems: Set<String> = ["SOL"],
-    starPositions: [String: Position] = ["SOL": Position(x: 0, y: 0, z: 0)]
+    starPositions: [String: Position] = ["SOL": Position(x: 0, y: 0, z: 0)],
+    theatreStock: [String: Double] = [:],
+    theatreStockFreshness: Date? = nil,
+    locationEvents: [LocationEvent] = []
 ) -> WorldView {
     let theatre = singleOperationalTheatre(depot: depot)
     return WorldView(
@@ -94,7 +97,68 @@ private func mineWorldView(
         theatres: theatre.theatres,
         components: theatre.components,
         beltsBySystem: belts,
+        theatreStock: theatreStock,
+        theatreStockFreshness: theatreStockFreshness,
+        locationEvents: locationEvents,
         now: mineNow
+    )
+}
+
+/// Two same-class belts in one system, so the siting can only be decided by the
+/// scarcity bonus: `raresBelt` scores under the static weights, `silicatesBelt`
+/// only under demand-derived ones.
+private let mineRaresBelt = "SOL-BELT-A"
+private let mineSilicatesBelt = "SOL-BELT-B"
+private let mineWeightedBelts = [
+    "SOL": [
+        BeltInfo(designation: mineRaresBelt, beltClass: .rich, richness: ["rares": "rich"]),
+        BeltInfo(designation: mineSilicatesBelt, beltClass: .rich, richness: ["silicates": "rich"]),
+    ]
+]
+
+/// Stock leaving silicates the least-covered type against `reserveFloors`, and
+/// rares the best-covered — the inverse of what the static weights assume.
+private let mineSilicatesShortStock: [String: Double] = [
+    "silicates": 50, "carbon": 50, "rares": 2000,
+    "conductive": 6000, "structural": 4000, "volatiles": 500,
+]
+
+/// Stock leaving RARES the least-covered type, so demand and the static table
+/// agree until an event asks for silicates.
+private let mineRaresShortStock: [String: Double] = [
+    "silicates": 10_000, "carbon": 10_000, "rares": 200,
+    "conductive": 60_000, "structural": 10_000, "volatiles": 10_000,
+]
+
+/// An open event asking for `amount` more silicates, in the live
+/// `accounts/events` shape so the decode under test is the real one.
+private func mineSilicatesEvent(amount: Int) -> LocationEvent {
+    LocationEvent(
+        designation: "SOL-3-EVT-1",
+        location: "SOL-3",
+        status: "active",
+        detail: .object([
+            "progress": .object([
+                "met": .bool(false),
+                "options": .array([
+                    .object([
+                        "name": .string("default"),
+                        "met": .bool(false),
+                        "resources": .array([
+                            .object([
+                                "resource_type": .string("silicates"),
+                                "current": .number(0),
+                                "required": .number(Double(amount)),
+                                "met": .bool(false),
+                            ])
+                        ]),
+                        "devices": .array([]),
+                    ])
+                ]),
+            ])
+        ]),
+        firstSeenAt: mineNow,
+        updatedAt: mineNow
     )
 }
 
@@ -253,6 +317,90 @@ struct BrainMineReadinessTests {
         #expect(
             Brain.mineReadiness(view: view, directives: [])
                 == .idle(reason: "no meshed candidate belt")
+        )
+    }
+
+    @Test("the site ranking uses demand-derived weights when stock is fresh")
+    func mineSitingUsesDemandWeights() {
+        let now = Date(timeIntervalSince1970: 1_750_000_000)
+        let headroom = Brain.siteWeights(
+            stock: ["silicates": 12777, "conductive": 19161, "volatiles": 6538],
+            events: [],
+            bills: [:],
+            freshness: now,
+            now: now
+        )
+        #expect(headroom.isFallback == false)
+        #expect(headroom.weights.count == 2)
+    }
+
+    @Test("no stock reading leaves the shipped constants in force")
+    func mineSitingFallsBackWithoutStock() {
+        let now = Date(timeIntervalSince1970: 1_750_000_000)
+        let headroom = Brain.siteWeights(
+            stock: [:], events: [], bills: [:], freshness: nil, now: now
+        )
+        #expect(headroom.weights == ResourceHeadroom.staticWeights)
+        #expect(headroom.isFallback)
+    }
+
+    /// The wiring, not the predicate: two same-class belts in one system, so
+    /// only the bonus separates them, and the demand-derived weights pick the
+    /// belt the static table ranks last.
+    @Test("the derived weights reach the launched belt, overruling the static table")
+    func derivedWeightsDecideTheLaunchedBelt() {
+        let view = mineWorldView(
+            devices: minePrintedFleet() + [mineCarrierDevice()],
+            belts: mineWeightedBelts,
+            theatreStock: mineSilicatesShortStock,
+            theatreStockFreshness: mineNow
+        )
+        #expect(
+            MineSitePlanner.site(view: view, occupiedBelts: [mineHub])?.belt == mineRaresBelt
+        )
+        #expect(
+            Brain.mineReadiness(view: view, directives: [])
+                == .launch(carrier: mineCarrier, belt: mineSilicatesBelt)
+        )
+    }
+
+    /// The events the demand is priced from ride `WorldView`, so an open event
+    /// asking for silicates must move the siting on its own.
+    @Test("an open event's demand moves the sited belt")
+    func anOpenEventMovesTheSitedBelt() {
+        let devices = minePrintedFleet() + [mineCarrierDevice()]
+        let quiet = mineWorldView(
+            devices: devices, belts: mineWeightedBelts,
+            theatreStock: mineRaresShortStock, theatreStockFreshness: mineNow
+        )
+        let asking = mineWorldView(
+            devices: devices, belts: mineWeightedBelts,
+            theatreStock: mineRaresShortStock, theatreStockFreshness: mineNow,
+            locationEvents: [mineSilicatesEvent(amount: 1_000_000)]
+        )
+        #expect(
+            Brain.mineReadiness(view: quiet, directives: [])
+                == .launch(carrier: mineCarrier, belt: mineRaresBelt)
+        )
+        #expect(
+            Brain.mineReadiness(view: asking, directives: [])
+                == .launch(carrier: mineCarrier, belt: mineSilicatesBelt)
+        )
+    }
+
+    /// A reading older than `stalenessBound` must rank exactly as no reading
+    /// does, or the brain sites a mine against last week's depot.
+    @Test("a stale stock reading sites the belt the static table picks")
+    func staleStockSitesTheStaticBelt() {
+        let view = mineWorldView(
+            devices: minePrintedFleet() + [mineCarrierDevice()],
+            belts: mineWeightedBelts,
+            theatreStock: mineSilicatesShortStock,
+            theatreStockFreshness: mineNow.addingTimeInterval(-ResourceHeadroom.stalenessBound - 1)
+        )
+        #expect(
+            Brain.mineReadiness(view: view, directives: [])
+                == .launch(carrier: mineCarrier, belt: mineRaresBelt)
         )
     }
 }

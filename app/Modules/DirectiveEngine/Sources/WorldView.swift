@@ -81,6 +81,14 @@ public struct WorldView: Equatable, Sendable {
     /// both are simply absent — and prune needs that distinction, since unknown
     /// value reads as pinned.
     public let surveyedSystems: Set<String>
+    /// The whole location-event ledger, unfiltered: `ResourceDemand.compute`
+    /// applies `isActive` itself, and reading demand out of the same
+    /// transaction as the stock above is what keeps the two comparable.
+    public let locationEvents: [LocationEvent]
+    /// Device type → its blueprint's build cost, the bill an event's device
+    /// requirement is priced through. Empty until the catalog is fetched;
+    /// `ResourceDemand` drops an unbilled device rather than guessing.
+    public let blueprintBills: [String: ResourceCost]
     /// The moment this snapshot was taken. Brain logic compares against this
     /// rather than `Date()`, keeping ranking passes pure and their tests
     /// deterministic.
@@ -101,6 +109,8 @@ public struct WorldView: Equatable, Sendable {
         stockpileUnits: [String: Int] = [:],
         theatreStock: [String: Double] = [:],
         theatreStockFreshness: Date? = nil,
+        locationEvents: [LocationEvent] = [],
+        blueprintBills: [String: ResourceCost] = [:],
         now: Date
     ) {
         self.devices = devices
@@ -117,6 +127,8 @@ public struct WorldView: Equatable, Sendable {
         self.stockpileUnits = stockpileUnits
         self.theatreStock = theatreStock
         self.theatreStockFreshness = theatreStockFreshness
+        self.locationEvents = locationEvents
+        self.blueprintBills = blueprintBills
         self.now = now
     }
 
@@ -154,6 +166,12 @@ public struct WorldView: Equatable, Sendable {
         let eventSystems = Set(
             events.filter(\.isActive).map { SiteAssay.system(of: $0.location) }
         )
+
+        // The unlocked catalog, a few dozen rows keyed by the device type an
+        // event's device requirement names.
+        let bills = try Blueprint.all.fetchAll(db).reduce(into: [String: ResourceCost]()) {
+            $0[$1.deviceType] = $1.resources
+        }
 
         // Candidate depot locations: print-capable, pinned, and system_hub
         // device locations, read in the same transaction as the devices.
@@ -218,6 +236,8 @@ public struct WorldView: Equatable, Sendable {
             },
             theatreStock: stock.quantities,
             theatreStockFreshness: stock.freshness,
+            locationEvents: events,
+            blueprintBills: bills,
             now: now
         )
     }
