@@ -871,4 +871,24 @@ struct BrainGrowFallthroughTests {
         #expect(ranked.map(\.firstHop) == ["CANDA", "CANDB"])
         #expect(reason == "no free carrier at \(hubX.depot) — VX is held by relay run RUN1 (running)")
     }
+
+    /// No theatre resolves for EITHER candidate: the loop walks both
+    /// no-theatre `continue`s without ever setting `blocked`, landing on the
+    /// generic reason for the whole field, not just the first candidate.
+    @Test func noTheatreAnywhereIdlesWithTheGenericReasonAcrossTheWholeField() {
+        let (base, _, _) = twoTheatreGrowView(carrierAtHubX: nil, carrierAtHubY: nil)
+        let view = WorldView(
+            devices: base.devices, starPositions: base.starPositions, meshSystems: base.meshSystems,
+            salvageUnits: base.salvageUnits, eventSystems: base.eventSystems, theatres: [],
+            now: base.now
+        )
+
+        let decision = Brain.plan(view: view, directives: [])
+        guard case let .idle(reason, ranked, _) = decision else {
+            Issue.record("expected idle")
+            return
+        }
+        #expect(ranked.map(\.firstHop) == ["CANDA", "CANDB"])
+        #expect(reason == "no operational theatre")
+    }
 }
