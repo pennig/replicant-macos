@@ -194,6 +194,14 @@ CREATE TABLE "locationFootprints" (
   "fetchedAt" TEXT NOT NULL
 ) STRICT;
 
+CREATE TABLE "locationInventories" (
+  "location" TEXT NOT NULL,
+  "resourceType" TEXT NOT NULL,
+  "quantity" REAL NOT NULL DEFAULT 0,
+  "fetchedAt" TEXT NOT NULL,
+  PRIMARY KEY ("location", "resourceType")
+) STRICT;
+
 CREATE TABLE "messages" (
   "id" INTEGER PRIMARY KEY NOT NULL,
   "messageType" TEXT NOT NULL DEFAULT '',

@@ -61,6 +61,7 @@ import Testing
         "Add 'region' to 'stars'",
         "Add 'hasHub' to 'stars'",
         "Add 'theatreDepot' to 'directives'",
+        "Create 'locationInventories' table",
     ]
 
     @Test func manifestMatchesTheFrozenList() {
