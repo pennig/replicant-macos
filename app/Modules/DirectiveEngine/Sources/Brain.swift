@@ -1198,7 +1198,7 @@ struct Brain: Sendable {
     /// owns, so two theatres never fight over one vessel.
     static func surveyReadiness(view: WorldView, theatre: Theatre) -> SurveyReadiness {
         guard let carrier = surveyCarrier(view: view, theatre: theatre) else {
-            return .idle(reason: surveyCarrierBlocker(devices: view.devices))
+            return .idle(reason: surveyCarrierBlocker(view: view, theatre: theatre))
         }
 
         let world = WorldSnapshot(devices: view.devices, openOperations: [:], now: view.now)
@@ -1543,13 +1543,16 @@ struct Brain: Sendable {
             .min { $0.deviceCode < $1.deviceCode }
     }
 
-    /// Mirrors `carrierBlocker`'s register: names the candidates and that they
-    /// are untagged (or tagged on a non-carrier), never a bare "unavailable".
-    private static func surveyCarrierBlocker(devices: [String: Device]) -> String {
-        let hulls = devices.values
+    /// Mirrors `carrierBlocker`'s register: names candidates as untagged (or
+    /// tagged on a non-carrier), scoped to `theatre`'s own devices — the same
+    /// pool `surveyCarrier` ranged over — never another theatre's.
+    private static func surveyCarrierBlocker(view: WorldView, theatre: Theatre) -> String {
+        let owned = view.devices.values
+            .filter { owningTheatre(of: $0, view: view)?.depot == theatre.depot }
+        let hulls = owned
             .filter(\.isCarrierHull)
             .sorted { $0.deviceCode < $1.deviceCode }
-        let mistagged = devices.values
+        let mistagged = owned
             .filter { !$0.isCarrierHull && $0.hasTag(surveyCarrierTag) }
             .sorted { $0.deviceCode < $1.deviceCode }
         guard !hulls.isEmpty else {

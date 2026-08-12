@@ -128,7 +128,7 @@ struct BrainSurveyTests {
 
     @Test("no vessel tagged auto:survey idles, naming the tag")
     func untaggedFleetIdles() {
-        let devices = [surveyReadinessDevice("V1", type: "heaven_vessel")]
+        let devices = [surveyReadinessDevice("V1", type: "heaven_vessel", location: "AINALRAM-1")]
         let view = surveyReadinessView(
             devices: devices, depot: "AINALRAM-BELT-1",
             starPositions: ["AINALRAM": Position(x: 0, y: 0, z: 0)]
@@ -182,13 +182,34 @@ struct BrainSurveyTests {
         #expect(reason.contains("drone"))
     }
 
+    /// `surveyReadiness` takes an arbitrary `Theatre` — one whose `system`
+    /// disagrees with its own `depot`'s real system still resolves a carrier
+    /// (matched on depot), so this seam can still reach the census guard.
+    @Test("a roam centre the census does not know idles, naming it")
+    func unknownRoamCentreIdles() {
+        let view = surveyReadinessView(
+            devices: surveyReadinessStagedFleet(),
+            depot: "AINALRAM-BELT-1",
+            starPositions: ["AINALRAM": Position(x: 0, y: 0, z: 0)]
+        )
+        let mismatchedTheatre = Theatre(
+            depot: "AINALRAM-BELT-1", system: "GHOST", origin: .derived, readiness: .operational, stock: 0
+        )
+
+        guard case let .idle(reason) = Brain.surveyReadiness(view: view, theatre: mismatchedTheatre) else {
+            Issue.record("expected idle — SurveyRun.plan would exhaust immediately")
+            return
+        }
+        #expect(reason.contains("GHOST"))
+    }
+
     /// Untagged hulls and a misapplied tag are different remedies; the reason
     /// must carry both so neither hides the other.
     @Test("untagged hulls and a mistagged device are both named")
     func untaggedHullsAndMistaggedDeviceAreBothNamed() {
         let devices = [
-            surveyReadinessDevice("V1", type: "heaven_vessel"),
-            surveyReadinessDevice("P1", type: "propulsor", tags: [Brain.surveyCarrierTag]),
+            surveyReadinessDevice("V1", type: "heaven_vessel", location: "AINALRAM-1"),
+            surveyReadinessDevice("P1", type: "propulsor", tags: [Brain.surveyCarrierTag], location: "AINALRAM-1"),
         ]
         let view = surveyReadinessView(
             devices: devices, depot: "AINALRAM-BELT-1",
@@ -208,7 +229,9 @@ struct BrainSurveyTests {
     /// test the survey gate does not run.
     @Test("a mistagged-only fleet names the device, not a freedom test")
     func mistaggedOnlyFleetNamesTheDevice() {
-        let devices = [surveyReadinessDevice("P1", type: "propulsor", tags: [Brain.surveyCarrierTag])]
+        let devices = [
+            surveyReadinessDevice("P1", type: "propulsor", tags: [Brain.surveyCarrierTag], location: "AINALRAM-1"),
+        ]
         let view = surveyReadinessView(
             devices: devices, depot: "AINALRAM-BELT-1",
             starPositions: ["AINALRAM": Position(x: 0, y: 0, z: 0)]
@@ -254,7 +277,9 @@ struct BrainSurveyTests {
     }
 
     /// A theatre with no carrier of its own idles — it must not fall back to
-    /// a carrier that belongs to a different theatre.
+    /// a carrier that belongs to a different theatre, and its reason must not
+    /// call AINALRAM's tagged, staged `VA` untagged just because DENEBED can't
+    /// see it.
     @Test("a theatre with no carrier of its own idles without consuming the other theatre's carrier")
     func theatreWithNoOwnCarrierIdlesWithoutConsumingTheOther() {
         let (view, ainalram, denebed) = twoTheatreSurveyView(
@@ -262,10 +287,12 @@ struct BrainSurveyTests {
             denebedFleet: []
         )
 
-        guard case .idle = Brain.surveyReadiness(view: view, theatre: denebed) else {
+        guard case let .idle(reason) = Brain.surveyReadiness(view: view, theatre: denebed) else {
             Issue.record("expected DENEBED to idle — it owns no carrier")
             return
         }
+        #expect(reason == "no vessel is tagged \(Brain.surveyCarrierTag)")
+        #expect(!reason.contains("VA"))
         #expect(Brain.surveyReadiness(view: view, theatre: ainalram) == .launch(carrier: "VA", roamCentre: "AINALRAM"))
     }
 }
@@ -350,6 +377,14 @@ struct BrainSurveyStatusTests {
         }
         #expect(status == readiness)
     }
+
+    /// `surveyReadiness` takes its theatre as a parameter, so a world with no
+    /// operational theatre at all is a `surveyStatus`-only concern.
+    @Test("no operational theatre reports idle, naming that")
+    func noOperationalTheatreReportsIdle() {
+        let view = surveyReadinessView(devices: [], depot: nil)
+        #expect(Brain.surveyStatus(directives: [], view: view) == .idle(reason: "no operational theatre"))
+    }
 }
 
 // MARK: - `Brain.ensureSurvey`
@@ -382,17 +417,20 @@ private func seedSurveyEnsureDevice(
 }
 
 /// A fully staged, tagged survey fleet: `seedSurveyEnsureDevice`'s three rows,
-/// carrier + stowed controller + adopted drone. The carrier stands at the
-/// growable world's hub location — what `owningTheatre` resolves it through.
-private func seedSurveyEnsureFleet(_ db: Database, carrier: String = surveyEnsureCarrier) throws {
+/// carrier + stowed controller + adopted drone, standing at `location` —
+/// what `owningTheatre` resolves the carrier through.
+private func seedSurveyEnsureFleet(
+    _ db: Database, carrier: String = surveyEnsureCarrier,
+    controller: String = "AMI1", drone: String = "DRONE1", location: String = growHubLocation
+) throws {
     try seedSurveyEnsureDevice(
-        db, code: carrier, type: "heaven_vessel", tags: [Brain.surveyCarrierTag], location: growHubLocation
+        db, code: carrier, type: "heaven_vessel", tags: [Brain.surveyCarrierTag], location: location
     )
     try seedSurveyEnsureDevice(
-        db, code: "AMI1", type: "ami_survey_controller", stowedIn: carrier, directives: ["survey_system"]
+        db, code: controller, type: "ami_survey_controller", stowedIn: carrier, directives: ["survey_system"]
     )
     try seedSurveyEnsureDevice(
-        db, code: "DRONE1", type: "survey_drone", stowedIn: carrier, controllerDeviceCode: "AMI1"
+        db, code: drone, type: "survey_drone", stowedIn: carrier, controllerDeviceCode: controller
     )
 }
 
@@ -401,6 +439,20 @@ private func seedSurveyEnsureFleet(_ db: Database, carrier: String = surveyEnsur
 private func seedSurveyEnsureReadyWorld(_ db: Database) throws {
     try seedGrowableWorld(db, carriers: [], salvage: [:])
     try seedSurveyEnsureFleet(db)
+}
+
+private let secondTheatreSystem = "VEGA"
+private let secondTheatreHubLocation = "VEGA-3"
+private let secondTheatreCarrier = "SV2"
+
+/// A second, independently meshed hub far enough from `SOL` to form its own
+/// mesh component — `seedGrowableWorld`'s shape, reproduced at `VEGA` rather
+/// than shared with it, so it derives its own operational theatre.
+private func seedSecondTheatre(_ db: Database) throws {
+    try seedRelay(db, code: "REL2", location: secondTheatreSystem)
+    try seedStar(db, designation: secondTheatreSystem, x: 300, y: 300, z: 300)
+    try seedPrintHub(db, code: "HUB2", location: secondTheatreHubLocation)
+    try seedHubStockpile(db, location: secondTheatreHubLocation, resources: BrainCeiling.aggregateSpendFloor * 2)
 }
 
 private func surveyEnsureDirectives(_ database: any DatabaseWriter) async throws -> [Directive] {
@@ -435,6 +487,31 @@ struct BrainEnsureSurveyTests {
         #expect(survey.roamCentre == surveyEnsureHubSystem)
         #expect(survey.step == SurveyRun().firstStep)
         #expect(survey.status == .running)
+    }
+
+    /// The loop's headline change: an idle theatre must `continue`, not
+    /// `return`, or it silently suppresses every theatre after it. SOL has
+    /// no survey fleet at all; VEGA is fully staged and must still launch.
+    @Test func anIdleTheatreDoesNotSuppressAReadyOnesLaunch() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try seedGrowableWorld(db, carriers: [], salvage: [:])
+            try seedSecondTheatre(db)
+            try seedSurveyEnsureFleet(
+                db, carrier: secondTheatreCarrier, controller: "AMI2", drone: "DRONE2",
+                location: secondTheatreHubLocation
+            )
+        }
+
+        await surveyEnsureTick(database)
+
+        let directives = try await surveyEnsureDirectives(database)
+        let survey = try #require(directives.first)
+        #expect(directives.count == 1)
+        #expect(survey.kind == .surveyRun)
+        #expect(survey.deviceCode == secondTheatreCarrier)
+        #expect(survey.roamCentre == secondTheatreSystem)
+        #expect(survey.theatreDepot == secondTheatreHubLocation)
     }
 
     /// A second tick against the row the first tick just launched inserts
