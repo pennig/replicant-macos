@@ -906,6 +906,16 @@ public struct SalvageRun: MissionStepMachine {
         directive.fleetTag ?? Self.defaultFleetTag
     }
 
+    /// The tag `Brain.ensureSalvage` stamps for a theatre at `depot` —
+    /// `auto:mine:<belt>`'s sibling, per theatre rather than per belt.
+    static func fleetTag(forTheatre depot: String) -> String { "\(defaultFleetTag):\(depot)" }
+
+    /// Whether `device` may carry `depot`'s salvage work: its own theatre
+    /// tag, or (an un-migrated fleet) the bare tag it falls back from.
+    static func isFleetTagged(_ device: Device, at depot: String) -> Bool {
+        device.hasTag(fleetTag(forTheatre: depot)) || device.hasTag(defaultFleetTag)
+    }
+
     /// Confirm the recall landed before letting the run go anywhere, then decide the
     /// next body. Stalls rather than departing without a drone. ONE confirming read,
     /// never ETA-driven polling: a `recall` config holds `directive.completed` until

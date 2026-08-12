@@ -70,10 +70,10 @@ private func surveyReadinessView(
 /// `location` is what `Brain.owningTheatre` resolves the carrier through.
 private func surveyReadinessStagedFleet(
     carrier: String = "V1", controller: String = "AMI1", drone: String = "DRONE1",
-    location: String? = "AINALRAM-1"
+    location: String? = "AINALRAM-1", tags: [String] = [Brain.surveyCarrierTag]
 ) -> [Device] {
     [
-        surveyReadinessDevice(carrier, type: "heaven_vessel", tags: [Brain.surveyCarrierTag], location: location),
+        surveyReadinessDevice(carrier, type: "heaven_vessel", tags: tags, location: location),
         surveyReadinessDevice(
             controller, type: "ami_survey_controller", stowedIn: carrier, directives: ["survey_system"]
         ),
@@ -308,6 +308,47 @@ struct BrainSurveyTests {
             return
         }
         #expect(reason.contains("P1 is tagged \(Brain.surveyCarrierTag) but is not a carrier hull"))
+    }
+
+    // MARK: - Per-theatre fleet tags
+
+    /// The headline shape at the pure-function level: two theatres, each with
+    /// its own PER-THEATRE-tagged (already migrated) carrier, each launch on
+    /// their own — never the bare tag.
+    @Test("two theatres each with their own per-theatre-tagged carrier each launch their own")
+    func twoTheatresEachWithAPerTheatreTaggedCarrierEachLaunchTheirOwn() {
+        let (view, ainalram, denebed) = twoTheatreSurveyView(
+            ainalramFleet: surveyReadinessStagedFleet(
+                carrier: "VA", controller: "AMIA", drone: "DRONEA", location: "AINALRAM-1",
+                tags: ["auto:survey:AINALRAM-BELT-1"]
+            ),
+            denebedFleet: surveyReadinessStagedFleet(
+                carrier: "VB", controller: "AMIB", drone: "DRONEB", location: "DENEBED-1",
+                tags: ["auto:survey:DENEBED-BELT-1"]
+            )
+        )
+
+        #expect(Brain.surveyReadiness(view: view, theatre: ainalram) == .launch(carrier: "VA", roamCentre: "AINALRAM"))
+        #expect(Brain.surveyReadiness(view: view, theatre: denebed) == .launch(carrier: "VB", roamCentre: "DENEBED"))
+    }
+
+    /// A carrier tagged for AINALRAM alone is never a candidate for DENEBED —
+    /// the theatre it wears no tag for idles, naming no carrier at all.
+    @Test("a device tagged for one theatre is not selected for another")
+    func aDeviceTaggedForOneTheatreIsNotSelectedForAnother() {
+        let (view, _, denebed) = twoTheatreSurveyView(
+            ainalramFleet: surveyReadinessStagedFleet(
+                carrier: "VA", controller: "AMIA", drone: "DRONEA", location: "AINALRAM-1",
+                tags: ["auto:survey:AINALRAM-BELT-1"]
+            ),
+            denebedFleet: []
+        )
+
+        guard case let .idle(reason) = Brain.surveyReadiness(view: view, theatre: denebed) else {
+            Issue.record("expected DENEBED to idle — VA wears only AINALRAM's tag")
+            return
+        }
+        #expect(!reason.contains("VA"))
     }
 }
 
@@ -620,6 +661,55 @@ struct BrainEnsureSurveyTests {
         #expect(after.count == 2, "exactly the pre-existing row plus the one survey launch")
         let otherAfter = try #require(after.first { $0.id == "OTHER" })
         #expect(otherAfter == otherBefore, "the brain must touch nothing but the row it inserts")
+    }
+
+    /// The headline, end to end: two theatres, each with its own ready fleet,
+    /// both launch in the SAME tick, each stamped with its own theatre's tag.
+    @Test func twoReadyTheatresBothLaunchInOneTick() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try seedSurveyEnsureReadyWorld(db)
+            try seedSecondTheatre(db)
+            try seedSurveyEnsureFleet(
+                db, carrier: secondTheatreCarrier, controller: "AMI2", drone: "DRONE2",
+                location: secondTheatreHubLocation
+            )
+        }
+
+        await surveyEnsureTick(database)
+
+        let rows = try await surveyEnsureDirectives(database).filter { $0.kind == .surveyRun }
+        #expect(rows.count == 2, "both theatres must launch in the same tick")
+        let first = try #require(rows.first { $0.deviceCode == surveyEnsureCarrier })
+        let second = try #require(rows.first { $0.deviceCode == secondTheatreCarrier })
+        #expect(first.fleetTag == SurveyRun.fleetTag(forTheatre: growHubLocation))
+        #expect(second.fleetTag == SurveyRun.fleetTag(forTheatre: secondTheatreHubLocation))
+    }
+
+    /// A live theatre's run, stamped with its OWN per-theatre tag exactly as
+    /// `ensureSurvey` now launches one, must not reserve another theatre's
+    /// carrier merely because that carrier still wears the bare fallback tag.
+    @Test func aLivePerTheatreTaggedTheatreDoesNotReserveAnotherTheatresCarrier() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try seedSurveyEnsureReadyWorld(db)
+            try seedDirective(
+                db, id: "LIVE-SOL", kind: .surveyRun, status: .running,
+                deviceCode: surveyEnsureCarrier, fleetTag: SurveyRun.fleetTag(forTheatre: growHubLocation),
+                theatreDepot: growHubLocation
+            )
+            try seedSecondTheatre(db)
+            try seedSurveyEnsureFleet(
+                db, carrier: secondTheatreCarrier, controller: "AMI2", drone: "DRONE2",
+                location: secondTheatreHubLocation
+            )
+        }
+
+        await surveyEnsureTick(database)
+
+        let rows = try await surveyEnsureDirectives(database).filter { $0.kind == .surveyRun }
+        #expect(rows.count == 2, "VEGA's fleet must still launch")
+        #expect(rows.contains { $0.deviceCode == secondTheatreCarrier })
     }
 }
 

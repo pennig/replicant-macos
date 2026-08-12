@@ -575,6 +575,16 @@ public struct SurveyRun: MissionStepMachine {
         directive.fleetTag ?? Self.defaultFleetTag
     }
 
+    /// The tag `Brain.ensureSurvey` stamps for a theatre at `depot` —
+    /// `auto:mine:<belt>`'s sibling, per theatre rather than per belt.
+    static func fleetTag(forTheatre depot: String) -> String { "\(defaultFleetTag):\(depot)" }
+
+    /// Whether `device` may carry `depot`'s survey work: its own theatre tag,
+    /// or (an un-migrated fleet) the bare tag it falls back from.
+    static func isFleetTagged(_ device: Device, at depot: String) -> Bool {
+        device.hasTag(fleetTag(forTheatre: depot)) || device.hasTag(defaultFleetTag)
+    }
+
     /// Deploy the next service bot still aboard `vessel`, or move on when the
     /// system already has them all.
     private func deployBots(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {

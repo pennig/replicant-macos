@@ -102,4 +102,21 @@ private func taggedBot(_ code: String, _ tags: [String]) -> Device {
         #expect(RepairFleet.fleet(of: vessel, in: w, owner: "auto:salvage")
             .map(\.deviceCode) == ["DRONE1"])
     }
+
+    // MARK: - Per-theatre tag migration
+
+    /// A bot never re-tagged for its theatre still answers to the per-theatre
+    /// owner a freshly-launched directive now stamps — the migration path.
+    @Test func aBareTaggedBotAnswersToATheatreScopedOwner() {
+        let bot = taggedBot("BOT1", ["auto:survey"])
+        #expect(RepairFleet.answers(bot, to: "auto:survey:AINALRAM-BELT-1"))
+    }
+
+    /// A bot migrated to ONE theatre must not answer for a different one —
+    /// the root fallback must not blur theatres together.
+    @Test func aTheatreTaggedBotDoesNotAnswerToAnotherTheatre() {
+        let bot = taggedBot("BOT1", ["auto:survey:AINALRAM-BELT-1"])
+        #expect(RepairFleet.answers(bot, to: "auto:survey:AINALRAM-BELT-1"))
+        #expect(!RepairFleet.answers(bot, to: "auto:survey:DENEBED-BELT-1"))
+    }
 }

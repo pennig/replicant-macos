@@ -95,18 +95,28 @@ public struct HaulRun: MissionStepMachine {
 
     // MARK: - Fleet
 
-    /// Every device in `devices` carrying `tag` and offering `ferry`, sorted by
-    /// code so a controller keeps its rank across evaluations. Resolved by TAG,
-    /// never location — untagging is how the operator takes a controller back.
+    /// Every device in `devices` matching `tag` (see `isFleetTagged`) and
+    /// offering `ferry`, sorted by code so a controller keeps its rank across
+    /// evaluations. Resolved by TAG, never location — untagging is the opt-out.
     public static func controllers(in devices: some Sequence<Device>, tag: String) -> [Device] {
         devices
-            .filter { $0.hasTag(tag) }
+            .filter { isFleetTagged($0, tag: tag) }
             .filter { $0.availableDirectives.contains(requiredDirective) }
             .sorted { $0.deviceCode < $1.deviceCode }
     }
 
     public static func controllers(in world: WorldSnapshot, tag: String) -> [Device] {
         controllers(in: world.devices.values, tag: tag)
+    }
+
+    /// The tag `Brain.ensureHaul` stamps for a theatre at `depot`.
+    static func fleetTag(forTheatre depot: String) -> String { "\(defaultFleetTag):\(depot)" }
+
+    /// Whether `device` matches `tag`, or — only when `tag` is a per-theatre
+    /// derivation of the default (`auto:haul:<depot>`), never an arbitrary
+    /// custom tag — the bare default it falls back from.
+    static func isFleetTagged(_ device: Device, tag: String) -> Bool {
+        device.hasTag(tag) || (tag.hasPrefix("\(defaultFleetTag):") && device.hasTag(defaultFleetTag))
     }
 
     private static func fleetTag(of directive: Directive) -> String {
@@ -131,7 +141,7 @@ public struct HaulRun: MissionStepMachine {
     /// differ, so the answer cannot flicker with dictionary order.
     public static func currentHaulTarget(devices: [Device], tag: String, delivery: String) -> String? {
         devices
-            .filter { $0.hasTag(tag) }
+            .filter { isFleetTagged($0, tag: tag) }
             .sorted { $0.deviceCode < $1.deviceCode }
             .lazy
             .compactMap { drainedPile(of: $0, delivery: delivery) }

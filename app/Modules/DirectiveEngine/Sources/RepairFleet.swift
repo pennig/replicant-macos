@@ -18,13 +18,23 @@ public enum RepairFleet {
     /// The prefix that marks a tag as a fleet's own.
     public static let fleetTagPrefix = "auto:"
 
-    /// Whether `bot` answers to the fleet tagged `owner`. A bot wearing a fleet
-    /// tag answers to that fleet alone; one wearing none answers to whoever asks.
+    /// Whether `bot` answers to the fleet tagged `owner` — exactly, or by
+    /// `owner`'s un-migrated `root(of:)` — or, wearing no fleet tag, to anyone.
     /// Both sides compare through `Device.normalizedTag` — see its warning.
     public static func answers(_ bot: Device, to owner: String?) -> Bool {
         let owned = bot.tags.map(Device.normalizedTag).filter { $0.hasPrefix(fleetTagPrefix) }
         if owned.isEmpty { return true }
-        return owner.map { owned.contains(Device.normalizedTag($0)) } ?? false
+        guard let owner else { return false }
+        let normalizedOwner = Device.normalizedTag(owner)
+        return owned.contains(normalizedOwner) || owned.contains(root(of: normalizedOwner))
+    }
+
+    /// `tag` with any theatre suffix stripped back to its bare fleet family —
+    /// `auto:survey:ainalram-belt-1` → `auto:survey`, unchanged if already bare.
+    private static func root(of tag: String) -> String {
+        let parts = tag.split(separator: ":", maxSplits: 2)
+        guard parts.count > 2 else { return tag }
+        return "\(parts[0]):\(parts[1])"
     }
 
     /// The service bots stowed aboard `vessel` in `world` that answer to `owner`,
