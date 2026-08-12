@@ -1671,11 +1671,14 @@ From `app/Modules`:
 
 ```
 swift build --build-tests && ./scripts/link-index-store.sh
+rm -f .build/events-*.jsonl   # per-filter runs write events-<Suite>.jsonl, which the glob would sweep in
 for p in UniverseModelsTests GameDatabaseTests GameServicesTests GameSyncTests DirectiveEngineTests; do
   swift test --test-product "$p" --disable-xctest --event-stream-version 0 \
     --event-stream-output-path ".build/events-$p.jsonl"
 done
-cat .build/events-*Tests.jsonl > .build/events-all.jsonl
+cat .build/events-UniverseModelsTests.jsonl .build/events-GameDatabaseTests.jsonl \
+    .build/events-GameServicesTests.jsonl .build/events-GameSyncTests.jsonl \
+    .build/events-DirectiveEngineTests.jsonl > .build/events-all.jsonl
 jq -s '[.[] | select(.kind=="event").payload] as $e
   | {started: ($e | map(select(.kind=="testStarted")) | length),
      ended:   ($e | map(select(.kind=="testEnded")) | length),
@@ -1745,11 +1748,14 @@ Run before declaring the plan complete:
 
 - [ ] `cd app/Modules && swift build --build-tests` — clean.
 - [ ] `./scripts/link-index-store.sh` — run after the build so LSP reference queries resolve.
-- [ ] `for p in UniverseModelsTests GameDatabaseTests GameServicesTests GameSyncTests DirectiveEngineTests; do
+- [ ] `rm -f .build/events-*.jsonl   # per-filter runs write events-<Suite>.jsonl, which the glob would sweep in
+for p in UniverseModelsTests GameDatabaseTests GameServicesTests GameSyncTests DirectiveEngineTests; do
   swift test --test-product "$p" --disable-xctest --event-stream-version 0 \
     --event-stream-output-path ".build/events-$p.jsonl"
 done
-cat .build/events-*Tests.jsonl > .build/events-all.jsonl
+cat .build/events-UniverseModelsTests.jsonl .build/events-GameDatabaseTests.jsonl \
+    .build/events-GameServicesTests.jsonl .build/events-GameSyncTests.jsonl \
+    .build/events-DirectiveEngineTests.jsonl > .build/events-all.jsonl
 jq -s '[.[] | select(.kind=="event").payload] as $e
   | {started: ($e | map(select(.kind=="testStarted")) | length),
      ended:   ($e | map(select(.kind=="testEnded")) | length),
