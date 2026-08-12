@@ -108,24 +108,48 @@ existing fallback-to-static-weights contract already covers "demand data is
 incomplete," so under-counting degrades gracefully into that contract rather
 than producing an actively wrong signal.
 
-## Residuals for the user — both about the blueprint catalog, both open
+## The blueprint-catalog gap — found during the build, CLOSED the same day
 
-**Blueprint bills have no dedicated fetch trigger.** The only caller of
-`blueprintsClient.fetchAll()` is the Blueprints screen. The live account has
-46 rows only because that screen has been opened at least once. After a
-fresh local DB reset, the brain ticks with an EMPTY bill table, and
-`ResourceDemand` drops every device-bearing event option (see above),
-degrading demand to reserve-floors-only until a human opens that screen.
-Same shape as the previously-recorded LocationFootprint no-poller bug.
-Closing it needs a new fetch trigger — out of this effort's scope.
+Both halves of this were open residuals when the nine tasks landed, and both
+were closed immediately after.
 
-**An empty blueprint catalog does not set `isFallback`.** Demand computed
-from zero blueprint rows still reads as ordinary (non-fallback) demand to
-every downstream consumer — the debug log line is the ONLY place this
-degraded state is visible. Closing it properly needs a new signal on
-`ResourceHeadroom` (a reviewed, already-closed type) plus a why-view surface
-to show it; pinned today only by a test proving the arithmetic
-(`demand == reserveFloors` exactly when bills are empty).
+**Blueprint bills had no dedicated fetch trigger.** The only caller of
+`blueprintsClient.fetchAll()` was the Blueprints screen, so the live account
+held 46 rows only because a human had opened it. After a local DB reset the
+brain ticked with an EMPTY bill table and `ResourceDemand` dropped every
+device-bearing event option (see above), degrading demand to
+reserve-floors-only until someone opened that screen — the same shape as the
+`LocationFootprint` no-poller bug. Closing it moved `BlueprintsClient` from
+`BlueprintsFeature` to `GameServices` (a feature module is not reachable from
+`GameSync`, and the client belongs beside `LocationsClient` anyway; the move
+swaps `ComposableArchitecture` for `Dependencies` per the manifest rule) and
+added an hourly throttled refresh to `DeadlineScheduler`, mirroring the depot
+sweep. **The refresh is unconditional by design**: the only available
+short-circuit would be "table already non-empty", which is an efficiency
+optimisation that would stop the catalog ever refreshing again and let
+newly-unlocked blueprints go stale for weeks. One idempotent upsert per hour
+is the cheaper mistake. Its knock-on: any test driving the real scheduler
+loop now hits the loud `unimplemented(...)` default and must stub
+`blueprintsClient.fetchAll` — three pre-existing `GameSyncEngineRestartTests`
+needed exactly that.
+
+**An empty catalog did not set `isFallback`.** Demand computed from zero
+blueprint rows read as ordinary derived demand to every downstream consumer.
+The fix is a SECOND, independent axis rather than another value of the first
+— `isFallback` means "could not read STOCK, so the shipped static weights
+were used", while degraded demand means the weights ARE derived, from real
+stock, against an under-counted demand side. `ResourceHeadroom` now carries
+`demandIncomplete`, set in `Brain.siteWeights` (the one place that knows: it
+already computed `bills.isEmpty && openEvents > 0` for its log line, and the
+predicate is written exactly once), threaded through `BrainReport` to a
+why-view line reading *"mine siting incomplete — blueprint catalog empty,
+demand under-counted"*.
+
+Worth knowing before extending: **the no-demand fallback inside `derive` is
+dead in production.** `reserveFloors` always supplies six positive entries,
+so only the stock side can ever raise `isFallback`. The demand side has no
+fallback at all, which is exactly why degraded demand needed its own flag
+rather than reusing that one.
 
 Related: [brain-relay-reserve-floor](brain-relay-reserve-floor.md),
 [brain-mine-build](brain-mine-build.md),
