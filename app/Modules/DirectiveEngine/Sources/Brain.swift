@@ -1325,6 +1325,15 @@ struct Brain: Sendable {
         freshness: Date?,
         now: Date
     ) -> ResourceHeadroom {
+        let open = events.filter(\.isActive).count
+        if bills.isEmpty, open > 0 {
+            logger.warning(
+                """
+                mine siting: demand degraded to the reserve floors — blueprint catalog \
+                empty, \(open, privacy: .public) open event(s) left unpriced
+                """
+            )
+        }
         let demand = ResourceDemand.compute(
             events: events, bills: bills, reserveFloors: BrainCeiling.reserveFloors
         )

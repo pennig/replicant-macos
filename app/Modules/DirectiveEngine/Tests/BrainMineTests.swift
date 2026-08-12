@@ -130,10 +130,20 @@ private let mineRaresShortStock: [String: Double] = [
     "conductive": 60_000, "structural": 10_000, "volatiles": 10_000,
 ]
 
-/// An open event asking for `amount` more silicates, in the live
-/// `accounts/events` shape so the decode under test is the real one.
-private func mineSilicatesEvent(amount: Int) -> LocationEvent {
-    LocationEvent(
+/// An open event asking for `resource` and, optionally, an undeliverable
+/// device, in the live `accounts/events` shape so the decode is the real one.
+private func mineEvent(
+    resource: (type: String, amount: Int), device: String? = nil
+) -> LocationEvent {
+    let devices: [JSONValue] = device.map { type in
+        [.object([
+            "device_type": .string(type),
+            "current": .number(0),
+            "required": .number(1),
+            "met": .bool(false),
+        ])]
+    } ?? []
+    return LocationEvent(
         designation: "SOL-3-EVT-1",
         location: "SOL-3",
         status: "active",
@@ -146,13 +156,13 @@ private func mineSilicatesEvent(amount: Int) -> LocationEvent {
                         "met": .bool(false),
                         "resources": .array([
                             .object([
-                                "resource_type": .string("silicates"),
+                                "resource_type": .string(resource.type),
                                 "current": .number(0),
-                                "required": .number(Double(amount)),
+                                "required": .number(Double(resource.amount)),
                                 "met": .bool(false),
                             ])
                         ]),
-                        "devices": .array([]),
+                        "devices": .array(devices),
                     ])
                 ]),
             ])
@@ -344,6 +354,22 @@ struct BrainMineReadinessTests {
         #expect(headroom.isFallback)
     }
 
+    /// Pins the empty-catalog degradation: an option needing an unbilled device
+    /// is DROPPED WHOLE, its resource lines with it, so demand is the reserve
+    /// floors alone — weights still derive rather than falling back.
+    @Test("an empty blueprint catalog degrades demand to the reserve floors")
+    func emptyBillsDegradeToTheReserveFloors() {
+        let headroom = Brain.siteWeights(
+            stock: mineSilicatesShortStock,
+            events: [mineEvent(resource: ("rares", 1_000_000), device: "defence_grid")],
+            bills: [:],
+            freshness: mineNow,
+            now: mineNow
+        )
+        #expect(headroom.isFallback == false)
+        #expect(headroom.weights == ["silicates": 2, "carbon": 1])
+    }
+
     /// The wiring, not the predicate: two same-class belts in one system, so
     /// only the bonus separates them, and the demand-derived weights pick the
     /// belt the static table ranks last.
@@ -376,7 +402,7 @@ struct BrainMineReadinessTests {
         let asking = mineWorldView(
             devices: devices, belts: mineWeightedBelts,
             theatreStock: mineRaresShortStock, theatreStockFreshness: mineNow,
-            locationEvents: [mineSilicatesEvent(amount: 1_000_000)]
+            locationEvents: [mineEvent(resource: ("silicates", 1_000_000))]
         )
         #expect(
             Brain.mineReadiness(view: quiet, directives: [])
