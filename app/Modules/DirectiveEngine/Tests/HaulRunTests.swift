@@ -232,6 +232,23 @@ struct HaulRunTests {
         #expect(HaulRun.controllers(in: world(devices: [notAController]), tag: "auto:haul").isEmpty)
     }
 
+    // MARK: - Per-theatre tag matching
+
+    /// A bare-tagged controller still answers to a per-theatre tag query —
+    /// the migration fallback — case drift and all, since `isFleetTagged`
+    /// compares through `Device.normalizedTag` like every other tag test.
+    @Test func perTheatreTagQueryFallsBackToTheBareTagAcrossCaseDrift() {
+        let bare = controller("C1", tags: ["Auto:Haul"])
+        #expect(HaulRun.isFleetTagged(bare, tag: "AUTO:HAUL:SOL-3"))
+    }
+
+    /// A genuinely custom, unrelated tag must NOT fall back to the bare
+    /// default — only a tag shaped `auto:haul:<depot>` does.
+    @Test func aCustomTagDoesNotFallBackToTheBareDefault() {
+        let bare = controller("C1", tags: ["auto:haul"])
+        #expect(!HaulRun.isFleetTagged(bare, tag: "auto:haul-b"))
+    }
+
     // MARK: surveying
 
     /// A stale census is re-read — one request covering discovery and drain

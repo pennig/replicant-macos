@@ -110,13 +110,14 @@ public struct HaulRun: MissionStepMachine {
     }
 
     /// The tag `Brain.ensureHaul` stamps for a theatre at `depot`.
-    static func fleetTag(forTheatre depot: String) -> String { "\(defaultFleetTag):\(depot)" }
+    public static func fleetTag(forTheatre depot: String) -> String { "\(defaultFleetTag):\(depot)" }
 
     /// Whether `device` matches `tag`, or — only when `tag` is a per-theatre
     /// derivation of the default (`auto:haul:<depot>`), never an arbitrary
     /// custom tag — the bare default it falls back from.
     static func isFleetTagged(_ device: Device, tag: String) -> Bool {
-        device.hasTag(tag) || (tag.hasPrefix("\(defaultFleetTag):") && device.hasTag(defaultFleetTag))
+        let normalized = Device.normalizedTag(tag)
+        return device.hasTag(normalized) || (normalized.hasPrefix("\(defaultFleetTag):") && device.hasTag(defaultFleetTag))
     }
 
     private static func fleetTag(of directive: Directive) -> String {

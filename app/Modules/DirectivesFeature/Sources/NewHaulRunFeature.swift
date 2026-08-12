@@ -89,38 +89,48 @@ public struct NewHaulRunFeature {
 
             case .launchTapped:
                 guard let anchor = state.anchorControllerCode else { return .none }
-                let directive = Directive(
-                    id: uuid().uuidString,
-                    kind: .haulRun,
-                    status: .running,
-                    // Anchor only — see this file's header. The machine resolves
-                    // its controllers by tag on every evaluation.
-                    deviceCode: anchor,
-                    // The engine claims nothing: a Haul Run drives EVERY tagged
-                    // controller, so pinning one here would misrepresent the run.
-                    controllerCode: nil,
-                    // No roam centre: this run plans over locations, not systems,
-                    // and never emits `.extendQueue`.
-                    roamCentre: nil,
-                    fleetTag: HaulRun.defaultFleetTag,
-                    // Empty and stays empty — the planner re-derives every cycle
-                    // from the footprint census, and records no history.
-                    targets: [],
-                    targetIndex: 0,
-                    step: HaulRun().firstStep,
-                    stepStartedAt: date.now,
-                    returnToOrigin: false,
-                    originDesignation: nil,
-                    attentionReason: nil,
-                    createdAt: date.now,
-                    updatedAt: date.now
-                )
-                logger.info("launching haul run \(directive.id, privacy: .public) anchored on \(anchor, privacy: .public)")
+                logger.info("launching haul run anchored on \(anchor, privacy: .public)")
                 // Bound to locals: referencing the property wrappers inside the
                 // @Sendable closure would capture the non-Sendable reducer.
                 let database = self.database
                 let dismiss = self.dismiss
+                let id = uuid().uuidString
+                let now = date.now
                 return .run { send in
+                    // `Brain.ensureHaul`'s own resolution — never the bare
+                    // tag, which reserves the whole fleet account-wide.
+                    let tag = (try? await database.read { db -> String in
+                        let view = try WorldView.read(from: db, now: now)
+                        guard let device = view.devices[anchor], let theatre = view.owningTheatre(of: device)
+                        else { return HaulRun.defaultFleetTag }
+                        return HaulRun.fleetTag(forTheatre: theatre.depot)
+                    }) ?? HaulRun.defaultFleetTag
+                    let directive = Directive(
+                        id: id,
+                        kind: .haulRun,
+                        status: .running,
+                        // Anchor only — see this file's header. The machine
+                        // resolves its controllers by tag on every evaluation.
+                        deviceCode: anchor,
+                        // The engine claims nothing: a Haul Run drives EVERY
+                        // tagged controller, so pinning one would misrepresent it.
+                        controllerCode: nil,
+                        // No roam centre: this run plans over locations, not
+                        // systems, and never emits `.extendQueue`.
+                        roamCentre: nil,
+                        fleetTag: tag,
+                        // Empty and stays empty — the planner re-derives every
+                        // cycle from the footprint census, and records no history.
+                        targets: [],
+                        targetIndex: 0,
+                        step: HaulRun().firstStep,
+                        stepStartedAt: now,
+                        returnToOrigin: false,
+                        originDesignation: nil,
+                        attentionReason: nil,
+                        createdAt: now,
+                        updatedAt: now
+                    )
                     try? await database.write { db in
                         try Directive.insert { directive }.execute(db)
                     }

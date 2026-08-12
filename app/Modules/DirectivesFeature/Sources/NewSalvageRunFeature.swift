@@ -167,46 +167,50 @@ public struct NewSalvageRunFeature {
                 guard let vesselCode = state.vesselCode, let centre = state.anchorSystem,
                       let vessel = state.devices.first(where: { $0.deviceCode == vesselCode })
                 else { return .none }
-                let directive = Directive(
-                    id: uuid().uuidString,
-                    kind: .salvageRun,
-                    status: .running,
-                    deviceCode: vesselCode,
-                    // The engine claims the controller at preflight, from
-                    // whatever is actually aboard when the run starts —
-                    // recording it here would go stale if the fleet moved
-                    // meanwhile.
-                    controllerCode: nil,
-                    // Always set: a Salvage Run has no finish line, so this is
-                    // what makes `.extendQueue` fire instead of `.done`.
-                    roamCentre: centre,
-                    // The run resolves its whole fleet by tag (spec §4.2) —
-                    // vessel, controller, drones, and relays must all carry
-                    // it, or `.refreshFleet` cannot see them.
-                    fleetTag: SalvageRun.defaultFleetTag,
-                    // Empty on purpose: the engine plans the first target from
-                    // the catalogue on its first evaluation, via
-                    // `SalvageTargetPlanner`. Pre-picking one here would
-                    // duplicate that logic and could disagree with it.
-                    targets: [],
-                    targetIndex: 0,
-                    step: SalvageRun().firstStep,
-                    stepStartedAt: date.now,
-                    // A continuous run has no queue to empty, so a return leg
-                    // would never fire; keep the column honest rather than
-                    // recording an intent that cannot happen.
-                    returnToOrigin: false,
-                    originDesignation: vessel.location.map { SiteAssay.system(of: $0) },
-                    attentionReason: nil,
-                    createdAt: date.now,
-                    updatedAt: date.now
-                )
-                logger.info("launching salvage run \(directive.id, privacy: .public) on \(vesselCode, privacy: .public) centred on \(centre, privacy: .public)")
+                logger.info("launching salvage run on \(vesselCode, privacy: .public) centred on \(centre, privacy: .public)")
                 // Bound to locals: referencing the property wrappers inside the
                 // @Sendable closure would capture the non-Sendable reducer.
                 let database = self.database
                 let dismiss = self.dismiss
+                let id = uuid().uuidString
+                let now = date.now
+                let origin = vessel.location.map { SiteAssay.system(of: $0) }
                 return .run { send in
+                    // `Brain.ensureSalvage`'s own resolution — never the bare
+                    // tag, which reserves the whole fleet account-wide.
+                    let tag = (try? await database.read { db -> String in
+                        let view = try WorldView.read(from: db, now: now)
+                        guard let device = view.devices[vesselCode], let theatre = view.owningTheatre(of: device)
+                        else { return SalvageRun.defaultFleetTag }
+                        return SalvageRun.fleetTag(forTheatre: theatre.depot)
+                    }) ?? SalvageRun.defaultFleetTag
+                    let directive = Directive(
+                        id: id,
+                        kind: .salvageRun,
+                        status: .running,
+                        deviceCode: vesselCode,
+                        // Claimed at preflight from whatever is aboard then —
+                        // recording it here would go stale if the fleet moved.
+                        controllerCode: nil,
+                        // Always set: with no finish line, this is what makes
+                        // `.extendQueue` fire instead of `.done`.
+                        roamCentre: centre,
+                        // The run resolves its whole fleet by tag (spec §4.2) —
+                        // `.refreshFleet` cannot see an untagged member.
+                        fleetTag: tag,
+                        // Empty: the engine plans the first target itself, via
+                        // `SalvageTargetPlanner`, on its first evaluation.
+                        targets: [],
+                        targetIndex: 0,
+                        step: SalvageRun().firstStep,
+                        stepStartedAt: now,
+                        // No queue to empty, so a return leg would never fire.
+                        returnToOrigin: false,
+                        originDesignation: origin,
+                        attentionReason: nil,
+                        createdAt: now,
+                        updatedAt: now
+                    )
                     try? await database.write { db in
                         try Directive.insert { directive }.execute(db)
                     }

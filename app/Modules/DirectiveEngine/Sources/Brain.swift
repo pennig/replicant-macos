@@ -332,7 +332,9 @@ struct Brain: Sendable {
     private func ensureSurvey(snapshot: Snapshot, database: any DatabaseWriter) async {
         @Dependency(\.uuid) var uuid
         for theatre in snapshot.view.theatres.filter(\.isOperational) {
-            guard case let .launch(carrier, roamCentre) = Self.surveyReadiness(view: snapshot.view, theatre: theatre)
+            guard case let .launch(carrier, roamCentre) = Self.surveyReadiness(
+                view: snapshot.view, directives: snapshot.directives, theatre: theatre
+            )
             else { continue }
             await ensureOne(.surveyRun, theatre: theatre, snapshot: snapshot, database: database) {
                 Directive(
@@ -622,13 +624,10 @@ struct Brain: Sendable {
 
     // MARK: - Theatre ownership
 
-    /// `device`'s theatre, if any — a partition: at most one theatre per
-    /// device, deterministic for a given `view`. Nil for a stowed/cruising
-    /// device or a system outside the census.
+    /// `device`'s theatre — forwards to `WorldView.owningTheatre(of:)`, the
+    /// public seam operator-launched dialogs outside the engine also use.
     static func owningTheatre(of device: Device, view: WorldView) -> Theatre? {
-        guard let location = device.location else { return nil }
-        let system = SiteAssay.system(of: location)
-        return view.theatre(servicing: system) ?? view.theatre(nearest: system)
+        view.owningTheatre(of: device)
     }
 
     // MARK: - Theatre adoption
@@ -1098,15 +1097,19 @@ struct Brain: Sendable {
     }
 
     /// The lowest-coded un-migrated `candidates` member (bare-tagged, not
-    /// wearing `tag`) held by a SAME-KIND directive — nil unless that
-    /// collision is what explains the hold.
+    /// wearing `tag`) held by a SAME-KIND directive from a DIFFERENT theatre —
+    /// nil unless that cross-theatre collision is what explains the hold.
     private static func unmigratedHold(
         _ candidates: some Sequence<Device>, reserved: Set<String>, tag: String,
-        kind: DirectiveKind, directives: [Directive], devices: [String: Device]
+        kind: DirectiveKind, theatre: Theatre, directives: [Directive], devices: [String: Device]
     ) -> Device? {
         candidates
             .filter { reserved.contains($0.deviceCode) && !$0.hasTag(tag) }
-            .filter { holdingDirective(of: $0.deviceCode, directives: directives, devices: devices)?.kind == kind }
+            .filter {
+                guard let holder = holdingDirective(of: $0.deviceCode, directives: directives, devices: devices)
+                else { return false }
+                return holder.kind == kind && holder.theatreDepot != theatre.depot
+            }
             .min { $0.deviceCode < $1.deviceCode }
     }
 
@@ -1211,12 +1214,13 @@ struct Brain: Sendable {
         case idle(reason: String)
     }
 
-    /// The survey verdict for `theatre`. Staging is judged through `SurveyRun`'s
-    /// own fleet queries, and the carrier pool is scoped to devices `theatre`
-    /// owns, so two theatres never fight over one vessel.
-    static func surveyReadiness(view: WorldView, theatre: Theatre) -> SurveyReadiness {
-        guard let carrier = surveyCarrier(view: view, theatre: theatre) else {
-            return .idle(reason: surveyCarrierBlocker(view: view, theatre: theatre))
+    /// The survey verdict for `theatre`. Staging is judged through
+    /// `SurveyRun`'s own fleet queries; the carrier pool is scoped to devices
+    /// `theatre` owns and free of any other kind's hold.
+    static func surveyReadiness(view: WorldView, directives: [Directive], theatre: Theatre) -> SurveyReadiness {
+        let reserved = reservedDevices(directives: directives, devices: view.devices)
+        guard let carrier = surveyCarrier(view: view, theatre: theatre, reserved: reserved) else {
+            return .idle(reason: surveyCarrierBlocker(view: view, theatre: theatre, reserved: reserved, directives: directives))
         }
 
         let world = WorldSnapshot(devices: view.devices, openOperations: [:], now: view.now)
@@ -1270,7 +1274,8 @@ struct Brain: Sendable {
             let theatreTag = SalvageRun.fleetTag(forTheatre: theatre.depot)
             guard let clause = mistaggedClause(mistagged, tag: salvageCarrierTag) else {
                 guard let unmigrated = unmigratedHold(
-                    candidates, reserved: reserved, tag: theatreTag, kind: .salvageRun, directives: directives, devices: view.devices
+                    candidates, reserved: reserved, tag: theatreTag, kind: .salvageRun,
+                    theatre: theatre, directives: directives, devices: view.devices
                 ) else {
                     return .idle(reason: "no \(salvageCarrierTag) vessel")
                 }
@@ -1315,7 +1320,7 @@ struct Brain: Sendable {
     /// per-site row (`auto:mine:<belt>`) — the bare tag, or any theatre-scoped
     /// tag it derives from. A nil tag counts, falling back to the default.
     static func isGeneralHaul(_ directive: Directive) -> Bool {
-        let tag = directive.fleetTag ?? HaulRun.defaultFleetTag
+        let tag = Device.normalizedTag(directive.fleetTag ?? HaulRun.defaultFleetTag)
         return tag == HaulRun.defaultFleetTag || tag.hasPrefix("\(HaulRun.defaultFleetTag):")
     }
 
@@ -1330,7 +1335,8 @@ struct Brain: Sendable {
         guard let controller = candidates.first(where: { !reserved.contains($0.deviceCode) }) else {
             let base = "no free \(HaulRun.defaultFleetTag) controller offering ferry"
             guard let unmigrated = unmigratedHold(
-                candidates, reserved: reserved, tag: theatreTag, kind: .haulRun, directives: directives, devices: view.devices
+                candidates, reserved: reserved, tag: theatreTag, kind: .haulRun,
+                theatre: theatre, directives: directives, devices: view.devices
             ) else {
                 return .idle(reason: base)
             }
@@ -1558,7 +1564,7 @@ struct Brain: Sendable {
         guard let theatre = view.theatres.first(where: \.isOperational) else {
             return .idle(reason: "no operational theatre")
         }
-        switch surveyReadiness(view: view, theatre: theatre) {
+        switch surveyReadiness(view: view, directives: directives, theatre: theatre) {
         case let .launch(carrier, roamCentre): return .ready(carrier: carrier, roamCentre: roamCentre)
         case let .idle(reason): return .idle(reason: reason)
         }
@@ -1576,20 +1582,23 @@ struct Brain: Sendable {
         }
     }
 
-    /// The lowest-coded vessel tagged `surveyCarrierTag` that `theatre` owns
-    /// (`owningTheatre`) — survey never co-locates at a hub the way
+    /// The lowest-coded FREE vessel tagged `surveyCarrierTag` that `theatre`
+    /// owns (`owningTheatre`) — survey never co-locates at a hub the way
     /// `freeCarrier` requires.
-    private static func surveyCarrier(view: WorldView, theatre: Theatre) -> Device? {
+    private static func surveyCarrier(view: WorldView, theatre: Theatre, reserved: Set<String>) -> Device? {
         view.devices.values
             .filter { $0.isCarrierHull && SurveyRun.isFleetTagged($0, at: theatre.depot) }
             .filter { owningTheatre(of: $0, view: view)?.depot == theatre.depot }
+            .filter { !reserved.contains($0.deviceCode) }
             .min { $0.deviceCode < $1.deviceCode }
     }
 
     /// Mirrors `carrierBlocker`'s register: names candidates as untagged (or
     /// tagged on a non-carrier), the hull pool scoped to `theatre` — the same
     /// pool `surveyCarrier` ranged over.
-    private static func surveyCarrierBlocker(view: WorldView, theatre: Theatre) -> String {
+    private static func surveyCarrierBlocker(
+        view: WorldView, theatre: Theatre, reserved: Set<String>, directives: [Directive]
+    ) -> String {
         let hulls = view.devices.values
             .filter { $0.isCarrierHull && owningTheatre(of: $0, view: view)?.depot == theatre.depot }
             .sorted { $0.deviceCode < $1.deviceCode }
@@ -1604,9 +1613,22 @@ struct Brain: Sendable {
             }
             return "no carrier hull — \(clause)"
         }
-        let untagged = "no carrier hull is tagged \(surveyCarrierTag) — \(list(hulls.map(\.deviceCode))) \(hulls.count == 1 ? "is" : "are") untagged"
-        guard let clause = mistaggedClause(mistagged, tag: surveyCarrierTag) else { return untagged }
-        return "\(untagged); \(clause)"
+        let candidates = hulls.filter { SurveyRun.isFleetTagged($0, at: theatre.depot) }
+        guard !candidates.isEmpty else {
+            let untagged = "no carrier hull is tagged \(surveyCarrierTag) — \(list(hulls.map(\.deviceCode))) \(hulls.count == 1 ? "is" : "are") untagged"
+            guard let clause = mistaggedClause(mistagged, tag: surveyCarrierTag) else { return untagged }
+            return "\(untagged); \(clause)"
+        }
+        // Reachable only because every candidate is reserved — `surveyCarrier`
+        // would otherwise have found one.
+        let theatreTag = SurveyRun.fleetTag(forTheatre: theatre.depot)
+        guard let unmigrated = unmigratedHold(
+            candidates, reserved: reserved, tag: theatreTag, kind: .surveyRun,
+            theatre: theatre, directives: directives, devices: view.devices
+        ) else {
+            return "no free \(surveyCarrierTag) vessel"
+        }
+        return "no free \(surveyCarrierTag) vessel — \(unmigratedNote(unmigrated, tag: theatreTag))"
     }
 
     // MARK: - The rationale

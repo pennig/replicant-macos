@@ -123,7 +123,7 @@ struct BrainSurveyTests {
             starPositions: ["AINALRAM": Position(x: 0, y: 0, z: 0)]
         )
 
-        #expect(Brain.surveyReadiness(view: view, theatre: ainalramTheatre) == .launch(carrier: "V1", roamCentre: "AINALRAM"))
+        #expect(Brain.surveyReadiness(view: view, directives: [], theatre: ainalramTheatre) == .launch(carrier: "V1", roamCentre: "AINALRAM"))
     }
 
     @Test("no vessel tagged auto:survey idles, naming the tag")
@@ -134,7 +134,7 @@ struct BrainSurveyTests {
             starPositions: ["AINALRAM": Position(x: 0, y: 0, z: 0)]
         )
 
-        guard case let .idle(reason) = Brain.surveyReadiness(view: view, theatre: ainalramTheatre) else {
+        guard case let .idle(reason) = Brain.surveyReadiness(view: view, directives: [], theatre: ainalramTheatre) else {
             Issue.record("expected idle")
             return
         }
@@ -152,7 +152,7 @@ struct BrainSurveyTests {
             starPositions: ["AINALRAM": Position(x: 0, y: 0, z: 0)]
         )
 
-        guard case let .idle(reason) = Brain.surveyReadiness(view: view, theatre: ainalramTheatre) else {
+        guard case let .idle(reason) = Brain.surveyReadiness(view: view, directives: [], theatre: ainalramTheatre) else {
             Issue.record("expected idle, never a stall")
             return
         }
@@ -173,7 +173,7 @@ struct BrainSurveyTests {
             starPositions: ["AINALRAM": Position(x: 0, y: 0, z: 0)]
         )
 
-        guard case let .idle(reason) = Brain.surveyReadiness(view: view, theatre: ainalramTheatre) else {
+        guard case let .idle(reason) = Brain.surveyReadiness(view: view, directives: [], theatre: ainalramTheatre) else {
             Issue.record("expected idle")
             return
         }
@@ -196,7 +196,7 @@ struct BrainSurveyTests {
             depot: "AINALRAM-BELT-1", system: "GHOST", origin: .derived, readiness: .operational, stock: 0
         )
 
-        guard case let .idle(reason) = Brain.surveyReadiness(view: view, theatre: mismatchedTheatre) else {
+        guard case let .idle(reason) = Brain.surveyReadiness(view: view, directives: [], theatre: mismatchedTheatre) else {
             Issue.record("expected idle — SurveyRun.plan would exhaust immediately")
             return
         }
@@ -216,7 +216,7 @@ struct BrainSurveyTests {
             starPositions: ["AINALRAM": Position(x: 0, y: 0, z: 0)]
         )
 
-        guard case let .idle(reason) = Brain.surveyReadiness(view: view, theatre: ainalramTheatre) else {
+        guard case let .idle(reason) = Brain.surveyReadiness(view: view, directives: [], theatre: ainalramTheatre) else {
             Issue.record("expected idle")
             return
         }
@@ -235,7 +235,7 @@ struct BrainSurveyTests {
             starPositions: ["AINALRAM": Position(x: 0, y: 0, z: 0)]
         )
 
-        guard case let .idle(reason) = Brain.surveyReadiness(view: view, theatre: ainalramTheatre) else {
+        guard case let .idle(reason) = Brain.surveyReadiness(view: view, directives: [], theatre: ainalramTheatre) else {
             Issue.record("expected idle")
             return
         }
@@ -258,7 +258,7 @@ struct BrainSurveyTests {
             starPositions: ["AINALRAM": Position(x: 0, y: 0, z: 0)]
         )
 
-        #expect(Brain.surveyReadiness(view: view, theatre: ainalramTheatre) == .launch(carrier: "V1", roamCentre: "AINALRAM"))
+        #expect(Brain.surveyReadiness(view: view, directives: [], theatre: ainalramTheatre) == .launch(carrier: "V1", roamCentre: "AINALRAM"))
     }
 
     /// Two theatres, each with its own tagged, staged carrier: each launches
@@ -270,8 +270,8 @@ struct BrainSurveyTests {
             denebedFleet: surveyReadinessStagedFleet(carrier: "VB", controller: "AMIB", drone: "DRONEB", location: "DENEBED-1")
         )
 
-        #expect(Brain.surveyReadiness(view: view, theatre: ainalram) == .launch(carrier: "VA", roamCentre: "AINALRAM"))
-        #expect(Brain.surveyReadiness(view: view, theatre: denebed) == .launch(carrier: "VB", roamCentre: "DENEBED"))
+        #expect(Brain.surveyReadiness(view: view, directives: [], theatre: ainalram) == .launch(carrier: "VA", roamCentre: "AINALRAM"))
+        #expect(Brain.surveyReadiness(view: view, directives: [], theatre: denebed) == .launch(carrier: "VB", roamCentre: "DENEBED"))
     }
 
     /// A theatre with no carrier of its own idles, and must not call
@@ -284,13 +284,13 @@ struct BrainSurveyTests {
             denebedFleet: []
         )
 
-        guard case let .idle(reason) = Brain.surveyReadiness(view: view, theatre: denebed) else {
+        guard case let .idle(reason) = Brain.surveyReadiness(view: view, directives: [], theatre: denebed) else {
             Issue.record("expected DENEBED to idle — it owns no carrier")
             return
         }
         #expect(reason == "no vessel is tagged \(Brain.surveyCarrierTag)")
         #expect(!reason.contains("VA"))
-        #expect(Brain.surveyReadiness(view: view, theatre: ainalram) == .launch(carrier: "VA", roamCentre: "AINALRAM"))
+        #expect(Brain.surveyReadiness(view: view, directives: [], theatre: ainalram) == .launch(carrier: "VA", roamCentre: "AINALRAM"))
     }
 
     /// The mistagged clause stays fleet-wide even where carrier selection is
@@ -303,7 +303,7 @@ struct BrainSurveyTests {
             denebedFleet: []
         )
 
-        guard case let .idle(reason) = Brain.surveyReadiness(view: view, theatre: ainalram) else {
+        guard case let .idle(reason) = Brain.surveyReadiness(view: view, directives: [], theatre: ainalram) else {
             Issue.record("expected idle")
             return
         }
@@ -328,8 +328,8 @@ struct BrainSurveyTests {
             )
         )
 
-        #expect(Brain.surveyReadiness(view: view, theatre: ainalram) == .launch(carrier: "VA", roamCentre: "AINALRAM"))
-        #expect(Brain.surveyReadiness(view: view, theatre: denebed) == .launch(carrier: "VB", roamCentre: "DENEBED"))
+        #expect(Brain.surveyReadiness(view: view, directives: [], theatre: ainalram) == .launch(carrier: "VA", roamCentre: "AINALRAM"))
+        #expect(Brain.surveyReadiness(view: view, directives: [], theatre: denebed) == .launch(carrier: "VB", roamCentre: "DENEBED"))
     }
 
     /// A carrier tagged for AINALRAM alone is never a candidate for DENEBED —
@@ -344,11 +344,35 @@ struct BrainSurveyTests {
             denebedFleet: []
         )
 
-        guard case let .idle(reason) = Brain.surveyReadiness(view: view, theatre: denebed) else {
+        guard case let .idle(reason) = Brain.surveyReadiness(view: view, directives: [], theatre: denebed) else {
             Issue.record("expected DENEBED to idle — VA wears only AINALRAM's tag")
             return
         }
         #expect(!reason.contains("VA"))
+    }
+
+    /// The pure-function proof of the un-migrated warning: DENEBED's only
+    /// candidate is bare-tagged and reserved by AINALRAM's legacy bare-tagged
+    /// live run — the idle reason must name it and point at re-tagging.
+    @Test("a candidate reserved by another theatre's legacy bare tag is named, not silently idle")
+    func aCandidateReservedByAnotherTheatresLegacyTagIsNamed() {
+        let (view, ainalram, denebed) = twoTheatreSurveyView(
+            ainalramFleet: surveyReadinessStagedFleet(carrier: "VA", location: "AINALRAM-1"),
+            denebedFleet: surveyReadinessStagedFleet(
+                carrier: "VB", controller: "AMIB", drone: "DRONEB", location: "DENEBED-1"
+            )
+        )
+        let live = directiveFixture(
+            id: "LIVE", kind: .surveyRun, deviceCode: "VA",
+            fleetTag: SurveyRun.defaultFleetTag, theatreDepot: ainalram.depot
+        )
+
+        guard case let .idle(reason) = Brain.surveyReadiness(view: view, directives: [live], theatre: denebed) else {
+            Issue.record("expected DENEBED to idle — VB is swept by AINALRAM's bare-tag reservation")
+            return
+        }
+        #expect(reason.contains("VB"))
+        #expect(reason.contains("re-tag"))
     }
 }
 
@@ -425,7 +449,7 @@ struct BrainSurveyStatusTests {
         let view = surveyReadinessView(devices: devices, depot: "AINALRAM-BELT-1")
 
         guard case let .idle(status) = Brain.surveyStatus(directives: [], view: view),
-              case let .idle(readiness) = Brain.surveyReadiness(view: view, theatre: ainalramTheatre)
+              case let .idle(readiness) = Brain.surveyReadiness(view: view, directives: [], theatre: ainalramTheatre)
         else {
             Issue.record("expected both to idle")
             return
@@ -686,10 +710,10 @@ struct BrainEnsureSurveyTests {
         #expect(second.fleetTag == SurveyRun.fleetTag(forTheatre: secondTheatreHubLocation))
     }
 
-    /// A live theatre's run, stamped with its OWN per-theatre tag exactly as
-    /// `ensureSurvey` now launches one, must not reserve another theatre's
-    /// carrier merely because that carrier still wears the bare fallback tag.
-    @Test func aLivePerTheatreTaggedTheatreDoesNotReserveAnotherTheatresCarrier() async throws {
+    /// Candidate SCOPING only — SOL's per-theatre tag can never literally
+    /// match VEGA's carrier's bare one, so this proves nothing about
+    /// `reservedDevices` itself; see the legacy-collision test below for that.
+    @Test func aLiveTheatresOwnTagDoesNotDisturbAnotherTheatresLaunch() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in
             try seedSurveyEnsureReadyWorld(db)
@@ -710,6 +734,32 @@ struct BrainEnsureSurveyTests {
         let rows = try await surveyEnsureDirectives(database).filter { $0.kind == .surveyRun }
         #expect(rows.count == 2, "VEGA's fleet must still launch")
         #expect(rows.contains { $0.deviceCode == secondTheatreCarrier })
+    }
+
+    /// The accepted residual (report Concern #2), for survey too: an
+    /// already-running directive still carrying the literal bare tag still
+    /// reserves a different theatre's still-bare carrier.
+    @Test func legacyBareTaggedLiveRunStillCollidesWithAnotherTheatresBareCarrier() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try seedSurveyEnsureReadyWorld(db)
+            try seedDirective(
+                db, id: "LIVE-SOL", kind: .surveyRun, status: .running,
+                deviceCode: surveyEnsureCarrier, fleetTag: SurveyRun.defaultFleetTag,
+                theatreDepot: growHubLocation
+            )
+            try seedSecondTheatre(db)
+            try seedSurveyEnsureFleet(
+                db, carrier: secondTheatreCarrier, controller: "AMI2", drone: "DRONE2",
+                location: secondTheatreHubLocation
+            )
+        }
+
+        await surveyEnsureTick(database)
+
+        let rows = try await surveyEnsureDirectives(database).filter { $0.kind == .surveyRun }
+        #expect(rows.count == 1, "VEGA's carrier is swept by SOL's literal bare-tag reservation")
+        #expect(rows.first?.id == "LIVE-SOL")
     }
 }
 

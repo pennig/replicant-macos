@@ -175,6 +175,28 @@ struct BrainSalvageReadinessTests {
         )
     }
 
+    /// A theatre's own live run holding its bare-tagged sibling is nothing to
+    /// re-tag for — the migration note must fire only for a CROSS-theatre
+    /// hold, never one entirely inside the same theatre.
+    @Test("a bare-tagged sibling held by this theatre's own live run gets no re-tag note")
+    func sameTheatreHoldGetsNoUnmigratedNote() {
+        let devices = [
+            salvageDevice("VA", type: "heaven_vessel", tags: [Brain.salvageCarrierTag], location: "AINALRAM-1"),
+            salvageDevice("VA2", type: "heaven_vessel", tags: [Brain.salvageCarrierTag], location: "AINALRAM-1"),
+        ]
+        let view = salvageView(devices: devices)
+        let live = directiveFixture(
+            id: "LIVE", kind: .salvageRun, deviceCode: "VA",
+            fleetTag: Brain.salvageCarrierTag, theatreDepot: ainalramTheatre.depot
+        )
+        guard case let .idle(reason) = Brain.salvageReadiness(view: view, directives: [live], theatre: ainalramTheatre)
+        else {
+            Issue.record("expected idle — both bare-tagged carriers are reserved")
+            return
+        }
+        #expect(!reason.contains("re-tag"))
+    }
+
     @Test("a tagged carrier with no mining controller aboard is idle, never a stall")
     func noControllerIsIdle() {
         let view = salvageView(
@@ -338,11 +360,11 @@ struct BrainSalvageReadinessTests {
         #expect(!reason.contains("VA"))
     }
 
-    /// A live theatre's run, stamped with its own per-theatre tag exactly as
-    /// `ensureSalvage` now launches one, does not reserve another theatre's
-    /// per-theatre-tagged carrier.
-    @Test("a live theatre's per-theatre tag does not reserve another theatre's tagged carrier")
-    func aLiveTheatreDoesNotReserveAnotherTheatresTaggedCarrier() {
+    /// Candidate SCOPING only — the two tags differ by construction and can
+    /// never literally collide, so this proves nothing about `reservedDevices`
+    /// itself; see the literal-collision tests below for that.
+    @Test("a live directive naming a different theatre's tag does not disturb this theatre's own verdict")
+    func aLiveDirectiveNamingAnotherTheatresTagDoesNotDisturbThisOne() {
         let (view, ainalram, denebed) = twoTheatreSalvageView(
             ainalramFleet: salvageStagedFleet(
                 carrier: "VA", location: "AINALRAM-1", tags: ["auto:salvage:AINALRAM-BELT-1"]
@@ -361,6 +383,54 @@ struct BrainSalvageReadinessTests {
             Brain.salvageReadiness(view: view, directives: [live], theatre: denebed)
                 == .launch(carrier: "VB", roamCentre: "DENEBED")
         )
+    }
+
+    // MARK: - Literal tag-sweep collision (the actual `reservedDevices` mechanism)
+
+    /// Two per-theatre tags can never literally collide, so a FRESH launch
+    /// in one theatre cannot reserve another's per-theatre-tagged carrier —
+    /// the property `reservedDevices`'s sweep actually guarantees.
+    @Test("a freshly-stamped per-theatre tag cannot literally match another theatre's tag")
+    func freshPerTheatreTagsCannotCollide() {
+        let (view, ainalram, denebed) = twoTheatreSalvageView(
+            ainalramFleet: salvageStagedFleet(
+                carrier: "VA", location: "AINALRAM-1", tags: ["auto:salvage:AINALRAM-BELT-1"]
+            ),
+            denebedFleet: salvageStagedFleet(
+                carrier: "VB", controller: "AMIB", drone: "DRONEB", location: "DENEBED-1", tags: ["auto:salvage:DENEBED-BELT-1"]
+            ),
+            salvageUnits: ["AINALRAM": 900, "DENEBED": 900]
+        )
+        let live = directiveFixture(
+            id: "LIVE", kind: .salvageRun, deviceCode: "VA",
+            fleetTag: SalvageRun.fleetTag(forTheatre: ainalram.depot), theatreDepot: ainalram.depot
+        )
+        let reserved = Brain.reservedDevices(directives: [live], devices: view.devices)
+        #expect(!reserved.contains("VB"), "the literal tags differ by depot, so the sweep cannot reach VB")
+    }
+
+    /// The accepted residual (report Concern #2): a directive still carrying
+    /// the LITERAL bare tag still sweeps another theatre's still-bare carrier
+    /// — protection exists only for the tag a FRESH launch stamps.
+    @Test("a legacy bare-tagged live directive still reserves another theatre's still-bare carrier")
+    func legacyBareTagStillCollidesAcrossTheatres() {
+        let (view, ainalram, denebed) = twoTheatreSalvageView(
+            ainalramFleet: salvageStagedFleet(carrier: "VA", location: "AINALRAM-1"),
+            denebedFleet: salvageStagedFleet(
+                carrier: "VB", controller: "AMIB", drone: "DRONEB", location: "DENEBED-1"
+            ),
+            salvageUnits: ["AINALRAM": 900, "DENEBED": 900]
+        )
+        let live = directiveFixture(
+            id: "LIVE", kind: .salvageRun, deviceCode: "VA",
+            fleetTag: SalvageRun.defaultFleetTag, theatreDepot: ainalram.depot
+        )
+
+        guard case let .idle(reason) = Brain.salvageReadiness(view: view, directives: [live], theatre: denebed) else {
+            Issue.record("VB is expected to be swept by LIVE's literal bare-tag reservation")
+            return
+        }
+        #expect(reason.contains("VB"))
     }
 }
 
@@ -926,10 +996,12 @@ struct BrainHaulReadinessTests {
             id: "PT", kind: .haulRun, deviceCode: "T2", fleetTag: "auto:haul:SOL-3"
         )
         let untagged = directiveFixture(id: "U", kind: .haulRun, deviceCode: "T1", fleetTag: nil)
+        let drifted = directiveFixture(id: "D", kind: .haulRun, deviceCode: "T3", fleetTag: "Auto:Haul:SOL-3")
         #expect(Brain.isGeneralHaul(perSite) == false)
         #expect(Brain.isGeneralHaul(general) == true)
         #expect(Brain.isGeneralHaul(perTheatre) == true, "a theatre-scoped general tag is still general")
         #expect(Brain.isGeneralHaul(untagged) == true, "a nil tag falls back to the default")
+        #expect(Brain.isGeneralHaul(drifted) == true, "case drift must not read as a per-site tag")
     }
 }
 
@@ -1045,10 +1117,10 @@ struct BrainEnsureHaulTests {
         #expect(hauls.contains { $0.deviceCode == "T2" })
     }
 
-    /// A live theatre's run stamps its OWN theatre's tag regardless of which
-    /// tag its carrier wore, so an un-migrated carrier still must not reserve
-    /// another theatre's per-theatre-tagged one.
-    @Test func aLiveBareTaggedTheatreDoesNotReserveAnotherTheatresTaggedController() async throws {
+    /// Candidate SCOPING only — SOL's per-theatre tag can never literally
+    /// match VEGA's, so this proves nothing about `reservedDevices` itself;
+    /// see the two BOTH-bare tests below for the actual sweep mechanism.
+    @Test func aLiveTheatresOwnTagDoesNotDisturbAnotherTheatresLaunch() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in
             try seedGrowableWorld(db, carriers: [], salvage: [:])
@@ -1056,9 +1128,6 @@ struct BrainEnsureHaulTests {
             try Device.insert {
                 haulController("T2", tags: ["auto:haul:\(secondTheatreHubLocation)"], location: secondTheatreHubLocation)
             }.execute(db)
-            // A live SOL run on a bare-tagged carrier, stamped exactly as
-            // `ensureHaul` stamps a fresh launch — the live-fleet twin of the
-            // pure `haulReadiness` reservation test below.
             try seedDirective(
                 db, id: "LIVE-SOL", kind: .haulRun, status: .running, deviceCode: "T1",
                 fleetTag: "auto:haul:\(growHubLocation)", theatreDepot: growHubLocation
@@ -1073,5 +1142,58 @@ struct BrainEnsureHaulTests {
         let hauls = try await salvageEnsureDirectives(database).filter { $0.kind == .haulRun }
         #expect(hauls.count == 2, "VEGA's own tagged controller must still launch")
         #expect(hauls.contains { $0.deviceCode == "T2" })
+    }
+
+    // MARK: - Literal tag-sweep collision (the actual `reservedDevices` mechanism)
+
+    /// The real mechanism of the original bug, fixed for a FRESH launch: two
+    /// theatres BOTH wearing the literal shared bare tag each launch in the
+    /// SAME tick, since the row each writes stamps its own per-theatre tag.
+    @Test func twoBareTaggedTheatresBothLaunchFreshInOneTick() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try seedGrowableWorld(db, carriers: [], salvage: [:])
+            try seedSecondTheatre(db)
+            try Device.insert {
+                haulController("T1", tags: [HaulRun.defaultFleetTag], location: growHubLocation)
+            }.execute(db)
+            try Device.insert {
+                haulController("T2", tags: [HaulRun.defaultFleetTag], location: secondTheatreHubLocation)
+            }.execute(db)
+        }
+
+        await salvageEnsureTick(database)
+
+        let hauls = try await salvageEnsureDirectives(database).filter { $0.kind == .haulRun }
+        #expect(hauls.count == 2, "neither theatre's literal bare tag may sweep the other's fresh row")
+        #expect(hauls.first { $0.deviceCode == "T1" }?.fleetTag == HaulRun.fleetTag(forTheatre: growHubLocation))
+        #expect(hauls.first { $0.deviceCode == "T2" }?.fleetTag == HaulRun.fleetTag(forTheatre: secondTheatreHubLocation))
+    }
+
+    /// The accepted residual (report Concern #2), driven through a real
+    /// tick: an ALREADY-RUNNING directive still carrying the literal bare
+    /// tag still reserves a different theatre's still-bare controller.
+    @Test func legacyBareTaggedLiveRunStillCollidesWithAnotherTheatresBareController() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try seedGrowableWorld(db, carriers: [], salvage: [:])
+            try seedSecondTheatre(db)
+            try Device.insert {
+                haulController("T1", tags: [HaulRun.defaultFleetTag], location: growHubLocation)
+            }.execute(db)
+            try Device.insert {
+                haulController("T2", tags: [HaulRun.defaultFleetTag], location: secondTheatreHubLocation)
+            }.execute(db)
+            try seedDirective(
+                db, id: "LIVE-SOL", kind: .haulRun, status: .running, deviceCode: "T1",
+                fleetTag: HaulRun.defaultFleetTag, theatreDepot: growHubLocation
+            )
+        }
+
+        await salvageEnsureTick(database)
+
+        let hauls = try await salvageEnsureDirectives(database).filter { $0.kind == .haulRun }
+        #expect(hauls.count == 1, "VEGA's T2 is swept by SOL's literal bare-tag reservation")
+        #expect(hauls.first?.id == "LIVE-SOL")
     }
 }

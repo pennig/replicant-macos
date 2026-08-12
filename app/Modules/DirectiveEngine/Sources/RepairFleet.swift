@@ -29,8 +29,7 @@ public enum RepairFleet {
         return owned.contains(normalizedOwner) || owned.contains(root(of: normalizedOwner))
     }
 
-    /// `tag` with any theatre suffix stripped back to its bare fleet family —
-    /// `auto:survey:ainalram-belt-1` → `auto:survey`, unchanged if already bare.
+    // `auto:survey:ainalram-belt-1` → `auto:survey`; unchanged if already bare.
     private static func root(of tag: String) -> String {
         let parts = tag.split(separator: ":", maxSplits: 2)
         guard parts.count > 2 else { return tag }

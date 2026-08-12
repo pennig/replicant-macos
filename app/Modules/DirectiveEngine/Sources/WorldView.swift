@@ -214,6 +214,14 @@ public struct WorldView: Equatable, Sendable {
         nearestTheatre(to: system) { _ in true }
     }
 
+    /// `device`'s theatre, if any — a partition: at most one per device. Nil
+    /// for a stowed/cruising device or a system outside the census.
+    public func owningTheatre(of device: Device) -> Theatre? {
+        guard let location = device.location else { return nil }
+        let system = SiteAssay.system(of: location)
+        return theatre(servicing: system) ?? theatre(nearest: system)
+    }
+
     /// Ranks both resolvers; they differ only by `admits`. Orders by
     /// (distance, depot) for a stable result.
     private func nearestTheatre(

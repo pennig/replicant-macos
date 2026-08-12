@@ -213,6 +213,55 @@ struct NewSalvageRunFeatureTests {
         #expect(created[0].returnToOrigin == false, "a continuous run has no queue to empty")
     }
 
+    /// The operator-launched path must stamp the SAME per-theatre tag the
+    /// brain does — not the bare literal, which is the account-wide
+    /// reservation bug this whole effort exists to close.
+    @Test func launchStampsThePerTheatreTagWhenATheatreResolves() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            for device in Self.stagedFleet() { try Device.insert { device }.execute(db) }
+            try Star.insert {
+                Star(
+                    designation: "SOL", spectralType: "G", color: "yellow",
+                    positionX: 0, positionY: 0, positionZ: 0, estimatedPlanets: 0,
+                    explored: false, hasLife: nil, entryPoint: nil,
+                    createdAt: Date(timeIntervalSince1970: 0)
+                )
+            }.execute(db)
+            var relay = Self.bareVessel("REL1")
+            relay.deviceType = "ftl_relay"
+            relay.status = "relaying"
+            relay.features = ["relay"]
+            relay.location = "SOL"
+            try Device.insert { relay }.execute(db)
+            var hub = Self.bareVessel("HUB1")
+            hub.deviceType = "autofactory"
+            hub.availableCommands = ["enqueue_print"]
+            try Device.insert { hub }.execute(db)
+            try LocationFootprint.insert {
+                LocationFootprint(
+                    location: "SOL-3", devices: 1, resources: 100_000, resourceSites: 0,
+                    locationEvents: 0, replicants: 0, fetchedAt: Date(timeIntervalSince1970: 0)
+                )
+            }.execute(db)
+        }
+        let store = TestStore(initialState: NewSalvageRunFeature.State()) {
+            NewSalvageRunFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
+            $0.uuid = .incrementing
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+        }
+        store.exhaustivity = .off
+
+        await store.send(.binding(.set(\.vesselCode, "VES1")))
+        await store.send(.launchTapped)
+        await store.receive(\.delegate.created)
+
+        let row = try #require(try await database.read { db in try Directive.all.fetchAll(db) }.first)
+        #expect(row.fleetTag == SalvageRun.fleetTag(forTheatre: "SOL-3"))
+    }
+
     /// Launch is refused with no vessel chosen.
     @Test func launchNeedsAVessel() async throws {
         let database = try GameDatabase.bootstrap()

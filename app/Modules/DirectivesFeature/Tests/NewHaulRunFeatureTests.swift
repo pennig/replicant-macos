@@ -17,6 +17,7 @@ import GameDatabase
 import GameModels
 import SQLiteData
 import Testing
+import UniverseModels
 import Utils
 @testable import DirectivesFeature
 
@@ -105,6 +106,54 @@ struct NewHaulRunFeatureTests {
         #expect(row.controllerCode == nil)
     }
 
+    /// The operator-launched path must stamp the SAME per-theatre tag the
+    /// brain does — not the bare literal, which is the account-wide
+    /// reservation bug this whole effort exists to close.
+    @Test func launchStampsThePerTheatreTagWhenATheatreResolves() async throws {
+        let (store, database) = try await self.store(seeding: [Self.controller("C1", location: "GRAZ-3")])
+        try await database.write { db in
+            try Star.insert {
+                Star(
+                    designation: "GRAZ", spectralType: "G", color: "yellow",
+                    positionX: 0, positionY: 0, positionZ: 0, estimatedPlanets: 0,
+                    explored: false, hasLife: nil, entryPoint: nil, createdAt: fixtureNow
+                )
+            }.execute(db)
+            try Device.insert {
+                Device(
+                    deviceCode: "REL1", deviceType: "ftl_relay", replicantCode: "R1",
+                    status: "relaying", location: "GRAZ", locationName: nil,
+                    operationalCapacity: 100, queueSize: 0, stowedInDeviceCode: nil,
+                    controllerDeviceCode: nil, attachedToDeviceCode: nil, createdAt: fixtureNow,
+                    availableCommands: [], features: ["relay"], tags: [], detail: .object([:]),
+                    updatedAt: fixtureNow, firstSeenAt: fixtureNow
+                )
+            }.execute(db)
+            try Device.insert {
+                Device(
+                    deviceCode: "HUB1", deviceType: "autofactory", replicantCode: "R1",
+                    status: "idle", location: "GRAZ-3", locationName: nil,
+                    operationalCapacity: 100, queueSize: 0, stowedInDeviceCode: nil,
+                    controllerDeviceCode: nil, attachedToDeviceCode: nil, createdAt: fixtureNow,
+                    availableCommands: ["enqueue_print"], features: [], tags: [], detail: .object([:]),
+                    updatedAt: fixtureNow, firstSeenAt: fixtureNow
+                )
+            }.execute(db)
+            try LocationFootprint.insert {
+                LocationFootprint(
+                    location: "GRAZ-3", devices: 1, resources: 100_000, resourceSites: 0,
+                    locationEvents: 0, replicants: 0, fetchedAt: fixtureNow
+                )
+            }.execute(db)
+        }
+
+        await store.send(.launchTapped)
+        await store.receive(\.delegate.created)
+
+        let row = try #require(try await database.read { db in try Directive.all.fetchAll(db) }.first)
+        #expect(row.fleetTag == HaulRun.fleetTag(forTheatre: "GRAZ-3"))
+    }
+
     /// Launch with no tagged controller must write nothing at all.
     @Test func launchIsInertWithoutAFleet() async throws {
         let (store, database) = try await store(seeding: [Self.controller("C1", tags: [])])
@@ -122,11 +171,12 @@ struct NewHaulRunFeatureTests {
     nonisolated static func controller(
         _ code: String,
         tags: [String] = ["auto:haul"],
-        directives: [String] = ["delivery", "ferry", "shuttle", "consolidate"]
+        directives: [String] = ["delivery", "ferry", "shuttle", "consolidate"],
+        location: String = "ATIANFU-1-L4"
     ) -> Device {
         Device(
             deviceCode: code, deviceType: "ami_transport_controller", replicantCode: "R1",
-            status: "coordinating", location: "ATIANFU-1-L4", locationName: nil,
+            status: "coordinating", location: location, locationName: nil,
             operationalCapacity: 100, queueSize: 0, stowedInDeviceCode: nil,
             controllerDeviceCode: nil, attachedToDeviceCode: nil,
             createdAt: fixtureNow, availableCommands: [],
