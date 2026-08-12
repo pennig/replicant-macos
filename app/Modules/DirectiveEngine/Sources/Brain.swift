@@ -1327,7 +1327,7 @@ struct Brain: Sendable {
     ) -> ResourceHeadroom {
         let open = events.filter(\.isActive).count
         if bills.isEmpty, open > 0 {
-            logger.warning(
+            logger.debug(
                 """
                 mine siting: demand degraded to the reserve floors — blueprint catalog \
                 empty, \(open, privacy: .public) open event(s) left unpriced
