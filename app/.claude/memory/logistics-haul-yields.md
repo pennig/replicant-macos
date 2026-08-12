@@ -39,9 +39,26 @@ validating the six slots in order is not sufficient — validate `volatiles,stru
 2-slot run. Measured: light ΔE 26.5 (protan), dark 27.3 (deutan), both well clear. The ring stays
 gate-safe only while it keeps `displayOrder`; reordering it re-rolls the interior pairs and the
 wrap together. The donut's direct labels (slices ≥10% share, `YieldChartMath.labelledResourceKeys`)
-are the mandated relief for the two light-mode slots under 3:1 contrast — silicates 2.74, rares
-2.62 — and the legend is the second, non-optional half of that relief, since a sub-10% slice gets
-no label at all.
+are the mandated relief for the light-mode slots under 3:1 contrast, and the legend is the second,
+non-optional half of that relief, since a sub-10% slice gets no label at all.
+
+**Validate against the app's REAL surfaces, never the validator's defaults** — `ContentBackground`
+is `#F9F5EE` light and `#0D1018` dark, not `#fcfcfb`/`#1a1a19`. On the real light surface THREE
+slots sit under 3:1 (conductive 2.94, silicates 2.59, rares 2.48), not the two an earlier pass
+recorded against the generic surface.
+
+**"Adjacent pairs is the right gate here" was half true, and the missing half is the LEGEND.** The
+marks are adjacent forms, but every chart on this screen carries a legend, and a legend is an
+all-pairs surface — six swatches side by side. Matt (colour-deficient) reported carbon as unreadable
+against structural, and the measurement agreed: dark `#9085E9` vs `#3987E5` was **ΔE 1.9 protan**
+and 9.8 normal, under the 15 floor. Carbon is now `#852D71`/`#9444A6`, found by an OKLCH sweep
+maximising worst-pair separation under the band, chroma floor, real-surface contrast and the normal
+floor (dark 1.9 → 10.5 CVD, 9.8 → 19.8 normal). **Two worse pairs remain and will surface in the
+legend next**: dark silicates↔rares at ΔE 1.6, and conductive↔volatiles at 3.2 light / 2.7 dark.
+**Dark mode cannot be fixed by hue alone** — five of six dark slots sit at L ≈ 0.62, so the palette
+spends nothing on lightness, the one channel CVD preserves; any carbon hue caps near ΔE 12.
+`docs/tools/resource-palette-playground.html` is the OKLCH bench for that work (live CVD simulation,
+per-pair scoring, xcassets export) — it is the intended way to re-roll a slot, not a hand-picked hex.
 
 Two latent traps: `haulYields.perType` has SQL `DEFAULT '{}'`, which `ResourceCost` cannot decode
 (six non-optional Ints, no defaults) — unreachable today since every write supplies it, but the

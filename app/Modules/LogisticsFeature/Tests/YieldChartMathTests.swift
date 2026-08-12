@@ -56,26 +56,24 @@ import Testing
 
     // Units are deliberately unsorted, so any re-sort inside the fold would
     // reorder the kept eight — only positional folding reproduces this.
-    @Test func tenSourcesFoldToEightPlusAnAggregateRemainder() {
+    @Test func tenSourcesKeepEightRowsAndTallyTheRest() {
         let units = [40, 90, 15, 70, 5, 60, 25, 80, 33, 12]
         let sources = units.enumerated().map { (designation: "SRC-\($0.offset + 1)", units: $0.element) }
         let folded = YieldChartMath.foldedSources(sources)
-        #expect(folded.count == 9)
-        #expect(folded.prefix(8).map(\.label) == sources.prefix(8).map(\.designation))
-        #expect(folded.prefix(8).map(\.units) == units.prefix(8).map { $0 })
-        #expect(folded.prefix(8).allSatisfy { !$0.isAggregate })
-        #expect(folded.last?.label == "All Others (2)")
-        #expect(folded.last?.units == 33 + 12)
-        #expect(folded.last?.isAggregate == true)
+        #expect(folded.rows.count == 8)
+        #expect(folded.rows.map(\.label) == sources.prefix(8).map(\.designation))
+        #expect(folded.rows.map(\.units) == units.prefix(8).map { $0 })
+        #expect(folded.hidden?.count == 2)
+        #expect(folded.hidden?.units == 33 + 12)
     }
 
-    // Exactly cap + 1: an "All Others (1)" bucket would hide the row it replaces.
+    // Exactly cap + 1: an "All Others (1)" caption would hide the row it replaces.
     @Test func nineSourcesReturnVerbatimUnfolded() {
         let sources = (1...9).map { (designation: "SRC-\($0)", units: $0 * 7 % 20) }
         let folded = YieldChartMath.foldedSources(sources)
-        #expect(folded.map(\.label) == sources.map(\.designation))
-        #expect(folded.map(\.units) == sources.map(\.units))
-        #expect(folded.allSatisfy { !$0.isAggregate })
+        #expect(folded.rows.map(\.label) == sources.map(\.designation))
+        #expect(folded.rows.map(\.units) == sources.map(\.units))
+        #expect(folded.hidden == nil)
     }
 
     @Test func slicesAtOrAboveTenPercentAreLabelled() {

@@ -203,7 +203,7 @@ greens must not sit next to each other:
 | structural | `#2a78d6` | `#3987e5` |
 | conductive | `#eb6834` | `#d95926` |
 | silicates | `#1baf7a` | `#199e70` |
-| carbon | `#4a3aa7` | `#9085e9` |
+| carbon | `#852d71` | `#9444a6` |
 | rares | `#e87ba4` | `#d55181` |
 | volatiles | `#008300` | `#008300` |
 
@@ -211,16 +211,26 @@ Validated with the dataviz validator against the app's real surfaces —
 `ContentBackground` `#F9F5EE` light, `#0D1018` dark:
 
 - **Light:** lightness band, chroma floor, CVD separation (worst adjacent ΔE 9.2
-  deutan, tritan 26.6) and normal-vision floor (27.6) all pass. Contrast warns
-  below 3:1 for three slots, relieved by direct labels and the ledger table.
-- **Dark:** all six checks pass, contrast included.
+  deutan, tritan 27.0) and normal-vision floor (27.0) all pass. Contrast warns
+  below 3:1 for three slots — conductive 2.94, silicates 2.59, rares 2.48 —
+  relieved by direct labels and the ledger table.
+- **Dark:** all six checks pass, contrast included. Worst adjacent CVD ΔE 9.4
+  deutan; normal-vision floor 15.0.
 
-**The gate is adjacent pairs, and that is not a shortcut — it is the correct gate
-for the forms used here.** Stacked bars and columns are *adjacent* forms: a
-reader separates a segment from the ones touching it. Under `--pairs all` this
-palette FAILS in both modes (normal-vision floor 12.9 light, 9.8 dark; CVD ΔE 3.2
-light, 1.6 dark), which is expected for six categorical hues and is why the
-skill caps all-pairs forms at three series.
+The donut added by the 2026-08-12 revision introduces one adjacency no linear
+form has: the ring **wrap**, seating volatiles beside structural. Validate it as
+its own two-slot run — light ΔE 26.5 protan, dark 27.3 deutan, both clear.
+
+**Adjacent pairs is the gate for the marks, and it is not the whole gate.**
+Stacked bars, columns and the donut ring are adjacent forms: a reader separates a
+segment from the ones touching it. But every one of these charts carries a
+**legend**, and a legend is an all-pairs surface — six swatches side by side,
+where any two can be compared. Under `--pairs all` this palette still fails in
+both modes (worst CVD ΔE 3.2 light on conductive↔volatiles, 1.6 dark on
+silicates↔rares; worst normal-vision 12.9 light and 11.6 dark, both
+conductive↔rares). Those pairs are the ones a reader will struggle with in the
+legend, and the text label beside each swatch is what carries identity there —
+which is why the legend is mandatory, not optional chrome.
 
 **Consequence, and it is binding: no all-pairs categorical form may be added to
 this feature** — no scatter, bubble, choropleth, or six-colour small multiples.
@@ -235,8 +245,20 @@ after any change to the mapping, not just to the hexes.
 
 Yellow was deliberately excluded. The obvious slot-4 yellow (`#eda100`) sits on
 top of the app's amber accent (`#D19317` / `#FFB23E`), so a series would read as
-selected; violet replaces it, which also lifts the weakest tritan pair from
-ΔE 5.8 to 26.6.
+selected.
+
+Carbon's first values (`#4a3aa7` / `#9085e9`) were a blue-violet, and dark mode
+measured **ΔE 1.9 protan against structural** — the same colour to a protanope,
+and only 9.8 under normal vision, under the 15 floor. The replacement is a
+magenta-plum found by sweeping OKLCH for the greatest worst-pair separation
+subject to the band, the chroma floor, ≥3:1 on the real surface and the
+normal-vision floor: light 13.0 → 16.5 CVD and 16.3 → 23.8 normal, dark 1.9 →
+10.5 and 9.8 → 19.8. **Dark mode caps out near ΔE 12 for any carbon hue**,
+because five of six dark slots sit at L ≈ 0.62 — a flat lightness profile throws
+away the one channel CVD leaves intact, and spreading it is the move that would
+lift the whole palette. `docs/tools/resource-palette-playground.html` is the
+bench for trying that: OKLCH sliders, live CVD simulation, and every pair scored
+as you drag.
 
 CVD separation sits in the 6–9 floor band, so **direct labels are mandatory**,
 not optional polish.
