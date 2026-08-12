@@ -59,14 +59,16 @@ stops it competing with volatiles and lifts dark's worst all-pairs CVD from ΔE 
 previously-broken dark pair improved and none dropped below 6. Adjacent-worst is now 12.0 light /
 11.4 dark, up from 9.2 / 9.4.
 
-**The one regression, still open: light `carbon` `#A64DC0` sits within 0.004 L of light
-`structural`, so protan folds them onto the same blue at ΔE 5.6** — worse than the 13.0 that
-prompted the original complaint, though dark (10.5) is untouched and dark is the mode in daily use.
-**Hue cannot fix this pair; only lightness can**, because protan simulation folds violet onto blue —
-same hue and chroma at L 0.48 (`#872CA0`) measures 9.9 and lifts light's all-pairs from FAIL to
-WARN. Flagged to Matt with a protan-simulated render; his own eyes outrank the model here, since
-Machado severity 1.0 is full dichromacy and an anomalous trichromat discriminates better than it
-predicts.
+**One pair measures weak and is DELIBERATELY KEPT — do not "fix" it.** Light `carbon` `#A64DC0`
+sits within 0.004 L of light `structural`, so protan folds them onto the same blue at ΔE 5.6, worse
+than the 13.0 that prompted the original complaint (dark is untouched at 10.5). Raised with Matt
+alongside a protan-simulated render of the real charts, and he answered "it reads just fine now."
+**His eyes outrank the model**: Machado severity 1.0 is complete dichromacy, and an anomalous
+trichromat discriminates better than it predicts — so a low ΔE on a pair a real reader can separate
+is a limit of the simulation, not a defect. The general rule this leaves: measure to FIND candidate
+problems, then let the affected reader adjudicate; never overrule a sighted verdict with a number.
+If it ever does need moving, hue is the wrong lever (protan folds violet onto blue at any hue) —
+lightness is the only one that works, `#872CA0` at L 0.48 measuring 9.9.
 
 **To SEE a CVD failure rather than read its ΔE, simulate the rendered PNG.** `swift test` renders
 the real charts ([[headless-swiftui-render-probe]]), then a Machado transform applied per-pixel

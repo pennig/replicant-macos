@@ -225,13 +225,18 @@ The donut added by the 2026-08-12 revision introduces one adjacency no linear
 form has: the ring **wrap**, seating volatiles beside structural. Validate it as
 its own two-slot run — light ΔE 27.3 deutan, dark 26.4 deutan, both clear.
 
-**Open, and it is the one weak pair left:** light `carbon` `#a64dc0` sits at
-L 0.579, within 0.004 of light `structural` — so under protanopia the two
-collapse to the same blue at ΔE 5.6, below the 6 floor. Hue alone cannot fix it,
-because protan simulation folds violet onto blue; the separation has to come from
-lightness. Holding the same hue and chroma and dropping L to 0.48 gives
-`#872ca0` at ΔE 9.9, which also lifts light's worst all-pairs figure from a FAIL
-to a WARN.
+**One pair measures weak and is deliberately kept:** light `carbon` `#a64dc0`
+sits at L 0.579, within 0.004 of light `structural`, so protan simulation folds
+the two onto the same blue at ΔE 5.6, below the 6 floor. It was raised with a
+protan-simulated render of the real charts and **accepted — it reads fine to the
+colour-deficient reader it was measured for**. Machado severity 1.0 models
+complete dichromacy, and an anomalous trichromat discriminates better than it
+predicts, so the sighted judgement is the higher authority here and this number
+is not a defect to fix. Do not "correct" it.
+
+Should it ever need correcting, hue is the wrong lever — protan folds violet onto
+blue whatever the hue. Lightness is the only one that moves it: the same hue and
+chroma at L 0.48 gives `#872ca0` at ΔE 9.9.
 
 **Adjacent pairs is the gate for the marks, and it is not the whole gate.**
 Stacked bars, columns and the donut ring are adjacent forms: a reader separates a
