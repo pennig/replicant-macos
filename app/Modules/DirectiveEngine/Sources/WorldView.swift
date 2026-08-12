@@ -72,9 +72,9 @@ public struct WorldView: Equatable, Sendable {
     /// Per-type stock summed over the operational theatres' depots. Empty when
     /// no depot has a per-type reading — absence is unknown, never zero.
     public let theatreStock: [String: Double]
-    /// The OLDEST `fetchedAt` among the depot rows read, so a depot that has
-    /// stopped refreshing ages the aggregate rather than hiding behind a
-    /// livelier sibling.
+    /// The OLDEST `fetchedAt` among the depot rows read, so a depot with a
+    /// stale reading ages the aggregate. A depot with NO rows contributes and
+    /// ages nothing — its absence is unknown, not stale.
     public let theatreStockFreshness: Date?
     /// Systems that have been through a full system scan. Carried separately because
     /// `beltsBySystem` cannot tell "surveyed, holds no belt" from "never looked" —
@@ -167,11 +167,10 @@ public struct WorldView: Equatable, Sendable {
             events.filter(\.isActive).map { SiteAssay.system(of: $0.location) }
         )
 
-        // The unlocked catalog, a few dozen rows keyed by the device type an
-        // event's device requirement names.
-        let bills = try Blueprint.all.fetchAll(db).reduce(into: [String: ResourceCost]()) {
-            $0[$1.deviceType] = $1.resources
-        }
+        // Only the two columns the brain needs, not the description strings
+        // and JSON arrays every row also carries.
+        let billRows = try Blueprint.all.select { ($0.deviceType, $0.resources) }.fetchAll(db)
+        let bills = Dictionary(billRows, uniquingKeysWith: { _, last in last })
 
         // Candidate depot locations: print-capable, pinned, and system_hub
         // device locations, read in the same transaction as the devices.

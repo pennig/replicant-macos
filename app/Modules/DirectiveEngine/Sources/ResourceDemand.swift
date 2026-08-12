@@ -7,7 +7,6 @@
 //  bills, plus the standing print reserve. Pure — no I/O, no clock.
 //
 
-import Foundation
 import GameModels
 
 public struct ResourceDemand: Equatable, Sendable {

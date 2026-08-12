@@ -115,8 +115,8 @@ public struct ResourceCost: Codable, Equatable, Sendable {
         )
     }
 
-    /// The typed cost back as the sparse `{resource: amount}` shape, zeros
-    /// included — callers filter.
+    /// The typed cost as a `{resource: amount}` dict with all six keys
+    /// always present, zeros included.
     public var wireDictionary: [String: Int] {
         [
             "carbon": carbon, "silicates": silicates, "structural": structural,

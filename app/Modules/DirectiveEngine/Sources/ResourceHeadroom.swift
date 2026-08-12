@@ -23,8 +23,7 @@ public struct ResourceHeadroom: Equatable, Sendable {
         self.isFallback = isFallback
     }
 
-    /// The weights used when stock is unknown or stale — the ranking this
-    /// replaced, so degrading changes nothing rather than making it worse.
+    /// The fixed weights used when stock is unknown or stale.
     public static let staticWeights: [String: Int] = ["rares": 2, "conductive": 1]
 
     /// How old a stock reading may be and still be ranked on.
@@ -35,7 +34,8 @@ public struct ResourceHeadroom: Equatable, Sendable {
     public static func derive(
         stock: [String: Double], demand: [String: Double], freshness: Date?, now: Date
     ) -> ResourceHeadroom {
-        let demanded = demand.filter { $0.value > 0 }
+        let knownTypes = Set(BrainCeiling.resourceTypes)
+        let demanded = demand.filter { $0.value > 0 && knownTypes.contains($0.key) }
         guard !stock.isEmpty, !demanded.isEmpty,
               let freshness, now.timeIntervalSince(freshness) <= stalenessBound
         else {

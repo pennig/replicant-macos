@@ -110,6 +110,18 @@ struct ResourceHeadroomTests {
         #expect(headroom.coverage["structural"] == nil)
     }
 
+    @Test("an unknown resource type never takes a slot or enters coverage")
+    func unknownTypeIsFiltered() {
+        let headroom = ResourceHeadroom.derive(
+            stock: ["conductive": 1, "unobtainium": 999],
+            demand: ["conductive": 1000, "unobtainium": 1],
+            freshness: now,
+            now: now
+        )
+        #expect(headroom.weights["unobtainium"] == nil)
+        #expect(headroom.coverage["unobtainium"] == nil)
+    }
+
     @Test("a reading exactly at the staleness bound still counts as fresh")
     func stalenessBoundIsInclusive() {
         let headroom = ResourceHeadroom.derive(
