@@ -10,6 +10,8 @@ import UI
 
 public struct LogisticsView: View {
     @Bindable var store: StoreOf<LogisticsFeature>
+    // Ephemeral presentation state, not domain state — stays off the reducer.
+    @State private var showAllSources = false
 
     public init(store: StoreOf<LogisticsFeature>) {
         self.store = store
@@ -47,15 +49,11 @@ public struct LogisticsView: View {
                 } else {
                     YieldOverTimeChart(summary: summary)
                     HStack(alignment: .top, spacing: Space.m) {
-                        YieldBreakdownChart(
-                            title: "By Resource",
-                            rows: summary.byResource.map { ($0.key.capitalized, $0.units) },
-                            monospacedLabels: false
-                        )
+                        ResourceDonutChart(title: "By Resource", rows: summary.byResource)
                         YieldBreakdownChart(
                             title: "By Source",
-                            rows: summary.bySource.map { ($0.designation, $0.units) },
-                            monospacedLabels: true
+                            sources: summary.bySource,
+                            showAll: $showAllSources
                         )
                     }
                     LazyVStack(alignment: .leading, spacing: Space.xs) {

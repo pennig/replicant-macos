@@ -57,9 +57,10 @@ public struct LogisticsFeature {
     }
 
     public enum TimeRange: String, CaseIterable, Equatable, Hashable, Sendable {
-        case week, month, all
+        case day, week, month, all
         public var title: String {
             switch self {
+            case .day: "24 hours"
             case .week: "7 days"
             case .month: "30 days"
             case .all: "All"
@@ -67,6 +68,7 @@ public struct LogisticsFeature {
         }
         public var days: Int? {
             switch self {
+            case .day: 1
             case .week: 7
             case .month: 30
             case .all: nil

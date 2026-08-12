@@ -97,6 +97,27 @@ private func testUUID(_ n: Int) -> UUID {
         #expect(summary.rows.map(\.id) == [inRange.id])
     }
 
+    // −23h sits inside the 24h window and −25h outside; the `>=` cutoff keeps
+    // exactly the two in-window rows (1 + 10) and drops the 100.
+    @Test func theDayRangeKeepsOnlyTheLastTwentyFourHours() {
+        let now = Date(timeIntervalSince1970: 40 * 86_400)
+        let at = { (hoursAgo: Int, n: Int, units: Int) -> HaulYield in
+            HaulYield(
+                id: testUUID(n), directiveID: "D", controllerCode: "C", deviceCode: "F",
+                sourceDesignation: "A-1",
+                collectedAt: now.addingTimeInterval(-TimeInterval(hoursAgo) * 3_600),
+                unitsCollected: units, perType: ResourceCost(), breakdownState: .exact
+            )
+        }
+        let summary = YieldSummary(
+            yields: [at(1, 1, 1), at(23, 2, 10), at(25, 3, 100)],
+            range: .day,
+            now: now
+        )
+        #expect(summary.totalUnits == 11)
+        #expect(summary.tripCount == 2)
+    }
+
     // 1 gapped vs 2 clean rows: `gapCount == tripCount` and an inverted
     // `followsGap` predicate both diverge from the correct answer here.
     @Test func gapsAreCountedSoTheChartCanSayItDoesNotKnow() {

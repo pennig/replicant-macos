@@ -40,6 +40,35 @@ enum YieldChartMath {
                 .compactMap { $0.value.max { $0.units < $1.units }?.id }
         )
     }
+
+    /// How many sources a folded breakdown shows before the remainder bar.
+    static let sourceCap = 8
+
+    /// The first `cap` sources plus one aggregate remainder bar, in input order.
+    /// At `cap + 1` or fewer the input returns unfolded — an "All Others (1)"
+    /// bucket is worse than the row it hides.
+    static func foldedSources(
+        _ sources: [(designation: String, units: Int)], cap: Int = YieldChartMath.sourceCap
+    ) -> [(label: String, units: Int, isAggregate: Bool)] {
+        let unfolded = sources.map { (label: $0.designation, units: $0.units, isAggregate: false) }
+        guard sources.count > cap + 1 else { return unfolded }
+        let remainder = sources.dropFirst(cap)
+        return unfolded.prefix(cap) + [(
+            label: "All Others (\(remainder.count))",
+            units: remainder.reduce(0) { $0 + $1.units },
+            isAggregate: true
+        )]
+    }
+
+    /// Keys of slices holding at least `minShare` of the total — the only ones
+    /// direct-labelled; two palette slots need the label as their contrast relief.
+    static func labelledResourceKeys(
+        _ rows: [(key: String, units: Int)], minShare: Double = 0.1
+    ) -> Set<String> {
+        let total = rows.reduce(0) { $0 + $1.units }
+        guard total > 0 else { return [] }
+        return Set(rows.filter { Double($0.units) / Double(total) >= minShare }.map(\.key))
+    }
 }
 
 struct YieldOverTimeChart: View {
@@ -84,34 +113,108 @@ struct YieldOverTimeChart: View {
 struct YieldBreakdownChart: View {
     let title: String
     /// Sequential single hue: this compares magnitude, not identity.
-    let rows: [(label: String, units: Int)]
-    let monospacedLabels: Bool
+    let sources: [(designation: String, units: Int)]
+    @Binding var showAll: Bool
 
     var body: some View {
+        let filtered = sources.filter { $0.units > 0 }
+        let folded = YieldChartMath.foldedSources(filtered)
+        // A range change can drop the source count below the fold threshold
+        // while `showAll` is still set, so expansion is gated on both.
+        let expanded = showAll && folded.last?.isAggregate == true
+        let rows = expanded
+            ? filtered.map { (label: $0.designation, units: $0.units, isAggregate: false) }
+            : folded
         VStack(alignment: .leading, spacing: Space.s) {
-            Text(title).font(.rcSectionLabel).foregroundStyle(.rcTextSecondary)
-            Chart(rows.filter { $0.units > 0 }, id: \.label) { row in
-                BarMark(
-                    x: .value("Units", row.units),
-                    y: .value("Label", row.label)
-                )
-                .foregroundStyle(Color.rcAccent)
-                .cornerRadius(Radius.textBadge)
-                .annotation(position: .trailing) {
-                    Text("\(row.units)").font(.rcMonoSmall).foregroundStyle(.rcTextSecondary)
+            HStack(spacing: Space.s) {
+                Text(title).font(.rcSectionLabel).foregroundStyle(.rcTextSecondary)
+                if folded.last?.isAggregate == true {
+                    Button(expanded ? "Show top \(YieldChartMath.sourceCap)" : "Show all \(filtered.count)") {
+                        showAll.toggle()
+                    }
+                    .buttonStyle(.plain)
+                    .font(.rcCaption)
+                    .foregroundStyle(.rcTextSecondary)
                 }
             }
-            .chartYAxis {
-                AxisMarks(position: .leading) { value in
-                    AxisValueLabel {
-                        if let label = value.as(String.self) {
-                            Text(label).font(monospacedLabels ? .rcMonoSmall : .rcCaption)
-                                .foregroundStyle(.rcTextSecondary)
-                        }
+            let height = CGFloat(rows.count) * ChartSize.breakdownRow
+            if expanded {
+                ScrollView { chart(rows).frame(height: height) }
+                    .frame(maxHeight: ChartSize.breakdownMax)
+            } else {
+                chart(rows).frame(height: max(height, ChartSize.breakdown))
+            }
+        }
+    }
+
+    private func chart(_ rows: [(label: String, units: Int, isAggregate: Bool)]) -> some View {
+        Chart(rows, id: \.label) { row in
+            BarMark(
+                x: .value("Units", row.units),
+                y: .value("Label", row.label)
+            )
+            // The remainder bar reads as "everything else", not another source.
+            .foregroundStyle(row.isAggregate ? Color.rcTextTertiary : Color.rcAccent)
+            .cornerRadius(Radius.textBadge)
+            .annotation(position: .trailing) {
+                Text("\(row.units)").font(.rcMonoSmall).foregroundStyle(.rcTextSecondary)
+            }
+        }
+        .chartYAxis {
+            AxisMarks(position: .leading) { value in
+                AxisValueLabel {
+                    if let label = value.as(String.self) {
+                        Text(label).font(.rcMonoSmall).foregroundStyle(.rcTextSecondary)
                     }
                 }
             }
-            .chartXAxis(.hidden)
+        }
+        .chartXAxis(.hidden)
+    }
+}
+
+struct ResourceDonutChart: View {
+    let title: String
+    /// `ResourceCost.displayOrder` order — palette-validated for ring adjacency.
+    let rows: [(key: String, units: Int)]
+
+    var body: some View {
+        let filtered = rows.filter { $0.units > 0 }
+        let labelled = YieldChartMath.labelledResourceKeys(filtered)
+        let total = filtered.reduce(0) { $0 + $1.units }
+        VStack(alignment: .leading, spacing: Space.s) {
+            Text(title).font(.rcSectionLabel).foregroundStyle(.rcTextSecondary)
+            Chart(filtered, id: \.key) { row in
+                SectorMark(
+                    angle: .value("Units", row.units),
+                    innerRadius: .ratio(0.62),
+                    angularInset: 1.5
+                )
+                .cornerRadius(Radius.textBadge)
+                .foregroundStyle(by: .value("Resource", row.key))
+                .annotation(position: .overlay) {
+                    if labelled.contains(row.key) {
+                        Text("\(row.units)").font(.rcMicroMono).foregroundStyle(.rcTextPrimary)
+                    }
+                }
+            }
+            .chartForegroundStyleScale(
+                domain: ResourceCost.displayOrder.map(\.key),
+                range: ResourceCost.displayOrder.map { Color.rcResource($0.key) }
+            )
+            .chartLegend(position: .bottom)
+            .chartBackground { proxy in
+                GeometryReader { geometry in
+                    if let plot = proxy.plotFrame {
+                        let frame = geometry[plot]
+                        VStack(spacing: 0) {
+                            Text("\(total)").font(.rcHeadline).monospacedDigit()
+                            Text("units").font(.rcCaption).foregroundStyle(.rcTextSecondary)
+                        }
+                        .position(x: frame.midX, y: frame.midY)
+                    }
+                }
+            }
             .frame(minHeight: ChartSize.breakdown)
         }
     }

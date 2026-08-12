@@ -333,6 +333,8 @@ public enum MarkerSize {
 public enum ChartSize {
     public static let overTime: CGFloat = 200
     public static let breakdown: CGFloat = 160
+    public static let breakdownRow: CGFloat = 24   // per-bar height in a show-all breakdown
+    public static let breakdownMax: CGFloat = 320  // a show-all breakdown scrolls past this
 }
 
 /// Shared motion curves. A disclosure gesture — a section collapsing, a host

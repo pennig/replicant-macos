@@ -53,4 +53,43 @@ import Testing
         #expect(points.isEmpty)
         #expect(YieldChartMath.labelledIDs(points).isEmpty)
     }
+
+    // Units are deliberately unsorted, so any re-sort inside the fold would
+    // reorder the kept eight — only positional folding reproduces this.
+    @Test func tenSourcesFoldToEightPlusAnAggregateRemainder() {
+        let units = [40, 90, 15, 70, 5, 60, 25, 80, 33, 12]
+        let sources = units.enumerated().map { (designation: "SRC-\($0.offset + 1)", units: $0.element) }
+        let folded = YieldChartMath.foldedSources(sources)
+        #expect(folded.count == 9)
+        #expect(folded.prefix(8).map(\.label) == sources.prefix(8).map(\.designation))
+        #expect(folded.prefix(8).map(\.units) == units.prefix(8).map { $0 })
+        #expect(folded.prefix(8).allSatisfy { !$0.isAggregate })
+        #expect(folded.last?.label == "All Others (2)")
+        #expect(folded.last?.units == 33 + 12)
+        #expect(folded.last?.isAggregate == true)
+    }
+
+    // Exactly cap + 1: an "All Others (1)" bucket would hide the row it replaces.
+    @Test func nineSourcesReturnVerbatimUnfolded() {
+        let sources = (1...9).map { (designation: "SRC-\($0)", units: $0 * 7 % 20) }
+        let folded = YieldChartMath.foldedSources(sources)
+        #expect(folded.map(\.label) == sources.map(\.designation))
+        #expect(folded.map(\.units) == sources.map(\.units))
+        #expect(folded.allSatisfy { !$0.isAggregate })
+    }
+
+    @Test func slicesAtOrAboveTenPercentAreLabelled() {
+        let rows = [
+            (key: "structural", units: 70),
+            (key: "conductive", units: 15),
+            (key: "silicates", units: 10),
+            (key: "carbon", units: 5),
+        ]
+        #expect(YieldChartMath.labelledResourceKeys(rows) == ["structural", "conductive", "silicates"])
+    }
+
+    @Test func aZeroTotalLabelsNoResourceKeys() {
+        #expect(YieldChartMath.labelledResourceKeys([]).isEmpty)
+        #expect(YieldChartMath.labelledResourceKeys([(key: "carbon", units: 0)]).isEmpty)
+    }
 }
