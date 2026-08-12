@@ -368,6 +368,32 @@ struct BrainMineReadinessTests {
         )
         #expect(headroom.isFallback == false)
         #expect(headroom.weights == ["silicates": 2, "carbon": 1])
+        #expect(headroom.demandIncomplete)
+    }
+
+    /// Kills a mutant that drops the `open > 0` half of the predicate: empty
+    /// bills alone, with nothing open to price, must not flag degradation.
+    @Test("empty bills with no open events leaves nothing to degrade")
+    func emptyBillsWithNoOpenEventsDoesNotDegrade() {
+        let headroom = Brain.siteWeights(
+            stock: mineSilicatesShortStock, events: [], bills: [:], freshness: mineNow, now: mineNow
+        )
+        #expect(headroom.demandIncomplete == false)
+    }
+
+    /// Kills a mutant that drops the `bills.isEmpty` half of the predicate: a
+    /// priceable catalog beside an open event must not flag degradation, even
+    /// though the event itself asks for an unbilled device.
+    @Test("a populated blueprint catalog does not degrade demand")
+    func populatedBillsDoNotDegradeDemand() {
+        let headroom = Brain.siteWeights(
+            stock: mineSilicatesShortStock,
+            events: [mineEvent(resource: ("rares", 1_000_000), device: "defence_grid")],
+            bills: ["defence_grid": ResourceCost(rares: 10)],
+            freshness: mineNow,
+            now: mineNow
+        )
+        #expect(headroom.demandIncomplete == false)
     }
 
     /// The wiring, not the predicate: two same-class belts in one system, so
@@ -490,7 +516,7 @@ struct BrainMineStatusTests {
             fleetTag: MineRecipe.fleetTag, targets: [mineBelt]
         )
         #expect(
-            Brain.mineStatus(directives: [live], view: view)
+            Brain.mineStatus(directives: [live], view: view).status
                 == .launched(vessel: mineCarrier, focus: mineBelt, status: .running)
         )
     }
@@ -503,7 +529,7 @@ struct BrainMineStatusTests {
             fleetTag: MineRecipe.fleetTag, targets: [mineBelt]
         )
         #expect(
-            Brain.mineStatus(directives: [live], view: view)
+            Brain.mineStatus(directives: [live], view: view).status
                 == .launched(vessel: mineCarrier, focus: mineBelt, status: .needsAttention)
         )
     }
@@ -511,14 +537,14 @@ struct BrainMineStatusTests {
     @Test("a full board with no live run reports ready, not launched")
     func readyWhenNoLiveRun() {
         let view = mineWorldView(devices: minePrintedFleet() + [mineCarrierDevice()])
-        #expect(Brain.mineStatus(directives: [], view: view) == .ready(vessel: mineCarrier))
+        #expect(Brain.mineStatus(directives: [], view: view).status == .ready(vessel: mineCarrier))
     }
 
     @Test("nothing printed reports idle with mineReadiness's own reason")
     func idleWhenNothingPrinted() {
         let view = mineWorldView(devices: [mineCarrierDevice()])
         #expect(
-            Brain.mineStatus(directives: [], view: view) == .idle(reason: "no printed mine fleet")
+            Brain.mineStatus(directives: [], view: view).status == .idle(reason: "no printed mine fleet")
         )
     }
 
@@ -529,7 +555,32 @@ struct BrainMineStatusTests {
             id: "M1", kind: .mineRun, status: .completed, deviceCode: "OTHERCARRIER",
             fleetTag: MineRecipe.fleetTag, targets: [mineBelt]
         )
-        #expect(Brain.mineStatus(directives: [completed], view: view) == .ready(vessel: mineCarrier))
+        #expect(Brain.mineStatus(directives: [completed], view: view).status == .ready(vessel: mineCarrier))
+    }
+
+    /// The end-to-end wiring `siteWeights`'s own tests cannot see: `mineStatus`
+    /// must forward `mineSiting`'s headroom, not silently drop it. Kills a
+    /// mutant that hard-codes `demandIncomplete: false` in `mineStatus` itself.
+    @Test("ready with an open event and no blueprint catalog reports demand incomplete")
+    func readyReportsDemandIncompleteWithAnUnpricedEvent() {
+        let view = mineWorldView(
+            devices: minePrintedFleet() + [mineCarrierDevice()],
+            locationEvents: [mineEvent(resource: ("rares", 1_000_000), device: "defence_grid")]
+        )
+        #expect(Brain.mineStatus(directives: [], view: view).demandIncomplete)
+    }
+
+    /// A live run never re-runs siting, so it must never claim the demand
+    /// reading was incomplete — kills a mutant that returns `true`
+    /// unconditionally from `mineStatus`.
+    @Test("a live run reports demand complete, since siting never re-ran")
+    func aLiveRunReportsDemandComplete() {
+        let view = mineWorldView(devices: minePrintedFleet() + [mineCarrierDevice()])
+        let live = directiveFixture(
+            id: "M1", kind: .mineRun, status: .running, deviceCode: mineCarrier,
+            fleetTag: MineRecipe.fleetTag, targets: [mineBelt]
+        )
+        #expect(Brain.mineStatus(directives: [live], view: view).demandIncomplete == false)
     }
 }
 

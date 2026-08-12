@@ -12,7 +12,8 @@ import Testing
 @testable import DirectivesFeature
 
 private func report(
-    salvage: BrainGoalStatus, haul: BrainGoalStatus, mine: BrainGoalStatus = .idle(reason: "not evaluated")
+    salvage: BrainGoalStatus, haul: BrainGoalStatus, mine: BrainGoalStatus = .idle(reason: "not evaluated"),
+    mineDemandIncomplete: Bool = false
 ) -> BrainReport {
     BrainReport(
         decision: .idle(reason: "nothing"),
@@ -25,6 +26,7 @@ private func report(
         ),
         survey: .idle(reason: "none"),
         salvage: salvage, haul: haul, mine: mine,
+        mineDemandIncomplete: mineDemandIncomplete,
         observedAt: Date(timeIntervalSince1970: 0)
     )
 }
@@ -161,5 +163,28 @@ struct BrainWhyMineHealthTests {
     func designationsAreTagged() {
         let health = BrainMineHealth(belt: "SOL-BELT-1", miningActive: true, surveyActive: true, ferryInForce: true)
         #expect(BrainWhy.mineHealthLine(health).spans.contains { $0 == .designation("SOL-BELT-1") })
+    }
+}
+
+/// A second, independent axis from `mineHealth`: present only while this
+/// tick's siting ranked belts on an incomplete catalog. One test kills a
+/// hard-coded-nil mutant, the other an always-renders one.
+@Suite("The mine demand-degraded note")
+struct BrainWhyMineDemandNoteTests {
+    @Test("the note renders when this tick's siting ran on an incomplete catalog")
+    func theNoteRendersWhenDemandIsIncomplete() {
+        let why = BrainWhy.from(
+            report: report(salvage: .idle(reason: "none"), haul: .idle(reason: "none"), mineDemandIncomplete: true)
+        )
+        #expect(
+            why.mineDemandNote?.text
+                == "mine siting incomplete — blueprint catalog empty, demand under-counted"
+        )
+    }
+
+    @Test("the note is absent on the ordinary path")
+    func theNoteIsAbsentOtherwise() {
+        let why = BrainWhy.from(report: report(salvage: .idle(reason: "none"), haul: .idle(reason: "none")))
+        #expect(why.mineDemandNote == nil)
     }
 }

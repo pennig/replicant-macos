@@ -114,7 +114,7 @@ struct Brain: Sendable {
         let survey = Self.surveyStatus(directives: snapshot.directives, view: snapshot.view)
         let salvage = Self.salvageStatus(directives: snapshot.directives, view: snapshot.view)
         let haul = Self.haulStatus(directives: snapshot.directives, view: snapshot.view)
-        let mine = Self.mineStatus(directives: snapshot.directives, view: snapshot.view)
+        let (mine, mineDemandIncomplete) = Self.mineStatus(directives: snapshot.directives, view: snapshot.view)
         let mines = Self.mineHealth(view: snapshot.view, directives: snapshot.directives)
 
         let escalated = await respondToStalls(snapshot)
@@ -140,6 +140,7 @@ struct Brain: Sendable {
             haul: haul,
             mine: mine,
             mines: mines,
+            mineDemandIncomplete: mineDemandIncomplete,
             observedAt: now
         )
     }
@@ -1326,7 +1327,8 @@ struct Brain: Sendable {
         now: Date
     ) -> ResourceHeadroom {
         let open = events.filter(\.isActive).count
-        if bills.isEmpty, open > 0 {
+        let demandIncomplete = bills.isEmpty && open > 0
+        if demandIncomplete {
             logger.debug(
                 """
                 mine siting: demand degraded to the reserve floors — blueprint catalog \
@@ -1338,29 +1340,41 @@ struct Brain: Sendable {
             events: events, bills: bills, reserveFloors: BrainCeiling.reserveFloors
         )
         return ResourceHeadroom.derive(
-            stock: stock, demand: demand.total, freshness: freshness, now: now
+            stock: stock, demand: demand.total, freshness: freshness, now: now,
+            demandIncomplete: demandIncomplete
         )
     }
 
-    /// The mine verdict for `view`. Takes `directives` for `haulReadiness`'s
-    /// reason — a carrier another row holds must not be reported ready — and to
-    /// keep a belt a live install already targets out of the siting.
-    static func mineReadiness(view: WorldView, directives: [Directive]) -> MineReadiness {
+    /// `mineReadiness`'s verdict plus the headroom siting was ranked under —
+    /// nil when an earlier guard decided idle before siting ever ran.
+    private struct MineSitingResult {
+        let readiness: MineReadiness
+        let headroom: ResourceHeadroom?
+    }
+
+    /// The mine verdict for `view`, plus the headroom it ranked under. Takes
+    /// `directives` for `haulReadiness`'s reason — a carrier another row holds
+    /// must not be reported ready — and to keep a live install's belt out of it.
+    private static func mineSiting(view: WorldView, directives: [Directive]) -> MineSitingResult {
         guard let hub = view.theatres.first(where: \.isOperational)?.depot else {
-            return .idle(reason: "no operational theatre")
+            return MineSitingResult(readiness: .idle(reason: "no operational theatre"), headroom: nil)
         }
 
         let fleet = view.devices.values
         let shortfall = MineRecipe.shortfall(at: hub, in: fleet)
         guard shortfall.isEmpty else {
-            return .idle(reason: mineFleetBlocker(shortfall, at: hub, in: fleet))
+            return MineSitingResult(
+                readiness: .idle(reason: mineFleetBlocker(shortfall, at: hub, in: fleet)), headroom: nil
+            )
         }
 
         let reserved = reservedDevices(directives: directives, devices: view.devices)
         guard let carrier = MineRecipe.idleCarrier(
             at: hub, in: fleet.filter { !reserved.contains($0.deviceCode) }
         ) else {
-            return .idle(reason: "no idle \(MineRecipe.carrierTag) surge carrier")
+            return MineSitingResult(
+                readiness: .idle(reason: "no idle \(MineRecipe.carrierTag) surge carrier"), headroom: nil
+            )
         }
 
         // Every operational theatre's depot is excluded: it's belt-shaped,
@@ -1379,7 +1393,10 @@ struct Brain: Sendable {
             let anyBelt = MineSitePlanner.site(
                 view: view, occupiedBelts: depots, headroom: headroom
             ) != nil
-            return .idle(reason: anyBelt ? "every candidate belt taken" : "no meshed candidate belt")
+            return MineSitingResult(
+                readiness: .idle(reason: anyBelt ? "every candidate belt taken" : "no meshed candidate belt"),
+                headroom: headroom
+            )
         }
 
         let boosted = headroom.weights
@@ -1393,7 +1410,15 @@ struct Brain: Sendable {
             \(headroom.isFallback ? " (static)" : "", privacy: .public)
             """
         )
-        return .launch(carrier: carrier.deviceCode, belt: site.belt)
+        return MineSitingResult(
+            readiness: .launch(carrier: carrier.deviceCode, belt: site.belt), headroom: site.headroom
+        )
+    }
+
+    /// `mineSiting`'s verdict alone — the shape every caller but `mineStatus`
+    /// needs.
+    static func mineReadiness(view: WorldView, directives: [Directive]) -> MineReadiness {
+        mineSiting(view: view, directives: directives).readiness
     }
 
     /// The belts a live `mineRun` is installing at.
@@ -1481,22 +1506,29 @@ struct Brain: Sendable {
         }
     }
 
-    /// The why-view's mine line: a live `mineRun` FIRST — an installing fleet
-    /// is attached/stowed, so `mineReadiness` would misreport its own blocker
-    /// mid-install — else the readiness verdict, exactly as `haulStatus`.
-    static func mineStatus(directives: [Directive], view: WorldView) -> BrainGoalStatus {
+    /// The why-view's mine line, plus whether siting ran on an incomplete
+    /// catalog — a live `mineRun` FIRST (mid-install misreports its own
+    /// blocker) else the readiness verdict, exactly as `haulStatus`.
+    static func mineStatus(
+        directives: [Directive], view: WorldView
+    ) -> (status: BrainGoalStatus, demandIncomplete: Bool) {
         if let live = directives.first(where: {
             $0.kind == .mineRun && owningStatuses.contains($0.status)
         }) {
-            return .launched(
-                vessel: live.deviceCode,
-                focus: live.currentTarget,
-                status: launchedGoalStatus(live.status)
+            return (
+                .launched(
+                    vessel: live.deviceCode,
+                    focus: live.currentTarget,
+                    status: launchedGoalStatus(live.status)
+                ),
+                false
             )
         }
-        switch mineReadiness(view: view, directives: directives) {
-        case let .launch(carrier, _): return .ready(vessel: carrier)
-        case let .idle(reason): return .idle(reason: reason)
+        let siting = mineSiting(view: view, directives: directives)
+        let demandIncomplete = siting.headroom?.demandIncomplete ?? false
+        switch siting.readiness {
+        case let .launch(carrier, _): return (.ready(vessel: carrier), demandIncomplete)
+        case let .idle(reason): return (.idle(reason: reason), demandIncomplete)
         }
     }
 

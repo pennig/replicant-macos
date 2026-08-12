@@ -133,4 +133,51 @@ struct ResourceHeadroomTests {
         #expect(headroom.isFallback == false)
         #expect(headroom.weights == ["volatiles": 2, "silicates": 1])
     }
+
+    /// Kills a mutant that hard-codes `demandIncomplete: false` on the derived
+    /// path (the guard's `else` branch is skipped here, so only threading the
+    /// parameter through the ordinary return can make this pass).
+    @Test("demandIncomplete threads through the ordinary derived path")
+    func demandIncompleteThreadsThroughDerivedPath() {
+        let headroom = ResourceHeadroom.derive(
+            stock: ["silicates": 500, "conductive": 1000],
+            demand: ["silicates": 50, "conductive": 10],
+            freshness: now,
+            now: now,
+            demandIncomplete: true
+        )
+        #expect(headroom.isFallback == false)
+        #expect(headroom.demandIncomplete)
+    }
+
+    /// Kills a mutant that hard-codes `demandIncomplete: false` on the
+    /// fallback path, or that drops the parameter from the fallback branch
+    /// specifically — this test would still pass a build that only wired the
+    /// derived branch above.
+    @Test("demandIncomplete threads through the fallback path too")
+    func demandIncompleteThreadsThroughFallbackPath() {
+        let headroom = ResourceHeadroom.derive(
+            stock: [:], demand: ["silicates": 100], freshness: now, now: now, demandIncomplete: true
+        )
+        #expect(headroom.isFallback)
+        #expect(headroom.demandIncomplete)
+    }
+
+    /// The default keeps every existing call site's behaviour unchanged —
+    /// kills a mutant that flips the parameter's default to `true`.
+    @Test("demandIncomplete defaults to false")
+    func demandIncompleteDefaultsToFalse() {
+        let headroom = ResourceHeadroom.derive(
+            stock: ["silicates": 500], demand: ["silicates": 50], freshness: now, now: now
+        )
+        #expect(headroom.demandIncomplete == false)
+    }
+
+    /// `staticFallback` is a stored constant, not a call through `derive` —
+    /// kills a mutant that flips its literal `demandIncomplete` argument.
+    @Test("staticFallback reports demand as complete")
+    func staticFallbackReportsDemandComplete() {
+        #expect(ResourceHeadroom.staticFallback.demandIncomplete == false)
+        #expect(ResourceHeadroom.staticFallback.isFallback)
+    }
 }

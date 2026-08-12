@@ -83,6 +83,17 @@ public struct BrainWhyDetailView: View {
                     }
                 }
 
+                // Present only while siting ran on an incomplete catalog — a
+                // second axis from `mineHealth`, silent on demand entirely.
+                if let mineDemandNote = why.mineDemandNote {
+                    section("Mine Siting") {
+                        mineDemandNote
+                            .styled(prose: .rcBody, designation: .rcMono)
+                            .foregroundStyle(.rcTextSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
                 // Empty until the first mine is installed — unlike `goals`,
                 // there is nothing to report before one exists.
                 if !why.mineHealth.isEmpty {

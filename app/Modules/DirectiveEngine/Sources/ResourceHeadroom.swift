@@ -16,11 +16,19 @@ public struct ResourceHeadroom: Equatable, Sendable {
     public let coverage: [String: Double]
     /// Whether `weights` is the static table rather than a derived reading.
     public let isFallback: Bool
+    /// Demand was priced against an incomplete blueprint catalog — a second,
+    /// independent axis from `isFallback`: the weights can still be derived
+    /// from real stock while under-counting what is asked of it.
+    public let demandIncomplete: Bool
 
-    public init(weights: [String: Int], coverage: [String: Double], isFallback: Bool) {
+    public init(
+        weights: [String: Int], coverage: [String: Double], isFallback: Bool,
+        demandIncomplete: Bool = false
+    ) {
         self.weights = weights
         self.coverage = coverage
         self.isFallback = isFallback
+        self.demandIncomplete = demandIncomplete
     }
 
     /// The fixed weights used when stock is unknown or stale.
@@ -32,14 +40,18 @@ public struct ResourceHeadroom: Equatable, Sendable {
     /// Weights from `stock` over `demand`. Falls back whenever the reading is
     /// missing, stale, or there is no demand to divide by.
     public static func derive(
-        stock: [String: Double], demand: [String: Double], freshness: Date?, now: Date
+        stock: [String: Double], demand: [String: Double], freshness: Date?, now: Date,
+        demandIncomplete: Bool = false
     ) -> ResourceHeadroom {
         let knownTypes = Set(BrainCeiling.resourceTypes)
         let demanded = demand.filter { $0.value > 0 && knownTypes.contains($0.key) }
         guard !stock.isEmpty, !demanded.isEmpty,
               let freshness, now.timeIntervalSince(freshness) <= stalenessBound
         else {
-            return ResourceHeadroom(weights: staticWeights, coverage: [:], isFallback: true)
+            return ResourceHeadroom(
+                weights: staticWeights, coverage: [:], isFallback: true,
+                demandIncomplete: demandIncomplete
+            )
         }
 
         var coverage: [String: Double] = [:]
@@ -52,11 +64,15 @@ public struct ResourceHeadroom: Equatable, Sendable {
             .prefix(2)
         var weights: [String: Int] = [:]
         for (offset, entry) in ranked.enumerated() { weights[entry.key] = 2 - offset }
-        return ResourceHeadroom(weights: weights, coverage: coverage, isFallback: false)
+        return ResourceHeadroom(
+            weights: weights, coverage: coverage, isFallback: false,
+            demandIncomplete: demandIncomplete
+        )
     }
 
-    /// The reading to rank with when there is none: the shipped constants.
+    /// The reading to rank with when there is none: the shipped constants,
+    /// under demand this axis has no reason to believe is incomplete.
     public static let staticFallback = ResourceHeadroom(
-        weights: staticWeights, coverage: [:], isFallback: true
+        weights: staticWeights, coverage: [:], isFallback: true, demandIncomplete: false
     )
 }
