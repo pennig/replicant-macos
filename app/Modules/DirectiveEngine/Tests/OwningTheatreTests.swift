@@ -52,4 +52,22 @@ struct OwningTheatreTests {
         #expect(first == second)
         #expect(first?.depot == "AINALRAM-BELT-1")
     }
+
+    @Test("The nearest fallback wins when the device's own component has no theatre")
+    func fallbackWinsAcrossComponents() {
+        let view = WorldView(
+            devices: [:],
+            starPositions: ["REMOTE": Position(x: 0, y: 0, z: 0), "FARAWAY": Position(x: 3, y: 4, z: 0)],
+            meshSystems: ["REMOTE", "FARAWAY"],
+            salvageUnits: [:], eventSystems: [],
+            theatres: [
+                Theatre(depot: "FARAWAY-BELT-1", system: "FARAWAY", origin: .derived,
+                        readiness: .operational, stock: 500),
+            ],
+            components: ["REMOTE": "REMOTE", "FARAWAY": "FARAWAY"],
+            now: Date(timeIntervalSince1970: 5_000)
+        )
+        let device = deviceFixture(code: "V1", location: "REMOTE-1")
+        #expect(Brain.owningTheatre(of: device, view: view)?.depot == "FARAWAY-BELT-1")
+    }
 }
