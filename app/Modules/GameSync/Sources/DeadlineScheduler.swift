@@ -132,7 +132,7 @@ actor DeadlineScheduler {
                 await DirectiveRetention.sweep(database, now: now)
             }
 
-            if lastDepotInventoryAt.map({ now.timeIntervalSince($0) >= depotInventoryInterval }) ?? true {
+            if Self.depotInventoryDue(lastAt: lastDepotInventoryAt, now: now, interval: depotInventoryInterval) {
                 lastDepotInventoryAt = now
                 await refreshDepotInventories()
             }
@@ -253,6 +253,12 @@ actor DeadlineScheduler {
     /// device stands. A stowed one carries no location and is skipped.
     nonisolated static func depotLocations(in devices: [Device]) -> [String] {
         Array(Set(devices.filter(\.isPrintHub).compactMap(\.location))).sorted()
+    }
+
+    /// Whether `run()`'s hourly depot sweep is due: never run yet, or spaced
+    /// at least `interval` past its last run.
+    nonisolated static func depotInventoryDue(lastAt: Date?, now: Date, interval: TimeInterval) -> Bool {
+        lastAt.map { now.timeIntervalSince($0) >= interval } ?? true
     }
 
     /// One per-type stock read per depot, hourly. The planner degrades to its
