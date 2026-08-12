@@ -118,8 +118,11 @@
     padding: 6px calc(var(--step) * 2.5); border-bottom: 1px solid var(--rule);
     color: var(--ink-3); background: var(--panel);
   }
-  .charts { display: grid; grid-template-columns: 1fr 1fr; gap: calc(var(--step) * 2); align-items: center; }
-  @media (max-width: 560px) { .charts { grid-template-columns: 1fr; } }
+  /* Sized in px against each viewBox's own aspect, never stretched to a grid
+     cell — an unsized SVG takes the cell's width and overruns its neighbour. */
+  .charts { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: calc(var(--step) * 3); }
+  #donut { width: 200px; height: 200px; flex: none; }
+  #stack { width: 132px; height: 200px; flex: none; }
   .legend { display: flex; flex-wrap: wrap; gap: 4px calc(var(--step) * 2); margin-top: calc(var(--step) * 2); }
   .legend span { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 0.75rem; }
   .legend i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
@@ -193,7 +196,7 @@
         <div class="stage-body" id="stage">
           <div class="charts">
             <svg id="donut" viewBox="0 0 200 200" role="img" aria-label="Donut preview"></svg>
-            <svg id="stack" viewBox="0 0 200 200" role="img" aria-label="Stacked column preview"></svg>
+            <svg id="stack" viewBox="0 0 132 200" role="img" aria-label="Stacked column preview"></svg>
           </div>
           <div class="legend" id="legend"></div>
         </div>
@@ -317,6 +320,10 @@ const BAND = { light: [0.43, 0.77], dark: [0.48, 0.67] };
 const CHROMA_FLOOR = 0.1, CVD_TARGET = 8, CVD_FLOOR = 6, NORMAL_FLOOR = 15, CONTRAST_MIN = 3;
 // Sample units, so the preview is shaped like real haul data rather than six equal slices.
 const SAMPLE = { structural: 18400, conductive: 9200, silicates: 6100, carbon: 3050, rares: 900, volatiles: 420 };
+const DAYS = [
+  SAMPLE,
+  { structural: 4200, conductive: 11800, silicates: 2100, carbon: 6400, rares: 3100, volatiles: 1500 },
+];
 
 const state = {
   mode: "dark",
@@ -430,25 +437,20 @@ function donut(svg, entries, kind) {
   svg.innerHTML = parts.join("") +
     `<text x="100" y="104" text-anchor="middle" font-family="ui-monospace, monospace" font-size="17" font-weight="600" fill="${seenHex(INK[state.mode], kind)}">${total.toLocaleString()}</text>`;
 }
+// Two days at different mixes. Both stack in `displayOrder` — reversing one
+// would invent adjacencies the real chart never draws.
 function stack(svg, entries, kind) {
-  const total = entries.reduce((n, e) => n + e.units, 0);
-  const barW = 34, x0 = 44, top = 14, h = 172;
-  let y = top;
-  const cols = [];
-  for (const e of entries) {
-    const seg = (e.units / total) * h;
-    cols.push(`<rect x="${x0}" y="${y + 1}" width="${barW}" height="${Math.max(0, seg - 2)}" fill="${seenHex(e.hex, kind)}" rx="2" />`);
-    y += seg;
-  }
-  // A second column at a different mix, because two stacks side by side is
-  // where adjacent-pair confusion actually shows up.
-  let y2 = top;
-  const mixed = [...entries].reverse();
-  for (const e of mixed) {
-    const seg = (e.units / total) * h;
-    cols.push(`<rect x="${x0 + barW + 24}" y="${y2 + 1}" width="${barW}" height="${Math.max(0, seg - 2)}" fill="${seenHex(e.hex, kind)}" rx="2" />`);
-    y2 += seg;
-  }
+  const cols = [], barW = 52, gap = 28, top = 8, h = 184;
+  const tallest = Math.max(...DAYS.map((d) => entries.reduce((n, e) => n + d[e.slot], 0)));
+  DAYS.forEach((day, i) => {
+    const x = i * (barW + gap) + 2;
+    let y = top + (h * (1 - entries.reduce((n, e) => n + day[e.slot], 0) / tallest));
+    for (const e of entries) {
+      const seg = (day[e.slot] / tallest) * h;
+      cols.push(`<rect x="${x}" y="${y + 1}" width="${barW}" height="${Math.max(0, seg - 2)}" fill="${seenHex(e.hex, kind)}" rx="2" />`);
+      y += seg;
+    }
+  });
   svg.innerHTML = cols.join("");
 }
 
