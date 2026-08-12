@@ -4,7 +4,7 @@
 //
 //  Installs a printed mine fleet at a belt: attach the nine carried members to
 //  the surge carrier, fly it out, set them down, hand the drones to their
-//  controllers, and put every controller and bot to work.
+//  controllers, put every controller and bot to work, and fly the carrier home.
 //
 
 import Foundation
@@ -37,6 +37,8 @@ public struct MineRun: MissionStepMachine {
         public static let confirmingAdopt = "confirmingAdopt"
         public static let arming = "arming"
         public static let confirmingArm = "confirmingArm"
+        /// Reached from `arming` only when the run carries `returnToOrigin`.
+        public static let returning = "returning"
     }
 
     /// The cap on one attach confirmation before the run surfaces the command
@@ -80,6 +82,7 @@ public struct MineRun: MissionStepMachine {
         case Step.confirmingAdopt: return confirmAdopt(directive, world)
         case Step.arming: return arm(directive, world)
         case Step.confirmingArm: return confirmArm(directive, world)
+        case Step.returning: return returnHome(directive, carrier, world)
         default:
             logger.notice("mine run \(directive.id, privacy: .public): unknown step \(directive.step, privacy: .public) — waiting")
             return .wait
@@ -453,7 +456,8 @@ public struct MineRun: MissionStepMachine {
             return .refreshFleet(tag: MineRecipe.fleetTag, thenStall: .mineFleetIncomplete)
         }
         guard let pending = targets.first(where: { Self.armState($0, in: world) < 2 }) else {
-            return .done
+            guard directive.returnToOrigin else { return .done }
+            return .advanceStep(nextStep: Step.returning)
         }
         guard Self.armState(pending, in: world) > 0 else {
             return .dispatch(
@@ -498,6 +502,30 @@ public struct MineRun: MissionStepMachine {
               let device = world.device(pending.deviceCode)
         else { return .refreshFleet(tag: MineRecipe.fleetTag, thenStall: .mineFleetIncomplete) }
         return Self.armLadder(device, directive, world)
+    }
+
+    /// Fly the emptied carrier back to its theatre's depot, where the next
+    /// install and the print run's carrier slot both look for it. The
+    /// destination is the row's own depot, never `originDesignation`.
+    private func returnHome(
+        _ directive: Directive, _ carrier: Device, _ world: WorldSnapshot
+    ) -> MissionAction {
+        guard let hub = RelayRun.theatreDepot(in: world, for: directive) else {
+            // Another theatre is up but this row's own went `.claimed` — wait
+            // for it rather than abandoning the carrier or flying elsewhere.
+            if world.theatreWentClaimed(for: directive) { return .wait }
+            // Nowhere to return to is done, not a stall: the mine is installed.
+            logger.notice("mine run \(directive.id, privacy: .public): no depot to return to — leaving the carrier where it stands")
+            return .done
+        }
+        if carrier.location == hub { return .done }
+        // The outbound leg's shape — see `travel`.
+        if world.openOperation(for: carrier.deviceCode) != nil { return .wait }
+        if let unconfirmed = SalvageRun.travelPositionUnconfirmed(carrier, world) { return unconfirmed }
+        return .dispatch(
+            kind: .travel, deviceCode: carrier.deviceCode,
+            params: CommandParams(destination: hub), nextStep: Step.returning
+        )
     }
 
     /// The confirm ladder for one arm target, named by the device class an

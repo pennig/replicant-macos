@@ -444,7 +444,7 @@ struct Brain: Sendable {
                     targets: [belt], targetIndex: 0,
                     step: MineRun().firstStep,
                     stepStartedAt: now,
-                    returnToOrigin: false,
+                    returnToOrigin: true,
                     originDesignation: theatre.system,
                     attentionReason: nil,
                     createdAt: now, updatedAt: now,

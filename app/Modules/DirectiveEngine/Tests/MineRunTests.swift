@@ -282,16 +282,24 @@ private func mineRunRow(
     targets: [String] = [targetBelt],
     stepStartedAt: Date = now.addingTimeInterval(-60),
     deviceCode: String = carrierCode,
-    theatreDepot: String? = hubLocation
+    theatreDepot: String? = hubLocation,
+    returnToOrigin: Bool = false
 ) -> Directive {
     Directive(
         id: "D1", kind: .mineRun, status: .running, deviceCode: deviceCode,
         controllerCode: nil, roamCentre: nil, fleetTag: MineRecipe.fleetTag, sourceRelayCode: nil,
         targets: targets, targetIndex: 0, step: step, stepStartedAt: stepStartedAt,
-        returnToOrigin: false, originDesignation: nil, attentionReason: nil,
+        returnToOrigin: returnToOrigin, originDesignation: nil, attentionReason: nil,
         createdAt: now.addingTimeInterval(-600), updatedAt: now, theatreDepot: theatreDepot
     )
 }
+
+/// The census reading that makes `hubLocation` resolve at all: the hub holds
+/// stock. Without it a print-capable device is not yet a hub.
+private let hubStock = LocationFootprint(
+    location: hubLocation, devices: 0, resources: 5_000, resourceSites: 0,
+    locationEvents: 0, replicants: 0, fetchedAt: now
+)
 
 private func logEntry(_ step: String, at occurredAt: Date) -> DirectiveLogEntry {
     DirectiveLogEntry(
@@ -1199,6 +1207,117 @@ struct MineRunTests {
 
         #expect(MineRun().nextAction(directive: directive, world: snapshot)
                 == .refreshDevices(deviceCodes: ["M01"], thenStall: .commandRejected))
+    }
+
+    // MARK: Returning home
+
+    /// The installed fleet with the carrier standing where `carrierAt` puts it.
+    /// `hub` adds what `RelayRun.hubLocation` reads — a print-capable device at a
+    /// meshed location the census shows holding stock.
+    private func returningWorld(
+        carrierAt location: String,
+        hub: Bool = true,
+        openOperations: [String: GameModels.Operation] = [:],
+        dispatchedOperations: [String: GameModels.Operation] = [:],
+        carrierUpdatedAt: Date = now
+    ) -> WorldSnapshot {
+        world(
+            devices: beltFleet(adoptedBy: adoptedByController, armed: armedCarried)
+                + transportPair(
+                    adopted: true,
+                    ferry: (collect: targetBelt, deliver: HaulRun.deliveryLocation, status: "active"),
+                    at: hub ? hubLocation : HaulRun.deliveryLocation
+                )
+                + [mineCarrier(location: location, updatedAt: carrierUpdatedAt), beltRelay]
+                + (hub ? [printHub, hubRelay] : []),
+            openOperations: openOperations,
+            dispatchedOperations: dispatchedOperations,
+            footprints: hub ? [hubStock] : []
+        )
+    }
+
+    @Test("an armed fleet on a returning row hands to the return leg")
+    func armedFleetReturnsTheCarrier() {
+        #expect(
+            MineRun().nextAction(
+                directive: mineRunRow(step: MineRun.Step.arming, returnToOrigin: true),
+                world: returningWorld(carrierAt: targetBelt)
+            ) == .advanceStep(nextStep: MineRun.Step.returning)
+        )
+    }
+
+    /// The destination is the hub LOCATION, not the belt's system or the row's
+    /// origin — the launcher's carrier query demands an exact match.
+    @Test("the emptied carrier is flown back to the hub location")
+    func returnDispatchesTravelToTheHub() {
+        #expect(
+            MineRun().nextAction(
+                directive: mineRunRow(step: MineRun.Step.returning, returnToOrigin: true),
+                world: returningWorld(carrierAt: targetBelt)
+            ) == .dispatch(
+                kind: .travel, deviceCode: carrierCode,
+                params: CommandParams(destination: hubLocation),
+                nextStep: MineRun.Step.returning
+            )
+        )
+    }
+
+    @Test("a carrier standing at the hub finishes the run")
+    func carrierHomeFinishes() {
+        #expect(
+            MineRun().nextAction(
+                directive: mineRunRow(step: MineRun.Step.returning, returnToOrigin: true),
+                world: returningWorld(carrierAt: hubLocation)
+            ) == .done
+        )
+    }
+
+    /// Nowhere to return to is not a fault: the mine is installed either way.
+    @Test("no hub leaves the carrier where it stands and finishes")
+    func noHubFinishes() {
+        #expect(
+            MineRun().nextAction(
+                directive: mineRunRow(step: MineRun.Step.returning, returnToOrigin: true),
+                world: returningWorld(carrierAt: targetBelt, hub: false)
+            ) == .done
+        )
+    }
+
+    @Test("a flight already under way is not re-commanded")
+    func openTravelHoldsTheReturn() {
+        #expect(
+            MineRun().nextAction(
+                directive: mineRunRow(step: MineRun.Step.returning, returnToOrigin: true),
+                world: returningWorld(carrierAt: targetBelt, openOperations: openTravel())
+            ) == .wait
+        )
+    }
+
+    /// The outbound leg's watermark, on the way home: a row still lagging the
+    /// arrival must not re-command travel at an already-parked carrier.
+    @Test("an unresolved arrival watermark defers the return dispatch")
+    func returnWaitsOnTheArrivalWatermark() {
+        #expect(
+            MineRun().nextAction(
+                directive: mineRunRow(step: MineRun.Step.returning, returnToOrigin: true),
+                world: returningWorld(
+                    carrierAt: targetBelt, dispatchedOperations: closedTravel(),
+                    carrierUpdatedAt: now.addingTimeInterval(-5.139)
+                )
+            ) == .wait
+        )
+    }
+
+    /// The flag is the switch: a row without it finishes at the belt, exactly as
+    /// every other assertion in this suite expects.
+    @Test("a row without returnToOrigin still finishes at the belt")
+    func withoutTheFlagTheRunFinishesAtTheBelt() {
+        #expect(
+            MineRun().nextAction(
+                directive: mineRunRow(step: MineRun.Step.arming),
+                world: returningWorld(carrierAt: targetBelt)
+            ) == .done
+        )
     }
 }
 

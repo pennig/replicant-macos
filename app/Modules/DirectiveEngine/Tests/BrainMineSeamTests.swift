@@ -97,6 +97,8 @@ struct BrainMineSeamTests {
         #expect(launched.deviceCode == mineSeamCarrier)
         #expect(launched.targets == [mineSeamBelt])
         #expect(launched.fleetTag == MineRecipe.fleetTag)
+        // Without it the carrier stays at the belt and the next install prints one.
+        #expect(launched.returnToOrigin)
         #expect(
             report.mine == .launched(vessel: mineSeamCarrier, focus: mineSeamBelt, status: .running)
         )
