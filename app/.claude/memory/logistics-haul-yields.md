@@ -51,14 +51,28 @@ recorded against the generic surface.
 marks are adjacent forms, but every chart on this screen carries a legend, and a legend is an
 all-pairs surface — six swatches side by side. Matt (colour-deficient) reported carbon as unreadable
 against structural, and the measurement agreed: dark `#9085E9` vs `#3987E5` was **ΔE 1.9 protan**
-and 9.8 normal, under the 15 floor. Carbon is now `#852D71`/`#9444A6`, found by an OKLCH sweep
-maximising worst-pair separation under the band, chroma floor, real-surface contrast and the normal
-floor (dark 1.9 → 10.5 CVD, 9.8 → 19.8 normal). **Two worse pairs remain and will surface in the
-legend next**: dark silicates↔rares at ΔE 1.6, and conductive↔volatiles at 3.2 light / 2.7 dark.
-**Dark mode cannot be fixed by hue alone** — five of six dark slots sit at L ≈ 0.62, so the palette
-spends nothing on lightness, the one channel CVD preserves; any carbon hue caps near ΔE 12.
-`docs/tools/resource-palette-playground.html` is the OKLCH bench for that work (live CVD simulation,
-per-pair scoring, xcassets export) — it is the intended way to re-roll a slot, not a hand-picked hex.
+and 9.8 normal, under the 15 floor.
+
+**Matt then re-rolled the whole palette himself in the bench (2026-08-12) and that set is what
+ships** — the spec table carries it. The one structural move is **silicates green → teal**, which
+stops it competing with volatiles and lifts dark's worst all-pairs CVD from ΔE 1.6 to 6.1; every
+previously-broken dark pair improved and none dropped below 6. Adjacent-worst is now 12.0 light /
+11.4 dark, up from 9.2 / 9.4.
+
+**The one regression, still open: light `carbon` `#A64DC0` sits within 0.004 L of light
+`structural`, so protan folds them onto the same blue at ΔE 5.6** — worse than the 13.0 that
+prompted the original complaint, though dark (10.5) is untouched and dark is the mode in daily use.
+**Hue cannot fix this pair; only lightness can**, because protan simulation folds violet onto blue —
+same hue and chroma at L 0.48 (`#872CA0`) measures 9.9 and lifts light's all-pairs from FAIL to
+WARN. Flagged to Matt with a protan-simulated render; his own eyes outrank the model here, since
+Machado severity 1.0 is full dichromacy and an anomalous trichromat discriminates better than it
+predicts.
+
+**To SEE a CVD failure rather than read its ΔE, simulate the rendered PNG.** `swift test` renders
+the real charts ([[headless-swiftui-render-probe]]), then a Machado transform applied per-pixel
+turns the number into a picture — that is what made the light carbon/structural collapse
+undeniable. `docs/tools/resource-palette-playground.html` is the OKLCH bench (live CVD simulation,
+per-pair scoring, xcassets export) and is the intended way to re-roll a slot, not a hand-picked hex.
 
 Two latent traps: `haulYields.perType` has SQL `DEFAULT '{}'`, which `ResourceCost` cannot decode
 (six non-optional Ints, no defaults) — unreachable today since every write supplies it, but the
