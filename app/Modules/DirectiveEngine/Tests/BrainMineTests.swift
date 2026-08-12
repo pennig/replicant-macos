@@ -98,30 +98,30 @@ private func mineWorldView(
     )
 }
 
+/// The theatre a `mineWorldView(depot:)` call recognises, for passing to
+/// `mineReadiness` — `SiteAssay.system(of:)` mirrors `singleOperationalTheatre`'s
+/// own derivation, so the two never disagree about which system a depot is in.
+private func mineTheatre(depot: String = mineHub) -> Theatre {
+    Theatre(depot: depot, system: SiteAssay.system(of: depot), origin: .derived, readiness: .operational, stock: 0)
+}
+
 @Suite("Brain — the mine readiness verdict")
 struct BrainMineReadinessTests {
     @Test("a printed fleet, an idle carrier and a meshed belt launch an install")
     func aFullBoardLaunches() {
         let view = mineWorldView(devices: minePrintedFleet() + [mineCarrierDevice()])
         #expect(
-            Brain.mineReadiness(view: view, directives: [])
+            Brain.mineReadiness(view: view, directives: [], theatre: mineTheatre())
                 == .launch(carrier: mineCarrier, belt: mineBelt)
         )
-    }
-
-    @Test("no operational theatre is idle before anything else is asked")
-    func noHubIsIdle() {
-        let view = mineWorldView(
-            devices: minePrintedFleet() + [mineCarrierDevice()], depot: nil
-        )
-        #expect(Brain.mineReadiness(view: view, directives: []) == .idle(reason: "no operational theatre"))
     }
 
     @Test("nothing printed reads differently from a fleet part-way printed")
     func nothingPrintedIsIdle() {
         let view = mineWorldView(devices: [mineCarrierDevice()])
         #expect(
-            Brain.mineReadiness(view: view, directives: []) == .idle(reason: "no printed mine fleet")
+            Brain.mineReadiness(view: view, directives: [], theatre: mineTheatre())
+                == .idle(reason: "no printed mine fleet")
         )
     }
 
@@ -130,7 +130,7 @@ struct BrainMineReadinessTests {
         let fleet = minePrintedFleet().filter { $0.deviceType != "mining_drone" }
         let view = mineWorldView(devices: fleet + [mineCarrierDevice()])
         #expect(
-            Brain.mineReadiness(view: view, directives: [])
+            Brain.mineReadiness(view: view, directives: [], theatre: mineTheatre())
                 == .idle(reason: "mine fleet incomplete — missing mining_drone×3")
         )
     }
@@ -139,7 +139,7 @@ struct BrainMineReadinessTests {
     func noCarrierIsIdle() {
         let view = mineWorldView(devices: minePrintedFleet())
         #expect(
-            Brain.mineReadiness(view: view, directives: [])
+            Brain.mineReadiness(view: view, directives: [], theatre: mineTheatre())
                 == .idle(reason: "no idle auto:carrier surge carrier")
         )
     }
@@ -150,7 +150,7 @@ struct BrainMineReadinessTests {
             devices: minePrintedFleet() + [mineCarrierDevice(status: "travelling")]
         )
         #expect(
-            Brain.mineReadiness(view: view, directives: [])
+            Brain.mineReadiness(view: view, directives: [], theatre: mineTheatre())
                 == .idle(reason: "no idle auto:carrier surge carrier")
         )
     }
@@ -162,7 +162,7 @@ struct BrainMineReadinessTests {
         let view = mineWorldView(devices: minePrintedFleet() + [mineCarrierDevice()])
         let holder = directiveFixture(id: "R1", kind: .relayRun, deviceCode: mineCarrier)
         #expect(
-            Brain.mineReadiness(view: view, directives: [holder])
+            Brain.mineReadiness(view: view, directives: [holder], theatre: mineTheatre())
                 == .idle(reason: "no idle auto:carrier surge carrier")
         )
     }
@@ -171,7 +171,7 @@ struct BrainMineReadinessTests {
     func noCandidateBeltIsIdle() {
         let view = mineWorldView(devices: minePrintedFleet() + [mineCarrierDevice()], belts: [:])
         #expect(
-            Brain.mineReadiness(view: view, directives: [])
+            Brain.mineReadiness(view: view, directives: [], theatre: mineTheatre())
                 == .idle(reason: "no meshed candidate belt")
         )
     }
@@ -183,7 +183,7 @@ struct BrainMineReadinessTests {
         let installed = mineDevice("MC-INSTALLED", type: "ami_mining_controller", location: mineBelt)
         let view = mineWorldView(devices: minePrintedFleet() + [mineCarrierDevice(), installed])
         #expect(
-            Brain.mineReadiness(view: view, directives: [])
+            Brain.mineReadiness(view: view, directives: [], theatre: mineTheatre())
                 == .idle(reason: "every candidate belt taken")
         )
     }
@@ -198,7 +198,7 @@ struct BrainMineReadinessTests {
             depot: mineBelt
         )
         #expect(
-            Brain.mineReadiness(view: view, directives: [])
+            Brain.mineReadiness(view: view, directives: [], theatre: mineTheatre(depot: mineBelt))
                 == .idle(reason: "no meshed candidate belt")
         )
     }
@@ -221,10 +221,11 @@ struct BrainMineReadinessTests {
             fleetTag: MineRecipe.fleetTag, targets: [mineBelt]
         )
         #expect(
-            Brain.mineReadiness(view: view, directives: []) == .launch(carrier: mineCarrier, belt: mineBelt)
+            Brain.mineReadiness(view: view, directives: [], theatre: mineTheatre())
+                == .launch(carrier: mineCarrier, belt: mineBelt)
         )
         #expect(
-            Brain.mineReadiness(view: view, directives: [live])
+            Brain.mineReadiness(view: view, directives: [live], theatre: mineTheatre())
                 == .launch(carrier: mineCarrier, belt: "VEGA-BELT-1")
         )
     }
@@ -238,21 +239,67 @@ struct BrainMineReadinessTests {
         let hubB = "HUB-B-BELT-1"
         let devices = minePrintedFleet(at: hubA) + [mineCarrierDevice(location: hubA)]
             + [mineDevice("MC-STAGED-B", type: "ami_mining_controller", location: hubB)]
+        let theatreA = Theatre(depot: hubA, system: "HUB-A", origin: .derived, readiness: .operational, stock: 0)
         let view = WorldView(
             devices: Dictionary(uniqueKeysWithValues: devices.map { ($0.deviceCode, $0) }),
             starPositions: ["HUB-A": Position(x: 0, y: 0, z: 0), "HUB-B": Position(x: 1, y: 0, z: 0)],
             meshSystems: ["HUB-A", "HUB-B"],
             salvageUnits: [:], eventSystems: [],
             theatres: [
-                Theatre(depot: hubA, system: "HUB-A", origin: .derived, readiness: .operational, stock: 0),
+                theatreA,
                 Theatre(depot: hubB, system: "HUB-B", origin: .derived, readiness: .operational, stock: 0),
             ],
             beltsBySystem: ["HUB-B": [BeltInfo(designation: hubB, beltClass: .rich)]],
             now: mineNow
         )
         #expect(
-            Brain.mineReadiness(view: view, directives: [])
+            Brain.mineReadiness(view: view, directives: [], theatre: theatreA)
                 == .idle(reason: "no meshed candidate belt")
+        )
+    }
+
+    /// Two independent theatres, each with a full printed fleet, idle carrier
+    /// and its own candidate belt — mirrors `twoTheatreHaulView`'s pure-function
+    /// shape for mine.
+    private func twoTheatreMineView(
+        solFleet: [Device], vegaFleet: [Device]
+    ) -> (view: WorldView, sol: Theatre, vega: Theatre) {
+        let sol = mineTheatre()
+        let vega = Theatre(depot: "VEGA-3", system: "VEGA", origin: .pinned, readiness: .operational, stock: 0)
+        let devices = solFleet + vegaFleet
+        let view = WorldView(
+            devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
+            starPositions: ["SOL": Position(x: 0, y: 0, z: 0), "VEGA": Position(x: 300, y: 300, z: 300)],
+            meshSystems: ["SOL", "VEGA"],
+            salvageUnits: [:], eventSystems: [],
+            theatres: [sol, vega],
+            components: ["SOL": "SOL", "VEGA": "VEGA"],
+            beltsBySystem: [
+                "SOL": [BeltInfo(designation: mineBelt, beltClass: .rich)],
+                "VEGA": [BeltInfo(designation: "VEGA-BELT-1", beltClass: .rich)],
+            ],
+            now: mineNow
+        )
+        return (view, sol, vega)
+    }
+
+    /// Each theatre's belt selection is scoped to its OWN systems — without
+    /// that, both calls would rank the identical global-best belt regardless
+    /// of which theatre asked, since `MineSitePlanner.site` takes no theatre.
+    @Test("two theatres each with their own fleet and carrier each site their own belt")
+    func twoTheatresEachSiteTheirOwnBelt() {
+        let (view, sol, vega) = twoTheatreMineView(
+            solFleet: minePrintedFleet(at: mineHub) + [mineCarrierDevice(location: mineHub)],
+            vegaFleet: minePrintedFleet(at: "VEGA-3", suffix: "V")
+                + [mineCarrierDevice("CARRIER2", location: "VEGA-3")]
+        )
+        #expect(
+            Brain.mineReadiness(view: view, directives: [], theatre: sol)
+                == .launch(carrier: mineCarrier, belt: mineBelt)
+        )
+        #expect(
+            Brain.mineReadiness(view: view, directives: [], theatre: vega)
+                == .launch(carrier: "CARRIER2", belt: "VEGA-BELT-1")
         )
     }
 }
@@ -356,6 +403,12 @@ struct BrainMineStatusTests {
             fleetTag: MineRecipe.fleetTag, targets: [mineBelt]
         )
         #expect(Brain.mineStatus(directives: [completed], view: view) == .ready(vessel: mineCarrier))
+    }
+
+    @Test("no operational theatre reports idle, naming that")
+    func noOperationalTheatreReportsIdle() {
+        let view = mineWorldView(devices: minePrintedFleet() + [mineCarrierDevice()], depot: nil)
+        #expect(Brain.mineStatus(directives: [], view: view) == .idle(reason: "no operational theatre"))
     }
 }
 
@@ -514,6 +567,23 @@ private func seedMineWorld(_ db: Database) throws {
     )
 }
 
+private let secondMineTheatreSystem = "VEGA"
+private let secondMineTheatreHubLocation = "VEGA-3"
+private let secondMineTheatreBelt = "VEGA-BELT-1"
+
+/// A second, independently meshed hub with its own candidate belt — mirrors
+/// `seedSecondTheatre` (`BrainSalvageTests.swift`) for mine's fleet-print shape.
+private func seedMineSecondTheatre(_ db: Database) throws {
+    try seedRelay(db, code: "REL2", location: secondMineTheatreSystem)
+    try seedStar(db, designation: secondMineTheatreSystem, x: 300, y: 300, z: 300)
+    try seedPrintHub(db, code: "HUB2", location: secondMineTheatreHubLocation)
+    try seedHubStockpile(db, location: secondMineTheatreHubLocation, resources: BrainCeiling.aggregateSpendFloor * 2)
+    try seedSystemDetail(
+        db, system: secondMineTheatreSystem, scanned: true,
+        belts: [Belt(designation: secondMineTheatreBelt, density: "dense")]
+    )
+}
+
 private func mineDirectives(_ database: any DatabaseWriter) async throws -> [Directive] {
     try await database.read { db in try Directive.all.fetchAll(db) }
 }
@@ -585,6 +655,32 @@ struct BrainEnsureMineTests {
         await mineTick(database)
 
         #expect(try await mineDirectives(database).isEmpty)
+    }
+
+    /// An idle theatre must `continue`, not `return`. Depot designations sort
+    /// `SOL-3` before `VEGA-3`, so SOL (no printed fleet) is visited first and
+    /// must not suppress VEGA's (fully ready) launch — nor may VEGA be sited at
+    /// SOL's own belt, which alphabetically outranks VEGA's.
+    @Test func anIdleTheatreDoesNotSuppressAReadyOnesLaunch() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try seedMineWorld(db)
+            try seedMineSecondTheatre(db)
+            for device in minePrintedFleet(at: secondMineTheatreHubLocation, suffix: "V")
+                + [mineCarrierDevice("CARRIER2", location: secondMineTheatreHubLocation)] {
+                try seedMineDevice(db, device)
+            }
+        }
+
+        await mineTick(database)
+
+        let directives = try await mineDirectives(database)
+        let mine = try #require(directives.first)
+        #expect(directives.count == 1)
+        #expect(mine.kind == .mineRun)
+        #expect(mine.deviceCode == "CARRIER2")
+        #expect(mine.targets == [secondMineTheatreBelt])
+        #expect(mine.theatreDepot == secondMineTheatreHubLocation)
     }
 }
 

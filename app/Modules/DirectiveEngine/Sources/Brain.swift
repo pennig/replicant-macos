@@ -426,12 +426,11 @@ struct Brain: Sendable {
     /// install would contend for the same free fleet members standing at the
     /// hub.
     private func ensureMine(snapshot: Snapshot, database: any DatabaseWriter) async {
-        guard case let .launch(carrier, belt) = Self.mineReadiness(
-            view: snapshot.view, directives: snapshot.directives
-        ) else { return }
-
         @Dependency(\.uuid) var uuid
         for theatre in snapshot.view.theatres.filter(\.isOperational) {
+            guard case let .launch(carrier, belt) = Self.mineReadiness(
+                view: snapshot.view, directives: snapshot.directives, theatre: theatre
+            ) else { continue }
             await ensureOne(.mineRun, theatre: theatre, snapshot: snapshot, database: database) {
                 Directive(
                     id: uuid().uuidString,
@@ -1319,13 +1318,11 @@ struct Brain: Sendable {
     /// freshly printed controller carries no directive vocabulary yet.
     static let mineTransportType = "ami_transport_controller"
 
-    /// The mine verdict for `view`. Takes `directives` for `haulReadiness`'s
-    /// reason — a carrier another row holds must not be reported ready — and to
-    /// keep a belt a live install already targets out of the siting.
-    static func mineReadiness(view: WorldView, directives: [Directive]) -> MineReadiness {
-        guard let hub = view.theatres.first(where: \.isOperational)?.depot else {
-            return .idle(reason: "no operational theatre")
-        }
+    /// The mine verdict for `theatre`. Takes `directives` to keep a carrier
+    /// another row holds from reading ready, and a belt a live install already
+    /// targets out of the siting.
+    static func mineReadiness(view: WorldView, directives: [Directive], theatre: Theatre) -> MineReadiness {
+        let hub = theatre.depot
 
         let fleet = view.devices.values
         let shortfall = MineRecipe.shortfall(at: hub, in: fleet)
@@ -1340,14 +1337,22 @@ struct Brain: Sendable {
             return .idle(reason: "no idle \(MineRecipe.carrierTag) surge carrier")
         }
 
-        // Every operational theatre's depot is excluded: it's belt-shaped,
-        // so a mine sited there is invisible to every installed-belt query.
+        // Every operational depot is excluded from siting, not just this
+        // theatre's own — a mine must never land on another theatre's depot.
         let depots = Set(view.theatres.filter(\.isOperational).map(\.depot))
+        // Off-theatre belts are excluded too: siting only searches this
+        // theatre's own systems, mirroring `owningTheatre`'s resolution order.
+        let elsewhere = Set(
+            view.beltsBySystem
+                .filter { (view.theatre(servicing: $0.key) ?? view.theatre(nearest: $0.key))?.depot != hub }
+                .flatMap { $0.value.map(\.designation) }
+        )
         let occupied = depots
+            .union(elsewhere)
             .union(MineRecipe.installedBelts(in: fleet, hubs: depots))
             .union(liveMineBelts(directives))
         guard let site = MineSitePlanner.site(view: view, occupiedBelts: occupied) else {
-            let anyBelt = MineSitePlanner.site(view: view, occupiedBelts: depots) != nil
+            let anyBelt = MineSitePlanner.site(view: view, occupiedBelts: depots.union(elsewhere)) != nil
             return .idle(reason: anyBelt ? "every candidate belt taken" : "no meshed candidate belt")
         }
         return .launch(carrier: carrier.deviceCode, belt: site.belt)
@@ -1457,7 +1462,10 @@ struct Brain: Sendable {
                 status: launchedGoalStatus(live.status)
             )
         }
-        switch mineReadiness(view: view, directives: directives) {
+        guard let theatre = view.theatres.first(where: \.isOperational) else {
+            return .idle(reason: "no operational theatre")
+        }
+        switch mineReadiness(view: view, directives: directives, theatre: theatre) {
         case let .launch(carrier, _): return .ready(vessel: carrier)
         case let .idle(reason): return .idle(reason: reason)
         }
