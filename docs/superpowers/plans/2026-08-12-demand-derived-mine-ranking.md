@@ -15,7 +15,7 @@
 - **Migrations are append-only.** New migration appends to `GameDatabase.manifest`; never edit or reorder a shipped one.
 - **Logging:** `os.Logger` only, subsystem `name.pennig.replicould`, category = module/service name.
 - **Loud test defaults:** a shared client's `testValue` uses `unimplemented(...)`; rich fixtures belong on `previewValue`.
-- **Reading test results:** use the `swift-test-event-stream` skill's invocation and `jq` recipes. Never grep console text.
+- **Reading test results:** never grep console text. Every run in this plan uses the canonical invocation — `--test-product <Target>` (one process, so the event stream is not truncated by a sibling target), `--disable-xctest`, `--event-stream-version 0`, and a per-filter output path under `.build/`. The `jq` gate after each run prints `started` and `failed`. **`started: 0` is a FAILED run, not a pass:** a filter that matches nothing exits 0 and prints only `warning: No matching test cases were run`. `--filter` matches the suite's Swift TYPE name, never its `@Suite("display name")`. Background and more recipes: the `swift-test-event-stream` skill.
 - **Resource type vocabulary (verified live):** exactly `carbon`, `conductive`, `rares`, `silicates`, `structural`, `volatiles`.
 - **Belt richness qualifiers (verified live):** `scarce`, `low`, `moderate`, `high`, `rich`. `atLeastModerate` means one of `moderate`, `high`, `rich`.
 - **Commits go to local `main`.** No PRs, no pushes, no branches unless asked.
@@ -166,7 +166,13 @@ No `Package.swift` change is needed: `UniverseModelsTests` already depends on `G
 From `app/Modules`:
 
 ```
-swift test --filter LocationInventoryTests --event-stream-output-path /tmp/rc-events.jsonl
+swift test --test-product UniverseModelsTests --filter LocationInventoryTests \
+  --disable-xctest --event-stream-version 0 \
+  --event-stream-output-path .build/events-LocationInventoryTests.jsonl
+jq -s '[.[] | select(.kind=="event").payload]
+   | {started: map(select(.kind=="testStarted")) | length,
+      failed: [.[] | select(.kind=="issueRecorded" and .issue.isFailure != false).testID] | unique | length}' \
+  .build/events-LocationInventoryTests.jsonl
 ```
 
 Expected: compile failure — `cannot find 'LocationInventory' in scope`.
@@ -270,13 +276,20 @@ Open `app/Modules/GameDatabase/Tests/SchemaManifestTests.swift`, find the frozen
 From `app/Modules`:
 
 ```
-RC_REGENERATE_SCHEMA_FIXTURE=1 swift test --filter GoldenSchemaTests
+RC_REGENERATE_SCHEMA_FIXTURE=1 swift test --test-product GameDatabaseTests \
+  --filter GoldenSchemaTests --disable-xctest
 ```
 
 Then re-run without the variable to confirm it passes against the regenerated fixture:
 
 ```
-swift test --filter GoldenSchemaTests --event-stream-output-path /tmp/rc-events.jsonl
+swift test --test-product GameDatabaseTests --filter GoldenSchemaTests \
+  --disable-xctest --event-stream-version 0 \
+  --event-stream-output-path .build/events-GoldenSchemaTests.jsonl
+jq -s '[.[] | select(.kind=="event").payload]
+   | {started: map(select(.kind=="testStarted")) | length,
+      failed: [.[] | select(.kind=="issueRecorded" and .issue.isFailure != false).testID] | unique | length}' \
+  .build/events-GoldenSchemaTests.jsonl
 ```
 
 Expected: PASS.
@@ -284,8 +297,20 @@ Expected: PASS.
 - [ ] **Step 7: Run the new tests**
 
 ```
-swift test --filter LocationInventoryTests --event-stream-output-path /tmp/rc-events.jsonl
-swift test --filter SchemaManifestTests --event-stream-output-path /tmp/rc-events.jsonl
+swift test --test-product UniverseModelsTests --filter LocationInventoryTests \
+  --disable-xctest --event-stream-version 0 \
+  --event-stream-output-path .build/events-LocationInventoryTests.jsonl
+jq -s '[.[] | select(.kind=="event").payload]
+   | {started: map(select(.kind=="testStarted")) | length,
+      failed: [.[] | select(.kind=="issueRecorded" and .issue.isFailure != false).testID] | unique | length}' \
+  .build/events-LocationInventoryTests.jsonl
+swift test --test-product GameDatabaseTests --filter SchemaManifestTests \
+  --disable-xctest --event-stream-version 0 \
+  --event-stream-output-path .build/events-SchemaManifestTests.jsonl
+jq -s '[.[] | select(.kind=="event").payload]
+   | {started: map(select(.kind=="testStarted")) | length,
+      failed: [.[] | select(.kind=="issueRecorded" and .issue.isFailure != false).testID] | unique | length}' \
+  .build/events-SchemaManifestTests.jsonl
 ```
 
 Expected: all PASS.
@@ -398,7 +423,13 @@ struct LocationInventoryPersistenceTests {
 From `app/Modules`:
 
 ```
-swift test --filter LocationInventoryPersistenceTests --event-stream-output-path /tmp/rc-events.jsonl
+swift test --test-product GameServicesTests --filter LocationInventoryPersistenceTests \
+  --disable-xctest --event-stream-version 0 \
+  --event-stream-output-path .build/events-LocationInventoryPersistenceTests.jsonl
+jq -s '[.[] | select(.kind=="event").payload]
+   | {started: map(select(.kind=="testStarted")) | length,
+      failed: [.[] | select(.kind=="issueRecorded" and .issue.isFailure != false).testID] | unique | length}' \
+  .build/events-LocationInventoryPersistenceTests.jsonl
 ```
 
 Expected: compile failure — `value of type 'LocationsClient' has no member 'refreshDepotInventories'`.
@@ -443,13 +474,25 @@ In the same `extension LocationsClient` block:
 - [ ] **Step 5: Run the tests to verify they pass**
 
 ```
-swift test --filter LocationInventoryPersistenceTests --event-stream-output-path /tmp/rc-events.jsonl
+swift test --test-product GameServicesTests --filter LocationInventoryPersistenceTests \
+  --disable-xctest --event-stream-version 0 \
+  --event-stream-output-path .build/events-LocationInventoryPersistenceTests.jsonl
+jq -s '[.[] | select(.kind=="event").payload]
+   | {started: map(select(.kind=="testStarted")) | length,
+      failed: [.[] | select(.kind=="issueRecorded" and .issue.isFailure != false).testID] | unique | length}' \
+  .build/events-LocationInventoryPersistenceTests.jsonl
 ```
 
 Expected: PASS. Then run the whole `GameServices` suite for regressions:
 
 ```
-swift test --filter GameServicesTests --event-stream-output-path /tmp/rc-events2.jsonl
+swift test --test-product GameServicesTests --filter GameServicesTests \
+  --disable-xctest --event-stream-version 0 \
+  --event-stream-output-path .build/events-GameServicesTests.jsonl
+jq -s '[.[] | select(.kind=="event").payload]
+   | {started: map(select(.kind=="testStarted")) | length,
+      failed: [.[] | select(.kind=="issueRecorded" and .issue.isFailure != false).testID] | unique | length}' \
+  .build/events-GameServicesTests.jsonl
 ```
 
 Expected: no new failures.
@@ -524,7 +567,13 @@ Reuse that shape rather than inventing a second fixture builder. If the found he
 - [ ] **Step 2: Run the test to verify it fails**
 
 ```
-swift test --filter DepotInventorySweepTests --event-stream-output-path /tmp/rc-events.jsonl
+swift test --test-product GameSyncTests --filter DepotInventorySweepTests \
+  --disable-xctest --event-stream-version 0 \
+  --event-stream-output-path .build/events-DepotInventorySweepTests.jsonl
+jq -s '[.[] | select(.kind=="event").payload]
+   | {started: map(select(.kind=="testStarted")) | length,
+      failed: [.[] | select(.kind=="issueRecorded" and .issue.isFailure != false).testID] | unique | length}' \
+  .build/events-DepotInventorySweepTests.jsonl
 ```
 
 Expected: compile failure — `type 'DeadlineScheduler' has no member 'depotLocations'`.
@@ -583,8 +632,20 @@ If `GameSync`'s `Package.swift` target does not already depend on `GameServices`
 - [ ] **Step 5: Run the tests to verify they pass**
 
 ```
-swift test --filter DepotInventorySweepTests --event-stream-output-path /tmp/rc-events.jsonl
-swift test --filter GameSyncTests --event-stream-output-path /tmp/rc-events2.jsonl
+swift test --test-product GameSyncTests --filter DepotInventorySweepTests \
+  --disable-xctest --event-stream-version 0 \
+  --event-stream-output-path .build/events-DepotInventorySweepTests.jsonl
+jq -s '[.[] | select(.kind=="event").payload]
+   | {started: map(select(.kind=="testStarted")) | length,
+      failed: [.[] | select(.kind=="issueRecorded" and .issue.isFailure != false).testID] | unique | length}' \
+  .build/events-DepotInventorySweepTests.jsonl
+swift test --test-product GameSyncTests --filter GameSyncTests \
+  --disable-xctest --event-stream-version 0 \
+  --event-stream-output-path .build/events-GameSyncTests.jsonl
+jq -s '[.[] | select(.kind=="event").payload]
+   | {started: map(select(.kind=="testStarted")) | length,
+      failed: [.[] | select(.kind=="issueRecorded" and .issue.isFailure != false).testID] | unique | length}' \
+  .build/events-GameSyncTests.jsonl
 ```
 
 Expected: new tests PASS, no new failures in `GameSync`.
@@ -779,7 +840,13 @@ struct ResourceDemandTests {
 - [ ] **Step 2: Run the test to verify it fails**
 
 ```
-swift test --filter ResourceDemandTests --event-stream-output-path /tmp/rc-events.jsonl
+swift test --test-product DirectiveEngineTests --filter ResourceDemandTests \
+  --disable-xctest --event-stream-version 0 \
+  --event-stream-output-path .build/events-ResourceDemandTests.jsonl
+jq -s '[.[] | select(.kind=="event").payload]
+   | {started: map(select(.kind=="testStarted")) | length,
+      failed: [.[] | select(.kind=="issueRecorded" and .issue.isFailure != false).testID] | unique | length}' \
+  .build/events-ResourceDemandTests.jsonl
 ```
 
 Expected: compile failure — `cannot find 'ResourceDemand' in scope`.
@@ -890,7 +957,13 @@ public struct ResourceDemand: Equatable, Sendable {
 - [ ] **Step 5: Run the tests to verify they pass**
 
 ```
-swift test --filter ResourceDemandTests --event-stream-output-path /tmp/rc-events.jsonl
+swift test --test-product DirectiveEngineTests --filter ResourceDemandTests \
+  --disable-xctest --event-stream-version 0 \
+  --event-stream-output-path .build/events-ResourceDemandTests.jsonl
+jq -s '[.[] | select(.kind=="event").payload]
+   | {started: map(select(.kind=="testStarted")) | length,
+      failed: [.[] | select(.kind=="issueRecorded" and .issue.isFailure != false).testID] | unique | length}' \
+  .build/events-ResourceDemandTests.jsonl
 ```
 
 Expected: all 8 tests PASS.
@@ -963,7 +1036,13 @@ struct WorldViewStockTests {
 - [ ] **Step 2: Run the test to verify it fails**
 
 ```
-swift test --filter WorldViewStockTests --event-stream-output-path /tmp/rc-events.jsonl
+swift test --test-product DirectiveEngineTests --filter WorldViewStockTests \
+  --disable-xctest --event-stream-version 0 \
+  --event-stream-output-path .build/events-WorldViewStockTests.jsonl
+jq -s '[.[] | select(.kind=="event").payload]
+   | {started: map(select(.kind=="testStarted")) | length,
+      failed: [.[] | select(.kind=="issueRecorded" and .issue.isFailure != false).testID] | unique | length}' \
+  .build/events-WorldViewStockTests.jsonl
 ```
 
 Expected: compile failure — `type 'WorldView' has no member 'aggregateStock'`.
@@ -1032,8 +1111,20 @@ and pass both into the returned `WorldView(...)`, after `stockpileUnits:`:
 - [ ] **Step 5: Run the tests to verify they pass**
 
 ```
-swift test --filter WorldViewStockTests --event-stream-output-path /tmp/rc-events.jsonl
-swift test --filter DirectiveEngineTests --event-stream-output-path /tmp/rc-events2.jsonl
+swift test --test-product DirectiveEngineTests --filter WorldViewStockTests \
+  --disable-xctest --event-stream-version 0 \
+  --event-stream-output-path .build/events-WorldViewStockTests.jsonl
+jq -s '[.[] | select(.kind=="event").payload]
+   | {started: map(select(.kind=="testStarted")) | length,
+      failed: [.[] | select(.kind=="issueRecorded" and .issue.isFailure != false).testID] | unique | length}' \
+  .build/events-WorldViewStockTests.jsonl
+swift test --test-product DirectiveEngineTests --filter DirectiveEngineTests \
+  --disable-xctest --event-stream-version 0 \
+  --event-stream-output-path .build/events-DirectiveEngineTests.jsonl
+jq -s '[.[] | select(.kind=="event").payload]
+   | {started: map(select(.kind=="testStarted")) | length,
+      failed: [.[] | select(.kind=="issueRecorded" and .issue.isFailure != false).testID] | unique | length}' \
+  .build/events-DirectiveEngineTests.jsonl
 ```
 
 Expected: new tests PASS; `DirectiveEngine` shows no new failures. Note that `theSupervisorAdoptsTheRowTheBrainLaunched` is a known pre-existing failure under whole-package runs — do not attribute it to this change.
@@ -1172,7 +1263,13 @@ struct ResourceHeadroomTests {
 - [ ] **Step 2: Run the test to verify it fails**
 
 ```
-swift test --filter ResourceHeadroomTests --event-stream-output-path /tmp/rc-events.jsonl
+swift test --test-product DirectiveEngineTests --filter ResourceHeadroomTests \
+  --disable-xctest --event-stream-version 0 \
+  --event-stream-output-path .build/events-ResourceHeadroomTests.jsonl
+jq -s '[.[] | select(.kind=="event").payload]
+   | {started: map(select(.kind=="testStarted")) | length,
+      failed: [.[] | select(.kind=="issueRecorded" and .issue.isFailure != false).testID] | unique | length}' \
+  .build/events-ResourceHeadroomTests.jsonl
 ```
 
 Expected: compile failure — `cannot find 'ResourceHeadroom' in scope`.
@@ -1249,7 +1346,13 @@ public struct ResourceHeadroom: Equatable, Sendable {
 - [ ] **Step 4: Run the tests to verify they pass**
 
 ```
-swift test --filter ResourceHeadroomTests --event-stream-output-path /tmp/rc-events.jsonl
+swift test --test-product DirectiveEngineTests --filter ResourceHeadroomTests \
+  --disable-xctest --event-stream-version 0 \
+  --event-stream-output-path .build/events-ResourceHeadroomTests.jsonl
+jq -s '[.[] | select(.kind=="event").payload]
+   | {started: map(select(.kind=="testStarted")) | length,
+      failed: [.[] | select(.kind=="issueRecorded" and .issue.isFailure != false).testID] | unique | length}' \
+  .build/events-ResourceHeadroomTests.jsonl
 ```
 
 Expected: all 8 tests PASS.
@@ -1340,7 +1443,13 @@ Append to `app/Modules/DirectiveEngine/Tests/MineSitePlannerTests.swift`, inside
 - [ ] **Step 2: Run the test to verify it fails**
 
 ```
-swift test --filter MineSitePlannerTests --event-stream-output-path /tmp/rc-events.jsonl
+swift test --test-product DirectiveEngineTests --filter MineSitePlannerTests \
+  --disable-xctest --event-stream-version 0 \
+  --event-stream-output-path .build/events-MineSitePlannerTests.jsonl
+jq -s '[.[] | select(.kind=="event").payload]
+   | {started: map(select(.kind=="testStarted")) | length,
+      failed: [.[] | select(.kind=="issueRecorded" and .issue.isFailure != false).testID] | unique | length}' \
+  .build/events-MineSitePlannerTests.jsonl
 ```
 
 Expected: compile failure — extra argument `weights` in call.
@@ -1399,7 +1508,13 @@ Keep the file header's second line accurate — it names the rank terms — by c
 - [ ] **Step 4: Run the tests to verify they pass**
 
 ```
-swift test --filter MineSitePlannerTests --event-stream-output-path /tmp/rc-events.jsonl
+swift test --test-product DirectiveEngineTests --filter MineSitePlannerTests \
+  --disable-xctest --event-stream-version 0 \
+  --event-stream-output-path .build/events-MineSitePlannerTests.jsonl
+jq -s '[.[] | select(.kind=="event").payload]
+   | {started: map(select(.kind=="testStarted")) | length,
+      failed: [.[] | select(.kind=="issueRecorded" and .issue.isFailure != false).testID] | unique | length}' \
+  .build/events-MineSitePlannerTests.jsonl
 ```
 
 Expected: all tests PASS, including the pre-existing ones (the defaulted parameter keeps them valid).
@@ -1461,7 +1576,13 @@ Add to the suite covering `mineReadiness`:
 - [ ] **Step 2: Run the test to verify it fails**
 
 ```
-swift test --filter Brain --event-stream-output-path /tmp/rc-events.jsonl
+swift test --test-product DirectiveEngineTests --filter Brain \
+  --disable-xctest --event-stream-version 0 \
+  --event-stream-output-path .build/events-Brain.jsonl
+jq -s '[.[] | select(.kind=="event").payload]
+   | {started: map(select(.kind=="testStarted")) | length,
+      failed: [.[] | select(.kind=="issueRecorded" and .issue.isFailure != false).testID] | unique | length}' \
+  .build/events-Brain.jsonl
 ```
 
 Expected: compile failure — `type 'Brain' has no member 'siteWeights'`.
@@ -1533,7 +1654,13 @@ Confirm `Brain.swift` already declares a `logger` at file scope; if the name dif
 - [ ] **Step 6: Run the tests to verify they pass**
 
 ```
-swift test --filter Brain --event-stream-output-path /tmp/rc-events.jsonl
+swift test --test-product DirectiveEngineTests --filter Brain \
+  --disable-xctest --event-stream-version 0 \
+  --event-stream-output-path .build/events-Brain.jsonl
+jq -s '[.[] | select(.kind=="event").payload]
+   | {started: map(select(.kind=="testStarted")) | length,
+      failed: [.[] | select(.kind=="issueRecorded" and .issue.isFailure != false).testID] | unique | length}' \
+  .build/events-Brain.jsonl
 ```
 
 Expected: new tests PASS, no new failures.
@@ -1544,7 +1671,18 @@ From `app/Modules`:
 
 ```
 swift build --build-tests && ./scripts/link-index-store.sh
-swift test --event-stream-output-path /tmp/rc-full.jsonl
+for p in UniverseModelsTests GameDatabaseTests GameServicesTests GameSyncTests DirectiveEngineTests; do
+  swift test --test-product "$p" --disable-xctest --event-stream-version 0 \
+    --event-stream-output-path ".build/events-$p.jsonl"
+done
+cat .build/events-*Tests.jsonl > .build/events-all.jsonl
+jq -s '[.[] | select(.kind=="event").payload] as $e
+  | {started: ($e | map(select(.kind=="testStarted")) | length),
+     ended:   ($e | map(select(.kind=="testEnded")) | length),
+     failed:  ([$e[] | select(.kind=="issueRecorded" and .issue.isFailure != false).testID] | unique),
+     crashed: (($e | map(select(.kind=="testStarted").testID))
+             - ($e | map(select(.kind=="testEnded" or .kind=="testSkipped").testID)))}' \
+  .build/events-all.jsonl
 ```
 
 Read the results through the `swift-test-event-stream` skill's `jq` recipes — it also covers the multi-target truncation trap, which matters here because several test targets are involved. Expected: no failures other than the known pre-existing `theSupervisorAdoptsTheRowTheBrainLaunched`.
@@ -1607,7 +1745,18 @@ Run before declaring the plan complete:
 
 - [ ] `cd app/Modules && swift build --build-tests` — clean.
 - [ ] `./scripts/link-index-store.sh` — run after the build so LSP reference queries resolve.
-- [ ] `swift test --event-stream-output-path /tmp/rc-full.jsonl`, results read through the `swift-test-event-stream` skill. Only the known `theSupervisorAdoptsTheRowTheBrainLaunched` whole-package failure may be red.
+- [ ] `for p in UniverseModelsTests GameDatabaseTests GameServicesTests GameSyncTests DirectiveEngineTests; do
+  swift test --test-product "$p" --disable-xctest --event-stream-version 0 \
+    --event-stream-output-path ".build/events-$p.jsonl"
+done
+cat .build/events-*Tests.jsonl > .build/events-all.jsonl
+jq -s '[.[] | select(.kind=="event").payload] as $e
+  | {started: ($e | map(select(.kind=="testStarted")) | length),
+     ended:   ($e | map(select(.kind=="testEnded")) | length),
+     failed:  ([$e[] | select(.kind=="issueRecorded" and .issue.isFailure != false).testID] | unique),
+     crashed: (($e | map(select(.kind=="testStarted").testID))
+             - ($e | map(select(.kind=="testEnded" or .kind=="testSkipped").testID)))}' \
+  .build/events-all.jsonl`, results read through the `swift-test-event-stream` skill. Only the known `theSupervisorAdoptsTheRowTheBrainLaunched` whole-package failure may be red.
 - [ ] `./app/scripts/check-comments.sh` over every created and modified source file.
 - [ ] `sqlite3` against the live DB confirms `locationInventories` exists after the app next launches and that the hourly sweep has written depot rows (path in the `sqlite-db-location` memory note; needs `dangerouslyDisableSandbox`).
 - [ ] The brain's mine-siting log line names the boosted types on a real tick.
