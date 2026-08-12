@@ -141,7 +141,7 @@ public struct BrainWhy: Equatable, Sendable {
             ),
             candidates: candidates(in: report),
             pruneNotes: pruneNotes(in: report),
-            survey: surveyLine(in: report),
+            survey: surveyLine(status: report.survey, report: report),
             goals: [
                 goalLine(.salvage, status: report.salvage, report: report),
                 goalLine(.haul, status: report.haul, report: report),
@@ -163,7 +163,7 @@ public struct BrainWhy: Equatable, Sendable {
         report.theatres.map { theatre in
             guard case let .claimed(missing) = theatre.readiness else {
                 return BrainWhyTheatreGroup(
-                    depot: theatre.depot, goalLines: theatreGoalLines(for: report), shortfallLines: []
+                    depot: theatre.depot, goalLines: theatreGoalLines(for: report, theatre: theatre), shortfallLines: []
                 )
             }
             return BrainWhyTheatreGroup(
@@ -173,15 +173,21 @@ public struct BrainWhy: Equatable, Sendable {
         }
     }
 
-    /// Grow, survey, and the three liveness goals, in that fixed order — the
-    /// five standing activities a theatre group reports.
-    private static func theatreGoalLines(for report: BrainReport) -> [BrainWhyTheatreGroup.Line] {
+    /// Grow, survey, the three liveness goals and this theatre's own stock,
+    /// in that fixed order. Grow and mine stay the report's flat figures;
+    /// survey, salvage, haul and stock are each THIS theatre's own.
+    private static func theatreGoalLines(for report: BrainReport, theatre: Theatre) -> [BrainWhyTheatreGroup.Line] {
         [
             growLine(report),
-            surveyGroupLine(report),
-            goalGroupLine(goalLine(.salvage, status: report.salvage, report: report)),
-            goalGroupLine(goalLine(.haul, status: report.haul, report: report)),
+            surveyGroupLine(report, theatre: theatre),
+            goalGroupLine(goalLine(
+                .salvage, status: report.theatreSalvage[theatre.depot] ?? .idle(reason: "not evaluated"), report: report
+            )),
+            goalGroupLine(goalLine(
+                .haul, status: report.theatreHaul[theatre.depot] ?? .idle(reason: "not evaluated"), report: report
+            )),
             goalGroupLine(goalLine(.mine, status: report.mine, report: report)),
+            stockGroupLine(report: report, theatre: theatre),
         ]
     }
 
@@ -200,8 +206,9 @@ public struct BrainWhy: Equatable, Sendable {
         return BrainWhyTheatreGroup.Line(id: "grow", label: "Grow", spans: spans, kind: kind)
     }
 
-    private static func surveyGroupLine(_ report: BrainReport) -> BrainWhyTheatreGroup.Line {
-        let survey = surveyLine(in: report)
+    private static func surveyGroupLine(_ report: BrainReport, theatre: Theatre) -> BrainWhyTheatreGroup.Line {
+        let status = report.theatreSurvey[theatre.depot] ?? .idle(reason: "not evaluated")
+        let survey = surveyLine(status: status, report: report)
         return BrainWhyTheatreGroup.Line(
             id: "survey", label: "Survey", spans: survey.spans, kind: surveyKind(survey.kind)
         )
@@ -209,6 +216,18 @@ public struct BrainWhy: Equatable, Sendable {
 
     private static func goalGroupLine(_ goal: BrainWhyGoal) -> BrainWhyTheatreGroup.Line {
         BrainWhyTheatreGroup.Line(id: goal.goal.rawValue, label: goal.goal.title, spans: goal.spans, kind: goal.kind)
+    }
+
+    /// This theatre's own hub-stock line — `report.theatreLimits[theatre]`,
+    /// never the flat `report.limits` another theatre's card would show too.
+    private static func stockGroupLine(report: BrainReport, theatre: Theatre) -> BrainWhyTheatreGroup.Line {
+        guard let limits = report.theatreLimits[theatre.depot] else {
+            return BrainWhyTheatreGroup.Line(id: "stock", label: "Stock", spans: [.prose("not evaluated")], kind: .idle)
+        }
+        let kind: BrainWhyGoal.Kind = limits.hubStockStanding(at: report.observedAt) == .clear ? .idle : .halted
+        return BrainWhyTheatreGroup.Line(
+            id: "stock", label: "Stock", spans: [.prose(stockDetail(limits, at: report.observedAt))], kind: kind
+        )
     }
 
     /// `BrainWhySurvey.Kind` and `BrainWhyGoal.Kind` name the same five
@@ -451,8 +470,8 @@ public struct BrainWhy: Equatable, Sendable {
     /// Survey's own line, in `topGoalGate`'s voice but never merged into it —
     /// a different fleet and a different question. `.idle`'s reason is
     /// carried verbatim, never reworded.
-    private static func surveyLine(in report: BrainReport) -> BrainWhySurvey {
-        switch report.survey {
+    private static func surveyLine(status: BrainSurveyStatus, report: BrainReport) -> BrainWhySurvey {
+        switch status {
         case let .launched(carrier, roamCentre, status):
             return launchedSurveyLine(carrier: carrier, roamCentre: roamCentre, status: status)
         case let .ready(carrier, roamCentre):
@@ -638,26 +657,34 @@ public struct BrainWhy: Equatable, Sendable {
         // The general rule this surface follows is that silence must never
         // read as permission to spend — which has to apply to ALL the ways
         // the reading can be untrustworthy, not just the absent one.
+        lines.append(
+            BrainWhyPressure(kind: .reserveFloor, detail: "hub stock — \(stockDetail(limits, at: report.observedAt))")
+        )
+
+        return lines
+    }
+
+    /// The reserve-floor line's own sentence for one `BrainLimits` reading —
+    /// shared by the flat pressure line above and each theatre's own stock
+    /// line, so the two can never quote the rail differently.
+    private static func stockDetail(_ limits: BrainLimits, at observedAt: Date) -> String {
         let floor = count(limits.spendFloor)
-        let stock: String = switch limits.hubStockStanding(at: report.observedAt) {
+        switch limits.hubStockStanding(at: observedAt) {
         case .unread:
-            "no census reading — printing vetoed until one lands"
+            return "no census reading — printing vetoed until one lands"
         case let .stale(age):
             // Name the AGE, not the figure's size: an operator told a healthy
             // -looking number is vetoed would go hunting for a shortage that
             // does not exist. Same reasoning as `printStockShortDiagnosis`.
-            """
+            return """
             \(limits.hubStock.map(count) ?? "?") units, but the census reading is \(aged(age)) \
             — printing vetoed until it refreshes
             """
         case .belowFloor:
-            "\(limits.hubStock.map(count) ?? "?") units, below the \(floor) reserve floor — printing vetoed"
+            return "\(limits.hubStock.map(count) ?? "?") units, below the \(floor) reserve floor — printing vetoed"
         case .clear:
-            "\(limits.hubStock.map(count) ?? "?") units against a \(floor) reserve floor"
+            return "\(limits.hubStock.map(count) ?? "?") units against a \(floor) reserve floor"
         }
-        lines.append(BrainWhyPressure(kind: .reserveFloor, detail: "hub stock — \(stock)"))
-
-        return lines
     }
 
     /// Coarse, because the precision is not the point: an operator needs to

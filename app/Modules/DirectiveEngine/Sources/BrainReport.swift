@@ -306,6 +306,18 @@ public struct BrainReport: Equatable, Sendable {
     /// "recent 429" window is judged against the same instant everything else
     /// on this report was.
     public let observedAt: Date
+    /// `Brain.surveyStatus`'s verdict for EACH operational theatre, keyed by
+    /// depot — what the why-view's per-theatre section renders. `survey`
+    /// above stays the single-theatre convenience the flat fallback uses.
+    public let theatreSurvey: [String: BrainSurveyStatus]
+    /// `Brain.salvageStatus`'s verdict per operational theatre.
+    public let theatreSalvage: [String: BrainGoalStatus]
+    /// `Brain.haulStatus`'s verdict per operational theatre.
+    public let theatreHaul: [String: BrainGoalStatus]
+    /// Each operational theatre's OWN hub-stock reading, sharing every other
+    /// `BrainLimits` field with `limits` — the fix for `limits.hubStock`
+    /// standing in for every theatre's figure.
+    public let theatreLimits: [String: BrainLimits]
 
     public init(
         decision: BrainDecision,
@@ -318,7 +330,11 @@ public struct BrainReport: Equatable, Sendable {
         haul: BrainGoalStatus = .idle(reason: "not evaluated"),
         mine: BrainGoalStatus = .idle(reason: "not evaluated"),
         mines: [BrainMineHealth] = [],
-        observedAt: Date
+        observedAt: Date,
+        theatreSurvey: [String: BrainSurveyStatus] = [:],
+        theatreSalvage: [String: BrainGoalStatus] = [:],
+        theatreHaul: [String: BrainGoalStatus] = [:],
+        theatreLimits: [String: BrainLimits] = [:]
     ) {
         self.decision = decision
         self.ranked = ranked
@@ -331,6 +347,10 @@ public struct BrainReport: Equatable, Sendable {
         self.mine = mine
         self.mines = mines
         self.observedAt = observedAt
+        self.theatreSurvey = theatreSurvey
+        self.theatreSalvage = theatreSalvage
+        self.theatreHaul = theatreHaul
+        self.theatreLimits = theatreLimits
     }
 }
 

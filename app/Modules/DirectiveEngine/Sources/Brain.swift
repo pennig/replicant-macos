@@ -13,6 +13,7 @@
 //  reconciliation loop beside it.
 //
 
+import API
 import Dependencies
 import Foundation
 import GameModels
@@ -77,15 +78,19 @@ struct Brain: Sendable {
                     by: { $0.directiveID ?? "" }
                 )
                 let view = try WorldView.read(from: db, now: now)
+                // Same transaction as the devices, one row per operational
+                // theatre — never `.first`, which showed every theatre one theatre's stock.
+                let depots = view.theatres.filter(\.isOperational).map(\.depot)
+                var hubFootprints: [String: LocationFootprint] = [:]
+                if !depots.isEmpty {
+                    let rows = try LocationFootprint.where { $0.location.in(depots) }.fetchAll(db)
+                    hubFootprints = Dictionary(uniqueKeysWithValues: rows.map { ($0.location, $0) })
+                }
                 return Snapshot(
                     view: view,
                     directives: directives,
                     log: log,
-                    // Same transaction as everything else: a stock figure from a
-                    // different instant than the devices describes no real world.
-                    hubFootprint: try view.theatres.first(where: \.isOperational).flatMap { theatre in
-                        try LocationFootprint.where { $0.location.eq(theatre.depot) }.fetchOne(db)
-                    }
+                    hubFootprints: hubFootprints
                 )
             }
         } catch {
@@ -117,6 +122,19 @@ struct Brain: Sendable {
         let mine = Self.mineStatus(directives: snapshot.directives, view: snapshot.view)
         let mines = Self.mineHealth(view: snapshot.view, directives: snapshot.directives)
 
+        // The same three verdicts, once per operational theatre, so one
+        // theatre's live run can never mask another's idle or halted state.
+        let operational = snapshot.view.theatres.filter(\.isOperational)
+        let theatreSurvey = Dictionary(uniqueKeysWithValues: operational.map {
+            ($0.depot, Self.surveyStatus(directives: snapshot.directives, view: snapshot.view, theatre: $0))
+        })
+        let theatreSalvage = Dictionary(uniqueKeysWithValues: operational.map {
+            ($0.depot, Self.salvageStatus(directives: snapshot.directives, view: snapshot.view, theatre: $0))
+        })
+        let theatreHaul = Dictionary(uniqueKeysWithValues: operational.map {
+            ($0.depot, Self.haulStatus(directives: snapshot.directives, view: snapshot.view, theatre: $0))
+        })
+
         let escalated = await respondToStalls(snapshot)
         let plan = Self.plan(view: snapshot.view, directives: snapshot.directives)
         let decision = await decide(plan, escalated: escalated, database: database)
@@ -127,11 +145,20 @@ struct Brain: Sendable {
         await ensureMine(snapshot: snapshot, database: database)
         await ensureMineFerries(snapshot: snapshot, database: database)
 
-        return await BrainReport(
+        // One governor read shared by the flat figure and every theatre's own
+        // — never one call per theatre for what is a single fleet-wide budget.
+        @Dependency(\.gameClient) var gameClient
+        let budget = await gameClient.budget(.actions)
+        let firstFootprint = operational.first.flatMap { snapshot.hubFootprints[$0.depot] }
+        let theatreLimits = Dictionary(uniqueKeysWithValues: operational.map {
+            ($0.depot, Self.limits(hubFootprint: snapshot.hubFootprints[$0.depot], budget: budget))
+        })
+
+        return BrainReport(
             decision: decision,
             ranked: plan.ranked,
             theatres: snapshot.view.theatres,
-            limits: Self.limits(hubFootprint: snapshot.hubFootprint),
+            limits: Self.limits(hubFootprint: firstFootprint, budget: budget),
             prune: Self.pruneReport(
                 plan: plan, decision: decision, directives: snapshot.directives
             ),
@@ -140,7 +167,11 @@ struct Brain: Sendable {
             haul: haul,
             mine: mine,
             mines: mines,
-            observedAt: now
+            observedAt: now,
+            theatreSurvey: theatreSurvey,
+            theatreSalvage: theatreSalvage,
+            theatreHaul: theatreHaul,
+            theatreLimits: theatreLimits
         )
     }
 
@@ -176,7 +207,7 @@ struct Brain: Sendable {
         }
         return Snapshot(
             view: snapshot.view, directives: directives,
-            log: snapshot.log, hubFootprint: snapshot.hubFootprint
+            log: snapshot.log, hubFootprints: snapshot.hubFootprints
         )
     }
 
@@ -594,8 +625,14 @@ struct Brain: Sendable {
     /// throttles on, not a second copy.
     private static func limits(hubFootprint: LocationFootprint?) async -> BrainLimits {
         @Dependency(\.gameClient) var gameClient
-        let budget = await gameClient.budget(.actions)
-        return BrainLimits(
+        return limits(hubFootprint: hubFootprint, budget: await gameClient.budget(.actions))
+    }
+
+    /// `limits(hubFootprint:)` over an ALREADY-READ `budget` — `report()` reads
+    /// it once and reuses it for the flat figure and every theatre's own,
+    /// rather than one governor call per theatre for one fleet-wide budget.
+    private static func limits(hubFootprint: LocationFootprint?, budget: RateLimitGovernor.Snapshot) -> BrainLimits {
+        BrainLimits(
             actionsRemaining: budget.remaining,
             actionsLimit: budget.limit,
             actionsFloor: CommandGovernorClient.actionFloor,
@@ -617,9 +654,31 @@ struct Brain: Sendable {
         let directives: [Directive]
         /// Oldest first, for each brain-managed stall and nothing else.
         let log: [String: [DirectiveLogEntry]]
-        /// Read for the why-view's reserve-floor line only; the rail itself is
-        /// enforced by `RelayRun` at the moment it would print.
-        let hubFootprint: LocationFootprint?
+        /// Read for the why-view's reserve-floor line only, by depot — never a
+        /// single reading, or every theatre's card shows one theatre's figure.
+        let hubFootprints: [String: LocationFootprint]
+
+        init(
+            view: WorldView, directives: [Directive], log: [String: [DirectiveLogEntry]],
+            hubFootprints: [String: LocationFootprint]
+        ) {
+            self.view = view
+            self.directives = directives
+            self.log = log
+            self.hubFootprints = hubFootprints
+        }
+
+        /// Single-footprint convenience — kept for the tests that only ever
+        /// cared about liveness, never about stock reporting.
+        init(
+            view: WorldView, directives: [Directive], log: [String: [DirectiveLogEntry]],
+            hubFootprint: LocationFootprint?
+        ) {
+            self.init(
+                view: view, directives: directives, log: log,
+                hubFootprints: hubFootprint.map { [$0.location: $0] } ?? [:]
+            )
+        }
     }
 
     // MARK: - Theatre ownership
@@ -1445,12 +1504,23 @@ struct Brain: Sendable {
         return chosen?.deviceCode
     }
 
-    /// The why-view's salvage line. Reads an already-live row FIRST: once a run
-    /// owns the fleet its own tag reserves the carrier, so re-deriving would
-    /// report "no vessel" about the vessel the operator is looking at.
+    /// The why-view's salvage line, over EVERY operational theatre — the
+    /// single-theatre convenience the flat fallback section uses when nothing
+    /// is operational yet.
     static func salvageStatus(directives: [Directive], view: WorldView) -> BrainGoalStatus {
+        guard let theatre = view.theatres.first(where: \.isOperational) else {
+            return .idle(reason: "no operational theatre")
+        }
+        return salvageStatus(directives: directives, view: view, theatre: theatre)
+    }
+
+    /// `theatre`'s own salvage line: a live row scoped to `theatre` (or
+    /// unstamped, per `ensureOne`) wins first, else `salvageReadiness`'s
+    /// verdict. A live row in another theatre must never mask this one's.
+    static func salvageStatus(directives: [Directive], view: WorldView, theatre: Theatre) -> BrainGoalStatus {
         if let live = directives.first(where: {
             $0.kind == .salvageRun && owningStatuses.contains($0.status)
+                && ($0.theatreDepot == theatre.depot || $0.theatreDepot == nil)
         }) {
             return .launched(
                 vessel: live.deviceCode,
@@ -1458,29 +1528,34 @@ struct Brain: Sendable {
                 status: launchedGoalStatus(live.status)
             )
         }
-        guard let theatre = view.theatres.first(where: \.isOperational) else {
-            return .idle(reason: "no operational theatre")
-        }
         switch salvageReadiness(view: view, directives: directives, theatre: theatre) {
         case let .launch(carrier, _): return .ready(vessel: carrier)
         case let .idle(reason): return .idle(reason: reason)
         }
     }
 
-    /// The why-view's haul line, for the GENERAL drainer only — a per-site row
-    /// is a different goal and must not stand in for this one.
+    /// The why-view's haul line, for the GENERAL drainer only — the
+    /// single-theatre convenience the flat fallback section uses.
     static func haulStatus(directives: [Directive], view: WorldView) -> BrainGoalStatus {
+        guard let theatre = view.theatres.first(where: \.isOperational) else {
+            return .idle(reason: "no operational theatre")
+        }
+        return haulStatus(directives: directives, view: view, theatre: theatre)
+    }
+
+    /// `theatre`'s own general-drainer line — a per-site row is a different
+    /// goal, and a live row in another theatre must never mask this
+    /// theatre's own idle or halted state.
+    static func haulStatus(directives: [Directive], view: WorldView, theatre: Theatre) -> BrainGoalStatus {
         if let live = directives.first(where: {
             $0.kind == .haulRun && owningStatuses.contains($0.status) && isGeneralHaul($0)
+                && ($0.theatreDepot == theatre.depot || $0.theatreDepot == nil)
         }) {
             return .launched(
                 vessel: live.deviceCode,
                 focus: live.theatreDepot,
                 status: launchedGoalStatus(live.status)
             )
-        }
-        guard let theatre = view.theatres.first(where: \.isOperational) else {
-            return .idle(reason: "no operational theatre")
         }
         switch haulReadiness(view: view, directives: directives, theatre: theatre) {
         case let .launch(controller): return .ready(vessel: controller)
@@ -1552,17 +1627,24 @@ struct Brain: Sendable {
         }
     }
 
-    /// The why-view's survey line: `.launched` off an already-live row —
-    /// never re-deriving carrier, centre or status — otherwise
-    /// `surveyReadiness`'s own verdict, carried through for `.launch`/`.idle`.
+    /// The why-view's survey line, over EVERY operational theatre — the
+    /// single-theatre convenience the flat fallback section uses.
     static func surveyStatus(directives: [Directive], view: WorldView) -> BrainSurveyStatus {
-        if let live = directives.first(where: {
-            $0.kind == .surveyRun && owningStatuses.contains($0.status)
-        }) {
-            return .launched(carrier: live.deviceCode, roamCentre: live.roamCentre, status: launchedStatus(live.status))
-        }
         guard let theatre = view.theatres.first(where: \.isOperational) else {
             return .idle(reason: "no operational theatre")
+        }
+        return surveyStatus(directives: directives, view: view, theatre: theatre)
+    }
+
+    /// `theatre`'s own survey line: a live row scoped to `theatre` (or
+    /// unstamped) wins first, never re-derived, else `surveyReadiness`'s
+    /// verdict. A live row elsewhere must never mask this theatre's state.
+    static func surveyStatus(directives: [Directive], view: WorldView, theatre: Theatre) -> BrainSurveyStatus {
+        if let live = directives.first(where: {
+            $0.kind == .surveyRun && owningStatuses.contains($0.status)
+                && ($0.theatreDepot == theatre.depot || $0.theatreDepot == nil)
+        }) {
+            return .launched(carrier: live.deviceCode, roamCentre: live.roamCentre, status: launchedStatus(live.status))
         }
         switch surveyReadiness(view: view, directives: directives, theatre: theatre) {
         case let .launch(carrier, roamCentre): return .ready(carrier: carrier, roamCentre: roamCentre)

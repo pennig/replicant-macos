@@ -32,14 +32,24 @@ struct WhyViewTheatreTests {
         )
     }
 
-    private func brainReportFixture(theatres: [Theatre]) -> BrainReport {
+    private func brainReportFixture(
+        theatres: [Theatre],
+        theatreSurvey: [String: BrainSurveyStatus] = [:],
+        theatreSalvage: [String: BrainGoalStatus] = [:],
+        theatreHaul: [String: BrainGoalStatus] = [:],
+        theatreLimits: [String: BrainLimits] = [:]
+    ) -> BrainReport {
         BrainReport(
             decision: .idle(reason: "no grow or prune work"),
             ranked: [],
             theatres: theatres,
             limits: BrainWhyViewTests.calmLimits(),
             survey: .idle(reason: "no vessel is tagged auto:survey"),
-            observedAt: BrainWhyViewTests.now
+            observedAt: BrainWhyViewTests.now,
+            theatreSurvey: theatreSurvey,
+            theatreSalvage: theatreSalvage,
+            theatreHaul: theatreHaul,
+            theatreLimits: theatreLimits
         )
     }
 
@@ -61,7 +71,80 @@ struct WhyViewTheatreTests {
         let groups = BrainWhy.groups(for: report)
 
         #expect(groups.map(\.depot) == ["AINALRAM-BELT-1", "DENEBED-BELT-1"])
-        #expect(groups.allSatisfy { $0.goalLines.count == 5 })
+        #expect(groups.allSatisfy { $0.goalLines.count == 6 })
+    }
+
+    /// A live run reported for AINALRAM must not leak into DENEBED's own
+    /// line — the fleet-wide-scan defect Task 7 closed, now checked at the
+    /// rendered card rather than just the engine verdict.
+    @Test("a live run in one theatre does not mask another theatre's idle or halted state")
+    func aLiveRunDoesNotMaskAnotherTheatresLine() {
+        let ainalram = Theatre(
+            depot: "AINALRAM-BELT-1", system: "AINALRAM", origin: .derived,
+            readiness: .operational, stock: 40_000
+        )
+        let denebed = Theatre(
+            depot: "DENEBED-BELT-1", system: "DENEBED", origin: .pinned,
+            readiness: .operational, stock: 900
+        )
+        let report = brainReportFixture(
+            theatres: [ainalram, denebed],
+            theatreSurvey: [
+                ainalram.depot: .launched(carrier: "V1", roamCentre: "AINALRAM", status: .running),
+                denebed.depot: .idle(reason: "no vessel is tagged auto:survey"),
+            ],
+            theatreSalvage: [
+                ainalram.depot: .launched(vessel: "V1", focus: "AINALRAM", status: .running),
+                denebed.depot: .idle(reason: "no auto:salvage vessel"),
+            ],
+            theatreHaul: [
+                ainalram.depot: .launched(vessel: "T1", focus: ainalram.depot, status: .running),
+                denebed.depot: .idle(reason: "no free auto:haul controller offering ferry"),
+            ]
+        )
+
+        let groups = Dictionary(uniqueKeysWithValues: BrainWhy.groups(for: report).map { ($0.depot, $0) })
+        let ainalramLines = Dictionary(uniqueKeysWithValues: groups[ainalram.depot]!.goalLines.map { ($0.id, $0.text) })
+        let denebedLines = Dictionary(uniqueKeysWithValues: groups[denebed.depot]!.goalLines.map { ($0.id, $0.text) })
+
+        #expect(ainalramLines["survey"] != denebedLines["survey"])
+        #expect(ainalramLines["salvage"] != denebedLines["salvage"])
+        #expect(ainalramLines["haul"] != denebedLines["haul"])
+        #expect(denebedLines["survey"] == "no vessel is tagged auto:survey")
+        #expect(denebedLines["haul"] == "no free auto:haul controller offering ferry")
+    }
+
+    /// Each theatre's own footprint renders under its own heading — the
+    /// `Snapshot.hubFootprint` fix.
+    @Test("two theatres with different footprint resources each report their own number")
+    func eachTheatreReportsItsOwnStockLine() {
+        let ainalram = Theatre(
+            depot: "AINALRAM-BELT-1", system: "AINALRAM", origin: .derived,
+            readiness: .operational, stock: 40_000
+        )
+        let denebed = Theatre(
+            depot: "DENEBED-BELT-1", system: "DENEBED", origin: .pinned,
+            readiness: .operational, stock: 900
+        )
+        func limits(hubStock: Int) -> BrainLimits {
+            BrainLimits(
+                actionsRemaining: 54, actionsLimit: 60, actionsFloor: 6,
+                hubStock: hubStock, hubStockFetchedAt: BrainWhyViewTests.now,
+                spendFloor: 35_078, rateLimitedAt: nil
+            )
+        }
+        let report = brainReportFixture(
+            theatres: [ainalram, denebed],
+            theatreLimits: [ainalram.depot: limits(hubStock: 40_000), denebed.depot: limits(hubStock: 900)]
+        )
+
+        let groups = Dictionary(uniqueKeysWithValues: BrainWhy.groups(for: report).map { ($0.depot, $0) })
+        let ainalramStock = groups[ainalram.depot]!.goalLines.first { $0.id == "stock" }!.text
+        let denebedStock = groups[denebed.depot]!.goalLines.first { $0.id == "stock" }!.text
+
+        #expect(ainalramStock.contains("40,000"))
+        #expect(denebedStock.contains("900"))
+        #expect(ainalramStock != denebedStock)
     }
 
     @Test("A claimed theatre renders its shortfalls in place of goal lines")

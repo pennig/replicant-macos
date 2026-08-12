@@ -408,14 +408,15 @@ struct BrainSurveyStatusTests {
             id: "LIVE", kind: .surveyRun, status: .running, deviceCode: "V9",
             roamCentre: "VEGA", targets: [], targetIndex: 0, step: "step",
             stepStartedAt: surveyFixtureNow, returnToOrigin: false, originDesignation: nil,
-            attentionReason: nil, createdAt: surveyFixtureNow, updatedAt: surveyFixtureNow
+            attentionReason: nil, createdAt: surveyFixtureNow, updatedAt: surveyFixtureNow,
+            theatreDepot: ainalramTheatre.depot
         )
         // A view that would otherwise idle — proves the live row is checked
         // FIRST, not merely that it wins when readiness also says launch.
         let view = surveyReadinessView(devices: [], depot: nil)
 
         #expect(
-            Brain.surveyStatus(directives: [live], view: view)
+            Brain.surveyStatus(directives: [live], view: view, theatre: ainalramTheatre)
                 == .launched(carrier: "V9", roamCentre: "VEGA", status: .running)
         )
     }
@@ -435,12 +436,13 @@ struct BrainSurveyStatusTests {
             id: "LIVE", kind: .surveyRun, status: row, deviceCode: "V9",
             roamCentre: nil, targets: ["ALTAIR"], targetIndex: 0, step: "step",
             stepStartedAt: surveyFixtureNow, returnToOrigin: false, originDesignation: nil,
-            attentionReason: nil, createdAt: surveyFixtureNow, updatedAt: surveyFixtureNow
+            attentionReason: nil, createdAt: surveyFixtureNow, updatedAt: surveyFixtureNow,
+            theatreDepot: ainalramTheatre.depot
         )
         let view = surveyReadinessView(devices: [], depot: nil)
 
         #expect(
-            Brain.surveyStatus(directives: [live], view: view)
+            Brain.surveyStatus(directives: [live], view: view, theatre: ainalramTheatre)
                 == .launched(carrier: "V9", roamCentre: nil, status: expected)
         )
     }
@@ -474,6 +476,27 @@ struct BrainSurveyStatusTests {
             return
         }
         #expect(status == readiness)
+    }
+
+    /// A live run in one theatre must not mask another theatre's own idle
+    /// state — the fleet-wide scan Task 7 closed.
+    @Test("a live run in one theatre does not mask another theatre's idle state")
+    func aLiveRunInOneTheatreDoesNotMaskAnother() {
+        let (view, ainalram, denebed) = twoTheatreSurveyView(
+            ainalramFleet: surveyReadinessStagedFleet(location: "AINALRAM-1"), denebedFleet: []
+        )
+        let live = directiveFixture(
+            id: "LIVE", kind: .surveyRun, deviceCode: "V1", theatreDepot: ainalram.depot
+        )
+
+        #expect(
+            Brain.surveyStatus(directives: [live], view: view, theatre: ainalram)
+                == .launched(carrier: "V1", roamCentre: nil, status: .running)
+        )
+        guard case .idle = Brain.surveyStatus(directives: [live], view: view, theatre: denebed) else {
+            Issue.record("DENEBED's own idle state must not read as AINALRAM's launch")
+            return
+        }
     }
 
     /// `surveyReadiness` takes its theatre as a parameter, so a world with no

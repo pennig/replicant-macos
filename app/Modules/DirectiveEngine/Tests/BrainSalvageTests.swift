@@ -443,6 +443,27 @@ struct BrainSalvageStatusTests {
         let view = salvageView(devices: [], depot: nil)
         #expect(Brain.salvageStatus(directives: [], view: view) == .idle(reason: "no operational theatre"))
     }
+
+    /// A live run in one theatre must not mask another theatre's own idle
+    /// state — the fleet-wide scan Task 7 closed.
+    @Test("a live run in one theatre does not mask another theatre's idle state")
+    func aLiveRunInOneTheatreDoesNotMaskAnother() {
+        let (view, ainalram, denebed) = twoTheatreSalvageView(
+            ainalramFleet: salvageStagedFleet(carrier: "V1", location: "AINALRAM-1"), denebedFleet: []
+        )
+        let live = directiveFixture(
+            id: "LIVE", kind: .salvageRun, deviceCode: "V1", theatreDepot: ainalram.depot
+        )
+
+        #expect(
+            Brain.salvageStatus(directives: [live], view: view, theatre: ainalram)
+                == .launched(vessel: "V1", focus: nil, status: .running)
+        )
+        guard case .idle = Brain.salvageStatus(directives: [live], view: view, theatre: denebed) else {
+            Issue.record("DENEBED's own idle state must not read as AINALRAM's launch")
+            return
+        }
+    }
 }
 
 // MARK: - ensureSalvage
@@ -1013,6 +1034,29 @@ struct BrainHaulStatusTests {
     func noOperationalTheatreReportsIdle() {
         let view = haulView(devices: [haulController("T1", tags: [HaulRun.defaultFleetTag])], depot: nil)
         #expect(Brain.haulStatus(directives: [], view: view) == .idle(reason: "no operational theatre"))
+    }
+
+    /// A live run in one theatre must not mask another theatre's own idle
+    /// state — the fleet-wide scan Task 7 closed.
+    @Test("a live run in one theatre does not mask another theatre's idle state")
+    func aLiveRunInOneTheatreDoesNotMaskAnother() {
+        let (view, sol, vega) = twoTheatreHaulView(
+            solControllers: [haulController("T1", tags: [HaulRun.defaultFleetTag], location: "SOL-1")],
+            vegaControllers: []
+        )
+        let live = directiveFixture(
+            id: "LIVE", kind: .haulRun, deviceCode: "T1",
+            fleetTag: HaulRun.defaultFleetTag, theatreDepot: sol.depot
+        )
+
+        #expect(
+            Brain.haulStatus(directives: [live], view: view, theatre: sol)
+                == .launched(vessel: "T1", focus: sol.depot, status: .running)
+        )
+        guard case .idle = Brain.haulStatus(directives: [live], view: view, theatre: vega) else {
+            Issue.record("VEGA's own idle state must not read as SOL's launch")
+            return
+        }
     }
 }
 
