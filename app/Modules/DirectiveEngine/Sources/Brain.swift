@@ -114,7 +114,9 @@ struct Brain: Sendable {
         let survey = Self.surveyStatus(directives: snapshot.directives, view: snapshot.view)
         let salvage = Self.salvageStatus(directives: snapshot.directives, view: snapshot.view)
         let haul = Self.haulStatus(directives: snapshot.directives, view: snapshot.view)
-        let (mine, mineDemandIncomplete) = Self.mineStatus(directives: snapshot.directives, view: snapshot.view)
+        let mineStatus = Self.mineStatus(directives: snapshot.directives, view: snapshot.view)
+        let mine = mineStatus.status
+        let mineDemandIncomplete = mineStatus.demandIncomplete
         let mines = Self.mineHealth(view: snapshot.view, directives: snapshot.directives)
 
         let escalated = await respondToStalls(snapshot)
@@ -1506,29 +1508,35 @@ struct Brain: Sendable {
         }
     }
 
+    /// `mineStatus`'s verdict plus whether siting ran on an incomplete catalog.
+    struct MineStatusResult: Equatable, Sendable {
+        let status: BrainGoalStatus
+        let demandIncomplete: Bool
+    }
+
     /// The why-view's mine line, plus whether siting ran on an incomplete
     /// catalog — a live `mineRun` FIRST (mid-install misreports its own
     /// blocker) else the readiness verdict, exactly as `haulStatus`.
-    static func mineStatus(
-        directives: [Directive], view: WorldView
-    ) -> (status: BrainGoalStatus, demandIncomplete: Bool) {
+    static func mineStatus(directives: [Directive], view: WorldView) -> MineStatusResult {
         if let live = directives.first(where: {
             $0.kind == .mineRun && owningStatuses.contains($0.status)
         }) {
-            return (
-                .launched(
+            return MineStatusResult(
+                status: .launched(
                     vessel: live.deviceCode,
                     focus: live.currentTarget,
                     status: launchedGoalStatus(live.status)
                 ),
-                false
+                demandIncomplete: false
             )
         }
         let siting = mineSiting(view: view, directives: directives)
         let demandIncomplete = siting.headroom?.demandIncomplete ?? false
         switch siting.readiness {
-        case let .launch(carrier, _): return (.ready(vessel: carrier), demandIncomplete)
-        case let .idle(reason): return (.idle(reason: reason), demandIncomplete)
+        case let .launch(carrier, _):
+            return MineStatusResult(status: .ready(vessel: carrier), demandIncomplete: demandIncomplete)
+        case let .idle(reason):
+            return MineStatusResult(status: .idle(reason: reason), demandIncomplete: demandIncomplete)
         }
     }
 

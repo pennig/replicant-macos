@@ -606,9 +606,6 @@ public struct BrainWhy: Equatable, Sendable {
         )
     }
 
-    /// Same status-then-static-fact template `mineHealthLine` follows: the
-    /// name (blueprint catalog) is a static fact, never framed as an ongoing
-    /// action.
     private static func mineDemandNote(in report: BrainReport) -> [BrainWhySpan]? {
         guard report.mineDemandIncomplete else { return nil }
         return [.prose("mine siting incomplete — blueprint catalog empty, demand under-counted")]
