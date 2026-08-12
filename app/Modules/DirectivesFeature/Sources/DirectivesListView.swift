@@ -36,6 +36,16 @@ public struct DirectivesListView: View {
         .safeAreaInset(edge: .top) { header }
         .toolbar {
             ToolbarItem {
+                Picker("Theatre", selection: $store.theatreFilter) {
+                    Text("All Theatres").tag(String?.none)
+                    ForEach(store.theatreOptions, id: \.self) { depot in
+                        Text(depot).font(.rcMono).tag(String?.some(depot))
+                    }
+                }
+                .pickerStyle(.menu)
+                .help("Show only one theatre's directives — an unassigned row always stays visible")
+            }
+            ToolbarItem {
                 Menu {
                     Button("Survey Run") { store.send(.newDirectiveTapped) }
                     Button("Salvage Run") { store.send(.newSalvageRunTapped) }

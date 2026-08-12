@@ -359,6 +359,8 @@ struct DirectivesBrainSelectionTests {
             DirectivesFeature()
         } withDependencies: {
             $0.defaultDatabase = database
+            // `.brainTapped` also loads the theatre-site ranking.
+            $0.date = .constant(Date(timeIntervalSince1970: 0))
         }
         store.exhaustivity = .off
 

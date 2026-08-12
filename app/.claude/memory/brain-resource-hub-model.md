@@ -1,6 +1,6 @@
 ---
 name: brain-resource-hub-model
-description: "The automation brain's resource-hub / inventory / supply model (wayfinder ticket 06 — the last spine ticket). A hub is a DERIVED, RECOGNISED predicate (a commandable location with a print-capable device + adequate per-type stock), NOT a placed/managed object — single hub this effort (the one autofactory's location, meshed by anchor co-location); placement/multi-hub → growFleet-future. Print-in-situ is REJECTED (salvage sites ≤3 types, a relay needs 6): printing is AT the hub with a HEAVEN Vessel co-located to auto-stow. Inventory: rank on per-type wherever known (SiteAssay + retained confirm-reads; totals fallback), a small additive per-type stockpile record beyond totals-only LocationFootprint, the .high per-type /inventory read is the printStockShort rail veto and is retained. Supply = mine/salvage ARE the supply line feeding the hub via the haul engine: salvage = shipped Salvage+Haul Run (sink→hub), mine = a dedicated PERSISTENT Haul Run per site (never depletes). The Relay Run = print+deliver, consuming hub stock, decoupled from resupply through the hub buffer. D4 answered: shuttle collapses into a generalised Haul Run and is the RESUPPLY EXECUTOR, not a Relay-Run co-engine (amends 05). Spend ceiling: R = per-type reserve floor rail, N = reclaim-fed idle-relay cap; literals deferred. Off-mesh hub → escalate. Amends 04 + 03."
+description: "The automation brain's resource-hub / inventory / supply model (wayfinder ticket 06 — the last spine ticket). A hub is a DERIVED, RECOGNISED predicate (a commandable location with a print-capable device + adequate per-type stock), NOT a placed/managed object. SUPERSEDED on the hub-count claim by the multi-theatre effort (see [[theatre-recognition-model]]): the brain now recognises several theatres per tick via `TheatreRegistry`, not one; deliberate placement (pinning) shipped too, so growFleet no longer owns that half either. Print-in-situ is REJECTED (salvage sites ≤3 types, a relay needs 6): printing is AT the hub with a HEAVEN Vessel co-located to auto-stow. Inventory: rank on per-type wherever known (SiteAssay + retained confirm-reads; totals fallback), a small additive per-type stockpile record beyond totals-only LocationFootprint, the .high per-type /inventory read is the printStockShort rail veto and is retained. Supply = mine/salvage ARE the supply line feeding the hub via the haul engine: salvage = shipped Salvage+Haul Run (sink→hub), mine = a dedicated PERSISTENT Haul Run per site (never depletes). The Relay Run = print+deliver, consuming hub stock, decoupled from resupply through the hub buffer. D4 answered: shuttle collapses into a generalised Haul Run and is the RESUPPLY EXECUTOR, not a Relay-Run co-engine (amends 05). Spend ceiling: R = per-type reserve floor rail, N = reclaim-fed idle-relay cap; literals deferred. Off-mesh hub → escalate. Amends 04 + 03."
 metadata:
   type: project
 ---
@@ -19,6 +19,11 @@ object. **One hub this effort**, derived at runtime from the single autofactory'
 construction** (co-located with the stationary anchor replicant). Multi-hub routing and deliberate hub
 **placement** (siting + meshing a new autofactory) are `growFleet` / managed-hub **reserved-future** —
 the operator's "emergent as fleet numbers and distances grow." *Mechanics on one hub first.*
+
+**Superseded 2026-08-11 by the multi-theatre effort.** The brain recognises several `Theatre`s per
+tick, not one, and an operator can pin a theatre deliberately — see [[theatre-recognition-model]] for
+the three recognition tiers and [[theatre-component-vs-distance]] for how work is routed to the right
+one. This section's "one hub"/`growFleet`-deferred framing is history, not the current model.
 
 ## Print-in-situ is dead — printing is at the hub
 Salvage sites carry **≤3 resource types**; an FTL relay needs **all six**, so a relay can never be

@@ -51,6 +51,7 @@ struct DirectiveRowView: View {
                             .foregroundStyle(.rcTextTertiary)
                     }
                 }
+                theatreLine
             }
             Spacer(minLength: 0)
             kindBadge
@@ -71,6 +72,20 @@ struct DirectiveRowView: View {
     private var isEngineOwned: Bool {
         if case let .builtIn(builtIn) = row { return builtIn.drivenBy != nil }
         return false
+    }
+
+    /// The theatre, subordinate to the row's own identity above it. A real
+    /// depot is a designation (mono, house rule); "unassigned" is a status
+    /// word, so it stays prose.
+    private var theatreLine: some View {
+        HStack(spacing: Space.xxs) {
+            Text("Theatre").font(.rcCaption).foregroundStyle(.rcTextTertiary)
+            if let depot = row.theatreDepot {
+                Text(depot).font(.rcMonoSmall).foregroundStyle(.rcTextTertiary)
+            } else {
+                Text(row.theatreLabel).font(.rcCaption).foregroundStyle(.rcTextTertiary)
+            }
+        }
     }
 
     private var kindBadge: some View {

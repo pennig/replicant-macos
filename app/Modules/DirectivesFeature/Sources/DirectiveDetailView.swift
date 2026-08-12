@@ -89,7 +89,7 @@ public struct DirectiveDetailView: View {
             // reserved id resolves to no row, so leaving it to the `nil` branch
             // would render "No Selection" over a deliberate one.
             if store.isBrainSelected, let why = store.brainWhy {
-                BrainWhyDetailView(why: why)
+                BrainWhyDetailView(why: why, candidateSites: store.theatreCandidates)
             } else {
                 switch store.selectedRow {
                 case let .builtIn(builtIn):

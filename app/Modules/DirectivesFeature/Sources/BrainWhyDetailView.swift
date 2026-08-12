@@ -20,6 +20,7 @@
 //  as it likes and the operator reads the whole sentence.
 //
 
+import DirectiveEngine
 import SwiftUI
 import UI
 
@@ -27,9 +28,14 @@ import UI
 /// header it opens from — this surface never dispatches anything.
 public struct BrainWhyDetailView: View {
     let why: BrainWhy
+    /// Ranked new-theatre-site proposals, already computed and held by the
+    /// caller — never ranked here (see `TheatreSiteRanking.rank`'s own cost
+    /// warning).
+    let candidateSites: [TheatreSiteRanking.Candidate]
 
-    public init(why: BrainWhy) {
+    public init(why: BrainWhy, candidateSites: [TheatreSiteRanking.Candidate] = []) {
         self.why = why
+        self.candidateSites = candidateSites
     }
 
     public var body: some View {
@@ -51,24 +57,30 @@ public struct BrainWhyDetailView: View {
                     }
                 }
 
-                // Unconditional, like `limitPressure`: the survey verdict is
-                // read every tick, and a card that only spoke up when idle
-                // could not be told apart from one that stopped reporting.
-                section("Survey") {
-                    why.survey.spans
-                        .styled(prose: .rcBody, designation: .rcMono)
-                        .foregroundStyle(surveyColor(why.survey.kind))
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                // Same discipline as Survey: read every tick, reported every
-                // tick, so silence never has to be interpreted.
-                ForEach(why.goals) { goal in
-                    section(goal.goal.title) {
-                        goal.spans
+                // One section per recognised theatre. `theatreGroups` is only
+                // ever empty when the world read itself failed (no theatres
+                // at all), so the flat rendering below is the fallback for
+                // that case alone.
+                if !why.theatreGroups.isEmpty {
+                    section("Theatres") {
+                        ForEach(why.theatreGroups) { group in
+                            BrainWhyTheatreGroupView(group: group)
+                        }
+                    }
+                } else {
+                    section("Survey") {
+                        why.survey.spans
                             .styled(prose: .rcBody, designation: .rcMono)
-                            .foregroundStyle(goalColor(goal.kind))
+                            .foregroundStyle(surveyColor(why.survey.kind))
                             .fixedSize(horizontal: false, vertical: true)
+                    }
+                    ForEach(why.goals) { goal in
+                        section(goal.goal.title) {
+                            goal.spans
+                                .styled(prose: .rcBody, designation: .rcMono)
+                                .foregroundStyle(goalColor(goal.kind))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                 }
 
@@ -97,6 +109,16 @@ public struct BrainWhyDetailView: View {
                                 // escalation colour, and prune never escalates.
                                 .foregroundStyle(note.isObservation ? .rcTextTertiary : .rcTextSecondary)
                                 .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+
+                // Ranked new-theatre proposals — empty until the operator has
+                // opened this pane at least once this session.
+                if !candidateSites.isEmpty {
+                    section("Prospective Theatres") {
+                        ForEach(candidateSites) { candidate in
+                            BrainWhyCandidateRowView(candidate: candidate)
                         }
                     }
                 }

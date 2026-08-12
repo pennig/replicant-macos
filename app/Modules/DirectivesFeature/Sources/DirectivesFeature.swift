@@ -72,6 +72,13 @@ public struct DirectivesFeature {
 
         /// The selected row's namespaced id (see `DirectiveRow.id`).
         public var selectedRowID: String?
+        /// Restricts `rows` to one theatre's depot; nil shows every theatre.
+        /// An unassigned row is never hidden — see `visibleRows`.
+        public var theatreFilter: String?
+        /// Ranked new-theatre-site proposals, loaded once when the brain pane
+        /// opens (`brainTapped`) — never on the render path, since
+        /// `TheatreSiteRanking.rank` walks the whole star catalogue.
+        public var theatreCandidates: [TheatreSiteRanking.Candidate] = []
         /// A failed or rejected command, shown as a banner over the list.
         public var errorMessage: String?
         /// The `set_directive` editor, presented from a built-in row's detail
@@ -94,9 +101,22 @@ public struct DirectivesFeature {
             self.selectedRowID = selectedRowID
         }
 
-        /// The merged list.
+        /// The merged list, restricted to `theatreFilter`.
         public var rows: [DirectiveRow] {
-            DirectiveRow.merge(devices: devices, directives: directives)
+            visibleRows(DirectiveRow.merge(devices: devices, directives: directives))
+        }
+
+        /// `rows` filtered to the selected theatre. An unassigned row (no
+        /// `theatreDepot`) is kept under every filter — it is the row an
+        /// operator must not lose track of after a migration.
+        public func visibleRows(_ rows: [DirectiveRow]) -> [DirectiveRow] {
+            guard let theatreFilter else { return rows }
+            return rows.filter { $0.theatreDepot == nil || $0.theatreDepot == theatreFilter }
+        }
+
+        /// Recognised theatre depots, for the filter picker.
+        public var theatreOptions: [String] {
+            (brainReport?.theatres.map(\.depot) ?? []).sorted()
         }
 
         /// The brain's why-view, derived from the latest tick. Computed here
@@ -169,6 +189,8 @@ public struct DirectivesFeature {
         case clearFinishedTapped
         /// Show the brain's full report in the detail pane.
         case brainTapped
+        /// A fresh theatre-site ranking finished loading.
+        case theatreCandidatesLoaded([TheatreSiteRanking.Candidate])
         case composer(PresentationAction<DirectiveComposer.Action>)
         case newDirective(PresentationAction<NewDirectiveFeature.Action>)
         case newSalvageRun(PresentationAction<NewSalvageRunFeature.Action>)
@@ -330,6 +352,10 @@ public struct DirectivesFeature {
                 // timeline, and re-running the query for it would clear the
                 // one belonging to whatever run was selected a moment ago —
                 // work the next real selection would only have to redo.
+                return loadTheatreCandidates()
+
+            case let .theatreCandidatesLoaded(candidates):
+                state.theatreCandidates = candidates
                 return .none
 
             case .clearFinishedTapped:
@@ -414,6 +440,20 @@ public struct DirectivesFeature {
         TextState("No autofactory found at the hub.")
     } actions: {
         ButtonState(role: .cancel) { TextState("OK") }
+    }
+
+    /// One `WorldView` read plus the CPU-bound rank, run only from this
+    /// effect — never a view's `body` or `onChange` — since
+    /// `TheatreSiteRanking.rank` walks the whole star catalogue.
+    private func loadTheatreCandidates() -> Effect<Action> {
+        let database = self.database
+        let date = self.date
+        return .run { send in
+            let view = try await database.read { db in try WorldView.read(from: db, now: date.now) }
+            await send(.theatreCandidatesLoaded(TheatreSiteRanking.rank(view: view)))
+        } catch: { error, _ in
+            logger.error("theatre candidate load failed: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     /// Re-run the timeline query for whatever is selected now. Called from BOTH

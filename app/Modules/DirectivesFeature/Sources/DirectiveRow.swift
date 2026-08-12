@@ -160,6 +160,19 @@ public enum DirectiveRow: Equatable, Identifiable, Sendable {
         return "\(headline) → \(designation)"
     }
 
+    /// The theatre owning this row's work — nil for every built-in row (no
+    /// theatre concept applies) and for a custom mission never assigned one.
+    public var theatreDepot: String? {
+        switch self {
+        case let .custom(directive, _): directive.theatreDepot
+        case .builtIn: nil
+        }
+    }
+
+    /// "unassigned" rather than nil, so a row with no theatre still reads —
+    /// see `filterKeepsUnassignedVisible`.
+    public var theatreLabel: String { theatreDepot ?? "unassigned" }
+
     /// The row's second line: progress for a mission, the controlled-drone count
     /// for a built-in — or, when the engine owns it, the mission driving it.
     ///

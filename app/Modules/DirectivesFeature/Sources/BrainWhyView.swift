@@ -77,6 +77,8 @@ public struct BrainWhy: Equatable, Sendable {
     /// that stopped being reported. `.rateLimited` is the only conditional
     /// entry.
     public var limitPressure: [BrainWhyPressure]
+    /// One section per recognised theatre — see `groups(for:)`.
+    public var theatreGroups: [BrainWhyTheatreGroup]
     /// Distinguishes idle-calm from a stall (robustness bar clause 6): a
     /// brain with nothing to do is surfaced but calm; a stalled one is
     /// surfaced AND escalated. The view must not let these look alike. A
@@ -92,6 +94,7 @@ public struct BrainWhy: Equatable, Sendable {
         goals: [BrainWhyGoal] = [],
         mineHealth: [BrainWhyMineHealth] = [],
         limitPressure: [BrainWhyPressure],
+        theatreGroups: [BrainWhyTheatreGroup] = [],
         isEscalated: Bool
     ) {
         self.topGoalGate = topGoalGate
@@ -101,6 +104,7 @@ public struct BrainWhy: Equatable, Sendable {
         self.goals = goals
         self.mineHealth = mineHealth
         self.limitPressure = limitPressure
+        self.theatreGroups = theatreGroups
         self.isEscalated = isEscalated
     }
 
@@ -138,8 +142,86 @@ public struct BrainWhy: Equatable, Sendable {
             ],
             mineHealth: report.mines.map(mineHealthLine),
             limitPressure: pressure(in: report),
+            theatreGroups: groups(for: report),
             isEscalated: isEscalated(report.decision)
         )
+    }
+
+    // MARK: - Theatre groups
+
+    /// One section per theatre, in `report.theatres`' own order. A
+    /// `.claimed` theatre renders its shortfalls in place of goal lines,
+    /// since no goal runs there.
+    public static func groups(for report: BrainReport) -> [BrainWhyTheatreGroup] {
+        report.theatres.map { theatre in
+            guard case let .claimed(missing) = theatre.readiness else {
+                return BrainWhyTheatreGroup(
+                    depot: theatre.depot, goalLines: theatreGoalLines(for: report), shortfallLines: []
+                )
+            }
+            return BrainWhyTheatreGroup(
+                depot: theatre.depot, goalLines: [],
+                shortfallLines: Theatre.Shortfall.allCases.filter(missing.contains).map(shortfallText)
+            )
+        }
+    }
+
+    /// Grow, survey, and the three liveness goals, in that fixed order — the
+    /// five standing activities a theatre group reports.
+    private static func theatreGoalLines(for report: BrainReport) -> [BrainWhyTheatreGroup.Line] {
+        [
+            growLine(report),
+            surveyGroupLine(report),
+            goalGroupLine(goalLine(.salvage, status: report.salvage, report: report)),
+            goalGroupLine(goalLine(.haul, status: report.haul, report: report)),
+            goalGroupLine(goalLine(.mine, status: report.mine, report: report)),
+        ]
+    }
+
+    /// The mesh grow/prune gate, restated as a group line in the same voice
+    /// `topGoalGate` already speaks.
+    private static func growLine(_ report: BrainReport) -> BrainWhyTheatreGroup.Line {
+        let kind: BrainWhyGoal.Kind
+        if isEscalated(report.decision) {
+            kind = .halted
+        } else if case .dispatch = report.decision {
+            kind = .running
+        } else {
+            kind = .idle
+        }
+        let spans = [BrainWhySpan].spans(in: gate(for: report.decision), designations: knownDesignations(in: report))
+        return BrainWhyTheatreGroup.Line(id: "grow", label: "Grow", spans: spans, kind: kind)
+    }
+
+    private static func surveyGroupLine(_ report: BrainReport) -> BrainWhyTheatreGroup.Line {
+        let survey = surveyLine(in: report)
+        return BrainWhyTheatreGroup.Line(
+            id: "survey", label: "Survey", spans: survey.spans, kind: surveyKind(survey.kind)
+        )
+    }
+
+    private static func goalGroupLine(_ goal: BrainWhyGoal) -> BrainWhyTheatreGroup.Line {
+        BrainWhyTheatreGroup.Line(id: goal.goal.rawValue, label: goal.goal.title, spans: goal.spans, kind: goal.kind)
+    }
+
+    /// `BrainWhySurvey.Kind` and `BrainWhyGoal.Kind` name the same five
+    /// states as two separate types; this is the mechanical bridge.
+    private static func surveyKind(_ kind: BrainWhySurvey.Kind) -> BrainWhyGoal.Kind {
+        switch kind {
+        case .running: .running
+        case .halted: .halted
+        case .paused: .paused
+        case .ready: .ready
+        case .idle: .idle
+        }
+    }
+
+    private static func shortfallText(_ shortfall: Theatre.Shortfall) -> String {
+        switch shortfall {
+        case .noPrintCapableDevice: "no autofactory here"
+        case .noStock: "no stock"
+        case .offMesh: "off mesh"
+        }
     }
 
     // MARK: - The gate
