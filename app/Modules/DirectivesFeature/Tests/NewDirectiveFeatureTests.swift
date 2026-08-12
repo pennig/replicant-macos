@@ -143,6 +143,59 @@ struct NewDirectiveFeatureTests {
         #expect(created[0].step == SurveyRun().firstStep)
         #expect(created[0].originDesignation == "SOL")
         #expect(created[0].controllerCode == nil, "the engine claims the controller at preflight")
+        #expect(created[0].fleetTag == SurveyRun.defaultFleetTag, "never nil — see reservedDevices' tag sweep")
+    }
+
+    /// The operator-launched path must stamp the SAME per-theatre tag the
+    /// brain does — not nil, which leaves the run's own fleet queries
+    /// falling back to the bare tag while `reservedDevices` protects nothing.
+    @Test func launchStampsThePerTheatreTagWhenATheatreResolves() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            var fleet = Self.stagedFleet()
+            fleet[0].location = "GRAZ-3"
+            for device in fleet { try Device.insert { device }.execute(db) }
+            try Star.insert {
+                Star(
+                    designation: "GRAZ", spectralType: "G", color: "yellow",
+                    positionX: 0, positionY: 0, positionZ: 0, estimatedPlanets: 0,
+                    explored: false, hasLife: nil, entryPoint: nil,
+                    createdAt: Date(timeIntervalSince1970: 0)
+                )
+            }.execute(db)
+            var relay = Self.bareVessel("REL1")
+            relay.deviceType = "ftl_relay"
+            relay.status = "relaying"
+            relay.features = ["relay"]
+            relay.location = "GRAZ"
+            try Device.insert { relay }.execute(db)
+            var hub = Self.bareVessel("HUB1")
+            hub.deviceType = "autofactory"
+            hub.availableCommands = ["enqueue_print"]
+            hub.location = "GRAZ-3"
+            try Device.insert { hub }.execute(db)
+            try LocationFootprint.insert {
+                LocationFootprint(
+                    location: "GRAZ-3", devices: 1, resources: 100_000, resourceSites: 0,
+                    locationEvents: 0, replicants: 0, fetchedAt: Date(timeIntervalSince1970: 0)
+                )
+            }.execute(db)
+        }
+        let store = TestStore(initialState: NewDirectiveFeature.State()) {
+            NewDirectiveFeature()
+        } withDependencies: {
+            $0.defaultDatabase = database
+            $0.uuid = .incrementing
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+        }
+        store.exhaustivity = .off
+
+        await store.send(.binding(.set(\.vesselCode, "VES1")))
+        await store.send(.launchTapped)
+        await store.receive(\.delegate.created)
+
+        let row = try #require(try await database.read { db in try Directive.all.fetchAll(db) }.first)
+        #expect(row.fleetTag == SurveyRun.fleetTag(forTheatre: "GRAZ-3"))
     }
 
     /// Launch is refused with no vessel or no targets — an empty queue would

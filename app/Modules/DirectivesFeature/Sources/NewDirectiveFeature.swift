@@ -199,39 +199,51 @@ public struct NewDirectiveFeature {
                       let vessel = state.devices.first(where: { $0.deviceCode == vesselCode })
                 else { return .none }
                 let isContinuous = state.mode == .continuous
-                let directive = Directive(
-                    id: uuid().uuidString,
-                    kind: .surveyRun,
-                    status: .running,
-                    deviceCode: vesselCode,
-                    // The engine claims the controller at preflight, from
-                    // whatever is actually aboard when the run starts — recording
-                    // it here would go stale if the fleet moved meanwhile.
-                    controllerCode: nil,
-                    // Non-nil is what makes the engine extend the queue rather
-                    // than finish when it empties.
-                    roamCentre: isContinuous ? state.effectiveCentre : nil,
-                    // Empty on purpose: the engine plans the first target from
-                    // the census on its first evaluation.
-                    targets: isContinuous ? [] : state.targets,
-                    targetIndex: 0,
-                    step: SurveyRun().firstStep,
-                    stepStartedAt: date.now,
-                    // A continuous run has no queue to empty, so a return leg
-                    // would never fire; keep the column honest rather than
-                    // recording an intent that cannot happen.
-                    returnToOrigin: isContinuous ? false : state.returnToOrigin,
-                    originDesignation: vessel.location.map { SiteAssay.system(of: $0) },
-                    attentionReason: nil,
-                    createdAt: date.now,
-                    updatedAt: date.now
-                )
-                logger.info("launching \(isContinuous ? "continuous" : "fixed", privacy: .public) survey run \(directive.id, privacy: .public) on \(vesselCode, privacy: .public) over \(directive.targets.count) target(s)")
+                logger.info("launching \(isContinuous ? "continuous" : "fixed", privacy: .public) survey run on \(vesselCode, privacy: .public)")
                 // Bound to locals: referencing the property wrappers inside the
                 // @Sendable closure would capture the non-Sendable reducer.
                 let database = self.database
                 let dismiss = self.dismiss
+                let id = uuid().uuidString
+                let now = date.now
+                let roamCentre = isContinuous ? state.effectiveCentre : nil
+                let targets = isContinuous ? [] : state.targets
+                let returnToOrigin = isContinuous ? false : state.returnToOrigin
+                let origin = vessel.location.map { SiteAssay.system(of: $0) }
                 return .run { send in
+                    // `Brain.ensureSurvey`'s own resolution — never nil, which
+                    // leaves `reservedDevices` skipping its sweep entirely.
+                    let tag = (try? await database.read { db -> String in
+                        let view = try WorldView.read(from: db, now: now)
+                        guard let device = view.devices[vesselCode], let theatre = view.owningTheatre(of: device)
+                        else { return SurveyRun.defaultFleetTag }
+                        return SurveyRun.fleetTag(forTheatre: theatre.depot)
+                    }) ?? SurveyRun.defaultFleetTag
+                    let directive = Directive(
+                        id: id,
+                        kind: .surveyRun,
+                        status: .running,
+                        deviceCode: vesselCode,
+                        // Claimed at preflight from whatever is aboard then —
+                        // recording it here would go stale if the fleet moved.
+                        controllerCode: nil,
+                        // Non-nil is what makes the engine extend the queue
+                        // rather than finish when it empties.
+                        roamCentre: roamCentre,
+                        fleetTag: tag,
+                        // Empty on purpose: the engine plans the first target
+                        // from the census on its first evaluation.
+                        targets: targets,
+                        targetIndex: 0,
+                        step: SurveyRun().firstStep,
+                        stepStartedAt: now,
+                        // No queue to empty, so a return leg would never fire.
+                        returnToOrigin: returnToOrigin,
+                        originDesignation: origin,
+                        attentionReason: nil,
+                        createdAt: now,
+                        updatedAt: now
+                    )
                     try? await database.write { db in
                         try Directive.insert { directive }.execute(db)
                     }

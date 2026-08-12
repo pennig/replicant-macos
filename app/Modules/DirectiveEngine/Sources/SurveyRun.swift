@@ -577,7 +577,7 @@ public struct SurveyRun: MissionStepMachine {
 
     /// The tag `Brain.ensureSurvey` stamps for a theatre at `depot` —
     /// `auto:mine:<belt>`'s sibling, per theatre rather than per belt.
-    static func fleetTag(forTheatre depot: String) -> String { "\(defaultFleetTag):\(depot)" }
+    public static func fleetTag(forTheatre depot: String) -> String { "\(defaultFleetTag):\(depot)" }
 
     /// Whether `device` may carry `depot`'s survey work: its own theatre tag,
     /// or (an un-migrated fleet) the bare tag it falls back from.

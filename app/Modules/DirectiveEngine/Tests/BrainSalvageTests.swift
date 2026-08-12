@@ -409,9 +409,9 @@ struct BrainSalvageReadinessTests {
         #expect(!reserved.contains("VB"), "the literal tags differ by depot, so the sweep cannot reach VB")
     }
 
-    /// The accepted residual (report Concern #2): a directive still carrying
-    /// the LITERAL bare tag still sweeps another theatre's still-bare carrier
-    /// — protection exists only for the tag a FRESH launch stamps.
+    /// A directive still carrying the LITERAL bare tag still sweeps another
+    /// theatre's still-bare carrier — `reservedDevices` protects only the tag
+    /// a FRESH launch stamps, permanently, since this run never relaunches.
     @Test("a legacy bare-tagged live directive still reserves another theatre's still-bare carrier")
     func legacyBareTagStillCollidesAcrossTheatres() {
         let (view, ainalram, denebed) = twoTheatreSalvageView(
@@ -1170,9 +1170,9 @@ struct BrainEnsureHaulTests {
         #expect(hauls.first { $0.deviceCode == "T2" }?.fleetTag == HaulRun.fleetTag(forTheatre: secondTheatreHubLocation))
     }
 
-    /// The accepted residual (report Concern #2), driven through a real
-    /// tick: an ALREADY-RUNNING directive still carrying the literal bare
-    /// tag still reserves a different theatre's still-bare controller.
+    /// Driven through a real tick: an ALREADY-RUNNING directive still
+    /// carrying the literal bare tag still reserves a different theatre's
+    /// still-bare controller — `reservedDevices` was left untouched.
     @Test func legacyBareTaggedLiveRunStillCollidesWithAnotherTheatresBareController() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in

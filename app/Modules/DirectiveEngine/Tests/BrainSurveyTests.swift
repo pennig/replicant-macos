@@ -374,6 +374,25 @@ struct BrainSurveyTests {
         #expect(reason.contains("VB"))
         #expect(reason.contains("re-tag"))
     }
+
+    /// The under-protection a nil `fleetTag` causes: `reservedDevices` skips
+    /// its tag sweep entirely, leaving a bare-tagged sibling unprotected —
+    /// a stamped bare tag sweeps it exactly as before.
+    @Test("a nil fleetTag leaves bare-tagged fleet siblings unprotected; a stamped bare tag does not")
+    func nilFleetTagLeavesSiblingsUnprotected() {
+        let devices = [
+            surveyReadinessDevice("V1", type: "heaven_vessel", tags: [Brain.surveyCarrierTag]),
+            surveyReadinessDevice("BOT1", type: "service_bot", tags: [Brain.surveyCarrierTag]),
+        ].reduce(into: [String: Device]()) { $0[$1.deviceCode] = $1 }
+
+        let nilTagged = directiveFixture(id: "NIL", kind: .surveyRun, deviceCode: "V1", fleetTag: nil)
+        #expect(!Brain.reservedDevices(directives: [nilTagged], devices: devices).contains("BOT1"))
+
+        let bareTagged = directiveFixture(
+            id: "BARE", kind: .surveyRun, deviceCode: "V1", fleetTag: SurveyRun.defaultFleetTag
+        )
+        #expect(Brain.reservedDevices(directives: [bareTagged], devices: devices).contains("BOT1"))
+    }
 }
 
 // MARK: - `Brain.surveyStatus` — the why-view's verdict
@@ -736,9 +755,9 @@ struct BrainEnsureSurveyTests {
         #expect(rows.contains { $0.deviceCode == secondTheatreCarrier })
     }
 
-    /// The accepted residual (report Concern #2), for survey too: an
-    /// already-running directive still carrying the literal bare tag still
-    /// reserves a different theatre's still-bare carrier.
+    /// For survey too: an already-running directive still carrying the
+    /// literal bare tag still reserves a different theatre's still-bare
+    /// carrier — protection exists only for a tag a fresh launch stamps.
     @Test func legacyBareTaggedLiveRunStillCollidesWithAnotherTheatresBareCarrier() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in
