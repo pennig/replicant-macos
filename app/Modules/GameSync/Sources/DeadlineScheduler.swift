@@ -74,6 +74,9 @@ actor DeadlineScheduler {
     private let retentionSweepInterval: TimeInterval
     /// When the last retention sweep ran, so `run()` throttles them.
     private var lastRetentionSweepAt: Date?
+    /// Minimum spacing between per-type depot stock reads.
+    private let depotInventoryInterval: TimeInterval = 3600
+    private var lastDepotInventoryAt: Date?
 
     init(
         reconciler: Reconciler,
@@ -127,6 +130,11 @@ actor DeadlineScheduler {
                 await OperationRetention.sweep(database, now: now)
                 await DirectiveLogRetention.sweep(database, now: now)
                 await DirectiveRetention.sweep(database, now: now)
+            }
+
+            if lastDepotInventoryAt.map({ now.timeIntervalSince($0) >= depotInventoryInterval }) ?? true {
+                lastDepotInventoryAt = now
+                await refreshDepotInventories()
             }
 
             let upcoming = await openDatedOps()
@@ -239,6 +247,26 @@ actor DeadlineScheduler {
                 await reconciler.completeOpenOperation(on: op.entityCode, source: .poll, eventTime: nil, result: nil)
             }
         }
+    }
+
+    /// The depot locations worth a per-type stock read: where a print-capable
+    /// device stands. A stowed one carries no location and is skipped.
+    nonisolated static func depotLocations(in devices: [Device]) -> [String] {
+        Array(Set(devices.filter(\.isPrintHub).compactMap(\.location))).sorted()
+    }
+
+    /// One per-type stock read per depot, hourly. The planner degrades to its
+    /// static weights when these rows age, so a skipped round costs efficiency
+    /// and never correctness.
+    func refreshDepotInventories() async {
+        @Dependency(\.defaultDatabase) var database
+        @Dependency(\.locationsClient) var locationsClient
+        guard let devices = try? await database.read({ db in try Device.all.fetchAll(db) })
+        else { return }
+        let depots = Self.depotLocations(in: devices)
+        guard !depots.isEmpty else { return }
+        logger.debug("depot stock: refreshing \(depots.count, privacy: .public) depot(s)")
+        await locationsClient.refreshDepotInventories(depots)
     }
 
     /// Open (`active`) operations that carry a completion deadline.
