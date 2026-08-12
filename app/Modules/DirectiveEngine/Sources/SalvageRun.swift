@@ -289,11 +289,15 @@ public struct SalvageRun: MissionStepMachine {
         // target. Checked BEFORE the staging guards so a fresh run with an empty
         // queue extends it rather than stalling over staging it has not reached.
         guard directive.currentTarget != nil else {
-            let centre = directive.roamCentre
-                ?? Self.system(of: vessel)
-                ?? Self.hubSystem(in: world, for: directive)
-                ?? Self.baseSystem
-            return .extendQueue(centre: centre)
+            if let centre = directive.roamCentre ?? Self.system(of: vessel) ?? Self.hubSystem(in: world, for: directive) {
+                return .extendQueue(centre: centre)
+            }
+            // A claimed theatre with another operational elsewhere must not
+            // fall back to the constant; a genuinely hub-less world still may.
+            guard world.theatreWentClaimed(for: directive) else {
+                return .extendQueue(centre: Self.baseSystem)
+            }
+            return .wait
         }
         let tag = Self.fleetTag(directive)
         // Both staging checks are NEGATIVE findings over local rows: silence

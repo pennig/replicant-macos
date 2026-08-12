@@ -6,6 +6,8 @@
 //  voice over their own fleets. Own file per the list-row-preview-crash rule.
 //
 
+import UI
+
 /// One line of "what a liveness goal is doing" in the why-view.
 public struct BrainWhyGoal: Equatable, Sendable, Identifiable {
     public enum Goal: String, Sendable, CaseIterable {

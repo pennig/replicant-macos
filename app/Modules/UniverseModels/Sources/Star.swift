@@ -111,6 +111,33 @@ extension Star {
     }
 }
 
+// MARK: - Persistence
+
+extension Star {
+    /// Upsert `records` from the objective catalogue. Refreshes every
+    /// catalogue-carried column, `region`/`hasHub` included; per-replicant
+    /// knowledge and the local lifecycle timestamps are left untouched, since
+    /// the catalogue carries neither.
+    public static func upsertCatalogue(_ records: [Star], in db: Database) throws {
+        try Star.insert {
+            records
+        } onConflict: {
+            $0.designation
+        } doUpdate: { row, excluded in
+            row.spectralType = excluded.spectralType
+            row.color = excluded.color
+            row.positionX = excluded.positionX
+            row.positionY = excluded.positionY
+            row.positionZ = excluded.positionZ
+            row.estimatedPlanets = excluded.estimatedPlanets
+            row.entryPoint = excluded.entryPoint
+            row.region = excluded.region
+            row.hasHub = excluded.hasHub
+        }
+        .execute(db)
+    }
+}
+
 // MARK: - Schema
 
 extension Star {

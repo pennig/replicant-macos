@@ -160,6 +160,14 @@ public struct WorldSnapshot: Equatable, Sendable {
         return theatres.first { $0.depot == depot && $0.isOperational }?.depot
     }
 
+    /// Whether `directive` is stamped to a theatre that has gone `.claimed`
+    /// while another theatre stands `.operational` — the state a mission must
+    /// idle through rather than paper over with a stand-in designation.
+    public func theatreWentClaimed(for directive: Directive) -> Bool {
+        guard let depot = directive.theatreDepot, theatreDepot(for: directive) == nil else { return false }
+        return theatres.contains { $0.depot != depot && $0.isOperational }
+    }
+
     /// One consistent read of everything a mission reasons over, taken from
     /// `database` at the instant `now` and scoped to `directive` — its targets,
     /// its origin, its log and the operations it dispatched.

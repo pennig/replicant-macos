@@ -107,13 +107,22 @@ import UniverseModels
         }
     }
 
-    /// Round-trips a `StarItem` through `Star(item:createdAt:)` and a real
-    /// migrated database, mirroring how `NewStarMapFeature` persists a page.
+    /// Round-trips a `StarItem` through the production `Star.upsertCatalogue`
+    /// path `NewStarMapFeature` calls, over a row already seeded with stale,
+    /// conflicting values — so a `doUpdate` that drops a column would leave
+    /// the stale value standing rather than trivially passing on a bare insert.
     private func persistedStar(_ item: StarItem) async throws -> UniverseModels.Star {
         let database = try GameDatabase.bootstrap()
-        let record = UniverseModels.Star(item: item, createdAt: Date(timeIntervalSince1970: 0))
+        let stale = UniverseModels.Star(
+            designation: item.designation, spectralType: "M0", color: "red",
+            positionX: 0, positionY: 0, positionZ: 0, estimatedPlanets: 0,
+            explored: false, hasLife: nil, entryPoint: nil,
+            createdAt: Date(timeIntervalSince1970: 0), region: "STALE", hasHub: !item.hasHub
+        )
+        let fresh = UniverseModels.Star(item: item, createdAt: Date(timeIntervalSince1970: 0))
         try await database.write { db in
-            try UniverseModels.Star.insert { record }.execute(db)
+            try UniverseModels.Star.insert { stale }.execute(db)
+            try UniverseModels.Star.upsertCatalogue([fresh], in: db)
         }
         return try await database.read { db in
             try #require(try UniverseModels.Star.where { $0.designation.eq(item.designation) }.fetchOne(db))

@@ -902,6 +902,9 @@ public struct RelayRun: MissionStepMachine {
     /// planted and the deliverable is met.
     private func returnHome(_ directive: Directive, _ carrier: Device, _ world: WorldSnapshot) -> MissionAction {
         guard let hub = Self.theatreDepot(in: world, for: directive) else {
+            // Another theatre is up but this row's own went `.claimed` — wait
+            // for it rather than abandoning the carrier or flying elsewhere.
+            if world.theatreWentClaimed(for: directive) { return .wait }
             logger.notice("relay run \(directive.id, privacy: .public): no hub to return to — leaving the carrier where it stands")
             return .done
         }

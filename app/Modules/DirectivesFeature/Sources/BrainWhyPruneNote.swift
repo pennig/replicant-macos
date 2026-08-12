@@ -26,6 +26,8 @@
 //  structurally instead of by matching prose.
 //
 
+import UI
+
 /// A single prune fact, split into prose and designation runs so the
 /// system names inside it render monospaced (`BrainWhySpan`).
 public struct BrainWhyPruneNote: Equatable, Identifiable, Sendable {

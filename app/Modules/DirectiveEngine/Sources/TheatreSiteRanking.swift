@@ -4,7 +4,7 @@
 //
 //  Brain proposes, operator establishes: ranks candidate systems for a new
 //  theatre. Pure and read-only over `WorldView` — no database, no clock, no
-//  acting capability. Nothing calls this yet; the why-view (ticket 13) does.
+//  acting capability. Called from the why-view and the Theatres tab.
 //
 
 import Foundation
@@ -38,6 +38,10 @@ public enum TheatreSiteRanking {
         public let isSurveyed: Bool
         /// One line per clause that moved the score, for the why-view.
         public let reasons: [String]
+        /// The nearest theatre's own depot, when one exists — the one
+        /// designation `reasons` embeds mid-sentence, for a caller that must
+        /// render it monospace via `BrainWhySpan`.
+        public let nearestTheatreDepot: String?
     }
 
     /// Ranks every system in `view.starPositions` other than an existing
@@ -115,7 +119,8 @@ public enum TheatreSiteRanking {
         return Candidate(
             system: system, score: score, unservicedValue: unserviced,
             distanceToNearestTheatre: distanceToNearestTheatre,
-            hasAuthority: hasAuthority, isSurveyed: isSurveyed, reasons: reasons
+            hasAuthority: hasAuthority, isSurveyed: isSurveyed, reasons: reasons,
+            nearestTheatreDepot: nearestTheatre?.depot
         )
     }
 

@@ -51,7 +51,9 @@ struct DirectiveRowView: View {
                             .foregroundStyle(.rcTextTertiary)
                     }
                 }
-                theatreLine
+                // Built-in rows own no theatre at all — unconditional would
+                // read every one of them as "unassigned".
+                if case .custom = row { theatreLine }
             }
             Spacer(minLength: 0)
             kindBadge

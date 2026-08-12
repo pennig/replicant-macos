@@ -112,6 +112,13 @@ public struct BrainWhy: Equatable, Sendable {
     /// what the card's accessibility label uses.
     public var gateText: String { topGoalGate.text }
 
+    /// Whether the flat Survey/Salvage/Haul/Mine sections should render:
+    /// no theatres at all, or every recognised one still `.claimed` and so
+    /// carrying no goal line — a live run predating the pin must stay visible.
+    public var flatSectionsVisible: Bool {
+        !theatreGroups.contains { !$0.goalLines.isEmpty }
+    }
+
     /// How recently the server must have answered 429 for it to count as
     /// current pressure rather than history.
     ///
@@ -697,26 +704,6 @@ public struct BrainWhy: Equatable, Sendable {
             codes.insert(theatre.system)
         }
         return codes
-    }
-}
-
-extension [BrainWhySpan] {
-    /// The line as one `Text`, with designations in the prominence-matched
-    /// mono token.
-    ///
-    /// Built as a single `AttributedString` with a per-run `font` attribute
-    /// rather than by concatenating `Text` values (`Text + Text` is
-    /// deprecated on macOS 26). One `Text` also means the line wraps as one
-    /// paragraph, which is what makes the monospace rule satisfiable for a
-    /// designation embedded mid-sentence at all.
-    func styled(prose: Font, designation: Font) -> Text {
-        var line = AttributedString()
-        for span in self {
-            var run = AttributedString(span.text)
-            run.font = span.isDesignation ? designation : prose
-            line += run
-        }
-        return Text(line)
     }
 }
 

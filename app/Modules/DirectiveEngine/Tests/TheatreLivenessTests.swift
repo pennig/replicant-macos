@@ -80,6 +80,32 @@ struct TheatreLivenessTests {
         #expect(rows.map(\.id) == ["D-HOME"])
     }
 
+    /// An unstamped row belongs to no theatre in particular, so it must block
+    /// every theatre's launch rather than being invisible to all of them —
+    /// otherwise a second free tagged carrier lets a duplicate through.
+    @Test("An unstamped live row still suppresses a launch in an operational theatre")
+    func unstampedRowStillSuppresses() async throws {
+        let database = try livenessDatabase()
+        let home = Theatre(depot: "AINALRAM-BELT-1", system: "AINALRAM", origin: .derived,
+                           readiness: .operational, stock: 40_000)
+
+        try await database.write { db in
+            try Directive.insert {
+                directiveFixture(id: "D-ORPHAN", kind: .haulRun, deviceCode: "T1", theatreDepot: nil)
+            }.execute(db)
+        }
+
+        let brain = Brain(now: livenessNow)
+        await brain.ensureOne(
+            .haulRun, theatre: home, snapshot: try await snapshot(database), database: database
+        ) {
+            directiveFixture(id: "D-SECOND", kind: .haulRun, deviceCode: "T2", theatreDepot: home.depot)
+        }
+
+        let rows = try await database.read { try Directive.all.fetchAll($0) }
+        #expect(rows.map(\.id) == ["D-ORPHAN"])
+    }
+
     @Test("A device already committed elsewhere is refused even in a fresh theatre")
     func reservationGuardStaysAccountWide() async throws {
         let database = try livenessDatabase()

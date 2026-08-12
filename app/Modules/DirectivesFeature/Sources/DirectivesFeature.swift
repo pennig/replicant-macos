@@ -106,11 +106,11 @@ public struct DirectivesFeature {
             visibleRows(DirectiveRow.merge(devices: devices, directives: directives))
         }
 
-        /// `rows` filtered to the selected theatre. An unassigned row (no
-        /// `theatreDepot`) is kept under every filter — it is the row an
-        /// operator must not lose track of after a migration.
+        /// `rows` filtered to the selected theatre; an unassigned row survives
+        /// every filter. A filter naming a theatre no longer offered shows
+        /// everything rather than going blank.
         public func visibleRows(_ rows: [DirectiveRow]) -> [DirectiveRow] {
-            guard let theatreFilter else { return rows }
+            guard let theatreFilter, theatreOptions.contains(theatreFilter) else { return rows }
             return rows.filter { $0.theatreDepot == nil || $0.theatreDepot == theatreFilter }
         }
 
@@ -203,6 +203,8 @@ public struct DirectivesFeature {
     }
 
     public init() {}
+
+    private enum CancelID { case loadTheatreCandidates }
 
     @Dependency(\.commandClient) var commandClient
     @Dependency(\.directiveResolution) var directiveResolution
@@ -454,6 +456,7 @@ public struct DirectivesFeature {
         } catch: { error, _ in
             logger.error("theatre candidate load failed: \(error.localizedDescription, privacy: .public)")
         }
+        .cancellable(id: CancelID.loadTheatreCandidates, cancelInFlight: true)
     }
 
     /// Re-run the timeline query for whatever is selected now. Called from BOTH

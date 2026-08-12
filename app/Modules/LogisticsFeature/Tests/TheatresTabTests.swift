@@ -113,6 +113,41 @@ struct EstablishTheatreSheetTests {
         state.location = "OMEROPE-BELT-1"
         #expect(state.canEstablish)
     }
+
+    /// The toolbar's "Establish Theatre" opens the sheet with no suggested
+    /// system at all — the guard must not depend on one being present.
+    @Test("A bare system is refused on the toolbar path too, with no suggestion to compare against")
+    func bareSystemRefusedWithNoSuggestion() {
+        var state = EstablishTheatreSheet.State()
+        state.location = "OMEROPE"
+        #expect(!state.canEstablish)
+        state.location = "OMEROPE-BELT-1"
+        #expect(state.canEstablish)
+    }
+
+    @Test("Re-establishing an already-pinned depot succeeds rather than surfacing the raw constraint error")
+    func reestablishingAnExistingDepotSucceeds() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try TheatrePin.insert { TheatrePin(location: "OMEROPE-BELT-1", createdAt: fixtureNow) }.execute(db)
+        }
+        var initial = EstablishTheatreSheet.State()
+        initial.location = "OMEROPE-BELT-1"
+        let store = TestStore(initialState: initial) {
+            EstablishTheatreSheet()
+        } withDependencies: {
+            $0.defaultDatabase = database
+            $0.date = .constant(fixtureNow)
+        }
+        store.exhaustivity = .off
+
+        await store.send(.confirmTapped) { $0.isSaving = true }
+        await store.receive(\.pinWritten) { $0.isSaving = false }
+        await store.finish()
+
+        let pins = try await database.read { try TheatrePin.all.fetchAll($0) }
+        #expect(pins.map(\.location) == ["OMEROPE-BELT-1"])
+    }
 }
 
 @Suite("Logistics theatres tab")

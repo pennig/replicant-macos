@@ -553,23 +553,7 @@ public struct NewStarMapFeature {
             let stamp = date.now
             let records = catalogue.map { UniverseModels.Star(item: $0, createdAt: stamp) }
             try await database.write { db in
-                try UniverseModels.Star.insert {
-                    records
-                } onConflict: {
-                    $0.designation
-                } doUpdate: { row, excluded in
-                    // Objective catalogue fields refresh; per-replicant knowledge
-                    // (explored/hasLife) and local lifecycle timestamps are
-                    // preserved — the catalogue carries neither.
-                    row.spectralType = excluded.spectralType
-                    row.color = excluded.color
-                    row.positionX = excluded.positionX
-                    row.positionY = excluded.positionY
-                    row.positionZ = excluded.positionZ
-                    row.estimatedPlanets = excluded.estimatedPlanets
-                    row.entryPoint = excluded.entryPoint
-                }
-                .execute(db)
+                try UniverseModels.Star.upsertCatalogue(records, in: db)
             }
             await send(.catalogueLoaded(count: catalogue.count))
 

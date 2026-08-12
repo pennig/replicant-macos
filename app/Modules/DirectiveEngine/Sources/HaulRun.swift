@@ -261,6 +261,9 @@ public struct HaulRun: MissionStepMachine {
     /// every controller in `world` already matches. N controllers settle over N
     /// ticks, keeping the one-action-per-tick contract.
     private func assign(_ directive: Directive, _ world: WorldSnapshot) -> MissionAction {
+        // A theatre gone `.claimed` while another stands operational must not
+        // repoint cargo at the fallback sink — wait for it to recover.
+        guard !world.theatreWentClaimed(for: directive) else { return .wait }
         if let pinned = Self.pinnedSource(of: directive) {
             let assignment = Self.pinnedAssignment(directive, at: pinned)
             if Self.isInForce(assignment, in: world, for: directive) {
@@ -288,6 +291,7 @@ public struct HaulRun: MissionStepMachine {
     /// pinned. Re-derives the target from `world` — the run stores no assignment
     /// state beyond `controllerCode`.
     private func dispatchAssignment(_ directive: Directive, _ world: WorldSnapshot) -> MissionAction {
+        guard !world.theatreWentClaimed(for: directive) else { return .wait }
         guard let controllerCode = directive.controllerCode else {
             return .advanceStep(nextStep: Step.assigning)
         }

@@ -230,9 +230,9 @@ struct BrainMineReadinessTests {
     }
 
     /// A second operational theatre's own depot can be belt-shaped
-    /// (`Theatre.swift`'s own `AINALRAM-BELT-1` example): a fleet staged
-    /// there must not read as an installed, occupying mine.
-    @Test("a staged fleet at a second theatre's own depot is not occupied")
+    /// (`Theatre.swift`'s own `AINALRAM-BELT-1` example): it must never be
+    /// offered as a mine site, whichever theatre staged a fleet there.
+    @Test("a second theatre's own depot is not offered as a belt")
     func aSecondTheatresStagedFleetIsNotOccupied() {
         let hubA = "HUB-A-DEPOT"
         let hubB = "HUB-B-BELT-1"
@@ -252,7 +252,7 @@ struct BrainMineReadinessTests {
         )
         #expect(
             Brain.mineReadiness(view: view, directives: [])
-                == .launch(carrier: mineCarrier, belt: hubB)
+                == .idle(reason: "no meshed candidate belt")
         )
     }
 }

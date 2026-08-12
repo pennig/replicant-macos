@@ -282,8 +282,10 @@ struct Brain: Sendable {
     ) async {
         guard !Task.isCancelled else { return }
         let owns: @Sendable (Directive) -> Bool = {
+            // Unstamped belongs to no theatre in particular, so it blocks
+            // every theatre's launch rather than being invisible to all of them.
             $0.kind == kind && Self.owningStatuses.contains($0.status)
-                && $0.theatreDepot == theatre.depot && matching($0)
+                && ($0.theatreDepot == theatre.depot || $0.theatreDepot == nil) && matching($0)
         }
         let live = snapshot.directives.contains(where: owns)
         guard !live else { return }
@@ -1335,15 +1337,15 @@ struct Brain: Sendable {
             return .idle(reason: "no idle \(MineRecipe.carrierTag) surge carrier")
         }
 
-        // The hub's own belt is a legal site the estate cannot see: every
-        // installed query filters `location != hub`, so a mine there is invisible.
-        let unsitable: Set<String> = [hub]
+        // Every operational theatre's own depot is a legal site the estate
+        // cannot see: every installed query filters those locations out, so
+        // a mine at any of them is invisible.
         let depots = Set(view.theatres.filter(\.isOperational).map(\.depot))
-        let occupied = unsitable
+        let occupied = depots
             .union(MineRecipe.installedBelts(in: fleet, hubs: depots))
             .union(liveMineBelts(directives))
         guard let site = MineSitePlanner.site(view: view, occupiedBelts: occupied) else {
-            let anyBelt = MineSitePlanner.site(view: view, occupiedBelts: unsitable) != nil
+            let anyBelt = MineSitePlanner.site(view: view, occupiedBelts: depots) != nil
             return .idle(reason: anyBelt ? "every candidate belt taken" : "no meshed candidate belt")
         }
         return .launch(carrier: carrier.deviceCode, belt: site.belt)
@@ -1424,7 +1426,7 @@ struct Brain: Sendable {
         }) {
             return .launched(
                 vessel: live.deviceCode,
-                focus: live.theatreDepot ?? HaulRun.deliveryLocation,
+                focus: live.theatreDepot,
                 status: launchedGoalStatus(live.status)
             )
         }

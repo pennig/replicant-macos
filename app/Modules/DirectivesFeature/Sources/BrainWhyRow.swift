@@ -15,6 +15,8 @@
 //  apart again. `fact` is guaranteed designation-free.
 //
 
+import UI
+
 /// A single candidate the brain considered, as the operator would read it on
 /// the map: the system it plants at, whose value that hop unlocks, and how
 /// far the chain still has to run.

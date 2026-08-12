@@ -80,8 +80,8 @@ struct TheatresTab: View {
     }
 }
 
-/// One ranked site: its `reasons` render verbatim, per the ticket's rule —
-/// they are the brain's graph facts, not restated prose this view owns.
+/// One ranked site: its `reasons` render verbatim — they are the brain's
+/// graph facts, not restated prose this view owns.
 private struct TheatreCandidateRow: View {
     let candidate: TheatreSiteRanking.Candidate
     let onEstablish: () -> Void
@@ -107,7 +107,9 @@ private struct TheatreCandidateRow: View {
                     .buttonStyle(RCButtonStyle(.secondary))
             }
             ForEach(candidate.reasons, id: \.self) { reason in
-                Text(reason).font(.rcCaption).foregroundStyle(.rcTextSecondary)
+                [BrainWhySpan].spans(in: reason, designations: designations)
+                    .styled(prose: .rcCaption, designation: .rcMonoSmall)
+                    .foregroundStyle(.rcTextSecondary)
             }
         }
         .padding(Space.m)
@@ -116,5 +118,9 @@ private struct TheatreCandidateRow: View {
             RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
                 .strokeBorder(.rcSeparator, lineWidth: Hairline.thin)
         )
+    }
+
+    private var designations: Set<String> {
+        Set([candidate.nearestTheatreDepot].compactMap { $0 })
     }
 }

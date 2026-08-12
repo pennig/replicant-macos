@@ -7,6 +7,8 @@
 //  runs at a theatre that is not yet operational.
 //
 
+import UI
+
 /// One theatre's slice of the why-view.
 public struct BrainWhyTheatreGroup: Equatable, Identifiable, Sendable {
     /// One activity line — grow, survey, or a liveness goal.

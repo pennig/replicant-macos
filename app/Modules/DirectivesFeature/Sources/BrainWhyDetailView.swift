@@ -57,17 +57,16 @@ public struct BrainWhyDetailView: View {
                     }
                 }
 
-                // One section per recognised theatre. `theatreGroups` is only
-                // ever empty when the world read itself failed (no theatres
-                // at all), so the flat rendering below is the fallback for
-                // that case alone.
+                // One section per recognised theatre.
                 if !why.theatreGroups.isEmpty {
                     section("Theatres") {
                         ForEach(why.theatreGroups) { group in
                             BrainWhyTheatreGroupView(group: group)
                         }
                     }
-                } else {
+                }
+                // The flat fallback — see `BrainWhy.flatSectionsVisible`.
+                if why.flatSectionsVisible {
                     section("Survey") {
                         why.survey.spans
                             .styled(prose: .rcBody, designation: .rcMono)

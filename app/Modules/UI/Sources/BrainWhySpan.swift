@@ -1,31 +1,22 @@
 //
 //  BrainWhySpan.swift
-//  Replicould — Directives feature
+//  UI
 //
-//  How the why-view honours the house monospace rule for designations that
-//  are EMBEDDED in a sentence rather than standing alone in their own label.
-//
-//  The rule (`app/CLAUDE.md`, `monospace-system-names`) is that a system or
-//  location designation is a CODE and always renders in a mono token. Most
-//  surfaces satisfy that trivially — the designation is its own `Text`. The
-//  brain's gate line is not: `Goal.rationale` is a whole sentence with the
-//  codes inside it ("meshing VEGA — 3,200 units at POLARISUM, 2 hops"), and
-//  Task 5's review flagged that rendering the lot in `.rcCaption` breaks the
-//  rule. So the projection SPLITS the sentence into runs, and the view
-//  concatenates them with the prominence-matched mono token
-//  (`.rcCaption`/`.rcMonoSmall`, `.rcBodyEmph`/`.rcBodyEmphMono`).
+//  Honours the house monospace rule for a designation EMBEDDED in a sentence
+//  rather than standing alone in its own label — the why-view's `Goal.rationale`
+//  ("meshing VEGA — 3,200 units at POLARISUM, 2 hops") and a theatre-site
+//  candidate's reasons both need it. Most surfaces satisfy the rule trivially,
+//  the designation being its own `Text`; this splits a sentence into runs so
+//  the mid-sentence case can render mono too.
 //
 //  **Matched against codes we were TOLD, never against a shape.** The split
-//  takes an explicit set of designations — the ones `BrainReport` carries
-//  (every ranked candidate's hop and served targets, the goal's target, the
-//  hub) — rather than sniffing for "an all-caps looking token". A shape rule
-//  is tempting and wrong: `DirectiveAttentionReason.awaitingRelayRestock`
-//  displays as "Out of FTL relays", and "FTL" would be monospaced as though
-//  it were a star system. A carrier device code inside a deferral reason
-//  ("deferred — carrier HV001234 unavailable on confirm") stays prose for the
-//  same reason in reverse: it is not a system or location name, which is what
-//  the rule is about, and the report does not carry it.
+//  takes an explicit set of designations — never a heuristic sniffing for "an
+//  all-caps looking token", which would also catch `DirectiveAttentionReason
+//  .awaitingRelayRestock`'s "Out of FTL relays" ("FTL" is not a system) and a
+//  carrier device code inside a deferral reason (also not one).
 //
+
+import SwiftUI
 
 /// One run of gate or row text, tagged with whether it is a designation.
 public enum BrainWhySpan: Equatable, Sendable {
@@ -111,5 +102,23 @@ extension [BrainWhySpan] {
         let end = sentence.index(start, offsetBy: length)
         if end < sentence.endIndex, isCodeCharacter(sentence[end]) { return false }
         return true
+    }
+
+    /// The line as one `Text`, with designations in the prominence-matched
+    /// mono token.
+    ///
+    /// Built as a single `AttributedString` with a per-run `font` attribute
+    /// rather than by concatenating `Text` values (`Text + Text` is
+    /// deprecated on macOS 26). One `Text` also means the line wraps as one
+    /// paragraph, which is what makes the monospace rule satisfiable for a
+    /// designation embedded mid-sentence at all.
+    public func styled(prose: Font, designation: Font) -> Text {
+        var line = AttributedString()
+        for span in self {
+            var run = AttributedString(span.text)
+            run.font = span.isDesignation ? designation : prose
+            line += run
+        }
+        return Text(line)
     }
 }

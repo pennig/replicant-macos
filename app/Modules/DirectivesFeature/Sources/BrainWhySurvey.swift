@@ -7,6 +7,8 @@
 //  per the list-row-preview-crash rule (`BrainWhyPruneNote`'s header).
 //
 
+import UI
+
 /// One line of "what the roaming Survey Run is doing" in the why-view.
 public struct BrainWhySurvey: Equatable, Sendable {
     public enum Kind: String, Sendable, CaseIterable {

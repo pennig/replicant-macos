@@ -308,6 +308,7 @@ let package = Package(
                 "GameDatabase",
                 "GameModels",
                 "GameServices",
+                "UI",
                 "UniverseModels",
                 "Utils",
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),

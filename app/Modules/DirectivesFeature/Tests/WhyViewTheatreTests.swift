@@ -79,6 +79,30 @@ struct WhyViewTheatreTests {
         #expect(groups[0].shortfallLines.count == 1)
     }
 
+    @Test("A claimed-only world still shows the flat sections")
+    func claimedOnlyWorldShowsFlatSections() {
+        let report = brainReportFixture(theatres: [
+            Theatre(
+                depot: "OMEROPE-BELT-1", system: "OMEROPE", origin: .pinned,
+                readiness: .claimed(missing: [.noStock]), stock: 0
+            ),
+        ])
+
+        #expect(BrainWhy.from(report: report).flatSectionsVisible)
+    }
+
+    @Test("An operational theatre with goal lines hides the flat sections")
+    func operationalTheatreHidesFlatSections() {
+        let report = brainReportFixture(theatres: [
+            Theatre(
+                depot: "AINALRAM-BELT-1", system: "AINALRAM", origin: .derived,
+                readiness: .operational, stock: 40_000
+            ),
+        ])
+
+        #expect(!BrainWhy.from(report: report).flatSectionsVisible)
+    }
+
     // MARK: - Directive row
 
     @Test("A directive with no theatre reads as unassigned rather than disappearing")
@@ -101,6 +125,14 @@ struct WhyViewTheatreTests {
             $0.defaultDatabase = try GameDatabase.bootstrap()
         } operation: {
             var state = DirectivesFeature.State()
+            state.$brainReport.withLock {
+                $0 = brainReportFixture(theatres: [
+                    Theatre(
+                        depot: "AINALRAM-BELT-1", system: "AINALRAM", origin: .derived,
+                        readiness: .operational, stock: 40_000
+                    ),
+                ])
+            }
             state.theatreFilter = "AINALRAM-BELT-1"
             let shown = state.visibleRows([
                 .custom(directiveFixture(id: "A", theatreDepot: "AINALRAM-BELT-1")),
@@ -109,6 +141,32 @@ struct WhyViewTheatreTests {
             ])
 
             #expect(shown.map(\.id) == ["custom:A", "custom:C"])
+        }
+    }
+
+    @Test("A filter naming a theatre no longer offered shows everything")
+    func staleFilterShowsEverything() throws {
+        try withDependencies {
+            $0.defaultDatabase = try GameDatabase.bootstrap()
+        } operation: {
+            var state = DirectivesFeature.State()
+            state.$brainReport.withLock {
+                $0 = brainReportFixture(theatres: [
+                    Theatre(
+                        depot: "AINALRAM-BELT-1", system: "AINALRAM", origin: .derived,
+                        readiness: .operational, stock: 40_000
+                    ),
+                ])
+            }
+            // Names a theatre that no longer appears in the latest report — a
+            // failed world read, or a reclaimed depot.
+            state.theatreFilter = "DENEBED-BELT-1"
+            let shown = state.visibleRows([
+                .custom(directiveFixture(id: "A", theatreDepot: "AINALRAM-BELT-1")),
+                .custom(directiveFixture(id: "B", theatreDepot: "DENEBED-BELT-1")),
+            ])
+
+            #expect(shown.map(\.id) == ["custom:A", "custom:B"])
         }
     }
 

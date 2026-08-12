@@ -21,10 +21,14 @@ struct BrainWhyCandidateRowView: View {
                 .foregroundStyle(.rcTextPrimary)
             // The brain's own graph facts, verbatim — not restated prose.
             ForEach(candidate.reasons, id: \.self) { reason in
-                Text(reason)
-                    .font(.rcCaption)
+                [BrainWhySpan].spans(in: reason, designations: designations)
+                    .styled(prose: .rcCaption, designation: .rcMonoSmall)
                     .foregroundStyle(.rcTextSecondary)
             }
         }
+    }
+
+    private var designations: Set<String> {
+        Set([candidate.nearestTheatreDepot].compactMap { $0 })
     }
 }

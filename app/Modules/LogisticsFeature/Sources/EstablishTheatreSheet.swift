@@ -33,12 +33,12 @@ public struct EstablishTheatreSheet {
             self.suggestedSystem = suggestedSystem
         }
 
-        /// Blank refuses, and so does the bare candidate system re-typed
-        /// verbatim — no device ever reports itself at a bare system code.
+        /// Blank refuses, and so does any bare system designation — no device
+        /// ever reports itself at one, whether typed fresh or re-typed from
+        /// `suggestedSystem` verbatim.
         public var canEstablish: Bool {
             let trimmed = location.trimmingCharacters(in: .whitespaces)
-            guard !trimmed.isEmpty, !isSaving else { return false }
-            if let suggestedSystem { return trimmed.uppercased() != suggestedSystem.uppercased() }
+            guard !trimmed.isEmpty, !isSaving, trimmed.contains("-") else { return false }
             return true
         }
     }
@@ -78,8 +78,10 @@ public struct EstablishTheatreSheet {
                 let date = self.date
                 return .run { send in
                     do {
+                        // Upsert: re-establishing an already-pinned depot is an
+                        // ordinary outcome, not a constraint violation to surface.
                         try await database.write { db in
-                            try TheatrePin.insert { TheatrePin(location: location, createdAt: date.now) }.execute(db)
+                            try TheatrePin.upsert { TheatrePin(location: location, createdAt: date.now) }.execute(db)
                         }
                         await send(.pinWritten(location))
                     } catch {
@@ -144,7 +146,7 @@ struct EstablishTheatreSheetView: View {
         VStack(alignment: .leading, spacing: Space.xs) {
             Text("Establish a Theatre").font(.rcTitle).foregroundStyle(.rcTextPrimary)
             if let system = store.suggestedSystem {
-                HStack(spacing: 4) {
+                HStack(spacing: Space.xs) {
                     Text("Candidate system").font(.rcCaption).foregroundStyle(.rcTextTertiary)
                     Text(system).font(.rcBodyEmphMono).foregroundStyle(.rcTextPrimary)
                 }

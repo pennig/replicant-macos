@@ -84,6 +84,8 @@ public struct LogisticsFeature {
 
     public init() {}
 
+    private enum CancelID { case loadTheatres }
+
     @Dependency(\.defaultDatabase) var database
     @Dependency(\.date) var date
 
@@ -142,5 +144,6 @@ public struct LogisticsFeature {
         } catch: { error, _ in
             logger.error("theatre load failed: \(error.localizedDescription, privacy: .public)")
         }
+        .cancellable(id: CancelID.loadTheatres, cancelInFlight: true)
     }
 }
