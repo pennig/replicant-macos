@@ -620,6 +620,17 @@ struct Brain: Sendable {
         let hubFootprint: LocationFootprint?
     }
 
+    // MARK: - Theatre ownership
+
+    /// `device`'s theatre, if any — a partition: at most one theatre per
+    /// device, deterministic for a given `view`. Nil for a stowed/cruising
+    /// device or a system outside the census.
+    static func owningTheatre(of device: Device, view: WorldView) -> Theatre? {
+        guard let location = device.location else { return nil }
+        let system = SiteAssay.system(of: location)
+        return view.theatre(servicing: system) ?? view.theatre(nearest: system)
+    }
+
     // MARK: - Theatre adoption
 
     /// Rows needing a `theatreDepot` and the depot to stamp on each. Pure —
