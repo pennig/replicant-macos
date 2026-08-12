@@ -91,6 +91,32 @@ struct ResourceDemandTests {
         #expect(demand.total["carbon"] == nil)
     }
 
+    @Test("a partial device delivery is billed for only the remaining count")
+    func partialDeviceDeliveryBillsRemainder() {
+        let demand = ResourceDemand.compute(
+            events: [event("E-1", options: [("default", [], [("defence_grid", 1, 3)])])],
+            bills: ["defence_grid": defenceGrid],
+            reserveFloors: [:]
+        )
+        #expect(demand.total["conductive"] == 200)
+        #expect(demand.total["structural"] == 400)
+        #expect(demand.total["rares"] == 100)
+        #expect(demand.total["silicates"] == 100)
+    }
+
+    @Test("demand for the same type accumulates across events")
+    func crossEventAccumulation() {
+        let demand = ResourceDemand.compute(
+            events: [
+                event("E-1", options: [("default", [("conductive", 0, 40)], [])]),
+                event("E-2", options: [("default", [("conductive", 0, 25)], [])]),
+            ],
+            bills: [:],
+            reserveFloors: [:]
+        )
+        #expect(demand.total["conductive"] == 65)
+    }
+
     @Test("only the cheapest priceable option of an event contributes")
     func cheapestOptionWins() {
         let demand = ResourceDemand.compute(
@@ -103,6 +129,21 @@ struct ResourceDemandTests {
         )
         #expect(demand.total["volatiles"] == 10)
         #expect(demand.total["conductive"] == nil)
+    }
+
+    @Test("a cost tie between options breaks by name, deterministically")
+    func cheapestTieBreaksByName() {
+        let demand = ResourceDemand.compute(
+            events: [event("E-1", options: [
+                ("beta", [("conductive", 0, 10)], []),
+                ("alpha", [("volatiles", 0, 10)], []),
+            ])],
+            bills: [:],
+            reserveFloors: [:]
+        )
+        #expect(demand.total["volatiles"] == 10)
+        #expect(demand.total["conductive"] == nil)
+        #expect(demand.pricedEvents["E-1"]?.map(\.name) == ["alpha", "beta"])
     }
 
     @Test("an option needing an unbilled device is unpriceable and skipped")
