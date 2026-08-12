@@ -77,6 +77,9 @@ actor DeadlineScheduler {
     /// Minimum spacing between per-type depot stock reads.
     private let depotInventoryInterval: TimeInterval = 3600
     private var lastDepotInventoryAt: Date?
+    /// Minimum spacing between blueprint catalog refreshes.
+    private let blueprintCatalogInterval: TimeInterval = 3600
+    private var lastBlueprintCatalogAt: Date?
 
     init(
         reconciler: Reconciler,
@@ -135,6 +138,11 @@ actor DeadlineScheduler {
             if Self.depotInventoryDue(lastAt: lastDepotInventoryAt, now: now, interval: depotInventoryInterval) {
                 lastDepotInventoryAt = now
                 await refreshDepotInventories()
+            }
+
+            if Self.blueprintCatalogDue(lastAt: lastBlueprintCatalogAt, now: now, interval: blueprintCatalogInterval) {
+                lastBlueprintCatalogAt = now
+                await refreshBlueprintCatalog()
             }
 
             let upcoming = await openDatedOps()
@@ -273,6 +281,25 @@ actor DeadlineScheduler {
         guard !depots.isEmpty else { return }
         logger.debug("depot stock: refreshing \(depots.count, privacy: .public) depot(s)")
         await locationsClient.refreshDepotInventories(depots)
+    }
+
+    /// Whether `run()`'s hourly blueprint catalog refresh is due: never run
+    /// yet, or spaced at least `interval` past its last run.
+    nonisolated static func blueprintCatalogDue(lastAt: Date?, now: Date, interval: TimeInterval) -> Bool {
+        lastAt.map { now.timeIntervalSince($0) >= interval } ?? true
+    }
+
+    /// One request for the full unlocked catalog, hourly. The brain's demand
+    /// pricing degrades to zero-priced device demand when this table is empty,
+    /// so a skipped round costs efficiency and never correctness.
+    func refreshBlueprintCatalog() async {
+        @Dependency(\.defaultDatabase) var database
+        @Dependency(\.blueprintsClient) var blueprintsClient
+        guard let blueprints = try? await blueprintsClient.fetchAll() else { return }
+        try? await database.write { db in
+            try Blueprint.upsert { blueprints }.execute(db)
+        }
+        logger.debug("blueprint catalog: refreshed \(blueprints.count, privacy: .public) blueprint(s)")
     }
 
     /// Open (`active`) operations that carry a completion deadline.

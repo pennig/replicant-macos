@@ -143,6 +143,7 @@ private typealias Operation = GameModels.Operation
             $0.defaultDatabase = database
             $0.date = .constant(Date(timeIntervalSince1970: 2_000))
             $0.continuousClock = clock
+            $0.blueprintsClient.fetchAll = { [] }
         } operation: {
             await engine.start()
 
@@ -189,6 +190,7 @@ private typealias Operation = GameModels.Operation
             $0.continuousClock = clock
             $0.deviceStaleness.startDraining = { started.withValue { $0 += 1 } }
             $0.deviceStaleness.stopDraining = { stopped.withValue { $0 += 1 } }
+            $0.blueprintsClient.fetchAll = { [] }
         } operation: {
             await engine.start()
             for _ in 0..<2_000 where started.value < 1 { await Task.yield() }
@@ -231,6 +233,7 @@ private typealias Operation = GameModels.Operation
             $0.defaultDatabase = database
             $0.date = .constant(Date(timeIntervalSince1970: 2_000))
             $0.continuousClock = clock
+            $0.blueprintsClient.fetchAll = { [] }
         } operation: {
             await engine.start()
             // Suspend until the connect actually lands — the consume task
