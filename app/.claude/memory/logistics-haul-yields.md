@@ -33,6 +33,16 @@ greens adjacent and drops the normal-vision floor to 15.6 against a hard-fail li
 only by a manual `dataviz` validator run — nothing in CI checks this** — re-run it by hand on any
 future palette edit.
 
+**The By Resource donut (2026-08-12) adds one adjacency the stacked column never had: the WRAP
+pair.** A ring in `displayOrder` seats volatiles beside structural, which no linear form does, so
+validating the six slots in order is not sufficient — validate `volatiles,structural` as its own
+2-slot run. Measured: light ΔE 26.5 (protan), dark 27.3 (deutan), both well clear. The ring stays
+gate-safe only while it keeps `displayOrder`; reordering it re-rolls the interior pairs and the
+wrap together. The donut's direct labels (slices ≥10% share, `YieldChartMath.labelledResourceKeys`)
+are the mandated relief for the two light-mode slots under 3:1 contrast — silicates 2.74, rares
+2.62 — and the legend is the second, non-optional half of that relief, since a sub-10% slice gets
+no label at all.
+
 Two latent traps: `haulYields.perType` has SQL `DEFAULT '{}'`, which `ResourceCost` cannot decode
 (six non-optional Ints, no defaults) — unreachable today since every write supplies it, but the
 migration is shipped and append-only. And a delivery arriving after a gap closes a stale open row
