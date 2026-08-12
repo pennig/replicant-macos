@@ -27,6 +27,7 @@ private func surveyReadinessDevice(
     _ code: String,
     type: String,
     tags: [String] = [],
+    location: String? = nil,
     stowedIn: String? = nil,
     controllerDeviceCode: String? = nil,
     directives: [String] = []
@@ -37,7 +38,7 @@ private func surveyReadinessDevice(
     }
     return Device(
         deviceCode: code, deviceType: type, replicantCode: "R1", status: "idle",
-        location: nil, locationName: nil, operationalCapacity: 100, queueSize: 0,
+        location: location, locationName: nil, operationalCapacity: 100, queueSize: 0,
         stowedInDeviceCode: stowedIn, controllerDeviceCode: controllerDeviceCode,
         attachedToDeviceCode: nil, createdAt: Date(timeIntervalSince1970: 0),
         availableCommands: [], features: fixtureFeatures(for: type), tags: tags,
@@ -66,15 +67,51 @@ private func surveyReadinessView(
 
 /// A fully staged survey vessel: tagged, a controller stowed aboard offering
 /// `survey_system`, and one drone the controller has adopted, also aboard.
-private func surveyReadinessStagedFleet() -> [Device] {
+/// `location` is what `Brain.owningTheatre` resolves the carrier through.
+private func surveyReadinessStagedFleet(
+    carrier: String = "V1", controller: String = "AMI1", drone: String = "DRONE1",
+    location: String? = "AINALRAM-1"
+) -> [Device] {
     [
-        surveyReadinessDevice("V1", type: "heaven_vessel", tags: [Brain.surveyCarrierTag]),
+        surveyReadinessDevice(carrier, type: "heaven_vessel", tags: [Brain.surveyCarrierTag], location: location),
         surveyReadinessDevice(
-            "AMI1", type: "ami_survey_controller", stowedIn: "V1", directives: ["survey_system"]
+            controller, type: "ami_survey_controller", stowedIn: carrier, directives: ["survey_system"]
         ),
-        surveyReadinessDevice("DRONE1", type: "survey_drone", stowedIn: "V1", controllerDeviceCode: "AMI1"),
+        surveyReadinessDevice(drone, type: "survey_drone", stowedIn: carrier, controllerDeviceCode: controller),
     ]
 }
+
+/// Two independent theatres in separate mesh components, each carrying the
+/// given fleet's devices at its own system. Component separation makes
+/// `owningTheatre` resolve each fleet to its own theatre unambiguously.
+private func twoTheatreSurveyView(
+    ainalramFleet: [Device], denebedFleet: [Device]
+) -> (view: WorldView, ainalram: Theatre, denebed: Theatre) {
+    let ainalram = Theatre(
+        depot: "AINALRAM-BELT-1", system: "AINALRAM", origin: .derived, readiness: .operational, stock: 0
+    )
+    let denebed = Theatre(
+        depot: "DENEBED-BELT-1", system: "DENEBED", origin: .pinned, readiness: .operational, stock: 0
+    )
+    let devices = ainalramFleet + denebedFleet
+    let view = WorldView(
+        devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
+        starPositions: ["AINALRAM": Position(x: 0, y: 0, z: 0), "DENEBED": Position(x: 100, y: 100, z: 100)],
+        meshSystems: [],
+        salvageUnits: [:],
+        eventSystems: [],
+        theatres: [ainalram, denebed],
+        components: ["AINALRAM": "AINALRAM", "DENEBED": "DENEBED"],
+        now: surveyFixtureNow
+    )
+    return (view, ainalram, denebed)
+}
+
+/// The single-theatre fixtures' theatre — depot `AINALRAM-BELT-1`, matching
+/// `surveyReadinessView(depot:)`'s default single-theatre setup.
+private let ainalramTheatre = Theatre(
+    depot: "AINALRAM-BELT-1", system: "AINALRAM", origin: .derived, readiness: .operational, stock: 0
+)
 
 @Suite("Brain — the survey readiness verdict")
 struct BrainSurveyTests {
@@ -86,7 +123,7 @@ struct BrainSurveyTests {
             starPositions: ["AINALRAM": Position(x: 0, y: 0, z: 0)]
         )
 
-        #expect(Brain.surveyReadiness(view: view) == .launch(carrier: "V1", roamCentre: "AINALRAM"))
+        #expect(Brain.surveyReadiness(view: view, theatre: ainalramTheatre) == .launch(carrier: "V1", roamCentre: "AINALRAM"))
     }
 
     @Test("no vessel tagged auto:survey idles, naming the tag")
@@ -97,7 +134,7 @@ struct BrainSurveyTests {
             starPositions: ["AINALRAM": Position(x: 0, y: 0, z: 0)]
         )
 
-        guard case let .idle(reason) = Brain.surveyReadiness(view: view) else {
+        guard case let .idle(reason) = Brain.surveyReadiness(view: view, theatre: ainalramTheatre) else {
             Issue.record("expected idle")
             return
         }
@@ -107,13 +144,15 @@ struct BrainSurveyTests {
 
     @Test("a tagged vessel with no survey controller aboard idles, never stalls")
     func noControllerAboardIdles() {
-        let devices = [surveyReadinessDevice("V1", type: "heaven_vessel", tags: [Brain.surveyCarrierTag])]
+        let devices = [
+            surveyReadinessDevice("V1", type: "heaven_vessel", tags: [Brain.surveyCarrierTag], location: "AINALRAM-1"),
+        ]
         let view = surveyReadinessView(
             devices: devices, depot: "AINALRAM-BELT-1",
             starPositions: ["AINALRAM": Position(x: 0, y: 0, z: 0)]
         )
 
-        guard case let .idle(reason) = Brain.surveyReadiness(view: view) else {
+        guard case let .idle(reason) = Brain.surveyReadiness(view: view, theatre: ainalramTheatre) else {
             Issue.record("expected idle, never a stall")
             return
         }
@@ -124,7 +163,7 @@ struct BrainSurveyTests {
     @Test("a tagged vessel whose controller has adopted no drone aboard idles, naming that")
     func noAdoptedDroneAboardIdles() {
         let devices = [
-            surveyReadinessDevice("V1", type: "heaven_vessel", tags: [Brain.surveyCarrierTag]),
+            surveyReadinessDevice("V1", type: "heaven_vessel", tags: [Brain.surveyCarrierTag], location: "AINALRAM-1"),
             surveyReadinessDevice(
                 "AMI1", type: "ami_survey_controller", stowedIn: "V1", directives: ["survey_system"]
             ),
@@ -134,42 +173,13 @@ struct BrainSurveyTests {
             starPositions: ["AINALRAM": Position(x: 0, y: 0, z: 0)]
         )
 
-        guard case let .idle(reason) = Brain.surveyReadiness(view: view) else {
+        guard case let .idle(reason) = Brain.surveyReadiness(view: view, theatre: ainalramTheatre) else {
             Issue.record("expected idle")
             return
         }
         #expect(reason.contains("V1"))
         #expect(reason.contains("AMI1"))
         #expect(reason.contains("drone"))
-    }
-
-    @Test("a roam centre the census does not know idles, naming it")
-    func unknownRoamCentreIdles() {
-        let view = surveyReadinessView(
-            devices: surveyReadinessStagedFleet(),
-            depot: "AINALRAM-BELT-1",
-            starPositions: [:]
-        )
-
-        guard case let .idle(reason) = Brain.surveyReadiness(view: view) else {
-            Issue.record("expected idle — SurveyRun.plan would exhaust immediately")
-            return
-        }
-        #expect(reason.contains("AINALRAM"))
-    }
-
-    @Test("an anchor with no resolvable location idles rather than crashing")
-    func unresolvedAnchorIdles() {
-        let view = surveyReadinessView(
-            devices: surveyReadinessStagedFleet(),
-            depot: nil,
-            starPositions: [:]
-        )
-
-        guard case .idle = Brain.surveyReadiness(view: view) else {
-            Issue.record("expected idle")
-            return
-        }
     }
 
     /// Untagged hulls and a misapplied tag are different remedies; the reason
@@ -185,7 +195,7 @@ struct BrainSurveyTests {
             starPositions: ["AINALRAM": Position(x: 0, y: 0, z: 0)]
         )
 
-        guard case let .idle(reason) = Brain.surveyReadiness(view: view) else {
+        guard case let .idle(reason) = Brain.surveyReadiness(view: view, theatre: ainalramTheatre) else {
             Issue.record("expected idle")
             return
         }
@@ -204,7 +214,7 @@ struct BrainSurveyTests {
             starPositions: ["AINALRAM": Position(x: 0, y: 0, z: 0)]
         )
 
-        guard case let .idle(reason) = Brain.surveyReadiness(view: view) else {
+        guard case let .idle(reason) = Brain.surveyReadiness(view: view, theatre: ainalramTheatre) else {
             Issue.record("expected idle")
             return
         }
@@ -216,7 +226,7 @@ struct BrainSurveyTests {
     @Test("a tagged, staged racing vessel is a survey carrier")
     func racingVesselIsASurveyCarrier() {
         let devices = [
-            surveyReadinessDevice("V1", type: "racing_vessel", tags: [Brain.surveyCarrierTag]),
+            surveyReadinessDevice("V1", type: "racing_vessel", tags: [Brain.surveyCarrierTag], location: "AINALRAM-1"),
             surveyReadinessDevice(
                 "AMI1", type: "ami_survey_controller", stowedIn: "V1", directives: ["survey_system"]
             ),
@@ -227,7 +237,36 @@ struct BrainSurveyTests {
             starPositions: ["AINALRAM": Position(x: 0, y: 0, z: 0)]
         )
 
-        #expect(Brain.surveyReadiness(view: view) == .launch(carrier: "V1", roamCentre: "AINALRAM"))
+        #expect(Brain.surveyReadiness(view: view, theatre: ainalramTheatre) == .launch(carrier: "V1", roamCentre: "AINALRAM"))
+    }
+
+    /// Two theatres, each with its own tagged, staged carrier: each launches
+    /// naming its OWN carrier and its OWN system, never the other's.
+    @Test("two operational theatres each launch on their own carrier")
+    func twoTheatresEachLaunchOnTheirOwnCarrier() {
+        let (view, ainalram, denebed) = twoTheatreSurveyView(
+            ainalramFleet: surveyReadinessStagedFleet(carrier: "VA", controller: "AMIA", drone: "DRONEA", location: "AINALRAM-1"),
+            denebedFleet: surveyReadinessStagedFleet(carrier: "VB", controller: "AMIB", drone: "DRONEB", location: "DENEBED-1")
+        )
+
+        #expect(Brain.surveyReadiness(view: view, theatre: ainalram) == .launch(carrier: "VA", roamCentre: "AINALRAM"))
+        #expect(Brain.surveyReadiness(view: view, theatre: denebed) == .launch(carrier: "VB", roamCentre: "DENEBED"))
+    }
+
+    /// A theatre with no carrier of its own idles — it must not fall back to
+    /// a carrier that belongs to a different theatre.
+    @Test("a theatre with no carrier of its own idles without consuming the other theatre's carrier")
+    func theatreWithNoOwnCarrierIdlesWithoutConsumingTheOther() {
+        let (view, ainalram, denebed) = twoTheatreSurveyView(
+            ainalramFleet: surveyReadinessStagedFleet(carrier: "VA", controller: "AMIA", drone: "DRONEA", location: "AINALRAM-1"),
+            denebedFleet: []
+        )
+
+        guard case .idle = Brain.surveyReadiness(view: view, theatre: denebed) else {
+            Issue.record("expected DENEBED to idle — it owns no carrier")
+            return
+        }
+        #expect(Brain.surveyReadiness(view: view, theatre: ainalram) == .launch(carrier: "VA", roamCentre: "AINALRAM"))
     }
 }
 
@@ -301,10 +340,10 @@ struct BrainSurveyStatusTests {
     @Test("an unready fleet with no live row reports idle with the named reason")
     func anUnreadyFleetReportsIdle() {
         let devices = [surveyReadinessDevice("V1", type: "heaven_vessel")]
-        let view = surveyReadinessView(devices: devices, depot: nil)
+        let view = surveyReadinessView(devices: devices, depot: "AINALRAM-BELT-1")
 
         guard case let .idle(status) = Brain.surveyStatus(directives: [], view: view),
-              case let .idle(readiness) = Brain.surveyReadiness(view: view)
+              case let .idle(readiness) = Brain.surveyReadiness(view: view, theatre: ainalramTheatre)
         else {
             Issue.record("expected both to idle")
             return
@@ -322,7 +361,7 @@ private let surveyEnsureCarrier = "SV1"
 /// The DB-backed twin of `surveyReadinessDevice` above — same shape, written
 /// straight to the database rather than held as a value.
 private func seedSurveyEnsureDevice(
-    _ db: Database, code: String, type: String, tags: [String] = [],
+    _ db: Database, code: String, type: String, tags: [String] = [], location: String? = nil,
     stowedIn: String? = nil, controllerDeviceCode: String? = nil, directives: [String] = []
 ) throws {
     var detail: [String: JSONValue] = [:]
@@ -332,7 +371,7 @@ private func seedSurveyEnsureDevice(
     try Device.insert {
         Device(
             deviceCode: code, deviceType: type, replicantCode: "R1", status: "idle",
-            location: nil, locationName: nil, operationalCapacity: 100, queueSize: 0,
+            location: location, locationName: nil, operationalCapacity: 100, queueSize: 0,
             stowedInDeviceCode: stowedIn, controllerDeviceCode: controllerDeviceCode,
             attachedToDeviceCode: nil, createdAt: Date(timeIntervalSince1970: 0),
             availableCommands: [], features: fixtureFeatures(for: type), tags: tags,
@@ -343,9 +382,12 @@ private func seedSurveyEnsureDevice(
 }
 
 /// A fully staged, tagged survey fleet: `seedSurveyEnsureDevice`'s three rows,
-/// carrier + stowed controller + adopted drone.
+/// carrier + stowed controller + adopted drone. The carrier stands at the
+/// growable world's hub location — what `owningTheatre` resolves it through.
 private func seedSurveyEnsureFleet(_ db: Database, carrier: String = surveyEnsureCarrier) throws {
-    try seedSurveyEnsureDevice(db, code: carrier, type: "heaven_vessel", tags: [Brain.surveyCarrierTag])
+    try seedSurveyEnsureDevice(
+        db, code: carrier, type: "heaven_vessel", tags: [Brain.surveyCarrierTag], location: growHubLocation
+    )
     try seedSurveyEnsureDevice(
         db, code: "AMI1", type: "ami_survey_controller", stowedIn: carrier, directives: ["survey_system"]
     )

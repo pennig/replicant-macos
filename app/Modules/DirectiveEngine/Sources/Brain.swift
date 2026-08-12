@@ -330,9 +330,10 @@ struct Brain: Sendable {
     /// `tendRestock`'s sibling. `.needsAttention`/`.paused` count as live so the
     /// brain never relaunches around a halted run or an operator's own pause.
     private func ensureSurvey(snapshot: Snapshot, database: any DatabaseWriter) async {
-        guard case let .launch(carrier, roamCentre) = Self.surveyReadiness(view: snapshot.view) else { return }
         @Dependency(\.uuid) var uuid
         for theatre in snapshot.view.theatres.filter(\.isOperational) {
+            guard case let .launch(carrier, roamCentre) = Self.surveyReadiness(view: snapshot.view, theatre: theatre)
+            else { continue }
             await ensureOne(.surveyRun, theatre: theatre, snapshot: snapshot, database: database) {
                 Directive(
                     id: uuid().uuidString,
@@ -1192,11 +1193,11 @@ struct Brain: Sendable {
         case idle(reason: String)
     }
 
-    /// The survey verdict for `view`. Staging is judged through `SurveyRun`'s
-    /// own fleet queries so the brain and the mission can never disagree about
-    /// what "staged" means.
-    static func surveyReadiness(view: WorldView) -> SurveyReadiness {
-        guard let carrier = surveyCarrier(devices: view.devices) else {
+    /// The survey verdict for `theatre`. Staging is judged through `SurveyRun`'s
+    /// own fleet queries, and the carrier pool is scoped to devices `theatre`
+    /// owns, so two theatres never fight over one vessel.
+    static func surveyReadiness(view: WorldView, theatre: Theatre) -> SurveyReadiness {
+        guard let carrier = surveyCarrier(view: view, theatre: theatre) else {
             return .idle(reason: surveyCarrierBlocker(devices: view.devices))
         }
 
@@ -1211,11 +1212,6 @@ struct Brain: Sendable {
             )
         }
 
-        // The anchor replicant and the print hub are co-located by construction
-        // (nothing enforces it), so the theatre's system stands in for the anchor's.
-        guard let theatre = view.theatres.first(where: \.isOperational) else {
-            return .idle(reason: "no operational theatre")
-        }
         let centre = theatre.system
         guard view.starPositions[centre] != nil else {
             return .idle(reason: "roam centre \(centre) is not in the census")
@@ -1516,7 +1512,10 @@ struct Brain: Sendable {
         }) {
             return .launched(carrier: live.deviceCode, roamCentre: live.roamCentre, status: launchedStatus(live.status))
         }
-        switch surveyReadiness(view: view) {
+        guard let theatre = view.theatres.first(where: \.isOperational) else {
+            return .idle(reason: "no operational theatre")
+        }
+        switch surveyReadiness(view: view, theatre: theatre) {
         case let .launch(carrier, roamCentre): return .ready(carrier: carrier, roamCentre: roamCentre)
         case let .idle(reason): return .idle(reason: reason)
         }
@@ -1534,11 +1533,13 @@ struct Brain: Sendable {
         }
     }
 
-    /// The lowest-coded vessel tagged `surveyCarrierTag`, wherever it stands —
-    /// survey never co-locates at a hub the way `freeCarrier` requires.
-    private static func surveyCarrier(devices: [String: Device]) -> Device? {
-        devices.values
+    /// The lowest-coded vessel tagged `surveyCarrierTag` that `theatre` owns
+    /// (`owningTheatre`) — survey never co-locates at a hub the way
+    /// `freeCarrier` requires.
+    private static func surveyCarrier(view: WorldView, theatre: Theatre) -> Device? {
+        view.devices.values
             .filter { $0.isCarrierHull && $0.hasTag(surveyCarrierTag) }
+            .filter { owningTheatre(of: $0, view: view)?.depot == theatre.depot }
             .min { $0.deviceCode < $1.deviceCode }
     }
 
