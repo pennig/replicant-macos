@@ -12,6 +12,16 @@ import UI
 
 struct DirectiveRowView: View {
     let row: DirectiveRow
+    /// The enclosing group's site, when it has one.
+    var groupDesignation: String?
+
+    /// The headline's designation, dropped when the group header already names
+    /// it — inside a mine every row but the ferry repeats the belt.
+    private var designation: String? {
+        guard let designation = row.headlineDesignation, designation != groupDesignation
+        else { return nil }
+        return designation
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: Space.s) {
@@ -25,7 +35,7 @@ struct DirectiveRowView: View {
                         .font(.rcBodyEmph)
                         .foregroundStyle(.rcTextPrimary)
                         .lineLimit(1)
-                    if let designation = row.headlineDesignation {
+                    if let designation {
                         Text("→")
                             .font(.rcCaption)
                             .foregroundStyle(.rcTextTertiary)

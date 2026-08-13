@@ -18,8 +18,10 @@ public struct DirectivesListView: View {
     }
 
     public var body: some View {
+        // Bound once: `groups` re-merges both live queries on every read.
+        let groups = store.groups
         Group {
-            if store.rows.isEmpty {
+            if groups.isEmpty {
                 RCContentUnavailableView(
                     "No Directives",
                     systemImage: "brain.head.profile",
@@ -27,12 +29,34 @@ public struct DirectivesListView: View {
                 )
             } else {
                 List(selection: $store.selectedRowID) {
-                    ForEach(store.rows) { row in
-                        DirectiveRowView(row: row).tag(row.id)
+                    ForEach(groups) { group in
+                        Section {
+                            if store.expandedGroups.contains(group.id) {
+                                ForEach(group.rows) { row in
+                                    DirectiveRowView(row: row, groupDesignation: group.designation)
+                                        .tag(row.id)
+                                }
+                            }
+                        } header: {
+                            DirectiveGroupHeader(
+                                group: group,
+                                isExpanded: store.expandedGroups.contains(group.id)
+                            ) {
+                                store.send(
+                                    .groupExpansionChanged(
+                                        id: group.id,
+                                        isExpanded: !store.expandedGroups.contains(group.id)
+                                    ),
+                                    animation: .default
+                                )
+                            }
+                        }
                     }
                 }
             }
         }
+        .onAppear { store.send(.seedExpansion) }
+        .onChange(of: groups.count) { store.send(.seedExpansion) }
         .safeAreaInset(edge: .top) { header }
         .toolbar {
             ToolbarItem {
