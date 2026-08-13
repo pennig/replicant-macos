@@ -115,6 +115,15 @@ public struct ResourceCost: Codable, Equatable, Sendable {
         )
     }
 
+    /// The typed cost as a `{resource: amount}` dict with all six keys
+    /// always present, zeros included.
+    public var wireDictionary: [String: Int] {
+        [
+            "carbon": carbon, "silicates": silicates, "structural": structural,
+            "rares": rares, "conductive": conductive, "volatiles": volatiles,
+        ]
+    }
+
     /// The non-zero line items in display order, for the inspector's build-cost
     /// breakdown. Empty when the blueprint has no listed cost.
     public var lineItems: [(label: String, amount: Int)] {

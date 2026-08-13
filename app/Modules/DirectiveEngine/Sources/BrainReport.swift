@@ -302,6 +302,10 @@ public struct BrainReport: Equatable, Sendable {
     public let mine: BrainGoalStatus
     /// `Brain.mineHealth`'s reading of every installed mine this tick.
     public let mines: [BrainMineHealth]
+    /// Whether this tick's mine siting (when it ran) ranked belts against
+    /// demand priced with an empty blueprint catalog — `ResourceHeadroom
+    /// .demandIncomplete`, read off `Brain.mineStatus`.
+    public let mineDemandIncomplete: Bool
     /// The tick's clock reading (`@Dependency(\.date)`, never `Date()`), so a
     /// "recent 429" window is judged against the same instant everything else
     /// on this report was.
@@ -331,6 +335,7 @@ public struct BrainReport: Equatable, Sendable {
         haul: BrainGoalStatus = .idle(reason: "not evaluated"),
         mine: BrainGoalStatus = .idle(reason: "not evaluated"),
         mines: [BrainMineHealth] = [],
+        mineDemandIncomplete: Bool = false,
         observedAt: Date,
         theatreSurvey: [String: BrainSurveyStatus] = [:],
         theatreSalvage: [String: BrainGoalStatus] = [:],
@@ -348,6 +353,7 @@ public struct BrainReport: Equatable, Sendable {
         self.haul = haul
         self.mine = mine
         self.mines = mines
+        self.mineDemandIncomplete = mineDemandIncomplete
         self.observedAt = observedAt
         self.theatreSurvey = theatreSurvey
         self.theatreSalvage = theatreSalvage

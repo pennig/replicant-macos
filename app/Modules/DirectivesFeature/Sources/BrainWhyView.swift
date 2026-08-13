@@ -67,6 +67,10 @@ public struct BrainWhy: Equatable, Sendable {
     /// distinct from `goals`' single mine-install line. Empty when no mine
     /// stands yet, which is the ordinary pre-first-mine state.
     public var mineHealth: [BrainWhyMineHealth]
+    /// Present only when this tick's mine siting ranked belts against demand
+    /// priced with an empty blueprint catalog — nil otherwise, distinct from
+    /// `mineHealth`, which says nothing about the demand side.
+    public var mineDemandNote: [BrainWhySpan]?
     /// Where the brain's two standing rails stand right now, plus a recent
     /// 429 when there is one.
     ///
@@ -93,6 +97,7 @@ public struct BrainWhy: Equatable, Sendable {
         survey: BrainWhySurvey,
         goals: [BrainWhyGoal] = [],
         mineHealth: [BrainWhyMineHealth] = [],
+        mineDemandNote: [BrainWhySpan]? = nil,
         limitPressure: [BrainWhyPressure],
         theatreGroups: [BrainWhyTheatreGroup] = [],
         isEscalated: Bool
@@ -103,6 +108,7 @@ public struct BrainWhy: Equatable, Sendable {
         self.survey = survey
         self.goals = goals
         self.mineHealth = mineHealth
+        self.mineDemandNote = mineDemandNote
         self.limitPressure = limitPressure
         self.theatreGroups = theatreGroups
         self.isEscalated = isEscalated
@@ -148,6 +154,7 @@ public struct BrainWhy: Equatable, Sendable {
                 goalLine(.mine, status: report.mine, report: report),
             ],
             mineHealth: report.mines.map(mineHealthLine),
+            mineDemandNote: mineDemandNote(in: report),
             limitPressure: pressure(in: report),
             theatreGroups: groups(for: report),
             isEscalated: isEscalated(report.decision)
@@ -618,6 +625,11 @@ public struct BrainWhy: Equatable, Sendable {
             belt: health.belt, kind: .running,
             spans: [.prose("mining, surveying and ferrying "), .designation(health.belt)]
         )
+    }
+
+    private static func mineDemandNote(in report: BrainReport) -> [BrainWhySpan]? {
+        guard report.mineDemandIncomplete else { return nil }
+        return [.prose("mine siting incomplete — blueprint catalog empty, demand under-counted")]
     }
 
     // MARK: - Limit pressure

@@ -41,23 +41,22 @@ enum YieldChartMath {
         )
     }
 
-    /// How many sources a folded breakdown shows before the remainder bar.
+    /// How many sources a folded breakdown charts before the remainder caption.
     static let sourceCap = 8
 
-    /// The first `cap` sources plus one aggregate remainder bar, in input order.
-    /// At `cap + 1` or fewer the input returns unfolded — an "All Others (1)"
-    /// bucket is worse than the row it hides.
+    /// The first `cap` sources in input order, plus the remainder's tally. At
+    /// `cap + 1` or fewer, everything is kept and `hidden` is nil — an
+    /// "All Others (1)" line is worse than the row it hides.
     static func foldedSources(
         _ sources: [(designation: String, units: Int)], cap: Int = YieldChartMath.sourceCap
-    ) -> [(label: String, units: Int, isAggregate: Bool)] {
-        let unfolded = sources.map { (label: $0.designation, units: $0.units, isAggregate: false) }
-        guard sources.count > cap + 1 else { return unfolded }
+    ) -> (rows: [(label: String, units: Int)], hidden: (count: Int, units: Int)?) {
+        let rows = sources.map { (label: $0.designation, units: $0.units) }
+        guard sources.count > cap + 1 else { return (rows, nil) }
         let remainder = sources.dropFirst(cap)
-        return unfolded.prefix(cap) + [(
-            label: "All Others (\(remainder.count))",
-            units: remainder.reduce(0) { $0 + $1.units },
-            isAggregate: true
-        )]
+        return (
+            Array(rows.prefix(cap)),
+            (count: remainder.count, units: remainder.reduce(0) { $0 + $1.units })
+        )
     }
 
     /// Keys of slices holding at least `minShare` of the total — the only ones
@@ -121,14 +120,14 @@ struct YieldBreakdownChart: View {
         let folded = YieldChartMath.foldedSources(filtered)
         // A range change can drop the source count below the fold threshold
         // while `showAll` is still set, so expansion is gated on both.
-        let expanded = showAll && folded.last?.isAggregate == true
+        let expanded = showAll && folded.hidden != nil
         let rows = expanded
-            ? filtered.map { (label: $0.designation, units: $0.units, isAggregate: false) }
-            : folded
+            ? filtered.map { (label: $0.designation, units: $0.units) }
+            : folded.rows
         VStack(alignment: .leading, spacing: Space.s) {
             HStack(spacing: Space.s) {
                 Text(title).font(.rcSectionLabel).foregroundStyle(.rcTextSecondary)
-                if folded.last?.isAggregate == true {
+                if folded.hidden != nil {
                     Button(expanded ? "Show top \(YieldChartMath.sourceCap)" : "Show all \(filtered.count)") {
                         showAll.toggle()
                     }
@@ -143,18 +142,22 @@ struct YieldBreakdownChart: View {
                     .frame(maxHeight: ChartSize.breakdownMax)
             } else {
                 chart(rows).frame(height: max(height, ChartSize.breakdown))
+                if let hidden = folded.hidden {
+                    Text("+ \(hidden.count) more sources · \(hidden.units) units")
+                        .font(.rcCaption)
+                        .foregroundStyle(.rcTextTertiary)
+                }
             }
         }
     }
 
-    private func chart(_ rows: [(label: String, units: Int, isAggregate: Bool)]) -> some View {
+    private func chart(_ rows: [(label: String, units: Int)]) -> some View {
         Chart(rows, id: \.label) { row in
             BarMark(
                 x: .value("Units", row.units),
                 y: .value("Label", row.label)
             )
-            // The remainder bar reads as "everything else", not another source.
-            .foregroundStyle(row.isAggregate ? Color.rcTextTertiary : Color.rcAccent)
+            .foregroundStyle(Color.rcAccent)
             .cornerRadius(Radius.textBadge)
             .annotation(position: .trailing) {
                 Text("\(row.units)").font(.rcMonoSmall).foregroundStyle(.rcTextSecondary)

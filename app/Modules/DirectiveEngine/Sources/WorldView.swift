@@ -69,11 +69,26 @@ public struct WorldView: Equatable, Sendable {
     /// the same instant. Bounded in SQL to rows holding units, or it would pin every
     /// system the fleet has ever visited.
     public let stockpileUnits: [String: Int]
+    /// Per-type stock summed over the operational theatres' depots. Empty when
+    /// no depot has a per-type reading — absence is unknown, never zero.
+    public let theatreStock: [String: Double]
+    /// The OLDEST `fetchedAt` among the depot rows read, so a depot with a
+    /// stale reading ages the aggregate. A depot with NO rows contributes and
+    /// ages nothing — its absence is unknown, not stale.
+    public let theatreStockFreshness: Date?
     /// Systems that have been through a full system scan. Carried separately because
     /// `beltsBySystem` cannot tell "surveyed, holds no belt" from "never looked" —
     /// both are simply absent — and prune needs that distinction, since unknown
     /// value reads as pinned.
     public let surveyedSystems: Set<String>
+    /// The whole location-event ledger, unfiltered: `ResourceDemand.compute`
+    /// applies `isActive` itself, and reading demand out of the same
+    /// transaction as the stock above is what keeps the two comparable.
+    public let locationEvents: [LocationEvent]
+    /// Device type → its blueprint's build cost, the bill an event's device
+    /// requirement is priced through. Empty until the catalog is fetched;
+    /// `ResourceDemand` drops an unbilled device rather than guessing.
+    public let blueprintBills: [String: ResourceCost]
     /// The moment this snapshot was taken. Brain logic compares against this
     /// rather than `Date()`, keeping ranking passes pure and their tests
     /// deterministic.
@@ -92,6 +107,10 @@ public struct WorldView: Equatable, Sendable {
         replicantSystems: Set<String> = [],
         replicantHostDevices: Set<String> = [],
         stockpileUnits: [String: Int] = [:],
+        theatreStock: [String: Double] = [:],
+        theatreStockFreshness: Date? = nil,
+        locationEvents: [LocationEvent] = [],
+        blueprintBills: [String: ResourceCost] = [:],
         now: Date
     ) {
         self.devices = devices
@@ -106,6 +125,10 @@ public struct WorldView: Equatable, Sendable {
         self.replicantSystems = replicantSystems
         self.replicantHostDevices = replicantHostDevices
         self.stockpileUnits = stockpileUnits
+        self.theatreStock = theatreStock
+        self.theatreStockFreshness = theatreStockFreshness
+        self.locationEvents = locationEvents
+        self.blueprintBills = blueprintBills
         self.now = now
     }
 
@@ -144,6 +167,11 @@ public struct WorldView: Equatable, Sendable {
             events.filter(\.isActive).map { SiteAssay.system(of: $0.location) }
         )
 
+        // Only the two columns the brain needs, not the description strings
+        // and JSON arrays every row also carries.
+        let billRows = try Blueprint.all.select { ($0.deviceType, $0.resources) }.fetchAll(db)
+        let bills = Dictionary(billRows, uniquingKeysWith: { _, last in last })
+
         // Candidate depot locations: print-capable, pinned, and system_hub
         // device locations, read in the same transaction as the devices.
         let printLocations = Set(allDevices.filter(\.isPrintHub).compactMap(\.location))
@@ -160,6 +188,12 @@ public struct WorldView: Equatable, Sendable {
             devices: allDevices, pins: pins, meshSystems: mesh,
             components: componentLabels, stockByLocation: hubStock
         )
+
+        let operationalDepots = Set(theatres.filter(\.isOperational).map(\.depot))
+        let inventoryRows = operationalDepots.isEmpty ? [] : try LocationInventory
+            .where { $0.location.in(Array(operationalDepots)) }
+            .fetchAll(db)
+        let stock = Self.aggregateStock(rows: inventoryRows, depots: operationalDepots)
 
         // Bounded in SQL to rows actually holding units. The table carries a
         // row per location the fleet has ever looked at and most of them are
@@ -199,8 +233,22 @@ public struct WorldView: Equatable, Sendable {
             stockpileUnits: stockpiles.reduce(into: [:]) { totals, row in
                 totals[SiteAssay.system(of: row.location), default: 0] += row.resources
             },
+            theatreStock: stock.quantities,
+            theatreStockFreshness: stock.freshness,
+            locationEvents: events,
+            blueprintBills: bills,
             now: now
         )
+    }
+
+    /// The per-type sum over `depots` and the oldest read behind it.
+    static func aggregateStock(
+        rows: [LocationInventory], depots: Set<String>
+    ) -> (quantities: [String: Double], freshness: Date?) {
+        let relevant = rows.filter { depots.contains($0.location) }
+        var quantities: [String: Double] = [:]
+        for row in relevant { quantities[row.resourceType, default: 0] += row.quantity }
+        return (quantities, relevant.map(\.fetchedAt).min())
     }
 
     /// Inward: same mesh component, then nearest. Operational only.

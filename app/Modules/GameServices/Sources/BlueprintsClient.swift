@@ -1,6 +1,6 @@
 //
 //  BlueprintsClient.swift
-//  Replicould — Blueprints feature
+//  Replicould — GameServices (shared clients + command engine)
 //
 //  The dependency that talks to the blueprints endpoint. It fetches the
 //  account's unlocked catalog (`GET /v1/blueprints`) via the shared generated
@@ -11,7 +11,7 @@
 //
 
 import API
-import ComposableArchitecture
+import Dependencies
 import Foundation
 import GameModels
 import GameSession

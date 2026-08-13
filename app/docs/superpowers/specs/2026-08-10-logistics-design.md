@@ -201,26 +201,53 @@ greens must not sit next to each other:
 | Slot (display order) | Light | Dark |
 |---|---|---|
 | structural | `#2a78d6` | `#3987e5` |
-| conductive | `#eb6834` | `#d95926` |
-| silicates | `#1baf7a` | `#199e70` |
-| carbon | `#4a3aa7` | `#9085e9` |
-| rares | `#e87ba4` | `#d55181` |
-| volatiles | `#008300` | `#008300` |
+| conductive | `#eb6834` | `#d85b1a` |
+| silicates | `#00aaac` | `#079a96` |
+| carbon | `#a64dc0` | `#9444a6` |
+| rares | `#fe6f91` | `#fd3e8a` |
+| volatiles | `#319e2c` | `#249320` |
+
+Silicates moved from green to teal in the 2026-08-12 revision, which is what
+stopped it competing with volatiles; that one move lifts dark's worst all-pairs
+CVD from ΔE 1.6 to 6.1.
 
 Validated with the dataviz validator against the app's real surfaces —
 `ContentBackground` `#F9F5EE` light, `#0D1018` dark:
 
-- **Light:** lightness band, chroma floor, CVD separation (worst adjacent ΔE 9.2
-  deutan, tritan 26.6) and normal-vision floor (27.6) all pass. Contrast warns
-  below 3:1 for three slots, relieved by direct labels and the ledger table.
-- **Dark:** all six checks pass, contrast included.
+- **Light:** lightness band, chroma floor, CVD separation (worst adjacent ΔE 12.0
+  deutan) and normal-vision floor (21.0) all pass. Contrast warns below 3:1 for
+  three slots — conductive 2.94, silicates 2.63, rares 2.45 — relieved by direct
+  labels and the ledger table.
+- **Dark:** all six checks pass, contrast included. Worst adjacent CVD ΔE 11.4
+  protan; normal-vision floor 20.9.
 
-**The gate is adjacent pairs, and that is not a shortcut — it is the correct gate
-for the forms used here.** Stacked bars and columns are *adjacent* forms: a
-reader separates a segment from the ones touching it. Under `--pairs all` this
-palette FAILS in both modes (normal-vision floor 12.9 light, 9.8 dark; CVD ΔE 3.2
-light, 1.6 dark), which is expected for six categorical hues and is why the
-skill caps all-pairs forms at three series.
+The donut added by the 2026-08-12 revision introduces one adjacency no linear
+form has: the ring **wrap**, seating volatiles beside structural. Validate it as
+its own two-slot run — light ΔE 27.3 deutan, dark 26.4 deutan, both clear.
+
+**One pair measures weak and is deliberately kept:** light `carbon` `#a64dc0`
+sits at L 0.579, within 0.004 of light `structural`, so protan simulation folds
+the two onto the same blue at ΔE 5.6, below the 6 floor. It was raised with a
+protan-simulated render of the real charts and **accepted — it reads fine to the
+colour-deficient reader it was measured for**. Machado severity 1.0 models
+complete dichromacy, and an anomalous trichromat discriminates better than it
+predicts, so the sighted judgement is the higher authority here and this number
+is not a defect to fix. Do not "correct" it.
+
+Should it ever need correcting, hue is the wrong lever — protan folds violet onto
+blue whatever the hue. Lightness is the only one that moves it: the same hue and
+chroma at L 0.48 gives `#872ca0` at ΔE 9.9.
+
+**Adjacent pairs is the gate for the marks, and it is not the whole gate.**
+Stacked bars, columns and the donut ring are adjacent forms: a reader separates a
+segment from the ones touching it. But every one of these charts carries a
+**legend**, and a legend is an all-pairs surface — six swatches side by side,
+where any two can be compared. Under `--pairs all` this palette still fails in
+both modes (worst CVD ΔE 5.6 light on structural↔carbon, 6.1 dark on
+conductive↔volatiles; worst normal-vision 11.3 light on conductive↔rares, 14.1
+dark on silicates↔volatiles). Those pairs are the ones a reader will struggle
+with in the legend, and the text label beside each swatch is what carries
+identity there — which is why the legend is mandatory, not optional chrome.
 
 **Consequence, and it is binding: no all-pairs categorical form may be added to
 this feature** — no scatter, bubble, choropleth, or six-colour small multiples.
@@ -235,8 +262,20 @@ after any change to the mapping, not just to the hexes.
 
 Yellow was deliberately excluded. The obvious slot-4 yellow (`#eda100`) sits on
 top of the app's amber accent (`#D19317` / `#FFB23E`), so a series would read as
-selected; violet replaces it, which also lifts the weakest tritan pair from
-ΔE 5.8 to 26.6.
+selected.
+
+Carbon's first values (`#4a3aa7` / `#9085e9`) were a blue-violet, and dark mode
+measured **ΔE 1.9 protan against structural** — the same colour to a protanope,
+and only 9.8 under normal vision, under the 15 floor. The replacement is a
+magenta-plum found by sweeping OKLCH for the greatest worst-pair separation
+subject to the band, the chroma floor, ≥3:1 on the real surface and the
+normal-vision floor: light 13.0 → 16.5 CVD and 16.3 → 23.8 normal, dark 1.9 →
+10.5 and 9.8 → 19.8. **Dark mode caps out near ΔE 12 for any carbon hue**,
+because five of six dark slots sit at L ≈ 0.62 — a flat lightness profile throws
+away the one channel CVD leaves intact, and spreading it is the move that would
+lift the whole palette. `docs/tools/resource-palette-playground.html` is the
+bench for trying that: OKLCH sliders, live CVD simulation, and every pair scored
+as you drag.
 
 CVD separation sits in the 6–9 floor band, so **direct labels are mandatory**,
 not optional polish.

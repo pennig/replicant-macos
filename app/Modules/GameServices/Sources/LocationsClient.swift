@@ -86,10 +86,27 @@ extension BodyDetail {
 }
 
 extension LocationsClient {
-    /// Fresh inventory at a location, fetched through `body(_:)`. Used by the
-    /// print confirmation to check a blueprint's cost against what's on hand.
+    /// Fresh inventory at a location, fetched through `body(_:)` and recorded
+    /// per type so the brain can rank on stock it did not pay to read.
     public func inventory(at designation: String) async throws -> [InventoryItem] {
-        try await body(designation).inventory
+        @Dependency(\.defaultDatabase) var database
+        @Dependency(\.date.now) var now
+        let items = try await body(designation).inventory
+        try? await database.write { db in
+            try LocationInventory.replace(
+                location: designation, items: items, fetchedAt: now, in: db
+            )
+        }
+        return items
+    }
+
+    /// Refresh per-type stock at each depot, one read apiece. A depot that
+    /// fails is skipped: the row simply ages, and the planner's staleness
+    /// bound is what decides whether the aggregate is still trusted.
+    public func refreshDepotInventories(_ depots: [String]) async {
+        for depot in depots.sorted() {
+            _ = try? await inventory(at: depot)
+        }
     }
 
     /// Resolve a print's resource requirements by refreshing the location's live

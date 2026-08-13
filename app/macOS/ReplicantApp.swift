@@ -243,6 +243,7 @@ struct ReplicantApp: App {
                 try? await database.write { db in
                     try SystemDetail.delete().execute(db)
                     try LocationFootprint.delete().execute(db)
+                    try LocationInventory.delete().execute(db)
                     try FTLLinkRecord.delete().execute(db)
                 }
             })

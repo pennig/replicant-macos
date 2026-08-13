@@ -101,4 +101,56 @@ struct MineSitePlannerTests {
         )
         #expect(MineSitePlanner.site(view: view, occupiedBelts: [])?.belt == "S-BELT-1")
     }
+
+    @Test("the bonus follows the supplied weights, not the old constants")
+    func bonusFollowsWeights() {
+        let weights = ["silicates": 2, "conductive": 1]
+        #expect(
+            MineSitePlanner.scarceBonus(
+                richness: ["silicates": "moderate", "rares": "rich"], weights: weights
+            ) == 2
+        )
+        #expect(
+            MineSitePlanner.scarceBonus(
+                richness: ["conductive": "high", "rares": "rich"], weights: weights
+            ) == 1
+        )
+        #expect(
+            MineSitePlanner.scarceBonus(
+                richness: ["silicates": "low", "conductive": "scarce"], weights: weights
+            ) == 0
+        )
+    }
+
+    @Test("a weighted type breaks a same-class tie the constants would miss")
+    func weightsDecideTheSite() {
+        let view = siteView(
+            belts: [
+                "NEAR": [BeltInfo(designation: "NEAR-BELT-1", beltClass: .rich, richness: ["rares": "rich"])],
+                "FAR": [BeltInfo(designation: "FAR-BELT-1", beltClass: .rich, richness: ["silicates": "moderate"])],
+            ],
+            meshSystems: ["AINALRAM", "NEAR", "FAR"],
+            positions: [
+                "AINALRAM": .init(x: 0, y: 0, z: 0),
+                "NEAR": .init(x: 1, y: 0, z: 0),
+                "FAR": .init(x: 30, y: 0, z: 0),
+            ]
+        )
+        let headroom = ResourceHeadroom(
+            weights: ["silicates": 2, "conductive": 1],
+            coverage: ["silicates": 3.1, "conductive": 4.3],
+            isFallback: false
+        )
+        let site = MineSitePlanner.site(view: view, occupiedBelts: [], headroom: headroom)
+        #expect(site?.belt == "FAR-BELT-1")
+        #expect(site?.headroom.weights == ["silicates": 2, "conductive": 1])
+        #expect(site?.headroom.coverage["silicates"] == 3.1)
+    }
+
+    @Test("the default weights reproduce the shipped ranking")
+    func defaultWeightsAreTheOldConstants() {
+        #expect(MineSitePlanner.scarceBonus(richness: ["rares": "moderate"]) == 2)
+        #expect(MineSitePlanner.scarceBonus(richness: ["conductive": "high"]) == 1)
+        #expect(MineSitePlanner.scarceBonus(richness: ["rares": "moderate", "conductive": "moderate"]) == 3)
+    }
 }

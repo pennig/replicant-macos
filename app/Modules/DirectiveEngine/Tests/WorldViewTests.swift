@@ -228,4 +228,20 @@ struct WorldViewTests {
         let view = try await db.read { try WorldView.read(from: $0, now: Date()) }
         #expect(view.beltsBySystem.isEmpty)
     }
+
+    /// The two demand inputs come out of the same transaction as everything
+    /// else. The event ledger is carried WHOLE — `ResourceDemand` applies
+    /// `isActive` itself, so a completed row must still be here.
+    @Test func readCarriesTheEventLedgerAndBlueprintBills() async throws {
+        let db = try GameDatabase.bootstrap()
+        try await db.write { db in
+            try seedLocationEvent(db, designation: "KRIOS-2-EVT-001", location: "KRIOS-2")
+            try seedLocationEvent(db, designation: "TAU-1-EVT-002", location: "TAU-1", status: "completed")
+            try Blueprint.insert { Blueprint.previewCatalog }.execute(db)
+        }
+        let view = try await db.read { try WorldView.read(from: $0, now: Date()) }
+        #expect(view.locationEvents.map(\.designation).sorted() == ["KRIOS-2-EVT-001", "TAU-1-EVT-002"])
+        #expect(view.blueprintBills["mining_drone"]?.structural == 100)
+        #expect(view.blueprintBills.count == Blueprint.previewCatalog.count)
+    }
 }

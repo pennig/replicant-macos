@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - **Design source of truth:** `docs/superpowers/specs/2026-08-12-demand-derived-mine-ranking-design.md`.
-- **Comment budget is hard:** file header ≤ 6 lines, `///` doc ≤ 3 lines, inline `//` ≤ 2 lines. No dated history, no rejected alternatives, no live-fleet snapshots (device codes, current stock figures), no provenance pointers. Verify with `./app/scripts/check-comments.sh <paths>` from the repo root (paths repo-root relative) — exit 0 is a floor, not proof.
+- **Comment budget is hard:** file header ≤ 6 lines, `///` doc ≤ 3 lines, inline `//` ≤ 2 lines. Blank `///` lines and `//` separator lines COUNT against the budget; the two-line `//  <Name>.swift` / `//  Replicould — <Module>` banner is EXEMPT (`docs/superpowers/comment-cleanup-standard.md`). No dated history, no rejected alternatives, no live-fleet snapshots (device codes, current stock figures), no provenance pointers. Verify with `./app/scripts/check-comments.sh <paths>` from the repo root (paths repo-root relative) — exit 0 is a floor, not proof, since it is eleven regexes with no notion of line counts or prose.
 - **Migrations are append-only.** New migration appends to `GameDatabase.manifest`; never edit or reorder a shipped one.
 - **Logging:** `os.Logger` only, subsystem `name.pennig.replicould`, category = module/service name.
 - **Loud test defaults:** a shared client's `testValue` uses `unimplemented(...)`; rich fixtures belong on `previewValue`.
@@ -1671,11 +1671,14 @@ From `app/Modules`:
 
 ```
 swift build --build-tests && ./scripts/link-index-store.sh
+rm -f .build/events-*.jsonl   # per-filter runs write events-<Suite>.jsonl, which the glob would sweep in
 for p in UniverseModelsTests GameDatabaseTests GameServicesTests GameSyncTests DirectiveEngineTests; do
   swift test --test-product "$p" --disable-xctest --event-stream-version 0 \
     --event-stream-output-path ".build/events-$p.jsonl"
 done
-cat .build/events-*Tests.jsonl > .build/events-all.jsonl
+cat .build/events-UniverseModelsTests.jsonl .build/events-GameDatabaseTests.jsonl \
+    .build/events-GameServicesTests.jsonl .build/events-GameSyncTests.jsonl \
+    .build/events-DirectiveEngineTests.jsonl > .build/events-all.jsonl
 jq -s '[.[] | select(.kind=="event").payload] as $e
   | {started: ($e | map(select(.kind=="testStarted")) | length),
      ended:   ($e | map(select(.kind=="testEnded")) | length),
@@ -1745,11 +1748,14 @@ Run before declaring the plan complete:
 
 - [ ] `cd app/Modules && swift build --build-tests` — clean.
 - [ ] `./scripts/link-index-store.sh` — run after the build so LSP reference queries resolve.
-- [ ] `for p in UniverseModelsTests GameDatabaseTests GameServicesTests GameSyncTests DirectiveEngineTests; do
+- [ ] `rm -f .build/events-*.jsonl   # per-filter runs write events-<Suite>.jsonl, which the glob would sweep in
+for p in UniverseModelsTests GameDatabaseTests GameServicesTests GameSyncTests DirectiveEngineTests; do
   swift test --test-product "$p" --disable-xctest --event-stream-version 0 \
     --event-stream-output-path ".build/events-$p.jsonl"
 done
-cat .build/events-*Tests.jsonl > .build/events-all.jsonl
+cat .build/events-UniverseModelsTests.jsonl .build/events-GameDatabaseTests.jsonl \
+    .build/events-GameServicesTests.jsonl .build/events-GameSyncTests.jsonl \
+    .build/events-DirectiveEngineTests.jsonl > .build/events-all.jsonl
 jq -s '[.[] | select(.kind=="event").payload] as $e
   | {started: ($e | map(select(.kind=="testStarted")) | length),
      ended:   ($e | map(select(.kind=="testEnded")) | length),

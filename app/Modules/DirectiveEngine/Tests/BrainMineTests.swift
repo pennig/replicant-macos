@@ -82,7 +82,10 @@ private func mineWorldView(
     depot: String? = mineHub,
     belts: [String: [BeltInfo]] = mineRichBelt,
     meshSystems: Set<String> = ["SOL"],
-    starPositions: [String: Position] = ["SOL": Position(x: 0, y: 0, z: 0)]
+    starPositions: [String: Position] = ["SOL": Position(x: 0, y: 0, z: 0)],
+    theatreStock: [String: Double] = [:],
+    theatreStockFreshness: Date? = nil,
+    locationEvents: [LocationEvent] = []
 ) -> WorldView {
     let theatre = singleOperationalTheatre(depot: depot)
     return WorldView(
@@ -94,6 +97,9 @@ private func mineWorldView(
         theatres: theatre.theatres,
         components: theatre.components,
         beltsBySystem: belts,
+        theatreStock: theatreStock,
+        theatreStockFreshness: theatreStockFreshness,
+        locationEvents: locationEvents,
         now: mineNow
     )
 }
@@ -103,6 +109,74 @@ private func mineWorldView(
 /// own derivation, so the two never disagree about which system a depot is in.
 private func mineTheatre(depot: String = mineHub) -> Theatre {
     Theatre(depot: depot, system: SiteAssay.system(of: depot), origin: .derived, readiness: .operational, stock: 0)
+}
+
+/// Two same-class belts in one system, so the siting can only be decided by the
+/// scarcity bonus: `raresBelt` scores under the static weights, `silicatesBelt`
+/// only under demand-derived ones.
+private let mineRaresBelt = "SOL-BELT-A"
+private let mineSilicatesBelt = "SOL-BELT-B"
+private let mineWeightedBelts = [
+    "SOL": [
+        BeltInfo(designation: mineRaresBelt, beltClass: .rich, richness: ["rares": "rich"]),
+        BeltInfo(designation: mineSilicatesBelt, beltClass: .rich, richness: ["silicates": "rich"]),
+    ]
+]
+
+/// Stock leaving silicates the least-covered type against `reserveFloors`, and
+/// rares the best-covered — the inverse of what the static weights assume.
+private let mineSilicatesShortStock: [String: Double] = [
+    "silicates": 50, "carbon": 50, "rares": 2000,
+    "conductive": 6000, "structural": 4000, "volatiles": 500,
+]
+
+/// Stock leaving RARES the least-covered type, so demand and the static table
+/// agree until an event asks for silicates.
+private let mineRaresShortStock: [String: Double] = [
+    "silicates": 10_000, "carbon": 10_000, "rares": 200,
+    "conductive": 60_000, "structural": 10_000, "volatiles": 10_000,
+]
+
+/// An open event asking for `resource` and, optionally, an undeliverable
+/// device, in the live `accounts/events` shape so the decode is the real one.
+private func mineEvent(
+    resource: (type: String, amount: Int), device: String? = nil
+) -> LocationEvent {
+    let devices: [JSONValue] = device.map { type in
+        [.object([
+            "device_type": .string(type),
+            "current": .number(0),
+            "required": .number(1),
+            "met": .bool(false),
+        ])]
+    } ?? []
+    return LocationEvent(
+        designation: "SOL-3-EVT-1",
+        location: "SOL-3",
+        status: "active",
+        detail: .object([
+            "progress": .object([
+                "met": .bool(false),
+                "options": .array([
+                    .object([
+                        "name": .string("default"),
+                        "met": .bool(false),
+                        "resources": .array([
+                            .object([
+                                "resource_type": .string(resource.type),
+                                "current": .number(0),
+                                "required": .number(Double(resource.amount)),
+                                "met": .bool(false),
+                            ])
+                        ]),
+                        "devices": .array(devices),
+                    ])
+                ]),
+            ])
+        ]),
+        firstSeenAt: mineNow,
+        updatedAt: mineNow
+    )
 }
 
 @Suite("Brain — the mine readiness verdict")
@@ -302,6 +376,132 @@ struct BrainMineReadinessTests {
                 == .launch(carrier: "CARRIER2", belt: "VEGA-BELT-1")
         )
     }
+
+    @Test("the site ranking uses demand-derived weights when stock is fresh")
+    func mineSitingUsesDemandWeights() {
+        let now = Date(timeIntervalSince1970: 1_750_000_000)
+        let headroom = Brain.siteWeights(
+            stock: ["silicates": 12777, "conductive": 19161, "volatiles": 6538],
+            events: [],
+            bills: [:],
+            freshness: now,
+            now: now
+        )
+        #expect(headroom.isFallback == false)
+        #expect(headroom.weights.count == 2)
+    }
+
+    @Test("no stock reading leaves the shipped constants in force")
+    func mineSitingFallsBackWithoutStock() {
+        let now = Date(timeIntervalSince1970: 1_750_000_000)
+        let headroom = Brain.siteWeights(
+            stock: [:], events: [], bills: [:], freshness: nil, now: now
+        )
+        #expect(headroom.weights == ResourceHeadroom.staticWeights)
+        #expect(headroom.isFallback)
+    }
+
+    /// Pins the empty-catalog degradation: an option needing an unbilled device
+    /// is DROPPED WHOLE, its resource lines with it, so demand is the reserve
+    /// floors alone — weights still derive rather than falling back.
+    @Test("an empty blueprint catalog degrades demand to the reserve floors")
+    func emptyBillsDegradeToTheReserveFloors() {
+        let headroom = Brain.siteWeights(
+            stock: mineSilicatesShortStock,
+            events: [mineEvent(resource: ("rares", 1_000_000), device: "defence_grid")],
+            bills: [:],
+            freshness: mineNow,
+            now: mineNow
+        )
+        #expect(headroom.isFallback == false)
+        #expect(headroom.weights == ["silicates": 2, "carbon": 1])
+        #expect(headroom.demandIncomplete)
+    }
+
+    /// Kills a mutant that drops the `open > 0` half of the predicate: empty
+    /// bills alone, with nothing open to price, must not flag degradation.
+    @Test("empty bills with no open events leaves nothing to degrade")
+    func emptyBillsWithNoOpenEventsDoesNotDegrade() {
+        let headroom = Brain.siteWeights(
+            stock: mineSilicatesShortStock, events: [], bills: [:], freshness: mineNow, now: mineNow
+        )
+        #expect(headroom.demandIncomplete == false)
+    }
+
+    /// Kills a mutant that drops the `bills.isEmpty` half of the predicate: a
+    /// priceable catalog beside an open event must not flag degradation, even
+    /// though the event itself asks for an unbilled device.
+    @Test("a populated blueprint catalog does not degrade demand")
+    func populatedBillsDoNotDegradeDemand() {
+        let headroom = Brain.siteWeights(
+            stock: mineSilicatesShortStock,
+            events: [mineEvent(resource: ("rares", 1_000_000), device: "defence_grid")],
+            bills: ["defence_grid": ResourceCost(rares: 10)],
+            freshness: mineNow,
+            now: mineNow
+        )
+        #expect(headroom.demandIncomplete == false)
+    }
+
+    /// The wiring, not the predicate: two same-class belts in one system, so
+    /// only the bonus separates them, and the demand-derived weights pick the
+    /// belt the static table ranks last.
+    @Test("the derived weights reach the launched belt, overruling the static table")
+    func derivedWeightsDecideTheLaunchedBelt() {
+        let view = mineWorldView(
+            devices: minePrintedFleet() + [mineCarrierDevice()],
+            belts: mineWeightedBelts,
+            theatreStock: mineSilicatesShortStock,
+            theatreStockFreshness: mineNow
+        )
+        #expect(
+            MineSitePlanner.site(view: view, occupiedBelts: [mineHub])?.belt == mineRaresBelt
+        )
+        #expect(
+            Brain.mineReadiness(view: view, directives: [])
+                == .launch(carrier: mineCarrier, belt: mineSilicatesBelt)
+        )
+    }
+
+    /// The events the demand is priced from ride `WorldView`, so an open event
+    /// asking for silicates must move the siting on its own.
+    @Test("an open event's demand moves the sited belt")
+    func anOpenEventMovesTheSitedBelt() {
+        let devices = minePrintedFleet() + [mineCarrierDevice()]
+        let quiet = mineWorldView(
+            devices: devices, belts: mineWeightedBelts,
+            theatreStock: mineRaresShortStock, theatreStockFreshness: mineNow
+        )
+        let asking = mineWorldView(
+            devices: devices, belts: mineWeightedBelts,
+            theatreStock: mineRaresShortStock, theatreStockFreshness: mineNow,
+            locationEvents: [mineEvent(resource: ("silicates", 1_000_000))]
+        )
+        #expect(
+            Brain.mineReadiness(view: quiet, directives: [])
+                == .launch(carrier: mineCarrier, belt: mineRaresBelt)
+        )
+        #expect(
+            Brain.mineReadiness(view: asking, directives: [])
+                == .launch(carrier: mineCarrier, belt: mineSilicatesBelt)
+        )
+    }
+
+    /// A reading older than `stalenessBound` must rank exactly as no reading
+    /// does, or the brain sites a mine against last week's depot.
+    @Test("a stale stock reading sites the belt the static table picks")
+    func staleStockSitesTheStaticBelt() {
+        let view = mineWorldView(
+            devices: minePrintedFleet() + [mineCarrierDevice()],
+            belts: mineWeightedBelts,
+            theatreStock: mineSilicatesShortStock,
+            theatreStockFreshness: mineNow.addingTimeInterval(-ResourceHeadroom.stalenessBound - 1)
+        )
+        #expect(
+            Brain.mineReadiness(view: view, directives: [])
+                == .launch(carrier: mineCarrier, belt: mineRaresBelt)
+        )
+    }
 }
 
 @Suite("Brain — the mine ferry controller")
@@ -363,7 +563,7 @@ struct BrainMineStatusTests {
             fleetTag: MineRecipe.fleetTag, targets: [mineBelt]
         )
         #expect(
-            Brain.mineStatus(directives: [live], view: view)
+            Brain.mineStatus(directives: [live], view: view).status
                 == .launched(vessel: mineCarrier, focus: mineBelt, status: .running)
         )
     }
@@ -376,7 +576,7 @@ struct BrainMineStatusTests {
             fleetTag: MineRecipe.fleetTag, targets: [mineBelt]
         )
         #expect(
-            Brain.mineStatus(directives: [live], view: view)
+            Brain.mineStatus(directives: [live], view: view).status
                 == .launched(vessel: mineCarrier, focus: mineBelt, status: .needsAttention)
         )
     }
@@ -384,14 +584,14 @@ struct BrainMineStatusTests {
     @Test("a full board with no live run reports ready, not launched")
     func readyWhenNoLiveRun() {
         let view = mineWorldView(devices: minePrintedFleet() + [mineCarrierDevice()])
-        #expect(Brain.mineStatus(directives: [], view: view) == .ready(vessel: mineCarrier))
+        #expect(Brain.mineStatus(directives: [], view: view).status == .ready(vessel: mineCarrier))
     }
 
     @Test("nothing printed reports idle with mineReadiness's own reason")
     func idleWhenNothingPrinted() {
         let view = mineWorldView(devices: [mineCarrierDevice()])
         #expect(
-            Brain.mineStatus(directives: [], view: view) == .idle(reason: "no printed mine fleet")
+            Brain.mineStatus(directives: [], view: view).status == .idle(reason: "no printed mine fleet")
         )
     }
 
@@ -402,13 +602,38 @@ struct BrainMineStatusTests {
             id: "M1", kind: .mineRun, status: .completed, deviceCode: "OTHERCARRIER",
             fleetTag: MineRecipe.fleetTag, targets: [mineBelt]
         )
-        #expect(Brain.mineStatus(directives: [completed], view: view) == .ready(vessel: mineCarrier))
+        #expect(Brain.mineStatus(directives: [completed], view: view).status == .ready(vessel: mineCarrier))
+    }
+
+    /// The end-to-end wiring `siteWeights`'s own tests cannot see: `mineStatus`
+    /// must forward `mineSiting`'s headroom, not silently drop it. Kills a
+    /// mutant that hard-codes `demandIncomplete: false` in `mineStatus` itself.
+    @Test("ready with an open event and no blueprint catalog reports demand incomplete")
+    func readyReportsDemandIncompleteWithAnUnpricedEvent() {
+        let view = mineWorldView(
+            devices: minePrintedFleet() + [mineCarrierDevice()],
+            locationEvents: [mineEvent(resource: ("rares", 1_000_000), device: "defence_grid")]
+        )
+        #expect(Brain.mineStatus(directives: [], view: view).demandIncomplete)
+    }
+
+    /// A live run never re-runs siting, so it must never claim the demand
+    /// reading was incomplete — kills a mutant that returns `true`
+    /// unconditionally from `mineStatus`.
+    @Test("a live run reports demand complete, since siting never re-ran")
+    func aLiveRunReportsDemandComplete() {
+        let view = mineWorldView(devices: minePrintedFleet() + [mineCarrierDevice()])
+        let live = directiveFixture(
+            id: "M1", kind: .mineRun, status: .running, deviceCode: mineCarrier,
+            fleetTag: MineRecipe.fleetTag, targets: [mineBelt]
+        )
+        #expect(Brain.mineStatus(directives: [live], view: view).demandIncomplete == false)
     }
 
     @Test("no operational theatre reports idle, naming that")
     func noOperationalTheatreReportsIdle() {
         let view = mineWorldView(devices: minePrintedFleet() + [mineCarrierDevice()], depot: nil)
-        #expect(Brain.mineStatus(directives: [], view: view) == .idle(reason: "no operational theatre"))
+        #expect(Brain.mineStatus(directives: [], view: view).status == .idle(reason: "no operational theatre"))
     }
 }
 
@@ -446,11 +671,11 @@ struct BrainMineStatusTheatreTests {
             fleetTag: MineRecipe.fleetTag(forTheatre: sol.depot), targets: [mineBelt], theatreDepot: sol.depot
         )
         #expect(
-            Brain.mineStatus(directives: [live], view: view, theatre: sol)
+            Brain.mineStatus(directives: [live], view: view, theatre: sol).status
                 == .launched(vessel: mineCarrier, focus: mineBelt, status: .running)
         )
         #expect(
-            Brain.mineStatus(directives: [live], view: view, theatre: vega)
+            Brain.mineStatus(directives: [live], view: view, theatre: vega).status
                 == .idle(reason: "no printed mine fleet")
         )
     }

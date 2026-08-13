@@ -2,7 +2,7 @@
 //  MineSitePlanner.swift
 //  Replicould — DirectiveEngine
 //
-//  Ranks candidate belts for a new permanent mine: class, then a rares/conductive
+//  Ranks candidate belts for a new permanent mine: class, then a demand-weighted
 //  scarcity bonus, then distance from the nearest theatre, then designation.
 //
 
@@ -18,15 +18,19 @@ public enum MineSitePlanner {
         public let beltClass: BeltClass
         public let scarceBonus: Int
         public let distanceLY: Double
+        /// The reading the bonus was scored under, for the why-view.
+        public let headroom: ResourceHeadroom
     }
 
-    /// Rares ≥ moderate scores 2, conductive ≥ moderate scores 1 — weighted by
-    /// how rare each is across charted belts, per the design spec.
-    public static func scarceBonus(richness: [String: String]) -> Int {
-        var bonus = 0
-        if atLeastModerate(richness["rares"]) { bonus += 2 }
-        if atLeastModerate(richness["conductive"]) { bonus += 1 }
-        return bonus
+    /// The belt's score under `weights`: each weighted type present at ≥
+    /// moderate adds its points. Unweighted types add nothing.
+    public static func scarceBonus(
+        richness: [String: String],
+        weights: [String: Int] = ResourceHeadroom.staticWeights
+    ) -> Int {
+        weights.reduce(0) { total, entry in
+            atLeastModerate(richness[entry.key]) ? total + entry.value : total
+        }
     }
 
     private static func atLeastModerate(_ qualifier: String?) -> Bool {
@@ -39,7 +43,11 @@ public enum MineSitePlanner {
     /// The best belt for a new mine, or nil when nothing passes the hard
     /// filters: meshed, unoccupied, classifiable, placeable. Ranked OUTWARD
     /// from each candidate's own nearest theatre — there is no row to read.
-    public static func site(view: WorldView, occupiedBelts: Set<String>) -> Candidate? {
+    public static func site(
+        view: WorldView,
+        occupiedBelts: Set<String>,
+        headroom: ResourceHeadroom = .staticFallback
+    ) -> Candidate? {
         var candidates: [Candidate] = []
         for (system, belts) in view.beltsBySystem {
             guard view.meshSystems.contains(system),
@@ -52,8 +60,9 @@ public enum MineSitePlanner {
                     belt: belt.designation,
                     system: system,
                     beltClass: belt.beltClass,
-                    scarceBonus: scarceBonus(richness: belt.richness),
-                    distanceLY: originPosition.distance(to: position)
+                    scarceBonus: scarceBonus(richness: belt.richness, weights: headroom.weights),
+                    distanceLY: originPosition.distance(to: position),
+                    headroom: headroom
                 ))
             }
         }

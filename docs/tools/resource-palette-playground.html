@@ -1,0 +1,576 @@
+<title>Resource Palette Bench</title>
+<style>
+  /* The chrome is achromatic on purpose: a palette tool must not seat its own
+     accent hue beside the swatches being judged. */
+  :root {
+    --ground: #F7F6F4;
+    --panel: #FFFFFF;
+    --ink: #16161A;
+    --ink-2: #55555F;
+    --ink-3: #8A8A93;
+    --rule: rgba(20, 20, 26, 0.14);
+    --rule-strong: rgba(20, 20, 26, 0.3);
+    --field: #EEEDEA;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+    --sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+    --step: 0.5rem;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0E0E10;
+      --panel: #17171A;
+      --ink: #EDEDF0;
+      --ink-2: #A2A2AC;
+      --ink-3: #6E6E78;
+      --rule: rgba(255, 255, 255, 0.14);
+      --rule-strong: rgba(255, 255, 255, 0.34);
+      --field: #232327;
+      --shadow: none;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #0E0E10;
+    --panel: #17171A;
+    --ink: #EDEDF0;
+    --ink-2: #A2A2AC;
+    --ink-3: #6E6E78;
+    --rule: rgba(255, 255, 255, 0.14);
+    --rule-strong: rgba(255, 255, 255, 0.34);
+    --field: #232327;
+    --shadow: none;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.5;
+    font-variant-numeric: tabular-nums;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1240px; margin: 0 auto; padding: calc(var(--step) * 5) calc(var(--step) * 3) calc(var(--step) * 10); }
+
+  header { border-bottom: 1px solid var(--rule-strong); padding-bottom: calc(var(--step) * 3); margin-bottom: calc(var(--step) * 4); }
+  h1 { font-size: 1.6rem; font-weight: 700; letter-spacing: -0.02em; margin: 0 0 var(--step); text-wrap: balance; }
+  .lede { color: var(--ink-2); margin: 0; max-width: 62ch; }
+  .eyebrow {
+    font-family: var(--mono); font-size: 0.68rem; text-transform: uppercase;
+    letter-spacing: 0.13em; color: var(--ink-3); margin: 0 0 calc(var(--step) * 1.5);
+  }
+
+  .toolbar { display: flex; flex-wrap: wrap; gap: calc(var(--step) * 3); margin-top: calc(var(--step) * 3); }
+  fieldset { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--step); }
+  legend { padding: 0; }
+  .seg { display: flex; border: 1px solid var(--rule-strong); border-radius: 6px; overflow: hidden; }
+  .seg button {
+    font: inherit; font-size: 0.82rem; font-family: var(--mono);
+    background: transparent; color: var(--ink-2); border: 0;
+    border-right: 1px solid var(--rule); padding: 6px 12px; cursor: pointer;
+  }
+  .seg button:last-child { border-right: 0; }
+  .seg button[aria-pressed="true"] { background: var(--ink); color: var(--ground); font-weight: 600; }
+  .seg button:focus-visible, button:focus-visible, input:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+
+  .cols { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: calc(var(--step) * 5); align-items: start; }
+  @media (max-width: 1000px) { .cols { grid-template-columns: 1fr; } .preview-col { position: static !important; } }
+
+  section + section { margin-top: calc(var(--step) * 5); }
+  h2 { font-size: 0.95rem; font-weight: 700; letter-spacing: -0.01em; margin: 0 0 calc(var(--step) * 2); }
+
+  /* ── slot editors ─────────────────────────────────────────────── */
+  .slot {
+    border: 1px solid var(--rule); border-radius: 8px; background: var(--panel);
+    padding: calc(var(--step) * 2); margin-bottom: calc(var(--step) * 2); box-shadow: var(--shadow);
+  }
+  .slot-head { display: flex; align-items: center; gap: calc(var(--step) * 1.5); margin-bottom: calc(var(--step) * 1.5); }
+  .chip { width: 30px; height: 30px; border-radius: 5px; border: 1px solid var(--rule-strong); flex: none; }
+  .slot-name { font-family: var(--mono); font-weight: 600; font-size: 0.9rem; }
+  .slot-head .spacer { margin-left: auto; }
+  .hexin {
+    font-family: var(--mono); font-size: 0.82rem; width: 9ch; text-transform: uppercase;
+    background: var(--field); color: var(--ink); border: 1px solid var(--rule); border-radius: 4px; padding: 4px 6px;
+  }
+  .mini {
+    font: inherit; font-size: 0.75rem; font-family: var(--mono);
+    background: transparent; color: var(--ink-2); border: 1px solid var(--rule-strong);
+    border-radius: 4px; padding: 4px 8px; cursor: pointer;
+  }
+  .mini:hover { color: var(--ink); border-color: var(--ink); }
+
+  .sliders { display: grid; grid-template-columns: 1.6ch 1fr 6ch; gap: 6px calc(var(--step) * 1.5); align-items: center; }
+  .sliders label { font-family: var(--mono); font-size: 0.78rem; color: var(--ink-3); }
+  .sliders output { font-family: var(--mono); font-size: 0.78rem; color: var(--ink-2); text-align: right; }
+  input[type="range"] { width: 100%; accent-color: var(--ink); }
+  .clip { font-family: var(--mono); font-size: 0.72rem; color: var(--ink-2); margin-top: var(--step); }
+
+  /* ── preview ──────────────────────────────────────────────────── */
+  .preview-col { position: sticky; top: calc(var(--step) * 2); }
+  .stage {
+    border: 1px solid var(--rule); border-radius: 8px; overflow: hidden; box-shadow: var(--shadow);
+  }
+  .stage-body { padding: calc(var(--step) * 2.5); }
+  .stage-note {
+    font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.06em; text-transform: uppercase;
+    padding: 6px calc(var(--step) * 2.5); border-bottom: 1px solid var(--rule);
+    color: var(--ink-3); background: var(--panel);
+  }
+  /* Sized in px against each viewBox's own aspect, never stretched to a grid
+     cell — an unsized SVG takes the cell's width and overruns its neighbour. */
+  .charts { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: calc(var(--step) * 3); }
+  #donut { width: 200px; height: 200px; flex: none; }
+  #stack { width: 132px; height: 200px; flex: none; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px calc(var(--step) * 2); margin-top: calc(var(--step) * 2); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 0.75rem; }
+  .legend i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+
+  /* ── verdicts & matrix ────────────────────────────────────────── */
+  table { border-collapse: collapse; width: 100%; font-family: var(--mono); font-size: 0.78rem; }
+  .scroller { overflow-x: auto; }
+  th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+  th { color: var(--ink-3); font-weight: 400; text-transform: uppercase; font-size: 0.68rem; letter-spacing: 0.1em; }
+  td.num { text-align: right; }
+  /* Status is a glyph + a word + a number — never colour alone, which would be
+     self-defeating in this tool of all tools. */
+  .mark { font-weight: 700; }
+  .verdicts li { margin-bottom: 6px; font-family: var(--mono); font-size: 0.79rem; }
+  .verdicts ul { list-style: none; padding: 0; margin: 0; }
+  .verdicts .why { color: var(--ink-2); }
+  .worst { border-left: 2px solid var(--rule-strong); padding-left: calc(var(--step) * 1.5); }
+
+  pre {
+    font-family: var(--mono); font-size: 0.74rem; line-height: 1.45; background: var(--field);
+    border: 1px solid var(--rule); border-radius: 6px; padding: calc(var(--step) * 2);
+    overflow-x: auto; margin: 0;
+  }
+  .exp-head { display: flex; align-items: center; gap: var(--step); margin-bottom: var(--step); }
+  footer { margin-top: calc(var(--step) * 6); padding-top: calc(var(--step) * 3); border-top: 1px solid var(--rule); color: var(--ink-3); font-size: 0.82rem; }
+  footer code, .lede code, li code { font-family: var(--mono); font-size: 0.92em; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+
+<div class="wrap">
+<header>
+  <p class="eyebrow">Replicould · UI palette</p>
+  <h1>Resource Palette Bench</h1>
+  <p class="lede">
+    Six resource hues, tuned in OKLCH and measured as you drag. Every number is computed —
+    OKLab ΔE under the Machado severity-1.0 simulation, WCAG contrast against the app's real
+    surfaces (<code>#F9F5EE</code> light, <code>#0D1018</code> dark). Pass marks are a glyph and
+    a figure, never a colour.
+  </p>
+  <div class="toolbar">
+    <fieldset>
+      <legend class="eyebrow">Palette</legend>
+      <div class="seg" id="modeSeg" role="group" aria-label="Palette appearance"></div>
+    </fieldset>
+    <fieldset>
+      <legend class="eyebrow">Simulated vision</legend>
+      <div class="seg" id="visionSeg" role="group" aria-label="Simulated vision"></div>
+    </fieldset>
+    <fieldset>
+      <legend class="eyebrow">Pair scope</legend>
+      <div class="seg" id="pairSeg" role="group" aria-label="Pair scope"></div>
+    </fieldset>
+  </div>
+</header>
+
+<div class="cols">
+  <div>
+    <section>
+      <h2>Slots</h2>
+      <p class="eyebrow" style="margin-bottom:calc(var(--step)*2)">Order is <code>ResourceCost.displayOrder</code> — it sets ring and stack adjacency</p>
+      <div id="slots"></div>
+      <button class="mini" id="resetAll">Reset all to shipped values</button>
+    </section>
+  </div>
+
+  <div class="preview-col">
+    <section style="margin-top:0">
+      <h2>On the real surface</h2>
+      <div class="stage">
+        <p class="stage-note" id="stageNote"></p>
+        <div class="stage-body" id="stage">
+          <div class="charts">
+            <svg id="donut" viewBox="0 0 200 200" role="img" aria-label="Donut preview"></svg>
+            <svg id="stack" viewBox="0 0 132 200" role="img" aria-label="Stacked column preview"></svg>
+          </div>
+          <div class="legend" id="legend"></div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Checks</h2>
+      <div class="verdicts"><ul id="verdicts"></ul></div>
+    </section>
+
+    <section>
+      <h2>Every pair, worst first</h2>
+      <div class="scroller"><table id="matrix">
+        <thead><tr><th>Pair</th><th class="num">CVD ΔE</th><th class="num">Normal ΔE</th><th>Reads as</th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+    </section>
+  </div>
+</div>
+
+<section>
+  <div class="exp-head">
+    <h2 style="margin:0">Export</h2>
+    <button class="mini" id="copyBtn">Copy Contents.json</button>
+    <span class="eyebrow" id="copied" style="margin:0"></span>
+  </div>
+  <p class="lede" style="margin-bottom:calc(var(--step)*2)">
+    One colorset per slot. Paste over
+    <code>app/Modules/UI/Sources/Colors.xcassets/Resource&lt;Slot&gt;.colorset/Contents.json</code>,
+    or hand me the hex values and I'll write them in.
+  </p>
+  <pre id="export"></pre>
+</section>
+
+<footer>
+  ΔE is Euclidean distance in OKLab ×100. Targets: <strong>8</strong> for a CVD pair, a
+  <strong>6</strong> floor that is legal only with direct labels; <strong>15</strong> is a hard
+  floor for normal vision; contrast <strong>3:1</strong> against the surface. The donut makes
+  <code>volatiles</code> and <code>structural</code> adjacent through the ring's wrap — a pair no
+  stacked column ever creates, and one the adjacent-only scope includes for that reason.
+</footer>
+</div>
+
+<script>
+// ── colour maths ────────────────────────────────────────────────────────────
+const MACHADO = {
+  protan: [[0.152286, 1.052583, -0.204868], [0.114503, 0.786281, 0.099216], [-0.003882, -0.048116, 1.051998]],
+  deutan: [[0.367322, 0.860646, -0.227968], [0.280085, 0.672501, 0.047413], [-0.011820, 0.042940, 0.968881]],
+  tritan: [[1.255528, -0.076749, -0.178779], [-0.078411, 0.930809, 0.147602], [0.004733, 0.691367, 0.303900]],
+};
+const clamp01 = (c) => Math.max(0, Math.min(1, c));
+const hex2srgb = (h) => { h = h.trim().replace(/^#/, ""); return [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16) / 255); };
+const s2lin = (c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+const lin2s = (c) => { c = clamp01(c); return c <= 0.0031308 ? 12.92 * c : 1.055 * c ** (1 / 2.4) - 0.055; };
+const lin = (h) => hex2srgb(h).map(s2lin);
+const relLum = ([r, g, b]) => 0.2126 * r + 0.7152 * g + 0.0722 * b;
+const contrast = (a, b) => { const x = relLum(lin(a)), y = relLum(lin(b)); const [hi, lo] = x > y ? [x, y] : [y, x]; return (hi + 0.05) / (lo + 0.05); };
+
+function oklabFromLin([r, g, b]) {
+  const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+  const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+  const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+  return [
+    0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
+    1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
+    0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s,
+  ];
+}
+function linFromOklab([L, a, b]) {
+  const l = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3;
+  const m = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3;
+  const s = (L - 0.0894841775 * a - 1.2914855480 * b) ** 3;
+  return [
+    4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+    -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+    -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s,
+  ];
+}
+const toHex = (rgbLin) => "#" + rgbLin.map((c) => Math.round(lin2s(c) * 255).toString(16).padStart(2, "0")).join("").toUpperCase();
+const inGamut = (rgb) => rgb.every((c) => c >= -1e-4 && c <= 1 + 1e-4);
+function lchToLin([L, C, H]) { const r = (H * Math.PI) / 180; return linFromOklab([L, C * Math.cos(r), C * Math.sin(r)]); }
+
+// Out-of-gamut chroma is walked down rather than clipped per channel, so the
+// hue a slider asks for is the hue that comes back.
+function lchToHex([L, C, H]) {
+  let c = C, clipped = false;
+  let rgb = lchToLin([L, c, H]);
+  while (!inGamut(rgb) && c > 0) { c = Math.max(0, c - 0.002); clipped = true; rgb = lchToLin([L, c, H]); }
+  return { hex: toHex(rgb), clipped, chroma: c };
+}
+function hexToLch(hex) {
+  const [L, a, b] = oklabFromLin(lin(hex));
+  return [L, Math.hypot(a, b), ((Math.atan2(b, a) * 180) / Math.PI % 360 + 360) % 360];
+}
+const simulate = (hex, kind) => {
+  if (!kind || kind === "normal") return lin(hex);
+  const [r, g, b] = lin(hex), M = MACHADO[kind];
+  return [
+    clamp01(M[0][0] * r + M[0][1] * g + M[0][2] * b),
+    clamp01(M[1][0] * r + M[1][1] * g + M[1][2] * b),
+    clamp01(M[2][0] * r + M[2][1] * g + M[2][2] * b),
+  ];
+};
+const seenHex = (hex, kind) => toHex(simulate(hex, kind));
+function deltaE(h1, h2, kind) {
+  const a = oklabFromLin(simulate(h1, kind)), b = oklabFromLin(simulate(h2, kind));
+  return 100 * Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+}
+const cvdDelta = (a, b) => Math.min(deltaE(a, b, "protan"), deltaE(a, b, "deutan"));
+
+// ── the subject ─────────────────────────────────────────────────────────────
+const SLOTS = ["structural", "conductive", "silicates", "carbon", "rares", "volatiles"];
+const SHIPPED = {
+  light: { structural: "#2A78D6", conductive: "#EB6834", silicates: "#00AAAC", carbon: "#A64DC0", rares: "#FE6F91", volatiles: "#319E2C" },
+  dark:  { structural: "#3987E5", conductive: "#D85B1A", silicates: "#079A96", carbon: "#9444A6", rares: "#FD3E8A", volatiles: "#249320" },
+};
+const SURFACE = { light: "#F9F5EE", dark: "#0D1018" };
+const INK = { light: "#1B2230", dark: "#E9EEF7" };
+const BAND = { light: [0.43, 0.77], dark: [0.48, 0.67] };
+const CHROMA_FLOOR = 0.1, CVD_TARGET = 8, CVD_FLOOR = 6, NORMAL_FLOOR = 15, CONTRAST_MIN = 3;
+// Sample units, so the preview is shaped like real haul data rather than six equal slices.
+const SAMPLE = { structural: 18400, conductive: 9200, silicates: 6100, carbon: 3050, rares: 900, volatiles: 420 };
+const DAYS = [
+  SAMPLE,
+  { structural: 4200, conductive: 11800, silicates: 2100, carbon: 6400, rares: 3100, volatiles: 1500 },
+];
+
+const state = {
+  mode: "dark",
+  vision: "deutan",
+  pairs: "adjacent",
+  lch: { light: {}, dark: {} },
+};
+for (const mode of ["light", "dark"]) for (const s of SLOTS) state.lch[mode][s] = hexToLch(SHIPPED[mode][s]);
+
+const hexOf = (mode, slot) => lchToHex(state.lch[mode][slot]).hex;
+const currentHexes = () => Object.fromEntries(SLOTS.map((s) => [s, hexOf(state.mode, s)]));
+
+// ── controls ────────────────────────────────────────────────────────────────
+function segment(el, options, key, onPick) {
+  el.innerHTML = "";
+  for (const [value, label] of options) {
+    const b = document.createElement("button");
+    b.type = "button"; b.textContent = label;
+    b.setAttribute("aria-pressed", String(state[key] === value));
+    b.addEventListener("click", () => { state[key] = value; onPick && onPick(); render(); });
+    el.appendChild(b);
+  }
+}
+const VISIONS = [["normal", "Normal"], ["protan", "Protan"], ["deutan", "Deutan"], ["tritan", "Tritan"]];
+
+function buildSlots() {
+  const host = document.getElementById("slots");
+  host.innerHTML = "";
+  for (const slot of SLOTS) {
+    const card = document.createElement("div");
+    card.className = "slot";
+    card.innerHTML = `
+      <div class="slot-head">
+        <span class="chip" data-chip="${slot}"></span>
+        <span class="slot-name">${slot}</span>
+        <span class="spacer"></span>
+        <input class="hexin" data-hex="${slot}" aria-label="${slot} hex" />
+        <button class="mini" data-optimise="${slot}">Optimise</button>
+        <button class="mini" data-revert="${slot}">Revert</button>
+      </div>
+      <div class="sliders">
+        <label for="${slot}-L">L</label><input type="range" id="${slot}-L" data-ax="L" data-slot="${slot}" min="0" max="1" step="0.005" /><output data-out="${slot}-L"></output>
+        <label for="${slot}-C">C</label><input type="range" id="${slot}-C" data-ax="C" data-slot="${slot}" min="0" max="0.37" step="0.002" /><output data-out="${slot}-C"></output>
+        <label for="${slot}-H">H</label><input type="range" id="${slot}-H" data-ax="H" data-slot="${slot}" min="0" max="360" step="1" /><output data-out="${slot}-H"></output>
+      </div>
+      <p class="clip" data-clip="${slot}"></p>`;
+    host.appendChild(card);
+  }
+  host.addEventListener("input", (e) => {
+    const ax = e.target.dataset.ax;
+    if (ax) {
+      const i = { L: 0, C: 1, H: 2 }[ax];
+      state.lch[state.mode][e.target.dataset.slot][i] = parseFloat(e.target.value);
+      render();
+    }
+  });
+  host.addEventListener("change", (e) => {
+    const slot = e.target.dataset.hex;
+    if (slot && /^#?[0-9a-fA-F]{6}$/.test(e.target.value.trim())) {
+      state.lch[state.mode][slot] = hexToLch(e.target.value.trim().replace(/^#?/, "#"));
+      render();
+    } else if (slot) render();
+  });
+  host.addEventListener("click", (e) => {
+    const rev = e.target.dataset.revert, opt = e.target.dataset.optimise;
+    if (rev) { state.lch[state.mode][rev] = hexToLch(SHIPPED[state.mode][rev]); render(); }
+    if (opt) { optimise(opt); render(); }
+  });
+}
+
+// Coarse-to-fine sweep of OKLCH for the slot that best separates from the rest —
+// the same search that picked the shipped carbon, run in the page.
+function optimise(slot) {
+  const others = SLOTS.filter((s) => s !== slot).map((s) => hexOf(state.mode, s));
+  const [lo, hi] = BAND[state.mode];
+  const surface = SURFACE[state.mode];
+  let best = null;
+  const score = (hex) => {
+    if (contrast(hex, surface) < CONTRAST_MIN) return null;
+    let cvd = Infinity, nrm = Infinity;
+    for (const o of others) { cvd = Math.min(cvd, cvdDelta(hex, o)); nrm = Math.min(nrm, deltaE(hex, o, "normal")); }
+    if (nrm < NORMAL_FLOOR) return null;
+    return cvd;
+  };
+  for (let H = 0; H < 360; H += 2)
+    for (let L = lo; L <= hi + 1e-9; L += 0.01)
+      for (let C = CHROMA_FLOOR; C <= 0.34; C += 0.01) {
+        const { hex, clipped } = lchToHex([L, C, H]);
+        if (clipped) continue;
+        const s = score(hex);
+        if (s !== null && (!best || s > best.score)) best = { score: s, lch: [L, C, H] };
+      }
+  if (best) state.lch[state.mode][slot] = best.lch;
+}
+
+// ── rendering ───────────────────────────────────────────────────────────────
+function donut(svg, entries, kind) {
+  const total = entries.reduce((n, e) => n + e.units, 0);
+  const cx = 100, cy = 100, r = 78, ir = 48;
+  let a0 = -Math.PI / 2;
+  const parts = entries.map((e) => {
+    const sweep = (e.units / total) * Math.PI * 2;
+    const gap = 0.012;
+    const s = a0 + gap, t = a0 + sweep - gap;
+    a0 += sweep;
+    const p = (rad, ang) => `${cx + rad * Math.cos(ang)} ${cy + rad * Math.sin(ang)}`;
+    const large = t - s > Math.PI ? 1 : 0;
+    const d = `M ${p(r, s)} A ${r} ${r} 0 ${large} 1 ${p(r, t)} L ${p(ir, t)} A ${ir} ${ir} 0 ${large} 0 ${p(ir, s)} Z`;
+    return `<path d="${d}" fill="${seenHex(e.hex, kind)}" />`;
+  });
+  svg.innerHTML = parts.join("") +
+    `<text x="100" y="104" text-anchor="middle" font-family="ui-monospace, monospace" font-size="17" font-weight="600" fill="${seenHex(INK[state.mode], kind)}">${total.toLocaleString()}</text>`;
+}
+// Two days at different mixes. Both stack in `displayOrder` — reversing one
+// would invent adjacencies the real chart never draws.
+function stack(svg, entries, kind) {
+  const cols = [], barW = 52, gap = 28, top = 8, h = 184;
+  const tallest = Math.max(...DAYS.map((d) => entries.reduce((n, e) => n + d[e.slot], 0)));
+  DAYS.forEach((day, i) => {
+    const x = i * (barW + gap) + 2;
+    let y = top + (h * (1 - entries.reduce((n, e) => n + day[e.slot], 0) / tallest));
+    for (const e of entries) {
+      const seg = (day[e.slot] / tallest) * h;
+      cols.push(`<rect x="${x}" y="${y + 1}" width="${barW}" height="${Math.max(0, seg - 2)}" fill="${seenHex(e.hex, kind)}" rx="2" />`);
+      y += seg;
+    }
+  });
+  svg.innerHTML = cols.join("");
+}
+
+function checks(hexes) {
+  const mode = state.mode, surface = SURFACE[mode], [lo, hi] = BAND[mode];
+  const out = [];
+  const band = SLOTS.filter((s) => { const L = hexToLch(hexes[s])[0]; return L < lo - 1e-6 || L > hi + 1e-6; });
+  out.push({ ok: !band.length, name: "Lightness band", detail: band.length ? `outside L ${lo}–${hi}: ${band.join(", ")}` : `all six inside L ${lo}–${hi}` });
+
+  const flat = SLOTS.filter((s) => hexToLch(hexes[s])[1] < CHROMA_FLOOR);
+  out.push({ ok: !flat.length, name: "Chroma floor", detail: flat.length ? `below ${CHROMA_FLOOR}, reads grey: ${flat.join(", ")}` : `all six at or above ${CHROMA_FLOOR}` });
+
+  const list = pairList(hexes);
+  const worstCvd = list[0];
+  const cvdOK = worstCvd.cvd >= CVD_FLOOR;
+  out.push({
+    ok: cvdOK, warn: cvdOK && worstCvd.cvd < CVD_TARGET,
+    name: `CVD separation (${state.pairs})`,
+    detail: `worst ${worstCvd.pair} at ΔE ${worstCvd.cvd.toFixed(1)}${cvdOK && worstCvd.cvd < CVD_TARGET ? " — legal only with direct labels" : ""}`,
+  });
+
+  const worstNormal = [...list].sort((a, b) => a.normal - b.normal)[0];
+  out.push({
+    ok: worstNormal.normal >= NORMAL_FLOOR, name: "Normal-vision floor",
+    detail: `worst ${worstNormal.pair} at ΔE ${worstNormal.normal.toFixed(1)}, floor ${NORMAL_FLOOR}`,
+  });
+
+  const low = SLOTS.map((s) => [s, contrast(hexes[s], surface)]).filter(([, c]) => c < CONTRAST_MIN);
+  out.push({
+    ok: !low.length, warn: !!low.length, name: "Contrast vs surface",
+    detail: low.length ? `under ${CONTRAST_MIN}:1 — needs a visible label: ${low.map(([s, c]) => `${s} ${c.toFixed(2)}`).join(", ")}` : `all six at or above ${CONTRAST_MIN}:1`,
+  });
+  return out;
+}
+
+function pairList(hexes) {
+  const rows = [];
+  const push = (a, b) => rows.push({ pair: `${a} ↔ ${b}`, cvd: cvdDelta(hexes[a], hexes[b]), normal: deltaE(hexes[a], hexes[b], "normal") });
+  if (state.pairs === "adjacent") {
+    for (let i = 0; i < SLOTS.length; i++) push(SLOTS[i], SLOTS[(i + 1) % SLOTS.length]);
+  } else {
+    for (let i = 0; i < SLOTS.length; i++) for (let j = i + 1; j < SLOTS.length; j++) push(SLOTS[i], SLOTS[j]);
+  }
+  return rows.sort((a, b) => a.cvd - b.cvd);
+}
+
+const readsAs = (cvd) =>
+  cvd >= CVD_TARGET ? ["✓", "distinct"] : cvd >= CVD_FLOOR ? ["!", "needs a label"] : ["✕", "same colour"];
+
+function render() {
+  const mode = state.mode, kind = state.vision;
+  const hexes = currentHexes();
+
+  for (const seg of [["modeSeg", [["light", "Light"], ["dark", "Dark"]], "mode"], ["visionSeg", VISIONS, "vision"], ["pairSeg", [["adjacent", "Adjacent"], ["all", "All pairs"]], "pairs"]])
+    segment(document.getElementById(seg[0]), seg[1], seg[2]);
+
+  for (const slot of SLOTS) {
+    const [L, C, H] = state.lch[mode][slot];
+    const { hex, clipped, chroma } = lchToHex([L, C, H]);
+    document.querySelector(`[data-chip="${slot}"]`).style.background = seenHex(hex, kind);
+    const input = document.querySelector(`[data-hex="${slot}"]`);
+    if (document.activeElement !== input) input.value = hex;
+    for (const [ax, v] of [["L", L], ["C", C], ["H", H]]) {
+      const el = document.getElementById(`${slot}-${ax}`);
+      if (document.activeElement !== el) el.value = v;
+      document.querySelector(`[data-out="${slot}-${ax}"]`).textContent = ax === "H" ? Math.round(v) + "°" : v.toFixed(3);
+    }
+    const c = contrast(hex, SURFACE[mode]);
+    document.querySelector(`[data-clip="${slot}"]`).textContent =
+      `contrast ${c.toFixed(2)}:1${clipped ? ` · chroma clamped to ${chroma.toFixed(3)} to stay in sRGB` : ""}`;
+  }
+
+  const entries = SLOTS.map((s) => ({ slot: s, hex: hexes[s], units: SAMPLE[s] }));
+  const stage = document.getElementById("stage");
+  stage.style.background = seenHex(SURFACE[mode], kind);
+  stage.style.color = seenHex(INK[mode], kind);
+  document.getElementById("stageNote").textContent =
+    `${mode} surface ${SURFACE[mode]} · ${VISIONS.find((v) => v[0] === kind)[1].toLowerCase()} vision`;
+  donut(document.getElementById("donut"), entries, kind);
+  stack(document.getElementById("stack"), entries, kind);
+  document.getElementById("legend").innerHTML = entries
+    .map((e) => `<span><i style="background:${seenHex(e.hex, kind)}"></i>${e.slot}</span>`).join("");
+
+  document.getElementById("verdicts").innerHTML = checks(hexes)
+    .map((c) => {
+      const mark = c.ok ? (c.warn ? "!" : "✓") : "✕";
+      const word = c.ok ? (c.warn ? "warn" : "pass") : "fail";
+      return `<li><span class="mark">${mark}</span> ${word.toUpperCase()} · ${c.name} — <span class="why">${c.detail}</span></li>`;
+    }).join("");
+
+  const rows = pairList(hexes);
+  document.querySelector("#matrix tbody").innerHTML = rows
+    .map((r) => {
+      const [mark, word] = readsAs(r.cvd);
+      return `<tr><td>${r.pair}</td><td class="num">${r.cvd.toFixed(1)}</td><td class="num">${r.normal.toFixed(1)}</td><td><span class="mark">${mark}</span> ${word}</td></tr>`;
+    }).join("");
+
+  document.getElementById("export").textContent = SLOTS.map((slot) => {
+    const cap = slot[0].toUpperCase() + slot.slice(1);
+    const body = ["light", "dark"].map((m) => {
+      const [r, g, b] = hexOf(m, slot).slice(1).match(/../g).map((v) => "0x" + v);
+      const appearance = m === "dark" ? `\n        "appearances" : [ { "appearance" : "luminosity", "value" : "dark" } ],` : "";
+      return `      {${appearance}\n        "color" : { "color-space" : "srgb", "components" : { "alpha" : "1.000", "blue" : "${b}", "green" : "${g}", "red" : "${r}" } },\n        "idiom" : "universal"\n      }`;
+    }).join(",\n");
+    return `Resource${cap}.colorset/Contents.json\n{\n  "colors" : [\n${body}\n  ],\n  "info" : { "author" : "xcode", "version" : 1 }\n}`;
+  }).join("\n\n");
+}
+
+document.getElementById("resetAll").addEventListener("click", () => {
+  for (const m of ["light", "dark"]) for (const s of SLOTS) state.lch[m][s] = hexToLch(SHIPPED[m][s]);
+  render();
+});
+document.getElementById("copyBtn").addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(document.getElementById("export").textContent);
+    document.getElementById("copied").textContent = "Copied";
+  } catch { document.getElementById("copied").textContent = "Select the block and copy"; }
+  setTimeout(() => { document.getElementById("copied").textContent = ""; }, 2400);
+});
+
+buildSlots();
+render();
+</script>
