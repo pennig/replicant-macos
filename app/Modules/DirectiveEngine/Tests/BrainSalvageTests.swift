@@ -165,6 +165,23 @@ struct BrainSalvageReadinessTests {
         )
     }
 
+    /// A stowed or mid-cruise vessel has `location: nil`, so `owningTheatre`
+    /// resolves no theatre for it — but it IS tagged, and "no auto:salvage
+    /// vessel" is false. The hull pool used for THIS message must stay
+    /// fleet-wide, the same way the mistagged-device clause already does.
+    @Test("a tagged vessel with no placeable location is named, not reported untagged")
+    func aTaggedStowedVesselIsNamedNotReportedUntagged() {
+        let view = salvageView(devices: [
+            salvageDevice("V1", type: "heaven_vessel", tags: [Brain.salvageCarrierTag], location: nil),
+        ])
+        guard case let .idle(reason) = Brain.salvageReadiness(view: view, directives: [], theatre: ainalramTheatre) else {
+            Issue.record("expected idle")
+            return
+        }
+        #expect(reason != "no \(Brain.salvageCarrierTag) vessel")
+        #expect(reason.contains("V1"))
+    }
+
     @Test("a carrier another kind of run already holds is idle, not contended for")
     func aReservedCarrierIsIdle() {
         let view = salvageView(devices: salvageStagedFleet())
@@ -445,7 +462,7 @@ struct BrainSalvageStatusTests {
     }
 
     /// A live run in one theatre must not mask another theatre's own idle
-    /// state — the fleet-wide scan Task 7 closed.
+    /// state.
     @Test("a live run in one theatre does not mask another theatre's idle state")
     func aLiveRunInOneTheatreDoesNotMaskAnother() {
         let (view, ainalram, denebed) = twoTheatreSalvageView(
@@ -1037,7 +1054,7 @@ struct BrainHaulStatusTests {
     }
 
     /// A live run in one theatre must not mask another theatre's own idle
-    /// state — the fleet-wide scan Task 7 closed.
+    /// state.
     @Test("a live run in one theatre does not mask another theatre's idle state")
     func aLiveRunInOneTheatreDoesNotMaskAnother() {
         let (view, sol, vega) = twoTheatreHaulView(
@@ -1138,8 +1155,7 @@ struct BrainEnsureHaulTests {
     }
 
     /// The headline: two theatres, each with its own per-theatre-tagged
-    /// controller, both launch in the SAME tick — today neither readiness
-    /// even recognises a per-theatre tag, so both idle.
+    /// controller, both launch in the SAME tick.
     @Test func twoTheatresEachWithAPerTheatreTaggedControllerBothLaunchInOneTick() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in

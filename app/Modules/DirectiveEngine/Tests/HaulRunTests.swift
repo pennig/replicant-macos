@@ -29,6 +29,7 @@ private func controller(
     directives: [String] = ["delivery", "ferry", "shuttle", "consolidate"],
     currentDirective: String? = nil,
     currentConfig: [String: JSONValue]? = nil,
+    location: String = "ATIANFU-1-L4",
     updatedAt: Date = fixtureNow
 ) -> Device {
     var detail: [String: JSONValue] = [
@@ -42,7 +43,7 @@ private func controller(
     }
     return Device(
         deviceCode: code, deviceType: "ami_transport_controller", replicantCode: "R1",
-        status: "coordinating", location: "ATIANFU-1-L4", locationName: nil,
+        status: "coordinating", location: location, locationName: nil,
         operationalCapacity: 100, queueSize: 0,
         stowedInDeviceCode: nil, controllerDeviceCode: nil, attachedToDeviceCode: nil,
         createdAt: Date(timeIntervalSince1970: 0), availableCommands: [],
@@ -249,6 +250,17 @@ struct HaulRunTests {
         #expect(!HaulRun.isFleetTagged(bare, tag: "auto:haul-b"))
     }
 
+    /// The wire read must send a tag the server knows: `GET
+    /// devices/tags/auto:haul:AINALRAM-BELT-1` answers zero devices live,
+    /// while `auto:haul` answers the real fleet.
+    @Test func preflightRefreshesUsingTheRootTagNotThePerTheatreOne() {
+        let action = HaulRun().nextAction(
+            directive: run(step: HaulRun.Step.preflight, fleetTag: "auto:haul:AINALRAM-BELT-1"),
+            world: world(devices: meshed)
+        )
+        #expect(action == .refreshFleet(tag: "auto:haul", thenStall: .noHaulControllerTagged))
+    }
+
     // MARK: surveying
 
     /// A stale census is re-read — one request covering discovery and drain
@@ -358,6 +370,17 @@ struct HaulRunTests {
     @Test func assigningReReadsTheFleetBeforeStallingOnIt() {
         let action = HaulRun().nextAction(
             directive: run(step: HaulRun.Step.assigning),
+            world: world(devices: meshed, footprints: [footprint("ATIANFU-BELT-1", 3_537)])
+        )
+        #expect(action == .refreshFleet(tag: "auto:haul", thenStall: .noHaulControllerTagged))
+    }
+
+    /// The same wire-tag rule as `preflight`'s: a theatre-scoped directive
+    /// must not ask the server for a tag `GET devices/tags/{tag}` returns
+    /// zero devices for.
+    @Test func assigningRefreshesUsingTheRootTagNotThePerTheatreOne() {
+        let action = HaulRun().nextAction(
+            directive: run(step: HaulRun.Step.assigning, fleetTag: "auto:haul:AINALRAM-BELT-1"),
             world: world(devices: meshed, footprints: [footprint("ATIANFU-BELT-1", 3_537)])
         )
         #expect(action == .refreshFleet(tag: "auto:haul", thenStall: .noHaulControllerTagged))
@@ -1291,6 +1314,77 @@ struct HaulRunDerivedSinkTests {
     }
 }
 
+// MARK: - Theatre-scoped controller resolution (C2)
+
+/// Two GENERAL drainers command each other's un-migrated controllers —
+/// see `haul-run-theatre-scoped-controllers.md` for the failure shape.
+@Suite("HaulRun — theatre-scoped controller resolution")
+struct HaulRunTheatreScopingTests {
+    private let ainalram = Theatre(
+        depot: "AINALRAM-BELT-1", system: "AINALRAM", origin: .derived, readiness: .operational, stock: 0
+    )
+    private let denebed = Theatre(
+        depot: "DENEBED-BELT-1", system: "DENEBED", origin: .derived, readiness: .operational, stock: 0
+    )
+
+    private func twoTheatreWorld(_ ctrlA: Device, _ ctrlB: Device) -> WorldSnapshot {
+        WorldSnapshot(
+            devices: Dictionary(uniqueKeysWithValues: [ctrlA, ctrlB].map { ($0.deviceCode, $0) }),
+            openOperations: [:],
+            starPositions: [
+                "AINALRAM": Position(x: 0, y: 0, z: 0), "DENEBED": Position(x: 300, y: 300, z: 300),
+            ],
+            components: ["AINALRAM": "AINALRAM", "DENEBED": "DENEBED"],
+            theatres: [ainalram, denebed],
+            now: fixtureNow
+        )
+    }
+
+    @Test func perTheatreTagFallbackDoesNotCrossTheatresWhenBothFleetsAreUnMigrated() {
+        let ctrlA = controller("CTRL-A", tags: ["auto:haul"], location: "AINALRAM-BELT-1")
+        let ctrlB = controller("CTRL-B", tags: ["auto:haul"], location: "DENEBED-BELT-1")
+        let world = twoTheatreWorld(ctrlA, ctrlB)
+
+        let forAinalram = HaulRun.controllers(
+            in: world, tag: "auto:haul:AINALRAM-BELT-1", theatreDepot: ainalram.depot
+        )
+        let forDenebed = HaulRun.controllers(
+            in: world, tag: "auto:haul:DENEBED-BELT-1", theatreDepot: denebed.depot
+        )
+
+        #expect(forAinalram.map(\.deviceCode) == ["CTRL-A"])
+        #expect(forDenebed.map(\.deviceCode) == ["CTRL-B"])
+    }
+
+    /// The end-to-end shape: `assigning` must pin only the OWN theatre's
+    /// controller, never the sibling's — even though both are bare-tagged and
+    /// `isFleetTagged` alone cannot tell them apart.
+    @Test func assigningPinsOnlyItsOwnTheatresController() {
+        let ctrlA = controller("CTRL-A", tags: ["auto:haul"], location: "AINALRAM-BELT-1")
+        let ctrlB = controller("CTRL-B", tags: ["auto:haul"], location: "DENEBED-BELT-1")
+        let base = twoTheatreWorld(ctrlA, ctrlB)
+        let world = WorldSnapshot(
+            devices: base.devices, openOperations: [:],
+            footprints: [
+                "AINALRAM-9": footprint("AINALRAM-9", 5_000),
+                "DENEBED-9": footprint("DENEBED-9", 5_000),
+            ],
+            starPositions: base.starPositions, components: base.components, theatres: base.theatres,
+            now: fixtureNow
+        )
+        let directive = run(
+            step: HaulRun.Step.assigning, fleetTag: "auto:haul:AINALRAM-BELT-1", theatreDepot: ainalram.depot
+        )
+
+        guard case let .assignController(deviceCode, _) = HaulRun().nextAction(directive: directive, world: world)
+        else {
+            Issue.record("expected assigning to pin a controller")
+            return
+        }
+        #expect(deviceCode == "CTRL-A")
+    }
+}
+
 // MARK: - Pinned source
 
 /// A row carrying `targets` is a per-mine ferry keeper: exactly its own
@@ -1303,7 +1397,7 @@ struct HaulRunPinnedTests {
     private let richestPile = "AINALRAM-2"
     private let runnerUpPile = "AINALRAM-3"
     /// Shares a system with the fallback delivery sink — an entry-point depot
-    /// frees a belt exactly this shape after Task 1-7's theatre work.
+    /// frees a belt in its own system, exactly this shape.
     private let sameSystemBelt = "AINALRAM-9-BELT-1"
 
     private func keeper(

@@ -314,9 +314,10 @@ public struct BrainReport: Equatable, Sendable {
     public let theatreSalvage: [String: BrainGoalStatus]
     /// `Brain.haulStatus`'s verdict per operational theatre.
     public let theatreHaul: [String: BrainGoalStatus]
+    /// `Brain.mineStatus`'s verdict per operational theatre.
+    public let theatreMine: [String: BrainGoalStatus]
     /// Each operational theatre's OWN hub-stock reading, sharing every other
-    /// `BrainLimits` field with `limits` — the fix for `limits.hubStock`
-    /// standing in for every theatre's figure.
+    /// `BrainLimits` field with `limits`.
     public let theatreLimits: [String: BrainLimits]
 
     public init(
@@ -334,6 +335,7 @@ public struct BrainReport: Equatable, Sendable {
         theatreSurvey: [String: BrainSurveyStatus] = [:],
         theatreSalvage: [String: BrainGoalStatus] = [:],
         theatreHaul: [String: BrainGoalStatus] = [:],
+        theatreMine: [String: BrainGoalStatus] = [:],
         theatreLimits: [String: BrainLimits] = [:]
     ) {
         self.decision = decision
@@ -350,6 +352,7 @@ public struct BrainReport: Equatable, Sendable {
         self.theatreSurvey = theatreSurvey
         self.theatreSalvage = theatreSalvage
         self.theatreHaul = theatreHaul
+        self.theatreMine = theatreMine
         self.theatreLimits = theatreLimits
     }
 }

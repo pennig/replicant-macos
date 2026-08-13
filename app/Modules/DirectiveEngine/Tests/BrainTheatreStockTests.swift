@@ -2,9 +2,8 @@
 //  BrainTheatreStockTests.swift
 //  Replicould — DirectiveEngine
 //
-//  Pins that each operational theatre's `BrainReport.theatreLimits` carries
-//  its OWN census reading — never another theatre's — through the real
-//  `Brain.report()` pipeline, `Snapshot.hubFootprints` included.
+//  Pins each theatre's `BrainReport.theatreLimits` to its own census reading,
+//  through the real `Brain.report()` pipeline.
 //
 
 import API

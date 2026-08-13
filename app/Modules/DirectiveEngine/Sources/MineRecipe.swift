@@ -13,6 +13,11 @@ import GameModels
 /// how to recognise the pieces in device rows.
 public enum MineRecipe {
     public static let fleetTag = "auto:mine"
+
+    /// The tag `Brain.ensureMine` stamps on the mineRun DIRECTIVE row — never
+    /// on recipe MEMBERS, which stay bare-tagged from print. Mirrors
+    /// `SurveyRun.fleetTag(forTheatre:)`.
+    public static func fleetTag(forTheatre depot: String) -> String { "\(fleetTag):\(depot)" }
     public static let carrierTag = "auto:carrier"
     public static let carrierDeviceType = "surge_carrier"
 

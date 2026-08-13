@@ -2,7 +2,7 @@
 //  OwningTheatreTests.swift
 //  Replicould — DirectiveEngine
 //
-//  `Brain.owningTheatre(of:view:)` — the per-device theatre partition.
+//  The theatre partition, by device (`Brain.owningTheatre`) and by system.
 //
 
 import Foundation
@@ -69,5 +69,22 @@ struct OwningTheatreTests {
         )
         let device = deviceFixture(code: "V1", location: "REMOTE-1")
         #expect(Brain.owningTheatre(of: device, view: view)?.depot == "FARAWAY-BELT-1")
+    }
+
+    // MARK: - The system-taking seam
+
+    /// `owningTheatre(ofSystem:)` must answer exactly what the device-taking
+    /// resolver answers for a device standing in that system — one rule,
+    /// two entry points.
+    @Test("owningTheatre(ofSystem:) agrees with the device-taking resolver")
+    func systemSeamAgreesWithDeviceResolver() {
+        let view = twoTheatreView()
+        #expect(view.owningTheatre(ofSystem: "AINALRAM")?.depot == "AINALRAM-BELT-1")
+        #expect(view.owningTheatre(ofSystem: "OMEROPE")?.depot == "DENEBED-BELT-1")
+    }
+
+    @Test("owningTheatre(ofSystem:) is nil for a system absent from the census")
+    func systemSeamOffCensusOwnsNothing() {
+        #expect(twoTheatreView().owningTheatre(ofSystem: "NOWHERE") == nil)
     }
 }

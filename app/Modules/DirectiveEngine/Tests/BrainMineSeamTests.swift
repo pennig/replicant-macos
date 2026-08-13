@@ -96,7 +96,7 @@ struct BrainMineSeamTests {
         #expect(runs.count == 1)
         #expect(launched.deviceCode == mineSeamCarrier)
         #expect(launched.targets == [mineSeamBelt])
-        #expect(launched.fleetTag == MineRecipe.fleetTag)
+        #expect(launched.fleetTag == MineRecipe.fleetTag(forTheatre: mineSeamHub))
         // Without it the carrier stays at the belt and the next install prints one.
         #expect(launched.returnToOrigin)
         #expect(

@@ -177,13 +177,22 @@ public struct NewSalvageRunFeature {
                 let origin = vessel.location.map { SiteAssay.system(of: $0) }
                 return .run { send in
                     // `Brain.ensureSalvage`'s own resolution — never the bare
-                    // tag, which reserves the whole fleet account-wide.
-                    let tag = (try? await database.read { db -> String in
-                        let view = try WorldView.read(from: db, now: now)
-                        guard let device = view.devices[vesselCode], let theatre = view.owningTheatre(of: device)
-                        else { return SalvageRun.defaultFleetTag }
-                        return SalvageRun.fleetTag(forTheatre: theatre.depot)
-                    }) ?? SalvageRun.defaultFleetTag
+                    // tag (see `launcher-tag-resolution-error-narrowing.md`).
+                    let tag: String
+                    do {
+                        tag = try await database.read { db -> String in
+                            let view = try WorldView.read(from: db, now: now)
+                            guard let device = view.devices[vesselCode], let theatre = view.owningTheatre(of: device)
+                            else {
+                                logger.notice("salvage launch on \(vesselCode, privacy: .public): no theatre resolves — bare tag")
+                                return SalvageRun.defaultFleetTag
+                            }
+                            return SalvageRun.fleetTag(forTheatre: theatre.depot)
+                        }
+                    } catch {
+                        logger.error("salvage launch on \(vesselCode, privacy: .public): theatre read failed: \(error) — bare tag")
+                        tag = SalvageRun.defaultFleetTag
+                    }
                     let directive = Directive(
                         id: id,
                         kind: .salvageRun,

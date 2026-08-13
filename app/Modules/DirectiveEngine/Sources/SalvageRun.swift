@@ -299,7 +299,9 @@ public struct SalvageRun: MissionStepMachine {
             }
             return .wait
         }
-        let tag = Self.fleetTag(directive)
+        // Rooted for the WIRE read below — the server's tag endpoint has no
+        // notion of a per-theatre tag, unlike local selection through it.
+        let tag = RepairFleet.root(of: Self.fleetTag(directive))
         // Both staging checks are NEGATIVE findings over local rows: silence
         // means either nothing is aboard or nobody has been allowed to look, and
         // only the first is worth stopping for. `.refreshFleet` buys one
@@ -651,13 +653,16 @@ public struct SalvageRun: MissionStepMachine {
         let drones = AMIFleet.adoptedDrones(of: controller, in: world)
         let lastLook = drones.map(\.updatedAt).min() ?? .distantPast
         let canRead = world.now.timeIntervalSince(lastLook) >= Self.reconcileInterval
+        // Rooted for every `.refreshFleet` below — the server's tag endpoint
+        // knows nothing of a per-theatre derivation.
+        let wireTag = RepairFleet.root(of: Self.fleetTag(directive))
 
         // Never believe a row read BEFORE this step began: a pre-launch drone row
         // still shows it stowed aboard and reads as "recovered" the instant the
         // step starts. Force a post-launch read of EVERY drone first, throttled so
         // a failing one cannot loop every tick.
         guard lastLook >= directive.stepStartedAt else {
-            return canRead ? .refreshFleet(tag: Self.fleetTag(directive), thenStall: nil) : .wait
+            return canRead ? .refreshFleet(tag: wireTag, thenStall: nil) : .wait
         }
 
         let stranded = drones.filter { $0.stowedInDeviceCode != vessel.deviceCode }
@@ -667,13 +672,13 @@ public struct SalvageRun: MissionStepMachine {
         // catch completion (or the controller going idle); never stall, however
         // long the cycle runs.
         if Self.isMining(controller) {
-            return canRead ? .refreshFleet(tag: Self.fleetTag(directive), thenStall: nil) : .wait
+            return canRead ? .refreshFleet(tag: wireTag, thenStall: nil) : .wait
         }
         // Set but not running, drones out: no completion is ever coming, so the
         // reconcile above would wait forever. Prove it on a fresh read, then name it.
         if Self.isPaused(controller) {
             return canRead
-                ? .refreshFleet(tag: Self.fleetTag(directive), thenStall: .miningDirectivePaused)
+                ? .refreshFleet(tag: wireTag, thenStall: .miningDirectivePaused)
                 : .wait
         }
         // Mining done, drones still out: a post-mining recall (near-instant now
@@ -932,7 +937,7 @@ public struct SalvageRun: MissionStepMachine {
         let stranded = AMIFleet.adoptedDrones(of: controller, in: world)
             .filter { $0.stowedInDeviceCode != vessel.deviceCode }
         if !stranded.isEmpty {
-            return .refreshFleet(tag: Self.fleetTag(directive), thenStall: .dronesNotRecovered)
+            return .refreshFleet(tag: RepairFleet.root(of: Self.fleetTag(directive)), thenStall: .dronesNotRecovered)
         }
         // The controller flies its own recall leg, and `directive.completed`
         // tracks the DRONES, so it is routinely still airborne here. Departing

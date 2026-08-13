@@ -168,6 +168,41 @@ public struct WorldSnapshot: Equatable, Sendable {
         return theatres.contains { $0.depot != depot && $0.isOperational }
     }
 
+    /// `device`'s theatre — mirrors `WorldView.owningTheatre(of:)`'s rule, off
+    /// this snapshot's own fields since a mission never holds a `WorldView`.
+    /// Nil for a stowed/cruising device or a system outside the census.
+    public func owningTheatre(of device: Device) -> Theatre? {
+        guard let location = device.location else { return nil }
+        let system = SiteAssay.system(of: location)
+        return theatre(servicing: system) ?? theatre(nearest: system)
+    }
+
+    /// Inward: same mesh component, then nearest. Operational only.
+    private func theatre(servicing system: String) -> Theatre? {
+        let component = components[system]
+        return nearestTheatre(to: system) { components[$0.system] != nil && components[$0.system] == component }
+    }
+
+    /// Outward: nearest by straight-line distance, no component filter. Operational only.
+    private func theatre(nearest system: String) -> Theatre? {
+        nearestTheatre(to: system) { _ in true }
+    }
+
+    /// Ranks both resolvers; they differ only by `admits`. Orders by
+    /// (distance, depot) for a stable result.
+    private func nearestTheatre(to system: String, admits: (Theatre) -> Bool) -> Theatre? {
+        guard let origin = starPositions[system] else { return nil }
+        return theatres
+            .filter { $0.isOperational && admits($0) }
+            .compactMap { theatre -> (Double, Theatre)? in
+                guard let position = starPositions[theatre.system] else { return nil }
+                return (origin.distance(to: position), theatre)
+            }
+            .min { lhs, rhs in
+                lhs.0 == rhs.0 ? lhs.1.depot < rhs.1.depot : lhs.0 < rhs.0
+            }?.1
+    }
+
     /// One consistent read of everything a mission reasons over, taken from
     /// `database` at the instant `now` and scoped to `directive` — its targets,
     /// its origin, its log and the operations it dispatched.

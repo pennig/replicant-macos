@@ -278,6 +278,16 @@ struct SalvageRunPreflightTests {
         #expect(SalvageRun().nextAction(directive: directive, world: snapshot)
                 == .refreshFleet(tag: "auto:salvage-2", thenStall: .noMiningControllerAboard))
     }
+
+    /// The WIRE READ must send a tag the server actually knows: `GET
+    /// devices/tags/auto:salvage:AINALRAM-BELT-1` answers zero devices live,
+    /// while `auto:salvage` answers the real fleet.
+    @Test func refreshesUsingTheRootTagNotThePerTheatreOne() {
+        let snapshot = world(devices: [vessel])
+        let directive = running(step: "preflight", fleetTag: "auto:salvage:AINALRAM-BELT-1")
+        #expect(SalvageRun().nextAction(directive: directive, world: snapshot)
+                == .refreshFleet(tag: "auto:salvage", thenStall: .noMiningControllerAboard))
+    }
 }
 
 // MARK: - Staging freshness
@@ -791,6 +801,26 @@ struct SalvageRunMiningTests {
             == .refreshFleet(tag: "auto:salvage", thenStall: nil))
     }
 
+    /// `awaitCompletion`'s reconcile read carries the same wire-tag rule as
+    /// `preflight`'s — a per-theatre directive must still ask the server for
+    /// the tag it actually recognises.
+    @Test func reconcileRefreshesUsingTheRootTagNotThePerTheatreOne() {
+        let mining = device("CTRL", type: "ami_mining_controller", stowedIn: "VESSEL",
+                            controlled: ["DRONE"], directives: ["gather_salvage"],
+                            currentDirective: "gather_salvage",
+                            currentDirectiveConfig: ["location": .string("TOSLIT-6-5"), "recall": .bool(true)],
+                            updatedAt: now.addingTimeInterval(-3 * 60))
+        let deployed = device("DRONE", type: "mining_drone", location: "TOSLIT-6-5", controlledBy: "CTRL",
+                              updatedAt: now.addingTimeInterval(-3 * 60))
+        let directive = running(
+            step: "awaiting", fleetTag: "auto:salvage:AINALRAM-BELT-1",
+            stepStartedAt: now.addingTimeInterval(-10 * 60)
+        )
+        let world = world(devices: [atSystem, mining, deployed], now: now)
+        #expect(SalvageRun().nextAction(directive: directive, world: world)
+            == .refreshFleet(tag: "auto:salvage", thenStall: nil))
+    }
+
     /// Mining done, a straggler whose ETA has already passed and the throttle
     /// allows: re-read just that drone rather than waiting or handing off. Pins
     /// the recall-branch POSITIVE `refreshDevices` — `waitsForAStragglerStillFlyingHome`
@@ -945,6 +975,16 @@ struct SalvageRunVerificationTests {
         let stranded = device("DRONE", type: "mining_drone", location: "TOSLIT-6-5", controlledBy: "CTRL")
         let world = world(devices: [atSystem, controller, stranded], systems: ["TOSLIT": miningToslit])
         #expect(SalvageRun().nextAction(directive: running(step: "verifying"), world: world)
+            == .refreshFleet(tag: "auto:salvage", thenStall: .dronesNotRecovered))
+    }
+
+    /// `verify`'s recovery read carries the same wire-tag rule: a per-theatre
+    /// directive must still ask the server for the tag it actually knows.
+    @Test func refreshesUsingTheRootTagNotThePerTheatreOne() {
+        let stranded = device("DRONE", type: "mining_drone", location: "TOSLIT-6-5", controlledBy: "CTRL")
+        let world = world(devices: [atSystem, controller, stranded], systems: ["TOSLIT": miningToslit])
+        let directive = running(step: "verifying", fleetTag: "auto:salvage:AINALRAM-BELT-1")
+        #expect(SalvageRun().nextAction(directive: directive, world: world)
             == .refreshFleet(tag: "auto:salvage", thenStall: .dronesNotRecovered))
     }
 

@@ -119,4 +119,12 @@ private func taggedBot(_ code: String, _ tags: [String]) -> Device {
         #expect(RepairFleet.answers(bot, to: "auto:survey:AINALRAM-BELT-1"))
         #expect(!RepairFleet.answers(bot, to: "auto:survey:DENEBED-BELT-1"))
     }
+
+    /// The OTHER migration direction. A legacy `surveyRun`/`salvageRun`
+    /// row keeps a bare `fleetTag` forever; an operator who re-tags its
+    /// service bots to the per-theatre form must not silently lose repair.
+    @Test func aTheatreTaggedBotStillAnswersToABareOwner() {
+        let bot = taggedBot("BOT1", ["auto:survey:AINALRAM-BELT-1"])
+        #expect(RepairFleet.answers(bot, to: "auto:survey"))
+    }
 }

@@ -97,14 +97,23 @@ public struct NewHaulRunFeature {
                 let id = uuid().uuidString
                 let now = date.now
                 return .run { send in
-                    // `Brain.ensureHaul`'s own resolution — never the bare
-                    // tag, which reserves the whole fleet account-wide.
-                    let tag = (try? await database.read { db -> String in
-                        let view = try WorldView.read(from: db, now: now)
-                        guard let device = view.devices[anchor], let theatre = view.owningTheatre(of: device)
-                        else { return HaulRun.defaultFleetTag }
-                        return HaulRun.fleetTag(forTheatre: theatre.depot)
-                    }) ?? HaulRun.defaultFleetTag
+                    // `Brain.ensureHaul`'s own resolution — never the bare tag
+                    // (see `launcher-tag-resolution-error-narrowing.md`).
+                    let tag: String
+                    do {
+                        tag = try await database.read { db -> String in
+                            let view = try WorldView.read(from: db, now: now)
+                            guard let device = view.devices[anchor], let theatre = view.owningTheatre(of: device)
+                            else {
+                                logger.notice("haul launch on \(anchor, privacy: .public): no theatre resolves — bare tag")
+                                return HaulRun.defaultFleetTag
+                            }
+                            return HaulRun.fleetTag(forTheatre: theatre.depot)
+                        }
+                    } catch {
+                        logger.error("haul launch on \(anchor, privacy: .public): theatre read failed: \(error) — bare tag")
+                        tag = HaulRun.defaultFleetTag
+                    }
                     let directive = Directive(
                         id: id,
                         kind: .haulRun,

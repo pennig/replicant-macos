@@ -105,8 +105,13 @@ public struct HaulRun: MissionStepMachine {
             .sorted { $0.deviceCode < $1.deviceCode }
     }
 
-    public static func controllers(in world: WorldSnapshot, tag: String) -> [Device] {
-        controllers(in: world.devices.values, tag: tag)
+    /// `theatreDepot`, when given, scopes the result to controllers
+    /// `world.owningTheatre(of:)` places in THAT theatre (see
+    /// `haul-run-theatre-scoped-controllers.md`); nil preserves the old read.
+    public static func controllers(in world: WorldSnapshot, tag: String, theatreDepot: String? = nil) -> [Device] {
+        let matched = controllers(in: world.devices.values, tag: tag)
+        guard let theatreDepot else { return matched }
+        return matched.filter { world.owningTheatre(of: $0)?.depot == theatreDepot }
     }
 
     /// The tag `Brain.ensureHaul` stamps for a theatre at `depot`.
@@ -151,7 +156,7 @@ public struct HaulRun: MissionStepMachine {
 
     private static func plans(_ directive: Directive, _ world: WorldSnapshot) -> [HaulTargetPlanner.Assignment] {
         HaulTargetPlanner.assignments(
-            controllers: controllers(in: world, tag: fleetTag(of: directive)),
+            controllers: controllers(in: world, tag: fleetTag(of: directive), theatreDepot: directive.theatreDepot),
             footprints: world.footprints.mapValues(\.resources),
             components: world.components,
             positions: world.starPositions,
@@ -249,12 +254,14 @@ public struct HaulRun: MissionStepMachine {
             return .advanceStep(nextStep: Step.surveying)
         }
         let tag = Self.fleetTag(of: directive)
-        let found = Self.controllers(in: world, tag: tag)
+        let found = Self.controllers(in: world, tag: tag, theatreDepot: directive.theatreDepot)
         let stale = found.isEmpty || found.contains {
             world.now.timeIntervalSince($0.updatedAt) > Self.stagingFreshness
         }
         if stale {
-            return .refreshFleet(tag: tag, thenStall: .noHaulControllerTagged)
+            // The WIRE read, unlike local selection, must name a tag the
+            // server itself recognises — it has no notion of a per-theatre tag.
+            return .refreshFleet(tag: RepairFleet.root(of: tag), thenStall: .noHaulControllerTagged)
         }
         return .advanceStep(nextStep: Step.surveying)
     }
@@ -285,10 +292,10 @@ public struct HaulRun: MissionStepMachine {
             return .assignController(deviceCode: assignment.controllerCode, nextStep: Step.dispatching)
         }
         let tag = Self.fleetTag(of: directive)
-        guard !Self.controllers(in: world, tag: tag).isEmpty else {
+        guard !Self.controllers(in: world, tag: tag, theatreDepot: directive.theatreDepot).isEmpty else {
             // Local silence is not evidence — `noHaulControllerTagged` belongs to a
-            // fresh TAG READ finding nothing.
-            return .refreshFleet(tag: tag, thenStall: .noHaulControllerTagged)
+            // fresh TAG READ finding nothing, sent under the tag the server knows.
+            return .refreshFleet(tag: RepairFleet.root(of: tag), thenStall: .noHaulControllerTagged)
         }
         let assignments = Self.plans(directive, world)
         guard let pending = assignments.first(where: { !Self.isInForce($0, in: world, for: directive) }) else {

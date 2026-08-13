@@ -218,8 +218,14 @@ public struct WorldView: Equatable, Sendable {
     /// for a stowed/cruising device or a system outside the census.
     public func owningTheatre(of device: Device) -> Theatre? {
         guard let location = device.location else { return nil }
-        let system = SiteAssay.system(of: location)
-        return theatre(servicing: system) ?? theatre(nearest: system)
+        return owningTheatre(ofSystem: SiteAssay.system(of: location))
+    }
+
+    /// `system`'s theatre — the rule `owningTheatre(of:)` applies to a
+    /// device's location, for a caller reasoning about a SYSTEM (a belt
+    /// candidate) rather than a device.
+    public func owningTheatre(ofSystem system: String) -> Theatre? {
+        theatre(servicing: system) ?? theatre(nearest: system)
     }
 
     /// Ranks both resolvers; they differ only by `admits`. Orders by

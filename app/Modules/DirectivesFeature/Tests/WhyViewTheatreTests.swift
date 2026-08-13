@@ -37,6 +37,7 @@ struct WhyViewTheatreTests {
         theatreSurvey: [String: BrainSurveyStatus] = [:],
         theatreSalvage: [String: BrainGoalStatus] = [:],
         theatreHaul: [String: BrainGoalStatus] = [:],
+        theatreMine: [String: BrainGoalStatus] = [:],
         theatreLimits: [String: BrainLimits] = [:]
     ) -> BrainReport {
         BrainReport(
@@ -49,6 +50,7 @@ struct WhyViewTheatreTests {
             theatreSurvey: theatreSurvey,
             theatreSalvage: theatreSalvage,
             theatreHaul: theatreHaul,
+            theatreMine: theatreMine,
             theatreLimits: theatreLimits
         )
     }
@@ -75,8 +77,7 @@ struct WhyViewTheatreTests {
     }
 
     /// A live run reported for AINALRAM must not leak into DENEBED's own
-    /// line — the fleet-wide-scan defect Task 7 closed, now checked at the
-    /// rendered card rather than just the engine verdict.
+    /// line — checked at the rendered card rather than just the engine verdict.
     @Test("a live run in one theatre does not mask another theatre's idle or halted state")
     func aLiveRunDoesNotMaskAnotherTheatresLine() {
         let ainalram = Theatre(
@@ -100,6 +101,10 @@ struct WhyViewTheatreTests {
             theatreHaul: [
                 ainalram.depot: .launched(vessel: "T1", focus: ainalram.depot, status: .running),
                 denebed.depot: .idle(reason: "no free auto:haul controller offering ferry"),
+            ],
+            theatreMine: [
+                ainalram.depot: .launched(vessel: "C1", focus: "AINALRAM-BELT-2", status: .running),
+                denebed.depot: .idle(reason: "no printed mine fleet"),
             ]
         )
 
@@ -110,8 +115,10 @@ struct WhyViewTheatreTests {
         #expect(ainalramLines["survey"] != denebedLines["survey"])
         #expect(ainalramLines["salvage"] != denebedLines["salvage"])
         #expect(ainalramLines["haul"] != denebedLines["haul"])
+        #expect(ainalramLines["mine"] != denebedLines["mine"])
         #expect(denebedLines["survey"] == "no vessel is tagged auto:survey")
         #expect(denebedLines["haul"] == "no free auto:haul controller offering ferry")
+        #expect(denebedLines["mine"] == "no printed mine fleet")
     }
 
     /// Each theatre's own footprint renders under its own heading — the

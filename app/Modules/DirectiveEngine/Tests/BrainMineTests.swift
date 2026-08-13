@@ -412,6 +412,50 @@ struct BrainMineStatusTests {
     }
 }
 
+@Suite("Brain — the mine goal status across theatres")
+struct BrainMineStatusTheatreTests {
+    private func twoTheatreView(
+        solFleet: [Device], vegaFleet: [Device]
+    ) -> (view: WorldView, sol: Theatre, vega: Theatre) {
+        let sol = mineTheatre()
+        let vega = Theatre(depot: "VEGA-3", system: "VEGA", origin: .pinned, readiness: .operational, stock: 0)
+        let devices = solFleet + vegaFleet
+        let view = WorldView(
+            devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
+            starPositions: ["SOL": Position(x: 0, y: 0, z: 0), "VEGA": Position(x: 300, y: 300, z: 300)],
+            meshSystems: ["SOL", "VEGA"], salvageUnits: [:], eventSystems: [],
+            theatres: [sol, vega], components: ["SOL": "SOL", "VEGA": "VEGA"],
+            beltsBySystem: [
+                "SOL": [BeltInfo(designation: mineBelt, beltClass: .rich)],
+                "VEGA": [BeltInfo(designation: "VEGA-BELT-1", beltClass: .rich)],
+            ],
+            now: mineNow
+        )
+        return (view, sol, vega)
+    }
+
+    /// A live mine run in one theatre must not mask another theatre's own
+    /// idle state — `surveyStatus`/`salvageStatus`/`haulStatus`'s own fix,
+    /// applied here.
+    @Test func aLiveRunInOneTheatreDoesNotMaskAnother() {
+        let (view, sol, vega) = twoTheatreView(
+            solFleet: minePrintedFleet(at: mineHub) + [mineCarrierDevice(location: mineHub)], vegaFleet: []
+        )
+        let live = directiveFixture(
+            id: "M1", kind: .mineRun, deviceCode: mineCarrier,
+            fleetTag: MineRecipe.fleetTag(forTheatre: sol.depot), targets: [mineBelt], theatreDepot: sol.depot
+        )
+        #expect(
+            Brain.mineStatus(directives: [live], view: view, theatre: sol)
+                == .launched(vessel: mineCarrier, focus: mineBelt, status: .running)
+        )
+        #expect(
+            Brain.mineStatus(directives: [live], view: view, theatre: vega)
+                == .idle(reason: "no printed mine fleet")
+        )
+    }
+}
+
 @Suite("Brain — per-mine health")
 struct BrainMineHealthTests {
     private func healthWorld(
@@ -620,7 +664,7 @@ struct BrainEnsureMineTests {
         #expect(mine.kind == .mineRun)
         #expect(mine.deviceCode == mineCarrier)
         #expect(mine.targets == [mineBelt])
-        #expect(mine.fleetTag == MineRecipe.fleetTag)
+        #expect(mine.fleetTag == MineRecipe.fleetTag(forTheatre: growHubLocation))
         #expect(mine.step == MineRun().firstStep)
         #expect(mine.status == .running)
         #expect(mine.roamCentre == nil)
@@ -657,10 +701,9 @@ struct BrainEnsureMineTests {
         #expect(try await mineDirectives(database).isEmpty)
     }
 
-    /// An idle theatre must `continue`, not `return`. Depot designations sort
-    /// `SOL-3` before `VEGA-3`, so SOL (no printed fleet) is visited first and
-    /// must not suppress VEGA's (fully ready) launch — nor may VEGA be sited at
-    /// SOL's own belt, which alphabetically outranks VEGA's.
+    /// An idle theatre must `continue`, not `return`: `SOL-3` sorts first but
+    /// has no printed fleet, and must not suppress VEGA's ready launch or
+    /// steal VEGA's own belt, which alphabetically outranks it.
     @Test func anIdleTheatreDoesNotSuppressAReadyOnesLaunch() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in
@@ -784,6 +827,36 @@ struct BrainEnsureMineFerriesTests {
 
         let hauls = try await mineDirectives(database).filter { $0.kind == .haulRun }
         #expect(hauls.isEmpty)
+    }
+
+    /// `ensureMine` must stamp a per-theatre tag on the mineRun row it
+    /// launches — see `mine-run-per-theatre-tag.md` for the failure shape.
+    @Test func aLiveInstallInOneTheatreDoesNotReserveAnotherTheatresFerryController() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try seedMineWorld(db)
+            for device in minePrintedFleet() + [mineCarrierDevice()] {
+                try seedMineDevice(db, device)
+            }
+        }
+        let uuid = UUIDGenerator.incrementing
+        // Theatre A's install launches on THIS tick — its `mineRun` carries
+        // whatever tag `ensureMine` actually stamps.
+        await mineTick(database, uuid: uuid)
+
+        // Theatre B's already-installed (bare-tagged) mine appears only now,
+        // so the ferry decision below is the FIRST evaluation to see it
+        // alongside theatre A's live row.
+        try await database.write { db in
+            try seedMineSecondTheatre(db)
+            try seedMineDevice(db, mineDevice("MC2", type: "ami_mining_controller", location: secondMineTheatreBelt))
+            try seedMineDevice(db, mineDevice("TC2", type: mineTransportType, location: secondMineTheatreHubLocation))
+        }
+        await mineTick(database, uuid: uuid)
+
+        let hauls = try await mineDirectives(database).filter { $0.kind == .haulRun }
+        let ferry = try #require(hauls.first { !Brain.isGeneralHaul($0) })
+        #expect(ferry.deviceCode == "TC2")
     }
 
     @Test func theTickAfterTheMineRunFinishesLaunchesTheFerry() async throws {

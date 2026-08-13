@@ -79,7 +79,7 @@ struct Brain: Sendable {
                 )
                 let view = try WorldView.read(from: db, now: now)
                 // Same transaction as the devices, one row per operational
-                // theatre — never `.first`, which showed every theatre one theatre's stock.
+                // theatre — never a single flat reading for every theatre.
                 let depots = view.theatres.filter(\.isOperational).map(\.depot)
                 var hubFootprints: [String: LocationFootprint] = [:]
                 if !depots.isEmpty {
@@ -134,6 +134,9 @@ struct Brain: Sendable {
         let theatreHaul = Dictionary(uniqueKeysWithValues: operational.map {
             ($0.depot, Self.haulStatus(directives: snapshot.directives, view: snapshot.view, theatre: $0))
         })
+        let theatreMine = Dictionary(uniqueKeysWithValues: operational.map {
+            ($0.depot, Self.mineStatus(directives: snapshot.directives, view: snapshot.view, theatre: $0))
+        })
 
         let escalated = await respondToStalls(snapshot)
         let plan = Self.plan(view: snapshot.view, directives: snapshot.directives)
@@ -171,6 +174,7 @@ struct Brain: Sendable {
             theatreSurvey: theatreSurvey,
             theatreSalvage: theatreSalvage,
             theatreHaul: theatreHaul,
+            theatreMine: theatreMine,
             theatreLimits: theatreLimits
         )
     }
@@ -472,7 +476,7 @@ struct Brain: Sendable {
                     deviceCode: carrier,
                     controllerCode: nil,
                     roamCentre: nil,
-                    fleetTag: MineRecipe.fleetTag,
+                    fleetTag: MineRecipe.fleetTag(forTheatre: theatre.depot),
                     sourceRelayCode: nil,
                     targets: [belt], targetIndex: 0,
                     step: MineRun().firstStep,
@@ -1336,6 +1340,20 @@ struct Brain: Sendable {
                     candidates, reserved: reserved, tag: theatreTag, kind: .salvageRun,
                     theatre: theatre, directives: directives, devices: view.devices
                 ) else {
+                    // A stowed or mid-cruise hull resolves no theatre — find it
+                    // fleet-wide, like `mistagged`, rather than read as untagged.
+                    let unreachable = view.devices.values
+                        .filter {
+                            $0.isCarrierHull && SalvageRun.isFleetTagged($0, at: theatre.depot)
+                                && owningTheatre(of: $0, view: view) == nil
+                        }
+                        .sorted { $0.deviceCode < $1.deviceCode }
+                    guard unreachable.isEmpty else {
+                        return .idle(reason: """
+                            \(list(unreachable.map(\.deviceCode))) \(unreachable.count == 1 ? "is" : "are") tagged \
+                            \(salvageCarrierTag) but not placeable — stowed or mid-cruise
+                            """)
+                    }
                     return .idle(reason: "no \(salvageCarrierTag) vessel")
                 }
                 return .idle(reason: "no \(salvageCarrierTag) vessel — \(unmigratedNote(unmigrated, tag: theatreTag))")
@@ -1439,10 +1457,10 @@ struct Brain: Sendable {
         // theatre's own — a mine must never land on another theatre's depot.
         let depots = Set(view.theatres.filter(\.isOperational).map(\.depot))
         // Off-theatre belts are excluded too: siting only searches this
-        // theatre's own systems, mirroring `owningTheatre`'s resolution order.
+        // theatre's own systems, per `owningTheatre`'s resolution order.
         let elsewhere = Set(
             view.beltsBySystem
-                .filter { (view.theatre(servicing: $0.key) ?? view.theatre(nearest: $0.key))?.depot != hub }
+                .filter { view.owningTheatre(ofSystem: $0.key)?.depot != hub }
                 .flatMap { $0.value.map(\.designation) }
         )
         let occupied = depots
@@ -1563,21 +1581,28 @@ struct Brain: Sendable {
         }
     }
 
-    /// The why-view's mine line: a live `mineRun` FIRST — an installing fleet
-    /// is attached/stowed, so `mineReadiness` would misreport its own blocker
-    /// mid-install — else the readiness verdict, exactly as `haulStatus`.
+    /// The why-view's mine line, over EVERY operational theatre — the
+    /// single-theatre convenience the flat fallback section uses.
     static func mineStatus(directives: [Directive], view: WorldView) -> BrainGoalStatus {
+        guard let theatre = view.theatres.first(where: \.isOperational) else {
+            return .idle(reason: "no operational theatre")
+        }
+        return mineStatus(directives: directives, view: view, theatre: theatre)
+    }
+
+    /// `theatre`'s own mine line: a live `mineRun` FIRST (mid-install it is
+    /// attached/stowed, so `mineReadiness` would misreport its blocker),
+    /// else the readiness verdict — never masked by another theatre's own.
+    static func mineStatus(directives: [Directive], view: WorldView, theatre: Theatre) -> BrainGoalStatus {
         if let live = directives.first(where: {
             $0.kind == .mineRun && owningStatuses.contains($0.status)
+                && ($0.theatreDepot == theatre.depot || $0.theatreDepot == nil)
         }) {
             return .launched(
                 vessel: live.deviceCode,
                 focus: live.currentTarget,
                 status: launchedGoalStatus(live.status)
             )
-        }
-        guard let theatre = view.theatres.first(where: \.isOperational) else {
-            return .idle(reason: "no operational theatre")
         }
         switch mineReadiness(view: view, directives: directives, theatre: theatre) {
         case let .launch(carrier, _): return .ready(vessel: carrier)
@@ -1690,6 +1715,14 @@ struct Brain: Sendable {
             .filter { !$0.isCarrierHull && SurveyRun.isFleetTagged($0, at: theatre.depot) }
             .sorted { $0.deviceCode < $1.deviceCode }
         guard !hulls.isEmpty else {
+            // A stowed or mid-cruise hull resolves no theatre — find it
+            // fleet-wide, like `mistagged`, rather than read as untagged.
+            let unreachable = view.devices.values
+                .filter { $0.isCarrierHull && SurveyRun.isFleetTagged($0, at: theatre.depot) && owningTheatre(of: $0, view: view) == nil }
+                .sorted { $0.deviceCode < $1.deviceCode }
+            guard unreachable.isEmpty else {
+                return "\(list(unreachable.map(\.deviceCode))) \(unreachable.count == 1 ? "is" : "are") tagged \(surveyCarrierTag) but not placeable — stowed or mid-cruise"
+            }
             guard let clause = mistaggedClause(mistagged, tag: surveyCarrierTag) else {
                 return "no vessel is tagged \(surveyCarrierTag)"
             }

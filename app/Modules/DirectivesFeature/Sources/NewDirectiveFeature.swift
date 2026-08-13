@@ -211,14 +211,23 @@ public struct NewDirectiveFeature {
                 let returnToOrigin = isContinuous ? false : state.returnToOrigin
                 let origin = vessel.location.map { SiteAssay.system(of: $0) }
                 return .run { send in
-                    // `Brain.ensureSurvey`'s own resolution — never nil, which
-                    // leaves `reservedDevices` skipping its sweep entirely.
-                    let tag = (try? await database.read { db -> String in
-                        let view = try WorldView.read(from: db, now: now)
-                        guard let device = view.devices[vesselCode], let theatre = view.owningTheatre(of: device)
-                        else { return SurveyRun.defaultFleetTag }
-                        return SurveyRun.fleetTag(forTheatre: theatre.depot)
-                    }) ?? SurveyRun.defaultFleetTag
+                    // `Brain.ensureSurvey`'s own resolution — never nil (see
+                    // `launcher-tag-resolution-error-narrowing.md`).
+                    let tag: String
+                    do {
+                        tag = try await database.read { db -> String in
+                            let view = try WorldView.read(from: db, now: now)
+                            guard let device = view.devices[vesselCode], let theatre = view.owningTheatre(of: device)
+                            else {
+                                logger.notice("survey launch on \(vesselCode, privacy: .public): no theatre resolves — bare tag")
+                                return SurveyRun.defaultFleetTag
+                            }
+                            return SurveyRun.fleetTag(forTheatre: theatre.depot)
+                        }
+                    } catch {
+                        logger.error("survey launch on \(vesselCode, privacy: .public): theatre read failed: \(error) — bare tag")
+                        tag = SurveyRun.defaultFleetTag
+                    }
                     let directive = Directive(
                         id: id,
                         kind: .surveyRun,

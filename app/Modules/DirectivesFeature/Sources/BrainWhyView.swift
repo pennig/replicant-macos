@@ -186,7 +186,9 @@ public struct BrainWhy: Equatable, Sendable {
             goalGroupLine(goalLine(
                 .haul, status: report.theatreHaul[theatre.depot] ?? .idle(reason: "not evaluated"), report: report
             )),
-            goalGroupLine(goalLine(.mine, status: report.mine, report: report)),
+            goalGroupLine(goalLine(
+                .mine, status: report.theatreMine[theatre.depot] ?? .idle(reason: "not evaluated"), report: report
+            )),
             stockGroupLine(report: report, theatre: theatre),
         ]
     }

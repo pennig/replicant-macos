@@ -142,6 +142,28 @@ struct BrainSurveyTests {
         #expect(reason.contains("V1"))
     }
 
+    /// A stowed or mid-cruise vessel has `location: nil`, so `owningTheatre`
+    /// resolves no theatre for it — but it IS tagged, and "no vessel is tagged"
+    /// is false. The hull listing must stay fleet-wide for this reason, the
+    /// same way the mistagged-device clause already does.
+    @Test("a tagged vessel with no placeable location is named, not reported untagged")
+    func aTaggedStowedVesselIsNamedNotReportedUntagged() {
+        let devices = [
+            surveyReadinessDevice("V1", type: "heaven_vessel", tags: [Brain.surveyCarrierTag], location: nil),
+        ]
+        let view = surveyReadinessView(
+            devices: devices, depot: "AINALRAM-BELT-1",
+            starPositions: ["AINALRAM": Position(x: 0, y: 0, z: 0)]
+        )
+
+        guard case let .idle(reason) = Brain.surveyReadiness(view: view, directives: [], theatre: ainalramTheatre) else {
+            Issue.record("expected idle")
+            return
+        }
+        #expect(reason != "no vessel is tagged \(Brain.surveyCarrierTag)")
+        #expect(reason.contains("V1"))
+    }
+
     @Test("a tagged vessel with no survey controller aboard idles, never stalls")
     func noControllerAboardIdles() {
         let devices = [
@@ -479,7 +501,7 @@ struct BrainSurveyStatusTests {
     }
 
     /// A live run in one theatre must not mask another theatre's own idle
-    /// state — the fleet-wide scan Task 7 closed.
+    /// state.
     @Test("a live run in one theatre does not mask another theatre's idle state")
     func aLiveRunInOneTheatreDoesNotMaskAnother() {
         let (view, ainalram, denebed) = twoTheatreSurveyView(
