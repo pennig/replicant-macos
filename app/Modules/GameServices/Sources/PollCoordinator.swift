@@ -50,7 +50,12 @@ actor PollCoordinator {
     /// waited it out. Internal so tests can await the barrier deterministically.
     private(set) var barrierWaits = 0
 
-    init(reconciler: Reconciler, ttl: TimeInterval = 2, budgetFloor: Int = 12) {
+    /// Where low-priority reads start being deferred. Surfaced through
+    /// `DeviceRefreshClient.readFloor` so the brain's why-view can state the
+    /// number this coordinator enforces rather than a literal that could drift.
+    static let defaultBudgetFloor = 12
+
+    init(reconciler: Reconciler, ttl: TimeInterval = 2, budgetFloor: Int = PollCoordinator.defaultBudgetFloor) {
         self.reconciler = reconciler
         self.ttl = ttl
         self.budgetFloor = budgetFloor

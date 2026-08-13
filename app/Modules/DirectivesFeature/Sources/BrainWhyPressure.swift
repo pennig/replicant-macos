@@ -21,7 +21,11 @@ public struct BrainWhyPressure: Equatable, Identifiable, Sendable {
     public enum Kind: String, Sendable, CaseIterable {
         /// The actions budget the `CommandGovernor` paces dispatches against.
         /// Voluntary: WE stop, before the server has to.
-        case governor
+        case commandGovernor
+        /// The reads budget, which every confirm-read and paged walk spends
+        /// from. A separate bucket with its own floor, so a healthy command
+        /// budget says nothing about it.
+        case readGovernor
         /// The reserve floor (`BrainCeiling`) standing between hub stock and
         /// a print. Also voluntary.
         case reserveFloor

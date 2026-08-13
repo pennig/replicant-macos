@@ -75,6 +75,9 @@ struct BrainWhyViewTests {
             actionsRemaining: 54,
             actionsLimit: 60,
             actionsFloor: 6,
+            readsRemaining: 108,
+            readsLimit: 120,
+            readsFloor: 12,
             hubStock: 41_000,
             hubStockFetchedAt: now,
             spendFloor: 35_078,
@@ -312,6 +315,7 @@ struct BrainWhyViewTests {
                 .idle(reason: "no grow or prune work"),
                 limits: BrainLimits(
                     actionsRemaining: 4, actionsLimit: 60, actionsFloor: 6,
+                    readsRemaining: 108, readsLimit: 120, readsFloor: 12,
                     hubStock: 41_000, hubStockFetchedAt: Self.now,
                     spendFloor: 35_078, rateLimitedAt: nil
                 )
@@ -327,15 +331,15 @@ struct BrainWhyViewTests {
         // Self-throttling reports the governor and nothing more: we are not
         // being rate-limited, and saying so would be false.
         #expect(!throttled.limitPressure.contains { $0.kind == .rateLimited })
-        #expect(throttled.limitPressure.contains { $0.kind == .governor })
+        #expect(throttled.limitPressure.contains { $0.kind == .commandGovernor })
 
         // A 429 gets its OWN line, of its own kind, marked as imposed rather
         // than chosen — and does not merely re-word the governor line.
         let imposed = rateLimited.limitPressure.filter { $0.kind == .rateLimited }
         #expect(imposed.count == 1)
         #expect(imposed.first?.isImposed == true)
-        #expect(rateLimited.limitPressure.contains { $0.kind == .governor })
-        #expect(imposed.first?.detail != rateLimited.limitPressure.first { $0.kind == .governor }?.detail)
+        #expect(rateLimited.limitPressure.contains { $0.kind == .commandGovernor })
+        #expect(imposed.first?.detail != rateLimited.limitPressure.first { $0.kind == .commandGovernor }?.detail)
     }
 
     /// A 429 from an hour ago is history, not pressure. Without a window the
@@ -356,8 +360,30 @@ struct BrainWhyViewTests {
     /// than as a number without a scale.
     @Test func theGovernorLineNamesTheFloorItPacesAgainst() {
         let why = BrainWhy.from(report: Self.report(.idle(reason: "no grow or prune work")))
-        let governor = why.limitPressure.first { $0.kind == .governor }
+        let governor = why.limitPressure.first { $0.kind == .commandGovernor }
         #expect(governor?.detail == "commands — 54 of 60 left this minute, pacing ourselves below 6")
+    }
+
+    /// Reads are a SEPARATE bucket with a separate floor, and the one a paged
+    /// walk or a confirm-read actually spends from. Reporting only the command
+    /// budget let a drained reads bucket stall a manual refresh while the
+    /// surface showed nothing but headroom — so both must be stated, and stated
+    /// distinctly enough that neither can be mistaken for the other.
+    @Test func bothBudgetsAreReportedAndKeptApart() {
+        let why = BrainWhy.from(report: Self.report(.idle(reason: "no grow or prune work")))
+
+        let reads = why.limitPressure.first { $0.kind == .readGovernor }
+        #expect(reads?.detail == "reads — 108 of 120 left this minute, pacing ourselves below 12")
+
+        // Two kinds, so the view can style them apart and a `ForEach` can
+        // identify them — a second line under one kind would collide on `id`.
+        let kinds = why.limitPressure.map(\.kind)
+        #expect(kinds.contains(.commandGovernor))
+        #expect(kinds.contains(.readGovernor))
+        #expect(Set(kinds).count == kinds.count, "every pressure line must carry a distinct kind")
+
+        // Neither is imposed: both are us pacing ourselves, not a 429.
+        #expect(why.limitPressure.filter { $0.isImposed }.isEmpty)
     }
 
     /// The reserve-floor line reports ALL FOUR states the rail has — clear,
@@ -379,6 +405,7 @@ struct BrainWhyViewTests {
                     .idle(reason: "no grow or prune work"),
                     limits: BrainLimits(
                         actionsRemaining: 54, actionsLimit: 60, actionsFloor: 6,
+                        readsRemaining: 108, readsLimit: 120, readsFloor: 12,
                         hubStock: hubStock, hubStockFetchedAt: fetchedAt,
                         spendFloor: 35_078, rateLimitedAt: nil
                     )
@@ -416,6 +443,7 @@ struct BrainWhyViewTests {
         func standing(ageSeconds: TimeInterval) -> BrainLimits.HubStockStanding {
             BrainLimits(
                 actionsRemaining: 54, actionsLimit: 60, actionsFloor: 6,
+                        readsRemaining: 108, readsLimit: 120, readsFloor: 12,
                 hubStock: 41_000, hubStockFetchedAt: Self.now.addingTimeInterval(-ageSeconds),
                 spendFloor: 35_078, rateLimitedAt: nil
             ).hubStockStanding(at: Self.now)

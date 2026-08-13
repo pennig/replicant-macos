@@ -21,6 +21,7 @@ private func report(
         theatres: [Theatre(depot: "SOL-3", system: "SOL", origin: .derived, readiness: .operational, stock: 0)],
         limits: BrainLimits(
             actionsRemaining: 54, actionsLimit: 60, actionsFloor: 6,
+            readsRemaining: 108, readsLimit: 120, readsFloor: 12,
             hubStock: 41_000, hubStockFetchedAt: Date(timeIntervalSince1970: 0),
             spendFloor: 35_078, rateLimitedAt: nil
         ),

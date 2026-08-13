@@ -37,6 +37,15 @@ public struct BrainLimits: Equatable, Sendable {
     /// The token count at or below which `CommandGovernor` defers a dispatch
     /// of its own accord — i.e. where SELF-throttling begins.
     public let actionsFloor: Int
+    /// Reads-bucket tokens left in this minute's window. A SEPARATE budget from
+    /// the actions one and the one every confirm-read and paged walk spends, so
+    /// it must be reported beside it rather than stand for it.
+    public let readsRemaining: Int
+    /// That bucket's own per-minute limit.
+    public let readsLimit: Int
+    /// Where `PollCoordinator` starts deferring low-priority reads of its own
+    /// accord — the reads-side counterpart to `actionsFloor`.
+    public let readsFloor: Int
     /// The hub's last-read TOTAL holdings, or nil when no census row for the
     /// hub exists (or there is no hub on the mesh at all). Nil is "nobody has
     /// told us", never "zero" — and `RelayRun` treats it as a veto for the
@@ -61,6 +70,9 @@ public struct BrainLimits: Equatable, Sendable {
         actionsRemaining: Int,
         actionsLimit: Int,
         actionsFloor: Int,
+        readsRemaining: Int,
+        readsLimit: Int,
+        readsFloor: Int,
         hubStock: Int?,
         hubStockFetchedAt: Date?,
         spendFloor: Int,
@@ -69,6 +81,9 @@ public struct BrainLimits: Equatable, Sendable {
         self.actionsRemaining = actionsRemaining
         self.actionsLimit = actionsLimit
         self.actionsFloor = actionsFloor
+        self.readsRemaining = readsRemaining
+        self.readsLimit = readsLimit
+        self.readsFloor = readsFloor
         self.hubStock = hubStock
         self.hubStockFetchedAt = hubStockFetchedAt
         self.spendFloor = spendFloor

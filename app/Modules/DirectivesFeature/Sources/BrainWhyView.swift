@@ -655,10 +655,22 @@ public struct BrainWhy: Equatable, Sendable {
         // "4 left" alone is a number without a scale.
         lines.append(
             BrainWhyPressure(
-                kind: .governor,
+                kind: .commandGovernor,
                 detail: """
                     commands — \(count(limits.actionsRemaining)) of \(count(limits.actionsLimit)) \
                     left this minute, pacing ourselves below \(count(limits.actionsFloor))
+                    """
+            )
+        )
+
+        // Its own bucket, and the one a paged walk or a confirm-read spends
+        // from — a healthy command budget is no evidence about this one.
+        lines.append(
+            BrainWhyPressure(
+                kind: .readGovernor,
+                detail: """
+                    reads — \(count(limits.readsRemaining)) of \(count(limits.readsLimit)) \
+                    left this minute, pacing ourselves below \(count(limits.readsFloor))
                     """
             )
         )

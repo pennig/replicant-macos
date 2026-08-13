@@ -64,6 +64,7 @@
 - [List row preview crash](list-row-preview-crash.md) — Xcode 26 crashes List previews when the row struct is in the same file as #Preview; keep row structs in their own file.
 - [Preview rewriter vs self.init](preview-rewriter-self-init.md) — a #Preview in the same file as a delegating convenience init fails the preview build; keep previews in their own file.
 - [API module name](api-module-name.md) — package is "ReplicouldKit" but the importable module is "API".
+- [Rate-limit bucket hygiene](rate-limit-bucket-hygiene.md) — the governor's two tracking defects (a foreign limiter's headers overwriting a shared bucket's pinned limit; `min()` blind to the server's window refill, so a drained bucket stayed drained through the whole next window) and why the brain must report the READS budget beside commands — a paged Devices walk is 9 serial `acquire(.reads)` calls while the why-view showed only `.actions`.
 - [OpenAPI operation-id format](openapi-operation-id-format.md) — runtime operationIDs are synthesized "method/path" strings (get/v1/stars), not Swift names; middleware must match Operations.X.id (the getV1Stars mismatch clamped the reads budget).
 - [Ignore sandbox folder](ignore-sandbox-folder.md) — skip `Replicant/sandbox/` in all work unless explicitly asked.
 - [pbxproj link is manual](pbxproj-link-is-manual.md) — linking a new SPM module product to the app target must be done by the user in Xcode; pbxproj edits are blocked.

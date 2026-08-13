@@ -1,4 +1,7 @@
 import Foundation
+import OSLog
+
+private let logger = Logger(subsystem: "name.pennig.replicould", category: "API")
 
 /// Tracks the game's two token-scoped rate-limit buckets and gates outgoing
 /// requests so the client throttles itself *before* the server has to.
@@ -61,6 +64,10 @@ public actor RateLimitGovernor {
         var resetAt: Date?
         /// Set only by `penalize` — i.e. only by a real 429.
         var rateLimitedAt: Date?
+        /// The limit this bucket is DEFINED by, when many endpoints share it.
+        /// Nil means the bucket has one endpoint and no foreign reading can
+        /// reach it, so the server's word is the only source it has.
+        var pinnedLimit: Int?
     }
 
     private var states: [Bucket: State]
@@ -72,11 +79,17 @@ public actor RateLimitGovernor {
 
     public init(readLimit: Int = 120, actionLimit: Int = 60, reserve: Int = 3) {
         self.states = [
-            .reads: State(limit: readLimit, remaining: readLimit, resetAt: nil, rateLimitedAt: nil),
-            .actions: State(limit: actionLimit, remaining: actionLimit, resetAt: nil, rateLimitedAt: nil),
+            .reads: State(
+                limit: readLimit, remaining: readLimit, resetAt: nil,
+                rateLimitedAt: nil, pinnedLimit: readLimit
+            ),
+            .actions: State(
+                limit: actionLimit, remaining: actionLimit, resetAt: nil,
+                rateLimitedAt: nil, pinnedLimit: actionLimit
+            ),
             // Only ever reconciled from response headers / read for its reset; the
             // optimistic defaults are never consulted since `stars` isn't gated.
-            .stars: State(limit: 1, remaining: 1, resetAt: nil, rateLimitedAt: nil),
+            .stars: State(limit: 1, remaining: 1, resetAt: nil, rateLimitedAt: nil, pinnedLimit: nil),
         ]
         self.reserve = max(0, reserve)
     }
@@ -109,8 +122,10 @@ public actor RateLimitGovernor {
     }
 
     /// Reconcile with the server's `X-RateLimit-*` headers.
-    /// `min` keeps this safe against out-of-order responses: a stale, higher
-    /// remaining can never inflate the local budget.
+    ///
+    /// Within one window `min` keeps this safe against out-of-order responses:
+    /// a stale, higher remaining can never inflate the local budget. A reading
+    /// from a LATER window is a refill and is taken at face value instead.
     public func record(
         bucket: Bucket,
         limit: Int?,
@@ -118,9 +133,27 @@ public actor RateLimitGovernor {
         resetEpoch: TimeInterval?
     ) {
         var state = states[bucket]!
+
+        // A limit that disagrees with a shared bucket's own is some other
+        // limiter answering on the shared headers, so its whole reading —
+        // remaining and reset included — describes a budget that isn't ours.
+        if let limit, let pinned = state.pinnedLimit, limit != pinned {
+            logger.notice(
+                "\(bucket.rawValue, privacy: .public): ignoring a reading limited at \(limit) — not this bucket's \(pinned)"
+            )
+            return
+        }
         if let limit { state.limit = limit }
-        if let remaining { state.remaining = min(state.remaining, remaining) }
-        if let resetEpoch { state.resetAt = Date(timeIntervalSince1970: resetEpoch) }
+
+        let reset = resetEpoch.map { Date(timeIntervalSince1970: $0) }
+        // The server moving its reset forward is the one signal that the window
+        // rolled; `min` alone cannot see a refill and would hold the old
+        // window's drained count through the whole of the next one.
+        let rolledOver = if let reset, let current = state.resetAt { reset > current } else { false }
+        if let remaining {
+            state.remaining = rolledOver ? remaining : min(state.remaining, remaining)
+        }
+        if let reset { state.resetAt = reset }
         states[bucket] = state
     }
 

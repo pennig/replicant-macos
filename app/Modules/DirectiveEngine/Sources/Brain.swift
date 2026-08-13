@@ -154,16 +154,22 @@ struct Brain: Sendable {
         // — never one call per theatre for what is a single fleet-wide budget.
         @Dependency(\.gameClient) var gameClient
         let budget = await gameClient.budget(.actions)
+        let reads = await gameClient.budget(.reads)
         let firstFootprint = operational.first.flatMap { snapshot.hubFootprints[$0.depot] }
         let theatreLimits = Dictionary(uniqueKeysWithValues: operational.map {
-            ($0.depot, Self.limits(hubFootprint: snapshot.hubFootprints[$0.depot], budget: budget))
+            (
+                $0.depot,
+                Self.limits(
+                    hubFootprint: snapshot.hubFootprints[$0.depot], budget: budget, reads: reads
+                )
+            )
         })
 
         return BrainReport(
             decision: decision,
             ranked: plan.ranked,
             theatres: snapshot.view.theatres,
-            limits: Self.limits(hubFootprint: firstFootprint, budget: budget),
+            limits: Self.limits(hubFootprint: firstFootprint, budget: budget, reads: reads),
             prune: Self.pruneReport(
                 plan: plan, decision: decision, directives: snapshot.directives
             ),
@@ -632,17 +638,28 @@ struct Brain: Sendable {
     /// throttles on, not a second copy.
     private static func limits(hubFootprint: LocationFootprint?) async -> BrainLimits {
         @Dependency(\.gameClient) var gameClient
-        return limits(hubFootprint: hubFootprint, budget: await gameClient.budget(.actions))
+        return limits(
+            hubFootprint: hubFootprint,
+            budget: await gameClient.budget(.actions),
+            reads: await gameClient.budget(.reads)
+        )
     }
 
-    /// `limits(hubFootprint:)` over an ALREADY-READ `budget` — `report()` reads
-    /// it once and reuses it for the flat figure and every theatre's own,
+    /// `limits(hubFootprint:)` over ALREADY-READ budgets — `report()` reads each
+    /// bucket once and reuses it for the flat figure and every theatre's own,
     /// rather than one governor call per theatre for one fleet-wide budget.
-    private static func limits(hubFootprint: LocationFootprint?, budget: RateLimitGovernor.Snapshot) -> BrainLimits {
+    private static func limits(
+        hubFootprint: LocationFootprint?,
+        budget: RateLimitGovernor.Snapshot,
+        reads: RateLimitGovernor.Snapshot
+    ) -> BrainLimits {
         BrainLimits(
             actionsRemaining: budget.remaining,
             actionsLimit: budget.limit,
             actionsFloor: CommandGovernorClient.actionFloor,
+            readsRemaining: reads.remaining,
+            readsLimit: reads.limit,
+            readsFloor: DeviceRefreshClient.readFloor,
             hubStock: hubFootprint?.resources,
             // The rail vetoes on the reading's AGE as well as its value, so a
             // figure without its timestamp cannot say what the rail is doing.

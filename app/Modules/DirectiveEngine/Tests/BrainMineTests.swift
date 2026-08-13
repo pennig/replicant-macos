@@ -799,6 +799,7 @@ struct BrainReportMineDefaultsTests {
             ranked: [], theatres: [],
             limits: BrainLimits(
                 actionsRemaining: 0, actionsLimit: 0, actionsFloor: 0,
+                readsRemaining: 0, readsLimit: 0, readsFloor: 0,
                 hubStock: nil, hubStockFetchedAt: nil, spendFloor: 0, rateLimitedAt: nil
             ),
             survey: .idle(reason: "none"),

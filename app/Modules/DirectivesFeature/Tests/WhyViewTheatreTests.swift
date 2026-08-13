@@ -136,6 +136,7 @@ struct WhyViewTheatreTests {
         func limits(hubStock: Int) -> BrainLimits {
             BrainLimits(
                 actionsRemaining: 54, actionsLimit: 60, actionsFloor: 6,
+                readsRemaining: 108, readsLimit: 120, readsFloor: 12,
                 hubStock: hubStock, hubStockFetchedAt: BrainWhyViewTests.now,
                 spendFloor: 35_078, rateLimitedAt: nil
             )

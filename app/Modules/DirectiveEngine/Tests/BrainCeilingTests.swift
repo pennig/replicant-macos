@@ -189,6 +189,7 @@ struct HubStockStandingTests {
     static func limits(stock: Int?, fetchedAt: Date?) -> BrainLimits {
         BrainLimits(
             actionsRemaining: 54, actionsLimit: 60, actionsFloor: 6,
+            readsRemaining: 108, readsLimit: 120, readsFloor: 12,
             hubStock: stock, hubStockFetchedAt: fetchedAt,
             spendFloor: floor, rateLimitedAt: nil
         )

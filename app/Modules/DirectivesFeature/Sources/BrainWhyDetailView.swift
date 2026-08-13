@@ -43,9 +43,9 @@ public struct BrainWhyDetailView: View {
             VStack(alignment: .leading, spacing: Space.l) {
                 gate
 
-                // Unconditional: `limitPressure` is never empty (the two
-                // standing rails report every tick, healthy or not), so a guard
-                // would be dead code.
+                // Unconditional: `limitPressure` is never empty (the standing
+                // rails report every tick, healthy or not), so a guard would be
+                // dead code.
                 section("Limits") {
                     ForEach(why.limitPressure) { pressure in
                         Text(pressure.detail)

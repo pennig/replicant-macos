@@ -20,6 +20,11 @@ public struct DeviceRefreshClient: Sendable {
     /// (or joined one in flight), or nil if it was suppressed / deferred / failed.
     public var refresh: @Sendable (_ deviceCode: String, _ priority: RefreshPriority) async -> Device?
 
+    /// The reads-budget floor the shared coordinator defers low-priority reads
+    /// at — the reads-side counterpart to `CommandGovernorClient.actionFloor`,
+    /// surfaced so the brain's why-view can state it rather than restate it.
+    public static let readFloor = PollCoordinator.defaultBudgetFloor
+
     public init(refresh: @escaping @Sendable (_ deviceCode: String, _ priority: RefreshPriority) async -> Device?) {
         self.refresh = refresh
     }
