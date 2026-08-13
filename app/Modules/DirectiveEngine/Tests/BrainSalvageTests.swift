@@ -167,8 +167,7 @@ struct BrainSalvageReadinessTests {
 
     /// A stowed or mid-cruise vessel has `location: nil`, so `owningTheatre`
     /// resolves no theatre for it — but it IS tagged, and "no auto:salvage
-    /// vessel" is false. The hull pool used for THIS message must stay
-    /// fleet-wide, the same way the mistagged-device clause already does.
+    /// vessel" is false; the hull pool must stay fleet-wide, like `mistagged`.
     @Test("a tagged vessel with no placeable location is named, not reported untagged")
     func aTaggedStowedVesselIsNamedNotReportedUntagged() {
         let view = salvageView(devices: [

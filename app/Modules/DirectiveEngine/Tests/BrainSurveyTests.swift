@@ -143,9 +143,8 @@ struct BrainSurveyTests {
     }
 
     /// A stowed or mid-cruise vessel has `location: nil`, so `owningTheatre`
-    /// resolves no theatre for it — but it IS tagged, and "no vessel is tagged"
-    /// is false. The hull listing must stay fleet-wide for this reason, the
-    /// same way the mistagged-device clause already does.
+    /// resolves no theatre for it — but it IS tagged, and "no vessel is
+    /// tagged" is false; the hull listing must stay fleet-wide, like `mistagged`.
     @Test("a tagged vessel with no placeable location is named, not reported untagged")
     func aTaggedStowedVesselIsNamedNotReportedUntagged() {
         let devices = [
