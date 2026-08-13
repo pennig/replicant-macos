@@ -72,6 +72,11 @@ public struct DirectivesFeature {
 
         /// The selected row's namespaced id (see `DirectiveRow.id`).
         public var selectedRowID: String?
+        /// Which groups are open (`DirectiveGroup.id`). Seeded once from
+        /// whatever is asking for the operator; a toggle owns it after that.
+        public var expandedGroups: Set<String> = []
+        /// Whether `expandedGroups` has taken its one seeding.
+        public var hasSeededExpansion = false
         /// Restricts `rows` to one theatre's depot; nil shows every theatre.
         /// An unassigned row is never hidden — see `visibleRows`.
         public var theatreFilter: String?
@@ -113,6 +118,9 @@ public struct DirectivesFeature {
             guard let theatreFilter, theatreOptions.contains(theatreFilter) else { return rows }
             return rows.filter { $0.theatreDepot == nil || $0.theatreDepot == theatreFilter }
         }
+
+        /// `rows` collected into the collapsible sections the list renders.
+        public var groups: [DirectiveGroup] { DirectiveGroup.group(rows) }
 
         /// Recognised theatre depots, for the filter picker.
         public var theatreOptions: [String] {
@@ -187,6 +195,11 @@ public struct DirectivesFeature {
         case resumeTapped
         /// Clear every finished (`.completed`/`.cancelled`) run from the list.
         case clearFinishedTapped
+        /// A group's disclosure was opened or closed.
+        case groupExpansionChanged(id: String, isExpanded: Bool)
+        /// Seed `expandedGroups`, if it has not taken its one seeding and there
+        /// are groups to seed from. Sent on appearance and when the set changes.
+        case seedExpansion
         /// Show the brain's full report in the detail pane.
         case brainTapped
         /// A fresh theatre-site ranking finished loading.
@@ -358,6 +371,25 @@ public struct DirectivesFeature {
 
             case let .theatreCandidatesLoaded(candidates):
                 state.theatreCandidates = candidates
+                return .none
+
+            case let .groupExpansionChanged(id, isExpanded):
+                if isExpanded {
+                    state.expandedGroups.insert(id)
+                } else {
+                    state.expandedGroups.remove(id)
+                }
+                return .none
+
+            case .seedExpansion:
+                // Guarded on non-empty too: the view appears before the live
+                // queries land, and an empty seed would spend the one chance.
+                let groups = state.groups
+                guard !state.hasSeededExpansion, !groups.isEmpty else { return .none }
+                state.hasSeededExpansion = true
+                state.expandedGroups = Set(
+                    groups.filter { $0.attention != .working }.map(\.id)
+                )
                 return .none
 
             case .clearFinishedTapped:

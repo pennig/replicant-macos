@@ -69,6 +69,9 @@ public struct BuiltInDirective: Equatable, Identifiable, Sendable {
     public let controlledDevices: [Device.ControlledDevice]
     /// Set when the engine owns this directive (see `DirectiveOwner`).
     public let drivenBy: DirectiveOwner?
+    /// The device's own tags, unfiltered — `DirectiveGroup` needs the most
+    /// specific fleet tag, which is not the one `drivenBy` names.
+    public let tags: [String]
 
     public var id: String { deviceCode }
 
@@ -78,7 +81,8 @@ public struct BuiltInDirective: Equatable, Identifiable, Sendable {
         directive: String,
         config: JSONValue?,
         controlledDevices: [Device.ControlledDevice],
-        drivenBy: DirectiveOwner? = nil
+        drivenBy: DirectiveOwner? = nil,
+        tags: [String] = []
     ) {
         self.deviceCode = deviceCode
         self.deviceType = deviceType
@@ -86,6 +90,7 @@ public struct BuiltInDirective: Equatable, Identifiable, Sendable {
         self.config = config
         self.controlledDevices = controlledDevices
         self.drivenBy = drivenBy
+        self.tags = tags
     }
 }
 
@@ -301,7 +306,8 @@ public enum DirectiveRow: Equatable, Identifiable, Sendable {
                     directive: directive,
                     config: device.currentDirectiveConfig,
                     controlledDevices: device.controlledDevices,
-                    drivenBy: owners[device.deviceCode] ?? fleetOwner(of: device, belts: belts)
+                    drivenBy: owners[device.deviceCode] ?? fleetOwner(of: device, belts: belts),
+                    tags: device.tags
                 )
             )
         }
