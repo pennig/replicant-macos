@@ -31,7 +31,8 @@ struct CommandAvailabilityTests {
         status: String = "idle",
         location: String? = nil,
         capacity: Double = 100,
-        commands: [String] = []
+        commands: [String] = [],
+        features: [String] = []
     ) -> Device {
         let epoch = Date(timeIntervalSince1970: 0)
         return Device(
@@ -48,7 +49,7 @@ struct CommandAvailabilityTests {
             attachedToDeviceCode: nil,
             createdAt: epoch,
             availableCommands: commands,
-            features: [],
+            features: features,
             tags: [],
             detail: .object([:]),
             updatedAt: epoch,
@@ -70,21 +71,40 @@ struct CommandAvailabilityTests {
                                              replicants: [], channels: []).isEmpty)
     }
 
-    // MARK: adopt — type-matched, and never already-controlled
+    // MARK: adopt — feature-matched, and never already-controlled
 
-    @Test func adoptOffersOnlyTheControllersOwnWorkerType() {
+    @Test func adoptOffersOnlyDevicesCarryingTheControllersFeature() {
         let controller = device(code: "C1", type: "ami_mining_controller", commands: ["adopt"])
-        let drone = device(code: "D1", type: "mining_drone", location: "SOL-3")
-        let wrongType = device(code: "D2", type: "survey_drone", location: "SOL-3")
+        let drone = device(code: "D1", type: "mining_drone", location: "SOL-3",
+                           features: ["cruise", "mine", "stow"])
+        let otherFeature = device(code: "D2", type: "survey_drone", location: "SOL-3",
+                                  features: ["cruise", "survey", "stow"])
 
         let candidates = CommandAvailability.adoptCandidates(
-            device: controller, fleet: [drone, wrongType])
+            device: controller, fleet: [drone, otherFeature])
         expectNoDifference(candidates.map(\.id), ["D1"])
+    }
+
+    /// The gate is the feature, not one named worker type: several device types
+    /// carry `transport`, and a transport controller shepherds all of them.
+    @Test func adoptSpansEveryTypeCarryingTheFeature() {
+        let controller = device(code: "C1", type: "ami_transport_controller", commands: ["adopt"])
+        let freighter = device(code: "F1", type: "cargo_freighter", status: "idle",
+                               features: ["surge", "cruise", "transport"])
+        let hauler = device(code: "H1", type: "transport_hauler", status: "idle",
+                            features: ["cruise", "transport"])
+        let fleet = [freighter, hauler]
+
+        expectNoDifference(
+            CommandAvailability.commands(device: controller, fleet: fleet,
+                                         replicants: [], channels: []),
+            [.adopt(candidates: [DeviceOption(id: "F1", subtitle: "Idle"),
+                                 DeviceOption(id: "H1", subtitle: "Idle")])])
     }
 
     @Test func aNonControllerAdoptsNothing() {
         let plain = device(code: "V1", type: "heaven_vessel", commands: ["adopt"])
-        let drone = device(code: "D1", type: "mining_drone")
+        let drone = device(code: "D1", type: "mining_drone", features: ["cruise", "mine", "stow"])
         #expect(CommandAvailability.adoptCandidates(device: plain, fleet: [drone]).isEmpty)
         // …and with no candidates the verb is withheld entirely, rather than
         // opening an empty picker.

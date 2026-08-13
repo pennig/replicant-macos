@@ -20,8 +20,8 @@ struct CommandGrid: View {
     let device: Device
     let store: StoreOf<DevicesFeature>
 
-    /// The whole fleet, for building the `adopt` candidate list (worker devices of
-    /// the type this controller shepherds).
+    /// The whole fleet, for building the `adopt` candidate list (devices carrying
+    /// the feature this controller shepherds).
     @FetchAll(Device.order { $0.deviceCode }) private var fleet
     /// The unlocked blueprint catalog, backing the `enqueue_print` dropdown.
     @FetchAll(Blueprint.order { $0.deviceType }) private var blueprints

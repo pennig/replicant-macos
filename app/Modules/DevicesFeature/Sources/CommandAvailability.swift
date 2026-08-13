@@ -26,14 +26,14 @@ enum CommandAvailability {
 
     // MARK: Candidate lists
 
-    /// The devices this controller can adopt: fleet members of the type it
-    /// shepherds (mining drones for a mining controller, etc.) that it doesn't
+    /// The devices this controller can adopt: fleet members carrying the feature it
+    /// shepherds (`transport` for a transport controller, etc.) that it doesn't
     /// already control. Empty for a non-controller.
     static func adoptCandidates(device: Device, fleet: [Device]) -> [DeviceOption] {
-        guard let type = DeviceCommand.controllableType(for: device.deviceType) else { return [] }
+        guard let feature = DeviceCommand.controllableFeature(for: device.deviceType) else { return [] }
         let controlled = Set(device.controlledDeviceCodes)
         return fleet
-            .filter { $0.deviceType == type && !controlled.contains($0.deviceCode) }
+            .filter { $0.features.contains(feature) && !controlled.contains($0.deviceCode) }
             .map { DeviceOption(id: $0.deviceCode, subtitle: adoptSubtitle($0)) }
     }
 

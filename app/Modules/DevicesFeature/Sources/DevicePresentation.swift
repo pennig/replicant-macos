@@ -339,14 +339,14 @@ enum DeviceCommand: Hashable, Identifiable {
     /// The `configure` carry modes a surge plate accepts.
     enum SurgeMode { static let all = ["taxi", "manual"] }
 
-    /// The worker device type an AMI controller adopts, or nil if the type isn't a
-    /// controller that scopes adoption to one kind. Mining/survey/transport
-    /// controllers each shepherd their matching drone.
-    static func controllableType(for controllerType: String) -> String? {
+    /// The device feature an AMI controller adopts, or nil if the type isn't a
+    /// controller that scopes adoption. A controller shepherds any device carrying
+    /// its feature — several device types can, so this is not a type match.
+    static func controllableFeature(for controllerType: String) -> String? {
         switch controllerType {
-        case "ami_mining_controller":    return "mining_drone"
-        case "ami_survey_controller":    return "survey_drone"
-        case "ami_transport_controller": return "transport_drone"
+        case "ami_mining_controller":    return "mine"
+        case "ami_survey_controller":    return "survey"
+        case "ami_transport_controller": return "transport"
         default:                         return nil
         }
     }
