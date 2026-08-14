@@ -67,10 +67,9 @@ actor DeadlineScheduler {
     private let continuousSweepInterval: TimeInterval
     /// When the last continuous-op sweep ran, so `run()` throttles them.
     private var lastContinuousSweepAt: Date?
-    /// Minimum spacing between retention sweeps over the `operations` table.
-    /// Housekeeping rides this loop because it is the only periodic one in
-    /// GameSync and retention needs no timeliness whatsoever — hourly is
-    /// already far more often than a 7-day window requires.
+    /// Minimum spacing between the retention sweeps. Housekeeping rides this
+    /// loop because it is the only periodic one in GameSync and retention needs
+    /// no timeliness whatsoever — hourly far exceeds what a 7-day window asks.
     private let retentionSweepInterval: TimeInterval
     /// When the last retention sweep ran, so `run()` throttles them.
     private var lastRetentionSweepAt: Date?
@@ -133,6 +132,7 @@ actor DeadlineScheduler {
                 await OperationRetention.sweep(database, now: now)
                 await DirectiveLogRetention.sweep(database, now: now)
                 await DirectiveRetention.sweep(database, now: now)
+                await EventLogRetention.sweep(database, now: now)
             }
 
             if Self.depotInventoryDue(lastAt: lastDepotInventoryAt, now: now, interval: depotInventoryInterval) {

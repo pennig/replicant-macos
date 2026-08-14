@@ -84,6 +84,7 @@ public enum GameDatabase {
         Star.addStarHasHub,
         Directive.addTheatreDepot,
         LocationInventory.createLocationInventories,
+        EventLog.addReceivedAtIndex,
     ]
 
     /// Builds a migrator from `entries`. The parameter exists so tests can

@@ -15,6 +15,7 @@ import GameModels
 import LoginFeature
 import RawAPIFeature
 import SwiftUI
+import UI
 
 /// The two mutually-exclusive top-level states of the app: the user is either
 /// signed out (first-launch screen) or signed in (main experience). Modeling
@@ -143,6 +144,10 @@ struct RawAPIWindow: View {
 /// observe the persisted event ledger. When signed out there's nothing to show —
 /// the window can't be opened from the (disabled) Tools menu, but guard anyway so
 /// a restored window is empty.
+///
+/// The feature is built on appear and released on disappear: its ledger
+/// observation is fetched on the writer connection, so a closed window that kept
+/// it alive would sit in front of every ingested event for the whole session.
 struct EventLogWindow: View {
     let store: StoreOf<AppFeature>
     @Shared(.appStorage("appearance")) var appearance: Appearance = .system
@@ -150,7 +155,15 @@ struct EventLogWindow: View {
     var body: some View {
         Group {
             if let mainStore = store.scope(state: \.appState.loggedIn, action: \.appState.loggedIn) {
-                EventLogView(store: mainStore.scope(state: \.eventLog, action: \.eventLog))
+                Group {
+                    if let eventLogStore = mainStore.scope(state: \.eventLog, action: \.eventLog) {
+                        EventLogView(store: eventLogStore)
+                    } else {
+                        Color.rcWindowBackground
+                    }
+                }
+                .onAppear { mainStore.send(.eventLogWindowAppeared) }
+                .onDisappear { mainStore.send(.eventLogWindowDisappeared) }
             } else {
                 ContentUnavailableView(
                     "Not Signed In",

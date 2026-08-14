@@ -172,4 +172,17 @@ extension EventLog {
         )
         .execute(db)
     }
+
+    /// Indexes the ledger's ordering key. The Event Log's display query is
+    /// observed, and GRDB runs a non-constant-region observation's fetch on the
+    /// writer connection — so an unindexed sort here blocks event ingestion.
+    public static let addReceivedAtIndex = SchemaMigration("Add index on 'eventLogs.receivedAt'") { db in
+        try #sql(
+            """
+            CREATE INDEX "event_logs_by_received_at"
+              ON "eventLogs" ("receivedAt")
+            """
+        )
+        .execute(db)
+    }
 }

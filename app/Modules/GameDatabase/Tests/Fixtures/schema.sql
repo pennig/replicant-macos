@@ -7,6 +7,9 @@ CREATE INDEX "directive_log_by_directive"
 CREATE UNIQUE INDEX "directive_log_unique_event"
   ON "directiveLogEntries" ("eventID") WHERE "eventID" IS NOT NULL;
 
+CREATE INDEX "event_logs_by_received_at"
+  ON "eventLogs" ("receivedAt");
+
 CREATE INDEX "haul_yields_by_controller"
   ON "haulYields" ("controllerCode");
 

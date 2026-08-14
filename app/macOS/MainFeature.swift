@@ -58,8 +58,9 @@ struct MainFeature {
         /// Seeded with the session API key so requests authenticate as this user.
         var rawAPI: RawAPIFeature.State
         /// The SSE Event Log diagnostic, shown in its own window (Tools menu). Reads
-        /// the persisted `EventLog` table, so it needs no session seeding.
-        var eventLog: EventLogFeature.State
+        /// the persisted `EventLog` table, so it needs no session seeding. Nil until
+        /// that window opens — see `eventLogWindowAppeared`.
+        var eventLog: EventLogFeature.State?
         /// The Galaxy Map (Stars view)
         var newStarMap: NewStarMapFeature.State
         /// The live fleet (Devices view) — list + inspector + command dispatch.
@@ -94,7 +95,6 @@ struct MainFeature {
             self.messages = MessagesFeature.State()
             self.bobnet = BobnetFeature.State()
             self.rawAPI = RawAPIFeature.State(apiKey: apiKey)
-            self.eventLog = EventLogFeature.State()
             self.newStarMap = NewStarMapFeature.State()
             self.devices = DevicesFeature.State()
             self.blueprints = BlueprintsFeature.State()
@@ -122,6 +122,11 @@ struct MainFeature {
         case bobnet(BobnetFeature.Action)
         case rawAPI(RawAPIFeature.Action)
         case eventLog(EventLogFeature.Action)
+        /// The Event Log window opened — build the feature, and with it the
+        /// `eventLogs` observation whose fetch GRDB runs on the writer connection.
+        case eventLogWindowAppeared
+        /// The window closed — release the observation off the ingestion path.
+        case eventLogWindowDisappeared
         case newStarMap(NewStarMapFeature.Action)
         case devices(DevicesFeature.Action)
         case blueprints(BlueprintsFeature.Action)
@@ -151,9 +156,6 @@ struct MainFeature {
         }
         Scope(state: \.rawAPI, action: \.rawAPI) {
             RawAPIFeature()
-        }
-        Scope(state: \.eventLog, action: \.eventLog) {
-            EventLogFeature()
         }
         Scope(state: \.newStarMap, action: \.newStarMap) {
             NewStarMapFeature()
@@ -221,12 +223,25 @@ struct MainFeature {
                 state.devices.selectedDeviceCode = code
                 return .none
 
+            case .eventLogWindowAppeared:
+                // Idempotent: SwiftUI may re-appear the same window, and rebuilding
+                // would drop the reader's rows for a frame.
+                if state.eventLog == nil { state.eventLog = EventLogFeature.State() }
+                return .none
+
+            case .eventLogWindowDisappeared:
+                state.eventLog = nil
+                return .none
+
             case .sidebar, .account, .messages, .bobnet, .rawAPI, .eventLog, .newStarMap, .devices, .blueprints, .civilisations, .directives, .locations, .locationEvents, .printQueue, .logistics, .replicantDirectory:
                 return .none
             }
         }
         .ifLet(\.$account, action: \.account) {
             AccountFeature()
+        }
+        .ifLet(\.eventLog, action: \.eventLog) {
+            EventLogFeature()
         }
     }
 }

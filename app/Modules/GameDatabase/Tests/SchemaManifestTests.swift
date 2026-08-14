@@ -62,6 +62,7 @@ import Testing
         "Add 'hasHub' to 'stars'",
         "Add 'theatreDepot' to 'directives'",
         "Create 'locationInventories' table",
+        "Add index on 'eventLogs.receivedAt'",
     ]
 
     @Test func manifestMatchesTheFrozenList() {
