@@ -81,6 +81,14 @@ public struct WorldSnapshot: Equatable, Sendable {
     /// Every recognised theatre, mirroring `WorldView.theatres` — the same
     /// `TheatreRegistry` call, so the two views cannot disagree.
     public let theatres: [Theatre]
+    /// The whole location-event ledger by designation, mirroring
+    /// `WorldView.locationEvents`. Read whole like `footprints`: it is one
+    /// small row per known event, and a convoy must see the row it commits.
+    public let locationEvents: [String: LocationEvent]
+    /// The devices the replicant roster is hosted in, mirroring
+    /// `WorldView.replicantHostDevices`. Hosting is a roster fact, never a
+    /// device column — `Device.replicantCode` records ownership instead.
+    public let replicantHostDevices: Set<String>
     /// The other in-force directives, INCLUDING this one — the rows a mission
     /// needs to see to know what its siblings already own.
     ///
@@ -125,6 +133,8 @@ public struct WorldSnapshot: Equatable, Sendable {
         starPositions: [String: Position] = [:],
         components: [String: String] = [:],
         theatres: [Theatre] = [],
+        locationEvents: [String: LocationEvent] = [:],
+        replicantHostDevices: Set<String> = [],
         peers: [Directive] = [],
         now: Date
     ) {
@@ -139,6 +149,8 @@ public struct WorldSnapshot: Equatable, Sendable {
         self.starPositions = starPositions
         self.components = components
         self.theatres = theatres
+        self.locationEvents = locationEvents
+        self.replicantHostDevices = replicantHostDevices
         self.peers = peers
         self.now = now
     }
@@ -151,6 +163,8 @@ public struct WorldSnapshot: Equatable, Sendable {
     /// out of `wanted` scope or failed to decode — the two are indistinguishable
     /// here, and both mean "this mission cannot prove anything about it".
     public func system(_ designation: String) -> StarSystem? { systems[designation] }
+    /// The row for the event `designation` names, or nil when the ledger has none.
+    public func event(_ designation: String) -> LocationEvent? { locationEvents[designation] }
 
     /// The depot of the theatre `directive` serves, resolved off its own row —
     /// nil when the row is unstamped or names a non-operational depot. Never
@@ -301,6 +315,16 @@ public struct WorldSnapshot: Equatable, Sendable {
                 components: components, stockByLocation: footprints.mapValues(\.resources)
             )
 
+            // Whole table, like `footprints` — a convoy must see the row it
+            // is about to commit, in this same transaction.
+            let eventRows = try LocationEvent.all.fetchAll(db)
+            let locationEvents = Dictionary(
+                eventRows.map { ($0.designation, $0) }, uniquingKeysWith: { _, last in last }
+            )
+            let replicantHostDevices = Set(
+                try Replicant.all.fetchAll(db).compactMap(\.hostedDeviceCode)
+            )
+
             return WorldSnapshot(
                 devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
                 openOperations: Dictionary(operations.map { ($0.entityCode, $0) }, uniquingKeysWith: { _, last in last }),
@@ -313,6 +337,8 @@ public struct WorldSnapshot: Equatable, Sendable {
                 starPositions: starPositions,
                 components: components,
                 theatres: theatres,
+                locationEvents: locationEvents,
+                replicantHostDevices: replicantHostDevices,
                 peers: peers,
                 now: now
             )

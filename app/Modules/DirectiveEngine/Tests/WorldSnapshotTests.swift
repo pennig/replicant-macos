@@ -291,3 +291,37 @@ struct WorldSnapshotFootprintTests {
         #expect(world.footprints.isEmpty)
     }
 }
+
+@Suite("WorldSnapshot events")
+struct WorldSnapshotEventTests {
+    @Test("the snapshot reads the whole event ledger")
+    func readsEvents() async throws {
+        let database = try GameDatabase.bootstrap()
+        let now = Date(timeIntervalSince1970: 1_000)
+        try await database.write { db in
+            try LocationEvent.insert {
+                LocationEvent(
+                    designation: "X-1-EVT-001", location: "X-1", status: "active",
+                    firstSeenAt: now, updatedAt: now
+                )
+            }.execute(db)
+            try LocationEvent.insert {
+                LocationEvent(
+                    designation: "Y-2-EVT-001", location: "Y-2", status: "completed",
+                    firstSeenAt: now, updatedAt: now
+                )
+            }.execute(db)
+        }
+        let directive = Directive(
+            id: "d1", kind: .eventRun, status: .running, deviceCode: "CARRIER",
+            controllerCode: nil, roamCentre: nil, fleetTag: nil, sourceRelayCode: nil,
+            targets: ["X-1-EVT-001"], targetIndex: 0, step: "preflight",
+            stepStartedAt: now, returnToOrigin: true, originDesignation: nil,
+            attentionReason: nil, createdAt: now, updatedAt: now
+        )
+        let world = try await WorldSnapshot.read(from: database, now: now, directive: directive)
+        #expect(world.locationEvents.count == 2)
+        #expect(world.event("X-1-EVT-001")?.location == "X-1")
+        #expect(world.event("MISSING") == nil)
+    }
+}
