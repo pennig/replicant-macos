@@ -1473,7 +1473,7 @@ struct EventRunLoadingTests {
             directive: Self.directive(step: EventRun.Step.loading, now: now), world: world
         )
         #expect(action == .dispatch(
-            kind: .collect, deviceCode: "FREIGHT",
+            kind: .collectResources, deviceCode: "FREIGHT",
             params: CommandParams(resources: ["structural": 200]),
             nextStep: EventRun.Step.confirmingLoad
         ))
@@ -1738,10 +1738,10 @@ public struct EventRun: MissionStepMachine {
         }
 
         if option.resources.isEmpty { return .advanceStep(nextStep: Step.departing) }
-        if (freighter.cargoUsed ?? 0) > 0 { return .advanceStep(nextStep: Step.departing) }
+        if freighter.cargoUsed > 0 { return .advanceStep(nextStep: Step.departing) }
         if world.openOperation(for: freighter.deviceCode) != nil { return .wait }
         return .dispatch(
-            kind: .collect, deviceCode: freighter.deviceCode,
+            kind: .collectResources, deviceCode: freighter.deviceCode,
             params: CommandParams(resources: option.resources),
             nextStep: Step.confirmingLoad
         )
@@ -1752,9 +1752,7 @@ public struct EventRun: MissionStepMachine {
 }
 ```
 
-If `Device` has no `cargoUsed` column, read it from the device detail blob the same way sibling code does, or drop that guard and rely on `confirmingLoad` (Task 9) to prove the load landed. Check before writing: `grep -n "cargoUsed\|cargo_used" app/Modules/GameModels/Sources/Device.swift`.
-
-Add `.collect` and `.deposit` to `OperationKind` if they are absent — check with `grep -rn "case collect\|case deposit" app/Modules/GameModels/Sources/`. If absent, add them beside `.attach`/`.detach` and map them in whatever command-verb table `CommandClient` uses.
+**Vocabulary settled, do not re-derive it.** `Device.cargoUsed` exists as a non-optional computed `Double` (`GameModels/Sources/Device.swift:405`) reading `cargo_used` out of the detail blob — so no optional coalescing, and compare it as a `Double`. `OperationKind` is a `RawRepresentable` struct of constants, not an enum: the ones this plan needs are `.collectResources`, `.depositResources`, `.attach`, `.detach`, `.travel`, `.print` and `.stow`, all already declared (`GameModels/Sources/Operation.swift:118-230`). There is **no `.replicate` constant** — use the `OperationKind.simple(_:)` factory for that verb. Add nothing to `OperationKind`.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -1914,7 +1912,7 @@ struct EventRunDeliveryTests {
             directive: EventRunFixtures.directive(step: EventRun.Step.staging, now: now), world: world
         )
         #expect(action == .dispatch(
-            kind: .deposit, deviceCode: "FREIGHT",
+            kind: .depositResources, deviceCode: "FREIGHT",
             params: CommandParams(resources: ["structural": 200]),
             nextStep: EventRun.Step.confirmingStage
         ))
@@ -2032,9 +2030,9 @@ Add the five steps to `EventRun`, and route them in `nextAction`:
             return .refreshFleet(tag: Self.rootTag, thenStall: .unreachableDevice)
         }
         if world.openOperation(for: freighter.deviceCode) != nil { return .wait }
-        if (freighter.cargoUsed ?? 0) == 0 { return .advanceStep(nextStep: Step.confirmingProgress) }
+        if freighter.cargoUsed == 0 { return .advanceStep(nextStep: Step.confirmingProgress) }
         return .dispatch(
-            kind: .deposit, deviceCode: freighter.deviceCode,
+            kind: .depositResources, deviceCode: freighter.deviceCode,
             params: CommandParams(resources: option.resources),
             nextStep: Step.confirmingStage
         )
@@ -2222,7 +2220,7 @@ struct EventRunCommitTests {
             world: world
         )
         #expect(action == .dispatch(
-            kind: .collect, deviceCode: "FREIGHT",
+            kind: .collectResources, deviceCode: "FREIGHT",
             params: CommandParams(resources: nil), nextStep: EventRun.Step.recovering
         ))
     }
@@ -2285,7 +2283,7 @@ Route the three steps in `nextAction` and add:
             return .advanceStep(nextStep: Step.recovering)
         }
         return .dispatch(
-            kind: .collect, deviceCode: freighter.deviceCode,
+            kind: .collectResources, deviceCode: freighter.deviceCode,
             params: CommandParams(resources: nil), nextStep: Step.recovering
         )
     }
@@ -2586,7 +2584,7 @@ struct EventCourierPrintTests {
             directive: directive(step: EventCourierPrint.Step.replicating), world: world(devices)
         )
         #expect(action == .dispatch(
-            kind: .replicate, deviceCode: "MATRIX",
+            kind: .simple("replicate"), deviceCode: "MATRIX",
             params: CommandParams(), nextStep: EventCourierPrint.Step.stowing
         ))
     }
@@ -2750,7 +2748,7 @@ public struct EventCourierPrint: MissionStepMachine {
         }
         if world.openOperation(for: source.deviceCode) != nil { return .wait }
         return .dispatch(
-            kind: .replicate, deviceCode: source.deviceCode,
+            kind: .simple("replicate"), deviceCode: source.deviceCode,
             params: CommandParams(), nextStep: Step.stowing
         )
     }
