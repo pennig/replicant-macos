@@ -301,6 +301,9 @@ public struct LocationEventDetail: Equatable, Sendable {
     public let met: Bool
     public let replicantPresent: Bool
     public let options: [Option]
+    /// Whether `options` came from `criteria` rather than live `progress` —
+    /// true for a freshly-discovered event, whose counters are all zero.
+    public let optionsAreFromCriteria: Bool
     public let experiencePoints: Int?
     public let civilisationPoints: Int?
     public let completionAchievement: String?
@@ -320,29 +323,12 @@ public struct LocationEventDetail: Equatable, Sendable {
 
         met = progress?["met"]?.boolValue ?? false
         replicantPresent = progress?["replicant_present"]?.boolValue ?? false
-        options = (progress?["options"]?.arrayValue ?? []).map { opt in
-            Option(
-                name: opt["name"]?.stringValue ?? "default",
-                met: opt["met"]?.boolValue ?? false,
-                resources: (opt["resources"]?.arrayValue ?? []).compactMap { r in
-                    guard let type = r["resource_type"]?.stringValue else { return nil }
-                    return ResourceRequirement(
-                        resourceType: type,
-                        current: Int(r["current"]?.numberValue ?? 0),
-                        required: Int(r["required"]?.numberValue ?? 0),
-                        met: r["met"]?.boolValue ?? false
-                    )
-                },
-                devices: (opt["devices"]?.arrayValue ?? []).compactMap { d in
-                    guard let type = d["device_type"]?.stringValue else { return nil }
-                    return DeviceRequirement(
-                        deviceType: type,
-                        current: Int(d["current"]?.numberValue ?? 0),
-                        required: Int(d["required"]?.numberValue ?? 0),
-                        met: d["met"]?.boolValue ?? false
-                    )
-                }
-            )
+        if let live = progress?["options"]?.arrayValue, !live.isEmpty {
+            optionsAreFromCriteria = false
+            options = live.map(Self.option(fromProgress:))
+        } else {
+            optionsAreFromCriteria = true
+            options = (json["criteria"]?.arrayValue ?? []).map(Self.option(fromCriteria:))
         }
 
         experiencePoints = rewards?["xp"]?.numberValue.map(Int.init)
@@ -357,6 +343,59 @@ public struct LocationEventDetail: Equatable, Sendable {
                 deviceType: device["device_type"]?.stringValue ?? ""
             )
         }
+    }
+
+    private static func option(fromProgress opt: JSONValue) -> Option {
+        Option(
+            name: opt["name"]?.stringValue ?? "default",
+            met: opt["met"]?.boolValue ?? false,
+            resources: (opt["resources"]?.arrayValue ?? []).compactMap { r in
+                guard let type = r["resource_type"]?.stringValue else { return nil }
+                return ResourceRequirement(
+                    resourceType: type,
+                    current: Int(r["current"]?.numberValue ?? 0),
+                    required: Int(r["required"]?.numberValue ?? 0),
+                    met: r["met"]?.boolValue ?? false
+                )
+            },
+            devices: (opt["devices"]?.arrayValue ?? []).compactMap { d in
+                guard let type = d["device_type"]?.stringValue else { return nil }
+                return DeviceRequirement(
+                    deviceType: type,
+                    current: Int(d["current"]?.numberValue ?? 0),
+                    required: Int(d["required"]?.numberValue ?? 0),
+                    met: d["met"]?.boolValue ?? false
+                )
+            }
+        )
+    }
+
+    /// A criteria entry states requirements only, so every counter reads zero.
+    private static func option(fromCriteria opt: JSONValue) -> Option {
+        let resources: [ResourceRequirement]
+        if case .object(let dict)? = opt["resources"] {
+            resources = dict.compactMap { key, value in
+                value.numberValue.map {
+                    ResourceRequirement(resourceType: key, current: 0, required: Int($0), met: false)
+                }
+            }.sorted { $0.resourceType < $1.resourceType }
+        } else {
+            resources = []
+        }
+        return Option(
+            name: opt["name"]?.stringValue ?? "default",
+            met: false,
+            resources: resources,
+            devices: (opt["devices"]?.arrayValue ?? []).compactMap { d in
+                guard let type = d["device_type"]?.stringValue else { return nil }
+                return DeviceRequirement(
+                    deviceType: type,
+                    current: 0,
+                    required: Int(d["count"]?.numberValue ?? 0),
+                    met: false
+                )
+            }
+        )
     }
 
     /// Decode a `{ "rares": 500, … }` resource map into sorted rows. Both the
