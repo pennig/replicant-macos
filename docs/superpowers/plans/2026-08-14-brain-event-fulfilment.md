@@ -1931,6 +1931,8 @@ Expected: FAIL — `cannot find 'EventRunFixtures' in scope`, then failures on e
 
 Lift the fixtures out of `EventRunTests.swift` into `app/Modules/DirectiveEngine/Tests/EventRunFixtures.swift` as a `enum EventRunFixtures` with the same `device`/`directive`/`event`/`world` statics, and update `EventRunLoadingTests` to call through it. Keep the helpers `fileprivate`-free but do NOT give any of them default-argument-free overloads that could capture another suite's call sites — the shared-helper trap from the survey fleet-repair build.
 
+**Before adding steps, know what `default` does.** Task 8's `nextAction` routes `default:` to `preflight`, not to `.wait`. So a step name that no case matches silently re-enters `preflight` and advances to `printing` rather than idling. Spell every new step's case correctly, and if you add a step to the `Step` vocabulary, route it in the same commit.
+
 Add the five steps to `EventRun`, and route them in `nextAction`:
 
 ```swift
