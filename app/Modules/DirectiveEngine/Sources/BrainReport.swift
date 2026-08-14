@@ -279,6 +279,47 @@ public struct BrainMineHealth: Equatable, Sendable {
     }
 }
 
+/// A multi-option event waiting on the operator's pick, with each option priced
+/// against what the fleet already holds.
+public struct BrainEventChoice: Equatable, Sendable, Identifiable {
+    public struct Option: Equatable, Sendable, Identifiable {
+        public let name: String
+        public let deviceUnits: Int
+        public let resourceUnits: Int
+        public let exceedsOneFreighterLoad: Bool
+        /// Device types this option needs that the fleet's rows do not supply.
+        public let missingDevices: [String]
+        public var id: String { name }
+
+        public init(
+            name: String,
+            deviceUnits: Int,
+            resourceUnits: Int,
+            exceedsOneFreighterLoad: Bool,
+            missingDevices: [String]
+        ) {
+            self.name = name
+            self.deviceUnits = deviceUnits
+            self.resourceUnits = resourceUnits
+            self.exceedsOneFreighterLoad = exceedsOneFreighterLoad
+            self.missingDevices = missingDevices
+        }
+    }
+
+    public let designation: String
+    public let location: String
+    public let tier: Int
+    public let options: [Option]
+    public var id: String { designation }
+
+    public init(designation: String, location: String, tier: Int, options: [Option]) {
+        self.designation = designation
+        self.location = location
+        self.tier = tier
+        self.options = options
+    }
+}
+
 /// One brain tick, as reported to the operator: the `decision` it reached, the
 /// `ranked` field it decided against, the `theatres` and `limits` it decided
 /// under, what `prune` saw, and the `observedAt` instant all of that was read.
@@ -338,6 +379,9 @@ public struct BrainReport: Equatable, Sendable {
     /// Each operational theatre's OWN hub-stock reading, sharing every other
     /// `BrainLimits` field with `limits`.
     public let theatreLimits: [String: BrainLimits]
+    /// The events this tick could not rank because nobody has picked an option
+    /// yet — the operator's queue, priced. Empty is "nothing to decide".
+    public let pendingEventChoices: [BrainEventChoice]
 
     public init(
         decision: BrainDecision,
@@ -356,7 +400,8 @@ public struct BrainReport: Equatable, Sendable {
         theatreSalvage: [String: BrainGoalStatus] = [:],
         theatreHaul: [String: BrainGoalStatus] = [:],
         theatreMine: [String: BrainGoalStatus] = [:],
-        theatreLimits: [String: BrainLimits] = [:]
+        theatreLimits: [String: BrainLimits] = [:],
+        pendingEventChoices: [BrainEventChoice] = []
     ) {
         self.decision = decision
         self.ranked = ranked
@@ -375,6 +420,42 @@ public struct BrainReport: Equatable, Sendable {
         self.theatreHaul = theatreHaul
         self.theatreMine = theatreMine
         self.theatreLimits = theatreLimits
+        self.pendingEventChoices = pendingEventChoices
+    }
+
+    /// The pending event choices, each option priced against what the fleet
+    /// already holds. Ordered by designation, as `EventRanking` orders them.
+    public static func eventChoices(
+        events: [LocationEvent], bills: [String: ResourceCost], devices: [String: Device]
+    ) -> [BrainEventChoice] {
+        let held = devices.values.reduce(into: [String: Int]()) { counts, device in
+            counts[device.deviceType, default: 0] += 1
+        }
+        // The picks come off the events, exactly as `Brain.eventReadiness`
+        // reads them — an empty map would re-offer a decided event forever.
+        let chosen = events.reduce(into: [String: String]()) { picks, event in
+            picks[event.designation] = event.chosenOption
+        }
+        return EventRanking
+            .pendingChoices(events: events, chosenOptions: chosen, bills: bills)
+            .map { event, options in
+                BrainEventChoice(
+                    designation: event.designation,
+                    location: event.location,
+                    tier: event.tier,
+                    options: options.map { option in
+                        BrainEventChoice.Option(
+                            name: option.name,
+                            deviceUnits: option.deviceUnits,
+                            resourceUnits: option.resourceUnits,
+                            exceedsOneFreighterLoad: option.exceedsOneFreighterLoad,
+                            missingDevices: option.devices
+                                .filter { (held[$0.key] ?? 0) < $0.value }
+                                .keys.sorted()
+                        )
+                    }
+                )
+            }
     }
 }
 

@@ -75,6 +75,7 @@ public struct DirectivesListView: View {
                     Button("Salvage Run") { store.send(.newSalvageRunTapped) }
                     Button("Haul Run") { store.send(.newHaulRunTapped) }
                     Button("Print Mine Fleet") { store.send(.printMineFleetTapped) }
+                    Button("Print Event Courier") { store.send(.eventCourierTapped) }
                 } label: {
                     Label("New Mission", systemImage: "plus")
                 }
@@ -102,6 +103,7 @@ public struct DirectivesListView: View {
             NewHaulRunSheet(store: newStore)
         }
         .confirmationDialog($store.scope(state: \.printMineFleetDialog, action: \.printMineFleetDialog))
+        .confirmationDialog($store.scope(state: \.eventCourierDialog, action: \.eventCourierDialog))
         .navigationTitle("Directives")
     }
 

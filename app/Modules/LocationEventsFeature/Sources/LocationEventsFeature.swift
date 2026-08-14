@@ -67,6 +67,9 @@ public struct LocationEventsFeature {
         case refresh
         case refreshed
         case refreshFailed(String)
+        /// Record which fulfilment option the convoy is to satisfy. Local only:
+        /// the pick is the brain's input, and the backend is never told.
+        case chooseOption(designation: String, name: String)
         /// Complete the selected (ready) event via an empty POST to its designation.
         case completeButtonTapped
         case completeSucceeded
@@ -76,6 +79,7 @@ public struct LocationEventsFeature {
 
     @Dependency(\.locationEventsClient) var locationEventsClient
     @Dependency(\.domainFreshness) var domainFreshness
+    @Dependency(\.defaultDatabase) var database
 
     public init() {}
 
@@ -114,6 +118,19 @@ public struct LocationEventsFeature {
                 state.isRefreshing = false
                 state.errorMessage = message
                 return .none
+
+            case let .chooseOption(designation, name):
+                // Bound to a local: referencing the property wrapper inside the
+                // @Sendable closure would capture the non-Sendable reducer.
+                let database = self.database
+                return .run { _ in
+                    try await database.write { db in
+                        try LocationEvent
+                            .where { $0.designation.eq(designation) }
+                            .update { $0.chosenOption = #bind(name) }
+                            .execute(db)
+                    }
+                }
 
             case .completeButtonTapped:
                 guard !state.isCompleting, let event = state.selectedEvent, event.isReady

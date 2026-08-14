@@ -185,7 +185,12 @@ struct Brain: Sendable {
             theatreSalvage: theatreSalvage,
             theatreHaul: theatreHaul,
             theatreMine: theatreMine,
-            theatreLimits: theatreLimits
+            theatreLimits: theatreLimits,
+            pendingEventChoices: BrainReport.eventChoices(
+                events: snapshot.view.locationEvents,
+                bills: snapshot.view.blueprintBills,
+                devices: snapshot.view.devices
+            )
         )
     }
 

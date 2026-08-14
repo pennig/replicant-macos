@@ -289,6 +289,10 @@ public struct LocationEventDetail: Equatable, Sendable {
         public var fraction: Double { required > 0 ? min(1, Double(current) / Double(required)) : (met ? 1 : 0) }
     }
 
+    /// A `cargo_freighter`'s hold. An option asking more than this needs a
+    /// second delivery run.
+    public static let freighterCargoCapacity = 500
+
     /// One way to satisfy the event (usually a single "default" option).
     public struct Option: Equatable, Sendable, Identifiable {
         public let name: String
@@ -296,6 +300,13 @@ public struct LocationEventDetail: Equatable, Sendable {
         public let resources: [ResourceRequirement]
         public let devices: [DeviceRequirement]
         public var id: String { name }
+
+        /// Units of raw resource the option consumes.
+        public var resourceUnits: Int { resources.reduce(0) { $0 + $1.required } }
+
+        public var exceedsOneFreighterLoad: Bool {
+            resourceUnits > LocationEventDetail.freighterCargoCapacity
+        }
     }
 
     /// A granted resource amount on completion.

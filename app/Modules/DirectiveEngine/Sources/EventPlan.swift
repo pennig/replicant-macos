@@ -12,7 +12,7 @@ public enum EventPlan {
     /// The beacon planted at every fulfilled event so later requests reach us.
     public static let beaconDeviceType = "ftl_beacon"
     /// A `cargo_freighter`'s hold. An option above this needs more than one run.
-    public static let freighterCargoCapacity = 500
+    public static let freighterCargoCapacity = LocationEventDetail.freighterCargoCapacity
 
     /// One way to satisfy an event, priced.
     public struct Option: Equatable, Sendable {

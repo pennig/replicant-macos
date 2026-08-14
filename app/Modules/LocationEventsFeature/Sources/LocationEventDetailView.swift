@@ -57,6 +57,9 @@ private struct QuestSheet: View {
                 }
 
                 if let quest {
+                    if event.isActive, quest.options.count > 1 {
+                        EventOptionPicker(store: store, event: event, options: quest.options)
+                    }
                     ForEach(quest.options) { option in
                         objectivesCard(option, multi: quest.options.count > 1)
                     }
