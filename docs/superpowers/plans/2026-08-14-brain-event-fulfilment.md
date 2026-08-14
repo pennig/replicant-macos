@@ -2071,6 +2071,13 @@ git commit -m "feat(engine): EventRun delivery legs and staging"
 
 ### Task 10: `EventRun` — progress, commit, reward sweep
 
+**`collect_resources` will not accept a nil map.** `CommandClient` is deliberately asymmetric: a
+`deposit_resources` with nil empties the whole hold, but `collectResourcesBody` throws
+`missingParameter("resources")` on nil or empty and the pinned OpenAPI schema marks the field
+required. Build the sweep's map from `LocationEventDetail.rewardResources` — per-type, exact,
+already on the event row `collecting` holds, and no unverified claim about what is on the ground.
+An empty reward manifest skips the sweep and advances to `recovering`.
+
 **Files:**
 - Modify: `app/Modules/DirectiveEngine/Sources/EventRun.swift`
 - Test: `app/Modules/DirectiveEngine/Tests/EventRunCommitTests.swift`
@@ -2223,7 +2230,7 @@ struct EventRunCommitTests {
         )
         #expect(action == .dispatch(
             kind: .collectResources, deviceCode: "FREIGHT",
-            params: CommandParams(resources: nil), nextStep: EventRun.Step.recovering
+            params: CommandParams(resources: ["rares": 400]), nextStep: EventRun.Step.recovering
         ))
     }
 }
@@ -2270,8 +2277,8 @@ Route the three steps in `nextAction` and add:
         )
     }
 
-    /// Take the reward pile home. The freighter is on site with a hold it just
-    /// emptied, so a nil resource map lifts whatever is there.
+    /// Take the reward home. The freighter is on site with a hold it just
+    /// emptied, and the event's own manifest names what to lift.
     private func collecting(
         _ directive: Directive, _ convoy: Convoy, _ event: LocationEvent, _ world: WorldSnapshot
     ) -> MissionAction {
@@ -2288,7 +2295,7 @@ Route the three steps in `nextAction` and add:
         }
         return .dispatch(
             kind: .collectResources, deviceCode: freighter.deviceCode,
-            params: CommandParams(resources: nil), nextStep: Step.recovering
+            params: CommandParams(resources: reward), nextStep: Step.recovering
         )
     }
 ```
