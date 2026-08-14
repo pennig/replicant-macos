@@ -3113,6 +3113,24 @@ struct BrainReportEventTests {
         #expect(choices[0].options.allSatisfy { !$0.exceedsOneFreighterLoad })
     }
 
+    @Test("an event whose option is already picked is no longer offered")
+    func decidedEventDropsOut() {
+        var event = LocationEvent(
+            designation: "X-1-EVT-001", location: "X-1", tier: 2, status: "active",
+            detail: .object([
+                "criteria": .array([
+                    .object(["name": .string("a"), "devices": .array([]), "resources": .object([:])]),
+                    .object(["name": .string("b"), "devices": .array([]), "resources": .object([:])]),
+                ]),
+                "rewards": .object(["xp": .number(1500)]),
+            ]),
+            firstSeenAt: .distantPast, updatedAt: .distantPast
+        )
+        #expect(BrainReport.eventChoices(events: [event], bills: [:], devices: [:]).count == 1)
+        event.chosenOption = "b"
+        #expect(BrainReport.eventChoices(events: [event], bills: [:], devices: [:]).isEmpty)
+    }
+
     @Test("an option we already hold the devices for reports nothing missing")
     func reportsHeldDevices() {
         let event = LocationEvent(
@@ -3190,8 +3208,13 @@ public struct BrainEventChoice: Equatable, Sendable, Identifiable {
         let held = devices.values.reduce(into: [String: Int]()) { counts, device in
             counts[device.deviceType, default: 0] += 1
         }
+        // The picks come off the events, exactly as `Brain.eventReadiness`
+        // reads them — an empty map would re-offer a decided event forever.
+        let chosen = events.reduce(into: [String: String]()) { picks, event in
+            picks[event.designation] = event.chosenOption
+        }
         return EventRanking
-            .pendingChoices(events: events, chosenOptions: [:], bills: bills)
+            .pendingChoices(events: events, chosenOptions: chosen, bills: bills)
             .map { event, options in
                 BrainEventChoice(
                     designation: event.designation,
