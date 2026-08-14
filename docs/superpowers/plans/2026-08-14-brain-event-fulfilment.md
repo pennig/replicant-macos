@@ -472,7 +472,12 @@ import Utils
 
 @Suite("EventRanking")
 struct EventRankingTests {
-    private let costs = ["defence_grid": 400, "comm_satellite": 350]
+    // Typed explicitly: `bills` takes ResourceCost, and inference would make
+    // this [String: Int].
+    private let costs: [String: ResourceCost] = [
+        "defence_grid": ResourceCost(structural: 200, rares: 50, conductive: 100, silicates: 50),
+        "comm_satellite": ResourceCost(silicates: 100, structural: 100, conductive: 150),
+    ]
 
     private func event(
         _ designation: String, location: String, tier: Int,
