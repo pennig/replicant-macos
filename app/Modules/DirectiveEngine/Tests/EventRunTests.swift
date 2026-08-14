@@ -11,15 +11,25 @@ struct EventRunLoadingTests {
     // Fixtures shared with the later EventRun suites.
     static func device(
         _ code: String, type: String, location: String? = "HUB-1",
-        attachedTo: String? = nil, tags: [String] = [], updatedAt: Date = .distantPast
+        attachedTo: String? = nil, tags: [String] = [], updatedAt: Date = .distantPast,
+        cargoUsed: Int? = nil
     ) -> Device {
         Device(
             deviceCode: code, deviceType: type, replicantCode: "R-1", status: "idle",
             location: location, locationName: nil, operationalCapacity: 1, queueSize: 0,
             stowedInDeviceCode: nil, controllerDeviceCode: nil, attachedToDeviceCode: attachedTo,
             createdAt: .distantPast, availableCommands: [], features: [], tags: tags,
-            detail: .object([:]), updatedAt: updatedAt, firstSeenAt: .distantPast
+            detail: cargoUsed.map { .object(["cargo_used": .number(Double($0))]) } ?? .object([:]),
+            updatedAt: updatedAt, firstSeenAt: .distantPast
         )
+    }
+
+    static func openPrint(on code: String, now: Date) -> [String: GameModels.Operation] {
+        [code: GameModels.Operation(
+            id: "OP-1", entityCode: code, kind: OperationKind.print.rawValue, status: .active,
+            source: .poll, startedAt: now, completesAt: nil, lastConfirmedAt: now,
+            detail: .object([:])
+        )]
     }
 
     static func directive(step: String, now: Date) -> Directive {
@@ -53,11 +63,12 @@ struct EventRunLoadingTests {
 
     static func world(
         devices: [Device], event: LocationEvent, now: Date,
-        footprintFresh: Bool = true, stock: Int = 500_000
+        footprintFresh: Bool = true, stock: Int = 500_000,
+        openOperations: [String: GameModels.Operation] = [:]
     ) -> WorldSnapshot {
         WorldSnapshot(
             devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, l in l }),
-            openOperations: [:],
+            openOperations: openOperations,
             footprints: [
                 "HUB-1": LocationFootprint(
                     location: "HUB-1", devices: devices.count, resources: stock,
@@ -201,6 +212,118 @@ struct EventRunLoadingTests {
         let devices = [
             Self.device("CARRIER", type: "surge_carrier", tags: ["auto:carrier"]),
             Self.device("FREIGHT", type: "cargo_freighter"),
+        ]
+        let world = Self.world(
+            devices: devices, event: Self.event(resources: ["structural": 200], devices: []), now: now
+        )
+        let action = EventRun().nextAction(
+            directive: Self.directive(step: EventRun.Step.loading, now: now), world: world
+        )
+        #expect(action == .refreshFleet(
+            tag: EventRun.rootTag, thenStall: .unreachableDevice
+        ))
+    }
+
+    @Test("a device roster older than the step buys one authoritative read first")
+    func staleFleetEvidenceReadsBeforePrinting() {
+        let devices = [
+            Self.device("CARRIER", type: "surge_carrier", tags: ["auto:carrier"]),
+            Self.device("FREIGHT", type: "cargo_freighter"),
+            Self.device("COURIER", type: "matrix_container"),
+            Self.device("PRINTER", type: "autofactory"),
+        ]
+        let world = Self.world(
+            devices: devices, event: Self.event(resources: ["structural": 200], devices: []), now: now
+        )
+        let action = EventRun().nextAction(
+            directive: Self.directive(step: EventRun.Step.printing, now: now), world: world
+        )
+        #expect(action == .refreshDevicesInSystem(
+            designation: "HUB-1", thenStall: .unreachableDevice
+        ))
+    }
+
+    @Test("a tagged beacon already waiting at the depot is not printed again")
+    func skipsBeaconStandingAtTheDepot() {
+        let devices = [
+            Self.device("CARRIER", type: "surge_carrier", tags: ["auto:carrier"]),
+            Self.device("FREIGHT", type: "cargo_freighter"),
+            Self.device("COURIER", type: "matrix_container"),
+            Self.device("PRINTER", type: "autofactory", updatedAt: now),
+            Self.device("BEACON", type: "ftl_beacon",
+                        tags: [EventRun.fleetTag(forTheatre: "HUB-1")]),
+        ]
+        let world = Self.world(
+            devices: devices, event: Self.event(resources: ["structural": 200], devices: []), now: now
+        )
+        let action = EventRun().nextAction(
+            directive: Self.directive(step: EventRun.Step.printing, now: now), world: world
+        )
+        #expect(action == .advanceStep(nextStep: EventRun.Step.loading))
+    }
+
+    @Test("a print already in flight at the printer is not doubled")
+    func waitsOnAnOpenPrint() {
+        let devices = [
+            Self.device("CARRIER", type: "surge_carrier", tags: ["auto:carrier"]),
+            Self.device("FREIGHT", type: "cargo_freighter"),
+            Self.device("COURIER", type: "matrix_container"),
+            Self.device("PRINTER", type: "autofactory", updatedAt: now),
+        ]
+        let world = Self.world(
+            devices: devices, event: Self.event(resources: ["structural": 200], devices: []),
+            now: now, openOperations: Self.openPrint(on: "PRINTER", now: now)
+        )
+        let action = EventRun().nextAction(
+            directive: Self.directive(step: EventRun.Step.printing, now: now), world: world
+        )
+        #expect(action == .wait)
+    }
+
+    @Test("a missing freighter re-reads the fleet rather than stalling")
+    func noFreighterRereadsTheFleet() {
+        let devices = [
+            Self.device("CARRIER", type: "surge_carrier", tags: ["auto:carrier"]),
+            Self.device("COURIER", type: "matrix_container"),
+            Self.device("BEACON", type: "ftl_beacon", attachedTo: "CARRIER",
+                        tags: [EventRun.fleetTag(forTheatre: "HUB-1")]),
+        ]
+        let world = Self.world(
+            devices: devices, event: Self.event(resources: ["structural": 200], devices: []), now: now
+        )
+        let action = EventRun().nextAction(
+            directive: Self.directive(step: EventRun.Step.loading, now: now), world: world
+        )
+        #expect(action == .refreshFleet(
+            tag: EventRun.rootTag, thenStall: .unreachableDevice
+        ))
+    }
+
+    @Test("a hold already carrying something departs rather than collecting twice")
+    func partiallyLoadedHoldDeparts() {
+        let devices = [
+            Self.device("CARRIER", type: "surge_carrier", tags: ["auto:carrier"]),
+            Self.device("FREIGHT", type: "cargo_freighter", cargoUsed: 120),
+            Self.device("COURIER", type: "matrix_container", attachedTo: "CARRIER"),
+            Self.device("BEACON", type: "ftl_beacon", attachedTo: "CARRIER",
+                        tags: [EventRun.fleetTag(forTheatre: "HUB-1")]),
+        ]
+        let world = Self.world(
+            devices: devices, event: Self.event(resources: ["structural": 200], devices: []), now: now
+        )
+        let action = EventRun().nextAction(
+            directive: Self.directive(step: EventRun.Step.loading, now: now), world: world
+        )
+        #expect(action == .advanceStep(nextStep: EventRun.Step.departing))
+    }
+
+    @Test("a container attached to another carrier is not this run's courier")
+    func ignoresACourierAboardAnotherCarrier() {
+        let devices = [
+            Self.device("CARRIER", type: "surge_carrier", tags: ["auto:carrier"]),
+            Self.device("FREIGHT", type: "cargo_freighter"),
+            Self.device("OTHER", type: "surge_carrier", tags: ["auto:carrier"]),
+            Self.device("COURIER", type: "matrix_container", attachedTo: "OTHER"),
         ]
         let world = Self.world(
             devices: devices, event: Self.event(resources: ["structural": 200], devices: []), now: now

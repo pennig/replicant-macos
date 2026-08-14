@@ -75,13 +75,19 @@ public struct EventRun: MissionStepMachine {
         public let courier: Device?
     }
 
+    /// A container aboard ANOTHER carrier is that run's courier, not this one's.
+    /// Sorted before `first`, so two containers cannot resolve differently per tick.
     public static func convoy(of directive: Directive, in world: WorldSnapshot) -> Convoy? {
         guard let carrier = world.device(directive.deviceCode) else { return nil }
         let freighter = directive.freighterCode.flatMap { world.device($0) }
-        let courier = world.devices.values.first {
-            $0.deviceType == courierDeviceType
-                && ($0.attachedToDeviceCode == carrier.deviceCode || $0.location == carrier.location)
-        }
+        let courier = world.devices.values
+            .filter {
+                guard $0.deviceType == courierDeviceType else { return false }
+                if let host = $0.attachedToDeviceCode { return host == carrier.deviceCode }
+                return $0.location == carrier.location
+            }
+            .sorted { $0.deviceCode < $1.deviceCode }
+            .first
         return Convoy(carrier: carrier, freighter: freighter, courier: courier)
     }
 
@@ -159,9 +165,12 @@ public struct EventRun: MissionStepMachine {
         }
         if wanted.isEmpty { return .advanceStep(nextStep: Step.loading) }
 
-        guard let printer = world.devices.values.first(where: {
-            $0.location == depot && $0.deviceType == "autofactory"
-        }) else { return .stall(.unreachableDevice) }
+        // Sorted before `first`: two printers at one depot must not alternate.
+        guard let printer = world.devices.values
+            .filter({ $0.location == depot && $0.deviceType == "autofactory" })
+            .sorted(by: { $0.deviceCode < $1.deviceCode })
+            .first
+        else { return .stall(.unreachableDevice) }
 
         if world.openOperation(for: printer.deviceCode) != nil { return .wait }
 
