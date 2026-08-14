@@ -5,8 +5,8 @@
 //  The automation brain's evaluation entry point, ticked by
 //  `DirectiveEngineCore.tickBrain()`: one tick reads the world, answers halted
 //  missions of the kinds in `brainManagedKinds`, launches at most one Relay Run,
-//  keeps one restock, survey, salvage, haul and mine run alive, and one pinned
-//  ferry row per installed mine beside them. A PURE
+//  keeps one restock, survey, salvage, haul, mine and event run alive, and one
+//  pinned ferry row per installed mine beside them. A PURE
 //  SELECTOR — it inserts directives and drives the `retry`/`cancel` resolution
 //  verbs, nothing else. STATELESS between ticks: a tick is a pure function of
 //  `(WorldView, directive rows)`. Not an actor, so ranking cannot block the
@@ -149,6 +149,7 @@ struct Brain: Sendable {
         await ensureHaul(snapshot: snapshot, database: database)
         await ensureMine(snapshot: snapshot, database: database)
         await ensureMineFerries(snapshot: snapshot, database: database)
+        await ensureEvent(snapshot: snapshot, database: database)
 
         // One governor read shared by the flat figure and every theatre's own
         // — never one call per theatre for what is a single fleet-wide budget.
@@ -357,6 +358,17 @@ struct Brain: Sendable {
                     )
                     return
                 }
+                // The second, independently-mobile lease — in here beside the
+                // carrier, since a snapshot check predates this tick's launches.
+                if let freighter = directive.freighterCode, reserved.contains(freighter) {
+                    logger.notice(
+                        """
+                        \(kind.rawValue, privacy: .public) declined: \
+                        \(freighter, privacy: .public) is already committed
+                        """
+                    )
+                    return
+                }
                 try Directive.insert { directive }.execute(db)
                 logger.info(
                     """
@@ -542,6 +554,39 @@ struct Brain: Sendable {
                     attentionReason: nil,
                     createdAt: now, updatedAt: now,
                     theatreDepot: theatre.depot
+                )
+            }
+        }
+    }
+
+    /// Keep at most one event convoy working per operational theatre. Both hulls
+    /// are stamped at launch: the freighter flies its own leg, so nothing
+    /// downstream could re-derive which one this run leased.
+    private func ensureEvent(snapshot: Snapshot, database: any DatabaseWriter) async {
+        @Dependency(\.uuid) var uuid
+        for theatre in snapshot.view.theatres.filter(\.isOperational) {
+            guard case let .launch(carrier, freighter, candidate) = Self.eventReadiness(
+                view: snapshot.view, directives: snapshot.directives, theatre: theatre
+            ) else { continue }
+            await ensureOne(.eventRun, theatre: theatre, snapshot: snapshot, database: database) {
+                Directive(
+                    id: uuid().uuidString,
+                    kind: .eventRun,
+                    status: .running,
+                    deviceCode: carrier,
+                    controllerCode: nil,
+                    roamCentre: nil,
+                    fleetTag: EventRun.fleetTag(forTheatre: theatre.depot),
+                    sourceRelayCode: nil,
+                    targets: [candidate.designation], targetIndex: 0,
+                    step: EventRun().firstStep,
+                    stepStartedAt: now,
+                    returnToOrigin: true,
+                    originDesignation: theatre.system,
+                    attentionReason: nil,
+                    createdAt: now, updatedAt: now,
+                    theatreDepot: theatre.depot,
+                    freighterCode: freighter
                 )
             }
         }
@@ -953,11 +998,11 @@ struct Brain: Sendable {
         }
     }
 
-    /// The kinds the brain launches and may therefore answer for. `surveyRun`
-    /// and `restockRun` stay out: a survey verdict has no stall case at all, and
-    /// a restock stall is the hub's, not a mission the brain can retry into.
+    /// The kinds the brain launches and may therefore answer for. `surveyRun`,
+    /// `restockRun` and `eventCourierPrint` stay out: none holds a stall the
+    /// brain can retry into — they are nobody's, the hub's and the operator's.
     static let brainManagedKinds: Set<DirectiveKind> = [
-        .relayRun, .salvageRun, .haulRun, .mineRun,
+        .relayRun, .salvageRun, .haulRun, .mineRun, .eventRun,
     ]
 
     /// The reason `directive` is halted on, when the brain may answer it. Kind is
@@ -1077,8 +1122,8 @@ struct Brain: Sendable {
 
     /// Every device code an in-force directive owns — the set a launch must not
     /// allocate out of. `devices` must be the UNFILTERED fleet, since a tagged
-    /// device is usually stowed. Seeded from each row's carrier, controller and
-    /// fleet tag, then closed to a fixpoint over stow (both directions) and
+    /// device is usually stowed. Seeded from each row's carrier, controller,
+    /// freighter and fleet tag, then closed to a fixpoint over stow (both directions) and
     /// adoption. Over-reserves by design: spreading through a containment
     /// component costs a tick of patience, the other direction strands a fleet.
     static func reservedDevices(directives: [Directive], devices: [String: Device]) -> Set<String> {
@@ -1089,6 +1134,9 @@ struct Brain: Sendable {
         for directive in owning {
             reserved.insert(directive.deviceCode)
             if let controller = directive.controllerCode { reserved.insert(controller) }
+            // Seeded, never dragged: an event convoy's freighter flies its own
+            // leg, so no stow or attach edge reaches it from the carrier.
+            if let freighter = directive.freighterCode { reserved.insert(freighter) }
             if let tag = directive.fleetTag {
                 for device in devices.values where device.hasTag(tag) {
                     reserved.insert(device.deviceCode)
@@ -1863,6 +1911,77 @@ struct Brain: Sendable {
             return "no free \(surveyCarrierTag) vessel"
         }
         return "no free \(surveyCarrierTag) vessel — \(unmigratedNote(unmigrated, tag: theatreTag))"
+    }
+
+    // MARK: - Event readiness
+
+    /// The two hulls to send and the event to work, or a named idle reason. No
+    /// stall case: a missing courier or an empty backlog is idle, so this goal
+    /// can never escalate a condition only a print or a replication clears.
+    enum EventReadiness: Equatable, Sendable {
+        case launch(carrier: String, freighter: String, candidate: EventCandidate)
+        case idle(reason: String)
+    }
+
+    /// A hull of `type` at `theatre`'s depot this tick may spend: at rest, in no
+    /// other row's hold, and wearing `tag` when one is named. Sorted before
+    /// `first`, so a stateless brain picks the same hull every tick.
+    private static func freeHull(
+        type: String, tag: String?, theatre: Theatre, view: WorldView, reserved: Set<String>
+    ) -> Device? {
+        view.devices.values
+            .filter { device in
+                device.deviceType == type && device.location == theatre.depot && !device.isBusy
+                    && !reserved.contains(device.deviceCode)
+                    && (tag.map(device.hasTag) ?? true)
+            }
+            .min { $0.deviceCode < $1.deviceCode }
+    }
+
+    /// The event verdict for `theatre`. Each event is ranked under its OWN
+    /// `chosenOption`, so one the operator has not decided is skipped by
+    /// `EventRanking.rank` rather than launched and stalled.
+    static func eventReadiness(
+        view: WorldView, directives: [Directive], theatre: Theatre
+    ) -> EventReadiness {
+        let world = WorldSnapshot(
+            devices: view.devices, openOperations: [:], theatres: view.theatres,
+            replicantHostDevices: view.replicantHostDevices, now: view.now
+        )
+        guard EventCourierPrint.courierStands(at: theatre.depot, in: world) else {
+            return .idle(reason: "no event courier at \(theatre.depot)")
+        }
+
+        let working = Set(
+            directives
+                .filter { $0.kind == .eventRun && owningStatuses.contains($0.status) }
+                .compactMap { EventRun.targetEvent(of: $0) }
+        )
+        let chosen = view.locationEvents.reduce(into: [String: String]()) { picks, event in
+            picks[event.designation] = event.chosenOption
+        }
+        let ranked = EventRanking.rank(
+            events: view.locationEvents, chosenOptions: chosen, bills: view.blueprintBills,
+            positions: view.starPositions, depot: theatre.depot, excluding: working
+        )
+        guard let candidate = ranked.first else { return .idle(reason: "no event worth working") }
+
+        let reserved = reservedDevices(directives: directives, devices: view.devices)
+        guard let carrier = freeHull(
+            type: EventRun.carrierDeviceType, tag: EventRun.carrierTag,
+            theatre: theatre, view: view, reserved: reserved
+        ) else {
+            return .idle(reason: "no free \(EventRun.carrierTag) surge carrier at \(theatre.depot)")
+        }
+        guard let freighter = freeHull(
+            type: EventRun.freighterDeviceType, tag: nil,
+            theatre: theatre, view: view, reserved: reserved
+        ) else {
+            return .idle(reason: "no free cargo freighter at \(theatre.depot)")
+        }
+        return .launch(
+            carrier: carrier.deviceCode, freighter: freighter.deviceCode, candidate: candidate
+        )
     }
 
     // MARK: - The rationale
