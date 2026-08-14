@@ -29,6 +29,9 @@ public enum DirectiveKind: String, Codable, Equatable, Sendable, CaseIterable, Q
     case mineRun
     /// A convoy fulfilling one location event: deliver, commit, plant a beacon.
     case eventRun
+    /// Stands up the convoy's replicant courier: print a container, replicate
+    /// into the spare matrix, stow it aboard.
+    case eventCourierPrint
 
     /// The list row's label, e.g. "Survey Run".
     public var title: String {
@@ -41,6 +44,7 @@ public enum DirectiveKind: String, Codable, Equatable, Sendable, CaseIterable, Q
         case .mineFleetPrint: "Mine Fleet Print"
         case .mineRun: "Mine Run"
         case .eventRun: "Event Run"
+        case .eventCourierPrint: "Event Courier Print"
         }
     }
 }
