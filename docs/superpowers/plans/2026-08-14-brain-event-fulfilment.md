@@ -1239,7 +1239,9 @@ In `DirectiveEngineCore`, add `.events` to the `RefreshKind` enum threaded throu
 
 Add a `completeEvent` resolver beside it that calls `locationEventsClient.complete(location, designation)` inside `withErrorReporting`, then `refresh()`, then returns `.advanceStep(nextStep:)`. A thrown commit is logged at `.notice` and still advances — the machine's next evaluation reads the refreshed row and decides whether to stall `.eventCommitRejected`.
 
-In `DirectiveExecutor.apply`, add both cases as the same "engine already resolved this" bypass fallback the `.refreshFootprint` case uses.
+In `DirectiveExecutor.apply`, add `.refreshEvents` to the same "engine already resolved this" bypass fallback the `.refreshFootprint` case uses. `.completeEvent` cannot join that case — it has no `thenStall` to bind alongside the other patterns — so give it its own `.extendQueue`-shaped entry that logs at `.notice` and leaves the row untouched. Advancing there would move the run on an event that was never POSTed; leaving the row alone self-heals on the next tick.
+
+**`.completeEvent` also needs a DISPATCH site, not only a bypass.** Add it to `evaluateOnce` beside the four refresh dispatches, or the POST never fires at all — the bypass alone is unreachable. Add it to `resolveExtendQueue`'s equivalent list too, for uniformity with the refresh kinds.
 
 - [ ] **Step 4: Run test to verify it passes**
 
