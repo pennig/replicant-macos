@@ -1147,7 +1147,9 @@ Committing an event is not a device command, so `.dispatch` cannot express it. R
 **Interfaces:**
 - Consumes: `LocationEventsClient.refresh`, `LocationEventsClient.complete` from `GameServices`.
 - Produces:
-  - `MissionAction.refreshEvents(nextStep: String, thenStall: DirectiveAttentionReason?)` — re-reads the account ledger, persists, re-asks the machine against the fresh rows.
+  - `MissionAction.refreshEvents(thenStall: DirectiveAttentionReason?)` — re-reads the account ledger, persists, re-asks the machine against the fresh rows.
+
+**Carries NO `nextStep`, deliberately.** Both callers (Task 10's `confirmProgress` and `collecting`) re-ask on their OWN step, so a `nextStep` would make the collapse `.advanceStep(nextStep: <its own step>)`. `DirectiveExecutor.move` re-stamps `stepStartedAt` on every `.advanceStep`, so the step deadline would never accumulate, the stall could never fire, and the run would poll the events endpoint every 5s tick forever — the `RelayRun.acquire` re-stamp trap. `collapse(_:)` therefore treats `.refreshEvents` like the three device kinds: `reason.map { .stall($0) } ?? .wait`. `.wait` is the only action that does not re-stamp the step clock, which is what lets the deadline accumulate and the stall fire.
   - `MissionAction.completeEvent(location: String, designation: String, nextStep: String)` — the empty POST, then a ledger re-read. Best-effort: a rejected commit moves to `nextStep` anyway, where the machine re-judges from the refreshed row.
   - `DirectiveAttentionReason.eventCriteriaUnmet`, `.eventCommitRejected`.
 
@@ -1227,7 +1229,7 @@ Add the two `MissionAction` cases:
 ```swift
     /// Re-read the account's whole event ledger, persist it, then ask the
     /// machine again against the fresh rows. Resolved by the engine.
-    case refreshEvents(nextStep: String, thenStall: DirectiveAttentionReason?)
+    case refreshEvents(thenStall: DirectiveAttentionReason?)
     /// Commit the event with the empty POST, re-read the ledger, then move to
     /// `nextStep` whatever happened — the machine re-judges from the fresh row.
     case completeEvent(location: String, designation: String, nextStep: String)
@@ -1598,7 +1600,7 @@ public struct EventRun: MissionStepMachine {
         }
         guard let designation = Self.targetEvent(of: directive),
               let event = world.event(designation)
-        else { return .refreshEvents(nextStep: directive.step, thenStall: .unreachableDevice) }
+        else { return .refreshEvents(thenStall: .unreachableDevice) }
 
         switch directive.step {
         case Step.printing: return printing(directive, convoy, event, world)
@@ -2145,7 +2147,7 @@ struct EventRunCommitTests {
             directive: EventRunFixtures.directive(step: EventRun.Step.confirmingProgress, now: now),
             world: world
         )
-        #expect(action == .refreshEvents(nextStep: EventRun.Step.confirmingProgress, thenStall: nil))
+        #expect(action == .refreshEvents(thenStall: nil))
     }
 
     @Test("unmet past the deadline stalls eventCriteriaUnmet")
@@ -2251,7 +2253,7 @@ Route the three steps in `nextAction` and add:
         if world.now.timeIntervalSince(directive.stepStartedAt) > Self.progressDeadline {
             return .stall(.eventCriteriaUnmet, detail: event.designation)
         }
-        return .refreshEvents(nextStep: Step.confirmingProgress, thenStall: nil)
+        return .refreshEvents(thenStall: nil)
     }
 
     /// The commit: an empty POST, then the ledger re-read the engine folds in.
@@ -2273,7 +2275,7 @@ Route the three steps in `nextAction` and add:
             if world.now.timeIntervalSince(directive.stepStartedAt) > Self.progressDeadline {
                 return .stall(.eventCommitRejected, detail: event.designation)
             }
-            return .refreshEvents(nextStep: Step.collecting, thenStall: nil)
+            return .refreshEvents(thenStall: nil)
         }
         guard let freighter = convoy.freighter else { return .advanceStep(nextStep: Step.recovering) }
         if world.openOperation(for: freighter.deviceCode) != nil { return .wait }
