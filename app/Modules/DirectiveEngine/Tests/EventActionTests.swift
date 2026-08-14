@@ -46,6 +46,26 @@ private struct FixedActionMachine: MissionStepMachine {
     func plan(_ context: RoamContext) -> RoamPlan { .exhausted }
 }
 
+/// Answers `script` in order, then repeats its last entry, so one evaluation can
+/// be walked through a chain of different actions. `nextAction` must stay pure
+/// for real machines; this one counts calls to prove how many the engine made.
+private struct ScriptedMachine: MissionStepMachine {
+    let kind: DirectiveKind = .eventRun
+    let firstStep = "step"
+    let script: [MissionAction]
+    let calls = LockIsolated(0)
+
+    func nextAction(directive: Directive, world: WorldSnapshot) -> MissionAction {
+        let index = calls.withValue { count -> Int in
+            defer { count += 1 }
+            return count
+        }
+        return script[min(index, script.count - 1)]
+    }
+
+    func plan(_ context: RoamContext) -> RoamPlan { .exhausted }
+}
+
 /// The two actions driven through `DirectiveEngineCore`, where the refresh
 /// chain's termination bound and the step clock actually live — a pure-function
 /// table cannot see either.
@@ -182,6 +202,74 @@ struct EventActionEngineTests {
 
         #expect(posted.value == ["SOL-3/EVT-1"])
         #expect(reads.value == 1, "the commit is followed by exactly one ledger re-read")
+        let row = try await row(database)
+        #expect(row.step == "after")
+        #expect(row.status == .running)
+    }
+
+    /// **The chain hop.** A device refresh whose re-ask asks for the ledger pays
+    /// for the events kind ONCE: the hop hands its resolver the union, so the next
+    /// `.refreshEvents` collapses instead of buying a second walk.
+    @Test func aDeviceRefreshChainsIntoTheLedgerExactlyOnce() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await seed(database)
+        let deviceReads = LockIsolated(0)
+        let ledgerReads = LockIsolated(0)
+        let machine = ScriptedMachine(script: [
+            .refreshDevices(deviceCodes: ["V1"], thenStall: nil),
+            .refreshEvents(thenStall: .eventCriteriaUnmet),
+            .refreshEvents(thenStall: .eventCriteriaUnmet),
+            .wait,
+        ])
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Self.instant)
+            $0.uuid = .incrementing
+            $0.deviceRefresher.refresh = { _, _ in deviceReads.withValue { $0 += 1 }; return nil }
+            $0.locationEventsClient.refresh = { ledgerReads.withValue { $0 += 1 }; return 3 }
+        } operation: {
+            let core = DirectiveEngineCore(machines: [machine], tick: .seconds(5))
+            await core.evaluateOnce(directiveID: "E1")
+        }
+
+        #expect(deviceReads.value == 1)
+        #expect(ledgerReads.value == 1, "the hop must pay for `.events`, not hand its resolver a bare `paid`")
+        #expect(machine.calls.value == 3, "ask, re-ask after devices, re-ask after events — then collapse")
+        let row = try await row(database)
+        #expect(row.status == .needsAttention)
+        #expect(row.attentionReason == .eventCriteriaUnmet)
+    }
+
+    /// A commit answered to a RE-ASK is resolved there, not passed to the executor
+    /// unresolved — otherwise the POST silently never fires on that tick.
+    @Test func aCommitAnsweredToAReAskStillPosts() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await seed(database)
+        let posted = LockIsolated<[String]>([])
+        let ledgerReads = LockIsolated(0)
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Self.instant)
+            $0.uuid = .incrementing
+            $0.locationEventsClient.refresh = { ledgerReads.withValue { $0 += 1 }; return 3 }
+            $0.locationEventsClient.complete = { location, designation in
+                posted.withValue { $0.append("\(location)/\(designation)") }
+            }
+        } operation: {
+            let core = DirectiveEngineCore(
+                machines: [ScriptedMachine(script: [
+                    .refreshEvents(thenStall: .eventCriteriaUnmet),
+                    .completeEvent(location: "SOL-3", designation: "EVT-1", nextStep: "after"),
+                ])],
+                tick: .seconds(5)
+            )
+            await core.evaluateOnce(directiveID: "E1")
+        }
+
+        #expect(posted.value == ["SOL-3/EVT-1"], "the commit must fire on the tick the re-ask asked for it")
+        #expect(ledgerReads.value == 2, "one walk for the refresh, one after the commit")
         let row = try await row(database)
         #expect(row.step == "after")
         #expect(row.status == .running)

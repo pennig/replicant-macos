@@ -756,10 +756,10 @@ actor DirectiveEngineCore {
 
     /// Ask `machine` once more against the freshly-read `fresh` world, given the
     /// kinds `paid` for so far. The loop guard, shared by all five refresh paths.
-    /// A non-refresh answer returns untouched; a kind already paid for collapses to
-    /// its own stall/fallback; a kind not yet paid for chains ONE hop into that
-    /// kind's resolver (passing it through unresolved would hit the executor's
-    /// bypass, which stalls instead of reading).
+    /// A commit resolves here too; any other non-refresh answer returns untouched;
+    /// a kind already paid for collapses to its own stall/fallback; a kind not yet
+    /// paid for chains ONE hop into that kind's resolver (passing it through
+    /// unresolved would hit the executor's bypass, which stalls instead of reading).
     ///
     /// **The bound:** `paid` grows strictly on every guarded hop over a closed
     /// five-case enum, so an evaluation performs at most one refresh round per kind
@@ -772,6 +772,14 @@ actor DirectiveEngineCore {
         paid: Set<RefreshKind>
     ) async -> MissionAction {
         let action = machine.nextAction(directive: directive, world: fresh)
+        if case let .completeEvent(location, designation, nextStep) = action {
+            // Terminal and non-refresh: the commit never re-asks, so it cannot
+            // extend the chain and `paid` is left exactly as it was.
+            return await resolveEventCompletion(
+                location: location, designation: designation,
+                nextStep: nextStep, directive: directive
+            )
+        }
         guard let kind = RefreshKind(action) else { return action }
 
         guard !paid.contains(kind) else {
