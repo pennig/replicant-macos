@@ -1,4 +1,4 @@
-//  Pins the mine-command response shape against the strict generated decoder.
+//  Pins device-command response shapes against the strict generated decoder.
 //  `app_schemas_devices_DeviceCommandResponseSchema` is `additionalProperties: false`,
 //  so an undeclared key throws rather than being ignored.
 
@@ -58,5 +58,28 @@ struct DeviceCommandResponseDecodingTests {
         #expect(response.salvageType == "derelict_probe")
         #expect(response.density == nil)
         #expect(response.availability == nil)
+    }
+
+    // `arrival_time` is nullable, matching upstream's own `TravelResponseSchema`.
+    @Test func decodesTravelStartWithArrivalTime() throws {
+        let response = try decode(
+            """
+            {
+              "arrival_time": "2026-08-14T12:34:56Z",
+              "arrives_at": "2026-08-14T12:34:56Z",
+              "departed_at": "2026-08-14T12:04:56Z",
+              "destination": "OMEROPE-BELT-1",
+              "device_code": "8FA61A04",
+              "origin": "OMEROPE",
+              "status": "travel_started",
+              "total_distance_ly": 4.2
+            }
+            """)
+
+        #expect(response.status == "travel_started")
+        #expect(response.arrivalTime == "2026-08-14T12:34:56Z")
+
+        let nullArrival = try decode(#"{"arrival_time": null, "status": "travel_started"}"#)
+        #expect(nullArrival.arrivalTime == nil)
     }
 }

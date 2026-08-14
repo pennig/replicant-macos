@@ -2419,6 +2419,10 @@
           "total_distance_ly": {
             "type": "number"
           },
+          "arrival_time": {
+            "type": "string",
+            "nullable": true
+          },
           "progress_percent": {
             "type": "number"
           },
