@@ -3413,7 +3413,7 @@ Two clauses have evidence narrower than the claim, and the review should say so 
 
 Two things this plan deliberately does not do, both recorded in the spec's §12 and §13:
 
-1. **Prove that a `matrix_container` can be attached to a `surge_carrier`.** No test can settle it — it needs a live mutation. Run it before Task 8, as a single announced `POST` against the idle hulls at the depot. If attach refuses a cradle hull, stop and re-open the spec's §3 decision 1: the courier becomes a self-surging heaven_vessel and `EventRun` loses its carrier dependency for resource-only events.
+1. ~~Prove that a `matrix_container` can be attached to a `surge_carrier`.~~ **Settled live by the operator, 2026-08-14 — it attaches.** Task 8 no longer waits on anything, and the courier rides the attach grid as the spec designed.
 2. **Write the build record.** When the capability ships, add `app/.claude/memory/brain-event-fulfilment-build.md` with its `MEMORY.md` index line, in the shape of `brain-mine-build.md`: what the plan got wrong, what the first live run surfaced, and the residuals.
 
 ---

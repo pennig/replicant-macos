@@ -316,13 +316,11 @@ evidence at review.
 
 ## 12. Risks and first-run verifications
 
-**Attaching a `matrix_container` to a `surge_carrier` is unverified.** It is
-load-bearing for the entire courier design and can only be settled by a live
-mutation. Precedent says it works — a `transport_hauler` has no `attach` feature yet
-gets attached to a `surge_plate`, and `ftl_beacon` likewise — but a cradle hull has
-never been attached on this account. **Prove this first.** If attach rejects it, the
-courier must become a self-surging heaven_vessel and §4's "carrier flies every event"
-consequence reverses.
+**Attaching a `matrix_container` to a `surge_carrier` works** — established live
+by the operator, 2026-08-14. This was the design's one load-bearing unknown: no
+test could settle it, and a refusal would have forced the courier onto a
+self-surging heaven_vessel and reversed §4's "carrier flies every event"
+consequence. The courier rides the attach grid as designed.
 
 **The beacon is assumed not to be consumed by the commit.** Consumption is scoped to
 the met option's `criteria`, and no criteria names `ftl_beacon`. Watch it on run one.
