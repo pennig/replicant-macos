@@ -16,14 +16,17 @@ enum EventRunFixtures {
     static func device(
         _ code: String, type: String, attachedTo: String? = nil,
         location: String? = "HUB-1", tags: [String] = [], updatedAt: Date = .distantPast,
-        cargoUsed: Int? = nil
+        cargoUsed: Int? = nil, cargoCapacity: Int? = nil
     ) -> Device {
-        Device(
+        var hold: [String: JSONValue] = [:]
+        if let cargoUsed { hold["cargo_used"] = .number(Double(cargoUsed)) }
+        if let cargoCapacity { hold["cargo_capacity"] = .number(Double(cargoCapacity)) }
+        return Device(
             deviceCode: code, deviceType: type, replicantCode: "R-1", status: "idle",
             location: location, locationName: nil, operationalCapacity: 1, queueSize: 0,
             stowedInDeviceCode: nil, controllerDeviceCode: nil, attachedToDeviceCode: attachedTo,
             createdAt: .distantPast, availableCommands: [], features: [], tags: tags,
-            detail: cargoUsed.map { .object(["cargo_used": .number(Double($0))]) } ?? .object([:]),
+            detail: .object(hold),
             updatedAt: updatedAt, firstSeenAt: .distantPast
         )
     }

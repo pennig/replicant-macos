@@ -448,8 +448,25 @@ public struct EventRun: MissionStepMachine {
         )
     }
 
-    /// Take the reward pile home. The freighter is on site with a hold it just
-    /// emptied, so a nil resource map lifts whatever is there.
+    /// What the completion paid, per type, in the order the hold fills and
+    /// clamped to what it can still take. A row carrying no capacity is
+    /// unhydrated rather than full, so it asks for the whole manifest.
+    static func sweepManifest(_ event: LocationEvent, into freighter: Device) -> [String: Int] {
+        let reward = LocationEventDetail(event.detail)?.rewardResources ?? []
+        var room = freighter.cargoCapacity > 0 ? freighter.cargoRemaining : Int.max
+        var manifest: [String: Int] = [:]
+        for item in reward.sorted(by: { $0.resourceType < $1.resourceType }) where item.amount > 0 {
+            let take = min(item.amount, room)
+            if take <= 0 { break }
+            manifest[item.resourceType] = take
+            room -= take
+        }
+        return manifest
+    }
+
+    /// Take the reward home. `collect_resources` demands an explicit per-type
+    /// map, so the event's own reward manifest names it; whatever will not fit
+    /// stays on the ground for a Haul Run.
     private func collecting(
         _ directive: Directive, _ convoy: Convoy, _ event: LocationEvent, _ world: WorldSnapshot
     ) -> MissionAction {
@@ -461,12 +478,11 @@ public struct EventRun: MissionStepMachine {
         }
         guard let freighter = convoy.freighter else { return .advanceStep(nextStep: Step.recovering) }
         if world.openOperation(for: freighter.deviceCode) != nil { return .wait }
-        guard let pile = world.footprints[event.location], pile.resources > 0 else {
-            return .advanceStep(nextStep: Step.recovering)
-        }
+        let manifest = Self.sweepManifest(event, into: freighter)
+        guard !manifest.isEmpty else { return .advanceStep(nextStep: Step.recovering) }
         return .dispatch(
             kind: .collectResources, deviceCode: freighter.deviceCode,
-            params: CommandParams(resources: nil), nextStep: Step.recovering
+            params: CommandParams(resources: manifest), nextStep: Step.recovering
         )
     }
 

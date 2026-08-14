@@ -9,7 +9,6 @@ import Foundation
 import GameModels
 import GameServices
 import Testing
-import UniverseModels
 import Utils
 @testable import DirectiveEngine
 
@@ -17,16 +16,24 @@ import Utils
 struct EventRunCommitTests {
     private let now = Date(timeIntervalSince1970: 10_000)
 
-    private func onSite(_ updatedAt: Date) -> [Device] {
+    /// The convoy stood down at the event. `hold` is the freighter's cargo
+    /// capacity; nil leaves the row's variable tail without one.
+    private func onSite(_ updatedAt: Date, hold: Int? = nil) -> [Device] {
         [
             EventRunFixtures.device("CARRIER", type: "surge_carrier", location: "X-1", updatedAt: updatedAt),
-            EventRunFixtures.device("FREIGHT", type: "cargo_freighter", location: "X-1", updatedAt: updatedAt),
+            EventRunFixtures.device(
+                "FREIGHT", type: "cargo_freighter", location: "X-1", updatedAt: updatedAt,
+                cargoUsed: 0, cargoCapacity: hold
+            ),
             EventRunFixtures.device("COURIER", type: "matrix_container", attachedTo: "CARRIER", location: "X-1", updatedAt: updatedAt),
         ]
     }
 
     /// An event whose live progress reports met and a replicant present.
-    private func metEvent(met: Bool, replicant: Bool, status: String = "active") -> LocationEvent {
+    private func metEvent(
+        met: Bool, replicant: Bool, status: String = "active",
+        rewards: [String: Int] = ["rares": 400]
+    ) -> LocationEvent {
         LocationEvent(
             designation: "X-1-EVT-001", location: "X-1", tier: 1, status: status,
             objectivesMet: met,
@@ -46,7 +53,10 @@ struct EventRunCommitTests {
                         ])]),
                     ])]),
                 ]),
-                "rewards": .object(["xp": .number(500), "resources": .object(["rares": .number(400)])]),
+                "rewards": .object([
+                    "xp": .number(500),
+                    "resources": .object(rewards.mapValues { .number(Double($0)) }),
+                ]),
             ]),
             firstSeenAt: .distantPast, updatedAt: .distantPast
         )
@@ -141,42 +151,50 @@ struct EventRunCommitTests {
         #expect(action == .stall(.eventCommitRejected, detail: "X-1-EVT-001"))
     }
 
-    @Test("collecting sweeps a reward pile into the empty freighter")
-    func sweepsReward() {
-        var world = EventRunFixtures.world(
-            devices: onSite(now),
-            event: metEvent(met: true, replicant: true, status: "completed"), now: now
+    /// `collecting` against a closed event, with `hold` as the freighter's capacity.
+    private func sweep(rewards: [String: Int], hold: Int?) -> MissionAction {
+        let world = EventRunFixtures.world(
+            devices: onSite(now, hold: hold),
+            event: metEvent(met: true, replicant: true, status: "completed", rewards: rewards),
+            now: now
         )
-        world = WorldSnapshot(
-            devices: world.devices, openOperations: [:],
-            footprints: world.footprints.merging([
-                "X-1": LocationFootprint(
-                    location: "X-1", devices: 0, resources: 400, resourceSites: 0,
-                    locationEvents: 1, replicants: 0, fetchedAt: now
-                )
-            ]) { _, new in new },
-            theatres: world.theatres, locationEvents: world.locationEvents, now: now
-        )
-        let action = EventRun().nextAction(
+        return EventRun().nextAction(
             directive: EventRunFixtures.directive(step: EventRun.Step.collecting, now: now),
             world: world
         )
-        #expect(action == .dispatch(
+    }
+
+    @Test("collecting names the reward's own types and amounts")
+    func sweepsReward() {
+        #expect(sweep(rewards: ["rares": 400, "structural": 50], hold: 500) == .dispatch(
             kind: .collectResources, deviceCode: "FREIGHT",
-            params: CommandParams(resources: nil), nextStep: EventRun.Step.recovering
+            params: CommandParams(resources: ["rares": 400, "structural": 50]),
+            nextStep: EventRun.Step.recovering
         ))
     }
 
-    @Test("no pile left to lift goes home")
+    @Test("a reward larger than the hold is clamped, not refused")
+    func clampsToTheHold() {
+        #expect(sweep(rewards: ["rares": 800, "structural": 500], hold: 500) == .dispatch(
+            kind: .collectResources, deviceCode: "FREIGHT",
+            params: CommandParams(resources: ["rares": 500]),
+            nextStep: EventRun.Step.recovering
+        ))
+    }
+
+    @Test("a row with no capacity in its tail asks for the whole manifest")
+    func unknownCapacityAsksForEverything() {
+        #expect(sweep(rewards: ["rares": 800, "structural": 500], hold: nil) == .dispatch(
+            kind: .collectResources, deviceCode: "FREIGHT",
+            params: CommandParams(resources: ["rares": 800, "structural": 500]),
+            nextStep: EventRun.Step.recovering
+        ))
+    }
+
+    @Test("an empty reward manifest goes home without a dispatch")
     func nothingToSweep() {
-        let world = EventRunFixtures.world(
-            devices: onSite(now),
-            event: metEvent(met: true, replicant: true, status: "completed"), now: now
-        )
-        let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.collecting, now: now),
-            world: world
-        )
+        let action = sweep(rewards: [:], hold: 500)
         #expect(action == .advanceStep(nextStep: EventRun.Step.recovering))
+        if case .dispatch = action { Issue.record("an XP-only reward must not be collected") }
     }
 }
