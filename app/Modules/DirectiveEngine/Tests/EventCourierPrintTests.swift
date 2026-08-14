@@ -58,17 +58,6 @@ struct EventCourierPrintTests {
         ]
     }
 
-    /// The courier's new replicant, in a spare cradle at the depot: an occupied
-    /// matrix plus the `matrix_container` holding it.
-    private func replicated() -> [Device] {
-        var matrix = EventRunFixtures.device("MATRIX", type: "replicant_matrix", location: nil)
-        matrix.features = ["stow", "matrix"]
-        matrix.stowedInDeviceCode = "CRADLE"
-        var cradle = EventRunFixtures.device("CRADLE", type: "matrix_container", updatedAt: now)
-        cradle.features = ["cruise", "cradle"]
-        return [matrix, cradle]
-    }
-
     /// A heaven vessel at the depot carrying its own resident replicant — the
     /// shape a depot-only scope cannot tell from the courier's.
     private func residentVessel() -> [Device] {
@@ -105,34 +94,16 @@ struct EventCourierPrintTests {
         #expect(DirectiveAttentionReason.awaitingCourierReplication.brainDisposition == .escalate)
     }
 
-    @Test("once the operator has replicated, the run resumes at stowing")
-    func resumesAfterReplication() {
-        let action = EventCourierPrint().nextAction(
-            directive: directive(step: EventCourierPrint.Step.replicating),
-            world: world(standing() + replicated())
-        )
-        #expect(action == .advanceStep(nextStep: EventCourierPrint.Step.stowing))
-    }
-
-    @Test("a vessel's own replicant is never mistaken for the courier's")
+    @Test("a vessel's own replicant is never mistaken for a courier")
     func neverRaidsAVessel() {
         let racer = EventRunFixtures.device("RACER", type: "racing_vessel", updatedAt: now)
-        let fleet = standing() + residentVessel() + [racer]
-        let hosts: Set<String> = ["HEAVEN", "RACER"]
-        let asked = EventCourierPrint().nextAction(
-            directive: directive(step: EventCourierPrint.Step.replicating),
-            world: world(fleet + [spareMatrix()], hosts: hosts)
+        let fleet = standing() + residentVessel() + [racer, spareMatrix()]
+        let peopled = world(fleet, hosts: ["HEAVEN", "RACER"])
+        let action = EventCourierPrint().nextAction(
+            directive: directive(step: EventCourierPrint.Step.replicating), world: peopled
         )
-        #expect(asked == .stall(.awaitingCourierReplication, detail: "HUB-1"))
-
-        let stowed = EventCourierPrint().nextAction(
-            directive: directive(step: EventCourierPrint.Step.stowing),
-            world: world(fleet + replicated(), hosts: hosts)
-        )
-        #expect(stowed == .dispatch(
-            kind: .stow, deviceCode: "MATRIX", params: CommandParams(target: "BOX"),
-            nextStep: EventCourierPrint.Step.confirmingStow
-        ))
+        #expect(action == .stall(.awaitingCourierReplication, detail: "HUB-1"))
+        #expect(!EventCourierPrint.courierStands(at: "HUB-1", in: peopled))
     }
 
     @Test("a hosted courier finishes the run")
@@ -142,7 +113,7 @@ struct EventCourierPrintTests {
         matrix.stowedInDeviceCode = "BOX"
         let hosted = world(standing() + [matrix], hosts: ["BOX"])
         let action = EventCourierPrint().nextAction(
-            directive: directive(step: EventCourierPrint.Step.stowing), world: hosted
+            directive: directive(step: EventCourierPrint.Step.replicating), world: hosted
         )
         #expect(action == .done)
         #expect(EventCourierPrint.courierStands(at: "HUB-1", in: hosted))
@@ -156,34 +127,10 @@ struct EventCourierPrintTests {
         #expect(action == .stall(.unreachableDevice, detail: "no empty replicant matrix at HUB-1"))
     }
 
-    @Test("a fresh replicant is stowed into the container, then confirmed")
-    func stows() {
+    @Test("a row stranded on a retired step rejoins the machine")
+    func unknownStepRejoins() {
         let action = EventCourierPrint().nextAction(
-            directive: directive(step: EventCourierPrint.Step.stowing),
-            world: world(standing() + replicated())
-        )
-        #expect(action == .dispatch(
-            kind: .stow, deviceCode: "MATRIX", params: CommandParams(target: "BOX"),
-            nextStep: EventCourierPrint.Step.confirmingStow
-        ))
-    }
-
-    @Test("a stow that never lands stalls instead of re-issuing forever")
-    func stowStalls() {
-        let entered = now.addingTimeInterval(-EventCourierPrint.stowConfirmDeadline - 1)
-        let action = EventCourierPrint().nextAction(
-            directive: directive(step: EventCourierPrint.Step.confirmingStow, entered: entered),
-            world: world(standing() + replicated())
-        )
-        #expect(action == .refreshDevices(deviceCodes: ["MATRIX"], thenStall: .commandRejected))
-    }
-
-    @Test("a replicate that produced nothing hands back rather than waiting forever")
-    func replicateNeverLanded() {
-        let entered = now.addingTimeInterval(-EventCourierPrint.replicateDeadline - 1)
-        let action = EventCourierPrint().nextAction(
-            directive: directive(step: EventCourierPrint.Step.stowing, entered: entered),
-            world: world(standing() + [spareMatrix()])
+            directive: directive(step: "stowing"), world: world(standing() + [spareMatrix()])
         )
         #expect(action == .advanceStep(nextStep: EventCourierPrint.Step.replicating))
     }

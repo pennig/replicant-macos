@@ -24,20 +24,7 @@ public struct EventCourierPrint: MissionStepMachine {
         public static let printing = "printing"
         public static let awaitingClone = "awaitingClone"
         public static let replicating = "replicating"
-        public static let stowing = "stowing"
-        public static let confirmingStow = "confirmingStow"
     }
-
-    /// An occupied matrix — the type IS the occupancy signal, and the one test
-    /// no hull can pass. `empty_replicant_matrix` is the unused spare, and the
-    /// `matrix` feature marks both alike.
-    public static let matrixDeviceType = "replicant_matrix"
-
-    /// How long `stowing` waits for a replicant to appear before handing back to
-    /// `replicating`, which stalls for the operator.
-    public static let replicateDeadline: TimeInterval = 5 * 60
-    /// How long `confirmingStow` waits for the matrix to read as aboard.
-    public static let stowConfirmDeadline: TimeInterval = 5 * 60
 
     public var firstStep: String { Step.printing }
 
@@ -65,8 +52,6 @@ public struct EventCourierPrint: MissionStepMachine {
         switch directive.step {
         case Step.awaitingClone: return awaitingClone(directive, depot, world)
         case Step.replicating: return replicating(directive, depot, world)
-        case Step.stowing: return stowing(directive, depot, world)
-        case Step.confirmingStow: return confirmingStow(directive, depot, world)
         default: return printing(directive, depot, world)
         }
     }
@@ -74,23 +59,6 @@ public struct EventCourierPrint: MissionStepMachine {
     private func container(at depot: String, in world: WorldSnapshot) -> Device? {
         world.devices.values
             .filter { $0.deviceType == EventRun.courierDeviceType && $0.location == depot }
-            .min { $0.deviceCode < $1.deviceCode }
-    }
-
-    /// The matrix carrying the courier's new replicant — what `stowing` loads.
-    /// A stowed matrix has no location of its own, so the depot test reads off
-    /// the cradle holding it.
-    private func loadable(into box: Device, at depot: String, in world: WorldSnapshot) -> Device? {
-        world.devices.values
-            .filter { matrix in
-                guard matrix.deviceType == Self.matrixDeviceType,
-                      let code = matrix.stowedInDeviceCode, code != box.deviceCode,
-                      let cradle = world.device(code), cradle.location == depot
-                else { return false }
-                // A vessel's own replicant is not spare cargo: taking it strands
-                // the vessel, and the anchor's mesh authority with it.
-                return !cradle.isCarrierHull
-            }
             .min { $0.deviceCode < $1.deviceCode }
     }
 
@@ -136,60 +104,19 @@ public struct EventCourierPrint: MissionStepMachine {
         return .advanceStep(nextStep: Step.printing)
     }
 
-    /// Hand the one replication to the operator. It is irreversible and happens
-    /// once per courier, ever, so the engine asks rather than dispatches; the
-    /// run resumes here the moment a replicant stands outside the container.
+    /// Hand the one replication to the operator: it is irreversible, happens
+    /// once per courier ever, and the container is itself the cradle to
+    /// replicate into. `courierStands` is the only exit.
     private func replicating(
         _ directive: Directive, _ depot: String, _ world: WorldSnapshot
     ) -> MissionAction {
-        guard let box = container(at: depot, in: world) else {
+        guard container(at: depot, in: world) != nil else {
             return .advanceStep(nextStep: Step.printing)
-        }
-        if loadable(into: box, at: depot, in: world) != nil {
-            return .advanceStep(nextStep: Step.stowing)
         }
         guard Self.replicationSource(in: world) != nil else {
             return .stall(.unreachableDevice, detail: "no empty replicant matrix at \(depot)")
         }
         return .stall(.awaitingCourierReplication, detail: depot)
-    }
-
-    /// Load the new replicant's matrix into the container. Hands back to
-    /// `replicating` once the deadline proves no replicant arrived, which
-    /// surfaces the ask rather than waiting on it forever.
-    private func stowing(
-        _ directive: Directive, _ depot: String, _ world: WorldSnapshot
-    ) -> MissionAction {
-        guard let box = container(at: depot, in: world) else {
-            return .advanceStep(nextStep: Step.printing)
-        }
-        guard let matrix = loadable(into: box, at: depot, in: world) else {
-            if world.now.timeIntervalSince(directive.stepStartedAt) <= Self.replicateDeadline {
-                return .wait
-            }
-            logger.notice("event courier print \(directive.id, privacy: .public): no replicant to stow within the deadline — re-deciding")
-            return .advanceStep(nextStep: Step.replicating)
-        }
-        return .dispatch(
-            kind: .stow, deviceCode: matrix.deviceCode,
-            params: CommandParams(target: box.deviceCode), nextStep: Step.confirmingStow
-        )
-    }
-
-    /// Judge the stow on the rows it moved. `stow` is immediate and untracked,
-    /// so this step's deadline is the only bound on one the server refused; the
-    /// success exit is `courierStands`, which `nextAction` checks first.
-    private func confirmingStow(
-        _ directive: Directive, _ depot: String, _ world: WorldSnapshot
-    ) -> MissionAction {
-        guard let box = container(at: depot, in: world) else {
-            return .advanceStep(nextStep: Step.printing)
-        }
-        let subject = loadable(into: box, at: depot, in: world) ?? box
-        return MissionConfirm.ladder(
-            [subject], directive, world,
-            deadline: Self.stowConfirmDeadline, thenStall: .commandRejected
-        )
     }
 
     public func plan(_ context: RoamContext) -> RoamPlan { .exhausted }
