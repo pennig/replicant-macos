@@ -152,16 +152,25 @@ struct EventRunCommitTests {
         #expect(action == .stall(.eventCommitRejected, detail: "X-1-EVT-001"))
     }
 
-    /// `collecting` against a closed event, with `hold` as the freighter's capacity.
-    private func sweep(rewards: [String: Int], hold: Int?) -> MissionAction {
+    /// `collecting` against a closed event, with `hold` as the freighter's
+    /// capacity and `used` as what is still aboard.
+    private func sweep(rewards: [String: Int], hold: Int?, used: Int = 0) -> MissionAction {
         let world = EventRunFixtures.world(
-            devices: onSite(now, hold: hold),
+            devices: onSite(now, hold: hold, used: used),
             event: metEvent(met: true, replicant: true, status: "completed", rewards: rewards),
             now: now
         )
         return EventRun().nextAction(
             directive: EventRunFixtures.directive(step: EventRun.Step.collecting, now: now),
             world: world
+        )
+    }
+
+    /// The same world, judged as the three-way verdict `collecting` switches on.
+    private func verdict(rewards: [String: Int], hold: Int?, used: Int = 0) -> EventRun.Sweep {
+        EventRun.sweep(
+            metEvent(met: true, replicant: true, status: "completed", rewards: rewards),
+            into: onSite(now, hold: hold, used: used).first { $0.deviceCode == "FREIGHT" }!
         )
     }
 
@@ -197,23 +206,22 @@ struct EventRunCommitTests {
         let action = sweep(rewards: [:], hold: 500)
         #expect(action == .advanceStep(nextStep: EventRun.Step.recovering))
         if case .dispatch = action { Issue.record("an XP-only reward must not be collected") }
-        #expect(EventRun.rewardPile(metEvent(met: true, replicant: true, rewards: [:])).isEmpty)
+        #expect(verdict(rewards: [:], hold: 500) == .nothingPaid)
     }
 
     @Test("a full hold goes home rather than stalling, reward still on the ground")
     func fullHoldAdvances() {
-        let event = metEvent(met: true, replicant: true, status: "completed", rewards: ["rares": 400])
-        let world = EventRunFixtures.world(
-            devices: onSite(now, hold: 500, used: 500), event: event, now: now
-        )
-        let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.collecting, now: now),
-            world: world
-        )
-        #expect(action == .advanceStep(nextStep: EventRun.Step.recovering))
-        // The reward was real and none of it fit — not the XP-only case.
-        let pile = EventRun.rewardPile(event)
-        #expect(pile == ["rares": 400])
-        #expect(EventRun.sweepManifest(pile, into: world.device("FREIGHT")!) == [:])
+        #expect(sweep(rewards: ["rares": 400], hold: 500, used: 500)
+            == .advanceStep(nextStep: EventRun.Step.recovering))
+        #expect(verdict(rewards: ["rares": 400], hold: 500, used: 500)
+            == .willNotFit(["rares": 400]))
+    }
+
+    @Test("the three sweep outcomes are distinguishable, not two")
+    func sweepTrichotomy() {
+        #expect(verdict(rewards: [:], hold: 500) == .nothingPaid)
+        #expect(verdict(rewards: ["rares": 400], hold: 500, used: 500) == .willNotFit(["rares": 400]))
+        #expect(verdict(rewards: ["rares": 400], hold: 500) == .lift(["rares": 400]))
+        #expect(verdict(rewards: ["rares": 800], hold: 500) == .lift(["rares": 500]))
     }
 }

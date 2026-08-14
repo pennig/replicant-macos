@@ -448,8 +448,27 @@ public struct EventRun: MissionStepMachine {
         )
     }
 
+    /// What the closed event's reward is worth to the freighter standing on it.
+    /// Three outcomes, not two: nothing paid and nothing liftable are the same
+    /// step move but different facts, and only one of them loses resources.
+    enum Sweep: Equatable, Sendable {
+        /// The reward paid no resources — an XP-only event.
+        case nothingPaid
+        /// A real pile the hold has no room for. It stays for a Haul Run.
+        case willNotFit([String: Int])
+        /// The clamped manifest to ask for.
+        case lift([String: Int])
+    }
+
+    static func sweep(_ event: LocationEvent, into freighter: Device) -> Sweep {
+        let pile = rewardPile(event)
+        if pile.isEmpty { return .nothingPaid }
+        let manifest = sweepManifest(pile, into: freighter)
+        return manifest.isEmpty ? .willNotFit(pile) : .lift(manifest)
+    }
+
     /// What the completion paid, per resource type. An XP-only reward pays none.
-    static func rewardPile(_ event: LocationEvent) -> [String: Int] {
+    private static func rewardPile(_ event: LocationEvent) -> [String: Int] {
         let reward = LocationEventDetail(event.detail)?.rewardResources ?? []
         return Dictionary(
             reward.filter { $0.amount > 0 }.map { ($0.resourceType, $0.amount) },
@@ -460,7 +479,7 @@ public struct EventRun: MissionStepMachine {
     /// `pile` in the order the hold fills, clamped to the room left. Capacity 0
     /// is an unhydrated tail rather than a hull with no hold — this one is a
     /// freighter — so it asks for the whole pile.
-    static func sweepManifest(_ pile: [String: Int], into freighter: Device) -> [String: Int] {
+    private static func sweepManifest(_ pile: [String: Int], into freighter: Device) -> [String: Int] {
         var room = freighter.cargoCapacity > 0 ? freighter.cargoRemaining : Int.max
         var manifest: [String: Int] = [:]
         for type in pile.keys.sorted() {
@@ -486,18 +505,19 @@ public struct EventRun: MissionStepMachine {
         }
         guard let freighter = convoy.freighter else { return .advanceStep(nextStep: Step.recovering) }
         if world.openOperation(for: freighter.deviceCode) != nil { return .wait }
-        let pile = Self.rewardPile(event)
-        if pile.isEmpty { return .advanceStep(nextStep: Step.recovering) }
-        let manifest = Self.sweepManifest(pile, into: freighter)
-        guard !manifest.isEmpty else {
+        switch Self.sweep(event, into: freighter) {
+        case .nothingPaid:
+            return .advanceStep(nextStep: Step.recovering)
+        case .willNotFit(let pile):
             let unswept = pile.keys.sorted().map { "\($0) \(pile[$0] ?? 0)" }.joined(separator: ", ")
             logger.notice("event run \(directive.id, privacy: .public): hold full at \(event.location, privacy: .public) — reward left for a haul: \(unswept, privacy: .public)")
             return .advanceStep(nextStep: Step.recovering)
+        case .lift(let manifest):
+            return .dispatch(
+                kind: .collectResources, deviceCode: freighter.deviceCode,
+                params: CommandParams(resources: manifest), nextStep: Step.recovering
+            )
         }
-        return .dispatch(
-            kind: .collectResources, deviceCode: freighter.deviceCode,
-            params: CommandParams(resources: manifest), nextStep: Step.recovering
-        )
     }
 
     /// The run never roams.
