@@ -16,7 +16,7 @@
 - **Build and test from `app/Modules`.** A fresh worktree needs `swift build --build-tests` then `./scripts/link-index-store.sh` before LSP answers anything.
 - **Read test results from the Swift Testing JSON event stream**, never console text. Use the `swift-test-event-stream` skill for the invocation.
 - **Migrations are append-only.** A new column is a new `SchemaMigration` appended to `GameDatabase.manifest` — never an edit to a shipped `CREATE TABLE`. `SchemaManifestTests` freezes the identifier list; `GoldenSchemaTests` snapshots the schema and is regenerated only with `RC_REGENERATE_SCHEMA_FIXTURE=1`.
-- **Comment budget is hard:** file header ≤ 6 lines, `///` ≤ 3 lines, inline `//` ≤ 2 lines. No history, no rationale, no dated notes, no live device codes in source. Those go to `app/.claude/memory/`.
+- **Comment budget is hard — count the `//` lines, blanks included.** A house file header is exactly six: blank, filename, `Replicould — <module>`, blank, ONE sentence, blank. A two-sentence description makes seven and fails. File header ≤ 6 lines, `///` ≤ 3 lines, inline `//` ≤ 2 lines. No history, no rationale, no dated notes, no live device codes in source. Those go to `app/.claude/memory/`.
 - **Logging:** `os.Logger` only, subsystem `name.pennig.replicould`, category `DirectiveEngine`.
 - **Loud test defaults:** a client's `testValue` uses `unimplemented(...)`, never a quiet stub.
 - **A mission step machine must be pure** — no I/O, no `Date()`, no randomness. Read the clock from `world.now`.
@@ -612,8 +612,7 @@ Expected: FAIL — `cannot find 'EventRanking' in scope`.
 //  EventRanking.swift
 //  Replicould — DirectiveEngine
 //
-//  Which location event the convoy works next: a lexicographic key over the
-//  active ledger, in `GrowRanking`'s shape.
+//  Which location event the convoy works next, in `GrowRanking`'s shape.
 //
 
 import Foundation
@@ -1507,8 +1506,7 @@ Create `EventRun.swift` with the type, the full `Step` vocabulary, the convoy re
 //  EventRun.swift
 //  Replicould — DirectiveEngine
 //
-//  One location event, end to end: print the option's devices and a beacon,
-//  load carrier and freighter, deliver, commit, sweep the reward, fly home.
+//  One location event end to end: print, load, deliver, commit, beacon, home.
 //
 
 import Foundation
@@ -2633,8 +2631,7 @@ Add `case eventCourierPrint` and its title `"Event Courier Print"` to `Directive
 //  EventCourierPrint.swift
 //  Replicould — DirectiveEngine
 //
-//  Stands up the event convoy's replicant courier: print a matrix container,
-//  replicate into the account's spare matrix, stow the matrix aboard.
+//  Stands up the event convoy's replicant courier at the theatre depot.
 //
 
 import Foundation
