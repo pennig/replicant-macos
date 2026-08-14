@@ -28,6 +28,11 @@ public struct EventCourierPrint: MissionStepMachine {
         public static let confirmingStow = "confirmingStow"
     }
 
+    /// An occupied matrix — the type IS the occupancy signal, and the one test
+    /// no hull can pass. `empty_replicant_matrix` is the unused spare, and the
+    /// `matrix` feature marks both alike.
+    public static let matrixDeviceType = "replicant_matrix"
+
     /// How long `stowing` waits for a replicant to appear before handing back to
     /// `replicating`, which stalls for the operator.
     public static let replicateDeadline: TimeInterval = 5 * 60
@@ -72,14 +77,19 @@ public struct EventCourierPrint: MissionStepMachine {
             .min { $0.deviceCode < $1.deviceCode }
     }
 
-    /// The freshly-replicated host still standing outside `box` — what `stowing`
-    /// loads. The box itself is excluded: nothing stows into itself.
-    private func loadable(into box: Device, in world: WorldSnapshot) -> Device? {
+    /// The matrix carrying the courier's new replicant — what `stowing` loads.
+    /// A stowed matrix has no location of its own, so the depot test reads off
+    /// the cradle holding it.
+    private func loadable(into box: Device, at depot: String, in world: WorldSnapshot) -> Device? {
         world.devices.values
-            .filter {
-                world.replicantHostDevices.contains($0.deviceCode)
-                    && $0.deviceCode != box.deviceCode
-                    && $0.stowedInDeviceCode != box.deviceCode
+            .filter { matrix in
+                guard matrix.deviceType == Self.matrixDeviceType,
+                      let code = matrix.stowedInDeviceCode, code != box.deviceCode,
+                      let cradle = world.device(code), cradle.location == depot
+                else { return false }
+                // A vessel's own replicant is not spare cargo: taking it strands
+                // the vessel, and the anchor's mesh authority with it.
+                return !cradle.isCarrierHull
             }
             .min { $0.deviceCode < $1.deviceCode }
     }
@@ -135,7 +145,7 @@ public struct EventCourierPrint: MissionStepMachine {
         guard let box = container(at: depot, in: world) else {
             return .advanceStep(nextStep: Step.printing)
         }
-        if loadable(into: box, in: world) != nil {
+        if loadable(into: box, at: depot, in: world) != nil {
             return .advanceStep(nextStep: Step.stowing)
         }
         guard Self.replicationSource(in: world) != nil else {
@@ -153,7 +163,7 @@ public struct EventCourierPrint: MissionStepMachine {
         guard let box = container(at: depot, in: world) else {
             return .advanceStep(nextStep: Step.printing)
         }
-        guard let matrix = loadable(into: box, in: world) else {
+        guard let matrix = loadable(into: box, at: depot, in: world) else {
             if world.now.timeIntervalSince(directive.stepStartedAt) <= Self.replicateDeadline {
                 return .wait
             }
@@ -175,7 +185,7 @@ public struct EventCourierPrint: MissionStepMachine {
         guard let box = container(at: depot, in: world) else {
             return .advanceStep(nextStep: Step.printing)
         }
-        let subject = loadable(into: box, in: world) ?? box
+        let subject = loadable(into: box, at: depot, in: world) ?? box
         return MissionConfirm.ladder(
             [subject], directive, world,
             deadline: Self.stowConfirmDeadline, thenStall: .commandRejected
