@@ -43,6 +43,20 @@ public struct BrainWhyDetailView: View {
             VStack(alignment: .leading, spacing: Space.l) {
                 gate
 
+                // Omitted entirely when nothing is pending: an empty-state line
+                // would be noise in a pane read at a glance.
+                if !why.eventChoices.isEmpty {
+                    section("Decisions Pending") {
+                        Text("Pick an option on the Missions screen; the convoy skips these until you do.")
+                            .font(.rcCaption)
+                            .foregroundStyle(.rcTextSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        ForEach(why.eventChoices) { choice in
+                            BrainWhyEventChoiceRowView(choice: choice)
+                        }
+                    }
+                }
+
                 // Unconditional: `limitPressure` is never empty (the standing
                 // rails report every tick, healthy or not), so a guard would be
                 // dead code.

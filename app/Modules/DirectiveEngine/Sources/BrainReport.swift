@@ -287,6 +287,9 @@ public struct BrainEventChoice: Equatable, Sendable, Identifiable {
         public let deviceUnits: Int
         public let resourceUnits: Int
         public let exceedsOneFreighterLoad: Bool
+        /// Every device type this option calls for, sorted. Empty means the
+        /// option delivers raw resource only.
+        public let requiredDevices: [String]
         /// Device types this option needs that the fleet's rows do not supply.
         public let missingDevices: [String]
         public var id: String { name }
@@ -296,12 +299,14 @@ public struct BrainEventChoice: Equatable, Sendable, Identifiable {
             deviceUnits: Int,
             resourceUnits: Int,
             exceedsOneFreighterLoad: Bool,
+            requiredDevices: [String],
             missingDevices: [String]
         ) {
             self.name = name
             self.deviceUnits = deviceUnits
             self.resourceUnits = resourceUnits
             self.exceedsOneFreighterLoad = exceedsOneFreighterLoad
+            self.requiredDevices = requiredDevices
             self.missingDevices = missingDevices
         }
     }
@@ -449,6 +454,7 @@ public struct BrainReport: Equatable, Sendable {
                             deviceUnits: option.deviceUnits,
                             resourceUnits: option.resourceUnits,
                             exceedsOneFreighterLoad: option.exceedsOneFreighterLoad,
+                            requiredDevices: option.devices.keys.sorted(),
                             missingDevices: option.devices
                                 .filter { (held[$0.key] ?? 0) < $0.value }
                                 .keys.sorted()

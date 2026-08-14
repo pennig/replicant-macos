@@ -83,6 +83,9 @@ public struct BrainWhy: Equatable, Sendable {
     public var limitPressure: [BrainWhyPressure]
     /// One section per recognised theatre — see `groups(for:)`.
     public var theatreGroups: [BrainWhyTheatreGroup]
+    /// The events waiting on an operator's pick. Empty is the ordinary state
+    /// and renders as nothing at all — never as a "nothing pending" line.
+    public var eventChoices: [BrainWhyEventChoice]
     /// Distinguishes idle-calm from a stall (robustness bar clause 6): a
     /// brain with nothing to do is surfaced but calm; a stalled one is
     /// surfaced AND escalated. The view must not let these look alike. A
@@ -100,6 +103,7 @@ public struct BrainWhy: Equatable, Sendable {
         mineDemandNote: [BrainWhySpan]? = nil,
         limitPressure: [BrainWhyPressure],
         theatreGroups: [BrainWhyTheatreGroup] = [],
+        eventChoices: [BrainWhyEventChoice] = [],
         isEscalated: Bool
     ) {
         self.topGoalGate = topGoalGate
@@ -111,6 +115,7 @@ public struct BrainWhy: Equatable, Sendable {
         self.mineDemandNote = mineDemandNote
         self.limitPressure = limitPressure
         self.theatreGroups = theatreGroups
+        self.eventChoices = eventChoices
         self.isEscalated = isEscalated
     }
 
@@ -157,6 +162,7 @@ public struct BrainWhy: Equatable, Sendable {
             mineDemandNote: mineDemandNote(in: report),
             limitPressure: pressure(in: report),
             theatreGroups: groups(for: report),
+            eventChoices: report.pendingEventChoices.map(BrainWhyEventChoice.init),
             isEscalated: isEscalated(report.decision)
         )
     }
