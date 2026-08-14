@@ -2083,7 +2083,7 @@ An empty reward manifest skips the sweep and advances to `recovering`.
 - Test: `app/Modules/DirectiveEngine/Tests/EventRunCommitTests.swift`
 
 **Interfaces:**
-- Consumes: `MissionAction.refreshEvents` / `.completeEvent` (Task 7), `WorldSnapshot.footprints`.
+- Consumes: `MissionAction.refreshEvents` / `.completeEvent` (Task 7), `LocationEventDetail.rewardResources`.
 - Produces: `EventRun` handles `Step.confirmingProgress`, `.committing`, `.collecting`.
 
 - [ ] **Step 1: Write the failing test**
@@ -2290,9 +2290,9 @@ Route the three steps in `nextAction` and add:
         }
         guard let freighter = convoy.freighter else { return .advanceStep(nextStep: Step.recovering) }
         if world.openOperation(for: freighter.deviceCode) != nil { return .wait }
-        guard let pile = world.footprints[event.location], pile.resources > 0 else {
-            return .advanceStep(nextStep: Step.recovering)
-        }
+        // No footprint guard: the run's only census refresh happens in
+        // `preflight`, long before the commit that mints the reward.
+        guard !reward.isEmpty else { return .advanceStep(nextStep: Step.recovering) }
         return .dispatch(
             kind: .collectResources, deviceCode: freighter.deviceCode,
             params: CommandParams(resources: reward), nextStep: Step.recovering
