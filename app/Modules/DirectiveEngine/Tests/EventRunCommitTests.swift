@@ -17,13 +17,14 @@ struct EventRunCommitTests {
     private let now = Date(timeIntervalSince1970: 10_000)
 
     /// The convoy stood down at the event. `hold` is the freighter's cargo
-    /// capacity; nil leaves the row's variable tail without one.
-    private func onSite(_ updatedAt: Date, hold: Int? = nil) -> [Device] {
+    /// capacity, `used` what is still aboard; a nil `hold` leaves the row's
+    /// variable tail without one.
+    private func onSite(_ updatedAt: Date, hold: Int? = nil, used: Int = 0) -> [Device] {
         [
             EventRunFixtures.device("CARRIER", type: "surge_carrier", location: "X-1", updatedAt: updatedAt),
             EventRunFixtures.device(
                 "FREIGHT", type: "cargo_freighter", location: "X-1", updatedAt: updatedAt,
-                cargoUsed: 0, cargoCapacity: hold
+                cargoUsed: used, cargoCapacity: hold
             ),
             EventRunFixtures.device("COURIER", type: "matrix_container", attachedTo: "CARRIER", location: "X-1", updatedAt: updatedAt),
         ]
@@ -196,5 +197,23 @@ struct EventRunCommitTests {
         let action = sweep(rewards: [:], hold: 500)
         #expect(action == .advanceStep(nextStep: EventRun.Step.recovering))
         if case .dispatch = action { Issue.record("an XP-only reward must not be collected") }
+        #expect(EventRun.rewardPile(metEvent(met: true, replicant: true, rewards: [:])).isEmpty)
+    }
+
+    @Test("a full hold goes home rather than stalling, reward still on the ground")
+    func fullHoldAdvances() {
+        let event = metEvent(met: true, replicant: true, status: "completed", rewards: ["rares": 400])
+        let world = EventRunFixtures.world(
+            devices: onSite(now, hold: 500, used: 500), event: event, now: now
+        )
+        let action = EventRun().nextAction(
+            directive: EventRunFixtures.directive(step: EventRun.Step.collecting, now: now),
+            world: world
+        )
+        #expect(action == .advanceStep(nextStep: EventRun.Step.recovering))
+        // The reward was real and none of it fit — not the XP-only case.
+        let pile = EventRun.rewardPile(event)
+        #expect(pile == ["rares": 400])
+        #expect(EventRun.sweepManifest(pile, into: world.device("FREIGHT")!) == [:])
     }
 }

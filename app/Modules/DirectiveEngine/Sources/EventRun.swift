@@ -448,17 +448,25 @@ public struct EventRun: MissionStepMachine {
         )
     }
 
-    /// What the completion paid, per type, in the order the hold fills and
-    /// clamped to what it can still take. A row carrying no capacity is
-    /// unhydrated rather than full, so it asks for the whole manifest.
-    static func sweepManifest(_ event: LocationEvent, into freighter: Device) -> [String: Int] {
+    /// What the completion paid, per resource type. An XP-only reward pays none.
+    static func rewardPile(_ event: LocationEvent) -> [String: Int] {
         let reward = LocationEventDetail(event.detail)?.rewardResources ?? []
+        return Dictionary(
+            reward.filter { $0.amount > 0 }.map { ($0.resourceType, $0.amount) },
+            uniquingKeysWith: { first, _ in first }
+        )
+    }
+
+    /// `pile` in the order the hold fills, clamped to the room left. Capacity 0
+    /// is an unhydrated tail rather than a hull with no hold — this one is a
+    /// freighter — so it asks for the whole pile.
+    static func sweepManifest(_ pile: [String: Int], into freighter: Device) -> [String: Int] {
         var room = freighter.cargoCapacity > 0 ? freighter.cargoRemaining : Int.max
         var manifest: [String: Int] = [:]
-        for item in reward.sorted(by: { $0.resourceType < $1.resourceType }) where item.amount > 0 {
-            let take = min(item.amount, room)
+        for type in pile.keys.sorted() {
+            let take = min(pile[type] ?? 0, room)
             if take <= 0 { break }
-            manifest[item.resourceType] = take
+            manifest[type] = take
             room -= take
         }
         return manifest
@@ -478,8 +486,14 @@ public struct EventRun: MissionStepMachine {
         }
         guard let freighter = convoy.freighter else { return .advanceStep(nextStep: Step.recovering) }
         if world.openOperation(for: freighter.deviceCode) != nil { return .wait }
-        let manifest = Self.sweepManifest(event, into: freighter)
-        guard !manifest.isEmpty else { return .advanceStep(nextStep: Step.recovering) }
+        let pile = Self.rewardPile(event)
+        if pile.isEmpty { return .advanceStep(nextStep: Step.recovering) }
+        let manifest = Self.sweepManifest(pile, into: freighter)
+        guard !manifest.isEmpty else {
+            let unswept = pile.keys.sorted().map { "\($0) \(pile[$0] ?? 0)" }.joined(separator: ", ")
+            logger.notice("event run \(directive.id, privacy: .public): hold full at \(event.location, privacy: .public) — reward left for a haul: \(unswept, privacy: .public)")
+            return .advanceStep(nextStep: Step.recovering)
+        }
         return .dispatch(
             kind: .collectResources, deviceCode: freighter.deviceCode,
             params: CommandParams(resources: manifest), nextStep: Step.recovering
