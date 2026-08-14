@@ -25,8 +25,63 @@ struct EventRunReturnTests {
         #expect(action == .dispatch(
             kind: .attach, deviceCode: "CARRIER",
             params: CommandParams(devices: ["COURIER"]),
-            nextStep: EventRun.Step.recovering
+            nextStep: EventRun.Step.confirmingRecovery
         ))
+    }
+
+    @Test("a courier still loose buys evidence rather than departing")
+    func looseCourierNeverDeparts() {
+        let devices = [
+            EventRunFixtures.device("CARRIER", type: "surge_carrier", location: "X-1"),
+            EventRunFixtures.device("FREIGHT", type: "cargo_freighter", location: "X-1"),
+            EventRunFixtures.device("COURIER", type: "matrix_container", location: "X-1"),
+        ]
+        let world = EventRunFixtures.world(
+            devices: devices,
+            event: EventRunFixtures.event(resources: [:], devices: []), now: now
+        )
+        let action = EventRun().nextAction(
+            directive: EventRunFixtures.directive(step: EventRun.Step.confirmingRecovery, now: now),
+            world: world
+        )
+        #expect(action == .refreshDevices(deviceCodes: ["COURIER"], thenStall: nil))
+    }
+
+    @Test("a courier that will not attach stalls instead of looping")
+    func unattachableCourierStalls() {
+        let devices = [
+            EventRunFixtures.device("CARRIER", type: "surge_carrier", location: "X-1"),
+            EventRunFixtures.device("FREIGHT", type: "cargo_freighter", location: "X-1"),
+            EventRunFixtures.device("COURIER", type: "matrix_container", location: "X-1"),
+        ]
+        let world = EventRunFixtures.world(
+            devices: devices,
+            event: EventRunFixtures.event(resources: [:], devices: []), now: now
+        )
+        let entered = now.addingTimeInterval(-EventRun.recoveryConfirmDeadline - 1)
+        let action = EventRun().nextAction(
+            directive: EventRunFixtures.directive(step: EventRun.Step.confirmingRecovery, now: entered),
+            world: world
+        )
+        #expect(action == .refreshDevices(deviceCodes: ["COURIER"], thenStall: .commandRejected))
+    }
+
+    @Test("a courier read as aboard hands back to recovering")
+    func confirmedCourierHandsBack() {
+        let devices = [
+            EventRunFixtures.device("CARRIER", type: "surge_carrier", location: "X-1"),
+            EventRunFixtures.device("FREIGHT", type: "cargo_freighter", location: "X-1"),
+            EventRunFixtures.device("COURIER", type: "matrix_container", attachedTo: "CARRIER", location: "X-1"),
+        ]
+        let world = EventRunFixtures.world(
+            devices: devices,
+            event: EventRunFixtures.event(resources: [:], devices: []), now: now
+        )
+        let action = EventRun().nextAction(
+            directive: EventRunFixtures.directive(step: EventRun.Step.confirmingRecovery, now: now),
+            world: world
+        )
+        #expect(action == .advanceStep(nextStep: EventRun.Step.recovering))
     }
 
     @Test("a beacon left on site is never recovered")

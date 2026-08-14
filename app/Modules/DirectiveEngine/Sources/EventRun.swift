@@ -37,6 +37,7 @@ public struct EventRun: MissionStepMachine {
         public static let committing = "committing"
         public static let collecting = "collecting"
         public static let recovering = "recovering"
+        public static let confirmingRecovery = "confirmingRecovery"
         public static let returning = "returning"
     }
 
@@ -55,6 +56,7 @@ public struct EventRun: MissionStepMachine {
     public static let loadConfirmDeadline: TimeInterval = 5 * 60
     public static let arrivalConfirmDeadline: TimeInterval = 5 * 60
     public static let stageConfirmDeadline: TimeInterval = 5 * 60
+    public static let recoveryConfirmDeadline: TimeInterval = 5 * 60
     /// Generous: `progress` moves on the server's own schedule after a deposit.
     public static let progressDeadline: TimeInterval = 15 * 60
 
@@ -111,6 +113,7 @@ public struct EventRun: MissionStepMachine {
         case Step.committing: return committing(directive, convoy, event, world)
         case Step.collecting: return collecting(directive, convoy, event, world)
         case Step.recovering: return recovering(directive, convoy, event, world)
+        case Step.confirmingRecovery: return confirmRecovery(directive, convoy, event, world)
         case Step.returning: return returning(directive, convoy, event, world)
         default: return preflight(directive, convoy, event, world)
         }
@@ -540,7 +543,25 @@ public struct EventRun: MissionStepMachine {
         return .dispatch(
             kind: .attach, deviceCode: convoy.carrier.deviceCode,
             params: CommandParams(devices: [courier.deviceCode]),
-            nextStep: Step.recovering
+            nextStep: Step.confirmingRecovery
+        )
+    }
+
+    /// Judge the re-attach on the courier's own row. `attach` is immediate and
+    /// untracked, so this step's deadline is the only bound on a rejected one;
+    /// it hands back to `recovering` only once the courier reads as aboard.
+    private func confirmRecovery(
+        _ directive: Directive, _ convoy: Convoy, _ event: LocationEvent, _ world: WorldSnapshot
+    ) -> MissionAction {
+        guard let courier = convoy.courier else {
+            return .refreshFleet(tag: Self.rootTag, thenStall: .unreachableDevice)
+        }
+        if courier.attachedToDeviceCode == convoy.carrier.deviceCode {
+            return .advanceStep(nextStep: Step.recovering)
+        }
+        return MissionConfirm.ladder(
+            [courier], directive, world,
+            deadline: Self.recoveryConfirmDeadline, thenStall: .commandRejected
         )
     }
 
