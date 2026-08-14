@@ -73,16 +73,25 @@ struct EventCourierPrintTests {
         ))
     }
 
-    @Test("with a container standing, it replicates into the spare matrix")
-    func replicates() {
+    @Test("with a container standing, it asks the operator to replicate")
+    func asksForReplication() {
         let action = EventCourierPrint().nextAction(
             directive: directive(step: EventCourierPrint.Step.replicating),
             world: world(standing() + [spareMatrix()])
         )
-        #expect(action == .dispatch(
-            kind: .simple("replicate"), deviceCode: "MATRIX",
-            params: CommandParams(), nextStep: EventCourierPrint.Step.stowing
-        ))
+        #expect(action == .stall(.awaitingCourierReplication, detail: "HUB-1"))
+        #expect(DirectiveAttentionReason.awaitingCourierReplication.brainDisposition == .escalate)
+    }
+
+    @Test("once the operator has replicated, the run resumes at stowing")
+    func resumesAfterReplication() {
+        var matrix = EventRunFixtures.device("MATRIX", type: "replicant_matrix", location: "HUB-1")
+        matrix.features = ["stow", "matrix"]
+        let action = EventCourierPrint().nextAction(
+            directive: directive(step: EventCourierPrint.Step.replicating),
+            world: world(standing() + [matrix], hosts: ["MATRIX"])
+        )
+        #expect(action == .advanceStep(nextStep: EventCourierPrint.Step.stowing))
     }
 
     @Test("a hosted courier finishes the run")

@@ -28,8 +28,8 @@ public struct EventCourierPrint: MissionStepMachine {
         public static let confirmingStow = "confirmingStow"
     }
 
-    /// How long `stowing` waits for a replicant to appear before re-deciding.
-    /// `replicate` creates no operation row, so nothing else bounds it.
+    /// How long `stowing` waits for a replicant to appear before handing back to
+    /// `replicating`, which stalls for the operator.
     public static let replicateDeadline: TimeInterval = 5 * 60
     /// How long `confirmingStow` waits for the matrix to read as aboard.
     public static let stowConfirmDeadline: TimeInterval = 5 * 60
@@ -126,25 +126,27 @@ public struct EventCourierPrint: MissionStepMachine {
         return .advanceStep(nextStep: Step.printing)
     }
 
+    /// Hand the one replication to the operator. It is irreversible and happens
+    /// once per courier, ever, so the engine asks rather than dispatches; the
+    /// run resumes here the moment a replicant stands outside the container.
     private func replicating(
         _ directive: Directive, _ depot: String, _ world: WorldSnapshot
     ) -> MissionAction {
-        guard container(at: depot, in: world) != nil else {
+        guard let box = container(at: depot, in: world) else {
             return .advanceStep(nextStep: Step.printing)
         }
-        guard let source = Self.replicationSource(in: world) else {
+        if loadable(into: box, in: world) != nil {
+            return .advanceStep(nextStep: Step.stowing)
+        }
+        guard Self.replicationSource(in: world) != nil else {
             return .stall(.unreachableDevice, detail: "no empty replicant matrix at \(depot)")
         }
-        if world.openOperation(for: source.deviceCode) != nil { return .wait }
-        return .dispatch(
-            kind: .simple("replicate"), deviceCode: source.deviceCode,
-            params: CommandParams(), nextStep: Step.stowing
-        )
+        return .stall(.awaitingCourierReplication, detail: depot)
     }
 
     /// Load the new replicant's matrix into the container. Hands back to
-    /// `replicating` once the deadline proves the replicate produced nothing —
-    /// it creates no operation row, so no guard here can notice its failure.
+    /// `replicating` once the deadline proves no replicant arrived, which
+    /// surfaces the ask rather than waiting on it forever.
     private func stowing(
         _ directive: Directive, _ depot: String, _ world: WorldSnapshot
     ) -> MissionAction {

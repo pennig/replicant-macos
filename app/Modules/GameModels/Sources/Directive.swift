@@ -170,6 +170,9 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
     case eventCriteriaUnmet
     /// The server refused the event commit.
     case eventCommitRejected
+    /// The courier's container is standing, but no replicant is free to host in
+    /// it. Replication is the operator's to perform.
+    case awaitingCourierReplication
 
     /// The stall panel's headline.
     public var displayName: String {
@@ -199,6 +202,7 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
         case .mineFleetIncomplete: "Mine fleet incomplete"
         case .eventCriteriaUnmet: "Event objectives not met"
         case .eventCommitRejected: "Event commit rejected"
+        case .awaitingCourierReplication: "Courier needs a replicant"
         }
     }
 
@@ -257,6 +261,8 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
             "Check the event's requirements against what the convoy delivered, then retry."
         case .eventCommitRejected:
             "The server refused the commit. Retry once a replicant is confirmed on site."
+        case .awaitingCourierReplication:
+            "The matrix container is standing at the depot but has nothing to carry. Replicate into the spare replicant matrix there, then retry — the run stows the new replicant itself."
         }
     }
 }
@@ -288,7 +294,7 @@ public extension DirectiveAttentionReason {
              .launchDeployedNothing, .noHaulControllerTagged, .awaitingRelayRestock,
              .repairUnfinished, .serviceBotNotArmed, .serviceBotNotRecovered,
              .miningDirectivePaused, .miningControllerNotRecovered, .mineFleetIncomplete,
-             .eventCriteriaUnmet:
+             .eventCriteriaUnmet, .awaitingCourierReplication:
             return .escalate
         }
     }
