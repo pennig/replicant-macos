@@ -2321,6 +2321,8 @@ git commit -m "feat(engine): EventRun progress gate, commit and reward sweep"
 
 ### Task 11: `EventRun` — recovery, return, registration
 
+**`recovering`'s attach must not target its own step.** `attach` creates no `Operation` row, so an `openOperation` guard on it is structurally nil, and `DirectiveExecutor` re-stamps `stepStartedAt` on every accepted dispatch — a same-step dispatch therefore re-issues every tick forever with no deadline able to fire. This plan made the same mistake in `staging` (Task 9) and it was caught in review there. Hand the dispatch to a confirming step bounded by `MissionLogBudget.dispatchRounds(…, kind:)`, or bound `recovering` in place with the same counter. The guarantee to preserve is that the convoy never departs without the courier; the loop must terminate in a stall an operator can see, never a silent advance.
+
 **Files:**
 - Modify: `app/Modules/DirectiveEngine/Sources/EventRun.swift`
 - Modify: `app/Modules/DirectiveEngine/Sources/MissionRegistry.swift:17-20`
