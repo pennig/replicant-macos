@@ -83,8 +83,9 @@ struct LocationEventDetailCriteriaTests {
 
     @Test("progress still wins when both blocks are present")
     func progressWins() throws {
-        var json = discovered
-        json["progress"] = .object([
+        // `JSONValue`'s subscript is get-only — no setter exists. Compose with
+        // the `adding(_:_:)` helper instead.
+        let json = discovered.adding("progress", .object([
             "met": .bool(false),
             "replicant_present": .bool(true),
             "options": .array([
@@ -102,7 +103,7 @@ struct LocationEventDetailCriteriaTests {
                     ]),
                 ])
             ]),
-        ])
+        ]))
         let detail = try #require(LocationEventDetail(json))
         #expect(detail.optionsAreFromCriteria == false)
         #expect(detail.replicantPresent)
