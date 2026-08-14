@@ -550,7 +550,7 @@ actor DirectiveEngineCore {
         do {
             let devices = try await devicesClient.fetchAtLocation(designation)
             let reconciler = Reconciler()
-            for device in devices { await reconciler.ingest(device) }
+            await reconciler.ingest(devices)
             logger.info("directive \(directive.id, privacy: .public): reconciled \(devices.count) device(s) at \(designation, privacy: .public) in one request")
         } catch {
             // The run is no worse off than before the attempt; fall through and
@@ -587,7 +587,7 @@ actor DirectiveEngineCore {
         do {
             let devices = try await devicesClient.fetchByTag(tag)
             let reconciler = Reconciler()
-            for device in devices { await reconciler.ingest(device) }
+            await reconciler.ingest(devices)
             logger.info("directive \(directive.id, privacy: .public): reconciled \(devices.count) device(s) tagged \(tag, privacy: .public) in one request")
         } catch {
             // The run is no worse off than before the attempt; fall through and

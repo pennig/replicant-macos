@@ -362,7 +362,7 @@ public struct DevicesFeature {
                     // Reconcile (not raw upsert) so the event-time guard holds and
                     // local provenance is preserved, exactly like a stream-driven read.
                     let reconciler = Reconciler()
-                    for device in devices { await reconciler.ingest(device) }
+                    await reconciler.ingest(devices)
                     // The walk is the authoritative full fleet, so anything local
                     // and no longer listed (traded away, destroyed) is gone —
                     // prune it rather than leaving an orphan row in the list.
@@ -603,7 +603,7 @@ public struct DevicesFeature {
                     // the inspector reflects the new topology.
                     if let devices = try? await devicesClient.fetchAll() {
                         let reconciler = Reconciler()
-                        for device in devices { await reconciler.ingest(device) }
+                        await reconciler.ingest(devices)
                         await reconciler.pruneDevices(presentCodes: devices.map(\.deviceCode))
                     } else {
                         logger.warning("post-replication fleet re-ingest failed; awaiting stream echo")

@@ -138,7 +138,7 @@ public struct PrintQueueFeature {
                     // Reconcile (not raw upsert) so the event-time guard holds and
                     // local provenance is preserved, exactly like a stream-driven read.
                     let reconciler = Reconciler()
-                    for device in devices { await reconciler.ingest(device) }
+                    await reconciler.ingest(devices)
                     await reconciler.pruneDevices(presentCodes: devices.map(\.deviceCode))
                     logger.info("cold-load reconciled \(devices.count) devices")
                     await send(.loadSucceeded)

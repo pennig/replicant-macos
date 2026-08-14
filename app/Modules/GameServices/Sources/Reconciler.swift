@@ -54,153 +54,172 @@ public struct Reconciler: Sendable {
     /// the write if what we already have is newer; preserves the stored
     /// `firstSeenAt`.
     public func ingest(_ device: Device) async {
+        await ingest([device])
+    }
+
+    /// Reconcile a whole walk in ONE transaction. Every `devices` observation is
+    /// re-fetched on the writer connection after each commit, so a transaction
+    /// per device makes a fleet walk pay for all of them once per device.
+    ///
+    /// All-or-nothing: a DB failure rolls the walk back and satisfies no
+    /// staleness mark, rather than leaving the fleet half-reconciled.
+    public func ingest(_ devices: [Device]) async {
+        guard !devices.isEmpty else { return }
         @Dependency(\.defaultDatabase) var database
         @Dependency(\.uuid) var uuid
         // A DB failure here is a correctness-core failure — report it
         // (visibly in DEBUG/tests), never swallow it (V3.6-T3).
         let applied = await withErrorReporting {
-            try await database.write { db in
-            let existing = try Device
-                .where { $0.deviceCode.eq(device.deviceCode) }
-                .fetchOne(db)
-
-            // Guard: never overwrite a row with a read that was *issued* earlier
-            // than the one already stored (out-of-order / duplicate arrivals) —
-            // its data is same-or-older, so applying it would regress the row.
-            if let existing, device.updatedAt < existing.updatedAt {
-                logger.debug("ingest \(device.deviceCode, privacy: .public): dropped stale (incoming \(device.updatedAt.ISO8601Format(), privacy: .public) < stored \(existing.updatedAt.ISO8601Format(), privacy: .public))")
-                return
-            }
-
-            var toWrite = device
-            if let existing { toWrite.firstSeenAt = existing.firstSeenAt }
-            try Device.upsert { toWrite }.execute(db)
-            logger.debug("ingest \(device.deviceCode, privacy: .public): applied status=\(device.status, privacy: .public) loc=\(device.location ?? "-", privacy: .public)")
-
-            // Reconcile the device's open operation against the in-progress
-            // activity its snapshot describes. Ops are normally created only by
-            // optimistic dispatch, so the reconcile path has to (a) adopt one when
-            // the device holds none of its own — a cold-load / relaunch that first
-            // meets a device already printing or travelling — and (b) promote a
-            // queued op to active once the snapshot shows it has actually started
-            // (a dispatched print sits `enqueued` with no deadline until then, so
-            // the progress bar can't draw). Both also refresh a slipped deadline.
-            if let activity = device.derivedActivity {
-                let openOp = try Operation.where {
-                    $0.entityCode.eq(device.deviceCode) &&
-                    $0.status.in(OperationStatus.openCases)
-                }
-                .fetchOne(db)
-
-                switch openOp {
-                case nil:
-                    // Adopt a fresh active op from the snapshot.
-                    let op = Operation(
-                        id: uuid().uuidString,
-                        entityCode: device.deviceCode,
-                        kind: activity.kind.rawValue,
-                        status: .active,
-                        source: OperationSource.poll,
-                        startedAt: activity.startedAt ?? device.updatedAt,
-                        completesAt: activity.completesAt,
-                        lastConfirmedAt: device.updatedAt,
-                        detail: .object([:])
-                    )
-                    try Operation.insert { op }.execute(db)
-                    logger.info("ingest \(device.deviceCode, privacy: .public): adopted \(activity.kind.rawValue, privacy: .public) op from in-progress snapshot")
-
-                case let op? where op.status != .optimistic
-                    && op.kind == activity.kind.rawValue
-                    && activity.completesAt != nil
-                    && (op.status != .active || op.completesAt != activity.completesAt):
-                    // The op exists but the snapshot is ahead of it: a queued op
-                    // that has now started, or a moved deadline. Promote/refresh in
-                    // place (same id, so the progress bar keeps its identity). An
-                    // `optimistic` op is left for dispatch to confirm.
-                    var updated = op
-                    updated.status = .active
-                    updated.completesAt = activity.completesAt
-                    if let startedAt = activity.startedAt { updated.startedAt = startedAt }
-                    updated.source = OperationSource.poll
-                    updated.lastConfirmedAt = device.updatedAt
-                    try Operation.upsert { updated }.execute(db)
-                    logger.info("ingest \(device.deviceCode, privacy: .public): promoted \(op.kind, privacy: .public) op \(op.id, privacy: .public) to active from in-progress snapshot")
-
-                case let op? where op.status != .optimistic && op.kind != activity.kind.rawValue:
-                    // The device has moved on to a *different* activity than the
-                    // open op tracks — the old action finished (we never saw a
-                    // settled status or completion event, because the device went
-                    // straight from one timed action into the next) and a new one
-                    // began. This happens when the transition is server-driven (a
-                    // recalled survey controller resuming a scan, an AMI directive
-                    // re-tasking a drone) rather than via local dispatch, which
-                    // would have superseded the prior op itself. Complete the stale
-                    // op and adopt the current activity, so the inspector stops
-                    // showing the finished task and the deadline scheduler tracks
-                    // the right one instead of re-arming the wrong op to its ETA.
-                    // An `optimistic` op is left for dispatch to confirm.
-                    var stale = op
-                    stale.status = .completed
-                    stale.source = OperationSource.poll
-                    stale.lastConfirmedAt = device.updatedAt
-                    // Complete first so the open-uniqueness index has room for the
-                    // adopted active op in the same transaction.
-                    try Operation.upsert { stale }.execute(db)
-
-                    let adopted = Operation(
-                        id: uuid().uuidString,
-                        entityCode: device.deviceCode,
-                        kind: activity.kind.rawValue,
-                        status: .active,
-                        source: OperationSource.poll,
-                        startedAt: activity.startedAt ?? device.updatedAt,
-                        completesAt: activity.completesAt,
-                        lastConfirmedAt: device.updatedAt,
-                        detail: .object([:])
-                    )
-                    try Operation.insert { adopted }.execute(db)
-                    logger.info("ingest \(device.deviceCode, privacy: .public): completed stale \(op.kind, privacy: .public) op \(op.id, privacy: .public) and adopted \(activity.kind.rawValue, privacy: .public) from in-progress snapshot")
-
-                default:
-                    break
-                }
-            } else if device.isSettled {
-                // The device has settled (idle/stowed/inactive): it finished
-                // whatever timed action it was running. Close its open
-                // deadline-bearing op directly instead of waiting for the deadline
-                // timer — this is what completes travel, since arrival events are
-                // unreliable as a "done" signal (per-leg arrivals fire on every
-                // leg, and a simple single-leg trip may emit *only* a per-leg
-                // arrival, never a whole-route `travel.arrived`). It also
-                // catches arrivals the server reports before its own ETA estimate.
-                // Continuous mining has no deadline (`completesAt == nil`) and is
-                // left to its own stop signals; search tracks its site and never
-                // settles. Mirrors the DeadlineScheduler's `isSettled → complete`.
-                if var op = try Operation.where({
-                    $0.entityCode.eq(device.deviceCode)
-                        && $0.status.eq(OperationStatus.active)
-                }).fetchOne(db),
-                   op.completesAt != nil {
-                    op.status = .completed
-                    op.source = OperationSource.poll
-                    op.lastConfirmedAt = device.updatedAt
-                    try Operation.upsert { op }.execute(db)
-                    logger.info("ingest \(device.deviceCode, privacy: .public): device settled (\(device.status, privacy: .public)) — completed \(op.kind, privacy: .public) op \(op.id, privacy: .public)")
-                }
-            }
+            try await database.write { (db: Database) -> Void in
+                for device in devices { try Self.apply(device, in: db, uuid: { uuid() }) }
             }
         } != nil
 
-        // Spend any staleness mark this snapshot satisfies (V3.5): every
+        // Spend any staleness mark these snapshots satisfy (V3.5): every
         // successful read funnels through here, so a `.high` confirm, the
         // inspector's viewing loop, or a cold-load walk all clear marks — the
         // drain loop never re-pays for an already-fresh row. The issue-time
         // comparison inside `markSatisfied` keeps a pre-mark snapshot from
         // spending a newer mark. (A dropped-stale write still satisfies: the
         // stored row is even fresher than this snapshot.)
-        if applied {
-            @Dependency(\.deviceStaleness) var deviceStaleness
+        guard applied else { return }
+        @Dependency(\.deviceStaleness) var deviceStaleness
+        for device in devices {
             await deviceStaleness.markSatisfied(device.deviceCode, device.updatedAt)
+        }
+    }
+
+    /// One device's share of a walk, inside the caller's transaction. `uuid` is
+    /// a closure so a device with no activity never resolves the dependency —
+    /// tests register it only when they expect an operation to be adopted.
+    private static func apply(_ device: Device, in db: Database, uuid: () -> UUID) throws {
+        let existing = try Device
+            .where { $0.deviceCode.eq(device.deviceCode) }
+            .fetchOne(db)
+
+        // Guard: never overwrite a row with a read that was *issued* earlier
+        // than the one already stored (out-of-order / duplicate arrivals) —
+        // its data is same-or-older, so applying it would regress the row.
+        if let existing, device.updatedAt < existing.updatedAt {
+            logger.debug("ingest \(device.deviceCode, privacy: .public): dropped stale (incoming \(device.updatedAt.ISO8601Format(), privacy: .public) < stored \(existing.updatedAt.ISO8601Format(), privacy: .public))")
+            return
+        }
+
+        var toWrite = device
+        if let existing { toWrite.firstSeenAt = existing.firstSeenAt }
+        try Device.upsert { toWrite }.execute(db)
+        logger.debug("ingest \(device.deviceCode, privacy: .public): applied status=\(device.status, privacy: .public) loc=\(device.location ?? "-", privacy: .public)")
+
+        // Reconcile the device's open operation against the in-progress
+        // activity its snapshot describes. Ops are normally created only by
+        // optimistic dispatch, so the reconcile path has to (a) adopt one when
+        // the device holds none of its own — a cold-load / relaunch that first
+        // meets a device already printing or travelling — and (b) promote a
+        // queued op to active once the snapshot shows it has actually started
+        // (a dispatched print sits `enqueued` with no deadline until then, so
+        // the progress bar can't draw). Both also refresh a slipped deadline.
+        if let activity = device.derivedActivity {
+            let openOp = try Operation.where {
+                $0.entityCode.eq(device.deviceCode) &&
+                $0.status.in(OperationStatus.openCases)
+            }
+            .fetchOne(db)
+
+            switch openOp {
+            case nil:
+                // Adopt a fresh active op from the snapshot.
+                let op = Operation(
+                    id: uuid().uuidString,
+                    entityCode: device.deviceCode,
+                    kind: activity.kind.rawValue,
+                    status: .active,
+                    source: OperationSource.poll,
+                    startedAt: activity.startedAt ?? device.updatedAt,
+                    completesAt: activity.completesAt,
+                    lastConfirmedAt: device.updatedAt,
+                    detail: .object([:])
+                )
+                try Operation.insert { op }.execute(db)
+                logger.info("ingest \(device.deviceCode, privacy: .public): adopted \(activity.kind.rawValue, privacy: .public) op from in-progress snapshot")
+
+            case let op? where op.status != .optimistic
+                && op.kind == activity.kind.rawValue
+                && activity.completesAt != nil
+                && (op.status != .active || op.completesAt != activity.completesAt):
+                // The op exists but the snapshot is ahead of it: a queued op
+                // that has now started, or a moved deadline. Promote/refresh in
+                // place (same id, so the progress bar keeps its identity). An
+                // `optimistic` op is left for dispatch to confirm.
+                var updated = op
+                updated.status = .active
+                updated.completesAt = activity.completesAt
+                if let startedAt = activity.startedAt { updated.startedAt = startedAt }
+                updated.source = OperationSource.poll
+                updated.lastConfirmedAt = device.updatedAt
+                try Operation.upsert { updated }.execute(db)
+                logger.info("ingest \(device.deviceCode, privacy: .public): promoted \(op.kind, privacy: .public) op \(op.id, privacy: .public) to active from in-progress snapshot")
+
+            case let op? where op.status != .optimistic && op.kind != activity.kind.rawValue:
+                // The device has moved on to a *different* activity than the
+                // open op tracks — the old action finished (we never saw a
+                // settled status or completion event, because the device went
+                // straight from one timed action into the next) and a new one
+                // began. This happens when the transition is server-driven (a
+                // recalled survey controller resuming a scan, an AMI directive
+                // re-tasking a drone) rather than via local dispatch, which
+                // would have superseded the prior op itself. Complete the stale
+                // op and adopt the current activity, so the inspector stops
+                // showing the finished task and the deadline scheduler tracks
+                // the right one instead of re-arming the wrong op to its ETA.
+                // An `optimistic` op is left for dispatch to confirm.
+                var stale = op
+                stale.status = .completed
+                stale.source = OperationSource.poll
+                stale.lastConfirmedAt = device.updatedAt
+                // Complete first so the open-uniqueness index has room for the
+                // adopted active op in the same transaction.
+                try Operation.upsert { stale }.execute(db)
+
+                let adopted = Operation(
+                    id: uuid().uuidString,
+                    entityCode: device.deviceCode,
+                    kind: activity.kind.rawValue,
+                    status: .active,
+                    source: OperationSource.poll,
+                    startedAt: activity.startedAt ?? device.updatedAt,
+                    completesAt: activity.completesAt,
+                    lastConfirmedAt: device.updatedAt,
+                    detail: .object([:])
+                )
+                try Operation.insert { adopted }.execute(db)
+                logger.info("ingest \(device.deviceCode, privacy: .public): completed stale \(op.kind, privacy: .public) op \(op.id, privacy: .public) and adopted \(activity.kind.rawValue, privacy: .public) from in-progress snapshot")
+
+            default:
+                break
+            }
+        } else if device.isSettled {
+            // The device has settled (idle/stowed/inactive): it finished
+            // whatever timed action it was running. Close its open
+            // deadline-bearing op directly instead of waiting for the deadline
+            // timer — this is what completes travel, since arrival events are
+            // unreliable as a "done" signal (per-leg arrivals fire on every
+            // leg, and a simple single-leg trip may emit *only* a per-leg
+            // arrival, never a whole-route `travel.arrived`). It also
+            // catches arrivals the server reports before its own ETA estimate.
+            // Continuous mining has no deadline (`completesAt == nil`) and is
+            // left to its own stop signals; search tracks its site and never
+            // settles. Mirrors the DeadlineScheduler's `isSettled → complete`.
+            if var op = try Operation.where({
+                $0.entityCode.eq(device.deviceCode)
+                    && $0.status.eq(OperationStatus.active)
+            }).fetchOne(db),
+               op.completesAt != nil {
+                op.status = .completed
+                op.source = OperationSource.poll
+                op.lastConfirmedAt = device.updatedAt
+                try Operation.upsert { op }.execute(db)
+                logger.info("ingest \(device.deviceCode, privacy: .public): device settled (\(device.status, privacy: .public)) — completed \(op.kind, privacy: .public) op \(op.id, privacy: .public)")
+            }
         }
     }
 
