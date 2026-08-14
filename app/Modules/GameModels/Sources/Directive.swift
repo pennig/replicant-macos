@@ -262,7 +262,7 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
         case .eventCommitRejected:
             "The server refused the commit. Retry once a replicant is confirmed on site."
         case .awaitingCourierReplication:
-            "Stow the spare replicant matrix into the matrix container at the depot, then replicate into it — the container is itself the cradle. If you already replicated into a matrix aboard something else, move that matrix into the container instead."
+            "Stow the empty replicant matrix into the matrix container at the depot, then replicate into it there — the container is the cradle. If you replicated into a matrix elsewhere, move that one into the container instead. Retry once the container holds the new replicant."
         }
     }
 }

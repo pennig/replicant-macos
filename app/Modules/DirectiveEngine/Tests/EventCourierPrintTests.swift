@@ -2,7 +2,7 @@
 //  EventCourierPrintTests.swift
 //  Replicould — DirectiveEngine
 //
-//  Covers the courier bootstrap: print the container, replicate, stow, confirm.
+//  Covers the courier bootstrap: print the container, ask the operator, finish.
 //
 
 import Foundation
