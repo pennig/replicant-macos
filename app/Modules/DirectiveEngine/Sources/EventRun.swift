@@ -102,6 +102,11 @@ public struct EventRun: MissionStepMachine {
         switch directive.step {
         case Step.printing: return printing(directive, convoy, event, world)
         case Step.loading: return loading(directive, convoy, event, world)
+        case Step.confirmingLoad: return confirmLoad(directive, convoy, event, world)
+        case Step.departing: return departing(directive, convoy, event, world)
+        case Step.confirmingArrival: return confirmArrival(directive, convoy, event, world)
+        case Step.staging: return staging(directive, convoy, event, world)
+        case Step.confirmingStage: return confirmStage(directive, convoy, event, world)
         default: return preflight(directive, convoy, event, world)
         }
     }
@@ -242,6 +247,120 @@ public struct EventRun: MissionStepMachine {
             params: CommandParams(resources: option.resources),
             nextStep: Step.confirmingLoad
         )
+    }
+
+    /// Judge the attach or collect just ordered, looping back for the next.
+    /// The dispatch's own confirm-read lands BEFORE the step stamp, so the
+    /// loop's round count proves it landed, not row freshness.
+    private func confirmLoad(
+        _ directive: Directive, _ convoy: Convoy, _ event: LocationEvent, _ world: WorldSnapshot
+    ) -> MissionAction {
+        if world.openOperation(for: convoy.carrier.deviceCode) != nil { return .wait }
+        if let freighter = convoy.freighter, world.openOperation(for: freighter.deviceCode) != nil {
+            return .wait
+        }
+        return .advanceStep(nextStep: Step.loading)
+    }
+
+    // MARK: - Delivery
+
+    /// Move the carrier first, then the freighter. Each leg is its own dispatch:
+    /// two hulls cannot share one travel command.
+    private func departing(
+        _ directive: Directive, _ convoy: Convoy, _ event: LocationEvent, _ world: WorldSnapshot
+    ) -> MissionAction {
+        let destination = event.location
+        if convoy.carrier.location != destination {
+            if world.openOperation(for: convoy.carrier.deviceCode) != nil { return .wait }
+            // The equality check above misreads a row still lagging an arrival.
+            if let unconfirmed = SalvageRun.travelPositionUnconfirmed(convoy.carrier, world) {
+                return unconfirmed
+            }
+            return .dispatch(
+                kind: .travel, deviceCode: convoy.carrier.deviceCode,
+                params: CommandParams(destination: destination), nextStep: Step.departing
+            )
+        }
+        guard let freighter = convoy.freighter else {
+            return .refreshFleet(tag: Self.rootTag, thenStall: .unreachableDevice)
+        }
+        if freighter.location != destination {
+            if world.openOperation(for: freighter.deviceCode) != nil { return .wait }
+            if let unconfirmed = SalvageRun.travelPositionUnconfirmed(freighter, world) {
+                return unconfirmed
+            }
+            return .dispatch(
+                kind: .travel, deviceCode: freighter.deviceCode,
+                params: CommandParams(destination: destination), nextStep: Step.confirmingArrival
+            )
+        }
+        return .advanceStep(nextStep: Step.confirmingArrival)
+    }
+
+    /// Both hulls placed at the event, on rows read since the step began.
+    private func confirmArrival(
+        _ directive: Directive, _ convoy: Convoy, _ event: LocationEvent, _ world: WorldSnapshot
+    ) -> MissionAction {
+        var rows = [convoy.carrier]
+        if let freighter = convoy.freighter { rows.append(freighter) }
+        let placed = rows.allSatisfy {
+            $0.updatedAt >= directive.stepStartedAt && $0.location == event.location
+        }
+        if placed { return .advanceStep(nextStep: Step.staging) }
+        if rows.contains(where: { world.openOperation(for: $0.deviceCode) != nil }) { return .wait }
+        return MissionConfirm.ladder(
+            rows, directive, world,
+            deadline: Self.arrivalConfirmDeadline, thenStall: .vesselPositionUnconfirmed
+        )
+    }
+
+    /// Set the load down and empty the hold. The courier stays attached — it is
+    /// the convoy's replicant and comes home with the carrier.
+    private func staging(
+        _ directive: Directive, _ convoy: Convoy, _ event: LocationEvent, _ world: WorldSnapshot
+    ) -> MissionAction {
+        guard case .decided(let option) = EventPlan.resolve(
+            event, chosenOption: event.chosenOption, bills: [:]
+        ) else { return .stall(.unreachableDevice) }
+
+        let courierCode = convoy.courier?.deviceCode
+        let aboard = world.devices.values
+            .filter { $0.attachedToDeviceCode == convoy.carrier.deviceCode && $0.deviceCode != courierCode }
+            .sorted { $0.deviceCode < $1.deviceCode }
+        if !aboard.isEmpty {
+            return .dispatch(
+                kind: .detach, deviceCode: convoy.carrier.deviceCode,
+                params: CommandParams(devices: aboard.map(\.deviceCode)),
+                nextStep: Step.confirmingStage
+            )
+        }
+
+        guard !option.resources.isEmpty else { return .advanceStep(nextStep: Step.confirmingProgress) }
+        guard let freighter = convoy.freighter else {
+            return .refreshFleet(tag: Self.rootTag, thenStall: .unreachableDevice)
+        }
+        if world.openOperation(for: freighter.deviceCode) != nil { return .wait }
+        // An empty hold means the deposit landed only once one was ordered.
+        if case .dispatched(let kind, _) = MissionLogBudget.lastDispatch(
+            world, dispatch: Step.staging, confirm: Step.confirmingStage
+        ), kind == OperationKind.depositResources.rawValue, freighter.cargoUsed == 0 {
+            return .advanceStep(nextStep: Step.confirmingProgress)
+        }
+        return .dispatch(
+            kind: .depositResources, deviceCode: freighter.deviceCode,
+            params: CommandParams(resources: option.resources),
+            nextStep: Step.confirmingStage
+        )
+    }
+
+    private func confirmStage(
+        _ directive: Directive, _ convoy: Convoy, _ event: LocationEvent, _ world: WorldSnapshot
+    ) -> MissionAction {
+        if world.openOperation(for: convoy.carrier.deviceCode) != nil { return .wait }
+        if let freighter = convoy.freighter, world.openOperation(for: freighter.deviceCode) != nil {
+            return .wait
+        }
+        return .advanceStep(nextStep: Step.staging)
     }
 
     /// The run never roams.

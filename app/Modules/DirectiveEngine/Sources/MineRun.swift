@@ -49,9 +49,6 @@ public struct MineRun: MissionStepMachine {
     /// carrier row may lag the arrival it reflects.
     public static let arrivalConfirmDeadline = SalvageRun.arrivalConfirmDeadline
 
-    /// Floor between confirm-reads of a row a step is waiting on.
-    public static let confirmReadInterval: TimeInterval = 30
-
     /// How many rows ride the carrier.
     public static let carriedTotal = MineRecipe.carried.reduce(0) { $0 + $1.quantity }
 
@@ -339,7 +336,7 @@ public struct MineRun: MissionStepMachine {
             world, dispatch: Step.attaching, confirm: Step.confirmingAttach
         )
         if roster.count - loose.count >= rounds { return .advanceStep(nextStep: Step.attaching) }
-        return Self.confirmLadder(
+        return MissionConfirm.ladder(
             [next], directive, world,
             deadline: Self.attachConfirmDeadline, thenStall: .commandRejected
         )
@@ -370,7 +367,7 @@ public struct MineRun: MissionStepMachine {
             return .advanceStep(nextStep: Step.detaching)
         }
         if world.openOperation(for: carrier.deviceCode) != nil { return .wait }
-        return Self.confirmLadder(
+        return MissionConfirm.ladder(
             [carrier], directive, world,
             deadline: Self.arrivalConfirmDeadline, thenStall: .vesselPositionUnconfirmed
         )
@@ -404,7 +401,7 @@ public struct MineRun: MissionStepMachine {
                 && $0.attachedToDeviceCode == nil && $0.location == belt
         }
         if landed { return .advanceStep(nextStep: Step.adopting) }
-        return Self.confirmLadder(
+        return MissionConfirm.ladder(
             roster, directive, world,
             deadline: Self.attachConfirmDeadline, thenStall: .commandRejected
         )
@@ -441,7 +438,7 @@ public struct MineRun: MissionStepMachine {
             world, dispatch: Step.adopting, confirm: Step.confirmingAdopt
         )
         if done >= rounds { return .advanceStep(nextStep: Step.adopting) }
-        return Self.confirmLadder(
+        return MissionConfirm.ladder(
             adoptions[done].pending, directive, world,
             deadline: Self.attachConfirmDeadline, thenStall: .commandRejected
         )
@@ -532,30 +529,9 @@ public struct MineRun: MissionStepMachine {
     private static func armLadder(
         _ device: Device, _ directive: Directive, _ world: WorldSnapshot
     ) -> MissionAction {
-        confirmLadder(
+        MissionConfirm.ladder(
             [device], directive, world, deadline: attachConfirmDeadline,
             thenStall: device.deviceType == "service_bot" ? .serviceBotNotArmed : .commandRejected
         )
-    }
-
-    // MARK: - Confirming reads
-
-    /// The ladder every confirm step ends with. The deadline is read FIRST: a
-    /// failing read never advances `updatedAt`, so the other order loops forever
-    /// at one high-priority read per tick.
-    private static func confirmLadder(
-        _ rows: [Device], _ directive: Directive, _ world: WorldSnapshot,
-        deadline: TimeInterval, thenStall: DirectiveAttentionReason
-    ) -> MissionAction {
-        let codes = rows.map(\.deviceCode)
-        if world.now.timeIntervalSince(directive.stepStartedAt) > deadline {
-            return .refreshDevices(deviceCodes: codes, thenStall: thenStall)
-        }
-        guard rows.contains(where: { $0.updatedAt < directive.stepStartedAt }) else { return .wait }
-        let lastLook = rows.map(\.updatedAt).min() ?? .distantPast
-        if world.now.timeIntervalSince(lastLook) > Self.confirmReadInterval {
-            return .refreshDevices(deviceCodes: codes, thenStall: nil)
-        }
-        return .wait
     }
 }
