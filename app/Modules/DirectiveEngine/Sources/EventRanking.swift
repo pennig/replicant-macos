@@ -2,8 +2,7 @@
 //  EventRanking.swift
 //  Replicould — DirectiveEngine
 //
-//  Which location event the convoy works next: a lexicographic key over the
-//  active ledger, in `GrowRanking`'s shape.
+//  Which location event the convoy works next, in `GrowRanking`'s shape.
 //
 
 import Foundation
