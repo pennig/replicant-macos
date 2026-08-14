@@ -361,8 +361,7 @@ Expected: FAIL — `cannot find 'EventPlan' in scope`.
 //  EventPlan.swift
 //  Replicould — DirectiveEngine
 //
-//  What one location event costs: the option in force and its device and
-//  resource bill, priced through the blueprint catalogue.
+//  What one location event costs, priced through the blueprint catalogue.
 //
 
 import Foundation
