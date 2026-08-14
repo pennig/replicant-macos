@@ -107,6 +107,27 @@ struct BrainWhyEventChoiceTests {
         #expect(first.options[1].holdsEveryDevice)
     }
 
+    /// A device type the blueprint catalogue cannot price must not read as a
+    /// free option — "nothing to deliver" beside "needs Signal Booster" is one
+    /// line contradicting itself.
+    @Test("an unpriced device option says so instead of reading as free")
+    func namesAnUnpricedBuild() {
+        let choices = BrainReport.eventChoices(
+            events: [
+                Self.event("X-1-EVT-001", location: "X-1", tier: 2, options: [
+                    Self.option("booster", devices: [(1, "signal_booster")]),
+                    Self.option("satellite", devices: [(1, "comm_satellite")], resources: ["carbon": 150]),
+                ]),
+            ],
+            bills: [:], devices: [:]
+        )
+        let why = BrainWhy.from(report: Self.report(choices: choices))
+
+        #expect(why.eventChoices[0].options[0].fact == "build cost unpriced")
+        #expect(why.eventChoices[0].options[1].fact == "build cost unpriced · 150 to ship")
+        #expect(why.eventChoices[0].options[0].stock == "needs Signal Booster")
+    }
+
     /// A pick the operator must make is not a fault, so the section carries no
     /// escalation — the card stays calm.
     @Test("a pending choice never escalates the card")

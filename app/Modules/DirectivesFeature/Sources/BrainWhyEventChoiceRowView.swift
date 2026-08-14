@@ -4,7 +4,7 @@
 //
 //  One pending decision inside the brain's why-view. Split from
 //  `BrainWhyEventChoice` per the list-row-preview-crash rule, and informational:
-//  the pick is made on the Missions screen, which this pane cannot reach.
+//  the pick is made under Location Events, which this pane cannot reach.
 //
 
 import SwiftUI

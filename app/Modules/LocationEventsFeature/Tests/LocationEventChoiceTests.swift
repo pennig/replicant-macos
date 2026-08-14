@@ -69,6 +69,24 @@ struct LocationEventChoiceTests {
         #expect(rows.first { $0.designation == "Y-2-EVT-009" }?.chosenOption == nil)
     }
 
+    /// Three pick states, three sentences. The stale one is the case a
+    /// nil-check alone gets wrong: a pick naming an option the payload does not
+    /// offer leaves every row unchosen and the event still pending.
+    @Test func thePromptReadsCorrectlyForAllThreePickStates() {
+        let options = Self.twoOptionEvent("X-1-EVT-001", location: "X-1").quest?.options ?? []
+        #expect(options.count == 2)
+
+        let undecided = EventOptionPicker.prompt(chosenOption: nil, options: options)
+        let live = EventOptionPicker.prompt(chosenOption: "booster", options: options)
+        let stale = EventOptionPicker.prompt(chosenOption: "gone", options: options)
+
+        #expect(undecided.contains("No option chosen"))
+        #expect(live == "The convoy delivers the chosen option.")
+        #expect(stale.contains("no longer offered"))
+        #expect(stale != live)
+        #expect(stale != undecided)
+    }
+
     /// The operator may change their mind before the convoy launches.
     @Test func choosingAgainReplacesThePick() async throws {
         let database = try GameDatabase.bootstrap()

@@ -70,6 +70,9 @@ public struct LocationEventsFeature {
         /// Record which fulfilment option the convoy is to satisfy. Local only:
         /// the pick is the brain's input, and the backend is never told.
         case chooseOption(designation: String, name: String)
+        /// The pick's write failed — surfaced, never swallowed: the operator
+        /// would otherwise see the row simply not take.
+        case chooseOptionFailed(String)
         /// Complete the selected (ready) event via an empty POST to its designation.
         case completeButtonTapped
         case completeSucceeded
@@ -130,7 +133,13 @@ public struct LocationEventsFeature {
                             .update { $0.chosenOption = #bind(name) }
                             .execute(db)
                     }
+                } catch: { error, send in
+                    await send(.chooseOptionFailed(error.localizedDescription))
                 }
+
+            case let .chooseOptionFailed(message):
+                state.errorMessage = message
+                return .none
 
             case .completeButtonTapped:
                 guard !state.isCompleting, let event = state.selectedEvent, event.isReady

@@ -72,17 +72,28 @@ extension BrainWhyEventChoice.Option {
     init(_ option: BrainEventChoice.Option) {
         self.init(
             name: option.name,
-            fact: Self.fact(build: option.deviceUnits, ship: option.resourceUnits),
+            fact: Self.fact(
+                build: option.deviceUnits, ship: option.resourceUnits,
+                required: option.requiredDevices
+            ),
             stock: Self.stock(required: option.requiredDevices, missing: option.missingDevices),
             holdsEveryDevice: option.missingDevices.isEmpty,
             exceedsOneFreighterLoad: option.exceedsOneFreighterLoad
         )
     }
 
-    private static func fact(build: Int, ship: Int) -> String {
+    /// An option calling for devices the blueprint catalogue cannot price says
+    /// so. Reporting it as a zero would contradict `stock` in the same line.
+    private static func fact(build: Int, ship: Int, required: [String]) -> String {
         var clauses: [String] = []
-        if build > 0 { clauses.append("\(build.formatted()) units to build") }
-        if ship > 0 { clauses.append(clauses.isEmpty ? "\(ship.formatted()) units to ship" : "\(ship.formatted()) to ship") }
+        if build > 0 {
+            clauses.append("\(build.formatted()) units to build")
+        } else if !required.isEmpty {
+            clauses.append("build cost unpriced")
+        }
+        if ship > 0 {
+            clauses.append(clauses.isEmpty ? "\(ship.formatted()) units to ship" : "\(ship.formatted()) to ship")
+        }
         return clauses.isEmpty ? "nothing to deliver" : clauses.joined(separator: " · ")
     }
 

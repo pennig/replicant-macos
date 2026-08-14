@@ -30,7 +30,7 @@ public struct EventOptionPicker: View {
     public var body: some View {
         RCReadoutCard("Fulfilment Option") {
             VStack(alignment: .leading, spacing: Space.s) {
-                Text(prompt)
+                Text(Self.prompt(chosenOption: event.chosenOption, options: options))
                     .font(.rcCaption)
                     .foregroundStyle(.rcTextSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -49,9 +49,16 @@ public struct EventOptionPicker: View {
         }
     }
 
-    private var prompt: String {
-        event.chosenOption == nil
-            ? "No option chosen — the convoy skips this event until one is."
-            : "The convoy delivers the chosen option."
+    /// Three pick states, not two. A pick naming an option the payload does not
+    /// offer is ignored by `EventPlan.resolve`, so it must never read as a
+    /// decision the convoy is acting on.
+    static func prompt(chosenOption: String?, options: [LocationEventDetail.Option]) -> String {
+        guard let chosenOption else {
+            return "No option chosen — the convoy skips this event until one is."
+        }
+        guard options.contains(where: { $0.name == chosenOption }) else {
+            return "The recorded option is no longer offered — pick again, or the convoy skips this event."
+        }
+        return "The convoy delivers the chosen option."
     }
 }

@@ -47,7 +47,7 @@ public struct BrainWhyDetailView: View {
                 // would be noise in a pane read at a glance.
                 if !why.eventChoices.isEmpty {
                     section("Decisions Pending") {
-                        Text("Pick an option on the Missions screen; the convoy skips these until you do.")
+                        Text("Pick an option under Location Events; the convoy skips these until you do.")
                             .font(.rcCaption)
                             .foregroundStyle(.rcTextSecondary)
                             .fixedSize(horizontal: false, vertical: true)
