@@ -31,6 +31,87 @@ enum EventRunFixtures {
         )
     }
 
+    /// The convoy stood down at the event, courier still aboard the carrier.
+    static func onSiteConvoy(
+        updatedAt: Date, cargoUsed: Int = 0, cargoCapacity: Int = 500
+    ) -> [Device] {
+        [
+            device("CARRIER", type: "surge_carrier", location: "X-1", updatedAt: updatedAt),
+            device(
+                "FREIGHT", type: "cargo_freighter", location: "X-1", updatedAt: updatedAt,
+                cargoUsed: cargoUsed, cargoCapacity: cargoCapacity
+            ),
+            device(
+                "COURIER", type: "matrix_container", attachedTo: "CARRIER",
+                location: "X-1", updatedAt: updatedAt
+            ),
+        ]
+    }
+
+    /// The rows that make `HUB-1` recognise as an operational theatre: a printer
+    /// standing the depot up, and a relay meshing its system.
+    static func depotFleet(updatedAt: Date = .distantPast) -> [Device] {
+        [
+            Device(
+                deviceCode: "PRINTER", deviceType: "autofactory", replicantCode: "R-1",
+                status: "idle", location: "HUB-1", locationName: nil, operationalCapacity: 1,
+                queueSize: 0, stowedInDeviceCode: nil, controllerDeviceCode: nil,
+                attachedToDeviceCode: nil, createdAt: .distantPast,
+                availableCommands: ["enqueue_print"], features: ["print"], tags: [],
+                detail: .object([:]), updatedAt: updatedAt, firstSeenAt: .distantPast
+            ),
+            Device(
+                deviceCode: "MESH", deviceType: "ftl_relay", replicantCode: "R-1",
+                status: "relaying", location: "HUB-1", locationName: nil, operationalCapacity: 1,
+                queueSize: 0, stowedInDeviceCode: nil, controllerDeviceCode: nil,
+                attachedToDeviceCode: nil, createdAt: .distantPast,
+                availableCommands: [], features: ["relay"], tags: [],
+                detail: .object([:]), updatedAt: updatedAt, firstSeenAt: .distantPast
+            ),
+        ]
+    }
+
+    /// The stock census that makes the depot `.operational`.
+    static func depotFootprint(fetchedAt: Date) -> LocationFootprint {
+        LocationFootprint(
+            location: "HUB-1", devices: 2, resources: BrainCeiling.aggregateSpendFloor * 2,
+            resourceSites: 0, locationEvents: 0, replicants: 0, fetchedAt: fetchedAt
+        )
+    }
+
+    /// The event carrying LIVE progress, as the ledger reports it mid-run.
+    static func progressEvent(
+        met: Bool, replicant: Bool, status: String = "active",
+        rewards: [String: Int] = ["rares": 400]
+    ) -> LocationEvent {
+        LocationEvent(
+            designation: "X-1-EVT-001", location: "X-1", tier: 1, status: status,
+            objectivesMet: met,
+            detail: .object([
+                "criteria": .array([.object([
+                    "name": .string("default"), "devices": .array([]),
+                    "resources": .object(["structural": .number(200)]),
+                ])]),
+                "progress": .object([
+                    "met": .bool(met), "replicant_present": .bool(replicant),
+                    "options": .array([.object([
+                        "name": .string("default"), "met": .bool(met), "devices": .array([]),
+                        "resources": .array([.object([
+                            "resource_type": .string("structural"),
+                            "current": .number(met ? 200 : 0), "required": .number(200),
+                            "met": .bool(met),
+                        ])]),
+                    ])]),
+                ]),
+                "rewards": .object([
+                    "xp": .number(500),
+                    "resources": .object(rewards.mapValues { .number(Double($0)) }),
+                ]),
+            ]),
+            firstSeenAt: .distantPast, updatedAt: .distantPast
+        )
+    }
+
     static func openPrint(on code: String, now: Date) -> [String: GameModels.Operation] {
         [code: GameModels.Operation(
             id: "OP-1", entityCode: code, kind: OperationKind.print.rawValue, status: .active,
