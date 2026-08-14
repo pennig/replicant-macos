@@ -2508,6 +2508,8 @@ git commit -m "feat(engine): EventRun courier recovery, return leg, registration
 
 ### Task 12: The courier bootstrap
 
+**Replication is the operator's, not the engine's.** `CommandClient.makeBody` has no `replicate` case — the verb lives on `ReplicantsClient.replicate(sourceMatrixCode:targetCode:name:)`, a different client entirely. Do not wire a `MissionAction` to it. Replication fires **once per courier, ever**; its source/target semantics are unverified; and it is irreversible, since an `empty_replicant_matrix` loses the `matrix` feature once used and this account holds one spare. The `replicating` step therefore **stalls with an actionable reason** naming what the operator must do, and the run resumes and stows once they have done it. The `fulfillEvent` goal reads idle rather than stalled while no courier exists, so nothing escalates in the meantime.
+
 An operator-invoked print that stands a `matrix_container` up and replicates a new replicant into the account's spare `empty_replicant_matrix`.
 
 **Files:**
