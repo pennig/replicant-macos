@@ -285,6 +285,16 @@ actor DirectiveEngineCore {
                 nextStep: nextStep, thenStall: thenStall,
                 directive: directive, machine: machine, paid: [.footprint]
             )
+        case let .refreshEvents(thenStall):
+            action = await resolveEventsRefresh(
+                thenStall: thenStall,
+                directive: directive, machine: machine, paid: [.events]
+            )
+        case let .completeEvent(location, designation, nextStep):
+            action = await resolveEventCompletion(
+                location: location, designation: designation,
+                nextStep: nextStep, directive: directive
+            )
         case let .extendQueue(centre):
             let resolution = await resolveExtendQueue(
                 centre: centre, directive: directive, machine: machine
@@ -478,6 +488,20 @@ actor DirectiveEngineCore {
             )
             return Resolution(action: resolved, directive: extended)
 
+        case let .refreshEvents(thenStall):
+            let resolved = await resolveEventsRefresh(
+                thenStall: thenStall,
+                directive: extended, machine: machine, paid: [.events]
+            )
+            return Resolution(action: resolved, directive: extended)
+
+        case let .completeEvent(location, designation, nextStep):
+            let resolved = await resolveEventCompletion(
+                location: location, designation: designation,
+                nextStep: nextStep, directive: extended
+            )
+            return Resolution(action: resolved, directive: extended)
+
         case let action:
             return Resolution(action: action, directive: extended)
         }
@@ -636,11 +660,66 @@ actor DirectiveEngineCore {
         return await reAsk(machine, directive, fresh, paid: paid)
     }
 
-    /// The four refresh actions as a discriminator, and the basis of the chain
+    /// `resolveFootprintRefresh`'s contract, paid for with one walk of the account
+    /// event ledger, falling back to `.wait` where that one falls back to
+    /// `.advanceStep` — the action carries no step of its own.
+    private func resolveEventsRefresh(
+        thenStall reason: DirectiveAttentionReason?,
+        directive: Directive,
+        machine: any MissionStepMachine,
+        paid: Set<RefreshKind>
+    ) async -> MissionAction {
+        @Dependency(\.locationEventsClient) var locationEventsClient
+        @Dependency(\.defaultDatabase) var database
+        @Dependency(\.date) var date
+
+        do {
+            let count = try await locationEventsClient.refresh()
+            logger.info("directive \(directive.id, privacy: .public): refreshed \(count) event(s)")
+        } catch {
+            logger.notice("directive \(directive.id, privacy: .public): event refresh failed: \(error)")
+        }
+
+        let fresh: WorldSnapshot
+        do {
+            fresh = try await WorldSnapshot.read(from: database, now: date.now, directive: directive)
+        } catch {
+            logger.error("world snapshot after event refresh failed: \(error)")
+            return reason.map { .stall($0) } ?? .wait
+        }
+        return await reAsk(machine, directive, fresh, paid: paid)
+    }
+
+    /// Commit `designation` at `location`, re-read the ledger, then advance to
+    /// `nextStep` UNCONDITIONALLY: a refusal is the mission's to judge from the
+    /// refreshed row on its next evaluation, so retrying here would hide it.
+    private func resolveEventCompletion(
+        location: String,
+        designation: String,
+        nextStep: String,
+        directive: Directive
+    ) async -> MissionAction {
+        @Dependency(\.locationEventsClient) var locationEventsClient
+
+        do {
+            try await locationEventsClient.complete(location, designation)
+            logger.info("directive \(directive.id, privacy: .public): committed event \(designation, privacy: .public)")
+        } catch {
+            logger.notice("directive \(directive.id, privacy: .public): event commit for \(designation, privacy: .public) refused: \(error)")
+        }
+        do {
+            _ = try await locationEventsClient.refresh()
+        } catch {
+            logger.notice("directive \(directive.id, privacy: .public): event refresh after commit failed: \(error)")
+        }
+        return .advanceStep(nextStep: nextStep)
+    }
+
+    /// The five refresh actions as a discriminator, and the basis of the chain
     /// bound below. Keyed on the KIND alone, never the payload: letting a changed
     /// payload buy another round restores the unbounded loop `reAsk` prevents.
     private enum RefreshKind: Hashable {
-        case devices, devicesInSystem, fleet, footprint
+        case devices, devicesInSystem, fleet, footprint, events
 
         /// The kind of refresh `action` asks for, or nil for anything else.
         init?(_ action: MissionAction) {
@@ -649,6 +728,7 @@ actor DirectiveEngineCore {
             case .refreshDevicesInSystem: self = .devicesInSystem
             case .refreshFleet: self = .fleet
             case .refreshFootprint: self = .footprint
+            case .refreshEvents: self = .events
             default: return nil
             }
         }
@@ -661,8 +741,9 @@ actor DirectiveEngineCore {
     private static func collapse(_ action: MissionAction) -> MissionAction {
         switch action {
         case let .refreshDevices(_, reason), let .refreshDevicesInSystem(_, reason),
-             let .refreshFleet(_, reason):
-            // These three never advance a step of their own accord.
+             let .refreshFleet(_, reason), let .refreshEvents(reason):
+            // These four never advance a step of their own accord. `.wait` is
+            // also the only fallback that leaves `stepStartedAt` alone.
             return reason.map { MissionAction.stall($0) } ?? .wait
         case let .refreshFootprint(nextStep, reason):
             // `HaulRun.survey`'s contract: a transient miss costs one cycle rather
@@ -674,15 +755,15 @@ actor DirectiveEngineCore {
     }
 
     /// Ask `machine` once more against the freshly-read `fresh` world, given the
-    /// kinds `paid` for so far. The loop guard, shared by all four refresh paths.
+    /// kinds `paid` for so far. The loop guard, shared by all five refresh paths.
     /// A non-refresh answer returns untouched; a kind already paid for collapses to
     /// its own stall/fallback; a kind not yet paid for chains ONE hop into that
     /// kind's resolver (passing it through unresolved would hit the executor's
     /// bypass, which stalls instead of reading).
     ///
     /// **The bound:** `paid` grows strictly on every guarded hop over a closed
-    /// four-case enum, so an evaluation performs at most one refresh round per kind
-    /// — four in total — and always terminates in a non-refresh action. This
+    /// five-case enum, so an evaluation performs at most one refresh round per kind
+    /// — five in total — and always terminates in a non-refresh action. This
     /// depends on no read succeeding and no mission being well-behaved.
     private func reAsk(
         _ machine: any MissionStepMachine,
@@ -726,9 +807,14 @@ actor DirectiveEngineCore {
                 nextStep: nextStep, thenStall: thenStall,
                 directive: directive, machine: machine, paid: chained
             )
+        case let .refreshEvents(thenStall):
+            return await resolveEventsRefresh(
+                thenStall: thenStall,
+                directive: directive, machine: machine, paid: chained
+            )
         default:
             // Unreachable: `RefreshKind.init` returned non-nil, so `action` is
-            // one of the four above. Kept total rather than force-unwrapped.
+            // one of the five above. Kept total rather than force-unwrapped.
             return action
         }
     }

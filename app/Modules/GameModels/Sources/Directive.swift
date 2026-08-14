@@ -161,6 +161,11 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
     /// The mine fleet the run was launched for is no longer complete at the hub —
     /// a member was taken, lost, or re-tasked between siting and attachment.
     case mineFleetIncomplete
+    /// The convoy delivered its option's devices and resources, but the event's
+    /// own progress never reported them met.
+    case eventCriteriaUnmet
+    /// The server refused the event commit.
+    case eventCommitRejected
 
     /// The stall panel's headline.
     public var displayName: String {
@@ -188,6 +193,8 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
         case .miningDirectivePaused: "Mining directive paused"
         case .miningControllerNotRecovered: "Mining controller not recovered"
         case .mineFleetIncomplete: "Mine fleet incomplete"
+        case .eventCriteriaUnmet: "Event objectives not met"
+        case .eventCommitRejected: "Event commit rejected"
         }
     }
 
@@ -242,6 +249,10 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
             "The mining controller is still travelling back to the vessel. Retry once it's stowed aboard; departing without it strands it in this system."
         case .mineFleetIncomplete:
             "The auto:mine fleet at the hub is missing members. Re-run Mine Fleet Print to top it up, or re-tag the missing devices, then retry."
+        case .eventCriteriaUnmet:
+            "Check the event's requirements against what the convoy delivered, then retry."
+        case .eventCommitRejected:
+            "The server refused the commit. Retry once a replicant is confirmed on site."
         }
     }
 }
@@ -266,13 +277,14 @@ public extension DirectiveAttentionReason {
         switch self {
         case .surveyIncomplete, .unreachableDevice, .vesselPositionUnconfirmed,
              .salvageSystemUnresolved, .salvageBodyNotDepleted, .commandRejected,
-             .relayActivationFailed, .printStockShort:
+             .relayActivationFailed, .printStockShort, .eventCommitRejected:
             return .retry
         case .noSurveyControllerAboard, .noSurveyDroneAboard, .noMiningControllerAboard,
              .noMiningDroneAboard, .noRelayCoLocated, .dronesNotRecovered,
              .launchDeployedNothing, .noHaulControllerTagged, .awaitingRelayRestock,
              .repairUnfinished, .serviceBotNotArmed, .serviceBotNotRecovered,
-             .miningDirectivePaused, .miningControllerNotRecovered, .mineFleetIncomplete:
+             .miningDirectivePaused, .miningControllerNotRecovered, .mineFleetIncomplete,
+             .eventCriteriaUnmet:
             return .escalate
         }
     }

@@ -50,6 +50,13 @@ public enum MissionAction: Equatable, Sendable {
     /// - `thenStall` non-nil: an unresolved re-ask collapses to `.stall`.
     /// - `thenStall` nil: it falls back to `.advanceStep(nextStep:)`.
     case refreshFootprint(nextStep: String, thenStall: DirectiveAttentionReason?)
+    /// Re-read the account's whole event ledger, persist it, then ask the machine
+    /// again against the fresh rows. Resolved by the engine. Carries NO `nextStep`:
+    /// an unresolved re-ask waits, which is what lets the step deadline accumulate.
+    case refreshEvents(thenStall: DirectiveAttentionReason?)
+    /// Commit the event with the empty POST, re-read the ledger, then move to
+    /// `nextStep` whatever happened — the machine re-judges from the fresh row.
+    case completeEvent(location: String, designation: String, nextStep: String)
     /// Re-read each named device authoritatively — plus whatever those devices
     /// report stowed aboard them — then ask the machine again against the fresh
     /// snapshot. Reads are `.high`, bypassing the TTL and read-budget floor.

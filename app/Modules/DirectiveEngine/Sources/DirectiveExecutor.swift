@@ -157,8 +157,9 @@ enum DirectiveExecutor {
             return true
 
         case let .refreshDevices(_, thenStall), let .refreshDevicesInSystem(_, thenStall),
-             let .refreshFleet(_, thenStall), let .refreshFootprint(_, thenStall):
-            // The engine resolves all four before they ever reach the executor
+             let .refreshFleet(_, thenStall), let .refreshFootprint(_, thenStall),
+             let .refreshEvents(thenStall):
+            // The engine resolves all five before they ever reach the executor
             // (each needs a second world read and a second call into the
             // machine). Reaching here means that resolution was bypassed, so
             // honour the carried fallback rather than silently dropping the
@@ -167,6 +168,12 @@ enum DirectiveExecutor {
             logger.notice("directive \(directive.id, privacy: .public): unresolved refresh — stalling with \(thenStall.rawValue, privacy: .public)")
             await stall(directive, reason: thenStall, detail: nil)
             return false
+
+        case let .completeEvent(_, designation, _):
+            // The engine owns the POST and the ledger re-read. Advancing here
+            // would move the run on an uncommitted event, so leave the row be.
+            logger.notice("directive \(directive.id, privacy: .public): unresolved event commit for \(designation, privacy: .public) — leaving the row untouched")
+            return true
 
         case .extendQueue:
             // The engine resolves this before it ever reaches the executor (it
