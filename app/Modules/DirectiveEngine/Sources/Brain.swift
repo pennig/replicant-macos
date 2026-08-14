@@ -1115,6 +1115,10 @@ struct Brain: Sendable {
             for adopted in device.controlledDeviceCodes {
                 link(device.deviceCode, adopted)
             }
+            if let hull = device.attachedToDeviceCode {
+                link(hull, device.deviceCode)   // downward: the load on its grid
+                link(device.deviceCode, hull)   // upward: the hull carrying it
+            }
         }
 
         var frontier = Array(reserved)
