@@ -107,6 +107,9 @@ public struct EventRun: MissionStepMachine {
         case Step.confirmingArrival: return confirmArrival(directive, convoy, event, world)
         case Step.staging: return staging(directive, convoy, event, world)
         case Step.confirmingStage: return confirmStage(directive, convoy, event, world)
+        case Step.confirmingProgress: return confirmProgress(directive, convoy, event, world)
+        case Step.committing: return committing(directive, convoy, event, world)
+        case Step.collecting: return collecting(directive, convoy, event, world)
         default: return preflight(directive, convoy, event, world)
         }
     }
@@ -413,6 +416,57 @@ public struct EventRun: MissionStepMachine {
         return MissionConfirm.ladder(
             aboard, directive, world,
             deadline: Self.stageConfirmDeadline, thenStall: .commandRejected
+        )
+    }
+
+    // MARK: - Commit
+
+    /// The event's own live progress is the authority: met, and a replicant on
+    /// site. A row read before the deposit landed proves nothing, so a stale
+    /// ledger buys one read per cycle until the deadline.
+    private func confirmProgress(
+        _ directive: Directive, _ convoy: Convoy, _ event: LocationEvent, _ world: WorldSnapshot
+    ) -> MissionAction {
+        guard event.isActive else { return .advanceStep(nextStep: Step.recovering) }
+        let detail = LocationEventDetail(event.detail)
+        if detail?.met == true, detail?.replicantPresent == true {
+            return .advanceStep(nextStep: Step.committing)
+        }
+        if world.now.timeIntervalSince(directive.stepStartedAt) > Self.progressDeadline {
+            return .stall(.eventCriteriaUnmet, detail: event.designation)
+        }
+        return .refreshEvents(thenStall: nil)
+    }
+
+    /// The commit: an empty POST, then the ledger re-read the engine folds in.
+    private func committing(
+        _ directive: Directive, _ convoy: Convoy, _ event: LocationEvent, _ world: WorldSnapshot
+    ) -> MissionAction {
+        guard event.isActive else { return .advanceStep(nextStep: Step.collecting) }
+        return .completeEvent(
+            location: event.location, designation: event.designation, nextStep: Step.collecting
+        )
+    }
+
+    /// Take the reward pile home. The freighter is on site with a hold it just
+    /// emptied, so a nil resource map lifts whatever is there.
+    private func collecting(
+        _ directive: Directive, _ convoy: Convoy, _ event: LocationEvent, _ world: WorldSnapshot
+    ) -> MissionAction {
+        if event.isActive {
+            if world.now.timeIntervalSince(directive.stepStartedAt) > Self.progressDeadline {
+                return .stall(.eventCommitRejected, detail: event.designation)
+            }
+            return .refreshEvents(thenStall: nil)
+        }
+        guard let freighter = convoy.freighter else { return .advanceStep(nextStep: Step.recovering) }
+        if world.openOperation(for: freighter.deviceCode) != nil { return .wait }
+        guard let pile = world.footprints[event.location], pile.resources > 0 else {
+            return .advanceStep(nextStep: Step.recovering)
+        }
+        return .dispatch(
+            kind: .collectResources, deviceCode: freighter.deviceCode,
+            params: CommandParams(resources: nil), nextStep: Step.recovering
         )
     }
 
