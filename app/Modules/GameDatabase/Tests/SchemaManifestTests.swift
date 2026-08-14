@@ -64,6 +64,8 @@ import Testing
         "Create 'locationInventories' table",
         "Add index on 'eventLogs.receivedAt'",
         "Rebackfill 'summaryJSON' for undepleted salvage counts",
+        "Add 'freighterCode' to 'directives'",
+        "Add 'chosenOption' to locationEvents",
     ]
 
     @Test func manifestMatchesTheFrozenList() {

@@ -86,6 +86,8 @@ public enum GameDatabase {
         LocationInventory.createLocationInventories,
         EventLog.addReceivedAtIndex,
         SystemDetail.rebackfillSummaryJSON,
+        Directive.addFreighterCode,
+        LocationEvent.addChosenOption,
     ]
 
     /// Builds a migrator from `entries`. The parameter exists so tests can

@@ -41,6 +41,9 @@ public struct LocationEvent: Identifiable, Equatable, Sendable {
     /// from `detail.progress.met` so the sidebar's "ready" badge and the list's
     /// ready-first ordering stay pure SQL (no blob decode per row).
     public var objectivesMet: Bool
+    /// The criteria option the operator picked for a multi-option event. Nil
+    /// until they choose; a name no option carries re-asks rather than misfires.
+    public var chosenOption: String?
     public var broadcastMessage: String?
     public var eventDescription: String?
     public var discoveredAt: Date?
@@ -70,7 +73,8 @@ public struct LocationEvent: Identifiable, Equatable, Sendable {
         completedAt: Date? = nil,
         detail: JSONValue = .object([:]),
         firstSeenAt: Date,
-        updatedAt: Date
+        updatedAt: Date,
+        chosenOption: String? = nil
     ) {
         self.designation = designation
         self.location = location
@@ -88,6 +92,7 @@ public struct LocationEvent: Identifiable, Equatable, Sendable {
         self.detail = detail
         self.firstSeenAt = firstSeenAt
         self.updatedAt = updatedAt
+        self.chosenOption = chosenOption
     }
 
     /// A human label for the event's location, falling back to the bare code.
@@ -148,6 +153,9 @@ extension LocationEvent {
         } else {
             event
         }
+        // `accounts/events` never returns the operator's fulfilment pick, so
+        // carry the existing local value across or a refresh silently erases it.
+        copy.chosenOption = chosenOption
         copy.updatedAt = now
         return copy
     }
@@ -243,6 +251,14 @@ extension LocationEvent {
             """
         )
         .execute(db)
+    }
+
+    public static let addChosenOption = SchemaMigration("Add 'chosenOption' to locationEvents") { db in
+        try #sql(
+            """
+            ALTER TABLE "locationEvents" ADD COLUMN "chosenOption" TEXT
+            """
+        ).execute(db)
     }
 }
 

@@ -27,6 +27,8 @@ public enum DirectiveKind: String, Codable, Equatable, Sendable, CaseIterable, Q
     case restockRun
     case mineFleetPrint
     case mineRun
+    /// A convoy fulfilling one location event: deliver, commit, plant a beacon.
+    case eventRun
 
     /// The list row's label, e.g. "Survey Run".
     public var title: String {
@@ -38,6 +40,7 @@ public enum DirectiveKind: String, Codable, Equatable, Sendable, CaseIterable, Q
         case .restockRun: "Relay Restock"
         case .mineFleetPrint: "Mine Fleet Print"
         case .mineRun: "Mine Run"
+        case .eventRun: "Event Run"
         }
     }
 }
@@ -324,6 +327,9 @@ public struct Directive: Identifiable, Equatable, Sendable {
     /// in the carrier's hold. Resolution reads it ahead of every derived lookup,
     /// so what the run is carrying cannot be re-decided by a later print.
     public var claimedRelayCode: String?
+    /// The cargo freighter carrying this convoy's resources. A second lease:
+    /// the freighter flies itself, so no containment edge holds it.
+    public var freighterCode: String?
     /// The ordered queue of star-system designations still to visit.
     ///
     /// For a continuous run this is append-only HISTORY rather than a plan: the
@@ -386,7 +392,8 @@ public struct Directive: Identifiable, Equatable, Sendable {
         deletedAt: Date? = nil,
         createdAt: Date,
         updatedAt: Date,
-        theatreDepot: String? = nil
+        theatreDepot: String? = nil,
+        freighterCode: String? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -408,6 +415,7 @@ public struct Directive: Identifiable, Equatable, Sendable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.theatreDepot = theatreDepot
+        self.freighterCode = freighterCode
     }
 
     /// Progress through the queue, for the list row's "m/n" readout. Counts
@@ -615,6 +623,16 @@ extension Directive {
             """
         )
         .execute(db)
+    }
+
+    /// Appended, never folded into the migration above it: that one has shipped
+    /// into real databases, so editing it means it silently never runs again.
+    public static let addFreighterCode = SchemaMigration("Add 'freighterCode' to 'directives'") { db in
+        try #sql(
+            """
+            ALTER TABLE "directives" ADD COLUMN "freighterCode" TEXT
+            """
+        ).execute(db)
     }
 
     /// Appended, never folded into the migration above it: that one has shipped

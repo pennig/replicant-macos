@@ -109,7 +109,7 @@ CREATE TABLE "directives" (
   "attentionReason" TEXT,
   "createdAt" TEXT NOT NULL,
   "updatedAt" TEXT NOT NULL
-, "controllerCode" TEXT, "roamCentre" TEXT, "fleetTag" TEXT, "sourceRelayCode" TEXT, "claimedRelayCode" TEXT, "deletedAt" TEXT, "theatreDepot" TEXT) STRICT;
+, "controllerCode" TEXT, "roamCentre" TEXT, "fleetTag" TEXT, "sourceRelayCode" TEXT, "claimedRelayCode" TEXT, "deletedAt" TEXT, "theatreDepot" TEXT, "freighterCode" TEXT) STRICT;
 
 CREATE TABLE "eventLogs" (
   "id" TEXT PRIMARY KEY NOT NULL,
@@ -185,7 +185,7 @@ CREATE TABLE "locationEvents" (
   "detail" TEXT NOT NULL DEFAULT '{}',
   "firstSeenAt" TEXT NOT NULL,
   "updatedAt" TEXT NOT NULL
-, "objectivesMet" INTEGER NOT NULL DEFAULT 0) STRICT;
+, "objectivesMet" INTEGER NOT NULL DEFAULT 0, "chosenOption" TEXT) STRICT;
 
 CREATE TABLE "locationFootprints" (
   "location" TEXT PRIMARY KEY NOT NULL,

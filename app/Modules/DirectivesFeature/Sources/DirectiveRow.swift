@@ -226,7 +226,7 @@ public enum DirectiveRow: Equatable, Identifiable, Sendable {
                     return "\(count) system\(count == 1 ? "" : "s") drained"
                 case .surveyRun, .relayRun:
                     return "\(directive.targetIndex) surveyed"
-                case .haulRun, .restockRun, .mineFleetPrint, .mineRun:
+                case .haulRun, .restockRun, .mineFleetPrint, .mineRun, .eventRun:
                     // Handled above, or never roams — no queue to walk here.
                     return nil
                 }
