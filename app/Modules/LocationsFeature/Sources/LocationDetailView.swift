@@ -193,14 +193,13 @@ private struct SystemInspector: View {
                 }
             }
 
-            let salvage = system.allSalvageSites
+            let salvage = system.remainingSalvageSites
             if !salvage.isEmpty {
                 RCReadoutCard("Salvage", count: salvage.count) {
                     ForEach(salvage) { s in
                         SiteAmountsRow(
                             title: s.name ?? s.designation, code: s.designation,
-                            amounts: SiteAmounts.amounts(for: s, totals: assayTotals[s.designation]),
-                            status: s.depleted ? "Depleted" : nil
+                            amounts: SiteAmounts.amounts(for: s, totals: assayTotals[s.designation])
                         )
                     }
                 }
@@ -250,7 +249,7 @@ private struct PlanetInspector: View {
                 if let n = planet.moonCount { Readout("Moons", "\(n)") }
             }
             if let phys = planet.physical { PhysicalCard(phys) }
-            SiteSalvageSections(sites: planet.sites, salvage: planet.salvage, assayTotals: assayTotals)
+            SiteSalvageSections(sites: planet.sites, salvage: planet.remainingSalvage, assayTotals: assayTotals)
             // Roll up the planet's own stock plus any held on its moons, attributed
             // per body.
             let holdings = planet.inventoryHoldings
@@ -274,7 +273,7 @@ private struct MoonInspector: View {
                 Readout("Type", moon.type ?? "—")
             }
             if let phys = moon.physical { PhysicalCard(phys) }
-            SiteSalvageSections(sites: moon.sites, salvage: moon.salvage, assayTotals: assayTotals)
+            SiteSalvageSections(sites: moon.sites, salvage: moon.remainingSalvage, assayTotals: assayTotals)
             InventoryCard(moon.inventory)
         }
     }
@@ -444,8 +443,7 @@ private struct SiteSalvageSections: View {
                         // `salvage[]` roster block, a scan body, a discovery
                         // event — still reports its assayed total as a
                         // discovered figure rather than a bare name.
-                        amounts: SiteAmounts.amounts(for: s, totals: assayTotals[s.designation]),
-                        status: s.depleted ? "Depleted" : nil
+                        amounts: SiteAmounts.amounts(for: s, totals: assayTotals[s.designation])
                     )
                 }
             }

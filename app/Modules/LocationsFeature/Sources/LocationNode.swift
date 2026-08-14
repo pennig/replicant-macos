@@ -16,8 +16,59 @@
 //
 
 import Foundation
+import SQLiteData
 import SwiftUI
 import UniverseModels
+
+// MARK: - Projections
+
+/// The census columns the catalog list reads, and only those. The forest is
+/// rebuilt on the writer connection whenever any table it observes is written,
+/// so what it does not select is the bulk of what that rebuild costs — the three
+/// `Date` columns it never reads are the expensive third of a whole `Star` row.
+@Selection
+public struct CensusRow: Equatable, Sendable {
+    public let designation: String
+    public let spectralType: String
+    public let positionX: Double
+    public let positionY: Double
+    public let positionZ: Double
+    public let estimatedPlanets: Int
+    public let explored: Bool
+
+    public var position: Position { Position(x: positionX, y: positionY, z: positionZ) }
+}
+
+/// The holdings overlay's counts, without the `fetchedAt` nothing in the list
+/// reads.
+@Selection
+public struct FootprintRow: Equatable, Sendable {
+    public let location: String
+    public let locationEvents: Int
+    public let devices: Int
+    public let resourceSites: Int
+    public let resources: Int
+    public let replicants: Int
+
+    public var counts: LocationCounts {
+        LocationCounts(
+            locationEvents: locationEvents, devices: devices, resourceSites: resourceSites,
+            resources: resources, replicants: replicants
+        )
+    }
+}
+
+extension CensusRow {
+    /// Build the projection from a whole row — for fixtures and any caller that
+    /// already holds a `Star`.
+    public init(_ star: Star) {
+        self.init(
+            designation: star.designation, spectralType: star.spectralType,
+            positionX: star.positionX, positionY: star.positionY, positionZ: star.positionZ,
+            estimatedPlanets: star.estimatedPlanets, explored: star.explored
+        )
+    }
+}
 
 // MARK: - Sort & filter
 
@@ -205,7 +256,7 @@ public enum LocationTree {
     /// `SystemSummary` values, never from the blobs — a system's children are
     /// built separately by `children(of:)` when it is expanded.
     public static func forest(
-        stars: [Star],
+        stars: [CensusRow],
         summaries: [String: SystemSummary],
         footprints: [String: LocationCounts],
         myPosition: Position?,
@@ -232,7 +283,7 @@ public enum LocationTree {
 
         let index = LocationInventoryIndex(footprints: footprints)
 
-        let sorted: [Star]
+        let sorted: [CensusRow]
         switch sort {
         case .alphabetical:
             sorted = filtered.sorted { $0.designation < $1.designation }
@@ -257,7 +308,7 @@ public enum LocationTree {
 
     // MARK: System node
 
-    static func node(for star: Star, summary: SystemSummary?, _ index: LocationInventoryIndex) -> LocationNode {
+    static func node(for star: CensusRow, summary: SystemSummary?, _ index: LocationInventoryIndex) -> LocationNode {
         guard let summary else {
             // Census-only: uncharted or charted-but-not-hydrated. Leaf. It carries
             // no hydrated inventory, but the footprint overlay can still flag that
@@ -324,7 +375,7 @@ public enum LocationTree {
                 .compactMap { $0 }.joined(separator: " · "),
             recon: p.recon,
             badges: bodyBadges(
-                sites: p.allResourceSites.count, salvage: p.allSalvageSites.count, devices: devices,
+                sites: p.allResourceSites.count, salvage: p.remainingSalvageSites.count, devices: devices,
                 hasInventory: hasInventory(p.designation, own: inventory, index: index, includeDescendants: true)
             ),
             children: children
@@ -359,7 +410,7 @@ public enum LocationTree {
             subtitle: m.type,
             recon: m.recon,
             badges: bodyBadges(
-                sites: m.sites.count, salvage: m.salvage.count, devices: m.devices.count,
+                sites: m.sites.count, salvage: m.remainingSalvage.count, devices: m.devices.count,
                 hasInventory: hasInventory(m.designation, own: m.inventory, index: index, includeDescendants: false)
             )
         )
@@ -444,13 +495,13 @@ public enum LocationTree {
             : index.resources(at: designation) > 0
     }
 
-    static func censusSubtitle(_ star: Star) -> String {
+    static func censusSubtitle(_ star: CensusRow) -> String {
         let planets = star.estimatedPlanets
         let est = star.explored ? "" : "≈"
         return "\(star.spectralType) · \(est)\(planets) planet\(planets == 1 ? "" : "s")"
     }
 
-    static func systemSubtitle(star: Star, summary: SystemSummary) -> String {
+    static func systemSubtitle(star: CensusRow, summary: SystemSummary) -> String {
         var parts = [star.spectralType]
         if let scanned = summary.planetsScanned, let total = summary.planetsTotal {
             parts.append("\(scanned)/\(total) scanned")
@@ -472,7 +523,7 @@ public enum LocationTree {
 
     // MARK: Sort keys
 
-    static func distance(_ star: Star, _ me: Position?) -> Double {
+    static func distance(_ star: CensusRow, _ me: Position?) -> Double {
         guard let me else { return .greatestFiniteMagnitude }
         return star.position.distance(to: me)
     }

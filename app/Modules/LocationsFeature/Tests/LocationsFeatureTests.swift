@@ -24,7 +24,7 @@ import UniverseModels
     ) -> [LocationNode] {
         let index = LocationInventoryIndex(footprints: footprints)
         return LocationTree.forest(
-            stars: stars,
+            stars: stars.map(CensusRow.init),
             summaries: systems.mapValues(SystemSummary.init),
             footprints: footprints,
             myPosition: myPosition,

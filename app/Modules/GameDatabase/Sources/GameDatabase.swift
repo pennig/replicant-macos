@@ -85,6 +85,7 @@ public enum GameDatabase {
         Directive.addTheatreDepot,
         LocationInventory.createLocationInventories,
         EventLog.addReceivedAtIndex,
+        SystemDetail.rebackfillSummaryJSON,
     ]
 
     /// Builds a migrator from `entries`. The parameter exists so tests can

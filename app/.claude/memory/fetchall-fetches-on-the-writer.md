@@ -92,12 +92,27 @@ measured **0.15 ms alone against 111.8 ms with the forest observation alive**, a
 rows in a single hour on 2026-08-14 against `systemDetails`' 50–76 *per day*. `LocationsFeature.State` is
 alive from launch, so every one of those writes blocks the writer for ~110 ms.
 
+## The forest rebuild (fixed 2026-08-14)
+
+`@Fetch(LocationForest)` re-runs on every write to `systemDetails`, `locationFootprints`, `stars` or
+`replicants`, and footprints are the frequent one. Profiled per rebuild, **two whole-table row decodes
+were 75 of the 101 ms**: `Star` at 58 ms for 14,995 rows and `LocationFootprint` at 17 ms for 14,562,
+against 11 ms for the tree build itself and ~1–2 ms for everything else.
+
+The list reads **7 of `Star`'s 15 columns** and 6 of `LocationFootprint`'s 7. Selecting exactly those
+through `@Selection` projections (`CensusRow`, `FootprintRow`) measured **Star 91.2 → 14.9 ms and
+footprints 22.0 → 9.3 ms in one run** — the unread columns include three `Date`s, and `Date` decoding is
+what made a whole row expensive. Whole fetch **100.9 → 42.7 ms**; end-to-end, a `locationFootprints` write
+with `LocationsFeature.State` alive went **111.8 → 34.9 ms**.
+
+Note what did NOT work first: narrowing the *`SystemDetail`* observation, which looked like the obvious
+9.1 MB offender and was worth 3.6 ms. Profile the fetch's stages before choosing one.
+
 ## Still open (measured, not fixed)
 
-- **`@Fetch(LocationForest)` at ~101 ms per rebuild**, triggered by writes to `systemDetails`,
-  `locationFootprints`, `stars` and `replicants` — the largest remaining writer-queue cost in the app.
-  [[locations-forest-inventory-index]] already took the rebuild from 1.20 s to 0.12 s; 101 ms *is* the
-  optimised version, so cutting it further means changing what the fetch observes, not how it computes.
+- **`@Fetch(LocationForest)` still costs ~35 ms per rebuild**, and it still rebuilds from scratch on every
+  observed write. Cutting it further means changing *what it observes or when it runs*, not what it
+  selects — the remaining time is spread thin (11 ms tree build, 10 ms stars, 8 ms footprints).
 - **`LocationsFeature.State` holds `@FetchAll(Device.all)`** (11.6 ms per `devices` write against 0.46 ms
   bare). Much less costly since the walk batched, but still charged to every device-carrying event.
 - **`directiveLogEntries` reached 101,927 rows** (9,442 when [[survey-fleet-repair-build]] measured it).

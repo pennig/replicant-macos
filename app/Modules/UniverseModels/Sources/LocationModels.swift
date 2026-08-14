@@ -496,6 +496,9 @@ public struct Moon: Identifiable, Equatable, Sendable, Codable {
     public var inventory: [InventoryItem]
     public var id: String { designation }
 
+    /// Undepleted salvage on this moon.
+    public var remainingSalvage: [SalvageSite] { salvage.filter { !$0.depleted } }
+
     public init(
         designation: String, name: String? = nil, type: String? = nil,
         lifeStage: String? = nil, recon: Recon = .aware,
@@ -735,7 +738,7 @@ public struct SystemSummary: Equatable, Sendable, Codable {
         planetsTotal = system.planetsTotal
         planetCount = system.planets.count
         siteCount = system.allResourceSites.count
-        salvageCount = system.allSalvageSites.count
+        salvageCount = system.remainingSalvageSites.count
         shopCount = system.shops.count
         deviceCount = system.allDevices.count
         inventoryTotal = system.totalInventoryQuantity
@@ -755,6 +758,13 @@ extension StarSystem {
     /// Every salvage site (planets and moons) anywhere in the system.
     public var allSalvageSites: [SalvageSite] {
         planets.flatMap { $0.salvage + $0.moons.flatMap(\.salvage) }
+    }
+
+    /// The salvage still worth going to. A drained site keeps its row so the
+    /// engines can tell "drained" from "never seen", but nothing the catalog
+    /// shows a player counts or lists one.
+    public var remainingSalvageSites: [SalvageSite] {
+        allSalvageSites.filter { !$0.depleted }
     }
 
     /// Salvage sites known in the system, tolerant of how the server (and older
@@ -881,6 +891,14 @@ extension Planet {
     /// Salvage sites on this planet and its moons.
     public var allSalvageSites: [SalvageSite] {
         salvage + moons.flatMap(\.salvage)
+    }
+
+    /// Undepleted salvage on this planet alone.
+    public var remainingSalvage: [SalvageSite] { salvage.filter { !$0.depleted } }
+
+    /// Undepleted salvage on this planet and its moons.
+    public var remainingSalvageSites: [SalvageSite] {
+        allSalvageSites.filter { !$0.depleted }
     }
 
     /// The planet and any of its moons that hold stored inventory, each paired

@@ -470,9 +470,19 @@ public struct LocationForest: FetchKeyRequest {
     public func fetch(_ db: Database) throws -> Value {
         // Empty search → `%%` matches every system.
         let pattern = "%\(search)%"
+        // Projected, not whole rows: this fetch re-runs on the writer connection
+        // for every write to any table it observes, and the columns the list never
+        // reads — three `Date`s among them — dominated that rebuild.
         let stars = try Star
             .where { $0.designation.like(pattern) }
             .order { $0.designation }
+            .select {
+                CensusRow.Columns(
+                    designation: $0.designation, spectralType: $0.spectralType,
+                    positionX: $0.positionX, positionY: $0.positionY, positionZ: $0.positionZ,
+                    estimatedPlanets: $0.estimatedPlanets, explored: $0.explored
+                )
+            }
             .fetchAll(db)
         // The SAME pattern, because a summary can only ever be read through a
         // star of its own designation. Selecting the two summary columns rather
@@ -482,7 +492,15 @@ public struct LocationForest: FetchKeyRequest {
             .where { $0.designation.like(pattern) }
             .select { ($0.designation, $0.summaryJSON) }
             .fetchAll(db)
-        let footprintRows = try LocationFootprint.all.fetchAll(db)
+        let footprintRows = try LocationFootprint.all
+            .select {
+                FootprintRow.Columns(
+                    location: $0.location, locationEvents: $0.locationEvents,
+                    devices: $0.devices, resourceSites: $0.resourceSites,
+                    resources: $0.resources, replicants: $0.replicants
+                )
+            }
+            .fetchAll(db)
         // The probe's position (for distance sort) — the active replicant's current
         // star, resolved the same way as `State.activeReplicant`: prefer the stored
         // selection, else fall back to the sole replicant on the roster. This is

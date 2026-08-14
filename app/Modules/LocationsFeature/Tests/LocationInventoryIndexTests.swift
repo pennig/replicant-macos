@@ -76,7 +76,7 @@ import UniverseModels
             explored: true, hasLife: nil, entryPoint: nil, createdAt: .distantPast
         )
         let forest = LocationTree.forest(
-            stars: [star, solaris, rigel], summaries: [:], footprints: footprints,
+            stars: [star, solaris, rigel].map(CensusRow.init), summaries: [:], footprints: footprints,
             myPosition: nil, filter: .all, sort: .alphabetical
         )
         func badges(_ id: String) -> [String] {
@@ -98,7 +98,8 @@ import UniverseModels
             )
         }
         let forest = LocationTree.forest(
-            stars: [star("SOL", 0), star("SOLARIS", 1), star("VEGA", 2), star("RIGEL", 3)],
+            stars: [star("SOL", 0), star("SOLARIS", 1), star("VEGA", 2), star("RIGEL", 3)]
+                .map(CensusRow.init),
             summaries: [:], footprints: footprints,
             myPosition: nil, filter: .all, sort: .inventory
         )

@@ -18,7 +18,7 @@ struct SiteAmountsRow: View {
     let code: String
     let amounts: [ResourceAmount]
     /// Rendered before the summary, e.g. "Depleted".
-    let status: String?
+    var status: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.xs) {

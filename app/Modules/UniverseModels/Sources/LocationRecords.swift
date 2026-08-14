@@ -289,6 +289,26 @@ extension SystemDetail {
                 .execute(db)
         }
     }
+
+    /// Recompute every stored summary. `salvageCount` now counts only undepleted
+    /// salvage, so summaries written under the old rule report a stale badge
+    /// until their system is hydrated again.
+    public static let rebackfillSummaryJSON = SchemaMigration(
+        "Rebackfill 'summaryJSON' for undepleted salvage counts"
+    ) { db in
+        let rows = try SystemDetail.all.fetchAll(db)
+        let encoder = JSONEncoder()
+        for row in rows {
+            guard let system = try? row.system(),
+                  let encoded = try? encoder.encode(SystemSummary(system))
+            else { continue }
+            let json = String(decoding: encoded, as: UTF8.self)
+            try SystemDetail
+                .where { $0.designation.eq(row.designation) }
+                .update { $0.summaryJSON = #bind(json) }
+                .execute(db)
+        }
+    }
 }
 
 extension LocationFootprint {
