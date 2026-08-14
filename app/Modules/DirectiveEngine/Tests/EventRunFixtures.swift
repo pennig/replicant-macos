@@ -65,14 +65,37 @@ enum EventRunFixtures {
         )
     }
 
+    /// A `.stepStarted` entry, as `DirectiveExecutor.move` writes one.
+    static func entered(_ step: String, at occurredAt: Date) -> DirectiveLogEntry {
+        DirectiveLogEntry(
+            id: "S-\(step)-\(occurredAt.timeIntervalSince1970)", directiveID: "d1", deviceCode: nil,
+            kind: .stepStarted, summary: step, step: step, operationID: nil,
+            eventID: nil, occurredAt: occurredAt
+        )
+    }
+
+    /// A `.commandDispatched` entry, in `DirectiveExecutor.dispatchSummary`'s wording.
+    static func dispatched(
+        _ kind: OperationKind, to deviceCode: String, step: String, at occurredAt: Date
+    ) -> DirectiveLogEntry {
+        DirectiveLogEntry(
+            id: "C-\(kind.rawValue)-\(occurredAt.timeIntervalSince1970)", directiveID: "d1",
+            deviceCode: nil, kind: .commandDispatched,
+            summary: "Dispatched \(kind.rawValue) to \(deviceCode)",
+            step: step, operationID: nil, eventID: nil, occurredAt: occurredAt
+        )
+    }
+
     static func world(
         devices: [Device], event: LocationEvent, now: Date,
         footprintFresh: Bool = true, stock: Int = 500_000,
-        openOperations: [String: GameModels.Operation] = [:]
+        openOperations: [String: GameModels.Operation] = [:],
+        log: [DirectiveLogEntry] = []
     ) -> WorldSnapshot {
         WorldSnapshot(
             devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, l in l }),
             openOperations: openOperations,
+            log: log,
             footprints: [
                 "HUB-1": LocationFootprint(
                     location: "HUB-1", devices: devices.count, resources: stock,

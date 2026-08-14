@@ -203,6 +203,22 @@ public struct EventRun: MissionStepMachine {
 
     // MARK: - Loading
 
+    /// The courier, then the beacon and the option's devices standing at `depot`,
+    /// in the order `loading` attaches them.
+    static func loadPayload(
+        courier: Device, option: EventPlan.Option, depot: String, tag: String,
+        in world: WorldSnapshot
+    ) -> [Device] {
+        var payload = [courier]
+        payload += world.devices.values
+            .filter {
+                $0.hasTag(tag) && $0.location == depot
+                    && ($0.deviceType == EventPlan.beaconDeviceType || option.devices[$0.deviceType] != nil)
+            }
+            .sorted { $0.deviceCode < $1.deviceCode }
+        return payload
+    }
+
     /// Attach the courier, the beacon and the option's devices one per round,
     /// then fill the freighter. `attach` moves one row at a time.
     private func loading(
@@ -222,14 +238,10 @@ public struct EventRun: MissionStepMachine {
         }
 
         let carrier = convoy.carrier
-        let tag = Self.fleetTag(forTheatre: depot)
-        var payload = [courier]
-        payload += world.devices.values
-            .filter {
-                $0.hasTag(tag) && $0.location == depot
-                    && ($0.deviceType == EventPlan.beaconDeviceType || option.devices[$0.deviceType] != nil)
-            }
-            .sorted { $0.deviceCode < $1.deviceCode }
+        let payload = Self.loadPayload(
+            courier: courier, option: option, depot: depot,
+            tag: Self.fleetTag(forTheatre: depot), in: world
+        )
 
         if let next = payload.first(where: { $0.attachedToDeviceCode != carrier.deviceCode }) {
             return .dispatch(
@@ -250,16 +262,39 @@ public struct EventRun: MissionStepMachine {
     }
 
     /// Judge the attach or collect just ordered, looping back for the next.
-    /// The dispatch's own confirm-read lands BEFORE the step stamp, so the
-    /// loop's round count proves it landed, not row freshness.
+    /// `attach` and `collect_resources` are immediate, so the loop's round count
+    /// is the bound — no op is ever open and the step stamp post-dates the read.
     private func confirmLoad(
         _ directive: Directive, _ convoy: Convoy, _ event: LocationEvent, _ world: WorldSnapshot
     ) -> MissionAction {
-        if world.openOperation(for: convoy.carrier.deviceCode) != nil { return .wait }
-        if let freighter = convoy.freighter, world.openOperation(for: freighter.deviceCode) != nil {
-            return .wait
+        let carrier = convoy.carrier
+        var landed = world.devices.values
+            .filter { $0.attachedToDeviceCode == carrier.deviceCode }
+            .count
+        if let freighter = convoy.freighter, freighter.cargoUsed > 0 { landed += 1 }
+        let rounds = MissionLogBudget.dispatchRounds(
+            world, dispatch: Step.loading, confirm: Step.confirmingLoad
+        )
+        if landed >= rounds { return .advanceStep(nextStep: Step.loading) }
+
+        guard let depot = world.theatreDepot(for: directive), let courier = convoy.courier,
+              case .decided(let option) = EventPlan.resolve(
+                  event, chosenOption: event.chosenOption, bills: [:]
+              )
+        else { return .refreshFleet(tag: Self.rootTag, thenStall: .unreachableDevice) }
+
+        let payload = Self.loadPayload(
+            courier: courier, option: option, depot: depot,
+            tag: Self.fleetTag(forTheatre: depot), in: world
+        )
+        let loose = payload.filter { $0.attachedToDeviceCode != carrier.deviceCode }
+        guard let next = loose.first ?? convoy.freighter else {
+            return .advanceStep(nextStep: Step.loading)
         }
-        return .advanceStep(nextStep: Step.loading)
+        return MissionConfirm.ladder(
+            [next], directive, world,
+            deadline: Self.loadConfirmDeadline, thenStall: .commandRejected
+        )
     }
 
     // MARK: - Delivery
@@ -314,8 +349,25 @@ public struct EventRun: MissionStepMachine {
         )
     }
 
-    /// Set the load down and empty the hold. The courier stays attached — it is
-    /// the convoy's replicant and comes home with the carrier.
+    /// Everything on the carrier's grid bar the courier, which stays aboard as
+    /// the convoy's replicant and flies home with it.
+    static func staged(_ convoy: Convoy, in world: WorldSnapshot) -> [Device] {
+        let courierCode = convoy.courier?.deviceCode
+        return world.devices.values
+            .filter {
+                $0.attachedToDeviceCode == convoy.carrier.deviceCode && $0.deviceCode != courierCode
+            }
+            .sorted { $0.deviceCode < $1.deviceCode }
+    }
+
+    private static func stageRounds(_ world: WorldSnapshot, _ kind: OperationKind) -> Int {
+        MissionLogBudget.dispatchRounds(
+            world, dispatch: Step.staging, confirm: Step.confirmingStage, kind: kind
+        )
+    }
+
+    /// Set the load down and empty the hold, each leg ordered at most once. Both
+    /// verbs are immediate, so the event's own progress judges the delivery.
     private func staging(
         _ directive: Directive, _ convoy: Convoy, _ event: LocationEvent, _ world: WorldSnapshot
     ) -> MissionAction {
@@ -323,11 +375,8 @@ public struct EventRun: MissionStepMachine {
             event, chosenOption: event.chosenOption, bills: [:]
         ) else { return .stall(.unreachableDevice) }
 
-        let courierCode = convoy.courier?.deviceCode
-        let aboard = world.devices.values
-            .filter { $0.attachedToDeviceCode == convoy.carrier.deviceCode && $0.deviceCode != courierCode }
-            .sorted { $0.deviceCode < $1.deviceCode }
-        if !aboard.isEmpty {
+        let aboard = Self.staged(convoy, in: world)
+        if !aboard.isEmpty, Self.stageRounds(world, .detach) < 1 {
             return .dispatch(
                 kind: .detach, deviceCode: convoy.carrier.deviceCode,
                 params: CommandParams(devices: aboard.map(\.deviceCode)),
@@ -339,28 +388,32 @@ public struct EventRun: MissionStepMachine {
         guard let freighter = convoy.freighter else {
             return .refreshFleet(tag: Self.rootTag, thenStall: .unreachableDevice)
         }
-        if world.openOperation(for: freighter.deviceCode) != nil { return .wait }
-        // An empty hold means the deposit landed only once one was ordered.
-        if case .dispatched(let kind, _) = MissionLogBudget.lastDispatch(
-            world, dispatch: Step.staging, confirm: Step.confirmingStage
-        ), kind == OperationKind.depositResources.rawValue, freighter.cargoUsed == 0 {
-            return .advanceStep(nextStep: Step.confirmingProgress)
+        if Self.stageRounds(world, .depositResources) < 1 {
+            return .dispatch(
+                kind: .depositResources, deviceCode: freighter.deviceCode,
+                params: CommandParams(resources: option.resources),
+                nextStep: Step.confirmingStage
+            )
         }
-        return .dispatch(
-            kind: .depositResources, deviceCode: freighter.deviceCode,
-            params: CommandParams(resources: option.resources),
-            nextStep: Step.confirmingStage
-        )
+        return .advanceStep(nextStep: Step.confirmingProgress)
     }
 
+    /// Judge a detach on the rows it moved. A deposit leaves no local proof — a
+    /// hold may carry more than the option asked for — so it hands straight back.
     private func confirmStage(
         _ directive: Directive, _ convoy: Convoy, _ event: LocationEvent, _ world: WorldSnapshot
     ) -> MissionAction {
-        if world.openOperation(for: convoy.carrier.deviceCode) != nil { return .wait }
-        if let freighter = convoy.freighter, world.openOperation(for: freighter.deviceCode) != nil {
-            return .wait
+        guard case .dispatched(let kind, _) = MissionLogBudget.lastDispatch(
+            world, dispatch: Step.staging, confirm: Step.confirmingStage
+        ), kind == OperationKind.detach.rawValue else {
+            return .advanceStep(nextStep: Step.staging)
         }
-        return .advanceStep(nextStep: Step.staging)
+        let aboard = Self.staged(convoy, in: world)
+        if aboard.isEmpty { return .advanceStep(nextStep: Step.staging) }
+        return MissionConfirm.ladder(
+            aboard, directive, world,
+            deadline: Self.stageConfirmDeadline, thenStall: .commandRejected
+        )
     }
 
     /// The run never roams.

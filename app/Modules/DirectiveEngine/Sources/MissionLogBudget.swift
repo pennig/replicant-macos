@@ -28,6 +28,27 @@ public enum MissionLogBudget {
         return count
     }
 
+    /// How often the CURRENT run of the `dispatch`/`confirm` loop sent `kind`,
+    /// counted off the same summary line `lastDispatch` parses. A loop whose legs
+    /// are immediate commands has no tracked op to count instead.
+    public static func dispatchRounds(
+        _ world: WorldSnapshot, dispatch: String, confirm: String, kind: OperationKind
+    ) -> Int {
+        var count = 0
+        for entry in world.log.reversed() {
+            if entry.kind == .resolved { break }
+            if entry.kind == .stepStarted {
+                guard let step = entry.step, step == dispatch || step == confirm else { break }
+                continue
+            }
+            guard entry.kind == .commandDispatched, entry.step == confirm else { continue }
+            let words = entry.summary.split(separator: " ")
+            guard words.count >= 2, words[0] == "Dispatched", words[1] == kind.rawValue else { continue }
+            count += 1
+        }
+        return count
+    }
+
     /// What the newest command entry in a dispatch/confirm loop run says. The
     /// three cases are three different demands: judge it, dispatch afresh, or
     /// refuse to read evidence that does not parse.
