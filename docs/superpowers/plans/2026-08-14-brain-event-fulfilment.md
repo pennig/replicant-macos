@@ -2238,6 +2238,8 @@ Expected: FAIL — every case routes to `preflight`'s `.advanceStep(nextStep: "p
 
 - [ ] **Step 3: Write minimal implementation**
 
+**`confirmingProgress` must NEVER route back to `staging`.** Task 9 bounds each staging leg with a per-verb `MissionLogBudget.dispatchRounds(…, kind:)` counter read off the directive's log for that step. Re-entering `staging` resets those counters, so both legs become orderable again and the freighter deposits the same resources a second time. The three exits below — `committing`, `recovering`, and the `.eventCriteriaUnmet` stall — are the complete set. Do not add a re-stage path; an under-delivered event is a stall for a human, not a retry.
+
 Route the three steps in `nextAction` and add:
 
 ```swift
