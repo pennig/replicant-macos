@@ -3073,6 +3073,10 @@ git commit -m "feat(brain): rank and launch location-event convoys"
 
 ### Task 14: Surface the pending choices
 
+**This task also adds the courier launcher, without which the capability can never arm.** `eventCourierPrint` is operator-invoked and nothing in the brain's tick starts one, so today the kind is registered and unreachable. Add a toolbar action in `DirectivesFeature` in the exact shape of `printMineFleetTapped` (`DirectivesFeature.swift:301-336`): an already-running check over `DirectiveStatus.openCases`, a confirm dialog, a host resolved as the lowest-coded print-capable device at the depot, and a host-missing path.
+
+Two differences from the mine-fleet launcher, both load-bearing: the row **must stamp `theatreDepot`**, because `EventCourierPrint` resolves its depot through `world.theatreDepot(for:)` and an unstamped row resolves to nothing; and the host must be the depot's printer, not merely any print hub. Read `app/.claude/memory/launcher-tag-resolution-error-narrowing.md` before writing the resolution — it records how the three existing launchers get theatre resolution wrong and how that was narrowed.
+
 The ~6 multi-option events need an operator pick, shown in the brain's why-view and written back to `locationEvents.chosenOption`.
 
 **Files:**
