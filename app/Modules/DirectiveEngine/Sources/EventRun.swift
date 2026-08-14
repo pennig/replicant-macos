@@ -110,6 +110,8 @@ public struct EventRun: MissionStepMachine {
         case Step.confirmingProgress: return confirmProgress(directive, convoy, event, world)
         case Step.committing: return committing(directive, convoy, event, world)
         case Step.collecting: return collecting(directive, convoy, event, world)
+        case Step.recovering: return recovering(directive, convoy, event, world)
+        case Step.returning: return returning(directive, convoy, event, world)
         default: return preflight(directive, convoy, event, world)
         }
     }
@@ -518,6 +520,51 @@ public struct EventRun: MissionStepMachine {
                 params: CommandParams(resources: manifest), nextStep: Step.recovering
             )
         }
+    }
+
+    // MARK: - Recovery and return
+
+    /// Take the courier back aboard. Never depart while it stands loose — a
+    /// convoy that leaves its replicant behind loses the capability, not a hull.
+    /// The beacon and the option's devices stay: both were spent on the event.
+    private func recovering(
+        _ directive: Directive, _ convoy: Convoy, _ event: LocationEvent, _ world: WorldSnapshot
+    ) -> MissionAction {
+        guard let courier = convoy.courier else {
+            return .refreshFleet(tag: Self.rootTag, thenStall: .unreachableDevice)
+        }
+        if courier.attachedToDeviceCode == convoy.carrier.deviceCode {
+            return .advanceStep(nextStep: Step.returning)
+        }
+        if world.openOperation(for: convoy.carrier.deviceCode) != nil { return .wait }
+        return .dispatch(
+            kind: .attach, deviceCode: convoy.carrier.deviceCode,
+            params: CommandParams(devices: [courier.deviceCode]),
+            nextStep: Step.recovering
+        )
+    }
+
+    /// Both hulls to the depot, resolved through the row's own theatre — never
+    /// `originDesignation`, a bare system that travels to an entry point rather
+    /// than to the depot where the printer stands.
+    private func returning(
+        _ directive: Directive, _ convoy: Convoy, _ event: LocationEvent, _ world: WorldSnapshot
+    ) -> MissionAction {
+        guard let depot = world.theatreDepot(for: directive) else {
+            if world.theatreWentClaimed(for: directive) { return .wait }
+            logger.notice("event run \(directive.id, privacy: .public): no depot to return to — leaving the convoy where it stands")
+            return .done
+        }
+        for hull in [convoy.carrier, convoy.freighter].compactMap({ $0 })
+        where hull.location != depot {
+            if world.openOperation(for: hull.deviceCode) != nil { return .wait }
+            if let unconfirmed = SalvageRun.travelPositionUnconfirmed(hull, world) { return unconfirmed }
+            return .dispatch(
+                kind: .travel, deviceCode: hull.deviceCode,
+                params: CommandParams(destination: depot), nextStep: Step.returning
+            )
+        }
+        return .done
     }
 
     /// The run never roams.
