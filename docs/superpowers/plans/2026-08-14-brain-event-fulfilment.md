@@ -2628,7 +2628,9 @@ Expected: FAIL — `cannot find 'EventCourierPrint' in scope`.
 
 - [ ] **Step 3: Write minimal implementation**
 
-Add `case eventCourierPrint` and its title `"Event Courier Print"` to `DirectiveKind`. Add `.replicate` to `OperationKind` if absent (check first: `grep -rn "case replicate" app/Modules/GameModels/Sources/`). Create the machine:
+Add `case eventCourierPrint` and its title `"Event Courier Print"` to `DirectiveKind`.
+
+**Adding a `DirectiveKind` case breaks exhaustive switches outside this module.** Task 4 hit exactly this: `DirectivesFeature/Sources/DirectiveTargetsSection.swift` and `.../DirectiveRow.swift` each switch exhaustively over the enum and needed a one-case addition. Fold `.eventCourierPrint` into whichever existing branch is already inert for a non-vessel run — invent no new UI behaviour here. Let `swift build` find the sites rather than guessing at them. Add `.replicate` to `OperationKind` if absent (check first: `grep -rn "case replicate" app/Modules/GameModels/Sources/`). Create the machine:
 
 ```swift
 //
