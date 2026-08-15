@@ -43,6 +43,9 @@ public struct BlueprintDetailView: View {
                     header(blueprint)
                     description(blueprint)
                     costAndTime(blueprint)
+                    if !blueprint.components.isEmpty {
+                        BlueprintComponentsSection(components: blueprint.components)
+                    }
                     capabilities(blueprint)
                     capacities(blueprint)
                 }
