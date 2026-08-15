@@ -96,18 +96,29 @@ struct EventRunEngineTests {
         )
     }
 
-    /// Stands each accepted print up at the depot wearing the tags it was
-    /// ordered with, which is the evidence the next evaluation nets against.
+    /// A printer that really consumes: each accepted print eats its blueprint's
+    /// components off the depot floor and stands the result up wearing the tags
+    /// it was ordered with. Netting is only meaningful against a printer like this.
     private func printingGovernor(
-        _ database: any DatabaseWriter, into printed: LockIsolated<[String]>
+        _ database: any DatabaseWriter, into printed: LockIsolated<[String]>,
+        consuming components: [String: [String: Int]] = [:]
     ) -> CommandGovernorClient {
         CommandGovernorClient { kind, _, params in
             guard kind == .print, let deviceType = params.deviceType else {
                 return .dispatched(.accepted(operationID: nil))
             }
+            let quantity = params.quantity ?? 1
             printed.withValue { $0.append(deviceType) }
             try? await database.write { db in
-                for index in 0..<(params.quantity ?? 1) {
+                let standing = try Device.all.fetchAll(db).filter { $0.location == "HUB-1" }
+                for (component, each) in (components[deviceType] ?? [:]).sorted(by: { $0.key < $1.key }) {
+                    for eaten in standing.filter({ $0.deviceType == component })
+                        .prefix(each * quantity)
+                    {
+                        try Device.delete().where { $0.deviceCode.eq(eaten.deviceCode) }.execute(db)
+                    }
+                }
+                for index in 0..<quantity {
                     try Device.upsert {
                         EventRunFixtures.device(
                             "\(deviceType)-\(index)", type: deviceType, location: "HUB-1",
@@ -182,7 +193,10 @@ struct EventRunEngineTests {
             $0.defaultDatabase = database
             $0.date = .constant(Self.now)
             $0.uuid = .incrementing
-            $0.commandGovernor = printingGovernor(database, into: printed)
+            $0.commandGovernor = printingGovernor(
+                database, into: printed,
+                consuming: ["atmospheric_regulator": ["filtration_array": 1, "atmo_processor": 2]]
+            )
         } operation: {
             let core = DirectiveEngineCore(machines: [EventRun()], tick: .seconds(5))
             for _ in 0..<5 { await core.evaluateOnce(directiveID: "d1") }
@@ -191,7 +205,7 @@ struct EventRunEngineTests {
         #expect(printed.value == [
             "atmo_processor", "filtration_array", "atmospheric_regulator",
             EventPlan.beaconDeviceType,
-        ], "components before the device consuming them, beacon last")
+        ], "components before the device consuming them, beacon last, nothing twice")
         let row = try await row(database)
         #expect(row.step == EventRun.Step.loading)
         #expect(row.status == .running)

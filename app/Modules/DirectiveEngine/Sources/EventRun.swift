@@ -156,31 +156,47 @@ public struct EventRun: MissionStepMachine {
 
     // MARK: - Printing
 
-    /// Every print the option still needs, prerequisites first: its device tree
-    /// expanded through blueprint components, netted against what already
-    /// stands free at `depot` under this run's own tag.
+    /// Every print the option still needs, prerequisites first: the top level
+    /// netted against what stands free at `depot` under this run's tag, the
+    /// remainder expanded, then the component levels netted from the same pool.
     static func missingTree(
         for option: EventPlan.Option, at depot: String, in world: WorldSnapshot, tag: String
     ) -> [BlueprintClosure.Job] {
-        let expansion = BlueprintClosure.expand(
-            option.devices, bills: world.blueprintBills, components: world.blueprintComponents
-        )
-        var held: [String: Int] = [:]
+        // One pool, spent once: a type can be both a top-level requirement and
+        // a sibling's component, and must not be counted for both.
+        var remaining: [String: Int] = [:]
         for device in world.devices.values
         where device.location == depot && device.hasTag(tag) {
-            held[device.deviceType, default: 0] += 1
+            remaining[device.deviceType, default: 0] += 1
         }
-        return expansion.jobs.compactMap { job in
-            let outstanding = job.quantity - (held[job.deviceType] ?? 0)
-            guard outstanding > 0 else { return nil }
-            return BlueprintClosure.Job(
-                deviceType: job.deviceType, quantity: outstanding, depth: job.depth
+
+        var outstanding: [String: Int] = [:]
+        for (type, count) in option.devices.sorted(by: { $0.key < $1.key }) {
+            let used = min(remaining[type] ?? 0, count)
+            remaining[type] = (remaining[type] ?? 0) - used
+            if count - used > 0 { outstanding[type] = count - used }
+        }
+
+        let expansion = BlueprintClosure.expand(
+            outstanding, bills: world.blueprintBills, components: world.blueprintComponents
+        )
+        var jobs: [BlueprintClosure.Job] = []
+        for job in expansion.jobs {
+            let used = min(remaining[job.deviceType] ?? 0, job.quantity)
+            remaining[job.deviceType] = (remaining[job.deviceType] ?? 0) - used
+            guard job.quantity - used > 0 else { continue }
+            jobs.append(
+                BlueprintClosure.Job(
+                    deviceType: job.deviceType, quantity: job.quantity - used, depth: job.depth
+                )
             )
         }
+        return jobs
     }
 
-    /// What a printer at `depot` says a queued job is still missing. The
-    /// server's own count, which outranks the local expansion.
+    /// What a printer at `depot` reports one queued job still missing. That is
+    /// a narrower scope than the expansion, which covers the whole option, so
+    /// the caller orders the GREATER of the two rather than replacing one.
     static func blockedComponents(at depot: String, in world: WorldSnapshot) -> [String: Int] {
         var missing: [String: Int] = [:]
         for device in world.devices.values where device.location == depot {
@@ -220,11 +236,16 @@ public struct EventRun: MissionStepMachine {
             wanted[job.deviceType] = job.quantity
             order.append(job.deviceType)
         }
-        // The server's own shortfall outranks the local expansion.
-        for (type, count) in Self.blockedComponents(at: depot, in: world) {
-            if wanted[type] == nil { order.insert(type, at: 0) }
+        // Sorted before folding: a type the expansion never named leads the
+        // order, and two of them must not alternate between ticks.
+        var reported: [String] = []
+        for (type, count) in Self.blockedComponents(at: depot, in: world)
+            .sorted(by: { $0.key < $1.key })
+        {
+            if wanted[type] == nil { reported.append(type) }
             wanted[type] = max(wanted[type] ?? 0, count)
         }
+        order.insert(contentsOf: reported, at: 0)
         if !Self.beaconStands(at: event.location, in: world),
            !world.devices.values.contains(where: {
                $0.deviceType == EventPlan.beaconDeviceType && $0.location == depot && $0.hasTag(tag)

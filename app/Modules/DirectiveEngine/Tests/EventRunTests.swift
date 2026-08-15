@@ -353,10 +353,14 @@ struct EventRunComponentPrintTests {
         "atmospheric_regulator": ResourceCost(structural: 200),
         "filtration_array": ResourceCost(structural: 140),
         "atmo_processor": ResourceCost(structural: 200),
+        "climate_processor": ResourceCost(structural: 300),
         "ftl_beacon": ResourceCost(structural: 50),
     ]
+    /// `climate_processor` shares `atmo_processor` with the regulator, which is
+    /// what makes a type both a top-level requirement and a sibling's component.
     private let components = [
-        "atmospheric_regulator": ["filtration_array": 1, "atmo_processor": 2]
+        "atmospheric_regulator": ["filtration_array": 1, "atmo_processor": 2],
+        "climate_processor": ["atmo_processor": 2],
     ]
 
     /// A depot printer reading fresher than the step, or `printing` buys a
@@ -379,7 +383,8 @@ struct EventRunComponentPrintTests {
     }
 
     private func world(
-        _ extraDevices: [Device], busy: [String] = [], stepStartedAt: Date
+        _ extraDevices: [Device], wanting: [(Int, String)] = [(1, "atmospheric_regulator")],
+        busy: [String] = [], stepStartedAt: Date
     ) -> WorldSnapshot {
         var openOperations: [String: GameModels.Operation] = [:]
         for code in busy {
@@ -392,7 +397,7 @@ struct EventRunComponentPrintTests {
                 EventRunFixtures.device("CARRIER", type: "surge_carrier", tags: ["auto:carrier"]),
                 EventRunFixtures.courier(),
             ] + extraDevices,
-            event: EventRunFixtures.event(devices: [(1, "atmospheric_regulator")]),
+            event: EventRunFixtures.event(devices: wanting),
             now: now,
             openOperations: openOperations,
             blueprintBills: bills,
@@ -450,6 +455,58 @@ struct EventRunComponentPrintTests {
         }
         #expect(params.deviceType == "atmo_processor")
         #expect(params.quantity == 2)
+    }
+
+    @Test("a standing parent suppresses the components it already consumed")
+    func standingParentSuppressesItsComponents() {
+        let action = EventRun().nextAction(
+            directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: now),
+            world: world(
+                [
+                    factory(),
+                    EventRunFixtures.device("AR1", type: "atmospheric_regulator", tags: [tag]),
+                    EventRunFixtures.device("OLDBEACON", type: "ftl_beacon", location: "X-1"),
+                ],
+                stepStartedAt: now
+            )
+        )
+        #expect(
+            action == .advanceStep(nextStep: EventRun.Step.loading),
+            "the regulator ate its own components — reprinting them buys nothing"
+        )
+    }
+
+    /// One `atmo_processor` wanted outright plus a `climate_processor` that eats
+    /// two more. Three held cover both demands; two cover only one of them, and
+    /// a pool spent twice would wrongly read as covering both.
+    @Test("held stock covering a top-level device and a sibling's tree is spent once")
+    func heldStockIsSpentOnlyOnce() {
+        func action(held: Int) -> MissionAction {
+            EventRun().nextAction(
+                directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: now),
+                world: world(
+                    [factory()] + (0..<held).map {
+                        EventRunFixtures.device("AP\($0)", type: "atmo_processor", tags: [tag])
+                    },
+                    wanting: [(1, "atmo_processor"), (1, "climate_processor")],
+                    stepStartedAt: now
+                )
+            )
+        }
+        func print(_ deviceType: String, _ quantity: Int) -> MissionAction {
+            .dispatch(
+                kind: .print, deviceCode: "FACTORY",
+                params: CommandParams(
+                    deviceType: deviceType, quantity: quantity, printTags: [tag]
+                ),
+                nextStep: EventRun.Step.printing
+            )
+        }
+        #expect(action(held: 3) == print("climate_processor", 1))
+        #expect(
+            action(held: 2) == print("atmo_processor", 1),
+            "the one spent on the top level must not also count against the tree"
+        )
     }
 
     @Test("a printer with nothing queued takes the job the blocked one cannot")

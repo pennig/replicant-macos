@@ -173,8 +173,9 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
     /// The courier's container is standing, but no replicant is free to host in
     /// it. Replication is the operator's to perform.
     case awaitingCourierReplication
-    /// A queued print is blocked on component devices it does not have. The run
-    /// prints them itself; this fires only when the block outlives the deadline.
+    /// Every printer at the depot stayed busy past the print deadline — usually
+    /// a queued job blocked on component devices. The run prints components
+    /// itself, so it takes a lasting block to reach this.
     case printBlockedOnComponents
 
     /// The stall panel's headline.
@@ -268,7 +269,7 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
         case .awaitingCourierReplication:
             "Stow the empty replicant matrix into the matrix container at the depot, then replicate into it there — the container is the cradle. If you replicated into a matrix elsewhere, move that one into the container instead. Retry once the container holds the new replicant."
         case .printBlockedOnComponents:
-            "A queued print is waiting on component devices, and every printer at the depot is busy. Retry once one frees up, or cancel the print that is blocking the queue."
+            "The print outlived its deadline with every printer at the depot still busy — most often a queued job waiting on component devices it doesn't have. Retry once a printer frees up, or cancel the print that's blocking the queue."
         }
     }
 }
