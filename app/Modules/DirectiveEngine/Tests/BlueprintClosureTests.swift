@@ -92,14 +92,17 @@ struct BlueprintClosureTests {
         #expect(out.unprintable.contains("a"))
     }
 
+    /// Named so depth order and alphabetical order DISAGREE: alphabetically this
+    /// is `alpha, beta, gamma`, so a build order that lost the depth comparison
+    /// would read differently.
     @Test("deeper components sort ahead of shallower ones")
     func depthOrder() {
         let out = BlueprintClosure.expand(
-            ["top": 1],
-            bills: ["top": ResourceCost(), "mid": ResourceCost(), "leaf": ResourceCost()],
-            components: ["top": ["mid": 1], "mid": ["leaf": 1]]
+            ["alpha": 1],
+            bills: ["alpha": ResourceCost(), "beta": ResourceCost(), "gamma": ResourceCost()],
+            components: ["alpha": ["beta": 1], "beta": ["gamma": 1]]
         )
-        #expect(out.jobs.map(\.deviceType) == ["leaf", "mid", "top"])
+        #expect(out.jobs.map(\.deviceType) == ["gamma", "beta", "alpha"])
     }
 
     @Test("print seconds sum over the whole tree")

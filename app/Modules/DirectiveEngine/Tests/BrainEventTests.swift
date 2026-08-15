@@ -428,7 +428,8 @@ struct BrainEventReadinessTests {
             view: eventView(devices: stagedConvoy(), events: [closed]),
             directives: [], theatre: eventTheatre
         )
-        guard case .idle = readiness else { Issue.record("expected .idle"); return }
+        guard case .idle(let reason) = readiness else { Issue.record("expected .idle"); return }
+        #expect(reason == "no event worth working")
     }
 
     @Test("the brain will not launch a run for an event it cannot build")
@@ -452,8 +453,10 @@ struct BrainEventReadinessTests {
             bills: ["climate_processor": ResourceCost(structural: 200)],
             blueprintComponents: ["climate_processor": ["orbital_mirror": 1]]
         )
-        guard case .idle = Brain.eventReadiness(view: view, directives: [], theatre: eventTheatre)
-        else { Issue.record("expected .idle for an unbuildable event"); return }
+        guard case .idle(let reason) = Brain.eventReadiness(
+            view: view, directives: [], theatre: eventTheatre
+        ) else { Issue.record("expected .idle for an unbuildable event"); return }
+        #expect(reason == "no event worth working")
     }
 }
 
