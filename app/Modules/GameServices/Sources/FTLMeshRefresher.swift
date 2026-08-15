@@ -38,15 +38,17 @@ public struct FTLMeshRefresher: Sendable {
 
 extension FTLMeshRefresher {
     /// The `.ftlMesh` domain's refresh policy, registered by the composition root
-    /// at launch. Applies must stay off the router's dispatch path (V3.4-B2): the
-    /// relay route notes the device and `invalidate(.ftlMesh)`s, and the domain's
-    /// trailing debounce collapses a burst into one refresh. Best-effort per relay
-    /// by design, so it always counts as a refresh.
-    public static let domainRegistration = DomainRegistration(refresh: {
-        @Dependency(\.ftlMeshRefresher) var ftlMeshRefresher
-        await ftlMeshRefresher.refresh()
-        return true
-    })
+    /// at launch. Applies must stay off the router's dispatch path (V3.4-B2), and
+    /// it is best-effort per relay, so it always counts as a refresh.
+    public static let domainRegistration = DomainRegistration(
+        // A sweep reads every relay serially against the reads budget, so the
+        // appear-path TTL must outlast one. An event invalidates regardless.
+        ttl: 15 * 60,
+        refresh: {
+            @Dependency(\.ftlMeshRefresher) var ftlMeshRefresher
+            await ftlMeshRefresher.refresh()
+            return true
+        })
 }
 
 extension FTLMeshRefresher: DependencyKey {

@@ -578,13 +578,13 @@ public struct NewStarMapView: View {
         }
         .task { store.send(.task) }
         // Refresh the mesh whenever the relay roster changes (and once on appear).
-        // The initial fire passes old == new, so the reducer can tell "pane
-        // appeared" (freshness-gated rebuild) from a genuine roster change
-        // (debounced invalidate). Relay liveness flips that don't change the
-        // roster are handled by GameSync's relay event route, so the persisted
-        // mesh stays fresh even when this view isn't on screen.
+        // The initial fire passes old == new, so the diff is empty and the reducer
+        // takes its freshness-gated path rather than invalidating. Relay liveness
+        // flips that don't change the roster are handled by GameSync's relay event
+        // route, so the persisted mesh stays fresh even when this view isn't on
+        // screen.
         .onChange(of: relayNodes, initial: true) { old, new in
-            store.send(.refreshMesh(rosterChanged: old != new))
+            store.send(.refreshMesh(changedRelays: RelayNode.changed(from: old, to: new)))
         }
     }
 

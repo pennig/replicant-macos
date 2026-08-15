@@ -143,12 +143,12 @@ public struct NewStarMapFeature {
         case drillIntoBodyRequested(String)   // planet designation (from a system view)
         case zoomOutRequested                 // steps out one level
         case transitionCompleted
-        // FTL mesh: the view fires this when the relay roster changes (and once on
-        // appear); the reducer rebuilds and persists the mesh off each relay's
-        // backend network view. What gets persisted is the CLOSURE, so the view
-        // renders the `DirectFTLLinks` reduction of those rows — never the rows
-        // themselves — and the drawn mesh still survives relaunch and a failed read.
-        case refreshMesh(rosterChanged: Bool)
+        // FTL mesh: the view fires this with the relays whose roster entry changed,
+        // empty on a mere appear; the reducer rebuilds and persists the mesh off
+        // each relay's backend network view. What gets persisted is the CLOSURE, so
+        // the view renders the `DirectFTLLinks` reduction of those rows — never the
+        // rows themselves — and the drawn mesh survives relaunch and a failed read.
+        case refreshMesh(changedRelays: Set<String>)
         /// Full re-scan of the replicant's current system (the only source of HZ /
         /// outer-system / hazards); refreshes the persisted `SystemDetail`.
         case scanCurrentSystemTapped
@@ -365,7 +365,7 @@ public struct NewStarMapFeature {
                 state.isTransitioning = false
                 return .none
 
-            case let .refreshMesh(rosterChanged):
+            case let .refreshMesh(changedRelays):
                 // The mesh refresh is network reads, so it goes through the
                 // freshness engine instead of firing directly (V3.4-B2/B6). A
                 // genuine roster change invalidates — the debounce collapses the
@@ -374,16 +374,17 @@ public struct NewStarMapFeature {
                 // lapsed; the `relay.*` event route keeps it fresh in between.
                 let domainFreshness = self.domainFreshness
                 let ftlMeshRefresher = self.ftlMeshRefresher
-                if rosterChanged {
-                    // Which relay moved is not recoverable from a roster diff, and
-                    // an unattributed change must read every relay rather than fold
-                    // one in over a roster that shifted underneath it.
-                    return .run { _ in
-                        ftlMeshRefresher.noteRelayChanged(nil)
-                        domainFreshness.invalidate(.ftlMesh)
-                    }
+                guard !changedRelays.isEmpty else {
+                    return .run { _ in await domainFreshness.refreshIfStale(.ftlMesh) }
                 }
-                return .run { _ in await domainFreshness.refreshIfStale(.ftlMesh) }
+                // Naming each relay is what lets a single-relay change fold in one
+                // network read; noting several leaves the refresh to sweep.
+                return .run { _ in
+                    for deviceCode in changedRelays {
+                        ftlMeshRefresher.noteRelayChanged(deviceCode)
+                    }
+                    domainFreshness.invalidate(.ftlMesh)
+                }
 
             case .scanCurrentSystemTapped:
                 guard let code = state.activeReplicantCode, !code.isEmpty else { return .none }

@@ -34,6 +34,16 @@ public struct RelayNode: Equatable, Sendable, Hashable {
     }
 }
 
+extension RelayNode {
+    /// The relays whose mesh membership differs between two rosters — added,
+    /// removed, or now deployed in a different star. Order is not a change.
+    public static func changed(from old: [RelayNode], to new: [RelayNode]) -> Set<String> {
+        let before = Dictionary(old.map { ($0.deviceCode, $0.star) }, uniquingKeysWith: { first, _ in first })
+        let after = Dictionary(new.map { ($0.deviceCode, $0.star) }, uniquingKeysWith: { first, _ in first })
+        return Set(before.keys).union(after.keys).filter { before[$0] != after[$0] }
+    }
+}
+
 /// An undirected link in the FTL mesh, as a pair of star-system designations.
 /// Endpoints are stored in a canonical order (`a <= b`) so the reciprocal links
 /// two relays each report for the same connection collapse to one edge under

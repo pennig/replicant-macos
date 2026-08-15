@@ -242,6 +242,26 @@ public struct DirectivesFeature {
 
     public var body: some ReducerOf<Self> {
         BindingReducer()
+        core
+            .ifLet(\.$composer, action: \.composer) {
+                DirectiveComposer()
+            }
+            .ifLet(\.$newDirective, action: \.newDirective) {
+                NewDirectiveFeature()
+            }
+            .ifLet(\.$newSalvageRun, action: \.newSalvageRun) {
+                NewSalvageRunFeature()
+            }
+            .ifLet(\.$newHaulRun, action: \.newHaulRun) {
+                NewHaulRunFeature()
+            }
+            .ifLet(\.$printMineFleetDialog, action: \.printMineFleetDialog)
+            .ifLet(\.$eventCourierDialog, action: \.eventCourierDialog)
+    }
+
+    /// The main switch, kept out of `body` so the switch and the presentation
+    /// chain are two expressions: as one, they exceed the type-checker's budget.
+    private var core: some ReducerOf<Self> {
         Reduce { state, action in
             switch action {
             case .binding(\.selectedRowID):
@@ -495,20 +515,6 @@ public struct DirectivesFeature {
                 return .none
             }
         }
-        .ifLet(\.$composer, action: \.composer) {
-            DirectiveComposer()
-        }
-        .ifLet(\.$newDirective, action: \.newDirective) {
-            NewDirectiveFeature()
-        }
-        .ifLet(\.$newSalvageRun, action: \.newSalvageRun) {
-            NewSalvageRunFeature()
-        }
-        .ifLet(\.$newHaulRun, action: \.newHaulRun) {
-            NewHaulRunFeature()
-        }
-        .ifLet(\.$printMineFleetDialog, action: \.printMineFleetDialog)
-        .ifLet(\.$eventCourierDialog, action: \.eventCourierDialog)
     }
 
     private static let confirmPrintDialog = ConfirmationDialogState<Action.PrintMineFleet> {

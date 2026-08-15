@@ -1,26 +1,47 @@
 ---
 name: ftl-mesh-incremental-fold
-description: "SHIPPED 2026-08-06: a relay.* event folds in ONE relay's network view instead of reading every relay; two escalation predicates (join / split) decide when a single view provably can't describe the change. The split check must use the RAW direct filter — DirectFTLLinks.reduce's parity repair answers it by construction."
+description: "SHIPPED 2026-08-06: a relay.* event folds in ONE relay's network view instead of reading every relay; two escalation predicates (join / split) decide when a single view provably can't describe the change. The split check must use the RAW direct filter — DirectFTLLinks.reduce's parity repair answers it by construction. UPDATED 2026-08-15: the star map's roster trigger folds too (it CAN name which relay moved), and the appear-path TTL was 30s against a 5-minute sweep — together they were burning 329 reads per Stars visit."
 metadata:
   type: project
 ---
 
 Amends [[ftl-authority-rule]] and [[star-map-live-overlays]], both of which still
-describe the mesh as recomputed wholesale on every roster or liveness change. That is now
-true only of the *roster* trigger.
+describe the mesh as recomputed wholesale on every roster or liveness change. Neither
+trigger works that way now — see the roster section below.
 
 ## What changed
 
 `GameSync.ftlMeshRoute` calls `ftlMeshRefresher.noteRelayChanged(event.deviceCode)` before
 `invalidate(.ftlMesh)`. The refresh drains that note: **exactly one attributed relay** takes
-the fold-in path (one `GET devices/{code}/network`); a burst, an unattributed event (nil
-`deviceCode`), or the star map's roster-change trigger takes the full sweep. The note lives
+the fold-in path (one `GET devices/{code}/network`); a burst or an unattributed event (nil
+`deviceCode`) takes the full sweep. The note lives
 in a `LockIsolated<Pending>` owned by `liveValue`, so the debounce and the
 never-read-on-the-router's-dispatch-path rule (V3.4-B2) are both untouched.
 
-`NewStarMapFeature`'s `rosterChanged` path notes `nil` deliberately — which relay moved is
-not recoverable from a roster diff, and folding one relay in over a roster that shifted
-underneath it would silently miss the other change.
+## The roster trigger folds too (2026-08-15)
+
+The claim above that a roster change "is not recoverable from a roster diff" was **false, and
+it cost 329 API reads per Stars-view visit**. `.onChange(of: relayNodes)` is handed both the
+old and the new roster, so `RelayNode.changed(from:to:)` names exactly the relays that were
+added, removed, or moved star; `NewStarMapFeature` notes each code instead of `nil`, and a
+one-relay change now folds. Several changed codes still sweep, which is the same
+`Pending.soleCode` rule the event route obeys — nothing in `FTLMeshRefresher` changed.
+
+Folding a roster change is safe because `incremental` was already built for exactly these
+shapes: an added relay is the activation case, and a removed one is the defunct-star case
+below, which needs no network read at all.
+
+**Measured before the fix (live, 329 relays / 53,956 closure rows):** each sweep was 329
+serial reads pinned at the limiter's 60/min ceiling — 5m13s — and mesh reads were 144 of 213
+total API calls in one ten-minute window, with the reads budget sitting at `0 ≤ floor 12` so
+every device confirm-read was deferred. The traffic tracked the Stars view exactly: it
+stopped for the 16 minutes the window was on Directives and resumed on return.
+
+The second half was the TTL. `FTLMeshRefresher.domainRegistration` took `DomainRegistration`'s
+30-second default, and a sweep runs for five-plus minutes — so the domain was **always** stale
+on the appear path and every revisit bought a whole sweep. It is now `15 * 60`, which must
+stay longer than one sweep. An `invalidate` still outranks the TTL, so a relay event refreshes
+at once.
 
 ## Why one view is nearly enough
 
