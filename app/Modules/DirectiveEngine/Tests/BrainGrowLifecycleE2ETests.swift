@@ -392,8 +392,11 @@ private actor ScriptedServer {
         }
     }
 
+    /// A `stop()` cancels executors mid-command, so cancellation here is teardown
+    /// rather than a scripting fault and must not be recorded as an Issue.
     private func write(_ body: @escaping @Sendable (Database) throws -> Void) async {
         do { try await database.write { db in try body(db) } }
+        catch is CancellationError {}
         catch { Issue.record("scripted server write failed: \(error)") }
     }
 }
@@ -818,21 +821,16 @@ struct BrainGrowLifecycleE2ETests {
             $0.gameClient = fundedGameClient()
             $0.commandClient = server.seam()
         } operation: {
-            // `start()` is what claims the supervisor — `reconcileExecutors()`
-            // deliberately refuses to spawn anything for a torn-down engine, so
-            // this cannot be shortcut. The loops it spawns tick once and then
-            // sleep on a `TestClock` that never advances; the assertions below
-            // are on state only they and these awaited calls can reach, and
-            // both paths agree (one directive, one executor).
+            // `start()` claims the supervisor — `reconcileExecutors()` refuses
+            // to spawn anything for a torn-down engine, so it cannot be skipped.
             await core.start()
+            // BOTH ticks explicitly, and sequentially. `start()` spawns a brain
+            // tick CONCURRENT with these — see `brain-tick-overlap-race.md`.
+            await core.tickBrain()
             await core.tickBrain()
             await core.reconcileExecutors()
-            // TWO rows, and the second one is the interesting one. `start()`
-            // ticks the brain once on its way up and the explicit `tickBrain()`
-            // above ticks it again; the first tick spends its one action on the
-            // grow launch and defers restock, the second creates restock. So
-            // this asserts the supervisor adopts a brain-written row of EITHER
-            // kind — a carrier-owned mission and a hub-owned persistent one.
+            // Tick one spends its one action on the grow launch and defers
+            // restock; tick two writes restock. Both rows must be adopted.
             #expect(
                 await core.executorCount == 2,
                 "the supervisor must spawn an executor for every directive the brain wrote"
