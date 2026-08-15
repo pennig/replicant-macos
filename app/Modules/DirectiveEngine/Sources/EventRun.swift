@@ -277,12 +277,14 @@ public struct EventRun: MissionStepMachine {
         guard outstanding.unprintable.isEmpty else {
             return .stall(
                 .eventOptionBlueprintMissing,
-                detail: outstanding.unprintable.sorted().joined(separator: ", ")
+                detail: outstanding.unprintable.sorted()
+                    .map(BlueprintPresentation.displayName).joined(separator: ", ")
             )
         }
 
         var wanted: [String: Int] = [:]
-        // Deepest-first, so a component precedes the device consuming it.
+        // Deepest-first, so a component is ORDERED before its consumer. Not
+        // executed before: several free printers enqueue several levels at once.
         var order: [String] = []
         for job in outstanding.jobs {
             wanted[job.deviceType] = job.quantity
@@ -331,15 +333,18 @@ public struct EventRun: MissionStepMachine {
             .sorted { $0.deviceCode < $1.deviceCode }
         guard !printers.isEmpty else { return .stall(.unreachableDevice) }
 
+        // Every path that orders nothing consults the deadline: a free printer
+        // with the bill in flight waits on the print an all-busy depot does.
+        let noProgress: MissionAction =
+            world.now.timeIntervalSince(directive.stepStartedAt) > deadline
+            ? .stall(.printBlockedOnComponents, detail: depot) : .wait
+
         guard let free = printers.first(where: { world.openOperation(for: $0.deviceCode) == nil })
-        else {
-            let stuck = world.now.timeIntervalSince(directive.stepStartedAt) > deadline
-            return stuck ? .stall(.printBlockedOnComponents, detail: depot) : .wait
-        }
+        else { return noProgress }
 
         guard let type = order.first(where: { wanted[$0] != nil }),
               let quantity = wanted[type]
-        else { return .wait }
+        else { return noProgress }
 
         return .dispatch(
             kind: .print, deviceCode: free.deviceCode,

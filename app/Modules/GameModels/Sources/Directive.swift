@@ -173,9 +173,9 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
     /// The courier's container is standing, but no replicant is free to host in
     /// it. Replication is the operator's to perform.
     case awaitingCourierReplication
-    /// Every printer at the depot stayed busy past the print deadline — usually
-    /// a queued job blocked on component devices. The run prints components
-    /// itself, so it takes a lasting block to reach this.
+    /// A print outlived its deadline with nothing the run could order meanwhile
+    /// — every printer busy, or the whole bill in flight and not completing.
+    /// Usually a queued job blocked on component devices.
     case printBlockedOnComponents
     /// The option's component tree reaches a device type the account holds no
     /// blueprint for, so the payload cannot be built at any price.
@@ -214,6 +214,11 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
         case .eventOptionBlueprintMissing: "Blueprint not unlocked"
         }
     }
+
+    /// Whether a stall's `detail` carries a designation code, which the panel
+    /// sets in monospace. A device type is prose and must not be, so the one
+    /// reason naming device types opts out.
+    public var detailIsDesignation: Bool { self != .eventOptionBlueprintMissing }
 
     /// What the user can do about it. Staging is the player's job — a Survey Run
     /// never stows or adopts — so these name the fix rather than implying the
@@ -273,7 +278,7 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
         case .awaitingCourierReplication:
             "Stow the empty replicant matrix into the matrix container at the depot, then replicate into it there — the container is the cradle. If you replicated into a matrix elsewhere, move that one into the container instead. Retry once the container holds the new replicant."
         case .printBlockedOnComponents:
-            "The print outlived its deadline with every printer at the depot still busy — most often a queued job waiting on component devices it doesn't have. Retry once a printer frees up, or cancel the print that's blocking the queue."
+            "A print at the depot outlived its deadline and the run had nothing else it could order — most often a queued job waiting on component devices it doesn't have. Retry once that print clears, or cancel the one blocking the queue."
         case .eventOptionBlueprintMissing:
             "The option's build tree needs the blueprints named above and the account holds none of them, so no amount of printing reaches it. Unlock those blueprints, or pick an option that avoids them under Location Events, then retry."
         }

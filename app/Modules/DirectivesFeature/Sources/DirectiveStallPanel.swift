@@ -36,8 +36,9 @@ struct DirectiveStallPanel: View {
             }
             if let detail {
                 Text(detail)
-                    .font(.rcMonoSmall)
+                    .font(reason.detailIsDesignation ? .rcMonoSmall : .rcCaption)
                     .foregroundStyle(.rcTextSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Text(reason.guidance)
                 .font(.rcCaption)

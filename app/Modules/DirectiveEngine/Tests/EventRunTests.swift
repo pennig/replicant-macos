@@ -553,22 +553,64 @@ struct EventRunComponentPrintTests {
         )
     }
 
-    /// The same net taken to its end: nothing is left to order, so a free
-    /// printer waits rather than the run flying a payload the prints never filled.
-    @Test("a free printer waits when the whole bill is already in flight")
-    func aFreePrinterWaitsWhenNothingIsLeft() {
-        let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: now),
+    /// The whole bill in flight and a printer standing free, INSIDE the
+    /// deadline: wait, rather than fly a payload the prints never filled.
+    @Test("a free printer waits inside the deadline when the bill is all in flight")
+    func aFreePrinterWaitsWhileTheBillIsInFlight() {
+        #expect(nothingLeftToOrder(startedAgo: 60) == .wait)
+    }
+
+    /// The same state past the deadline. A free printer used to make the
+    /// deadline unreachable, so a component-blocked print parked the run
+    /// forever — the exact silent park this branch exists to close.
+    @Test("a free printer with the bill all in flight still stalls past the deadline")
+    func aFreePrinterStallsOnceTheInFlightPrintOutlivesTheDeadline() {
+        let action = nothingLeftToOrder(startedAgo: EventRun.printSlack + 600 + 60)
+        guard case .stall(let reason, _) = action else {
+            Issue.record("expected a stall, got \(action)"); return
+        }
+        #expect(reason == .printBlockedOnComponents)
+    }
+
+    /// Two printers, one busy with this run's only remaining job and one free,
+    /// so the dispatch guard falls through with nothing left to order.
+    private func nothingLeftToOrder(startedAgo: TimeInterval) -> MissionAction {
+        let started = now.addingTimeInterval(-startedAgo)
+        return EventRun().nextAction(
+            directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: started),
             world: world(
                 [
                     factory(), factory("SPARE"),
                     EventRunFixtures.device("OLDBEACON", type: "ftl_beacon", location: "X-1"),
                 ],
                 wanting: [(2, "atmo_processor")], busy: ["FACTORY"],
-                ordering: ["FACTORY": ("atmo_processor", 2)], stepStartedAt: now
+                ordering: ["FACTORY": ("atmo_processor", 2)], stepStartedAt: started
             )
         )
-        #expect(action == .wait)
+    }
+
+    /// Three free printers walk down the order rather than re-issuing its head,
+    /// so a parent is enqueued while its own components are still printing. The
+    /// server parks it in `waiting_for.components`; this pins that intent.
+    @Test("three free printers walk the order rather than re-issuing its head")
+    func threeFreePrintersWalkTheOrder() {
+        func tick(_ inFlight: [String: (String, Int)]) -> MissionAction {
+            EventRun().nextAction(
+                directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: now),
+                world: world(
+                    [factory(), factory("SPARE"), factory("THIRD")],
+                    busy: Array(inFlight.keys), ordering: inFlight, stepStartedAt: now
+                )
+            )
+        }
+        #expect(tick([:]) == print("atmo_processor", 2))
+        #expect(tick(["FACTORY": ("atmo_processor", 2)]) == print("filtration_array", 1, at: "SPARE"))
+        #expect(
+            tick([
+                "FACTORY": ("atmo_processor", 2), "SPARE": ("filtration_array", 1),
+            ]) == print("atmospheric_regulator", 1, at: "THIRD"),
+            "the parent is ordered while its components print — the server queues it"
+        )
     }
 
     // MARK: - A tree that cannot be built
@@ -586,7 +628,10 @@ struct EventRunComponentPrintTests {
             Issue.record("expected a stall, got \(action)"); return
         }
         #expect(reason == .eventOptionBlueprintMissing)
-        #expect(detail == "orbital_mirror")
+        #expect(
+            detail == "Orbital Mirror",
+            "a device type is prose — the panel sets a designation in mono, not this"
+        )
     }
 
     @Test("a fully printable tree still dispatches")

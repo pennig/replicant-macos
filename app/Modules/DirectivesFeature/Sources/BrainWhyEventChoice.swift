@@ -131,7 +131,9 @@ extension BrainWhyEventChoice.Option {
         return "needs \(missing.map(label).joined(separator: ", "))"
     }
 
+    /// The same formatter the stall panel's detail uses, so one device type
+    /// cannot read two ways across two surfaces.
     private static func label(_ deviceType: String) -> String {
-        deviceType.replacingOccurrences(of: "_", with: " ").capitalized
+        BlueprintPresentation.displayName(deviceType)
     }
 }
