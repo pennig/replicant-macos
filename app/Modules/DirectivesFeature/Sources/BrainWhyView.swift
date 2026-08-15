@@ -83,8 +83,9 @@ public struct BrainWhy: Equatable, Sendable {
     public var limitPressure: [BrainWhyPressure]
     /// One section per recognised theatre — see `groups(for:)`.
     public var theatreGroups: [BrainWhyTheatreGroup]
-    /// The events waiting on an operator's pick. Empty is the ordinary state
-    /// and renders as nothing at all — never as a "nothing pending" line.
+    /// The events waiting on an operator's pick AND the ones no option can
+    /// build. Empty is the ordinary state and renders as nothing at all —
+    /// never as a "nothing pending" line.
     public var eventChoices: [BrainWhyEventChoice]
     /// Distinguishes idle-calm from a stall (robustness bar clause 6): a
     /// brain with nothing to do is surfaced but calm; a stalled one is
@@ -128,6 +129,18 @@ public struct BrainWhy: Equatable, Sendable {
     /// carrying no goal line — a live run predating the pin must stay visible.
     public var flatSectionsVisible: Bool {
         !theatreGroups.contains { !$0.goalLines.isEmpty }
+    }
+
+    /// Events still awaiting a pick. Split on `isBlocked` alone: an option
+    /// inside a pending choice can carry missing blueprints during a cold
+    /// catalogue window without the event being blocked.
+    public var pendingEventChoices: [BrainWhyEventChoice] {
+        eventChoices.filter { !$0.isBlocked }
+    }
+
+    /// Events no option can build, which no pick resolves.
+    public var blockedEvents: [BrainWhyEventChoice] {
+        eventChoices.filter(\.isBlocked)
     }
 
     /// How recently the server must have answered 429 for it to count as

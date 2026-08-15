@@ -35,9 +35,9 @@ struct BrainWhyEventChoiceRowView: View {
 
     private func optionLine(_ option: BrainWhyEventChoice.Option) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: Space.xs) {
-            Image(systemName: option.holdsEveryDevice ? "checkmark.circle" : "shippingbox")
+            Image(systemName: glyph(option))
                 .font(.system(size: IconSize.s))
-                .foregroundStyle(.rcTextTertiary)
+                .foregroundStyle(option.needsAMissingBlueprint ? .rcTextSecondary : .rcTextTertiary)
                 .frame(minWidth: Space.m, alignment: .trailing)
             Text(option.name).font(.rcCaption).foregroundStyle(.rcTextSecondary)
             Text("\(option.fact) · \(option.stock)")
@@ -49,6 +49,12 @@ struct BrainWhyEventChoiceRowView: View {
             Spacer(minLength: 0)
         }
         .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// Three states, three shapes — the distinction never rides on colour.
+    private func glyph(_ option: BrainWhyEventChoice.Option) -> String {
+        if option.needsAMissingBlueprint { return "lock.slash" }
+        return option.holdsEveryDevice ? "checkmark.circle" : "shippingbox"
     }
 
     private var accessibilityLabel: String {

@@ -45,13 +45,27 @@ public struct BrainWhyDetailView: View {
 
                 // Omitted entirely when nothing is pending: an empty-state line
                 // would be noise in a pane read at a glance.
-                if !why.eventChoices.isEmpty {
+                if !why.pendingEventChoices.isEmpty {
                     section("Decisions Pending") {
                         Text("Pick an option under Location Events; the convoy skips these until you do.")
                             .font(.rcCaption)
                             .foregroundStyle(.rcTextSecondary)
                             .fixedSize(horizontal: false, vertical: true)
-                        ForEach(why.eventChoices) { choice in
+                        ForEach(why.pendingEventChoices) { choice in
+                            BrainWhyEventChoiceRowView(choice: choice)
+                        }
+                    }
+                }
+
+                // Picking one of these changes nothing: `EventPlan.resolve`
+                // ignores a pick naming no printable option.
+                if !why.blockedEvents.isEmpty {
+                    section("Blocked Events") {
+                        Text("No option can be built — each needs a blueprint the account hasn't unlocked. Picking one won't launch a convoy.")
+                            .font(.rcCaption)
+                            .foregroundStyle(.rcTextSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        ForEach(why.blockedEvents) { choice in
                             BrainWhyEventChoiceRowView(choice: choice)
                         }
                     }

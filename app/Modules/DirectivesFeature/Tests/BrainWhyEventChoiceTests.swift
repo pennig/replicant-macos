@@ -177,4 +177,59 @@ struct BrainWhyEventChoiceTests {
         // claim a stock reading it never took.
         #expect(why.eventChoices[0].options[0].stock == "no devices needed")
     }
+
+    // MARK: - Blocked events
+
+    /// The live park: every option's tree reaches `orbital_mirror`, which no
+    /// blueprint prints. It must not read as a decision the operator can make.
+    @Test("a blocked event renders apart from the pending decisions, naming the blueprint")
+    func blockedEventIsSeparatedAndNamed() {
+        let choices = BrainReport.eventChoices(
+            events: [
+                Self.event("X-1-EVT-001", location: "X-1", tier: 2, options: [
+                    Self.option("a", devices: [(1, "signal_booster")]),
+                    Self.option("b", devices: [(2, "signal_booster")]),
+                ]),
+                Self.event("TABAT-4-EVT-007", location: "TABAT-4", tier: 4, options: [
+                    Self.option("reclamation", devices: [(2, "climate_processor")]),
+                ]),
+            ],
+            bills: [
+                "signal_booster": ResourceCost(conductive: 400),
+                "climate_processor": ResourceCost(structural: 200),
+            ],
+            components: ["climate_processor": ["orbital_mirror": 1]],
+            devices: [:]
+        )
+        let why = BrainWhy.from(report: Self.report(choices: choices))
+
+        #expect(why.pendingEventChoices.map(\.designation) == ["X-1-EVT-001"])
+        #expect(why.blockedEvents.map(\.designation) == ["TABAT-4-EVT-007"])
+        guard let blocked = why.blockedEvents.first else {
+            Issue.record("expected the blocked event"); return
+        }
+        #expect(blocked.options[0].stock == "no blueprint for Orbital Mirror")
+        #expect(blocked.options[0].needsAMissingBlueprint)
+    }
+
+    /// The cold-catalogue window: an option inside a pending choice carries a
+    /// non-empty `unprintable` set while the event is not blocked at all.
+    @Test("a pending choice with an unpriced option is never read as blocked")
+    func coldCatalogueOptionStaysPending() {
+        let choices = BrainReport.eventChoices(
+            events: [
+                Self.event("X-1-EVT-001", location: "X-1", tier: 2, options: [
+                    Self.option("a", devices: [(1, "signal_booster")]),
+                    Self.option("b", devices: [(2, "signal_booster")]),
+                ]),
+            ],
+            bills: [:], devices: [:]
+        )
+        let why = BrainWhy.from(report: Self.report(choices: choices))
+
+        #expect(why.blockedEvents.isEmpty)
+        #expect(why.pendingEventChoices.count == 1)
+        #expect(why.pendingEventChoices[0].options[0].stock == "needs Signal Booster")
+        #expect(why.pendingEventChoices[0].options[0].needsAMissingBlueprint == false)
+    }
 }

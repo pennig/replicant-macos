@@ -25,6 +25,9 @@ public struct BrainWhyEventChoice: Equatable, Identifiable, Sendable {
         /// row can differ in glyph as well as wording.
         public let holdsEveryDevice: Bool
         public let exceedsOneFreighterLoad: Bool
+        /// Whether this option's tree needs a blueprint the account lacks. No
+        /// amount of printing or waiting reaches it.
+        public let needsAMissingBlueprint: Bool
         public var id: String { name }
 
         public init(
@@ -32,13 +35,15 @@ public struct BrainWhyEventChoice: Equatable, Identifiable, Sendable {
             fact: String,
             stock: String,
             holdsEveryDevice: Bool,
-            exceedsOneFreighterLoad: Bool
+            exceedsOneFreighterLoad: Bool,
+            needsAMissingBlueprint: Bool = false
         ) {
             self.name = name
             self.fact = fact
             self.stock = stock
             self.holdsEveryDevice = holdsEveryDevice
             self.exceedsOneFreighterLoad = exceedsOneFreighterLoad
+            self.needsAMissingBlueprint = needsAMissingBlueprint
         }
     }
 
@@ -48,13 +53,21 @@ public struct BrainWhyEventChoice: Equatable, Identifiable, Sendable {
     public let location: String
     public let tier: Int
     public let options: [Option]
+    /// Whether NO option can be built — a report, not a decision. Never derive
+    /// it from an option's missing blueprints: a cold catalogue populates those
+    /// on an event that is merely awaiting a pick.
+    public let isBlocked: Bool
     public var id: String { designation }
 
-    public init(designation: String, location: String, tier: Int, options: [Option]) {
+    public init(
+        designation: String, location: String, tier: Int, options: [Option],
+        isBlocked: Bool = false
+    ) {
         self.designation = designation
         self.location = location
         self.tier = tier
         self.options = options
+        self.isBlocked = isBlocked
     }
 
     /// Projects one `BrainEventChoice` off the tick's report.
@@ -63,22 +76,30 @@ public struct BrainWhyEventChoice: Equatable, Identifiable, Sendable {
             designation: choice.designation,
             location: choice.location,
             tier: choice.tier,
-            options: choice.options.map(Option.init)
+            options: choice.options.map { Option($0, blocked: choice.isBlocked) },
+            isBlocked: choice.isBlocked
         )
     }
 }
 
 extension BrainWhyEventChoice.Option {
-    init(_ option: BrainEventChoice.Option) {
+    /// `blocked` is the event's own verdict, and the ONLY gate on the missing
+    /// blueprint wording: a cold catalogue leaves `unprintable` populated on an
+    /// option that is merely awaiting a pick.
+    init(_ option: BrainEventChoice.Option, blocked: Bool) {
         self.init(
             name: option.name,
             fact: Self.fact(
                 build: option.deviceUnits, ship: option.resourceUnits,
                 required: option.requiredDevices
             ),
-            stock: Self.stock(required: option.requiredDevices, missing: option.missingDevices),
+            stock: Self.stock(
+                required: option.requiredDevices, missing: option.missingDevices,
+                unprintable: blocked ? option.unprintable : []
+            ),
             holdsEveryDevice: option.missingDevices.isEmpty,
-            exceedsOneFreighterLoad: option.exceedsOneFreighterLoad
+            exceedsOneFreighterLoad: option.exceedsOneFreighterLoad,
+            needsAMissingBlueprint: blocked && !option.unprintable.isEmpty
         )
     }
 
@@ -97,7 +118,14 @@ extension BrainWhyEventChoice.Option {
         return clauses.isEmpty ? "nothing to deliver" : clauses.joined(separator: " · ")
     }
 
-    private static func stock(required: [String], missing: [String]) -> String {
+    /// The missing blueprints lead: a shortfall the fleet could print is a
+    /// different problem from one no print reaches.
+    private static func stock(
+        required: [String], missing: [String], unprintable: [String]
+    ) -> String {
+        if !unprintable.isEmpty {
+            return "no blueprint for \(unprintable.map(label).joined(separator: ", "))"
+        }
         guard !required.isEmpty else { return "no devices needed" }
         guard !missing.isEmpty else { return "every device in stock" }
         return "needs \(missing.map(label).joined(separator: ", "))"
