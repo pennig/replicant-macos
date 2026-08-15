@@ -77,6 +77,18 @@ public struct EventRun: MissionStepMachine {
         public let courier: Device?
     }
 
+    /// A container this capability printed. An untagged one hosts some other
+    /// automation's replicant, whatever it happens to stand beside.
+    public static func isCourierHull(_ device: Device) -> Bool {
+        device.deviceType == courierDeviceType && device.hasTag(rootTag)
+    }
+
+    /// A courier: an owned container with a replicant replicated into it.
+    /// Untagged it is not ours to fly; unhosted it cannot resolve the commit.
+    public static func isCourier(_ device: Device, in world: WorldSnapshot) -> Bool {
+        isCourierHull(device) && world.replicantHostDevices.contains(device.deviceCode)
+    }
+
     /// A container aboard ANOTHER carrier is that run's courier, not this one's.
     /// Sorted before `first`, so two containers cannot resolve differently per tick.
     public static func convoy(of directive: Directive, in world: WorldSnapshot) -> Convoy? {
@@ -84,7 +96,7 @@ public struct EventRun: MissionStepMachine {
         let freighter = directive.freighterCode.flatMap { world.device($0) }
         let courier = world.devices.values
             .filter {
-                guard $0.deviceType == courierDeviceType else { return false }
+                guard isCourier($0, in: world) else { return false }
                 if let host = $0.attachedToDeviceCode { return host == carrier.deviceCode }
                 return $0.location == carrier.location
             }
@@ -128,7 +140,7 @@ public struct EventRun: MissionStepMachine {
             logger.notice("event run \(directive.id, privacy: .public): \(event.designation, privacy: .public) already closed — recovering")
             return .advanceStep(nextStep: Step.recovering)
         }
-        guard world.theatreDepot(for: directive) != nil else {
+        guard let depot = world.theatreDepot(for: directive) else {
             if world.theatreWentClaimed(for: directive) { return .wait }
             return .stall(.unreachableDevice)
         }

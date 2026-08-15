@@ -13,7 +13,7 @@ struct EventRunReturnTests {
         let devices = [
             EventRunFixtures.device("CARRIER", type: "surge_carrier", location: "X-1"),
             EventRunFixtures.device("FREIGHT", type: "cargo_freighter", location: "X-1"),
-            EventRunFixtures.device("COURIER", type: "matrix_container", location: "X-1"),
+            EventRunFixtures.courier(location: "X-1"),
         ]
         let world = EventRunFixtures.world(
             devices: devices,
@@ -34,7 +34,7 @@ struct EventRunReturnTests {
         let devices = [
             EventRunFixtures.device("CARRIER", type: "surge_carrier", location: "X-1"),
             EventRunFixtures.device("FREIGHT", type: "cargo_freighter", location: "X-1"),
-            EventRunFixtures.device("COURIER", type: "matrix_container", location: "X-1"),
+            EventRunFixtures.courier(location: "X-1"),
         ]
         let world = EventRunFixtures.world(
             devices: devices,
@@ -52,7 +52,7 @@ struct EventRunReturnTests {
         let devices = [
             EventRunFixtures.device("CARRIER", type: "surge_carrier", location: "X-1"),
             EventRunFixtures.device("FREIGHT", type: "cargo_freighter", location: "X-1"),
-            EventRunFixtures.device("COURIER", type: "matrix_container", location: "X-1"),
+            EventRunFixtures.courier(location: "X-1"),
         ]
         let world = EventRunFixtures.world(
             devices: devices,
@@ -71,7 +71,7 @@ struct EventRunReturnTests {
         let devices = [
             EventRunFixtures.device("CARRIER", type: "surge_carrier", location: "X-1"),
             EventRunFixtures.device("FREIGHT", type: "cargo_freighter", location: "X-1"),
-            EventRunFixtures.device("COURIER", type: "matrix_container", attachedTo: "CARRIER", location: "X-1"),
+            EventRunFixtures.courier(attachedTo: "CARRIER", location: "X-1"),
         ]
         let world = EventRunFixtures.world(
             devices: devices,
@@ -89,7 +89,7 @@ struct EventRunReturnTests {
         let devices = [
             EventRunFixtures.device("CARRIER", type: "surge_carrier", location: "X-1"),
             EventRunFixtures.device("FREIGHT", type: "cargo_freighter", location: "X-1"),
-            EventRunFixtures.device("COURIER", type: "matrix_container", attachedTo: "CARRIER", location: "X-1"),
+            EventRunFixtures.courier(attachedTo: "CARRIER", location: "X-1"),
             EventRunFixtures.device("BEACON", type: "ftl_beacon", location: "X-1"),
         ]
         let world = EventRunFixtures.world(
@@ -107,7 +107,7 @@ struct EventRunReturnTests {
         let devices = [
             EventRunFixtures.device("CARRIER", type: "surge_carrier", location: "X-1"),
             EventRunFixtures.device("FREIGHT", type: "cargo_freighter", location: "X-1"),
-            EventRunFixtures.device("COURIER", type: "matrix_container", attachedTo: "CARRIER", location: "X-1"),
+            EventRunFixtures.courier(attachedTo: "CARRIER", location: "X-1"),
         ]
         let world = EventRunFixtures.world(
             devices: devices,
@@ -128,7 +128,7 @@ struct EventRunReturnTests {
         let devices = [
             EventRunFixtures.device("CARRIER", type: "surge_carrier"),
             EventRunFixtures.device("FREIGHT", type: "cargo_freighter"),
-            EventRunFixtures.device("COURIER", type: "matrix_container", attachedTo: "CARRIER"),
+            EventRunFixtures.courier(attachedTo: "CARRIER"),
         ]
         let world = EventRunFixtures.world(
             devices: devices,

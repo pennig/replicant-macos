@@ -22,7 +22,7 @@ struct EventRunLoadingTests {
         let devices = [
             EventRunFixtures.device("CARRIER", type: "surge_carrier", tags: ["auto:carrier"]),
             EventRunFixtures.device("FREIGHT", type: "cargo_freighter"),
-            EventRunFixtures.device("COURIER", type: "matrix_container"),
+            EventRunFixtures.courier(),
             EventRunFixtures.device("PRINTER", type: "autofactory", updatedAt: now),
         ]
         let world = EventRunFixtures.world(
@@ -39,7 +39,7 @@ struct EventRunLoadingTests {
         let devices = [
             EventRunFixtures.device("CARRIER", type: "surge_carrier", tags: ["auto:carrier"]),
             EventRunFixtures.device("FREIGHT", type: "cargo_freighter"),
-            EventRunFixtures.device("COURIER", type: "matrix_container"),
+            EventRunFixtures.courier(),
             EventRunFixtures.device("PRINTER", type: "autofactory", updatedAt: now),
         ]
         let world = EventRunFixtures.world(
@@ -63,7 +63,7 @@ struct EventRunLoadingTests {
         let devices = [
             EventRunFixtures.device("CARRIER", type: "surge_carrier", tags: ["auto:carrier"]),
             EventRunFixtures.device("FREIGHT", type: "cargo_freighter"),
-            EventRunFixtures.device("COURIER", type: "matrix_container"),
+            EventRunFixtures.courier(),
             EventRunFixtures.device("PRINTER", type: "autofactory", updatedAt: now),
             EventRunFixtures.device("OLDBEACON", type: "ftl_beacon", location: "X-1"),
         ]
@@ -81,7 +81,7 @@ struct EventRunLoadingTests {
         let devices = [
             EventRunFixtures.device("CARRIER", type: "surge_carrier", tags: ["auto:carrier"]),
             EventRunFixtures.device("FREIGHT", type: "cargo_freighter"),
-            EventRunFixtures.device("COURIER", type: "matrix_container"),
+            EventRunFixtures.courier(),
             EventRunFixtures.device("PRINTER", type: "autofactory", updatedAt: now),
         ]
         let world = EventRunFixtures.world(
@@ -99,7 +99,7 @@ struct EventRunLoadingTests {
         let devices = [
             EventRunFixtures.device("CARRIER", type: "surge_carrier", tags: ["auto:carrier"]),
             EventRunFixtures.device("FREIGHT", type: "cargo_freighter"),
-            EventRunFixtures.device("COURIER", type: "matrix_container"),
+            EventRunFixtures.courier(),
             EventRunFixtures.device("BEACON", type: "ftl_beacon", tags: [EventRun.fleetTag(forTheatre: "HUB-1")]),
         ]
         let world = EventRunFixtures.world(
@@ -120,7 +120,7 @@ struct EventRunLoadingTests {
         let devices = [
             EventRunFixtures.device("CARRIER", type: "surge_carrier", tags: ["auto:carrier"]),
             EventRunFixtures.device("FREIGHT", type: "cargo_freighter"),
-            EventRunFixtures.device("COURIER", type: "matrix_container", attachedTo: "CARRIER"),
+            EventRunFixtures.courier(attachedTo: "CARRIER"),
             EventRunFixtures.device("BEACON", type: "ftl_beacon", attachedTo: "CARRIER",
                         tags: [EventRun.fleetTag(forTheatre: "HUB-1")]),
         ]
@@ -159,7 +159,7 @@ struct EventRunLoadingTests {
         let devices = [
             EventRunFixtures.device("CARRIER", type: "surge_carrier", tags: ["auto:carrier"]),
             EventRunFixtures.device("FREIGHT", type: "cargo_freighter"),
-            EventRunFixtures.device("COURIER", type: "matrix_container"),
+            EventRunFixtures.courier(),
             EventRunFixtures.device("PRINTER", type: "autofactory"),
         ]
         let world = EventRunFixtures.world(
@@ -178,7 +178,7 @@ struct EventRunLoadingTests {
         let devices = [
             EventRunFixtures.device("CARRIER", type: "surge_carrier", tags: ["auto:carrier"]),
             EventRunFixtures.device("FREIGHT", type: "cargo_freighter"),
-            EventRunFixtures.device("COURIER", type: "matrix_container"),
+            EventRunFixtures.courier(),
             EventRunFixtures.device("PRINTER", type: "autofactory", updatedAt: now),
             EventRunFixtures.device("BEACON", type: "ftl_beacon",
                         tags: [EventRun.fleetTag(forTheatre: "HUB-1")]),
@@ -197,7 +197,7 @@ struct EventRunLoadingTests {
         let devices = [
             EventRunFixtures.device("CARRIER", type: "surge_carrier", tags: ["auto:carrier"]),
             EventRunFixtures.device("FREIGHT", type: "cargo_freighter"),
-            EventRunFixtures.device("COURIER", type: "matrix_container"),
+            EventRunFixtures.courier(),
             EventRunFixtures.device("PRINTER", type: "autofactory", updatedAt: now),
         ]
         let world = EventRunFixtures.world(
@@ -214,7 +214,7 @@ struct EventRunLoadingTests {
     func noFreighterRereadsTheFleet() {
         let devices = [
             EventRunFixtures.device("CARRIER", type: "surge_carrier", tags: ["auto:carrier"]),
-            EventRunFixtures.device("COURIER", type: "matrix_container"),
+            EventRunFixtures.courier(),
             EventRunFixtures.device("BEACON", type: "ftl_beacon", attachedTo: "CARRIER",
                         tags: [EventRun.fleetTag(forTheatre: "HUB-1")]),
         ]
@@ -234,7 +234,7 @@ struct EventRunLoadingTests {
         let devices = [
             EventRunFixtures.device("CARRIER", type: "surge_carrier", tags: ["auto:carrier"]),
             EventRunFixtures.device("FREIGHT", type: "cargo_freighter", cargoUsed: 120),
-            EventRunFixtures.device("COURIER", type: "matrix_container", attachedTo: "CARRIER"),
+            EventRunFixtures.courier(attachedTo: "CARRIER"),
             EventRunFixtures.device("BEACON", type: "ftl_beacon", attachedTo: "CARRIER",
                         tags: [EventRun.fleetTag(forTheatre: "HUB-1")]),
         ]
@@ -247,13 +247,55 @@ struct EventRunLoadingTests {
         #expect(action == .advanceStep(nextStep: EventRun.Step.departing))
     }
 
+    /// The two containers a depot really holds: one hosting another
+    /// automation's replicant and never printed by this capability, and one
+    /// this capability printed that nobody has replicated into yet.
+    private func mixedContainers() -> [Device] {
+        [
+            EventRunFixtures.device("CARRIER", type: "surge_carrier", tags: ["auto:carrier"]),
+            EventRunFixtures.device("FREIGHT", type: "cargo_freighter"),
+            EventRunFixtures.device("ANCHOR", type: "matrix_container"),
+            EventRunFixtures.courier("PRINTED"),
+        ]
+    }
+
+    @Test("neither an untagged host nor an unreplicated print is a courier")
+    func ignoresTheAnchorHostAndTheUnreplicatedPrint() {
+        let world = EventRunFixtures.world(
+            devices: mixedContainers(),
+            event: EventRunFixtures.event(resources: ["structural": 200], devices: []),
+            now: now, hosts: ["ANCHOR"]
+        )
+        let directive = EventRunFixtures.directive(step: EventRun.Step.loading, now: now)
+        #expect(EventRun.convoy(of: directive, in: world)?.courier == nil)
+        #expect(EventRun().nextAction(directive: directive, world: world) == .refreshFleet(
+            tag: EventRun.rootTag, thenStall: .unreachableDevice
+        ))
+    }
+
+    @Test("a tagged container with a replicant in it IS the courier")
+    func selectsTheOwnedHostedContainer() {
+        let world = EventRunFixtures.world(
+            devices: mixedContainers(),
+            event: EventRunFixtures.event(resources: ["structural": 200], devices: []),
+            now: now, hosts: ["ANCHOR", "PRINTED"]
+        )
+        let directive = EventRunFixtures.directive(step: EventRun.Step.loading, now: now)
+        #expect(EventRun.convoy(of: directive, in: world)?.courier?.deviceCode == "PRINTED")
+        #expect(EventRun().nextAction(directive: directive, world: world) == .dispatch(
+            kind: .attach, deviceCode: "CARRIER",
+            params: CommandParams(devices: ["PRINTED"]),
+            nextStep: EventRun.Step.confirmingLoad
+        ))
+    }
+
     @Test("a container attached to another carrier is not this run's courier")
     func ignoresACourierAboardAnotherCarrier() {
         let devices = [
             EventRunFixtures.device("CARRIER", type: "surge_carrier", tags: ["auto:carrier"]),
             EventRunFixtures.device("FREIGHT", type: "cargo_freighter"),
             EventRunFixtures.device("OTHER", type: "surge_carrier", tags: ["auto:carrier"]),
-            EventRunFixtures.device("COURIER", type: "matrix_container", attachedTo: "OTHER"),
+            EventRunFixtures.courier(attachedTo: "OTHER"),
         ]
         let world = EventRunFixtures.world(
             devices: devices, event: EventRunFixtures.event(resources: ["structural": 200], devices: []), now: now

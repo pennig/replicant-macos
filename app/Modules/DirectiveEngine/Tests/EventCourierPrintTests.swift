@@ -127,6 +127,37 @@ struct EventCourierPrintTests {
         #expect(action == .stall(.unreachableDevice, detail: "no empty replicant matrix at HUB-1"))
     }
 
+    /// A container hosting another automation's replicant, never printed here.
+    private func anchorContainer() -> Device {
+        EventRunFixtures.device("ANCHOR", type: "matrix_container", updatedAt: now)
+    }
+
+    @Test("a hosted container we never printed does not stand as a courier")
+    func courierStandsWantsBothHalves() {
+        // `standing()`'s BOX is the other half: printed here, nobody in it yet.
+        let mixed = world(standing() + [anchorContainer()], hosts: ["ANCHOR"])
+        #expect(!EventCourierPrint.courierStands(at: "HUB-1", in: mixed))
+    }
+
+    @Test("it prints its own container rather than claiming an untagged one")
+    func printsPastAnotherAutomationsContainer() {
+        let fleet = [
+            EventRunFixtures.device("PRINTER", type: "autofactory", updatedAt: now),
+            anchorContainer(),
+        ]
+        let action = EventCourierPrint().nextAction(
+            directive: directive(step: EventCourierPrint.Step.printing),
+            world: world(fleet, hosts: ["ANCHOR"])
+        )
+        #expect(action == .dispatch(
+            kind: .print, deviceCode: "PRINTER",
+            params: CommandParams(
+                deviceType: "matrix_container", quantity: 1, printTags: [EventRun.rootTag]
+            ),
+            nextStep: EventCourierPrint.Step.awaitingClone
+        ))
+    }
+
     @Test("a row stranded on a retired step rejoins the machine")
     func unknownStepRejoins() {
         let action = EventCourierPrint().nextAction(

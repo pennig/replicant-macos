@@ -26,7 +26,7 @@ struct EventRunCommitTests {
                 "FREIGHT", type: "cargo_freighter", location: "X-1", updatedAt: updatedAt,
                 cargoUsed: used, cargoCapacity: hold
             ),
-            EventRunFixtures.device("COURIER", type: "matrix_container", attachedTo: "CARRIER", location: "X-1", updatedAt: updatedAt),
+            EventRunFixtures.courier(attachedTo: "CARRIER", location: "X-1", updatedAt: updatedAt),
         ]
     }
 

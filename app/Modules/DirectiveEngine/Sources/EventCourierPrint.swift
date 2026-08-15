@@ -28,11 +28,11 @@ public struct EventCourierPrint: MissionStepMachine {
 
     public var firstStep: String { Step.printing }
 
-    /// A courier is a container at `depot` that hosts a replicant.
+    /// A courier of ours standing at `depot`, by the one predicate `EventRun`
+    /// also selects on — so what this reports ready is what a convoy can fly.
     public static func courierStands(at depot: String, in world: WorldSnapshot) -> Bool {
         world.devices.values.contains {
-            $0.deviceType == EventRun.courierDeviceType && $0.location == depot
-                && world.replicantHostDevices.contains($0.deviceCode)
+            EventRun.isCourier($0, in: world) && $0.location == depot
         }
     }
 
@@ -56,9 +56,11 @@ public struct EventCourierPrint: MissionStepMachine {
         }
     }
 
+    /// Only a container carrying this run's own print tag: replicating into
+    /// another automation's would produce a host `courierStands` never accepts.
     private func container(at depot: String, in world: WorldSnapshot) -> Device? {
         world.devices.values
-            .filter { $0.deviceType == EventRun.courierDeviceType && $0.location == depot }
+            .filter { EventRun.isCourierHull($0) && $0.location == depot }
             .min { $0.deviceCode < $1.deviceCode }
     }
 

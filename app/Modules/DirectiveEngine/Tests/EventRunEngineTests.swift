@@ -37,6 +37,7 @@ struct EventRunEngineTests {
             {
                 try Device.insert { device }.execute(db)
             }
+            try Replicant.insert { EventRunFixtures.courierReplicant() }.execute(db)
             try LocationFootprint.insert { EventRunFixtures.depotFootprint(fetchedAt: now) }
                 .execute(db)
             try TheatrePin.insert { TheatrePin(location: "HUB-1", createdAt: now) }.execute(db)

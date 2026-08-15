@@ -31,6 +31,19 @@ enum EventRunFixtures {
         )
     }
 
+    /// The convoy's courier: wearing the tag its own print stamps, and hosting a
+    /// replicant — the two halves `EventRun.isCourier` requires. `world` seeds
+    /// `COURIER` into `replicantHostDevices` by default, matching this.
+    static func courier(
+        _ code: String = "COURIER", attachedTo: String? = nil,
+        location: String? = "HUB-1", updatedAt: Date = .distantPast
+    ) -> Device {
+        device(
+            code, type: "matrix_container", attachedTo: attachedTo, location: location,
+            tags: [EventRun.rootTag], updatedAt: updatedAt
+        )
+    }
+
     /// The convoy stood down at the event, courier still aboard the carrier.
     static func onSiteConvoy(
         updatedAt: Date, cargoUsed: Int = 0, cargoCapacity: Int = 500
@@ -41,11 +54,18 @@ enum EventRunFixtures {
                 "FREIGHT", type: "cargo_freighter", location: "X-1", updatedAt: updatedAt,
                 cargoUsed: cargoUsed, cargoCapacity: cargoCapacity
             ),
-            device(
-                "COURIER", type: "matrix_container", attachedTo: "CARRIER",
-                location: "X-1", updatedAt: updatedAt
-            ),
+            courier(attachedTo: "CARRIER", location: "X-1", updatedAt: updatedAt),
         ]
+    }
+
+    /// The replicant living in `COURIER`, which is what makes it a courier to a
+    /// `WorldSnapshot` read from the database rather than built by hand.
+    static func courierReplicant() -> Replicant {
+        Replicant(
+            replicantCode: "R-COURIER", name: "courier", createdAt: .distantPast,
+            currentStar: "X", currentStarName: nil, currentLocation: "X-1",
+            currentLocationName: nil, hostedDeviceCode: "COURIER"
+        )
     }
 
     /// The rows that make `HUB-1` recognise as an operational theatre: a printer
@@ -174,7 +194,7 @@ enum EventRunFixtures {
         devices: [Device], event: LocationEvent, now: Date,
         footprintFresh: Bool = true, stock: Int = 500_000,
         openOperations: [String: GameModels.Operation] = [:],
-        log: [DirectiveLogEntry] = []
+        log: [DirectiveLogEntry] = [], hosts: Set<String> = ["COURIER"]
     ) -> WorldSnapshot {
         WorldSnapshot(
             devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, l in l }),
@@ -192,6 +212,7 @@ enum EventRunFixtures {
                         readiness: .operational, stock: stock)
             ],
             locationEvents: [event.designation: event],
+            replicantHostDevices: hosts,
             now: now
         )
     }

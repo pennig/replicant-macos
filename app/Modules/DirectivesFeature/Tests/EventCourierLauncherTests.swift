@@ -23,13 +23,14 @@ struct EventCourierLauncherTests {
 
     nonisolated static func device(
         _ code: String, type: String, location: String?,
-        commands: [String] = [], features: [String] = [], status: String = "idle"
+        commands: [String] = [], features: [String] = [], status: String = "idle",
+        tags: [String] = []
     ) -> Device {
         Device(
             deviceCode: code, deviceType: type, replicantCode: "R1", status: status,
             location: location, locationName: nil, operationalCapacity: 100, queueSize: 0,
             stowedInDeviceCode: nil, controllerDeviceCode: nil, attachedToDeviceCode: nil,
-            createdAt: epoch, availableCommands: commands, features: features, tags: [],
+            createdAt: epoch, availableCommands: commands, features: features, tags: tags,
             detail: .object([:]), updatedAt: epoch, firstSeenAt: epoch
         )
     }
@@ -84,7 +85,10 @@ struct EventCourierLauncherTests {
     /// A courier already standing at `depot`: a container hosting a replicant.
     nonisolated private static func seedCourier(_ db: Database, at depot: String) throws {
         try Device.insert {
-            Self.device("BOX-A", type: EventRun.courierDeviceType, location: depot)
+            Self.device(
+                "BOX-A", type: EventRun.courierDeviceType, location: depot,
+                tags: [EventRun.rootTag]
+            )
         }.execute(db)
         try Replicant.insert {
             Replicant(
