@@ -2,8 +2,16 @@
 //  Brain.swift
 //  Replicould — DirectiveEngine
 //
-//  The automation brain's evaluation entry point, ticked by `DirectiveEngineCore.tickBrain()`: ranks goals from `WorldView` and drives directives via the
-//  sanctioned resolution verbs. A pure, stateless selector — not an actor, so ranking cannot block the reconciliation loop beside it.
+//  The automation brain's evaluation entry point, ticked by
+//  `DirectiveEngineCore.tickBrain()`: one tick reads the world, answers halted
+//  missions of the kinds in `brainManagedKinds`, launches at most one Relay Run,
+//  keeps one restock, survey, salvage, haul, mine and event run alive, and one
+//  pinned ferry row per installed mine beside them. A PURE
+//  SELECTOR — it inserts directives and drives the `retry`/`cancel` resolution
+//  verbs, nothing else. STATELESS between ticks: a tick is a pure function of
+//  `(WorldView, directive rows)`. Not an actor, so ranking cannot block the
+//  reconciliation loop beside it.
+//
 
 import API
 import Dependencies

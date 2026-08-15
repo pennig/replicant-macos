@@ -2,7 +2,11 @@
 //  PrintingSnapshotTests.swift
 //  Replicould — GameServices
 //
-//  Tests mapping a printer's `printing` block, queue, and `waiting_for` blockers to their display types, against a real payload captured from a live device.
+//  `PrintingSnapshot(printingBlock:)` maps a printer's `printing` block to the
+//  active-job readout, and the `Device` extensions surface the queue
+//  (`print_queue`), the resources a job is blocked on (`waiting_for`), and the
+//  `isPrintingOrQueued` gate the Print Queue list filters on. The `printing`
+//  block here is a real payload captured from a live heaven vessel.
 //
 
 import Foundation

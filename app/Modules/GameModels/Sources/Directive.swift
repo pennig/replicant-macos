@@ -2,8 +2,16 @@
 //  Directive.swift
 //  Replicould — Directives feature
 //
-//  A custom directive (a multi-step mission the app executes) and the shared audit trail both directive kinds write to; built-in AMI directives get no row
-//  here — the server owns that state on the `Device` row (`ami_directive`) already. Both tables are account-scoped and wiped on logout.
+//  A custom directive (a multi-step mission the app executes) and the shared
+//  audit trail both directive kinds write to. Built-in AMI directives get NO
+//  row here on purpose: the server owns that state and it is already carried on
+//  the `Device` row (`ami_directive`), so mirroring it locally would invent a
+//  drift bug. `DirectiveLogEntry` is the one thing both kinds share — hence its
+//  optional `directiveID` (custom) / `deviceCode` (built-in) pair.
+//
+//  Both tables are account-scoped and wiped on logout (see
+//  `ReplicantApp.registerSessionCleanup`).
+//
 
 import Foundation
 import SQLiteData

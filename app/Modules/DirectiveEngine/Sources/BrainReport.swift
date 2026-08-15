@@ -2,8 +2,23 @@
 //  BrainReport.swift
 //  Replicould — DirectiveEngine
 //
-//  The live feed from the brain's plan loop to its why-view. `@Shared(.inMemory)` and must stay so — the why-view is derived state with no table of its own,
-//  and the report is `Sendable`/lock-guarded so the engine writes off-main while `DirectivesFeature` observes on-main.
+//  The live feed from the brain's plan loop to its why-view
+//  (`brain-robustness-bar` clause 8: the brain must be explainable, in graph
+//  facts, while it is running). Every tick `DirectiveEngineCore.tickBrain()`
+//  publishes one `BrainReport`; `DirectivesFeature` reads it and projects it
+//  into `BrainWhy`.
+//
+//  The feed is `@Shared(.inMemory)` and must stay so. The why-view is DERIVED
+//  state — it restates what the brain just worked out from rows already
+//  persisted — so it gets no table and no migration. The report lives in
+//  Sharing's in-memory store rather than on `DirectiveEngineCore`: the actor
+//  writes the tick's report and forgets it, leaving the brain nothing to read
+//  back on the next tick (clause 2: stateless between ticks). The boundary is
+//  safe by construction — `BrainReport` is `Sendable` and `Shared` mutation
+//  goes through the library's own lock, so the engine writes off-main while the
+//  feature observes on-main — and `defaultInMemoryStorage` being a dependency
+//  lets a test scope its own store.
+//
 
 import Foundation
 import GameModels

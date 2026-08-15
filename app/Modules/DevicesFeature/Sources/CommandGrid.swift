@@ -2,7 +2,11 @@
 //  CommandGrid.swift
 //  Replicould — Devices feature
 //
-//  The device inspector's command surface: dispatchable commands grouped into sections, each with an inline confirm panel; heavier commands confirm in their own sheets.
+//  The device inspector's command surface: the device's dispatchable commands,
+//  grouped into named sections (Movement / Tasks / …), and the inline confirm/parameter
+//  panel each one reveals when selected (a text field, a resource picker, a device
+//  checkbox list, a blueprint picker, or a plain confirmation); heavier commands (travel /
+//  print / cargo / directive) confirm in their own sheets.
 //
 
 import ComposableArchitecture

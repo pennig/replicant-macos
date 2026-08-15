@@ -2,8 +2,18 @@
 //  Printing.swift
 //  Replicould — shared dependency clients
 //
-//  A printer's fabrication state mapped to display types: the active job (`printing`), the queued jobs (`print_queue`), and what a queued job is still
-//  waiting on (`waiting_for`). The Print Queue feature renders straight from these rather than tracking a local operation.
+//  A printer's fabrication state, mapped to display value types. A device with
+//  the `print` feature reports its work in three tail blocks: the `printing`
+//  block (the job under way — the device type being fabricated, its start /
+//  completion times, and a server-authoritative `progress_percent`), the
+//  `print_queue` array (jobs waiting their turn behind the active one), and the
+//  `waiting_for` object (resources a queued job still needs before it can start,
+//  as `{resource: {need, have}}`). The Print Queue feature renders straight from
+//  these, so the readout reflects the device's own state rather than a locally
+//  tracked operation. The `print_queue` item schema is undocumented server-side,
+//  so parsing is deliberately lenient — the queue index (array position) is the
+//  stable handle `dequeue_print` uses.
+//
 
 import Foundation
 import Utils
@@ -111,6 +121,8 @@ public struct WaitingResource: Equatable, Sendable, Identifiable {
     }
 }
 
+/// `components` / `resources` name a nested block; anything else is a flat
+/// resource row in the legacy shape.
 private func nestedKind(_ key: String) -> WaitingResource.Kind? {
     key == "components" ? .component : (key == "resources" ? .resource : nil)
 }

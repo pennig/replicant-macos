@@ -2,7 +2,9 @@
 //  GameDatabase.swift
 //  GameDatabase
 //
-//  Owns the app's SQLite schema composition — every feature's `@Table` migration is registered here so the app, Xcode previews, and tests share one schema.
+//  Owns the app's SQLite schema composition. Every feature's `@Table` migration
+//  is registered here in one place, so the database used by the app, by Xcode
+//  previews, and by tests all share a single schema and can never drift.
 //
 
 import Dependencies

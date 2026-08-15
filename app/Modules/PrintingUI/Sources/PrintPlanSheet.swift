@@ -2,7 +2,12 @@
 //  PrintPlanSheet.swift
 //  Replicould — PrintingUI (shared print-confirmation UI)
 //
-//  The `enqueue_print` confirmation sheet shared by the Devices and Print Queue inspectors: cost vs. live inventory, resolved just before the sheet opens.
+//  The `enqueue_print` confirmation sheet, shared by the Devices and Print Queue
+//  inspectors (both depend on this feature for the blueprint catalog). Given a
+//  resolved `PrintPreview`, it shows the chosen blueprint's per-resource cost
+//  against the live inventory at the device's current location — refreshed just
+//  before the sheet opens — and lets the user commit or back out. Reads only
+//  plain values + two callbacks, so neither feature's store leaks in here.
 //
 
 import GameModels

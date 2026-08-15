@@ -2,8 +2,17 @@
 //  Blueprint.swift
 //  Replicould — Blueprints feature
 //
-//  The locally-persisted device blueprint record, its schema mapping, and table migration — mirrors the backend `BlueprintSchema` payload from `GET /v1/blueprints`.
-//  Column names track the Swift property names; snake_case backend keys are mapped at the networking boundary in `BlueprintsClient`.
+//  The locally-persisted device blueprint record plus its schema mapping and
+//  table migration. Blueprints are fetched from `GET /v1/blueprints` (the
+//  account's *unlocked* catalog) and upserted into SQLite so the catalog reads
+//  instantly, survives relaunches, and can be searched reactively through a
+//  `@FetchAll` query. Mirrors the backend
+//  `app_schemas_blueprints_BlueprintSchema` payload.
+//
+//  The column names track the Swift property names; the snake_case backend keys
+//  (`device_type`, `short_description`, `print_time`, …) are mapped at the
+//  networking boundary in `BlueprintsClient`.
+//
 
 import API
 import Foundation

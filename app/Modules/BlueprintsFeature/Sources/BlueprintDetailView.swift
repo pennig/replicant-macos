@@ -2,7 +2,11 @@
 //  BlueprintDetailView.swift
 //  Replicould — Blueprints feature
 //
-//  The blueprint inspector for the split view's detail column: cost breakdown, feature/directive chips, and capacities. Read-only; observes the `Blueprint` table.
+//  The blueprint inspector for the split view's detail column: header, full
+//  description, build-cost breakdown (resource line items + print time), feature
+//  and directive chips, and a capacities readout. Read-only — printing is a
+//  per-device command surfaced elsewhere. Observes the `Blueprint` table, so a
+//  refresh re-renders the pane automatically.
 //
 
 import ComposableArchitecture
