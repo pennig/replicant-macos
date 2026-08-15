@@ -28,7 +28,8 @@ struct EventRunEngineTests {
         _ database: any DatabaseWriter,
         step: String,
         event: LocationEvent,
-        extraDevices: [Device] = []
+        extraDevices: [Device] = [],
+        blueprints: [Blueprint] = []
     ) async throws {
         let now = Self.now
         try await database.write { db in
@@ -36,6 +37,9 @@ struct EventRunEngineTests {
                 + EventRunFixtures.depotFleet(updatedAt: now) + extraDevices
             {
                 try Device.insert { device }.execute(db)
+            }
+            for blueprint in blueprints {
+                try Blueprint.insert { blueprint }.execute(db)
             }
             try Replicant.insert { EventRunFixtures.courierReplicant() }.execute(db)
             try LocationFootprint.insert { EventRunFixtures.depotFootprint(fetchedAt: now) }
@@ -80,6 +84,42 @@ struct EventRunEngineTests {
         }
     }
 
+    /// A catalogue row costed alike for every type, so the ORDER a print lands in
+    /// is the only thing the assertions can be reading.
+    private func blueprint(_ deviceType: String, components: [String: Int] = [:]) -> Blueprint {
+        Blueprint(
+            deviceType: deviceType, shortDescription: deviceType, fullDescription: deviceType,
+            printTime: 600, features: [], directives: [],
+            resources: ResourceCost(structural: 200), stowCapacity: 0, cargoCapacity: 0,
+            attachCapacity: 0, queueSize: 0, strength: 1, currentHubs: nil,
+            components: components
+        )
+    }
+
+    /// Stands each accepted print up at the depot wearing the tags it was
+    /// ordered with, which is the evidence the next evaluation nets against.
+    private func printingGovernor(
+        _ database: any DatabaseWriter, into printed: LockIsolated<[String]>
+    ) -> CommandGovernorClient {
+        CommandGovernorClient { kind, _, params in
+            guard kind == .print, let deviceType = params.deviceType else {
+                return .dispatched(.accepted(operationID: nil))
+            }
+            printed.withValue { $0.append(deviceType) }
+            try? await database.write { db in
+                for index in 0..<(params.quantity ?? 1) {
+                    try Device.upsert {
+                        EventRunFixtures.device(
+                            "\(deviceType)-\(index)", type: deviceType, location: "HUB-1",
+                            tags: params.printTags ?? [], updatedAt: Self.now
+                        )
+                    }.execute(db)
+                }
+            }
+            return .dispatched(.accepted(operationID: nil))
+        }
+    }
+
     // MARK: - Termination
 
     /// **Required.** A ledger that never satisfies the machine must stall, and the
@@ -113,6 +153,96 @@ struct EventRunEngineTests {
         #expect(row.attentionReason == .eventCriteriaUnmet)
         #expect(row.step == EventRun.Step.confirmingProgress)
         #expect(row.stepStartedAt == Self.now, "the poll must not re-stamp the deadline it is accruing")
+    }
+
+    // MARK: - Printing the tree
+
+    /// **Required.** The eight-hour park this task exists to end: an option whose
+    /// device is printed out of other printed devices must order the components
+    /// first and then hand on, rather than queueing a job no printer can start.
+    @Test("a component-bearing option prints prerequisites first and reaches the load")
+    func componentTreePrintsThenLoads() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await seed(
+            database, step: EventRun.Step.printing,
+            event: EventRunFixtures.event(devices: [(1, "atmospheric_regulator")]),
+            blueprints: [
+                blueprint(
+                    "atmospheric_regulator",
+                    components: ["filtration_array": 1, "atmo_processor": 2]
+                ),
+                blueprint("filtration_array"),
+                blueprint("atmo_processor"),
+                blueprint(EventPlan.beaconDeviceType),
+            ]
+        )
+        let printed = LockIsolated<[String]>([])
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Self.now)
+            $0.uuid = .incrementing
+            $0.commandGovernor = printingGovernor(database, into: printed)
+        } operation: {
+            let core = DirectiveEngineCore(machines: [EventRun()], tick: .seconds(5))
+            for _ in 0..<5 { await core.evaluateOnce(directiveID: "d1") }
+        }
+
+        #expect(printed.value == [
+            "atmo_processor", "filtration_array", "atmospheric_regulator",
+            EventPlan.beaconDeviceType,
+        ], "components before the device consuming them, beacon last")
+        let row = try await row(database)
+        #expect(row.step == EventRun.Step.loading)
+        #expect(row.status == .running)
+        #expect(row.attentionReason == nil)
+    }
+
+    /// The other half of the park: every printer busy, and the step past its
+    /// deadline. The run must surface rather than wait out another eight hours.
+    @Test("every printer blocked past the deadline surfaces instead of waiting")
+    func blockedPrintersStallThroughTheEngine() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await seed(
+            database, step: EventRun.Step.printing,
+            event: EventRunFixtures.event(devices: [(1, "atmospheric_regulator")]),
+            blueprints: [
+                blueprint(
+                    "atmospheric_regulator",
+                    components: ["filtration_array": 1, "atmo_processor": 2]
+                ),
+                blueprint("filtration_array"),
+                blueprint("atmo_processor"),
+                blueprint(EventPlan.beaconDeviceType),
+            ]
+        )
+        // The clock stays put and the STEP is backdated: advancing `now` past the
+        // deadline would age the census out from under the rail as well.
+        try await database.write { db in
+            for operation in EventRunFixtures.openPrint(on: "PRINTER", now: Self.now).values {
+                try GameModels.Operation.insert { operation }.execute(db)
+            }
+            guard var directive = try Directive.where { $0.id.eq("d1") }.fetchOne(db) else { return }
+            directive.stepStartedAt = Self.now.addingTimeInterval(-EventRun.printDeadline - 60)
+            try Directive.upsert { directive }.execute(db)
+        }
+        let printed = LockIsolated<[String]>([])
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Self.now)
+            $0.uuid = .incrementing
+            $0.commandGovernor = printingGovernor(database, into: printed)
+        } operation: {
+            let core = DirectiveEngineCore(machines: [EventRun()], tick: .seconds(5))
+            for _ in 0..<3 { await core.evaluateOnce(directiveID: "d1") }
+        }
+
+        #expect(printed.value.isEmpty, "nothing may be ordered at a printer that is already busy")
+        let row = try await row(database)
+        #expect(row.status == .needsAttention)
+        #expect(row.attentionReason == .printBlockedOnComponents)
+        #expect(row.step == EventRun.Step.printing)
     }
 
     // MARK: - The commit

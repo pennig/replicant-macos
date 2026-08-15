@@ -2,7 +2,7 @@
 //  EventRunTests.swift
 //  Replicould — DirectiveEngine
 //
-//  `EventRun` as a verdict table: preflight, the beacon print, and the load.
+//  `EventRun` as a verdict table: preflight, the prints, and the load.
 //
 
 import Foundation
@@ -339,6 +339,177 @@ struct EventRunLoadingTests {
         )
         #expect(action == .refreshFleet(
             tag: EventRun.rootTag, thenStall: .unreachableDevice
+        ))
+    }
+}
+
+/// The option whose device is itself printed out of other printed devices: one
+/// `atmospheric_regulator` over a `filtration_array` and two `atmo_processor`s.
+@Suite("EventRun — component prints")
+struct EventRunComponentPrintTests {
+    private let now = Date(timeIntervalSince1970: 10_000)
+    private let tag = EventRun.fleetTag(forTheatre: "HUB-1")
+    private let bills: [String: ResourceCost] = [
+        "atmospheric_regulator": ResourceCost(structural: 200),
+        "filtration_array": ResourceCost(structural: 140),
+        "atmo_processor": ResourceCost(structural: 200),
+        "ftl_beacon": ResourceCost(structural: 50),
+    ]
+    private let components = [
+        "atmospheric_regulator": ["filtration_array": 1, "atmo_processor": 2]
+    ]
+
+    /// A depot printer reading fresher than the step, or `printing` buys a
+    /// device read before it dispatches anything.
+    private func factory(_ code: String = "FACTORY") -> Device {
+        EventRunFixtures.device(code, type: "autofactory", updatedAt: now)
+    }
+
+    /// `FACTORY`, reporting the shortfall a queued job is parked on.
+    private func blockedFactory(_ shortfall: [String: (Int, Int)]) -> Device {
+        var device = factory()
+        device.detail = .object([
+            "waiting_for": .object([
+                "components": .object(shortfall.mapValues {
+                    .object(["have": .number(Double($0.0)), "need": .number(Double($0.1))])
+                })
+            ])
+        ])
+        return device
+    }
+
+    private func world(
+        _ extraDevices: [Device], busy: [String] = [], stepStartedAt: Date
+    ) -> WorldSnapshot {
+        var openOperations: [String: GameModels.Operation] = [:]
+        for code in busy {
+            openOperations.merge(EventRunFixtures.openPrint(on: code, now: stepStartedAt)) {
+                _, latest in latest
+            }
+        }
+        return EventRunFixtures.world(
+            devices: [
+                EventRunFixtures.device("CARRIER", type: "surge_carrier", tags: ["auto:carrier"]),
+                EventRunFixtures.courier(),
+            ] + extraDevices,
+            event: EventRunFixtures.event(devices: [(1, "atmospheric_regulator")]),
+            now: now,
+            openOperations: openOperations,
+            blueprintBills: bills,
+            blueprintComponents: components
+        )
+    }
+
+    @Test("printing dispatches a component before the device that consumes it")
+    func componentsPrintFirst() {
+        let action = EventRun().nextAction(
+            directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: now),
+            world: world([factory()], stepStartedAt: now)
+        )
+        guard case .dispatch(_, _, let params, _) = action else {
+            Issue.record("expected a dispatch, got \(action)"); return
+        }
+        #expect(params.deviceType == "atmo_processor")
+        #expect(params.quantity == 2)
+    }
+
+    @Test("a component already standing under the run's tag is not reprinted")
+    func standingComponentIsNetted() {
+        let action = EventRun().nextAction(
+            directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: now),
+            world: world(
+                [
+                    factory(),
+                    EventRunFixtures.device("AP1", type: "atmo_processor", tags: [tag]),
+                    EventRunFixtures.device("AP2", type: "atmo_processor", tags: [tag]),
+                ],
+                stepStartedAt: now
+            )
+        )
+        guard case .dispatch(_, _, let params, _) = action else {
+            Issue.record("expected a dispatch, got \(action)"); return
+        }
+        #expect(params.deviceType == "filtration_array")
+    }
+
+    @Test("an untagged component of the standing fleet is never scavenged")
+    func untaggedComponentIsNotNetted() {
+        let action = EventRun().nextAction(
+            directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: now),
+            world: world(
+                [
+                    factory(),
+                    EventRunFixtures.device("AP1", type: "atmo_processor", tags: []),
+                    EventRunFixtures.device("AP2", type: "atmo_processor", tags: []),
+                ],
+                stepStartedAt: now
+            )
+        )
+        guard case .dispatch(_, _, let params, _) = action else {
+            Issue.record("expected a dispatch, got \(action)"); return
+        }
+        #expect(params.deviceType == "atmo_processor")
+        #expect(params.quantity == 2)
+    }
+
+    @Test("a printer with nothing queued takes the job the blocked one cannot")
+    func aFreePrinterTakesTheComponentJob() {
+        let started = now.addingTimeInterval(-EventRun.printDeadline - 60)
+        let action = EventRun().nextAction(
+            directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: started),
+            world: world(
+                [blockedFactory(["atmo_processor": (0, 2)]), factory("SPARE")],
+                busy: ["FACTORY"], stepStartedAt: started
+            )
+        )
+        #expect(action == .dispatch(
+            kind: .print, deviceCode: "SPARE",
+            params: CommandParams(deviceType: "atmo_processor", quantity: 2, printTags: [tag]),
+            nextStep: EventRun.Step.printing
+        ))
+    }
+
+    @Test("a print blocked past the deadline stalls instead of waiting forever")
+    func blockedPrintStalls() {
+        let started = now.addingTimeInterval(-EventRun.printDeadline - 60)
+        let action = EventRun().nextAction(
+            directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: started),
+            world: world(
+                [blockedFactory(["atmo_processor": (0, 2)])],
+                busy: ["FACTORY"], stepStartedAt: started
+            )
+        )
+        guard case .stall(let reason, _) = action else {
+            Issue.record("expected a stall, got \(action)"); return
+        }
+        #expect(reason == .printBlockedOnComponents)
+    }
+
+    @Test("a print blocked inside the deadline waits")
+    func blockedPrintWaitsInsideTheDeadline() {
+        let action = EventRun().nextAction(
+            directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: now),
+            world: world(
+                [blockedFactory(["atmo_processor": (0, 2)])],
+                busy: ["FACTORY"], stepStartedAt: now
+            )
+        )
+        #expect(action == .wait)
+    }
+
+    @Test("the server's own shortfall outranks the local expansion")
+    func serverShortfallLeadsTheOrder() {
+        let action = EventRun().nextAction(
+            directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: now),
+            world: world(
+                [blockedFactory(["coolant_loop": (1, 3)]), factory("SPARE")],
+                busy: ["FACTORY"], stepStartedAt: now
+            )
+        )
+        #expect(action == .dispatch(
+            kind: .print, deviceCode: "SPARE",
+            params: CommandParams(deviceType: "coolant_loop", quantity: 2, printTags: [tag]),
+            nextStep: EventRun.Step.printing
         ))
     }
 }

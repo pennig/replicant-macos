@@ -152,7 +152,9 @@ enum EventRunFixtures {
         )
     }
 
-    static func event(resources: [String: Int], devices: [(Int, String)]) -> LocationEvent {
+    static func event(
+        resources: [String: Int] = [:], devices: [(Int, String)]
+    ) -> LocationEvent {
         LocationEvent(
             designation: "X-1-EVT-001", location: "X-1", tier: 1, status: "active",
             detail: .object([
@@ -194,7 +196,9 @@ enum EventRunFixtures {
         devices: [Device], event: LocationEvent, now: Date,
         footprintFresh: Bool = true, stock: Int = 500_000,
         openOperations: [String: GameModels.Operation] = [:],
-        log: [DirectiveLogEntry] = [], hosts: Set<String> = ["COURIER"]
+        log: [DirectiveLogEntry] = [], hosts: Set<String> = ["COURIER"],
+        blueprintBills: [String: ResourceCost] = [:],
+        blueprintComponents: [String: [String: Int]] = [:]
     ) -> WorldSnapshot {
         WorldSnapshot(
             devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, l in l }),
@@ -207,6 +211,8 @@ enum EventRunFixtures {
                     fetchedAt: footprintFresh ? now : .distantPast
                 )
             ],
+            blueprintBills: blueprintBills,
+            blueprintComponents: blueprintComponents,
             theatres: [
                 Theatre(depot: "HUB-1", system: "HUB", origin: .derived,
                         readiness: .operational, stock: stock)

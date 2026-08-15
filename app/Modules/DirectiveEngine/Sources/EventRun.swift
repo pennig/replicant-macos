@@ -156,18 +156,44 @@ public struct EventRun: MissionStepMachine {
 
     // MARK: - Printing
 
-    /// What the option still needs, standing free at `depot` and unclaimed.
-    static func missingDevices(
+    /// Every print the option still needs, prerequisites first: its device tree
+    /// expanded through blueprint components, netted against what already
+    /// stands free at `depot` under this run's own tag.
+    static func missingTree(
         for option: EventPlan.Option, at depot: String, in world: WorldSnapshot, tag: String
-    ) -> [String: Int] {
-        var wanted = option.devices
+    ) -> [BlueprintClosure.Job] {
+        let expansion = BlueprintClosure.expand(
+            option.devices, bills: world.blueprintBills, components: world.blueprintComponents
+        )
+        var held: [String: Int] = [:]
         for device in world.devices.values
         where device.location == depot && device.hasTag(tag) {
-            if let outstanding = wanted[device.deviceType] {
-                wanted[device.deviceType] = outstanding > 1 ? outstanding - 1 : nil
+            held[device.deviceType, default: 0] += 1
+        }
+        return expansion.jobs.compactMap { job in
+            let outstanding = job.quantity - (held[job.deviceType] ?? 0)
+            guard outstanding > 0 else { return nil }
+            return BlueprintClosure.Job(
+                deviceType: job.deviceType, quantity: outstanding, depth: job.depth
+            )
+        }
+    }
+
+    /// What a printer at `depot` says a queued job is still missing. The
+    /// server's own count, which outranks the local expansion.
+    static func blockedComponents(at depot: String, in world: WorldSnapshot) -> [String: Int] {
+        var missing: [String: Int] = [:]
+        for device in world.devices.values where device.location == depot {
+            guard case let .object(waiting)? = device.detail["waiting_for"],
+                  case let .object(rows)? = waiting["components"]
+            else { continue }
+            for (type, amounts) in rows {
+                let need = Int(amounts["need"]?.numberValue ?? 0)
+                let have = Int(amounts["have"]?.numberValue ?? 0)
+                if need > have { missing[type] = max(missing[type] ?? 0, need - have) }
             }
         }
-        return wanted
+        return missing
     }
 
     /// Whether a beacon already stands at the event's location.
@@ -187,24 +213,27 @@ public struct EventRun: MissionStepMachine {
         else { return .stall(.unreachableDevice) }
 
         let tag = Self.fleetTag(forTheatre: depot)
-        var wanted = Self.missingDevices(for: option, at: depot, in: world, tag: tag)
+        var wanted: [String: Int] = [:]
+        // Deepest-first, so a component precedes the device consuming it.
+        var order: [String] = []
+        for job in Self.missingTree(for: option, at: depot, in: world, tag: tag) {
+            wanted[job.deviceType] = job.quantity
+            order.append(job.deviceType)
+        }
+        // The server's own shortfall outranks the local expansion.
+        for (type, count) in Self.blockedComponents(at: depot, in: world) {
+            if wanted[type] == nil { order.insert(type, at: 0) }
+            wanted[type] = max(wanted[type] ?? 0, count)
+        }
         if !Self.beaconStands(at: event.location, in: world),
            !world.devices.values.contains(where: {
                $0.deviceType == EventPlan.beaconDeviceType && $0.location == depot && $0.hasTag(tag)
            })
         {
             wanted[EventPlan.beaconDeviceType] = 1
+            order.append(EventPlan.beaconDeviceType)
         }
         if wanted.isEmpty { return .advanceStep(nextStep: Step.loading) }
-
-        // Sorted before `first`: two printers at one depot must not alternate.
-        guard let printer = world.devices.values
-            .filter({ $0.location == depot && $0.deviceType == "autofactory" })
-            .sorted(by: { $0.deviceCode < $1.deviceCode })
-            .first
-        else { return .stall(.unreachableDevice) }
-
-        if world.openOperation(for: printer.deviceCode) != nil { return .wait }
 
         let rail = RelayRun(reserveFloor: reserveFloor)
         if rail.footprintCensusIsStale(world) {
@@ -215,14 +244,24 @@ public struct EventRun: MissionStepMachine {
             return .refreshDevicesInSystem(designation: depot, thenStall: .unreachableDevice)
         }
 
-        // Beacon last: the option's devices are the long prints.
-        let order = option.devices.keys.sorted() + [EventPlan.beaconDeviceType]
+        // Sorted before `first`: two printers at one depot must not alternate.
+        let printers = world.devices.values
+            .filter { $0.location == depot && $0.deviceType == "autofactory" }
+            .sorted { $0.deviceCode < $1.deviceCode }
+        guard !printers.isEmpty else { return .stall(.unreachableDevice) }
+
+        guard let free = printers.first(where: { world.openOperation(for: $0.deviceCode) == nil })
+        else {
+            let stuck = world.now.timeIntervalSince(directive.stepStartedAt) > Self.printDeadline
+            return stuck ? .stall(.printBlockedOnComponents, detail: depot) : .wait
+        }
+
         guard let type = order.first(where: { wanted[$0] != nil }),
               let quantity = wanted[type]
         else { return .wait }
 
         return .dispatch(
-            kind: .print, deviceCode: printer.deviceCode,
+            kind: .print, deviceCode: free.deviceCode,
             params: CommandParams(deviceType: type, quantity: quantity, printTags: [tag]),
             nextStep: Step.printing
         )

@@ -173,6 +173,9 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
     /// The courier's container is standing, but no replicant is free to host in
     /// it. Replication is the operator's to perform.
     case awaitingCourierReplication
+    /// A queued print is blocked on component devices it does not have. The run
+    /// prints them itself; this fires only when the block outlives the deadline.
+    case printBlockedOnComponents
 
     /// The stall panel's headline.
     public var displayName: String {
@@ -203,6 +206,7 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
         case .eventCriteriaUnmet: "Event objectives not met"
         case .eventCommitRejected: "Event commit rejected"
         case .awaitingCourierReplication: "Courier needs a replicant"
+        case .printBlockedOnComponents: "Print blocked on components"
         }
     }
 
@@ -263,6 +267,8 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
             "The server refused the commit. Retry once a replicant is confirmed on site."
         case .awaitingCourierReplication:
             "Stow the empty replicant matrix into the matrix container at the depot, then replicate into it there — the container is the cradle. If you replicated into a matrix elsewhere, move that one into the container instead. Retry once the container holds the new replicant."
+        case .printBlockedOnComponents:
+            "A queued print is waiting on component devices, and every printer at the depot is busy. Retry once one frees up, or cancel the print that is blocking the queue."
         }
     }
 }
@@ -287,7 +293,8 @@ public extension DirectiveAttentionReason {
         switch self {
         case .surveyIncomplete, .unreachableDevice, .vesselPositionUnconfirmed,
              .salvageSystemUnresolved, .salvageBodyNotDepleted, .commandRejected,
-             .relayActivationFailed, .printStockShort, .eventCommitRejected:
+             .relayActivationFailed, .printStockShort, .eventCommitRejected,
+             .printBlockedOnComponents:
             return .retry
         case .noSurveyControllerAboard, .noSurveyDroneAboard, .noMiningControllerAboard,
              .noMiningDroneAboard, .noRelayCoLocated, .dronesNotRecovered,
