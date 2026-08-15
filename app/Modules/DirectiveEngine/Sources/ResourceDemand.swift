@@ -38,6 +38,7 @@ public struct ResourceDemand: Equatable, Sendable {
     public static func compute(
         events: [LocationEvent],
         bills: [String: ResourceCost],
+        components: [String: [String: Int]] = [:],
         reserveFloors: [String: Double]
     ) -> ResourceDemand {
         var total = reserveFloors
@@ -46,7 +47,7 @@ public struct ResourceDemand: Equatable, Sendable {
         for event in events where event.isActive {
             guard let options = event.quest?.options, !options.isEmpty else { continue }
             let costed = options
-                .compactMap { price($0, bills: bills) }
+                .compactMap { price($0, bills: bills, components: components) }
                 .sorted { lhs, rhs in
                     lhs.units == rhs.units ? lhs.name < rhs.name : lhs.units < rhs.units
                 }
@@ -57,9 +58,12 @@ public struct ResourceDemand: Equatable, Sendable {
         return ResourceDemand(total: total, pricedEvents: priced)
     }
 
-    /// One option's unmet remainder, or nil when it needs an unbilled device.
+    /// One option's unmet remainder, or nil when its tree needs a blueprint the
+    /// account does not have.
     private static func price(
-        _ option: LocationEventDetail.Option, bills: [String: ResourceCost]
+        _ option: LocationEventDetail.Option,
+        bills: [String: ResourceCost],
+        components: [String: [String: Int]]
     ) -> PricedOption? {
         var cost: [String: Double] = [:]
         for line in option.resources {
@@ -67,13 +71,16 @@ public struct ResourceDemand: Equatable, Sendable {
             guard remaining > 0 else { continue }
             cost[line.resourceType.lowercased(), default: 0] += Double(remaining)
         }
+        var outstanding: [String: Int] = [:]
         for line in option.devices {
             let remaining = max(0, line.required - line.current)
             guard remaining > 0 else { continue }
-            guard let bill = bills[line.deviceType] else { return nil }
-            for (type, amount) in bill.wireDictionary where amount > 0 {
-                cost[type, default: 0] += Double(amount * remaining)
-            }
+            outstanding[line.deviceType, default: 0] += remaining
+        }
+        let expansion = BlueprintClosure.expand(outstanding, bills: bills, components: components)
+        guard expansion.unprintable.isEmpty else { return nil }
+        for (type, amount) in expansion.resources.wireDictionary where amount > 0 {
+            cost[type, default: 0] += Double(amount)
         }
         return PricedOption(name: option.name, cost: cost)
     }

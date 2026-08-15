@@ -191,4 +191,62 @@ struct ResourceDemandTests {
         #expect(demand.total["conductive"] == 700)
         #expect(demand.total["volatiles"] == 50)
     }
+
+    @Test("the cheapest option changes once components are counted")
+    func componentsChangeTheCheapestOption() {
+        let bills: [String: ResourceCost] = [
+            "cheap_shell": ResourceCost(structural: 100),
+            "dear_shell": ResourceCost(structural: 150),
+            "hidden_core": ResourceCost(structural: 500),
+        ]
+        let components = ["cheap_shell": ["hidden_core": 1]]
+        let row = twoOptionEvent(
+            first: ("shell", [(1, "cheap_shell")]),
+            second: ("plain", [(1, "dear_shell")])
+        )
+        let flat = ResourceDemand.compute(events: [row], bills: bills, reserveFloors: [:])
+        #expect(flat.pricedEvents[row.designation]?.first?.name == "shell")
+
+        let deep = ResourceDemand.compute(
+            events: [row], bills: bills, components: components, reserveFloors: [:]
+        )
+        #expect(deep.pricedEvents[row.designation]?.first?.name == "plain")
+        #expect(deep.total["structural"] == 150)
+    }
+
+    @Test("an option needing an unknown blueprint anywhere in its tree is dropped")
+    func unknownInTreeDropsTheOption() {
+        let bills: [String: ResourceCost] = ["shell": ResourceCost(structural: 100)]
+        let components = ["shell": ["mystery": 1]]
+        let row = twoOptionEvent(
+            first: ("only", [(1, "shell")]),
+            second: ("only2", [(1, "shell")])
+        )
+        let demand = ResourceDemand.compute(
+            events: [row], bills: bills, components: components, reserveFloors: [:]
+        )
+        #expect(demand.pricedEvents[row.designation] == nil)
+    }
+
+    private func twoOptionEvent(
+        first: (String, [(Int, String)]), second: (String, [(Int, String)])
+    ) -> LocationEvent {
+        func opt(_ pair: (String, [(Int, String)])) -> JSONValue {
+            .object([
+                "name": .string(pair.0),
+                "devices": .array(pair.1.map {
+                    .object(["count": .number(Double($0.0)), "device_type": .string($0.1)])
+                }),
+                "resources": .object([:]),
+            ])
+        }
+        return LocationEvent(
+            designation: "D-1-EVT-001", location: "D-1", tier: 2, status: "active",
+            detail: .object([
+                "criteria": .array([opt(first), opt(second)]),
+                "rewards": .object(["xp": .number(500)]),
+            ]),
+            firstSeenAt: .distantPast, updatedAt: .distantPast
+        )
+    }
 }
