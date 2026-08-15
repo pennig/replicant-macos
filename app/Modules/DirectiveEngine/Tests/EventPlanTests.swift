@@ -106,6 +106,18 @@ struct EventPlanTests {
         "atmospheric_regulator": ["filtration_array": 1, "atmo_processor": 2],
     ]
 
+    @Test("an empty catalogue leaves every option standing rather than blocking it")
+    func emptyCatalogueIsInert() throws {
+        let row = event(.array([
+            option("only", devices: [(2, "climate_processor")], resources: [:])
+        ]))
+        guard case .decided(let plan) = EventPlan.resolve(
+            row, chosenOption: nil, bills: [:], components: componentBills
+        ) else { Issue.record("expected .decided"); return }
+        #expect(plan.name == "only")
+        #expect(plan.deviceUnits == 0)
+    }
+
     @Test("device units count the whole component tree")
     func pricesComponents() throws {
         var withAtmo = costs

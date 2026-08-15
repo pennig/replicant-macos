@@ -57,7 +57,8 @@ public enum EventPlan {
             return .undecodable
         }
         let priced = detail.options.map { price($0, bills, components) }
-        let printable = priced.filter(\.unprintable.isEmpty)
+        // An empty catalogue cannot judge printability; leave every option standing.
+        let printable = bills.isEmpty ? priced : priced.filter(\.unprintable.isEmpty)
         if printable.isEmpty { return .blocked(priced) }
         if printable.count == 1, let only = printable.first { return .decided(only) }
         if let name = chosenOption, let picked = printable.first(where: { $0.name == name }) {
