@@ -52,7 +52,8 @@ public struct EventRun: MissionStepMachine {
     public static let carrierTag = "auto:carrier"
 
     /// Deadlines, all in the shape the sibling runs use.
-    public static let printDeadline: TimeInterval = RestockRun.printDeadline
+    /// What a print gets on top of its own run time: queue wait and confirm lag.
+    public static let printSlack: TimeInterval = RestockRun.printDeadline
     public static let loadConfirmDeadline: TimeInterval = 5 * 60
     public static let arrivalConfirmDeadline: TimeInterval = 5 * 60
     public static let stageConfirmDeadline: TimeInterval = 5 * 60
@@ -156,12 +157,20 @@ public struct EventRun: MissionStepMachine {
 
     // MARK: - Printing
 
+    /// What the option still needs printed, and the device types in its tree the
+    /// account holds no blueprint for. `jobs` is a SUBSET of the build order
+    /// whenever `unprintable` is non-empty, never a complete one.
+    struct Outstanding: Equatable, Sendable {
+        let jobs: [BlueprintClosure.Job]
+        let unprintable: Set<String>
+    }
+
     /// Every print the option still needs, prerequisites first: the top level
     /// netted against what stands free at `depot` under this run's tag, the
     /// remainder expanded, then the component levels netted from the same pool.
     static func missingTree(
         for option: EventPlan.Option, at depot: String, in world: WorldSnapshot, tag: String
-    ) -> [BlueprintClosure.Job] {
+    ) -> Outstanding {
         // One pool, spent once: a type can be both a top-level requirement and
         // a sibling's component, and must not be counted for both.
         var remaining: [String: Int] = [:]
@@ -175,6 +184,17 @@ public struct EventRun: MissionStepMachine {
             let used = min(remaining[type] ?? 0, count)
             remaining[type] = (remaining[type] ?? 0) - used
             if count - used > 0 { outstanding[type] = count - used }
+        }
+
+        // An unread catalogue makes every type look unprintable. Treat the top
+        // level as leaves instead, which is what this step did before bills.
+        guard !world.blueprintBills.isEmpty else {
+            return Outstanding(
+                jobs: outstanding.sorted(by: { $0.key < $1.key }).map {
+                    BlueprintClosure.Job(deviceType: $0.key, quantity: $0.value, depth: 0)
+                },
+                unprintable: []
+            )
         }
 
         let expansion = BlueprintClosure.expand(
@@ -191,18 +211,46 @@ public struct EventRun: MissionStepMachine {
                 )
             )
         }
-        return jobs
+        return Outstanding(jobs: jobs, unprintable: expansion.unprintable)
     }
 
-    /// What a printer at `depot` reports one queued job still missing. That is
-    /// a narrower scope than the expansion, which covers the whole option, so
-    /// the caller orders the GREATER of the two rather than replacing one.
+    /// This directive's own prints still open, per device type, read off the ops
+    /// it dispatched. A type the op detail does not name contributes nothing.
+    static func printsInFlight(in world: WorldSnapshot) -> [String: Int] {
+        var counts: [String: Int] = [:]
+        for operation in world.dispatchedOperations.values
+        where operation.kind == OperationKind.print.rawValue && operation.status.isOpen {
+            guard let params = operation.detail["params"],
+                  let type = params["device_type"]?.stringValue
+            else { continue }
+            counts[type, default: 0] += Int(params["quantity"]?.numberValue ?? 1)
+        }
+        return counts
+    }
+
+    /// The printing step's bound: the longest single job it still has queued,
+    /// plus `printSlack`. A print time the catalogue has no row for adds nothing.
+    static func printDeadline(for wanted: [String: Int], in world: WorldSnapshot) -> TimeInterval {
+        let longest = wanted.keys.compactMap { world.blueprintPrintTimes[$0] }.max() ?? 0
+        return printSlack + TimeInterval(longest)
+    }
+
+    /// What a printer THIS run has a print open on reports its queued job still
+    /// missing — a narrower scope than the expansion, so the caller orders the
+    /// GREATER of the two. A type with no blueprint is dropped as unorderable.
     static func blockedComponents(at depot: String, in world: WorldSnapshot) -> [String: Int] {
+        let ours = Set(
+            world.dispatchedOperations.values
+                .filter { $0.kind == OperationKind.print.rawValue && $0.status.isOpen }
+                .map(\.entityCode)
+        )
         var missing: [String: Int] = [:]
-        for device in world.devices.values where device.location == depot {
+        for device in world.devices.values
+        where device.location == depot && ours.contains(device.deviceCode) {
             for row in device.waitingForComponents where !row.isMet {
                 let shortfall = Int((row.need ?? 0) - (row.have ?? 0))
-                if shortfall > 0 { missing[row.resource] = max(missing[row.resource] ?? 0, shortfall) }
+                guard shortfall > 0, world.blueprintBills[row.resource] != nil else { continue }
+                missing[row.resource] = max(missing[row.resource] ?? 0, shortfall)
             }
         }
         return missing
@@ -225,10 +273,18 @@ public struct EventRun: MissionStepMachine {
         else { return .stall(.unreachableDevice) }
 
         let tag = Self.fleetTag(forTheatre: depot)
+        let outstanding = Self.missingTree(for: option, at: depot, in: world, tag: tag)
+        guard outstanding.unprintable.isEmpty else {
+            return .stall(
+                .eventOptionBlueprintMissing,
+                detail: outstanding.unprintable.sorted().joined(separator: ", ")
+            )
+        }
+
         var wanted: [String: Int] = [:]
         // Deepest-first, so a component precedes the device consuming it.
         var order: [String] = []
-        for job in Self.missingTree(for: option, at: depot, in: world, tag: tag) {
+        for job in outstanding.jobs {
             wanted[job.deviceType] = job.quantity
             order.append(job.deviceType)
         }
@@ -251,6 +307,7 @@ public struct EventRun: MissionStepMachine {
             order.append(EventPlan.beaconDeviceType)
         }
         if wanted.isEmpty { return .advanceStep(nextStep: Step.loading) }
+        let deadline = Self.printDeadline(for: wanted, in: world)
 
         let rail = RelayRun(reserveFloor: reserveFloor)
         if rail.footprintCensusIsStale(world) {
@@ -261,6 +318,13 @@ public struct EventRun: MissionStepMachine {
             return .refreshDevicesInSystem(designation: depot, thenStall: .unreachableDevice)
         }
 
+        // `missingTree` counts only what STANDS at the depot, so a job already on
+        // order still reads as wanted and a second free printer would re-order it.
+        for (type, onOrder) in Self.printsInFlight(in: world) {
+            guard let count = wanted[type] else { continue }
+            wanted[type] = count > onOrder ? count - onOrder : nil
+        }
+
         // Sorted before `first`: two printers at one depot must not alternate.
         let printers = world.devices.values
             .filter { $0.location == depot && $0.deviceType == "autofactory" }
@@ -269,7 +333,7 @@ public struct EventRun: MissionStepMachine {
 
         guard let free = printers.first(where: { world.openOperation(for: $0.deviceCode) == nil })
         else {
-            let stuck = world.now.timeIntervalSince(directive.stepStartedAt) > Self.printDeadline
+            let stuck = world.now.timeIntervalSince(directive.stepStartedAt) > deadline
             return stuck ? .stall(.printBlockedOnComponents, detail: depot) : .wait
         }
 

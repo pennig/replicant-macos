@@ -342,18 +342,21 @@ struct EventRunLoadingTests {
         ))
     }
 }
-
 /// The option whose device is itself printed out of other printed devices: one
 /// `atmospheric_regulator` over a `filtration_array` and two `atmo_processor`s.
 @Suite("EventRun — component prints")
 struct EventRunComponentPrintTests {
     private let now = Date(timeIntervalSince1970: 10_000)
     private let tag = EventRun.fleetTag(forTheatre: "HUB-1")
+    /// `orbital_mirror` is deliberately absent: it is one of the four component
+    /// types the account holds no blueprint for.
     private let bills: [String: ResourceCost] = [
         "atmospheric_regulator": ResourceCost(structural: 200),
         "filtration_array": ResourceCost(structural: 140),
         "atmo_processor": ResourceCost(structural: 200),
         "climate_processor": ResourceCost(structural: 300),
+        "reclamation_rig": ResourceCost(structural: 400),
+        "coolant_loop": ResourceCost(structural: 90),
         "ftl_beacon": ResourceCost(structural: 50),
     ]
     /// `climate_processor` shares `atmo_processor` with the regulator, which is
@@ -361,6 +364,14 @@ struct EventRunComponentPrintTests {
     private let components = [
         "atmospheric_regulator": ["filtration_array": 1, "atmo_processor": 2],
         "climate_processor": ["atmo_processor": 2],
+        "reclamation_rig": ["orbital_mirror": 1, "atmo_processor": 1],
+    ]
+    /// The live catalogue's spread: the regulator alone outruns the relay-shaped
+    /// slack, so the deadline has to be derived rather than constant.
+    private let printTimes = [
+        "atmospheric_regulator": 3600, "filtration_array": 600, "atmo_processor": 600,
+        "climate_processor": 4200, "reclamation_rig": 3600, "coolant_loop": 300,
+        "ftl_beacon": 900,
     ]
 
     /// A depot printer reading fresher than the step, or `printing` buys a
@@ -369,9 +380,11 @@ struct EventRunComponentPrintTests {
         EventRunFixtures.device(code, type: "autofactory", updatedAt: now)
     }
 
-    /// `FACTORY`, reporting the shortfall a queued job is parked on.
-    private func blockedFactory(_ shortfall: [String: (Int, Int)]) -> Device {
-        var device = factory()
+    /// A printer reporting the shortfall a queued job is parked on.
+    private func blockedFactory(
+        _ shortfall: [String: (Int, Int)], _ code: String = "FACTORY"
+    ) -> Device {
+        var device = factory(code)
         device.detail = .object([
             "waiting_for": .object([
                 "components": .object(shortfall.mapValues {
@@ -382,12 +395,25 @@ struct EventRunComponentPrintTests {
         return device
     }
 
+    /// `busy` printers carry a print THIS run dispatched; `foreign` ones carry
+    /// somebody else's. `ordering` names what a busy printer is building, which
+    /// is what the in-flight net reads.
     private func world(
         _ extraDevices: [Device], wanting: [(Int, String)] = [(1, "atmospheric_regulator")],
-        busy: [String] = [], stepStartedAt: Date
+        busy: [String] = [], foreign: [String] = [],
+        ordering: [String: (String, Int)] = [:], stepStartedAt: Date
     ) -> WorldSnapshot {
         var openOperations: [String: GameModels.Operation] = [:]
+        var dispatched: [String: GameModels.Operation] = [:]
         for code in busy {
+            let job = ordering[code]
+            let ours = EventRunFixtures.openPrint(
+                on: code, now: stepStartedAt, deviceType: job?.0, quantity: job?.1 ?? 1
+            )
+            openOperations.merge(ours) { _, latest in latest }
+            for operation in ours.values { dispatched[operation.id] = operation }
+        }
+        for code in foreign {
             openOperations.merge(EventRunFixtures.openPrint(on: code, now: stepStartedAt)) {
                 _, latest in latest
             }
@@ -400,8 +426,20 @@ struct EventRunComponentPrintTests {
             event: EventRunFixtures.event(devices: wanting),
             now: now,
             openOperations: openOperations,
+            dispatchedOperations: dispatched,
             blueprintBills: bills,
-            blueprintComponents: components
+            blueprintComponents: components,
+            blueprintPrintTimes: printTimes
+        )
+    }
+
+    private func print(
+        _ deviceType: String, _ quantity: Int, at deviceCode: String = "FACTORY"
+    ) -> MissionAction {
+        .dispatch(
+            kind: .print, deviceCode: deviceCode,
+            params: CommandParams(deviceType: deviceType, quantity: quantity, printTags: [tag]),
+            nextStep: EventRun.Step.printing
         )
     }
 
@@ -411,11 +449,7 @@ struct EventRunComponentPrintTests {
             directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: now),
             world: world([factory()], stepStartedAt: now)
         )
-        guard case .dispatch(_, _, let params, _) = action else {
-            Issue.record("expected a dispatch, got \(action)"); return
-        }
-        #expect(params.deviceType == "atmo_processor")
-        #expect(params.quantity == 2)
+        #expect(action == print("atmo_processor", 2))
     }
 
     @Test("a component already standing under the run's tag is not reprinted")
@@ -431,10 +465,7 @@ struct EventRunComponentPrintTests {
                 stepStartedAt: now
             )
         )
-        guard case .dispatch(_, _, let params, _) = action else {
-            Issue.record("expected a dispatch, got \(action)"); return
-        }
-        #expect(params.deviceType == "filtration_array")
+        #expect(action == print("filtration_array", 1))
     }
 
     @Test("an untagged component of the standing fleet is never scavenged")
@@ -450,11 +481,7 @@ struct EventRunComponentPrintTests {
                 stepStartedAt: now
             )
         )
-        guard case .dispatch(_, _, let params, _) = action else {
-            Issue.record("expected a dispatch, got \(action)"); return
-        }
-        #expect(params.deviceType == "atmo_processor")
-        #expect(params.quantity == 2)
+        #expect(action == print("atmo_processor", 2))
     }
 
     @Test("a standing parent suppresses the components it already consumed")
@@ -493,15 +520,6 @@ struct EventRunComponentPrintTests {
                 )
             )
         }
-        func print(_ deviceType: String, _ quantity: Int) -> MissionAction {
-            .dispatch(
-                kind: .print, deviceCode: "FACTORY",
-                params: CommandParams(
-                    deviceType: deviceType, quantity: quantity, printTags: [tag]
-                ),
-                nextStep: EventRun.Step.printing
-            )
-        }
         #expect(action(held: 3) == print("climate_processor", 1))
         #expect(
             action(held: 2) == print("atmo_processor", 1),
@@ -509,26 +527,99 @@ struct EventRunComponentPrintTests {
         )
     }
 
-    @Test("a printer with nothing queued takes the job the blocked one cannot")
-    func aFreePrinterTakesTheComponentJob() {
-        let started = now.addingTimeInterval(-EventRun.printDeadline - 60)
+    // MARK: - One bill, however many printers
+
+    /// Two free printers, the first tick's order already in flight. The second
+    /// printer must take the NEXT job: `missingTree` counts only what STANDS at
+    /// the depot, so without the in-flight net it re-orders the same bill.
+    @Test("a second free printer never re-dispatches a job already in flight")
+    func aSecondFreePrinterTakesOnlyNewWork() {
+        let first = EventRun().nextAction(
+            directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: now),
+            world: world([factory(), factory("SPARE")], stepStartedAt: now)
+        )
+        #expect(first == print("atmo_processor", 2))
+
+        let second = EventRun().nextAction(
+            directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: now),
+            world: world(
+                [factory(), factory("SPARE")], busy: ["FACTORY"],
+                ordering: ["FACTORY": ("atmo_processor", 2)], stepStartedAt: now
+            )
+        )
+        #expect(
+            second == print("filtration_array", 1, at: "SPARE"),
+            "four autofactories used to mean four times the component bill"
+        )
+    }
+
+    /// The same net taken to its end: nothing is left to order, so a free
+    /// printer waits rather than the run flying a payload the prints never filled.
+    @Test("a free printer waits when the whole bill is already in flight")
+    func aFreePrinterWaitsWhenNothingIsLeft() {
+        let action = EventRun().nextAction(
+            directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: now),
+            world: world(
+                [
+                    factory(), factory("SPARE"),
+                    EventRunFixtures.device("OLDBEACON", type: "ftl_beacon", location: "X-1"),
+                ],
+                wanting: [(2, "atmo_processor")], busy: ["FACTORY"],
+                ordering: ["FACTORY": ("atmo_processor", 2)], stepStartedAt: now
+            )
+        )
+        #expect(action == .wait)
+    }
+
+    // MARK: - A tree that cannot be built
+
+    /// An option whose tree reaches `orbital_mirror`, which no blueprint prints.
+    /// Printing the rest and departing spends hulls and resources on a payload
+    /// that cannot satisfy the criteria.
+    @Test("a tree reaching a blueprint-less device stalls and dispatches nothing")
+    func unprintableTreeStalls() {
+        let action = EventRun().nextAction(
+            directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: now),
+            world: world([factory()], wanting: [(1, "reclamation_rig")], stepStartedAt: now)
+        )
+        guard case .stall(let reason, let detail) = action else {
+            Issue.record("expected a stall, got \(action)"); return
+        }
+        #expect(reason == .eventOptionBlueprintMissing)
+        #expect(detail == "orbital_mirror")
+    }
+
+    @Test("a fully printable tree still dispatches")
+    func printableTreeStillDispatches() {
+        let action = EventRun().nextAction(
+            directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: now),
+            world: world([factory()], wanting: [(1, "climate_processor")], stepStartedAt: now)
+        )
+        #expect(action == print("atmo_processor", 2))
+    }
+
+    // MARK: - The deadline
+
+    /// 1,860 s in: past the old relay-shaped constant, well inside the
+    /// regulator's own 3,600 s print. A healthy print must not surface.
+    @Test("every printer busy inside the derived deadline waits")
+    func aLongPrintOutlivesTheRelayShapedConstant() {
+        let started = now.addingTimeInterval(-(EventRun.printSlack + 60))
         let action = EventRun().nextAction(
             directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: started),
             world: world(
-                [blockedFactory(["atmo_processor": (0, 2)]), factory("SPARE")],
+                [blockedFactory(["atmo_processor": (0, 2)])],
                 busy: ["FACTORY"], stepStartedAt: started
             )
         )
-        #expect(action == .dispatch(
-            kind: .print, deviceCode: "SPARE",
-            params: CommandParams(deviceType: "atmo_processor", quantity: 2, printTags: [tag]),
-            nextStep: EventRun.Step.printing
-        ))
+        #expect(action == .wait)
     }
 
-    @Test("a print blocked past the deadline stalls instead of waiting forever")
-    func blockedPrintStalls() {
-        let started = now.addingTimeInterval(-EventRun.printDeadline - 60)
+    /// The other side of the same rule: a print outliving its own run time plus
+    /// the slack is stuck rather than slow, and must surface.
+    @Test("every printer busy past the derived deadline stalls")
+    func aPermanentlyBlockedPrintStalls() {
+        let started = now.addingTimeInterval(-(EventRun.printSlack + 3600 + 60))
         let action = EventRun().nextAction(
             directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: started),
             world: world(
@@ -542,17 +633,7 @@ struct EventRunComponentPrintTests {
         #expect(reason == .printBlockedOnComponents)
     }
 
-    @Test("a print blocked inside the deadline waits")
-    func blockedPrintWaitsInsideTheDeadline() {
-        let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: now),
-            world: world(
-                [blockedFactory(["atmo_processor": (0, 2)])],
-                busy: ["FACTORY"], stepStartedAt: now
-            )
-        )
-        #expect(action == .wait)
-    }
+    // MARK: - The server's own answer
 
     @Test("the server's own shortfall outranks the local expansion")
     func serverShortfallLeadsTheOrder() {
@@ -563,10 +644,53 @@ struct EventRunComponentPrintTests {
                 busy: ["FACTORY"], stepStartedAt: now
             )
         )
-        #expect(action == .dispatch(
-            kind: .print, deviceCode: "SPARE",
-            params: CommandParams(deviceType: "coolant_loop", quantity: 2, printTags: [tag]),
-            nextStep: EventRun.Step.printing
-        ))
+        #expect(action == print("coolant_loop", 2, at: "SPARE"))
+    }
+
+    /// The fold takes the GREATER of the two counts, so the magnitudes have to
+    /// differ in BOTH directions for the `max` to be visible at all.
+    @Test("the order takes the greater of the server's shortfall and the expansion")
+    func theGreaterOfTheTwoCountsIsOrdered() {
+        func action(serverShortfall: Int) -> MissionAction {
+            EventRun().nextAction(
+                directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: now),
+                world: world(
+                    [blockedFactory(["atmo_processor": (0, serverShortfall)]), factory("SPARE")],
+                    busy: ["FACTORY"], stepStartedAt: now
+                )
+            )
+        }
+        #expect(action(serverShortfall: 5) == print("atmo_processor", 5, at: "SPARE"))
+        #expect(
+            action(serverShortfall: 1) == print("atmo_processor", 2, at: "SPARE"),
+            "the expansion is the greater one here"
+        )
+    }
+
+    /// Another automation's — or the operator's — blocked print at the same
+    /// depot must not steer this run's order or spend its budget.
+    @Test("a blockage on a printer this run has no work on is ignored")
+    func foreignBlockageDoesNotSteerTheOrder() {
+        let action = EventRun().nextAction(
+            directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: now),
+            world: world(
+                [blockedFactory(["coolant_loop": (1, 3)]), factory("SPARE")],
+                foreign: ["FACTORY"], stepStartedAt: now
+            )
+        )
+        #expect(action == print("atmo_processor", 2, at: "SPARE"))
+    }
+
+    /// `enqueue_print` for a type with no blueprint is refused every tick.
+    @Test("a server-named type with no blueprint is dropped from the order")
+    func unbillableServerShortfallIsDropped() {
+        let action = EventRun().nextAction(
+            directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: now),
+            world: world(
+                [blockedFactory(["orbital_mirror": (0, 2)]), factory("SPARE")],
+                busy: ["FACTORY"], stepStartedAt: now
+            )
+        )
+        #expect(action == print("atmo_processor", 2, at: "SPARE"))
     }
 }

@@ -212,10 +212,11 @@ struct EventRunEngineTests {
         #expect(row.attentionReason == nil)
     }
 
-    /// The other half of the park: every printer busy, and the step past its
-    /// deadline. The run must surface rather than wait out another eight hours.
-    @Test("every printer blocked past the deadline surfaces instead of waiting")
-    func blockedPrintersStallThroughTheEngine() async throws {
+    /// The other half of the park: every printer busy, and the step past the
+    /// deadline its own queued print times derive. The run must surface rather
+    /// than wait out another eight hours.
+    @Test("every printer busy past the derived deadline surfaces instead of waiting")
+    func busyPrintersStallThroughTheEngine() async throws {
         let database = try GameDatabase.bootstrap()
         try await seed(
             database, step: EventRun.Step.printing,
@@ -237,7 +238,8 @@ struct EventRunEngineTests {
                 try GameModels.Operation.insert { operation }.execute(db)
             }
             guard var directive = try Directive.where { $0.id.eq("d1") }.fetchOne(db) else { return }
-            directive.stepStartedAt = Self.now.addingTimeInterval(-EventRun.printDeadline - 60)
+            directive.stepStartedAt = Self.now
+                .addingTimeInterval(-(EventRun.printSlack + 600 + 60))
             try Directive.upsert { directive }.execute(db)
         }
         let printed = LockIsolated<[String]>([])

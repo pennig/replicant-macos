@@ -83,6 +83,9 @@ public struct WorldSnapshot: Equatable, Sendable {
     public let blueprintBills: [String: ResourceCost]
     /// Device type → the printed devices its blueprint consumes.
     public let blueprintComponents: [String: [String: Int]]
+    /// Device type → how many seconds one unit takes to print. Absent means the
+    /// catalogue has never been read for that type, never "instant".
+    public let blueprintPrintTimes: [String: Int]
     /// Every recognised theatre, mirroring `WorldView.theatres` — the same
     /// `TheatreRegistry` call, so the two views cannot disagree.
     public let theatres: [Theatre]
@@ -139,6 +142,7 @@ public struct WorldSnapshot: Equatable, Sendable {
         components: [String: String] = [:],
         blueprintBills: [String: ResourceCost] = [:],
         blueprintComponents: [String: [String: Int]] = [:],
+        blueprintPrintTimes: [String: Int] = [:],
         theatres: [Theatre] = [],
         locationEvents: [String: LocationEvent] = [:],
         replicantHostDevices: Set<String> = [],
@@ -157,6 +161,7 @@ public struct WorldSnapshot: Equatable, Sendable {
         self.components = components
         self.blueprintBills = blueprintBills
         self.blueprintComponents = blueprintComponents
+        self.blueprintPrintTimes = blueprintPrintTimes
         self.theatres = theatres
         self.locationEvents = locationEvents
         self.replicantHostDevices = replicantHostDevices
@@ -317,13 +322,16 @@ public struct WorldSnapshot: Equatable, Sendable {
             let components = MeshGraph(positions: starPositions).components(of: mesh)
 
             let blueprintRows = try Blueprint.all
-                .select { ($0.deviceType, $0.resources, $0.components) }
+                .select { ($0.deviceType, $0.resources, $0.components, $0.printTime) }
                 .fetchAll(db)
             let blueprintBills = Dictionary(
                 blueprintRows.map { ($0.0, $0.1) }, uniquingKeysWith: { _, last in last }
             )
             let blueprintComponents = Dictionary(
                 blueprintRows.map { ($0.0, $0.2) }, uniquingKeysWith: { _, last in last }
+            )
+            let blueprintPrintTimes = Dictionary(
+                blueprintRows.map { ($0.0, $0.3) }, uniquingKeysWith: { _, last in last }
             )
 
             // Same `TheatreRegistry` call `WorldView.read` makes — two lists
@@ -357,6 +365,7 @@ public struct WorldSnapshot: Equatable, Sendable {
                 components: components,
                 blueprintBills: blueprintBills,
                 blueprintComponents: blueprintComponents,
+                blueprintPrintTimes: blueprintPrintTimes,
                 theatres: theatres,
                 locationEvents: locationEvents,
                 replicantHostDevices: replicantHostDevices,

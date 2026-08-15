@@ -177,6 +177,9 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
     /// a queued job blocked on component devices. The run prints components
     /// itself, so it takes a lasting block to reach this.
     case printBlockedOnComponents
+    /// The option's component tree reaches a device type the account holds no
+    /// blueprint for, so the payload cannot be built at any price.
+    case eventOptionBlueprintMissing
 
     /// The stall panel's headline.
     public var displayName: String {
@@ -208,6 +211,7 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
         case .eventCommitRejected: "Event commit rejected"
         case .awaitingCourierReplication: "Courier needs a replicant"
         case .printBlockedOnComponents: "Print blocked on components"
+        case .eventOptionBlueprintMissing: "Blueprint not unlocked"
         }
     }
 
@@ -270,6 +274,8 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
             "Stow the empty replicant matrix into the matrix container at the depot, then replicate into it there — the container is the cradle. If you replicated into a matrix elsewhere, move that one into the container instead. Retry once the container holds the new replicant."
         case .printBlockedOnComponents:
             "The print outlived its deadline with every printer at the depot still busy — most often a queued job waiting on component devices it doesn't have. Retry once a printer frees up, or cancel the print that's blocking the queue."
+        case .eventOptionBlueprintMissing:
+            "The option's build tree needs the blueprints named above and the account holds none of them, so no amount of printing reaches it. Unlock those blueprints, or pick an option that avoids them under Location Events, then retry."
         }
     }
 }
@@ -302,7 +308,7 @@ public extension DirectiveAttentionReason {
              .launchDeployedNothing, .noHaulControllerTagged, .awaitingRelayRestock,
              .repairUnfinished, .serviceBotNotArmed, .serviceBotNotRecovered,
              .miningDirectivePaused, .miningControllerNotRecovered, .mineFleetIncomplete,
-             .eventCriteriaUnmet, .awaitingCourierReplication:
+             .eventCriteriaUnmet, .awaitingCourierReplication, .eventOptionBlueprintMissing:
             return .escalate
         }
     }

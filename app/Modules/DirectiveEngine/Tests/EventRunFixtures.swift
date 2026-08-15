@@ -132,11 +132,18 @@ enum EventRunFixtures {
         )
     }
 
-    static func openPrint(on code: String, now: Date) -> [String: GameModels.Operation] {
-        [code: GameModels.Operation(
-            id: "OP-1", entityCode: code, kind: OperationKind.print.rawValue, status: .active,
+    static func openPrint(
+        on code: String, now: Date, deviceType: String? = nil, quantity: Int = 1
+    ) -> [String: GameModels.Operation] {
+        var params: [String: JSONValue] = [:]
+        if let deviceType {
+            params["device_type"] = .string(deviceType)
+            params["quantity"] = .number(Double(quantity))
+        }
+        return [code: GameModels.Operation(
+            id: "OP-\(code)", entityCode: code, kind: OperationKind.print.rawValue, status: .active,
             source: .poll, startedAt: now, completesAt: nil, lastConfirmedAt: now,
-            detail: .object([:])
+            detail: params.isEmpty ? .object([:]) : .object(["params": .object(params)])
         )]
     }
 
@@ -196,14 +203,17 @@ enum EventRunFixtures {
         devices: [Device], event: LocationEvent, now: Date,
         footprintFresh: Bool = true, stock: Int = 500_000,
         openOperations: [String: GameModels.Operation] = [:],
+        dispatchedOperations: [String: GameModels.Operation] = [:],
         log: [DirectiveLogEntry] = [], hosts: Set<String> = ["COURIER"],
         blueprintBills: [String: ResourceCost] = [:],
-        blueprintComponents: [String: [String: Int]] = [:]
+        blueprintComponents: [String: [String: Int]] = [:],
+        blueprintPrintTimes: [String: Int] = [:]
     ) -> WorldSnapshot {
         WorldSnapshot(
             devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, l in l }),
             openOperations: openOperations,
             log: log,
+            dispatchedOperations: dispatchedOperations,
             footprints: [
                 "HUB-1": LocationFootprint(
                     location: "HUB-1", devices: devices.count, resources: stock,
@@ -213,6 +223,7 @@ enum EventRunFixtures {
             ],
             blueprintBills: blueprintBills,
             blueprintComponents: blueprintComponents,
+            blueprintPrintTimes: blueprintPrintTimes,
             theatres: [
                 Theatre(depot: "HUB-1", system: "HUB", origin: .derived,
                         readiness: .operational, stock: stock)
