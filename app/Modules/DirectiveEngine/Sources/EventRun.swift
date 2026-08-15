@@ -144,6 +144,13 @@ public struct EventRun: MissionStepMachine {
             if world.theatreWentClaimed(for: directive) { return .wait }
             return .stall(.unreachableDevice)
         }
+        // The rail is the ceiling on the WHOLE run, resources included, so it
+        // sits ahead of the first spend rather than only ahead of the prints.
+        let rail = RelayRun(reserveFloor: reserveFloor)
+        if rail.footprintCensusIsStale(world) {
+            return .refreshFootprint(nextStep: Step.preflight, thenStall: nil)
+        }
+        if rail.printStockIsShort(at: depot, world) { return .wait }
         return .advanceStep(nextStep: Step.printing)
     }
 

@@ -289,6 +289,40 @@ struct EventRunLoadingTests {
         ))
     }
 
+    @Test("preflight refuses to start a run the reserve rail would veto")
+    func preflightHonoursTheRail() {
+        let devices = [
+            EventRunFixtures.device("CARRIER", type: "surge_carrier", tags: ["auto:carrier"]),
+            EventRunFixtures.device("FREIGHT", type: "cargo_freighter"),
+            EventRunFixtures.courier(),
+        ]
+        let world = EventRunFixtures.world(
+            devices: devices, event: EventRunFixtures.event(resources: ["structural": 200], devices: []),
+            now: now, stock: 1
+        )
+        let action = EventRun().nextAction(
+            directive: EventRunFixtures.directive(step: EventRun.Step.preflight, now: now), world: world
+        )
+        #expect(action == .wait)
+    }
+
+    @Test("preflight buys a census read before trusting the rail")
+    func preflightRefreshesAStaleCensus() {
+        let devices = [
+            EventRunFixtures.device("CARRIER", type: "surge_carrier", tags: ["auto:carrier"]),
+            EventRunFixtures.device("FREIGHT", type: "cargo_freighter"),
+            EventRunFixtures.courier(),
+        ]
+        let world = EventRunFixtures.world(
+            devices: devices, event: EventRunFixtures.event(resources: ["structural": 200], devices: []),
+            now: now, footprintFresh: false
+        )
+        let action = EventRun().nextAction(
+            directive: EventRunFixtures.directive(step: EventRun.Step.preflight, now: now), world: world
+        )
+        #expect(action == .refreshFootprint(nextStep: EventRun.Step.preflight, thenStall: nil))
+    }
+
     @Test("a container attached to another carrier is not this run's courier")
     func ignoresACourierAboardAnotherCarrier() {
         let devices = [
