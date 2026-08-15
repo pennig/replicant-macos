@@ -1,36 +1,27 @@
 ---
 name: supervisor-adopts-row-whole-package-failure
-description: "theSupervisorAdoptsTheRowTheBrainLaunched fails only in the whole-package umbrella test run, not per-product — pre-existing, not yours"
+description: "RESOLVED 2026-08-15 — the supervisor-adopts-row flake is fixed; this note's original diagnosis was wrong on both counts"
 metadata:
   node_type: memory
   type: project
 ---
 
 `DirectiveEngineTests.BrainGrowLifecycleE2ETests/theSupervisorAdoptsTheRowTheBrainLaunched()`
-fails **only** when the whole package runs as one process
-(`swift test --build-system native`, the umbrella `ModulesPackageTests`
-product). It passes in isolation and passes in a full
-`--test-product DirectiveEngineTests` run (668 tests, green).
+is **FIXED**. Older plan docs still tell you to expect it red and not to
+attribute it to your change — that instruction is now stale. A failure of this
+test is yours.
 
-The three expectations that go red are the restock half:
-`core.executorCount == 2`, `restock.count == 1`, and
-`restock.first?.deviceCode == "HUB1"` — the second brain tick does not write
-its `restockRun` row. The grow half of the test passes.
+This note originally called it **deterministic under whole-package parallelism**
+with root-causing unfinished. Both halves were wrong:
 
-**Why:** verified pre-existing on 2026-08-05 at `a2f200a` with an unrelated
-change stashed — the clean tree fails the same test the same way (2,085
-tests, 1 failure). It reproduced on two consecutive umbrella runs, so it is
-deterministic under whole-package parallelism rather than a random flake.
-The likely mechanism is contention: the test drives `core.start()`, a
-`TestClock`, and `executorCount` on a shared actor while ~2,000 other tests
-run in the same process.
+- Not deterministic, and not about the backend. 21 consecutive whole-package
+  `--build-system native` runs on an idle machine passed; under CPU load, 5 of
+  10 failed. **Load is the variable.**
+- Not contention on a shared actor. The mechanism is two brain ticks OVERLAPPING
+  and both reading the pre-launch world — see [[brain-tick-overlap-race]] for
+  the full contract and the rule for any test that needs N completed ticks.
 
-**How to apply:** do not spend time attributing this to your own change.
-Confirm by running `--test-product DirectiveEngineTests` — if that is green,
-your work is clean. If you need a whole-package signal, run per-product into
-separate event-stream files and concatenate (see
-[[swift-test-event-stream-output]]) rather than using `--build-system
-native`, which both rebuilds from scratch and creates the contention.
-
-Root-causing it is unfinished work. See [[brain-tendmesh-build]] and
-[[relay-return-and-restock]] for what the restock row is supposed to do.
+Fixed by driving both ticks explicitly and sequentially instead of counting
+`start()`'s concurrent one, plus letting the scripted server treat a
+teardown `CancellationError` as teardown rather than a scripting fault.
+Verified 25 loaded whole-package runs with zero failures of this test.
