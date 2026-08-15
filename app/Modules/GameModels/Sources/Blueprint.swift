@@ -192,6 +192,15 @@ public struct ResourceCost: Codable, Equatable, Sendable {
         rares += other.rares; conductive += other.conductive; volatiles += other.volatiles
     }
 
+    /// Every field multiplied by `factor`, for costing a quantity in one step.
+    public func scaled(by factor: Int) -> ResourceCost {
+        ResourceCost(
+            carbon: carbon * factor, silicates: silicates * factor,
+            structural: structural * factor, rares: rares * factor,
+            conductive: conductive * factor, volatiles: volatiles * factor
+        )
+    }
+
     /// Per-field difference, floored at zero so a shrunk hold never reads negative.
     public func subtracting(_ other: ResourceCost) -> ResourceCost {
         ResourceCost(
