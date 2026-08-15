@@ -484,9 +484,13 @@ public struct DevicesFeature {
             case let .printPreviewRequested(deviceCode, deviceType, location, locationName, required, requiredComponents):
                 state.printPreview = PrintPreview(deviceCode: deviceCode, deviceType: deviceType)
                 let locationsClient = self.locationsClient
-                let heldComponents = state.devices
-                    .filter { $0.location == location }
-                    .reduce(into: [String: Int]()) { $0[$1.deviceType, default: 0] += 1 }
+                // Stowing CLEARS `location`, so a nil one matches every stowed
+                // device rather than the printer's own floor.
+                let heldComponents = location.map { here in
+                    state.devices
+                        .filter { $0.location == here }
+                        .reduce(into: [String: Int]()) { $0[$1.deviceType, default: 0] += 1 }
+                } ?? [:]
                 logger.info("print preview \(deviceCode, privacy: .public) ⚒ \(deviceType, privacy: .public) requested")
                 return .run { send in
                     let requirements = await locationsClient.printRequirements(
