@@ -2,8 +2,7 @@
 //  BlueprintClosure.swift
 //  Replicould — DirectiveEngine
 //
-//  What a set of devices really costs: raw material rolled up through the
-//  blueprint components each one consumes, and the prints that build them.
+//  What a set of devices really costs, rolled up through blueprint components.
 //
 
 import Foundation
