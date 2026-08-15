@@ -78,6 +78,11 @@ public struct WorldSnapshot: Equatable, Sendable {
     /// System → mesh-component label (`MeshGraph.components(of:)`), so a haul
     /// candidate is filtered to the delivering theatre's own component.
     public let components: [String: String]
+    /// Device type → its blueprint's build cost, mirroring `WorldView`. Distinct
+    /// from `components` above, which is the FTL mesh.
+    public let blueprintBills: [String: ResourceCost]
+    /// Device type → the printed devices its blueprint consumes.
+    public let blueprintComponents: [String: [String: Int]]
     /// Every recognised theatre, mirroring `WorldView.theatres` — the same
     /// `TheatreRegistry` call, so the two views cannot disagree.
     public let theatres: [Theatre]
@@ -132,6 +137,8 @@ public struct WorldSnapshot: Equatable, Sendable {
         footprints: [String: LocationFootprint] = [:],
         starPositions: [String: Position] = [:],
         components: [String: String] = [:],
+        blueprintBills: [String: ResourceCost] = [:],
+        blueprintComponents: [String: [String: Int]] = [:],
         theatres: [Theatre] = [],
         locationEvents: [String: LocationEvent] = [:],
         replicantHostDevices: Set<String> = [],
@@ -148,6 +155,8 @@ public struct WorldSnapshot: Equatable, Sendable {
         self.footprints = footprints
         self.starPositions = starPositions
         self.components = components
+        self.blueprintBills = blueprintBills
+        self.blueprintComponents = blueprintComponents
         self.theatres = theatres
         self.locationEvents = locationEvents
         self.replicantHostDevices = replicantHostDevices
@@ -307,6 +316,16 @@ public struct WorldSnapshot: Equatable, Sendable {
             let mesh = SalvageTargetPlanner.meshSystems(in: devices)
             let components = MeshGraph(positions: starPositions).components(of: mesh)
 
+            let blueprintRows = try Blueprint.all
+                .select { ($0.deviceType, $0.resources, $0.components) }
+                .fetchAll(db)
+            let blueprintBills = Dictionary(
+                blueprintRows.map { ($0.0, $0.1) }, uniquingKeysWith: { _, last in last }
+            )
+            let blueprintComponents = Dictionary(
+                blueprintRows.map { ($0.0, $0.2) }, uniquingKeysWith: { _, last in last }
+            )
+
             // Same `TheatreRegistry` call `WorldView.read` makes — two lists
             // of theatres in one process would be a real hazard.
             let pins = try TheatrePin.all.fetchAll(db)
@@ -336,6 +355,8 @@ public struct WorldSnapshot: Equatable, Sendable {
                 footprints: footprints,
                 starPositions: starPositions,
                 components: components,
+                blueprintBills: blueprintBills,
+                blueprintComponents: blueprintComponents,
                 theatres: theatres,
                 locationEvents: locationEvents,
                 replicantHostDevices: replicantHostDevices,

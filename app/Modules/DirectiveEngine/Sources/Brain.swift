@@ -189,6 +189,7 @@ struct Brain: Sendable {
             pendingEventChoices: BrainReport.eventChoices(
                 events: snapshot.view.locationEvents,
                 bills: snapshot.view.blueprintBills,
+                components: snapshot.view.blueprintComponents,
                 devices: snapshot.view.devices
             )
         )
@@ -1517,6 +1518,7 @@ struct Brain: Sendable {
         stock: [String: Double],
         events: [LocationEvent],
         bills: [String: ResourceCost],
+        components: [String: [String: Int]] = [:],
         freshness: Date?,
         now: Date
     ) -> ResourceHeadroom {
@@ -1531,7 +1533,7 @@ struct Brain: Sendable {
             )
         }
         let demand = ResourceDemand.compute(
-            events: events, bills: bills, reserveFloors: BrainCeiling.reserveFloors
+            events: events, bills: bills, components: components, reserveFloors: BrainCeiling.reserveFloors
         )
         return ResourceHeadroom.derive(
             stock: stock, demand: demand.total, freshness: freshness, now: now,
@@ -1587,7 +1589,8 @@ struct Brain: Sendable {
             .union(liveMineBelts(directives))
         let headroom = siteWeights(
             stock: view.theatreStock, events: view.locationEvents,
-            bills: view.blueprintBills, freshness: view.theatreStockFreshness, now: view.now
+            bills: view.blueprintBills, components: view.blueprintComponents,
+            freshness: view.theatreStockFreshness, now: view.now
         )
         guard let site = MineSitePlanner.site(
             view: view, occupiedBelts: occupied, headroom: headroom
@@ -1969,6 +1972,7 @@ struct Brain: Sendable {
         }
         let ranked = EventRanking.rank(
             events: view.locationEvents, chosenOptions: chosen, bills: view.blueprintBills,
+            components: view.blueprintComponents,
             positions: view.starPositions, depot: theatre.depot, excluding: working
         )
         guard let candidate = ranked.first else { return .idle(reason: "no event worth working") }

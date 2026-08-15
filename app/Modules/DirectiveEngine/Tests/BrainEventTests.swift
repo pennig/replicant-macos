@@ -81,7 +81,8 @@ private func eventFixture(
 }
 
 private func eventView(
-    devices: [Device], events: [LocationEvent], courierHosts: Set<String> = ["BOX"]
+    devices: [Device], events: [LocationEvent], courierHosts: Set<String> = ["BOX"],
+    bills: [String: ResourceCost] = [:], blueprintComponents: [String: [String: Int]] = [:]
 ) -> WorldView {
     WorldView(
         devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
@@ -89,14 +90,16 @@ private func eventView(
             "HUB": Position(x: 0, y: 0, z: 0),
             "X": Position(x: 1, y: 0, z: 0),
             "Y": Position(x: 2, y: 0, z: 0),
+            "TABAT-4": Position(x: 3, y: 0, z: 0),
         ],
-        meshSystems: ["HUB", "X", "Y"],
+        meshSystems: ["HUB", "X", "Y", "TABAT-4"],
         salvageUnits: [:],
         eventSystems: Set(events.filter(\.isActive).map { SiteAssay.system(of: $0.location) }),
         theatres: [eventTheatre],
         replicantHostDevices: courierHosts,
         locationEvents: events,
-        blueprintBills: [:],
+        blueprintBills: bills,
+        blueprintComponents: blueprintComponents,
         now: .distantPast
     )
 }
@@ -426,6 +429,31 @@ struct BrainEventReadinessTests {
             directives: [], theatre: eventTheatre
         )
         guard case .idle = readiness else { Issue.record("expected .idle"); return }
+    }
+
+    @Test("the brain will not launch a run for an event it cannot build")
+    func blockedEventNeverLaunches() throws {
+        let event = LocationEvent(
+            designation: "TABAT-4-EVT-007", location: "TABAT-4", tier: 4, status: "active",
+            detail: .object([
+                "criteria": .array([.object([
+                    "name": .string("only"),
+                    "devices": .array([.object([
+                        "count": .number(2), "device_type": .string("climate_processor"),
+                    ])]),
+                    "resources": .object([:]),
+                ])]),
+                "rewards": .object(["xp": .number(500)]),
+            ]),
+            firstSeenAt: .distantPast, updatedAt: .distantPast
+        )
+        let view = eventView(
+            devices: stagedConvoy(), events: [event],
+            bills: ["climate_processor": ResourceCost(structural: 200)],
+            blueprintComponents: ["climate_processor": ["orbital_mirror": 1]]
+        )
+        guard case .idle = Brain.eventReadiness(view: view, directives: [], theatre: eventTheatre)
+        else { Issue.record("expected .idle for an unbuildable event"); return }
     }
 }
 

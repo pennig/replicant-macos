@@ -89,6 +89,9 @@ public struct WorldView: Equatable, Sendable {
     /// requirement is priced through. Empty until the catalog is fetched;
     /// `ResourceDemand` drops an unbilled device rather than guessing.
     public let blueprintBills: [String: ResourceCost]
+    /// Device type → the other printed devices its blueprint consumes. Empty
+    /// until the catalog is fetched, which makes every device read as a leaf.
+    public let blueprintComponents: [String: [String: Int]]
     /// The moment this snapshot was taken. Brain logic compares against this
     /// rather than `Date()`, keeping ranking passes pure and their tests
     /// deterministic.
@@ -111,6 +114,7 @@ public struct WorldView: Equatable, Sendable {
         theatreStockFreshness: Date? = nil,
         locationEvents: [LocationEvent] = [],
         blueprintBills: [String: ResourceCost] = [:],
+        blueprintComponents: [String: [String: Int]] = [:],
         now: Date
     ) {
         self.devices = devices
@@ -129,6 +133,7 @@ public struct WorldView: Equatable, Sendable {
         self.theatreStockFreshness = theatreStockFreshness
         self.locationEvents = locationEvents
         self.blueprintBills = blueprintBills
+        self.blueprintComponents = blueprintComponents
         self.now = now
     }
 
@@ -169,8 +174,15 @@ public struct WorldView: Equatable, Sendable {
 
         // Only the two columns the brain needs, not the description strings
         // and JSON arrays every row also carries.
-        let billRows = try Blueprint.all.select { ($0.deviceType, $0.resources) }.fetchAll(db)
-        let bills = Dictionary(billRows, uniquingKeysWith: { _, last in last })
+        let billRows = try Blueprint.all
+            .select { ($0.deviceType, $0.resources, $0.components) }
+            .fetchAll(db)
+        let bills = Dictionary(
+            billRows.map { ($0.0, $0.1) }, uniquingKeysWith: { _, last in last }
+        )
+        let blueprintComponents = Dictionary(
+            billRows.map { ($0.0, $0.2) }, uniquingKeysWith: { _, last in last }
+        )
 
         // Candidate depot locations: print-capable, pinned, and system_hub
         // device locations, read in the same transaction as the devices.
@@ -237,6 +249,7 @@ public struct WorldView: Equatable, Sendable {
             theatreStockFreshness: stock.freshness,
             locationEvents: events,
             blueprintBills: bills,
+            blueprintComponents: blueprintComponents,
             now: now
         )
     }
