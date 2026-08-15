@@ -172,8 +172,8 @@ public struct WorldView: Equatable, Sendable {
             events.filter(\.isActive).map { SiteAssay.system(of: $0.location) }
         )
 
-        // Only the two columns the brain needs, not the description strings
-        // and JSON arrays every row also carries.
+        // The three columns the brain needs, not the description strings and
+        // other JSON arrays every row also carries.
         let billRows = try Blueprint.all
             .select { ($0.deviceType, $0.resources, $0.components) }
             .fetchAll(db)

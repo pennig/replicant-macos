@@ -40,8 +40,7 @@ public struct PrintResourceLine: Equatable, Sendable, Identifiable {
 }
 
 /// One component line in the print confirmation: a device the blueprint
-/// consumes, and how many stand where the print will run. `available` is nil
-/// when the location's devices couldn't be read.
+/// consumes, and how many stand where the print will run.
 public struct PrintComponentLine: Equatable, Sendable, Identifiable {
     public var deviceType: String
     public var label: String

@@ -121,8 +121,6 @@ public struct WaitingResource: Equatable, Sendable, Identifiable {
     }
 }
 
-/// `components` / `resources` name a nested block; anything else is a flat
-/// resource row in the legacy shape.
 private func nestedKind(_ key: String) -> WaitingResource.Kind? {
     key == "components" ? .component : (key == "resources" ? .resource : nil)
 }
