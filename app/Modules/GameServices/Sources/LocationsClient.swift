@@ -117,7 +117,9 @@ extension LocationsClient {
         deviceType: String,
         location: String?,
         locationName: String?,
-        required: [PrintResourceLine]
+        required: [PrintResourceLine],
+        requiredComponents: [PrintComponentLine] = [],
+        heldComponents: [String: Int] = [:]
     ) async -> PrintRequirements {
         var available: [String: Double]?
         if let location, let items = try? await inventory(at: location) {
@@ -130,7 +132,9 @@ extension LocationsClient {
             deviceType: deviceType,
             locationName: locationName,
             required: required,
-            available: available
+            requiredComponents: requiredComponents,
+            available: available,
+            heldComponents: heldComponents
         )
     }
 }

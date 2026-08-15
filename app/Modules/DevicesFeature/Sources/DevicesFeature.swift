@@ -184,7 +184,8 @@ public struct DevicesFeature {
             deviceType: String,
             location: String?,
             locationName: String?,
-            required: [PrintResourceLine]
+            required: [PrintResourceLine],
+            requiredComponents: [PrintComponentLine] = []
         )
         /// Print command preview flow: refresh the location inventory and check
         /// the blueprint's cost against it, then either confirm (enqueue for real)
@@ -194,7 +195,8 @@ public struct DevicesFeature {
             deviceType: String,
             location: String?,
             locationName: String?,
-            required: [PrintResourceLine]
+            required: [PrintResourceLine],
+            requiredComponents: [PrintComponentLine] = []
         )
         case printPreviewResponse(PrintPreview.Phase)
         case printPreviewConfirmed
@@ -460,7 +462,7 @@ public struct DevicesFeature {
                 state.travelPreview = nil
                 return .cancel(id: CancelID.travelPreview)
 
-            case let .printConfirmed(deviceCode, deviceType, location, locationName, required):
+            case let .printConfirmed(deviceCode, deviceType, location, locationName, required, requiredComponents):
                 // Mirror of `.travelConfirmed`: clear stale state, end editing,
                 // and yield before the print preview sheet presents.
                 let reset = Self.clearStalePresentations(&state)
@@ -474,20 +476,26 @@ public struct DevicesFeature {
                         deviceType: deviceType,
                         location: location,
                         locationName: locationName,
-                        required: required
+                        required: required,
+                        requiredComponents: requiredComponents
                     ))
                 })
 
-            case let .printPreviewRequested(deviceCode, deviceType, location, locationName, required):
+            case let .printPreviewRequested(deviceCode, deviceType, location, locationName, required, requiredComponents):
                 state.printPreview = PrintPreview(deviceCode: deviceCode, deviceType: deviceType)
                 let locationsClient = self.locationsClient
+                let heldComponents = state.devices
+                    .filter { $0.location == location }
+                    .reduce(into: [String: Int]()) { $0[$1.deviceType, default: 0] += 1 }
                 logger.info("print preview \(deviceCode, privacy: .public) ⚒ \(deviceType, privacy: .public) requested")
                 return .run { send in
                     let requirements = await locationsClient.printRequirements(
                         deviceType: deviceType,
                         location: location,
                         locationName: locationName,
-                        required: required
+                        required: required,
+                        requiredComponents: requiredComponents,
+                        heldComponents: heldComponents
                     )
                     await send(.printPreviewResponse(.loaded(requirements)))
                 }

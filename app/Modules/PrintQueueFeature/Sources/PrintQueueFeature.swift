@@ -92,7 +92,8 @@ public struct PrintQueueFeature {
             deviceType: String,
             location: String?,
             locationName: String?,
-            required: [PrintResourceLine]
+            required: [PrintResourceLine],
+            requiredComponents: [PrintComponentLine] = []
         )
         case printPreviewResponse(PrintPreview.Phase)
         case printPreviewConfirmed
@@ -180,16 +181,21 @@ public struct PrintQueueFeature {
                 state.commandError = nil
                 return .none
 
-            case let .printPreviewRequested(deviceCode, deviceType, location, locationName, required):
+            case let .printPreviewRequested(deviceCode, deviceType, location, locationName, required, requiredComponents):
                 state.printPreview = PrintPreview(deviceCode: deviceCode, deviceType: deviceType)
                 let locationsClient = self.locationsClient
+                let heldComponents = state.fleet
+                    .filter { $0.location == location }
+                    .reduce(into: [String: Int]()) { $0[$1.deviceType, default: 0] += 1 }
                 logger.info("print preview \(deviceCode, privacy: .public) ⚒ \(deviceType, privacy: .public) requested")
                 return .run { send in
                     let requirements = await locationsClient.printRequirements(
                         deviceType: deviceType,
                         location: location,
                         locationName: locationName,
-                        required: required
+                        required: required,
+                        requiredComponents: requiredComponents,
+                        heldComponents: heldComponents
                     )
                     await send(.printPreviewResponse(.loaded(requirements)))
                 }

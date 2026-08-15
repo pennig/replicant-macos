@@ -281,7 +281,8 @@ struct CommandGrid: View {
                             deviceType: blueprintType,
                             location: device.location,
                             locationName: device.locationName,
-                            required: requiredLines(for: blueprintType)
+                            required: requiredLines(for: blueprintType),
+                            requiredComponents: requiredComponents(for: blueprintType)
                         ))
                     } else if case .replicate = command {
                         let name = textValue.trimmingCharacters(in: .whitespaces)
@@ -557,5 +558,20 @@ struct CommandGrid: View {
                 required: Double(item.amount)
             )
         }
+    }
+
+    /// The component devices a blueprint consumes, as confirmation lines.
+    /// Empty when the blueprint is unknown or consumes none.
+    private func requiredComponents(for deviceType: String) -> [PrintComponentLine] {
+        guard let blueprint = blueprints.first(where: { $0.deviceType == deviceType }) else { return [] }
+        return blueprint.components
+            .sorted { $0.key < $1.key }
+            .map { type, count in
+                PrintComponentLine(
+                    deviceType: type,
+                    label: BlueprintPresentation.displayName(type),
+                    required: count
+                )
+            }
     }
 }

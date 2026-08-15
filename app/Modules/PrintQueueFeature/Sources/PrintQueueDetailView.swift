@@ -317,7 +317,8 @@ public struct PrintQueueDetailView: View {
                             deviceType: enqueueType,
                             location: device.location,
                             locationName: device.locationName,
-                            required: requiredLines(for: enqueueType)
+                            required: requiredLines(for: enqueueType),
+                            requiredComponents: requiredComponents(for: enqueueType)
                         ))
                     }
                     .buttonStyle(RCButtonStyle(.primary))
@@ -342,6 +343,21 @@ public struct PrintQueueDetailView: View {
                 required: Double(item.amount)
             )
         }
+    }
+
+    /// The component devices a blueprint consumes, as confirmation lines.
+    /// Empty when the blueprint is unknown or consumes none.
+    private func requiredComponents(for deviceType: String) -> [PrintComponentLine] {
+        guard let blueprint = blueprints.first(where: { $0.deviceType == deviceType }) else { return [] }
+        return blueprint.components
+            .sorted { $0.key < $1.key }
+            .map { type, count in
+                PrintComponentLine(
+                    deviceType: type,
+                    label: BlueprintPresentation.displayName(type),
+                    required: count
+                )
+            }
     }
 
     // MARK: Shared chrome

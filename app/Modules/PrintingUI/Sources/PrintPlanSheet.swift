@@ -132,8 +132,49 @@ public struct PrintPlanSheet: View {
                 .background(cardBackground)
             }
 
+            componentsList(requirements)
             note(requirements)
         }
+    }
+
+    @ViewBuilder
+    private func componentsList(_ requirements: PrintRequirements) -> some View {
+        if !requirements.components.isEmpty {
+            VStack(alignment: .leading, spacing: Space.s) {
+                HStack(spacing: Space.s) {
+                    RCSectionHeader("Components Required")
+                    Spacer(minLength: 0)
+                    RCSectionHeader("Have / Need")
+                }
+                VStack(spacing: 0) {
+                    ForEach(Array(requirements.components.enumerated()), id: \.element.id) { index, line in
+                        if index > 0 { Divider().overlay(Color.rcSeparator) }
+                        componentRow(line)
+                    }
+                }
+                .padding(.vertical, Space.xs)
+                .background(cardBackground)
+            }
+        }
+    }
+
+    private func componentRow(_ line: PrintComponentLine) -> some View {
+        HStack(spacing: Space.m) {
+            Image(systemName: line.isMet ? "checkmark.circle.fill" : "hourglass")
+                .font(.system(size: IconSize.s))
+                .foregroundStyle(line.isMet ? Color.rcStatusReady : .rcWarning)
+                .frame(width: 14)
+            Text(line.label)
+                .font(.rcCaption)
+                .foregroundStyle(.rcTextSecondary)
+            Spacer(minLength: Space.s)
+            Text("\(line.available ?? 0) / \(line.required)")
+                .font(.rcMonoSmall)
+                .foregroundStyle(line.isMet ? .rcTextSecondary : .rcTextPrimary)
+                .monospacedDigit()
+        }
+        .padding(.horizontal, Space.m)
+        .padding(.vertical, Space.s)
     }
 
     private func resourceRow(_ line: PrintResourceLine, inventoryKnown: Bool) -> some View {
