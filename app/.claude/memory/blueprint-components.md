@@ -184,6 +184,52 @@ time. Treat "the linter is green" as proof of nothing here; a header-length
 sweep is a hand-check with its own scope discipline (each file its own
 load-bearing-content judgment call), not a mechanical trim.
 
+## What only the whole-branch review could see
+
+Eleven task reviews all came back clean, and the final whole-branch review
+then found three Criticals — every one of them in `EventRun.printing`, and
+every one an interaction between changes that were individually correct.
+Reviewing a step machine task-by-task cannot find these; the spend path has
+to be read as one system at least once.
+
+**Preferring a free printer needs an in-flight subtraction.** Replacing "one
+deterministic printer, wait if it is busy" with "the first printer with no
+open operation" looks like a strict improvement, and is not: `missingTree`
+counts only devices already STANDING at the depot, so consecutive ticks
+recompute an identical bill and hand it to a second free printer. N free
+printers meant N times the component bill. `EventRun.printsInFlight(in:)`
+now subtracts what this directive already has out, reading
+`world.dispatchedOperations` — directive-scoped, unlike the device-keyed
+`world.openOperation`, which is why `RelayRun.printInFlight` uses the same
+source.
+
+**An unprintable subset must refuse, not print what it can.**
+`BlueprintClosure.expand` emits no job for a device with no blueprint, so a
+step that reads only `jobs` prints the printable part, sees an empty bill,
+and advances — flying a three-hull convoy to an event it cannot satisfy.
+`missingTree` returns the unprintable set alongside the jobs and `printing`
+stalls `.eventOptionBlueprintMissing` (classified `.escalate`: no retry
+unlocks a blueprint) before anything is spent.
+
+**A deadline inherited from a sibling run was shorter than the prints it
+bounded.** `printDeadline` was `RelayRun`'s 1800 s, calibrated for an ~800 s
+relay; the component blueprints print in 3600-4200 s. Because `printing`
+re-dispatches into its own step, `Brain.retryEpisode` never resets, so three
+stalls anywhere in a multi-hour phase escalated permanently. It is now
+`printSlack` plus the longest SINGLE print still queued — single, not the
+phase sum, because `DirectiveExecutor` re-stamps `stepStartedAt` on every
+accepted dispatch, making the longest single job the worst case a healthy
+run can accrue.
+
+**The fixture that hid all of it: every printing test had one printer.** The
+live depot has four autofactories. A single-printer fixture makes the
+correct and the buggy code agree, and it hid a Critical through eleven task
+reviews, a whole-branch review and a scoped re-review — the last one only
+because fixing the double-print removed the accident that was masking an
+unreachable deadline check. When a fixture's cardinality is lower than the
+fleet's, it is not a simplification, it is a blind spot. Multi-printer tests
+now exist; check for the same shape wherever a mission queries a pool.
+
 Related: [supervisor-adopts-row-whole-package-failure](supervisor-adopts-row-whole-package-failure.md),
 [demand-derived-mine-ranking](demand-derived-mine-ranking.md),
 [comment-policy](comment-policy.md).
