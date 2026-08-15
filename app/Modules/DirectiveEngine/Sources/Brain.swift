@@ -1929,16 +1929,18 @@ struct Brain: Sendable {
     }
 
     /// A hull of `type` at `theatre`'s depot this tick may spend: at rest, in no
-    /// other row's hold, and wearing `tag` when one is named. Sorted before
-    /// `first`, so a stateless brain picks the same hull every tick.
+    /// other row's hold, wearing `tag` when one is named, and carrying nothing
+    /// when `emptyHold`. Sorted, so a stateless brain picks the same hull twice.
     private static func freeHull(
-        type: String, tag: String?, theatre: Theatre, view: WorldView, reserved: Set<String>
+        type: String, tag: String?, emptyHold: Bool = false,
+        theatre: Theatre, view: WorldView, reserved: Set<String>
     ) -> Device? {
         view.devices.values
             .filter { device in
                 device.deviceType == type && device.location == theatre.depot && !device.isBusy
                     && !reserved.contains(device.deviceCode)
                     && (tag.map(device.hasTag) ?? true)
+                    && (!emptyHold || device.cargoUsed == 0)
             }
             .min { $0.deviceCode < $1.deviceCode }
     }
@@ -1978,11 +1980,13 @@ struct Brain: Sendable {
         ) else {
             return .idle(reason: "no free \(EventRun.carrierTag) surge carrier at \(theatre.depot)")
         }
+        // An empty hold is what makes `EventRun`'s own `cargoUsed > 0` read as
+        // "this run loaded it" rather than "someone's haul is still aboard".
         guard let freighter = freeHull(
-            type: EventRun.freighterDeviceType, tag: nil,
+            type: EventRun.freighterDeviceType, tag: nil, emptyHold: true,
             theatre: theatre, view: view, reserved: reserved
         ) else {
-            return .idle(reason: "no free cargo freighter at \(theatre.depot)")
+            return .idle(reason: "no free cargo freighter with an empty hold at \(theatre.depot)")
         }
         return .launch(
             carrier: carrier.deviceCode, freighter: freighter.deviceCode, candidate: candidate

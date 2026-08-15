@@ -41,9 +41,20 @@ private func freighter(_ code: String, location: String? = eventDepot, status: S
     hull(code, type: EventRun.freighterDeviceType, location: location, status: status)
 }
 
-/// A `matrix_container` at the depot; `courierHosts` is what makes it a courier.
-private func courier(_ code: String) -> Device {
-    hull(code, type: EventRun.courierDeviceType)
+/// A `matrix_container` at the depot wearing its print tag; `courierHosts` is
+/// the other half of what makes it a courier.
+private func courier(_ code: String, tags: [String] = [EventRun.rootTag]) -> Device {
+    hull(code, type: EventRun.courierDeviceType, tags: tags)
+}
+
+/// `hull` with `units` already in its hold — the ordinary mid-cycle state of a
+/// haul freighter standing at the depot between trips.
+private func laden(_ hull: Device, units: Int) -> Device {
+    var laden = hull
+    laden.detail = .object([
+        "cargo_used": .number(Double(units)), "cargo_capacity": .number(500),
+    ])
+    return laden
 }
 
 private func eventFixture(
@@ -155,6 +166,48 @@ struct BrainEventReadinessTests {
         )
         guard case .idle(let reason) = readiness else { Issue.record("expected .idle"); return }
         #expect(reason.contains("courier"))
+    }
+
+    @Test("the account's own anchor host is not read as a courier")
+    func untaggedHostIsNotACourier() {
+        var devices = stagedConvoy()
+        devices[0] = courier("ANCHOR", tags: [])
+        let readiness = Brain.eventReadiness(
+            view: eventView(
+                devices: devices, events: [eventFixture("X-1-EVT-001", location: "X-1")],
+                courierHosts: ["ANCHOR"]
+            ),
+            directives: [], theatre: eventTheatre
+        )
+        guard case .idle(let reason) = readiness else { Issue.record("expected .idle"); return }
+        #expect(reason.contains("courier"))
+    }
+
+    @Test("a freighter still carrying someone's haul is never spent")
+    func ladenFreighterIsNotSpent() {
+        var devices = stagedConvoy()
+        devices[3] = laden(freighter("FREIGHT-A"), units: 120)
+        let readiness = Brain.eventReadiness(
+            view: eventView(devices: devices, events: [eventFixture("X-1-EVT-001", location: "X-1")]),
+            directives: [], theatre: eventTheatre
+        )
+        guard case .launch(_, let freighter, _) = readiness else {
+            Issue.record("expected .launch"); return
+        }
+        #expect(freighter == "FREIGHT-B")
+    }
+
+    @Test("every freighter at the depot carrying cargo is idle, not a skipped collect")
+    func everyFreighterLadenIsIdle() {
+        var devices = stagedConvoy()
+        devices[3] = laden(freighter("FREIGHT-A"), units: 120)
+        devices[4] = laden(freighter("FREIGHT-B"), units: 473)
+        let readiness = Brain.eventReadiness(
+            view: eventView(devices: devices, events: [eventFixture("X-1-EVT-001", location: "X-1")]),
+            directives: [], theatre: eventTheatre
+        )
+        guard case .idle(let reason) = readiness else { Issue.record("expected .idle"); return }
+        #expect(reason.contains("empty hold"))
     }
 
     @Test("a staged convoy and a ranked event launches the lowest free hull of each type")
@@ -450,7 +503,7 @@ private func seedEventWorld(_ db: Database) throws {
     try Device.insert {
         deviceFixture(
             code: "BOX", type: EventRun.courierDeviceType, location: growHubLocation,
-            features: [], updatedAt: eventNow
+            features: [], tags: [EventRun.rootTag], updatedAt: eventNow
         )
     }.execute(db)
     try seedReplicant(db, code: "R-COURIER", star: "SOL", hostedDeviceCode: "BOX")
