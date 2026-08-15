@@ -133,4 +133,44 @@ struct EventRankingTests {
         )
         #expect(ranked.map(\.designation) == ["NEAR-1-EVT-001", "GHOST-1-EVT-001"])
     }
+
+    @Test("an event whose every option needs an unknown blueprint is not ranked")
+    func blockedIsNotRanked() {
+        let row = eventNeeding(devices: [(2, "climate_processor")])
+        let ranked = EventRanking.rank(
+            events: [row], chosenOptions: [:], bills: ["climate_processor": ResourceCost(structural: 200)],
+            components: ["climate_processor": ["orbital_mirror": 1]],
+            positions: [:], depot: "HUB-1", excluding: []
+        )
+        #expect(ranked.isEmpty)
+    }
+
+    @Test("a blocked event is reported with the blueprints it lacks")
+    func blockedIsReported() {
+        let row = eventNeeding(devices: [(2, "climate_processor")])
+        let blocked = EventRanking.blockedEvents(
+            events: [row],
+            bills: ["climate_processor": ResourceCost(structural: 200)],
+            components: ["climate_processor": ["orbital_mirror": 1, "terraform_controller": 1]]
+        )
+        #expect(blocked.count == 1)
+        #expect(blocked.first?.1.first?.unprintable == ["orbital_mirror", "terraform_controller"])
+    }
+
+    private func eventNeeding(devices: [(Int, String)]) -> LocationEvent {
+        LocationEvent(
+            designation: "TABAT-4-EVT-007", location: "TABAT-4", tier: 4, status: "active",
+            detail: .object([
+                "criteria": .array([.object([
+                    "name": .string("only"),
+                    "devices": .array(devices.map {
+                        .object(["count": .number(Double($0.0)), "device_type": .string($0.1)])
+                    }),
+                    "resources": .object([:]),
+                ])]),
+                "rewards": .object(["xp": .number(500)]),
+            ]),
+            firstSeenAt: .distantPast, updatedAt: .distantPast
+        )
+    }
 }

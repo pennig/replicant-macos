@@ -292,6 +292,9 @@ public struct BrainEventChoice: Equatable, Sendable, Identifiable {
         public let requiredDevices: [String]
         /// Device types this option needs that the fleet's rows do not supply.
         public let missingDevices: [String]
+        /// Blueprints this option's component tree needs that the account does
+        /// not have. Non-empty means the option cannot be built at any price.
+        public let unprintable: [String]
         public var id: String { name }
 
         public init(
@@ -300,7 +303,8 @@ public struct BrainEventChoice: Equatable, Sendable, Identifiable {
             resourceUnits: Int,
             exceedsOneFreighterLoad: Bool,
             requiredDevices: [String],
-            missingDevices: [String]
+            missingDevices: [String],
+            unprintable: [String] = []
         ) {
             self.name = name
             self.deviceUnits = deviceUnits
@@ -308,6 +312,7 @@ public struct BrainEventChoice: Equatable, Sendable, Identifiable {
             self.exceedsOneFreighterLoad = exceedsOneFreighterLoad
             self.requiredDevices = requiredDevices
             self.missingDevices = missingDevices
+            self.unprintable = unprintable
         }
     }
 
@@ -315,13 +320,19 @@ public struct BrainEventChoice: Equatable, Sendable, Identifiable {
     public let location: String
     public let tier: Int
     public let options: [Option]
+    /// Whether every option is unbuildable — a report, not a decision.
+    public let isBlocked: Bool
     public var id: String { designation }
 
-    public init(designation: String, location: String, tier: Int, options: [Option]) {
+    public init(
+        designation: String, location: String, tier: Int, options: [Option],
+        isBlocked: Bool = false
+    ) {
         self.designation = designation
         self.location = location
         self.tier = tier
         self.options = options
+        self.isBlocked = isBlocked
     }
 }
 
@@ -428,10 +439,13 @@ public struct BrainReport: Equatable, Sendable {
         self.pendingEventChoices = pendingEventChoices
     }
 
-    /// The pending event choices, each option priced against what the fleet
-    /// already holds. Ordered by designation, as `EventRanking` orders them.
+    /// The pending event choices and the blocked events, each option priced
+    /// against what the fleet already holds. Ordered by designation.
     public static func eventChoices(
-        events: [LocationEvent], bills: [String: ResourceCost], devices: [String: Device]
+        events: [LocationEvent],
+        bills: [String: ResourceCost],
+        components: [String: [String: Int]] = [:],
+        devices: [String: Device]
     ) -> [BrainEventChoice] {
         let held = devices.values.reduce(into: [String: Int]()) { counts, device in
             counts[device.deviceType, default: 0] += 1
@@ -441,27 +455,36 @@ public struct BrainReport: Equatable, Sendable {
         let chosen = events.reduce(into: [String: String]()) { picks, event in
             picks[event.designation] = event.chosenOption
         }
-        return EventRanking
-            .pendingChoices(events: events, chosenOptions: chosen, bills: bills)
-            .map { event, options in
-                BrainEventChoice(
-                    designation: event.designation,
-                    location: event.location,
-                    tier: event.tier,
-                    options: options.map { option in
-                        BrainEventChoice.Option(
-                            name: option.name,
-                            deviceUnits: option.deviceUnits,
-                            resourceUnits: option.resourceUnits,
-                            exceedsOneFreighterLoad: option.exceedsOneFreighterLoad,
-                            requiredDevices: option.devices.keys.sorted(),
-                            missingDevices: option.devices
-                                .filter { (held[$0.key] ?? 0) < $0.value }
-                                .keys.sorted()
-                        )
-                    }
-                )
-            }
+        func choice(
+            _ event: LocationEvent, _ options: [EventPlan.Option], blocked: Bool
+        ) -> BrainEventChoice {
+            BrainEventChoice(
+                designation: event.designation,
+                location: event.location,
+                tier: event.tier,
+                options: options.map { option in
+                    BrainEventChoice.Option(
+                        name: option.name,
+                        deviceUnits: option.deviceUnits,
+                        resourceUnits: option.resourceUnits,
+                        exceedsOneFreighterLoad: option.exceedsOneFreighterLoad,
+                        requiredDevices: option.devices.keys.sorted(),
+                        missingDevices: option.devices
+                            .filter { (held[$0.key] ?? 0) < $0.value }
+                            .keys.sorted(),
+                        unprintable: option.unprintable.sorted()
+                    )
+                },
+                isBlocked: blocked
+            )
+        }
+        let pending = EventRanking
+            .pendingChoices(events: events, chosenOptions: chosen, bills: bills, components: components)
+            .map { choice($0, $1, blocked: false) }
+        let blocked = EventRanking
+            .blockedEvents(events: events, bills: bills, components: components)
+            .map { choice($0, $1, blocked: true) }
+        return pending + blocked
     }
 }
 

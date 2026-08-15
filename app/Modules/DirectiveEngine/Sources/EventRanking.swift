@@ -32,6 +32,7 @@ public enum EventRanking {
         events: [LocationEvent],
         chosenOptions: [String: String],
         bills: [String: ResourceCost],
+        components: [String: [String: Int]] = [:],
         positions: [String: Position],
         depot: String,
         excluding: Set<String>
@@ -40,7 +41,8 @@ public enum EventRanking {
             .filter { $0.isActive && !excluding.contains($0.designation) }
             .compactMap { event -> EventCandidate? in
                 guard case .decided(let option) = EventPlan.resolve(
-                    event, chosenOption: chosenOptions[event.designation], bills: bills
+                    event, chosenOption: chosenOptions[event.designation], bills: bills,
+                    components: components
                 ) else { return nil }
                 let trip = roundTrip(from: depot, to: event.location, positions: positions)
                 return EventCandidate(
@@ -60,13 +62,33 @@ public enum EventRanking {
     public static func pendingChoices(
         events: [LocationEvent],
         chosenOptions: [String: String],
-        bills: [String: ResourceCost]
+        bills: [String: ResourceCost],
+        components: [String: [String: Int]] = [:]
     ) -> [(LocationEvent, [EventPlan.Option])] {
         events
             .filter(\.isActive)
             .compactMap { event in
                 guard case .needsChoice(let offered) = EventPlan.resolve(
-                    event, chosenOption: chosenOptions[event.designation], bills: bills
+                    event, chosenOption: chosenOptions[event.designation], bills: bills,
+                    components: components
+                ) else { return nil }
+                return (event, offered)
+            }
+            .sorted { $0.0.designation < $1.0.designation }
+    }
+
+    /// The events no option can build, with every option priced so the operator
+    /// can see what each would need.
+    public static func blockedEvents(
+        events: [LocationEvent],
+        bills: [String: ResourceCost],
+        components: [String: [String: Int]] = [:]
+    ) -> [(LocationEvent, [EventPlan.Option])] {
+        events
+            .filter(\.isActive)
+            .compactMap { event in
+                guard case .blocked(let offered) = EventPlan.resolve(
+                    event, chosenOption: nil, bills: bills, components: components
                 ) else { return nil }
                 return (event, offered)
             }

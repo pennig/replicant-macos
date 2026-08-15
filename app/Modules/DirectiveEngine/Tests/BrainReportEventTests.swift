@@ -166,4 +166,31 @@ struct BrainReportEventTests {
         #expect(report.pendingEventChoices.map(\.designation) == ["X-1-EVT-001"])
         #expect(report.pendingEventChoices.first?.options.map(\.name) == ["a", "b"])
     }
+
+    @Test("a blocked event reaches the why-view flagged, with its missing blueprints")
+    func blockedReachesTheReport() {
+        let row = LocationEvent(
+            designation: "TABAT-4-EVT-007", location: "TABAT-4", tier: 4, status: "active",
+            detail: .object([
+                "criteria": .array([.object([
+                    "name": .string("only"),
+                    "devices": .array([.object([
+                        "count": .number(2), "device_type": .string("climate_processor"),
+                    ])]),
+                    "resources": .object([:]),
+                ])]),
+                "rewards": .object(["xp": .number(500)]),
+            ]),
+            firstSeenAt: .distantPast, updatedAt: .distantPast
+        )
+        let choices = BrainReport.eventChoices(
+            events: [row],
+            bills: ["climate_processor": ResourceCost(structural: 200)],
+            components: ["climate_processor": ["orbital_mirror": 1, "terraform_controller": 1]],
+            devices: [:]
+        )
+        #expect(choices.count == 1)
+        #expect(choices.first?.isBlocked == true)
+        #expect(choices.first?.options.first?.unprintable == ["orbital_mirror", "terraform_controller"])
+    }
 }
