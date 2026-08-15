@@ -40,6 +40,9 @@ public struct Blueprint: Identifiable, Equatable, Sendable {
     public var strength: Double
     /// Present only for `system_hub`; nil otherwise.
     public var currentHubs: Int?
+    /// Other printed devices this blueprint consumes, on top of `resources`.
+    /// Empty for most blueprints; the wire omits the key entirely.
+    @Column(as: [String: Int].JSONRepresentation.self) public var components: [String: Int]
 
     public var id: String { deviceType }
 
@@ -56,7 +59,8 @@ public struct Blueprint: Identifiable, Equatable, Sendable {
         attachCapacity: Int,
         queueSize: Int,
         strength: Double,
-        currentHubs: Int?
+        currentHubs: Int?,
+        components: [String: Int] = [:]
     ) {
         self.deviceType = deviceType
         self.shortDescription = shortDescription
@@ -71,6 +75,7 @@ public struct Blueprint: Identifiable, Equatable, Sendable {
         self.queueSize = queueSize
         self.strength = strength
         self.currentHubs = currentHubs
+        self.components = components
     }
 }
 
@@ -220,7 +225,8 @@ extension Blueprint {
             attachCapacity: schema.attachCapacity ?? 0,
             queueSize: schema.queueSize ?? 0,
             strength: schema.strength ?? 0,
-            currentHubs: schema.currentHubs
+            currentHubs: schema.currentHubs,
+            components: schema.components?.additionalProperties ?? [:]
         )
     }
 }
@@ -251,6 +257,16 @@ extension Blueprint {
             """
         )
         .execute(db)
+    }
+
+    /// Adds the `components` column — the other printed devices a blueprint
+    /// consumes, beyond its raw `resources`.
+    public static let addComponents = SchemaMigration("Add 'components' to blueprints") { db in
+        try #sql(
+            """
+            ALTER TABLE "blueprints" ADD COLUMN "components" TEXT NOT NULL DEFAULT '{}'
+            """
+        ).execute(db)
     }
 }
 

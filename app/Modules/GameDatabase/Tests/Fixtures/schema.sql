@@ -31,7 +31,7 @@ CREATE TABLE "blueprints" (
   "queueSize" INTEGER NOT NULL DEFAULT 0,
   "strength" REAL NOT NULL DEFAULT 0,
   "currentHubs" INTEGER
-) STRICT;
+, "components" TEXT NOT NULL DEFAULT '{}') STRICT;
 
 CREATE TABLE "bobnetChannels" (
   "name" TEXT PRIMARY KEY NOT NULL,

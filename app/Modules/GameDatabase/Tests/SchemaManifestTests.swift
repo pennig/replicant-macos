@@ -66,6 +66,7 @@ import Testing
         "Rebackfill 'summaryJSON' for undepleted salvage counts",
         "Add 'freighterCode' to 'directives'",
         "Add 'chosenOption' to locationEvents",
+        "Add 'components' to blueprints",
     ]
 
     @Test func manifestMatchesTheFrozenList() {

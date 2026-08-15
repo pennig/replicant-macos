@@ -88,6 +88,7 @@ public enum GameDatabase {
         SystemDetail.rebackfillSummaryJSON,
         Directive.addFreighterCode,
         LocationEvent.addChosenOption,
+        Blueprint.addComponents,
     ]
 
     /// Builds a migrator from `entries`. The parameter exists so tests can
