@@ -200,13 +200,9 @@ public struct EventRun: MissionStepMachine {
     static func blockedComponents(at depot: String, in world: WorldSnapshot) -> [String: Int] {
         var missing: [String: Int] = [:]
         for device in world.devices.values where device.location == depot {
-            guard case let .object(waiting)? = device.detail["waiting_for"],
-                  case let .object(rows)? = waiting["components"]
-            else { continue }
-            for (type, amounts) in rows {
-                let need = Int(amounts["need"]?.numberValue ?? 0)
-                let have = Int(amounts["have"]?.numberValue ?? 0)
-                if need > have { missing[type] = max(missing[type] ?? 0, need - have) }
+            for row in device.waitingForComponents where !row.isMet {
+                let shortfall = Int((row.need ?? 0) - (row.have ?? 0))
+                if shortfall > 0 { missing[row.resource] = max(missing[row.resource] ?? 0, shortfall) }
             }
         }
         return missing

@@ -190,7 +190,11 @@ public struct PrintQueueDetailView: View {
                         Image(systemName: resource.isMet ? "checkmark.circle.fill" : "hourglass")
                             .font(.system(size: IconSize.s))
                             .foregroundStyle(resource.isMet ? Color.rcStatusReady : .rcWarning)
-                        Text(PrintQueuePresentation.displayName(resource.resource))
+                        Text(
+                            resource.kind == .component
+                                ? BlueprintPresentation.displayName(resource.resource)
+                                : PrintQueuePresentation.displayName(resource.resource)
+                        )
                             .font(.rcCaption)
                             .foregroundStyle(.rcTextSecondary)
                             .frame(width: 120, alignment: .leading)

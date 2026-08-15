@@ -88,23 +88,43 @@ public struct PrintQueueItem: Equatable, Sendable, Identifiable {
     }
 }
 
-/// A resource a queued print still needs before it can start, parsed from a
-/// `waiting_for` entry (`{resource: {need, have}}`).
+/// A requirement a queued print still needs before it can start, parsed from a
+/// `waiting_for` entry. Raw material and component devices arrive in the same
+/// `{need, have}` shape under different keys.
 public struct WaitingResource: Equatable, Sendable, Identifiable {
+    public enum Kind: String, Equatable, Sendable {
+        case resource
+        case component
+    }
+
     public var resource: String
+    public var kind: Kind
     public var need: Double?
     public var have: Double?
 
-    public var id: String { resource }
+    public var id: String { "\(kind.rawValue)>\(resource)" }
 
-    /// Whether the location already holds enough of this resource.
-    public var isMet: Bool { (have ?? 0) >= (need ?? 0) }
+    /// Whether the location already holds enough. A row carrying neither figure
+    /// could not be parsed and reads as unmet, never as satisfied.
+    public var isMet: Bool {
+        guard need != nil || have != nil else { return false }
+        return (have ?? 0) >= (need ?? 0)
+    }
 
-    public init(resource: String, need: Double? = nil, have: Double? = nil) {
+    public init(
+        resource: String, kind: Kind = .resource, need: Double? = nil, have: Double? = nil
+    ) {
         self.resource = resource
+        self.kind = kind
         self.need = need
         self.have = have
     }
+}
+
+/// `components` / `resources` name a nested block; anything else is a flat
+/// resource row in the legacy shape.
+private func nestedKind(_ key: String) -> WaitingResource.Kind? {
+    key == "components" ? .component : (key == "resources" ? .resource : nil)
 }
 
 extension Device {
@@ -140,20 +160,43 @@ extension Device {
     /// *capacity*.
     public var queuedJobCount: Int { printQueueItems.count }
 
-    /// Resources a queued print is still waiting on before it can start, parsed
-    /// from the `waiting_for` object (`{resource: {need, have}}`). Empty when the
-    /// device isn't blocked on resources. Sorted by resource name for a stable
-    /// readout.
+    /// What a queued print is still waiting on, parsed from `waiting_for`. The
+    /// server nests rows under `components`/`resources`; a flat payload is read
+    /// as raw material. Sorted by name within kind for a stable readout.
     public var waitingForResources: [WaitingResource] {
         guard case let .object(dict)? = detail["waiting_for"] else { return [] }
-        return dict.map { resource, amounts in
-            WaitingResource(
-                resource: resource,
-                need: amounts["need"]?.numberValue,
-                have: amounts["have"]?.numberValue
-            )
+        var rows: [WaitingResource] = []
+        for (key, value) in dict {
+            guard case let .object(inner) = value else { continue }
+            if let kind = nestedKind(key) {
+                for (name, amounts) in inner {
+                    guard case let .object(figures) = amounts else { continue }
+                    rows.append(
+                        WaitingResource(
+                            resource: name, kind: kind,
+                            need: figures["need"]?.numberValue,
+                            have: figures["have"]?.numberValue
+                        )
+                    )
+                }
+            } else {
+                rows.append(
+                    WaitingResource(
+                        resource: key, kind: .resource,
+                        need: inner["need"]?.numberValue,
+                        have: inner["have"]?.numberValue
+                    )
+                )
+            }
         }
-        .sorted { $0.resource < $1.resource }
+        return rows.sorted {
+            $0.kind == $1.kind ? $0.resource < $1.resource : $0.kind.rawValue < $1.kind.rawValue
+        }
+    }
+
+    /// Component rows only — what a blocked print needs built before it starts.
+    public var waitingForComponents: [WaitingResource] {
+        waitingForResources.filter { $0.kind == .component }
     }
 
     /// Whether this device belongs in the Print Queue: it can print and is either

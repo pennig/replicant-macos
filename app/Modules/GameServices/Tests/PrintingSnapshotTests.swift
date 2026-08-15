@@ -123,6 +123,59 @@ import Utils
         #expect(device.isPrintingOrQueued == false)
     }
 
+    @Test("a component blockage parses as component rows, not one nil row")
+    func nestedComponents() {
+        let device = makeDevice(detail: .object([
+            "waiting_for": .object([
+                "components": .object([
+                    "filtration_array": .object(["have": .number(0), "need": .number(1)]),
+                    "atmo_processor": .object(["have": .number(1), "need": .number(2)]),
+                ])
+            ]),
+        ]))
+        let rows = device.waitingForResources
+        #expect(rows.count == 2)
+        #expect(rows.allSatisfy { $0.kind == .component })
+        #expect(rows.first?.resource == "atmo_processor")
+        #expect(rows.first?.need == 2)
+        #expect(rows.first?.have == 1)
+        #expect(rows.allSatisfy { !$0.isMet })
+    }
+
+    @Test("a row with neither need nor have is unmet, never met")
+    func unparseableRowIsUnmet() {
+        let row = WaitingResource(resource: "components", need: nil, have: nil)
+        #expect(!row.isMet)
+    }
+
+    @Test("the flat resource shape still parses")
+    func flatResources() {
+        let device = makeDevice(detail: .object([
+            "waiting_for": .object([
+                "structural": .object(["have": .number(10), "need": .number(80)])
+            ]),
+        ]))
+        let rows = device.waitingForResources
+        #expect(rows.count == 1)
+        #expect(rows.first?.kind == .resource)
+        #expect(rows.first?.need == 80)
+    }
+
+    @Test("a nested resources block parses as resource rows")
+    func nestedResources() {
+        let device = makeDevice(detail: .object([
+            "waiting_for": .object([
+                "resources": .object([
+                    "structural": .object(["have": .number(10), "need": .number(80)])
+                ])
+            ]),
+        ]))
+        let rows = device.waitingForResources
+        #expect(rows.count == 1)
+        #expect(rows.first?.kind == .resource)
+        #expect(rows.first?.resource == "structural")
+    }
+
     private func makeDevice(
         detail: JSONValue,
         features: [String] = ["print"],
