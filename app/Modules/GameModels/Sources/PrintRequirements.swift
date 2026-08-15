@@ -2,11 +2,7 @@
 //  PrintRequirements.swift
 //  Replicould — shared printing preview model
 //
-//  The pre-flight resource check backing the `enqueue_print` confirmation shown
-//  in both the Devices and Print Queue inspectors: for a chosen blueprint, what
-//  each resource costs versus what's on hand at the device's current location
-//  (refreshed live before the sheet opens). Kept here in `GameServices` so
-//  both features share one model rather than each rolling its own.
+//  The pre-flight resource check backing the `enqueue_print` confirmation, shared by the Devices and Print Queue inspectors rather than each rolling its own.
 //
 
 import Foundation
@@ -40,8 +36,7 @@ public struct PrintResourceLine: Equatable, Sendable, Identifiable {
 }
 
 /// One component line in the print confirmation: a device the blueprint
-/// consumes, and how many stand where the print will run. `available` is nil
-/// when the location's devices couldn't be read.
+/// consumes, and how many stand where the print will run.
 public struct PrintComponentLine: Equatable, Sendable, Identifiable {
     public var deviceType: String
     public var label: String

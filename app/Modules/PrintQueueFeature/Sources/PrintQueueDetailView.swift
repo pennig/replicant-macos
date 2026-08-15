@@ -2,12 +2,7 @@
 //  PrintQueueDetailView.swift
 //  Replicould — Printing feature
 //
-//  The printer inspector for the split view's detail column: the active job with
-//  a live progress bar (interpolated on device by `OperationProgressView`), any
-//  resources a queued job is still waiting on, the queue itself (each entry
-//  removable via `dequeue_print`), and an enqueue field to add a new job. Reads
-//  everything straight from the device's `printing` / `print_queue` /
-//  `waiting_for` blocks, so a stream update re-renders the pane automatically.
+//  The printer inspector for the split view's detail column: the active job's live progress bar, resources a queued job is waiting on, the queue itself, and an enqueue field.
 //
 
 import ComposableArchitecture

@@ -2,15 +2,8 @@
 //  PrintQueueFeature.swift
 //  Replicould — Printing feature (type name kept as PrintQueueFeature)
 //
-//  The fleet's fabrication view: every device that can print, whether or not it
-//  is currently printing or holding queued jobs. Like the Devices feature, the
-//  list itself is observed straight from the `Device` SQLite table (via
-//  `@FetchAll` in the views, filtered to `canPrint`) and kept live by `GameSync`;
-//  the reducer owns only intent — the cold load / explicit refresh and command
-//  dispatch (enqueue a new print, dequeue a queued job, clear the queue). Firing
-//  a command goes through `CommandClient` so the UI keeps observing tables rather
-//  than inspecting responses.
-//
+//  The fleet's fabrication view: every printable device, observed straight from the `Device` table and kept live by `GameSync`; the reducer owns only intent
+//  (cold load and command dispatch) — firing a command goes through `CommandClient` so the UI keeps observing tables rather than inspecting responses.
 
 import ComposableArchitecture
 import Foundation

@@ -2,20 +2,8 @@
 //  LocationsClient.swift
 //  Replicould — GameServices (shared clients + command engine)
 //
-//  Reads the stellar-locations catalog through the generated `ReplicantSpace`
-//  client (inheriting bearer auth, rate limiting, and logging). Three calls:
-//    - `footprint()`   → GET /v1/locations       (holdings overlay; see note)
-//    - `system(_:)`    → GET /v1/locations/{star} (star-level roster + belts)
-//    - `body(_:)`      → GET /v1/locations/{code} (scanned body detail to merge)
-//
-//  Location detail is gated on *presence*, not exploration: the endpoint returns
-//  detail only while one of your replicants is in the system, and otherwise
-//  responds 403 ("No replicant in system"), surfaced here as
-//  `LocationsError.noReplicantInSystem` (not a failure — it just means "travel
-//  there first"). All decoding goes through the JSON round-trip in
-//  `LocationDTOs.swift`, since the generated client exposes the nested blocks
-//  only as opaque freeform containers.
-//
+//  Reads the stellar-locations catalog through the generated client: footprint, per-system detail, and scanned body detail. Location detail is gated on
+//  presence, not exploration — a 403 surfaces as `LocationsError.noReplicantInSystem`, not a failure. Decoding round-trips through `LocationDTOs`.
 
 import API
 import Dependencies

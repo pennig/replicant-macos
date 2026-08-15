@@ -2,15 +2,8 @@
 //  WorldView.swift
 //  Replicould — DirectiveEngine
 //
-//  The galaxy as the automation brain sees it: one consistent read of the mesh,
-//  census positions, live assays and events, uncollected units, the replicants and
-//  the print hub — the single input every brain pass consumes. Wider than the
-//  sibling `WorldSnapshot`, which scopes to one directive because decoding
-//  thousands of `StarSystem` blobs per tick is real cost. No blob reaches Swift
-//  here: `beltsBySystem` is projected out of the JSON by SQLite, bounded by
-//  SURVEY (`SystemDetail.systemScanned`). A malformed blob degrades to "no belt
-//  data for that system" rather than failing the read.
-//
+//  The galaxy as the automation brain sees it: one consistent read of the mesh, census, assays, events, and blueprint bills — the input every brain pass consumes.
+//  Wider than the sibling `WorldSnapshot`, which scopes to one directive; no blob reaches Swift here, belt data is projected out of the JSON by SQLite.
 
 import Foundation
 import GameModels
@@ -172,8 +165,8 @@ public struct WorldView: Equatable, Sendable {
             events.filter(\.isActive).map { SiteAssay.system(of: $0.location) }
         )
 
-        // Only the two columns the brain needs, not the description strings
-        // and JSON arrays every row also carries.
+        // The three columns the brain needs, not the description strings and
+        // other JSON arrays every row also carries.
         let billRows = try Blueprint.all
             .select { ($0.deviceType, $0.resources, $0.components) }
             .fetchAll(db)

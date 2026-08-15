@@ -2,10 +2,7 @@
 //  WorldSnapshot.swift
 //  Replicould — DirectiveEngine
 //
-//  The world as a step machine sees it: one consistent read of reconciled
-//  SQLite state, keyed for lookup. Missions are pure functions over this — they
-//  perform no I/O and never see a raw event, so they stay testable as fixtures
-//  and immune to replay.
+//  The world as a step machine sees it: one consistent, keyed read of reconciled SQLite state that missions consume as pure functions, immune to replay.
 //
 
 import Foundation

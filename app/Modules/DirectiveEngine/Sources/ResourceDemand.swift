@@ -2,9 +2,7 @@
 //  ResourceDemand.swift
 //  Replicould — DirectiveEngine
 //
-//  What the fleet is being asked for: every open location event priced at its
-//  cheapest resolution option, devices translated through their blueprint
-//  bills, plus the standing print reserve. Pure — no I/O, no clock.
+//  What the fleet is being asked for: every open event priced at its cheapest option, devices costed through blueprint bills, plus the standing print reserve. Pure.
 //
 
 import GameModels

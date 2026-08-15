@@ -2,12 +2,7 @@
 //  DevicesFeature.swift
 //  Replicould — Devices feature
 //
-//  The first real consumer of the action layer. The fleet itself is observed
-//  straight from the `Device`/`Operation` SQLite tables (via `@FetchAll` in the
-//  views) and kept live by `GameSync`; the reducer owns only intent — the cold
-//  load (first run / explicit refresh) and command dispatch. Firing a command
-//  goes through `CommandClient`, so the optimistic op appears instantly and the
-//  reconciler drives it to completion — the reducer never inspects responses.
+//  The fleet feature: the `Device`/`Operation` tables (kept live by `GameSync`) drive the UI directly; the reducer owns only cold load and command dispatch via `CommandClient`.
 //
 
 import ComposableArchitecture

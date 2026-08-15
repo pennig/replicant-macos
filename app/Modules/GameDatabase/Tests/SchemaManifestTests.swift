@@ -2,10 +2,7 @@
 //  SchemaManifestTests.swift
 //  GameDatabaseTests
 //
-//  Freezes the migration manifest. Migrations are append-only: an identifier
-//  that has shipped is recorded in real databases, so renaming or reordering
-//  one silently changes what those databases will do. This test makes either
-//  mistake a build failure rather than a data-loss report.
+//  Freezes the migration manifest: migrations are append-only, so renaming or reordering a shipped identifier must fail this build, not corrupt live data.
 //
 
 import Foundation
