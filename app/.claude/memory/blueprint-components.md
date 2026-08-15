@@ -147,23 +147,42 @@ a cold catalogue.
 
 ## Comment-pass note
 
-Beyond the four items reviewers flagged directly (`ResourceDemand.swift`'s
-8-line header, `WorldView.swift`'s stale "two columns" comment beside a
-three-column select, `PrintComponentLine`'s doc claiming an unreachable nil
-state, and `Printing.swift`'s over-commented private `nestedKind` helper), a
-full hand-check of every file this branch touched turned up **fifteen more
-file headers over the 6-line budget** — `BlueprintDetailView.swift`,
-`CommandGrid.swift`, `DevicesFeature.swift`, `Brain.swift`, `BrainReport.swift`
-(21 lines, the worst), `WorldSnapshot.swift`, `GameDatabase.swift`,
-`SchemaManifestTests.swift`, `Blueprint.swift`, `Directive.swift`,
-`PrintingSnapshotTests.swift`, `LocationsClient.swift`,
-`PrintQueueDetailView.swift`, `PrintQueueFeature.swift`, `PrintPlanSheet.swift`
-— all pre-existing debt from before this branch, none introduced by it, all
-trimmed to 6 lines under this task's explicit scope ruling: a touched file's
-header must comply regardless of who put it over budget, while inline/doc
-comments in regions this branch never touched were left alone. No new
-`///`/`//` budget violations were found inside any hunk this branch actually
-added or modified.
+Four items shipped, exactly the ones reviewers flagged directly:
+`ResourceDemand.swift`'s 8-line header trimmed to 6 (wrapped at the module's
+usual ~78-82-character width, every fact preserved verbatim);
+`WorldView.swift`'s stale "two columns" comment corrected beside the
+three-column select it now sits above; `PrintComponentLine`'s doc corrected
+to stop claiming an unreachable nil state (`resolve` always supplies a
+concrete `Int` via `?? 0`); and `Printing.swift`'s over-commented private
+`nestedKind` helper's 2-line `///` dropped in favour of the one-line body
+reading on its own.
+
+**A wider sweep was attempted and reverted.** A full hand-check turned up
+fifteen more file headers over the 6-line budget elsewhere in this branch's
+touched files (`BrainReport.swift` the worst, at 21 lines) and trimmed all of
+them under a scope ruling that said a touched file's header must comply
+"regardless of who put it over budget." That ruling was wrong: it is
+internally inconsistent with the same task's other half, which says to leave
+pre-existing violations in regions this branch never touched — a header this
+branch never otherwise edited **is** exactly such a region. Worse, several of
+the trimmed headers were load-bearing: `BrainReport.swift`'s explained why
+its feed must stay `@Shared(.inMemory)`, why the report lives in Sharing's
+store rather than on the actor (stateless between ticks), and why the
+boundary is safe off-main without further synchronization — none of that is
+recoverable from the code alone, which is exactly what `app/CLAUDE.md`'s
+**Keep** list protects, and the same policy requires writing a load-bearing
+fact to memory *before* deleting it, not after. The sweep was reverted in
+full; those fifteen headers remain pre-existing over-budget debt, unresolved,
+left for a future deliberate pass that budgets time to migrate what they
+carry into memory notes first.
+
+**The reusable lesson, not the incident:** `check-comments.sh` cannot catch
+an over-length file header at all — it is eleven regexes over dates and
+device codes with no line-counting of any kind. A header can run to 21 lines
+declaring invariants nobody reads again, and the script exits 0 the whole
+time. Treat "the linter is green" as proof of nothing here; a header-length
+sweep is a hand-check with its own scope discipline (each file its own
+load-bearing-content judgment call), not a mechanical trim.
 
 Related: [supervisor-adopts-row-whole-package-failure](supervisor-adopts-row-whole-package-failure.md),
 [demand-derived-mine-ranking](demand-derived-mine-ranking.md),
