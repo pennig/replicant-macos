@@ -50,7 +50,9 @@ LSP-list every `.refreshSystem/.scanSystem/.refreshBody/.setDeviceTags/.refreshF
 ## Comments
 
 Commits: `5b19f9c` (failing tests), `f60ff9b` (implementation), `d646ad1`
-(follow-up failing tests), `18e5a95` (follow-up fix).
+(follow-up failing tests), `18e5a95` (follow-up fix), `6d702e7` (review:
+comment-budget trim), `fdd4427` (review: one read per backstop, not one per
+tick).
 
 Step 3 audit — self-targeting sites found (`nextStep == directive.step`):
 - `RelayRun.acquire` footprint gate (`.printStockShort`) — already safe pre- and
@@ -74,6 +76,21 @@ Step 3 audit — self-targeting sites found (`nextStep == directive.step`):
   hand-crafted double-`.stepStarted` log fixtures (a shape production can no
   longer produce) are replaced with pure `stepStartedAt`-elapsed fixtures at
   all three sites, confirmed RED against the pre-fix implementation.
+  **Second review round**: the first cut spent a read on EVERY tick across the
+  60s window (~12 reads) rather than one, reversing the deleted design's own
+  "one is enough" rationale without ever surfacing that as a choice. Traced
+  both suggested fixes: gating on the system/body record's own freshness is
+  unusable — `LocationsClient.hydrateSystem`/`hydrateBody` write nothing on a
+  failed fetch, so a persistently-failing read never produces a freshness
+  signal; gating on the directive row's own `updatedAt` looked workable but
+  is unsafe — `verify` calls both `unresolvedSystem` and `sameBodyAgain`,
+  which would share one `updatedAt` watermark and could suppress each
+  other's read. Landed a third option instead: `unresolvedReadBand` (5s, one
+  engine tick), the narrow width right past each deadline in which the one
+  read fires; the rest of the (unchanged, 60s) window is a plain wait, then
+  the stall. Pure function of elapsed time, no shared mutable state. Each
+  site now has a test walking its whole window at 5s ticks asserting exactly
+  one read and the same stall/reason at the same bound.
 - `EventRun.preflight`/`.printing`, `MineFleetPrint.stocking`,
   `RestockRun.stocking`, `EventCourierPrint.printing` — all `.refreshFootprint`
   self-targets with `thenStall: nil` by design (never escalate a stale
