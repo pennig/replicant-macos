@@ -49,7 +49,8 @@ LSP-list every `.refreshSystem/.scanSystem/.refreshBody/.setDeviceTags/.refreshF
 
 ## Comments
 
-Commits: `5b19f9c` (failing tests), `f60ff9b` (implementation).
+Commits: `5b19f9c` (failing tests), `f60ff9b` (implementation), `d646ad1`
+(follow-up failing tests), `18e5a95` (follow-up fix).
 
 Step 3 audit — self-targeting sites found (`nextStep == directive.step`):
 - `RelayRun.acquire` footprint gate (`.printStockShort`) — already safe pre- and
@@ -57,15 +58,22 @@ Step 3 audit — self-targeting sites found (`nextStep == directive.step`):
   non-nil, so it was never subject to the restamp bug.
 - `SalvageRun.unresolvedSystem` / `RelayRun.unresolvedSystem` (`.refreshSystem`,
   `.salvageSystemUnresolved`) and `SalvageRun.sameBodyAgain` (`.refreshBody`,
-  `.salvageBodyNotDepleted`) — deadlines now genuinely accumulate, but their
-  "one extra read, then stall" bound (`SalvageRun.stepEntryCount`) counts
-  `.stepStarted` log entries the same-step read no longer writes. **Regression,
-  left unfixed as out of this ticket's file scope**: these three sites now
-  retry forever past their deadline instead of ever reaching their stall. No
-  existing test catches it — `SalvageRunTests.stallsWhenTheTargetSystemNeverResolves`
-  hand-crafts two `.stepStarted` log entries to reach that branch, a shape
-  production can no longer produce. Needs a follow-up ticket to rebase
-  `stepEntryCount`'s bound off something other than the log.
+  `.salvageBodyNotDepleted`) — deadlines now genuinely accumulate. Their "one
+  extra read, then stall" bound used `SalvageRun.stepEntryCount`, a log-count
+  re-entry budget that counted `.stepStarted` entries the same-step read no
+  longer writes, so first landed these three sites retried forever instead of
+  ever reaching their stall. **Fixed per coordinator ruling** (this was judged
+  worse than the bug the ticket fixes, and in scope by the ticket's own step 3
+  text): `stepEntryCount` removed; `unresolvedSystem`/`sameBodyAgain` now bound
+  the retry with a second, additive time window
+  (`systemUnresolvedRetryWindow` / `bodyUnresolvedRetryWindow`, both 60s) read
+  off the same `stepStartedAt` the deadline already reads. Elapsed time alone
+  is sufficient once a same-step read stops resetting it, and stays correct
+  after an operator Retry — `DirectiveResolutionClient.retry` stamps
+  `stepStartedAt = now` directly, a write path this ticket does not touch. The
+  hand-crafted double-`.stepStarted` log fixtures (a shape production can no
+  longer produce) are replaced with pure `stepStartedAt`-elapsed fixtures at
+  all three sites, confirmed RED against the pre-fix implementation.
 - `EventRun.preflight`/`.printing`, `MineFleetPrint.stocking`,
   `RestockRun.stocking`, `EventCourierPrint.printing` — all `.refreshFootprint`
   self-targets with `thenStall: nil` by design (never escalate a stale
