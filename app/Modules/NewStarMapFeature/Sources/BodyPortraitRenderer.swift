@@ -19,6 +19,7 @@ final class BodyPortraitRenderer: NSObject, MTKViewDelegate {
     private var atmoPipeline: MTLRenderPipelineState?
     private var starGlowPipeline: MTLRenderPipelineState?
     private var starDiscPipeline: MTLRenderPipelineState?
+    private var pointPipeline: MTLRenderPipelineState?
     private var tonemapPipeline: MTLRenderPipelineState?
     private var bodyDepthState: MTLDepthStencilState?
     private var readDepthState: MTLDepthStencilState?
@@ -79,6 +80,7 @@ final class BodyPortraitRenderer: NSObject, MTKViewDelegate {
         atmoPipeline = pipeline("orrery_atmosphere_vertex", "orrery_atmosphere_fragment", additive)
         starGlowPipeline = pipeline("star_vertex", "star_fragment", additive)
         starDiscPipeline = pipeline("star_vertex", "star_body_fragment", alphaOver)
+        pointPipeline = pipeline("orrery_point_vertex", "orrery_point_fragment", additive)
 
         let tm = MTLRenderPipelineDescriptor()
         tm.vertexFunction = library.makeFunction(name: "fullscreen_vertex")
@@ -151,8 +153,12 @@ final class BodyPortraitRenderer: NSObject, MTKViewDelegate {
                        designation: m.designation, into: enc, uniforms: &u)
         case .star(let s):
             encodeStar(s, into: enc, uniforms: &u)
-        case .belt, .region, .none:
-            break   // Task 9
+        case .belt(let b):
+            encodePoints(Self.beltBand(for: b), into: enc, uniforms: &u)
+        case .region(let s):
+            encodePoints(Self.regionBand(for: s), into: enc, uniforms: &u)
+        case .none:
+            break
         }
     }
 
@@ -192,6 +198,46 @@ final class BodyPortraitRenderer: NSObject, MTKViewDelegate {
         enc.setFragmentBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 2)
         enc.setFragmentBytes(&relRange, length: MemoryLayout<SIMD2<Float>>.stride, index: 3)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6, instanceCount: 1)
+    }
+
+    /// A belt framed on its own. Absolute orbital radius means nothing without the
+    /// star to measure it against, so only the band's true width carries over.
+    static func beltBand(for belt: Belt) -> BeltModel {
+        let inner = OrreryMapping.sceneRadius(au: belt.innerRadiusAu ?? 0)
+        let outer = OrreryMapping.sceneRadius(au: belt.outerRadiusAu ?? 0)
+        let width = max(outer - inner, 0.8)
+        return BeltModel(designation: belt.designation, innerScene: 6,
+                         outerScene: 6 + width, density: belt.density,
+                         richness: belt.richness, hasSites: !belt.sites.isEmpty)
+    }
+
+    static func regionBand(for site: SpecialSite) -> BeltModel {
+        BeltModel(designation: site.designation, innerScene: 5, outerScene: 9,
+                  density: "sparse", richness: [:], hasSites: false)
+    }
+
+    private func encodePoints(_ band: BeltModel, into enc: MTLRenderCommandEncoder,
+                              uniforms u: inout Uniforms) {
+        guard let pointPipeline, let device, let readDepthState else { return }
+        let star = StarDetail(designation: band.designation, name: nil, spectralType: nil,
+                              color: nil, position: Position(x: 0, y: 0, z: 0),
+                              temperatureK: nil, massSolar: nil, luminositySolar: nil,
+                              ageMy: nil, habitableZone: nil, miningBonusPct: nil)
+        let model = SystemModel(star: star, hzInnerScene: nil, hzOuterScene: nil,
+                                planets: [], belts: [band], hazards: [], kuiperScene: nil,
+                                frameScene: band.outerScene, deviceCount: 0, vesselCount: 0)
+        let pts = OrreryGeometry.beltPoints(model: model, center: .zero, scale: 1)
+        guard !pts.isEmpty,
+              let buffer = device.makeBuffer(
+                  bytes: pts,
+                  length: MemoryLayout<AmbientVertex>.stride * pts.count,
+                  options: .storageModeShared)
+        else { return }
+        enc.setRenderPipelineState(pointPipeline)
+        enc.setDepthStencilState(readDepthState)
+        enc.setVertexBuffer(buffer, offset: 0, index: 0)
+        enc.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 1)
+        enc.drawPrimitives(type: .point, vertexStart: 0, vertexCount: pts.count)
     }
 
     private func encodeBody(_ appearance: BodyAppearance, designation: String,
@@ -253,6 +299,8 @@ final class BodyPortraitRenderer: NSObject, MTKViewDelegate {
         case .planet(let p):
             let rings = OrreryMapping.appearance(planet: p, options: options).rings
             return max(1.54, rings.map { $0.outerFrac } ?? 1)
+        case .belt(let b):   return Float(Self.beltBand(for: b).outerScene)
+        case .region(let s): return Float(Self.regionBand(for: s).outerScene)
         default:
             return 1.54
         }
@@ -274,7 +322,13 @@ final class BodyPortraitRenderer: NSObject, MTKViewDelegate {
     private func uniforms(aspect: Float) -> Uniforms {
         var u = Uniforms()
         let d = cameraDistance()
-        let ce = cos(cameraElevation), se = sin(cameraElevation)
+        // A ring viewed near edge-on reads as a line, so give it a steeper camera.
+        let elevation: Float
+        switch subject {
+        case .belt, .region: elevation = cameraElevation * 1.6
+        default:              elevation = cameraElevation
+        }
+        let ce = cos(elevation), se = sin(elevation)
         let eye = SIMD3<Float>(d * ce * sin(cameraAzimuth), d * se, d * ce * cos(cameraAzimuth))
         u.view = .lookAt(eye: eye, center: .zero, up: SIMD3(0, 1, 0))
         u.projection = .perspective(fovyRadians: fovy, aspect: aspect,
@@ -284,6 +338,16 @@ final class BodyPortraitRenderer: NSObject, MTKViewDelegate {
         // correctly and completely invisibly.
         u.orreryAlpha = 1
         u.exposure = exposure
+        switch subject {
+        case .belt, .region:
+            // The point vertex scales its local offset by reveal; at 0 the whole ring
+            // collapses into its own centre.
+            u.orreryReveal = 1
+            u.orreryCenter = SIMD4(repeating: 0)
+            u.orreryBuildCenter = SIMD4(repeating: 0)
+        default:
+            break
+        }
         if case .star = subject {
             u.minAngularSize = 0.0015
             u.maxAngularSize = 0.05
