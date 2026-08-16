@@ -22,6 +22,7 @@ final class BodyPortraitRenderer: NSObject, MTKViewDelegate {
     private var tonemapPipeline: MTLRenderPipelineState?
     private var bodyDepthState: MTLDepthStencilState?
     private var readDepthState: MTLDepthStencilState?
+    private var noDepthState: MTLDepthStencilState?
     private var hdrTexture: MTLTexture?
     private var depthTexture: MTLTexture?
     private let start = CACurrentMediaTime()
@@ -91,6 +92,9 @@ final class BodyPortraitRenderer: NSObject, MTKViewDelegate {
         let rd = MTLDepthStencilDescriptor()
         rd.depthCompareFunction = .less; rd.isDepthWriteEnabled = false
         readDepthState = device.makeDepthStencilState(descriptor: rd)
+        let nd = MTLDepthStencilDescriptor()
+        nd.depthCompareFunction = .always; nd.isDepthWriteEnabled = false
+        noDepthState = device.makeDepthStencilState(descriptor: nd)
     }
 
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
@@ -163,14 +167,17 @@ final class BodyPortraitRenderer: NSObject, MTKViewDelegate {
 
     private func encodeStar(_ star: SystemStar, into enc: MTLRenderCommandEncoder,
                             uniforms u: inout Uniforms) {
-        guard let starGlowPipeline, let starDiscPipeline, let bodyDepthState else { return }
+        guard let starGlowPipeline, let starDiscPipeline, let bodyDepthState, let noDepthState
+        else { return }
 
         var instance = Self.starInstance(for: star, radius: bodyRadius)
         var relevance: Float = 1                  // 1.0 = fully relevant
         var relRange = SIMD2<Float>(0, 2)         // one draw, keep every fragment
 
+        // Both draws share star_vertex's billboard geometry, so a depth-writing glow
+        // would occlude the disc drawn right behind it at the same depth.
         enc.setRenderPipelineState(starGlowPipeline)
-        enc.setDepthStencilState(bodyDepthState)
+        enc.setDepthStencilState(noDepthState)
         enc.setVertexBytes(&instance, length: MemoryLayout<StarInstance>.stride, index: 0)
         enc.setVertexBytes(&relevance, length: MemoryLayout<Float>.stride, index: 1)
         enc.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 2)
@@ -178,6 +185,7 @@ final class BodyPortraitRenderer: NSObject, MTKViewDelegate {
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6, instanceCount: 1)
 
         enc.setRenderPipelineState(starDiscPipeline)
+        enc.setDepthStencilState(bodyDepthState)
         enc.setVertexBytes(&instance, length: MemoryLayout<StarInstance>.stride, index: 0)
         enc.setVertexBytes(&relevance, length: MemoryLayout<Float>.stride, index: 1)
         enc.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 2)
