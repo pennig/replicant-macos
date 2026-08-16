@@ -94,11 +94,9 @@ public struct RestockRun: MissionStepMachine {
         let desired = Self.desiredIdle(for: directive)
         guard idle < desired else { return .wait }
 
-        // One print in flight at a time. A correctness guard, not a throttle:
-        // `CommandClient` supersedes any other open op on a device, so a second
-        // dispatch silently orphans the first's row and strands the run waiting
-        // on it.
-        if world.openOperation(for: hub.deviceCode) != nil { return .wait }
+        // A correctness guard against orphaning our own open op, not a
+        // throttle — owner-scoped, so a co-tenant's job here is never ours to wait on.
+        if world.openOperation(for: hub.deviceCode, owner: directive.id) != nil { return .wait }
 
         // The rail, read through `RelayRun`'s own veto so the two cannot drift.
         //
@@ -150,25 +148,19 @@ public struct RestockRun: MissionStepMachine {
 
     // MARK: - Waiting on the clone
 
-    /// Wait for a printed relay to reach `world`'s idle pool at `hub`'s
-    /// location, then hand `directive` back to `stocking` to decide again.
-    ///
-    /// **It does not care WHICH relay arrived**, unlike `RelayRun.printing`,
-    /// which must identify its own clone to fly it somewhere: any relay reaching
-    /// the hub's idle stock tops the pool up, so a superseded print op cannot
-    /// strand this run.
+    /// Wait for a printed relay to reach `world`'s idle pool, then hand back to
+    /// `stocking`. Doesn't care WHICH relay arrived, unlike `RelayRun.printing`
+    /// — any relay topping the pool up survives a superseded print op.
     private func printing(_ directive: Directive, _ hub: Device, _ world: WorldSnapshot) -> MissionAction {
         guard let location = hub.location else { return .stall(.unreachableDevice) }
         if RelayRun.idleRelays(at: location, in: world).count >= Self.desiredIdle(for: directive) {
             return .advanceStep(nextStep: Step.stocking)
         }
-        if world.openOperation(for: hub.deviceCode) != nil { return .wait }
-        // No open op and the pool still short: the clone landed and demand moved,
-        // or the print failed — either way, re-decide. The deadline exists only
-        // so a silently never-arriving print cannot park this step forever.
         if world.now.timeIntervalSince(directive.stepStartedAt) > Self.printDeadline {
             logger.notice("restock \(directive.id, privacy: .public): print produced no relay within the deadline — re-deciding")
+            return .advanceStep(nextStep: Step.stocking)
         }
+        if world.openOperation(for: hub.deviceCode, owner: directive.id) != nil { return .wait }
         return .advanceStep(nextStep: Step.stocking)
     }
 

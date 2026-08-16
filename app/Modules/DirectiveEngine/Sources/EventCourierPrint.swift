@@ -75,7 +75,7 @@ public struct EventCourierPrint: MissionStepMachine {
         guard let printer = MineFleetPrint.printer(for: directive, in: world) else {
             return .stall(.unreachableDevice)
         }
-        if world.openOperation(for: printer.deviceCode) != nil { return .wait }
+        if world.openOperation(for: printer.deviceCode, owner: directive.id) != nil { return .wait }
         let rail = RelayRun(reserveFloor: reserveFloor)
         if rail.footprintCensusIsStale(world) {
             return .refreshFootprint(nextStep: Step.printing, thenStall: nil)
@@ -103,10 +103,10 @@ public struct EventCourierPrint: MissionStepMachine {
         _ directive: Directive, _ depot: String, _ world: WorldSnapshot
     ) -> MissionAction {
         if container(at: depot, in: world) != nil { return .advanceStep(nextStep: Step.replicating) }
-        if world.openOperation(for: directive.deviceCode) != nil { return .wait }
-        if world.now.timeIntervalSince(directive.stepStartedAt) <= RestockRun.printDeadline {
-            return .wait
+        if world.now.timeIntervalSince(directive.stepStartedAt) > RestockRun.printDeadline {
+            return .advanceStep(nextStep: Step.printing)
         }
+        if world.openOperation(for: directive.deviceCode, owner: directive.id) != nil { return .wait }
         return .advanceStep(nextStep: Step.printing)
     }
 
