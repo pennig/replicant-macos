@@ -2,7 +2,10 @@ import AppKit
 import CStarMapShaderTypes
 import MetalKit
 import UniverseModels
+import os
 import simd
+
+private let logger = Logger(subsystem: "name.pennig.replicould", category: "NewStarMapFeature")
 
 /// Draws one body alone through the star map's own shaders and tone-map, so a body
 /// looks the same in a location inspector as it does in the map.
@@ -28,6 +31,10 @@ final class BodyPortraitRenderer: NSObject, MTKViewDelegate {
     private var depthTexture: MTLTexture?
     private let start = CACurrentMediaTime()
 
+    /// `extent()` and `encodeSubject` both derive the current planet/moon's look;
+    /// cached here so a frame pays for it once, invalidated by subject/options.
+    private var cachedAppearance: (subject: BodyPortrait, options: OrreryMapping.OrreryPlaneOptions, value: BodyAppearance)?
+
     private let bodyRadius: Float = 1
     private let fovy: Float = 60 * .pi / 180
     private let cameraAzimuth: Float = 0.6
@@ -40,7 +47,10 @@ final class BodyPortraitRenderer: NSObject, MTKViewDelegate {
         guard let device = view.device ?? MTLCreateSystemDefaultDevice(),
               let queue = device.makeCommandQueue(),
               let library = try? device.makeDefaultLibrary(bundle: .module)
-        else { return }
+        else {
+            logger.error("BodyPortraitRenderer.configure: no Metal device, queue, or default library")
+            return
+        }
         self.device = device
         self.queue = queue
 
@@ -72,7 +82,12 @@ final class BodyPortraitRenderer: NSObject, MTKViewDelegate {
             d.fragmentFunction = library.makeFunction(name: fragment)
             blend(d.colorAttachments[0]!)
             d.depthAttachmentPixelFormat = .depth32Float
-            return try? device.makeRenderPipelineState(descriptor: d)
+            do {
+                return try device.makeRenderPipelineState(descriptor: d)
+            } catch {
+                logger.error("BodyPortraitRenderer pipeline \(vertex)/\(fragment) failed: \(error)")
+                return nil
+            }
         }
 
         bodyPipeline = pipeline("orrery_body_vertex", "orrery_body_fragment", alphaOver)
@@ -86,7 +101,11 @@ final class BodyPortraitRenderer: NSObject, MTKViewDelegate {
         tm.vertexFunction = library.makeFunction(name: "fullscreen_vertex")
         tm.fragmentFunction = library.makeFunction(name: "tonemap_fragment")
         tm.colorAttachments[0].pixelFormat = view.colorPixelFormat
-        tonemapPipeline = try? device.makeRenderPipelineState(descriptor: tm)
+        do {
+            tonemapPipeline = try device.makeRenderPipelineState(descriptor: tm)
+        } catch {
+            logger.error("BodyPortraitRenderer pipeline fullscreen_vertex/tonemap_fragment failed: \(error)")
+        }
 
         let bd = MTLDepthStencilDescriptor()
         bd.depthCompareFunction = .less; bd.isDepthWriteEnabled = true
@@ -146,11 +165,11 @@ final class BodyPortraitRenderer: NSObject, MTKViewDelegate {
     private func encodeSubject(into enc: MTLRenderCommandEncoder, uniforms u: inout Uniforms) {
         switch subject {
         case .planet(let p):
-            encodeBody(OrreryMapping.appearance(planet: p, options: options),
-                       designation: p.designation, into: enc, uniforms: &u)
+            guard let a = appearance() else { return }
+            encodeBody(a, designation: p.designation, into: enc, uniforms: &u)
         case .moon(let m):
-            encodeBody(OrreryMapping.appearance(moon: m, options: options),
-                       designation: m.designation, into: enc, uniforms: &u)
+            guard let a = appearance() else { return }
+            encodeBody(a, designation: m.designation, into: enc, uniforms: &u)
         case .star(let s):
             encodeStar(s, into: enc, uniforms: &u)
         case .belt(let b):
@@ -261,8 +280,8 @@ final class BodyPortraitRenderer: NSObject, MTKViewDelegate {
             enc.setFragmentBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 1)
             enc.setVertexBytes(&ring, length: MemoryLayout<OrreryRingUniform>.stride, index: 2)
             enc.setFragmentBytes(&ring, length: MemoryLayout<OrreryRingUniform>.stride, index: 2)
-            // SYNC POINT: kRingSegments = 192 in Orrery.metal.
-            enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 193 * 2)
+            enc.drawPrimitives(type: .triangleStrip, vertexStart: 0,
+                              vertexCount: (StarFieldRenderer.ringSegments + 1) * 2)
         }
 
         if var atmo = atmosphereUniform(placed), let atmoPipeline {
@@ -296,14 +315,31 @@ final class BodyPortraitRenderer: NSObject, MTKViewDelegate {
     /// an irregular body's long axis at 1.54x (unit-product axes).
     private func extent() -> Float {
         switch subject {
-        case .planet(let p):
-            let rings = OrreryMapping.appearance(planet: p, options: options).rings
+        case .planet:
+            let rings = appearance()?.rings
             return max(1.54, rings.map { $0.outerFrac } ?? 1)
         case .belt(let b):   return Float(Self.beltBand(for: b).outerScene)
         case .region(let s): return Float(Self.regionBand(for: s).outerScene)
         default:
             return 1.54
         }
+    }
+
+    /// The current planet/moon subject's derived look, cached until `subject`
+    /// or `options` changes.
+    private func appearance() -> BodyAppearance? {
+        guard let subject else { return nil }
+        if let c = cachedAppearance, c.subject == subject, c.options == options {
+            return c.value
+        }
+        let value: BodyAppearance
+        switch subject {
+        case .planet(let p): value = OrreryMapping.appearance(planet: p, options: options)
+        case .moon(let m):   value = OrreryMapping.appearance(moon: m, options: options)
+        default: return nil
+        }
+        cachedAppearance = (subject, options, value)
+        return value
     }
 
     private func cameraDistance() -> Float {

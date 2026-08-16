@@ -636,7 +636,8 @@ fragment float4 orrery_atmosphere_fragment(OrreryAtmoVaryings in   [[stage_in]],
 // alternating inner and outer rim vertices. Alpha-blended and depth-READ after the
 // opaque bodies (which now write true sphere depth), so the near hemisphere occludes
 // the far half of the ring at the real silhouette and the ring occludes nothing.
-constant uint kRingSegments = 192;   // SYNC POINT: matches `ringSegments` in StarFieldRenderer
+constant uint kRingSegments = 192;   // SYNC POINT: matches `StarFieldRenderer.ringSegments`,
+                                      // read also by BodyPortraitRenderer
 
 struct OrreryRingVaryings {
     float4 position [[position]];

@@ -17,14 +17,6 @@ struct SiteGlyphTests {
         #expect(SiteGlyph.symbolName(for: site) == "building.2")
     }
 
-    @Test("kuiper and oort fall back to a region glyph")
-    func regions() {
-        for kind in [SpecialSiteKind.kuiper, .oort] {
-            let site = SpecialSite(designation: "SOL-K", kind: kind)
-            #expect(SiteGlyph.symbolName(for: site) == "circle.dotted")
-        }
-    }
-
     @Test("an unremarkable object gets the generic glyph")
     func object() {
         let site = SpecialSite(designation: "SOL-OBJ-2", kind: .object)

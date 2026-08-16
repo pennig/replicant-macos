@@ -7,9 +7,8 @@ enum SiteGlyph {
     static func symbolName(for site: SpecialSite) -> String {
         if site.objectType == "incoming_asteroid" { return "exclamationmark.triangle" }
         switch site.kind {
-        case .megastructure:      return "building.2"
-        case .kuiper, .oort:      return "circle.dotted"
-        case .object, .lagrange:  return "shippingbox"
+        case .megastructure:                      return "building.2"
+        case .object, .lagrange, .kuiper, .oort:  return "shippingbox"
         }
     }
 }

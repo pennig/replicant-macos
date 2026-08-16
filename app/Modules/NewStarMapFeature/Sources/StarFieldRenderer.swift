@@ -31,7 +31,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
     /// Segment count of the generated ring annulus.
     /// SYNC POINT: must match `kRingSegments` in Orrery.metal, which derives the ring
     /// geometry from `vertex_id` alone. If they drift, the ring grows a wedge gap.
-    private let ringSegments = 192
+    nonisolated(unsafe) static let ringSegments = 192
 
     // Depth: only the resolved bodies write it; the dense additive field never
     // does (Invariant 8). Overlays test against it to occlude behind bodies.
@@ -1941,7 +1941,7 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
                 enc.setVertexBytes(&r, length: MemoryLayout<OrreryRingUniform>.stride, index: 2)
                 enc.setFragmentBytes(&r, length: MemoryLayout<OrreryRingUniform>.stride, index: 2)
                 enc.drawPrimitives(type: .triangleStrip, vertexStart: 0,
-                                   vertexCount: (ringSegments + 1) * 2)
+                                   vertexCount: (Self.ringSegments + 1) * 2)
             }
         }
 

@@ -502,7 +502,7 @@ private struct InspectorScroll<Content: View>: View {
                         portrait
                             .frame(width: TileSize.portrait, height: TileSize.portrait)
                     }
-                    VStack(alignment: .leading, spacing: Space.s) {
+                    VStack(alignment: .leading, spacing: Space.xs) {
                         VStack(alignment: .leading, spacing: Space.xs) {
                             Text(title).font(.rcTitleMono).foregroundStyle(.rcTextPrimary)
                             HStack(spacing: Space.s) {
@@ -511,8 +511,10 @@ private struct InspectorScroll<Content: View>: View {
                                 Text(recon.label).font(.rcCaption).foregroundStyle(.rcTextTertiary)
                             }
                         }
-                        ForEach(facts, id: \.label) { fact in
-                            Readout(fact.label, fact.value, mono: fact.mono)
+                        VStack(alignment: .leading, spacing: Space.xxs) {
+                            ForEach(facts, id: \.label) { fact in
+                                HeaderReadout(fact: fact)
+                            }
                         }
                     }
                     if let accessory {
@@ -531,6 +533,22 @@ private struct InspectorScroll<Content: View>: View {
 }
 
 
+
+/// A fact row compact enough to keep the header's five-row budget inside the
+/// pinned 128pt frame — `Readout` (13pt/16pt lines) is too tall for that.
+private struct HeaderReadout: View {
+    let fact: BodyFact
+    var body: some View {
+        HStack {
+            Text(fact.label).font(.rcCaption).foregroundStyle(.rcTextSecondary)
+            Spacer()
+            Text(fact.value)
+                .font(fact.mono ? .rcMonoSmall : .rcCaption)
+                .monospacedDigit()
+                .foregroundStyle(.rcTextPrimary)
+        }
+    }
+}
 
 private struct Readout: View {
     let label: String
