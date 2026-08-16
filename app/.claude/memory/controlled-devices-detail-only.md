@@ -29,9 +29,16 @@ survey drones all stowed, every drone reporting `controller_device_code:
 link — the drone's column, or the controller's `controlled_devices` when a
 detail read happens to have populated it.
 
-Safe consumers are the ones reached from the **device inspector**, which does a
-per-device read on selection: the adopt/release pickers in
-`DevicesFeature/CommandGrid.swift` and the location fallback in
-`DirectiveComposer`. Still affected: `DirectiveRow` (built-in directive rows show
-a controller's controlled-device count/list, which under-reports for a
-list-synced controller). See [[directives-feature]].
+`DeviceAdoption` (in `DevicesFeature`) is now the one place the union is taken —
+`adopted(by:fleet:)` merges the controller's tail with every fleet row naming it,
+`controller(of:fleet:)` reads the drone's column. The inspector's "Adopted
+Devices" / "Adopted By" cards and both `CommandAvailability` pickers read it, so
+they no longer depend on a detail read having landed. Prefer it over
+`Device.controlledDevices` at any new call site.
+
+The inspector's per-device read on selection used to be what made the adopt and
+release pickers correct; it is no longer load-bearing for them. Still affected:
+`DirectiveRow` (built-in directive rows show a controller's controlled-device
+count/list, which under-reports for a list-synced controller) — it reads
+`device.controlledDevices` directly and has no fleet in hand. See
+[[directives-feature]].
