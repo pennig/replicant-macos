@@ -314,7 +314,7 @@ private struct ObjectInspector: View {
         InspectorScroll(
             title: site.title ?? site.name ?? site.designation, code: site.designation,
             recon: .scanned, accessory: accessory,
-            portrait: AnyView(PortraitFrame { Color.clear }),
+            portrait: AnyView(PortraitFrame { SiteGlyphPortrait(site: site) }),
             facts: BodyFacts.rows(site: site)
         ) {
             if let p = site.progressPercentage {
