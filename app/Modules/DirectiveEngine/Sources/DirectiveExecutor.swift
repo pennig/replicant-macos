@@ -45,7 +45,8 @@ enum DirectiveExecutor {
 
         case let .dispatch(kind, deviceCode, params, nextStep):
             @Dependency(\.commandGovernor) var commandGovernor
-            switch await commandGovernor.dispatch(kind, deviceCode, params) {
+            let owner = CommandOwner(directiveID: directive.id, step: directive.step, since: directive.stepStartedAt)
+            switch await commandGovernor.dispatchOwned(kind, deviceCode, params, owner) {
             case let .deferred(reason):
                 // Not a failure: the governor will let it through on a later
                 // tick, so the step is late rather than lost. No state change.

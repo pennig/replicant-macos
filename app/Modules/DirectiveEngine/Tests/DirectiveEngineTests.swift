@@ -76,11 +76,16 @@ struct DirectiveEngineTests {
             tick: .seconds(5)
         )
 
+        let capturedOwner = LockIsolated<CommandOwner?>(nil)
+
         try await withDependencies {
             $0.defaultDatabase = database
             $0.date = .constant(Date(timeIntervalSince1970: 1_000))
             $0.uuid = .incrementing
-            $0.commandGovernor.dispatch = { _, _, _ in .dispatched(.accepted(operationID: "OP1")) }
+            $0.commandGovernor.dispatchOwned = { _, _, _, owner in
+                capturedOwner.setValue(owner)
+                return .dispatched(.accepted(operationID: "OP1"))
+            }
         } operation: {
             await core.evaluateOnce(directiveID: "D1")
 
@@ -100,6 +105,13 @@ struct DirectiveEngineTests {
             #expect(entries.last?.summary == "Dispatched travel to VES1 — SOL",
                      "a travel's dispatch entry names its destination")
         }
+
+        // The owner reaches the governor before the step advances, so it names
+        // the STARTING step, and `since` is that step's own `stepStartedAt`.
+        let owner = try #require(capturedOwner.value)
+        #expect(owner.directiveID == "D1")
+        #expect(owner.step == "start")
+        #expect(owner.since == Date(timeIntervalSince1970: 0))
     }
 
     /// A `set_directive` repoint names the pile it's pointing the controller
@@ -126,7 +138,7 @@ struct DirectiveEngineTests {
             $0.defaultDatabase = database
             $0.date = .constant(Date(timeIntervalSince1970: 1_000))
             $0.uuid = .incrementing
-            $0.commandGovernor.dispatch = { _, _, _ in .dispatched(.accepted(operationID: "OP1")) }
+            $0.commandGovernor.dispatchOwned = { _, _, _, _ in .dispatched(.accepted(operationID: "OP1")) }
         } operation: {
             await core.evaluateOnce(directiveID: "D1")
 
@@ -156,7 +168,7 @@ struct DirectiveEngineTests {
             $0.defaultDatabase = database
             $0.date = .constant(Date(timeIntervalSince1970: 1_000))
             $0.uuid = .incrementing
-            $0.commandGovernor.dispatch = { _, _, _ in .dispatched(.accepted(operationID: "OP1")) }
+            $0.commandGovernor.dispatchOwned = { _, _, _, _ in .dispatched(.accepted(operationID: "OP1")) }
         } operation: {
             await core.evaluateOnce(directiveID: "D1")
 
@@ -186,7 +198,7 @@ struct DirectiveEngineTests {
             $0.defaultDatabase = database
             $0.date = .constant(Date(timeIntervalSince1970: 1_000))
             $0.uuid = .incrementing
-            $0.commandGovernor.dispatch = { _, _, _ in .deferred(.budgetExhausted) }
+            $0.commandGovernor.dispatchOwned = { _, _, _, _ in .deferred(.budgetExhausted) }
         } operation: {
             await core.evaluateOnce(directiveID: "D1")
             let directive = try await database.read { db in
@@ -218,7 +230,7 @@ struct DirectiveEngineTests {
             $0.defaultDatabase = database
             $0.date = .constant(Date(timeIntervalSince1970: 1_000))
             $0.uuid = .incrementing
-            $0.commandGovernor.dispatch = { _, _, _ in .dispatched(.rejected("device busy")) }
+            $0.commandGovernor.dispatchOwned = { _, _, _, _ in .dispatched(.rejected("device busy")) }
         } operation: {
             await core.evaluateOnce(directiveID: "D1")
             let directive = try await database.read { db in
@@ -349,7 +361,7 @@ struct DirectiveEngineTests {
             $0.defaultDatabase = database
             $0.date = .constant(Date(timeIntervalSince1970: 1_000))
             $0.uuid = .incrementing
-            $0.commandGovernor.dispatch = { _, _, _ in
+            $0.commandGovernor.dispatchOwned = { _, _, _, _ in
                 Issue.record("advanceStep must not POST")
                 return .deferred(.budgetExhausted)
             }
@@ -1867,7 +1879,7 @@ struct DirectiveEngineSalvageArrivalFreshnessTests {
             $0.defaultDatabase = database
             $0.date = .constant(Self.tick)
             $0.uuid = .incrementing
-            $0.commandGovernor.dispatch = { _, _, _ in .dispatched(.accepted(operationID: "OP-NEW")) }
+            $0.commandGovernor.dispatchOwned = { _, _, _, _ in .dispatched(.accepted(operationID: "OP-NEW")) }
         } operation: {
             let core = DirectiveEngineCore(machines: [SalvageRun()], tick: .seconds(5))
             await core.evaluateOnce(directiveID: "D1")
@@ -2302,7 +2314,7 @@ struct RelayRunEngineTests {
                     resources: 999_999, replicants: 0
                 )]
             }
-            $0.commandGovernor.dispatch = { kind, _, _ in
+            $0.commandGovernor.dispatchOwned = { kind, _, _, _ in
                 dispatched.withValue { $0.append(kind) }
                 return .dispatched(.accepted(operationID: "OP1"))
             }
@@ -2368,7 +2380,7 @@ struct RelayRunEngineTests {
                     resources: 999_999, replicants: 0
                 )]
             }
-            $0.commandGovernor.dispatch = { _, _, _ in
+            $0.commandGovernor.dispatchOwned = { _, _, _, _ in
                 dispatched.withValue { $0 += 1 }
                 return .dispatched(.accepted(operationID: "OP1"))
             }

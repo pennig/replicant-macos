@@ -62,7 +62,7 @@ struct EventRunEngineTests {
     private func governor(
         _ database: any DatabaseWriter, into log: LockIsolated<[String]>
     ) -> CommandGovernorClient {
-        CommandGovernorClient { kind, deviceCode, params in
+        let body: @Sendable (OperationKind, String, CommandParams) async -> CommandDispatchResult = { kind, deviceCode, params in
             log.withValue { $0.append(kind.rawValue) }
             try? await database.write { db in
                 if kind == .travel, let destination = params.destination {
@@ -82,6 +82,10 @@ struct EventRunEngineTests {
             }
             return .dispatched(.accepted(operationID: nil))
         }
+        return CommandGovernorClient(
+            dispatch: body,
+            dispatchOwned: { kind, deviceCode, params, _ in await body(kind, deviceCode, params) }
+        )
     }
 
     /// A catalogue row costed alike for every type, so the ORDER a print lands in
@@ -103,7 +107,7 @@ struct EventRunEngineTests {
         _ database: any DatabaseWriter, into printed: LockIsolated<[String]>,
         consuming components: [String: [String: Int]] = [:]
     ) -> CommandGovernorClient {
-        CommandGovernorClient { kind, _, params in
+        let body: @Sendable (OperationKind, String, CommandParams) async -> CommandDispatchResult = { kind, _, params in
             guard kind == .print, let deviceType = params.deviceType else {
                 return .dispatched(.accepted(operationID: nil))
             }
@@ -129,6 +133,10 @@ struct EventRunEngineTests {
             }
             return .dispatched(.accepted(operationID: nil))
         }
+        return CommandGovernorClient(
+            dispatch: body,
+            dispatchOwned: { kind, deviceCode, params, _ in await body(kind, deviceCode, params) }
+        )
     }
 
     // MARK: - Termination

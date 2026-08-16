@@ -680,10 +680,12 @@ struct RestockEngineTests {
             }()
             $0.commandClient = {
                 var client = CommandClient.testValue
-                client.dispatch = { kind, deviceCode, _ in
+                let body: @Sendable (OperationKind, String, CommandParams) async -> CommandOutcome = { kind, deviceCode, _ in
                     printed.withValue { $0.append("\(kind.rawValue)→\(deviceCode)") }
                     return .accepted(operationID: "OP-1")
                 }
+                client.dispatch = body
+                client.dispatchOwned = { kind, deviceCode, params, _ in await body(kind, deviceCode, params) }
                 return client
             }()
             // The real `refreshFootprint()` persistence runs on top of this, so

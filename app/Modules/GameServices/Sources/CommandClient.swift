@@ -39,6 +39,13 @@ public struct CommandClient: Sendable {
     /// can surface a rejection/failure while the UI still mostly observes tables.
     public var dispatch: @Sendable (_ kind: OperationKind, _ deviceCode: String, _ params: CommandParams) async -> CommandOutcome
 
+    /// Same as `dispatch`, but attributes the written `Operation` row to the
+    /// dispatching directive step when `owner` is non-nil. `dispatch` calls
+    /// this with `owner: nil`.
+    public var dispatchOwned: @Sendable (
+        _ kind: OperationKind, _ deviceCode: String, _ params: CommandParams, _ owner: CommandOwner?
+    ) async -> CommandOutcome
+
     /// Preview a `travel` command via `dry_run`: ask the server to plot the
     /// route without dispatching the device, so the user can confirm the
     /// itinerary first. Never throws — the result is a `TravelPreviewOutcome`.
@@ -70,8 +77,25 @@ public enum CommandOutcome: Sendable, Equatable {
 // MARK: - Live implementation
 
 extension CommandClient: DependencyKey {
-    public static let liveValue = CommandClient(
-        dispatch: { kind, deviceCode, params in
+    public static let liveValue: CommandClient = {
+        let dispatchOwned = makeDispatchOwned()
+        return CommandClient(
+            dispatch: { kind, deviceCode, params in
+                await dispatchOwned(kind, deviceCode, params, nil)
+            },
+            dispatchOwned: dispatchOwned,
+            previewTravel: { deviceCode, destination in
+                await previewTravelLive(deviceCode: deviceCode, destination: destination)
+            }
+        )
+    }()
+
+    /// Built once and shared by `dispatch`/`dispatchOwned` in `liveValue` — never
+    /// `Self.liveValue.dispatchOwned`, which would recurse through the static.
+    private static func makeDispatchOwned() -> @Sendable (
+        _ kind: OperationKind, _ deviceCode: String, _ params: CommandParams, _ owner: CommandOwner?
+    ) async -> CommandOutcome {
+        { kind, deviceCode, params, owner in
             @Dependency(\.gameClient) var gameClient
             @Dependency(\.deviceRefresher) var deviceRefresher
             @Dependency(\.defaultDatabase) var database
@@ -90,12 +114,15 @@ extension CommandClient: DependencyKey {
             }
 
             // Immediate commands (scan/census reads + status-only lifecycle) are
-            // not long-running, so they create no Operation row and never
-            // supersede a device's running action. POST, then take the single
-            // authoritative device read so status/location refresh. A terminating
-            // command (recall/deactivate/decommission) also closes the device's
-            // open op, since it stops whatever was running.
+            // not long-running, so they never supersede a device's running action
+            // and confirm/reject in one POST — but they still write one terminal
+            // `Operation` row, so every dispatch leaves a row an owner can be
+            // read off. A terminating command (recall/deactivate/decommission)
+            // also closes the device's open op, since it stops whatever was
+            // running.
             if completion(for: kind) == .immediate {
+                let status: OperationStatus
+                let message: String?
                 do {
                     let output = try await gameClient().postV1DevicesDeviceCode(
                         path: .init(deviceCode: deviceCode), body: body
@@ -121,34 +148,61 @@ extension CommandClient: DependencyKey {
                             await refreshOpenLocationEvents(at: location)
                         }
                         await refreshAffectedDevices(in: responseJSON, excluding: deviceCode)
-                        return .accepted(operationID: nil)
+                        status = .completed
+                        message = nil
                     case let .badRequest(response):
                         let reason = errorMessage(response.body)
                         logger.warning("dispatch \(kind.rawValue, privacy: .public) → \(deviceCode, privacy: .public): rejected (400) — \(reason, privacy: .public)")
-                        return .rejected(reason)
+                        status = .rejected
+                        message = reason
                     case let .forbidden(response):
                         let reason = errorMessage(response.body)
                         logger.warning("dispatch \(kind.rawValue, privacy: .public) → \(deviceCode, privacy: .public): rejected (403) — \(reason, privacy: .public)")
-                        return .rejected(reason)
+                        status = .rejected
+                        message = reason
                     case let .notFound(response):
                         let reason = errorMessage(response.body)
                         logger.warning("dispatch \(kind.rawValue, privacy: .public) → \(deviceCode, privacy: .public): rejected (404) — \(reason, privacy: .public)")
-                        return .rejected(reason)
+                        status = .rejected
+                        message = reason
                     case let .default(statusCode, _):
                         let reason = "Server error (\(statusCode))."
                         logger.warning("dispatch \(kind.rawValue, privacy: .public) → \(deviceCode, privacy: .public): \(reason, privacy: .public)")
-                        return .failed(reason)
+                        status = .failed
+                        message = reason
                     case .created:
                         // 201 is only returned by `replicate`, which dispatches via
                         // `ReplicantsClient` — not through here — so treat it as unexpected.
                         logger.warning("dispatch \(kind.rawValue, privacy: .public) → \(deviceCode, privacy: .public): unexpected 201")
-                        return .failed("Unexpected server response.")
+                        status = .failed
+                        message = "Unexpected server response."
                     @unknown default:
-                        return .failed("Unexpected server response.")
+                        status = .failed
+                        message = "Unexpected server response."
                     }
                 } catch {
                     logger.error("dispatch \(kind.rawValue, privacy: .public): failed — \(error.localizedDescription, privacy: .public)")
-                    return .failed(error.localizedDescription)
+                    status = .failed
+                    message = error.localizedDescription
+                }
+
+                let stamp = date.now
+                var detail: JSONValue = .object(["params": params.json])
+                if let message { detail = detail.adding("message", .string(message)) }
+                let record = Operation(
+                    id: uuid().uuidString, entityCode: deviceCode, kind: kind.rawValue,
+                    status: status,
+                    source: .optimistic,
+                    startedAt: stamp, completesAt: nil, lastConfirmedAt: stamp,
+                    detail: detail,
+                    directiveID: owner?.directiveID, step: owner?.step, paramsDigest: params.dedupKey
+                )
+                try? await database.write { db in try Operation.insert { record }.execute(db) }
+
+                switch status {
+                case .completed: return .accepted(operationID: nil)
+                case .rejected:  return .rejected(message ?? "The command was rejected.")
+                default:         return .failed(message ?? "Unexpected server response.")
                 }
             }
 
@@ -164,7 +218,8 @@ extension CommandClient: DependencyKey {
                 status: .optimistic,
                 source: OperationSource.optimistic,
                 startedAt: started, completesAt: nil, lastConfirmedAt: started,
-                detail: .object(["params": params.json])
+                detail: .object(["params": params.json]),
+                directiveID: owner?.directiveID, step: owner?.step, paramsDigest: params.dedupKey
             )
             try? await database.write { db in try Operation.insert { optimistic }.execute(db) }
             logger.info("dispatch \(kind.rawValue, privacy: .public) → \(deviceCode, privacy: .public): optimistic op \(opID, privacy: .public)")
@@ -283,11 +338,8 @@ extension CommandClient: DependencyKey {
                 await finish(opID, as: .failed, reason: error.localizedDescription, at: date.now, database: database)
                 return .failed(error.localizedDescription)
             }
-        },
-        previewTravel: { deviceCode, destination in
-            await previewTravelLive(deviceCode: deviceCode, destination: destination)
         }
-    )
+    }
 
     // MARK: Completion classification
 
@@ -443,6 +495,7 @@ extension CommandClient: TestDependencyKey {
     /// stubbed `gameClient`.
     public static let testValue = CommandClient(
         dispatch: unimplemented("CommandClient.dispatch", placeholder: .failed("unimplemented")),
+        dispatchOwned: unimplemented("CommandClient.dispatchOwned", placeholder: .failed("unimplemented")),
         previewTravel: unimplemented("CommandClient.previewTravel", placeholder: .failed("unimplemented"))
     )
 
@@ -450,6 +503,7 @@ extension CommandClient: TestDependencyKey {
     /// button should quietly "accept", not surface a runtime-issue banner.
     public static let previewValue = CommandClient(
         dispatch: { _, _, _ in .accepted(operationID: "preview-op") },
+        dispatchOwned: { _, _, _, _ in .accepted(operationID: "preview-op") },
         previewTravel: { _, _ in .plan(TravelPlan()) }
     )
 }

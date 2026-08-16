@@ -465,7 +465,7 @@ struct MineFleetPrintEngineTests {
                 queries.withValue { $0.append(designation) }
                 return printedFleet(omitting: "ami_transport_controller") + [hub(), carrier(), clone]
             }
-            $0.commandGovernor.dispatch = { _, _, params in
+            $0.commandGovernor.dispatchOwned = { _, _, params, _ in
                 dispatches.withValue { $0.append(params.deviceType ?? "?") }
                 return .dispatched(.accepted(operationID: nil))
             }
@@ -502,7 +502,7 @@ struct MineFleetPrintEngineTests {
             $0.devicesClient.fetchAtLocation = { _ in
                 printedFleet(omitting: "ami_transport_controller") + [hub(), carrier()]
             }
-            $0.commandGovernor.dispatch = { _, _, params in
+            $0.commandGovernor.dispatchOwned = { _, _, params, _ in
                 dispatches.withValue { $0.append(params.deviceType ?? "?") }
                 return .dispatched(.accepted(operationID: nil))
             }
@@ -537,7 +537,7 @@ struct MineFleetPrintEngineTests {
             $0.date = .constant(now)
             $0.uuid = .incrementing
             $0.devicesClient.fetchAtLocation = { _ in throw ReadFailure() }
-            $0.commandGovernor.dispatch = { _, _, params in
+            $0.commandGovernor.dispatchOwned = { _, _, params, _ in
                 dispatches.withValue { $0.append(params.deviceType ?? "?") }
                 return .dispatched(.accepted(operationID: nil))
             }

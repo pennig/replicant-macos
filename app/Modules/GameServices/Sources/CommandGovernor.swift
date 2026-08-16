@@ -71,7 +71,8 @@ actor CommandGovernor {
     func dispatch(
         _ kind: OperationKind,
         on deviceCode: String,
-        params: CommandParams
+        params: CommandParams,
+        owner: CommandOwner?
     ) async -> CommandDispatchResult {
         guard !inFlight.contains(deviceCode) else {
             logger.debug("dispatch \(kind.rawValue, privacy: .public) → \(deviceCode, privacy: .public): deferred (command in flight)")
@@ -97,7 +98,7 @@ actor CommandGovernor {
         defer { inFlight.remove(deviceCode) }
 
         @Dependency(\.commandClient) var commandClient
-        let outcome = await commandClient.dispatch(kind, deviceCode, params)
+        let outcome = await commandClient.dispatchOwned(kind, deviceCode, params, owner)
         logger.info("dispatch \(kind.rawValue, privacy: .public) → \(deviceCode, privacy: .public): \(String(describing: outcome), privacy: .public)")
         return .dispatched(outcome)
     }

@@ -1047,7 +1047,7 @@ struct HaulRunEndToEndTests {
             $0.defaultDatabase = database
             $0.date = .constant(fixtureNow)
             $0.uuid = .incrementing
-            $0.commandGovernor.dispatch = { kind, deviceCode, params in
+            $0.commandGovernor.dispatchOwned = { kind, deviceCode, params, _ in
                 dispatched.withValue {
                     $0.append(RecordedDispatch(kind: kind, deviceCode: deviceCode, params: params))
                 }
@@ -1106,7 +1106,7 @@ struct HaulRunEndToEndTests {
             $0.defaultDatabase = database
             $0.date = .constant(fixtureNow)
             $0.uuid = .incrementing
-            $0.commandGovernor.dispatch = { _, _, _ in
+            $0.commandGovernor.dispatchOwned = { _, _, _, _ in
                 dispatched.withValue { $0 += 1 }
                 return .dispatched(.accepted(operationID: nil))
             }
@@ -1161,7 +1161,7 @@ struct HaulRunEndToEndTests {
             $0.defaultDatabase = database
             $0.date = .constant(fixtureNow)
             $0.uuid = .incrementing
-            $0.commandGovernor.dispatch = { kind, deviceCode, params in
+            $0.commandGovernor.dispatchOwned = { kind, deviceCode, params, _ in
                 dispatched.withValue {
                     $0.append(RecordedDispatch(kind: kind, deviceCode: deviceCode, params: params))
                 }
