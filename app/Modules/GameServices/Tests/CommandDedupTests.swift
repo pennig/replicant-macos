@@ -118,9 +118,9 @@ struct CommandDedupTests {
         #expect(called.value)
     }
 
-    /// The ticket 06 seam: a `.failed` row from a prior attempt in this step
-    /// entry does NOT suppress a retry, while a `.completed` row still does —
-    /// pinned side by side so the two can't silently drift apart again.
+    /// A `.failed` row from a prior attempt in this step entry does NOT
+    /// suppress a retry, while a `.completed` row still does — pinned side
+    /// by side so the two can't silently drift apart again.
     @Test func aFailedRowDoesNotSuppressARetryButACompletedRowStillDoes() async throws {
         let database = try GameDatabase.bootstrap()
         let digest = CommandParams().dedupKey
