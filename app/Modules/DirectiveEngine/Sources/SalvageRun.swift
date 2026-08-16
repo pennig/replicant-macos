@@ -234,30 +234,6 @@ public struct SalvageRun: MissionStepMachine {
             && controller.currentDirectiveStatus == "paused"
     }
 
-    // MARK: - Re-entry budget
-
-    /// How many times `directive` has entered its CURRENT step without leaving in
-    /// between — the durable attempt counter for a step whose only way forward is a
-    /// read it must pay for again. The walk stops at an operator resolution and
-    /// COUNTS it, so a Retry buys a genuinely new read. A step that re-enters itself
-    /// via a tracked dispatch arrives with its budget already partly spent.
-    static func stepEntryCount(_ directive: Directive, _ world: WorldSnapshot) -> Int {
-        var count = 0
-        for entry in world.log.reversed() {
-            if entry.kind == .resolved {
-                count += 1
-                break
-            }
-            guard entry.kind == .stepStarted else { continue }
-            // A different step ends this run of the current one.
-            guard entry.step == directive.step else { break }
-            count += 1
-        }
-        // A step reached before anything was ever logged (the first evaluation
-        // of a fresh row) still counts as one visit.
-        return max(count, 1)
-    }
-
     // MARK: - Target planning
 
     /// Where the run goes next, ranked by `SalvageTargetPlanner` over MESHED
@@ -469,25 +445,22 @@ public struct SalvageRun: MissionStepMachine {
     /// backstops that never landing rather than the expected path.
     public static let systemResolutionDeadline: TimeInterval = 10 * 60
 
-    /// How many `locations/{star}` reads an unresolved-system backstop may spend
-    /// per visit before it surfaces. One is enough: the read is authoritative, so
-    /// a blob it fails to produce will not appear by waiting longer.
-    public static let systemRefreshAttempts = 1
+    /// How long past `systemResolutionDeadline` an unresolved-system backstop
+    /// keeps re-reading before surfacing. A same-step `.refreshSystem` leaves
+    /// `stepStartedAt` alone, so this window — not a log count — bounds it.
+    public static let systemUnresolvedRetryWindow: TimeInterval = 60
 
     /// What `emplace`, `configure` and `verify` all do about an uncached `target`:
-    /// wait out `systemResolutionDeadline`, spend one `.refreshSystem`, then stall.
-    /// The ORDER is the point — `.wait` is the only action leaving `stepStartedAt`
-    /// alone, so refreshing on every pass resets the clock the backstop measures.
-    /// The read sits past the deadline because a bare stall there is unrecoverable:
-    /// Retry fetches nothing, so it would re-run a pure function over the identical
-    /// stale snapshot forever.
+    /// wait out `systemResolutionDeadline`, spend `.refreshSystem` for a further
+    /// `systemUnresolvedRetryWindow`, then stall.
     private func unresolvedSystem(
         _ directive: Directive, _ world: WorldSnapshot, target: String
     ) -> MissionAction {
-        if world.now.timeIntervalSince(directive.stepStartedAt) <= Self.systemResolutionDeadline {
+        let elapsed = world.now.timeIntervalSince(directive.stepStartedAt)
+        if elapsed <= Self.systemResolutionDeadline {
             return .wait
         }
-        if Self.stepEntryCount(directive, world) <= Self.systemRefreshAttempts {
+        if elapsed <= Self.systemResolutionDeadline + Self.systemUnresolvedRetryWindow {
             return .refreshSystem(designation: target, nextStep: directive.step)
         }
         return .stall(.salvageSystemUnresolved)
@@ -987,25 +960,27 @@ public struct SalvageRun: MissionStepMachine {
         return controller.currentDirectiveConfig?["location"]?.stringValue
     }
 
-    /// How many per-body reads the loop may spend on a body that came back
-    /// unchanged before surfacing it. One: the read is authoritative.
-    public static let bodyProgressAttempts = 1
+    /// How long past `depletionPropagationGrace` the loop keeps re-reading a
+    /// still-on-offer worked body before surfacing it. A same-step
+    /// `.refreshBody` leaves `stepStartedAt` alone, so elapsed time bounds it.
+    public static let bodyUnresolvedRetryWindow: TimeInterval = 60
 
     /// How long `verify` waits before treating a still-on-offer worked body as
     /// evidence: the `salvage.depleted` frame and the roster both lag the drones'
     /// real finish, so a read spent sooner asks a server not yet caught up.
     public static let depletionPropagationGrace: TimeInterval = 5 * 60
 
-    /// The mining loop's terminator, ordered grace → one `.refreshBody` → stall.
-    /// The per-body read, never `.refreshSystem`: the server DELISTS a depleted
+    /// The mining loop's terminator, ordered grace → `.refreshBody` → stall. The
+    /// per-body read, never `.refreshSystem`: the server DELISTS a depleted
     /// site, and only the per-body endpoint's roster can observe the absence.
     private func sameBodyAgain(
         _ directive: Directive, _ world: WorldSnapshot, target: String, body: String
     ) -> MissionAction {
-        if world.now.timeIntervalSince(directive.stepStartedAt) <= Self.depletionPropagationGrace {
+        let elapsed = world.now.timeIntervalSince(directive.stepStartedAt)
+        if elapsed <= Self.depletionPropagationGrace {
             return .wait
         }
-        if Self.stepEntryCount(directive, world) <= Self.bodyProgressAttempts {
+        if elapsed <= Self.depletionPropagationGrace + Self.bodyUnresolvedRetryWindow {
             return .refreshBody(system: target, body: body, nextStep: Step.verifying)
         }
         return .stall(.salvageBodyNotDepleted, detail: body)

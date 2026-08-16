@@ -758,17 +758,17 @@ public struct RelayRun: MissionStepMachine {
         )
     }
 
-    /// Wait, buy a bounded number of refreshes, then stall — for a `target` whose
-    /// catalogue blob is not cached. `.wait` is the only action leaving
-    /// `stepStartedAt` alone, so refreshing on every pass would reset the clock the
-    /// backstop measures from.
+    /// Wait out `SalvageRun.systemResolutionDeadline`, spend `.refreshSystem` for
+    /// a further `systemUnresolvedRetryWindow`, then stall — for a `target` whose
+    /// catalogue blob is not cached.
     private func unresolvedSystem(
         _ directive: Directive, _ world: WorldSnapshot, target: String
     ) -> MissionAction {
-        if world.now.timeIntervalSince(directive.stepStartedAt) <= SalvageRun.systemResolutionDeadline {
+        let elapsed = world.now.timeIntervalSince(directive.stepStartedAt)
+        if elapsed <= SalvageRun.systemResolutionDeadline {
             return .wait
         }
-        if SalvageRun.stepEntryCount(directive, world) <= SalvageRun.systemRefreshAttempts {
+        if elapsed <= SalvageRun.systemResolutionDeadline + SalvageRun.systemUnresolvedRetryWindow {
             return .refreshSystem(designation: target, nextStep: directive.step)
         }
         return .stall(.salvageSystemUnresolved)
