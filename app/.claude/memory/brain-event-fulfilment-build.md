@@ -1,6 +1,6 @@
 ---
 name: brain-event-fulfilment-build
-description: "Location-event fulfilment BUILT (not yet run live): the fulfillEvent goal + the three-hull eventRun convoy + the operator-invoked courier bootstrap. Carries the defect classes that recurred, the live-roster Critical every fixture hid, and the gates that arm later."
+description: "Location-event fulfilment, now RUN LIVE: the fulfillEvent goal + the three-hull eventRun convoy + the operator-invoked courier bootstrap. Carries the defect classes that recurred, the live-roster Critical every fixture hid, the two self-locking gates the first live runs surfaced, and the gates that arm later."
 metadata:
   node_type: memory
   type: project
@@ -8,8 +8,43 @@ metadata:
 
 The automation brain's **sixth acting capability**, built 2026-08-14 across 52 commits on
 `worktree-event-fulfilment-design`. Design: `docs/superpowers/specs/2026-08-14-brain-event-fulfilment-design.md`.
-Plan: `docs/superpowers/plans/2026-08-14-brain-event-fulfilment.md`. **Built and reviewed
-clean; never yet run against the live account.**
+Plan: `docs/superpowers/plans/2026-08-14-brain-event-fulfilment.md`. Built and reviewed
+clean 2026-08-14; **first live runs 2026-08-15/16**, five convoys, four completed.
+
+## What the first live runs cost (both FIXED 2026-08-16)
+
+The backlog stopped dead after a completed run, and the two reasons were both gates the
+run itself had shut.
+
+**A courier was judged by its own `location` row.** `EventCourierPrint.courierStands` tested
+`$0.location == depot` while the courier flies home ATTACHED to the carrier, and nothing
+refreshes its row except a `.refreshFleet` inside a run — so the row read as still at the
+event and `eventReadiness` idled `no event courier at <depot>`. **Self-locking: the run that
+would refresh the row could not launch because of the row.** Nothing else walks the fleet —
+`devicesClient.fetchAll` has two callers, the Devices screen and the post-replication
+re-ingest, and both scoped walks are issued only by a RUNNING directive. Fixed by
+`EventRun.standingLocation(of:in:)`, which follows `attachedToDeviceCode ?? stowedInDeviceCode`
+to the hull and reads ITS location; the hull is systematically fresher (it is the directive's
+own `deviceCode`) and is the authority on where both of them are. `EventRun.convoy` had
+always resolved the courier through its host — the two predicates disagreed about WHERE a
+courier is, exactly as they once disagreed about WHAT one is.
+
+**The run flew the reward home and parked it.** `collecting` sweeps the reward into the
+freighter and `returning` ended at `.done` with the hold still full. Nothing else drains it:
+the freighter is untagged, so no Haul Run touches it, and `Brain.freeHull` leases the
+freighter with `emptyHold: true` — so one completed run consumed the only empty freighter in
+the theatre permanently. Fixed with `depositing`/`confirmingDeposit` after `returning`;
+`CommandParams()` with nil resources is the whole-hold unload (`resourcesSchema` omits the
+key), the asymmetry with `collect_resources` this note already records.
+
+**The dispatch budget trap, caught pre-merge and worth the warning:** the first cut bounded
+`depositing` with `MissionLogBudget.dispatchRounds(_:dispatch:confirm:)`, which counts
+`.stepStarted` entries — and `DirectiveExecutor.move` has ALREADY stamped this step's own
+entry by the time the machine is asked, so the count is 1 on first entry and the guard
+returned `.done` without ever depositing. The `kind:` overload counts `.commandDispatched`
+lines instead and is the one a dispatch budget wants. **A fixture with an empty `log` cannot
+tell the two apart** — the test only discriminated once it carried the step-start the
+executor really writes.
 
 ## What it is
 
@@ -89,7 +124,10 @@ events endpoint every tick forever.
 
 ## Gates that arm later
 
-- **A second operational theatre.** `ensureEvent` loops theatres against a pre-tick snapshot with
+- **A second operational theatre — NO LONGER HYPOTHETICAL.** A `TheatrePin` row for
+  `SAGARMADHA-2-L4` was created 2026-08-16 01:46. It cannot bite yet (that depot has no
+  courier, so `eventReadiness` idles at its first gate), but the collision window below is
+  live the moment one stands there. `ensureEvent` loops theatres against a pre-tick snapshot with
   no target-collision check inside the write transaction, so two theatres sharing one backlog
   could both launch on the same event in one tick — different depots mean different hulls, so
   neither lease guard fires. `ensureMine` has the identical shape. Latent only because the
@@ -107,6 +145,9 @@ events endpoint every tick forever.
 - The `fulfillEvent` goal has **no why-view status**: `EventReadiness.idle(reason:)`'s four
   reasons and `EventCandidate.rationale` are computed every tick and discarded. Robustness
   clause 8 ships half — pending option choices render, the goal's own state does not.
+  **This is what made both live defects cost an operator a diagnosis rather than a glance**:
+  the brain named its own blocker every 5 s for 36 minutes and threw the string away. Now
+  the highest-value residual on this capability.
 - **Clause 6's "clean abort with devices recovered" does not recover devices.** A
   `confirmingProgress` abort routes to `recovering`, but `staging` has already detached the
   devices and beacon and deposited the resources; `recovering` re-attaches only the courier. The
