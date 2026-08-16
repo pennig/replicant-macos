@@ -445,23 +445,32 @@ public struct SalvageRun: MissionStepMachine {
     /// backstops that never landing rather than the expected path.
     public static let systemResolutionDeadline: TimeInterval = 10 * 60
 
-    /// How long past `systemResolutionDeadline` an unresolved-system backstop
-    /// keeps re-reading before surfacing. A same-step `.refreshSystem` leaves
-    /// `stepStartedAt` alone, so this window — not a log count — bounds it.
+    /// How long past its deadline an unresolved-system/body backstop still
+    /// waits before surfacing — the read fires once, in `unresolvedReadBand`,
+    /// never on every tick across this whole span.
     public static let systemUnresolvedRetryWindow: TimeInterval = 60
 
+    /// The width, right past a backstop's deadline, in which its ONE
+    /// authoritative read fires — sized to the engine's own tick, so ordinarily
+    /// exactly one tick lands inside it. Shared by every same-step backstop.
+    public static let unresolvedReadBand: TimeInterval = 5
+
     /// What `emplace`, `configure` and `verify` all do about an uncached `target`:
-    /// wait out `systemResolutionDeadline`, spend `.refreshSystem` for a further
-    /// `systemUnresolvedRetryWindow`, then stall.
+    /// wait out `systemResolutionDeadline`, spend ONE `.refreshSystem` in the
+    /// following `unresolvedReadBand`, wait out the rest, then stall.
     private func unresolvedSystem(
         _ directive: Directive, _ world: WorldSnapshot, target: String
     ) -> MissionAction {
-        let elapsed = world.now.timeIntervalSince(directive.stepStartedAt)
-        if elapsed <= Self.systemResolutionDeadline {
+        let sinceDeadline = world.now.timeIntervalSince(directive.stepStartedAt)
+            - Self.systemResolutionDeadline
+        if sinceDeadline <= 0 {
             return .wait
         }
-        if elapsed <= Self.systemResolutionDeadline + Self.systemUnresolvedRetryWindow {
+        if sinceDeadline <= Self.unresolvedReadBand {
             return .refreshSystem(designation: target, nextStep: directive.step)
+        }
+        if sinceDeadline <= Self.systemUnresolvedRetryWindow {
+            return .wait
         }
         return .stall(.salvageSystemUnresolved)
     }
@@ -960,9 +969,9 @@ public struct SalvageRun: MissionStepMachine {
         return controller.currentDirectiveConfig?["location"]?.stringValue
     }
 
-    /// How long past `depletionPropagationGrace` the loop keeps re-reading a
-    /// still-on-offer worked body before surfacing it. A same-step
-    /// `.refreshBody` leaves `stepStartedAt` alone, so elapsed time bounds it.
+    /// How long past `depletionPropagationGrace` the loop still waits on a
+    /// still-on-offer worked body before surfacing it — the one read fires in
+    /// `unresolvedReadBand`, never on every tick across this whole span.
     public static let bodyUnresolvedRetryWindow: TimeInterval = 60
 
     /// How long `verify` waits before treating a still-on-offer worked body as
@@ -970,18 +979,22 @@ public struct SalvageRun: MissionStepMachine {
     /// real finish, so a read spent sooner asks a server not yet caught up.
     public static let depletionPropagationGrace: TimeInterval = 5 * 60
 
-    /// The mining loop's terminator, ordered grace → `.refreshBody` → stall. The
-    /// per-body read, never `.refreshSystem`: the server DELISTS a depleted
-    /// site, and only the per-body endpoint's roster can observe the absence.
+    /// The mining loop's terminator, ordered grace → ONE `.refreshBody` → wait
+    /// out the rest → stall. The per-body read, never `.refreshSystem`: the
+    /// server DELISTS a depleted site, only the per-body roster sees it.
     private func sameBodyAgain(
         _ directive: Directive, _ world: WorldSnapshot, target: String, body: String
     ) -> MissionAction {
-        let elapsed = world.now.timeIntervalSince(directive.stepStartedAt)
-        if elapsed <= Self.depletionPropagationGrace {
+        let sinceGrace = world.now.timeIntervalSince(directive.stepStartedAt)
+            - Self.depletionPropagationGrace
+        if sinceGrace <= 0 {
             return .wait
         }
-        if elapsed <= Self.depletionPropagationGrace + Self.bodyUnresolvedRetryWindow {
+        if sinceGrace <= Self.unresolvedReadBand {
             return .refreshBody(system: target, body: body, nextStep: Step.verifying)
+        }
+        if sinceGrace <= Self.bodyUnresolvedRetryWindow {
+            return .wait
         }
         return .stall(.salvageBodyNotDepleted, detail: body)
     }

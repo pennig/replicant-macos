@@ -889,6 +889,32 @@ struct SalvageRunMiningTests {
             == .refreshSystem(designation: "TOSLIT", nextStep: "configuring"))
     }
 
+    /// The read is spent ONCE, not on every tick of `systemUnresolvedRetryWindow`
+    /// — walks the whole span at the engine's 5s cadence and counts, so a
+    /// regression back to "one read per tick" fails this test, not a human.
+    @Test func readsOnlyOnceAcrossTheWholeRetryWindow() {
+        let stepStartedAt = Date(timeIntervalSince1970: 0)
+        let span = SalvageRun.systemResolutionDeadline + SalvageRun.systemUnresolvedRetryWindow
+        var reads = 0
+        var sawTheStall = false
+        var elapsed = SalvageRun.systemResolutionDeadline - 10
+        while elapsed <= span + 10 {
+            let world = world(
+                devices: [atSystem, controller, drone], // still no "TOSLIT" entry
+                now: stepStartedAt.addingTimeInterval(elapsed)
+            )
+            switch SalvageRun().nextAction(directive: running(step: "configuring", stepStartedAt: stepStartedAt), world: world) {
+            case .refreshSystem: reads += 1
+            case .stall(.salvageSystemUnresolved, nil): sawTheStall = true
+            case .wait: break
+            default: Issue.record("unexpected action at elapsed \(elapsed)")
+            }
+            elapsed += 5
+        }
+        #expect(reads == 1)
+        #expect(sawTheStall)
+    }
+
     /// Past `systemUnresolvedRetryWindow` too, the run surfaces rather than
     /// reading forever. `stepStartedAt` alone governs — no log fixture needed —
     /// since a same-step `.refreshSystem` leaves it untouched.
@@ -1098,6 +1124,34 @@ struct SalvageRunLoopProgressTests {
                           systems: ["TOSLIT": miningToslit], siteAssays: miningToslitAssays)
         #expect(SalvageRun().nextAction(directive: directive, world: world)
             == .refreshBody(system: "TOSLIT", body: "TOSLIT-6-5", nextStep: "verifying"))
+    }
+
+    /// Same invariant as the system backstop's: the body read is spent ONCE,
+    /// not on every tick of `bodyUnresolvedRetryWindow` — walked at the
+    /// engine's 5s cadence.
+    @Test func readsTheBodyOnlyOnceAcrossTheWholeRetryWindow() {
+        let stepStartedAt = Date(timeIntervalSince1970: 0)
+        let span = SalvageRun.depletionPropagationGrace + SalvageRun.bodyUnresolvedRetryWindow
+        var reads = 0
+        var sawTheStall = false
+        var elapsed = SalvageRun.depletionPropagationGrace - 10
+        while elapsed <= span + 10 {
+            let world = world(
+                devices: [atSystem, worked("TOSLIT-6-5"), drone],
+                systems: ["TOSLIT": miningToslit], siteAssays: miningToslitAssays,
+                now: stepStartedAt.addingTimeInterval(elapsed)
+            )
+            let directive = running(step: "verifying", stepStartedAt: stepStartedAt)
+            switch SalvageRun().nextAction(directive: directive, world: world) {
+            case .refreshBody: reads += 1
+            case .stall(.salvageBodyNotDepleted, _): sawTheStall = true
+            case .wait: break
+            default: Issue.record("unexpected action at elapsed \(elapsed)")
+            }
+            elapsed += 5
+        }
+        #expect(reads == 1)
+        #expect(sawTheStall)
     }
 
     /// Past `bodyUnresolvedRetryWindow` too, and the body is STILL on offer,

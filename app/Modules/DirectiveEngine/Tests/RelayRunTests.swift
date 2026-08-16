@@ -1258,6 +1258,33 @@ struct RelayRunEmplaceTests {
         )
         #expect(RelayRun().nextAction(directive: overdue, world: snapshot) == .stall(.salvageSystemUnresolved))
     }
+
+    /// Same invariant as `SalvageRun`'s own copy: the read is spent ONCE, not
+    /// on every tick of `systemUnresolvedRetryWindow` — walked at the engine's
+    /// 5s cadence.
+    @Test func readsOnlyOnceAcrossTheWholeRetryWindow() {
+        let stepStartedAt = Date(timeIntervalSince1970: 0)
+        let span = SalvageRun.systemResolutionDeadline + SalvageRun.systemUnresolvedRetryWindow
+        var reads = 0
+        var sawTheStall = false
+        var elapsed = SalvageRun.systemResolutionDeadline - 10
+        while elapsed <= span + 10 {
+            let snapshot = world(
+                devices: [carrier(location: "VEGA"), relay(stowedIn: "V1")],
+                now: stepStartedAt.addingTimeInterval(elapsed)
+            )
+            let directive = running(step: RelayRun.Step.emplacing, stepStartedAt: stepStartedAt)
+            switch RelayRun().nextAction(directive: directive, world: snapshot) {
+            case .refreshSystem: reads += 1
+            case .stall(.salvageSystemUnresolved, nil): sawTheStall = true
+            case .wait: break
+            default: Issue.record("unexpected action at elapsed \(elapsed)")
+            }
+            elapsed += 5
+        }
+        #expect(reads == 1)
+        #expect(sawTheStall)
+    }
 }
 
 // MARK: - Activating and confirming

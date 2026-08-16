@@ -758,18 +758,22 @@ public struct RelayRun: MissionStepMachine {
         )
     }
 
-    /// Wait out `SalvageRun.systemResolutionDeadline`, spend `.refreshSystem` for
-    /// a further `systemUnresolvedRetryWindow`, then stall — for a `target` whose
-    /// catalogue blob is not cached.
+    /// Wait out `SalvageRun.systemResolutionDeadline`, spend ONE `.refreshSystem`
+    /// in the following `unresolvedReadBand`, wait out the rest of
+    /// `systemUnresolvedRetryWindow`, then stall — for an uncached `target`.
     private func unresolvedSystem(
         _ directive: Directive, _ world: WorldSnapshot, target: String
     ) -> MissionAction {
-        let elapsed = world.now.timeIntervalSince(directive.stepStartedAt)
-        if elapsed <= SalvageRun.systemResolutionDeadline {
+        let sinceDeadline = world.now.timeIntervalSince(directive.stepStartedAt)
+            - SalvageRun.systemResolutionDeadline
+        if sinceDeadline <= 0 {
             return .wait
         }
-        if elapsed <= SalvageRun.systemResolutionDeadline + SalvageRun.systemUnresolvedRetryWindow {
+        if sinceDeadline <= SalvageRun.unresolvedReadBand {
             return .refreshSystem(designation: target, nextStep: directive.step)
+        }
+        if sinceDeadline <= SalvageRun.systemUnresolvedRetryWindow {
+            return .wait
         }
         return .stall(.salvageSystemUnresolved)
     }
