@@ -313,6 +313,193 @@ struct DirectiveEngineTests {
         }
     }
 
+    /// A REJECTED command over the real governor still stalls on tick 1 — a
+    /// 4xx never gets the `.failed` budget's retries.
+    @Test func rejectionStallsImmediately() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { mission(step: "start") }.execute(db)
+        }
+        let core = DirectiveEngineCore(
+            machines: [ScriptedMachine([
+                .dispatch(kind: .travel, deviceCode: "VES1",
+                          params: CommandParams(), nextStep: "travelling"),
+            ])],
+            tick: .seconds(5)
+        )
+        let governor = CommandGovernor()
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.gameClient = GameClient(
+                make: { ReplicantSpace.client(apiKey: "") },
+                budget: { _ in RateLimitGovernor.Snapshot(limit: 60, remaining: 40, resetAt: nil) }
+            )
+            $0.commandClient.dispatchOwned = { kind, deviceCode, params, owner in
+                try? await database.write { db in
+                    try GameModels.Operation.insert {
+                        GameModels.Operation(
+                            id: "REJ1", entityCode: deviceCode, kind: kind.rawValue,
+                            status: .rejected, source: .optimistic,
+                            startedAt: Date(timeIntervalSince1970: 1_000), completesAt: nil,
+                            lastConfirmedAt: Date(timeIntervalSince1970: 1_000),
+                            detail: .object(["error": .string("400")]),
+                            directiveID: owner?.directiveID, step: owner?.step, paramsDigest: params.dedupKey
+                        )
+                    }.execute(db)
+                }
+                return .rejected("400")
+            }
+            $0.commandGovernor.dispatchOwned = { kind, deviceCode, params, owner in
+                await governor.dispatch(kind, on: deviceCode, params: params, owner: owner)
+            }
+        } operation: {
+            await core.evaluateOnce(directiveID: "D1")
+            let directive = try await database.read { db in
+                try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+            }
+            #expect(directive?.status == .needsAttention)
+            #expect(directive?.attentionReason == .commandRejected)
+            #expect(directive?.step == "start")
+            let rejected = try await database.read { db in
+                try GameModels.Operation.where { $0.status.eq(OperationStatus.rejected) }.fetchCount(db)
+            }
+            #expect(rejected == 1)
+        }
+    }
+
+    /// Three transiently-failing ticks stay `.running`; the fourth stalls
+    /// `.commandFailed`. Driven over the REAL governor, the shape ticket
+    /// 02 built, so the counter reads rows a real dispatch wrote.
+    @Test func transientFailureWaitsThenStallsAtBudget() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { mission(step: "start") }.execute(db)
+        }
+        let dispatch = MissionAction.dispatch(
+            kind: .travel, deviceCode: "VES1", params: CommandParams(), nextStep: "travelling"
+        )
+        let core = DirectiveEngineCore(
+            machines: [ScriptedMachine([dispatch, dispatch, dispatch, dispatch])],
+            tick: .seconds(5)
+        )
+        let governor = CommandGovernor()
+        let calls = LockIsolated(0)
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.gameClient = GameClient(
+                make: { ReplicantSpace.client(apiKey: "") },
+                budget: { _ in RateLimitGovernor.Snapshot(limit: 60, remaining: 40, resetAt: nil) }
+            )
+            $0.commandClient.dispatchOwned = { kind, deviceCode, params, owner in
+                calls.withValue { $0 += 1 }
+                try? await database.write { db in
+                    try GameModels.Operation.insert {
+                        GameModels.Operation(
+                            id: "OP\(calls.value)", entityCode: deviceCode, kind: kind.rawValue,
+                            status: .failed, source: .optimistic,
+                            startedAt: Date(timeIntervalSince1970: 1_000), completesAt: nil,
+                            lastConfirmedAt: Date(timeIntervalSince1970: 1_000),
+                            detail: .object(["error": .string("503")]),
+                            directiveID: owner?.directiveID, step: owner?.step, paramsDigest: params.dedupKey
+                        )
+                    }.execute(db)
+                }
+                return .failed("503")
+            }
+            $0.commandGovernor.dispatchOwned = { kind, deviceCode, params, owner in
+                await governor.dispatch(kind, on: deviceCode, params: params, owner: owner)
+            }
+        } operation: {
+            for tick in 1...3 {
+                await core.evaluateOnce(directiveID: "D1")
+                let directive = try await database.read { db in
+                    try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+                }
+                #expect(directive?.status == .running, "tick \(tick) must still be running")
+                #expect(directive?.step == "start", "tick \(tick) must not advance the step")
+            }
+            let failedRows = try await database.read { db in
+                try GameModels.Operation.where { $0.status.eq(OperationStatus.failed) }.fetchCount(db)
+            }
+            #expect(failedRows == 3, "three retried ticks must each leave a .failed op row")
+            #expect(calls.value == 3, "each of the three ticks must have reached the client")
+
+            await core.evaluateOnce(directiveID: "D1")
+            let directive = try await database.read { db in
+                try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+            }
+            #expect(directive?.status == .needsAttention, "the fourth failure trips the budget")
+            #expect(directive?.attentionReason == .commandFailed)
+            #expect(directive?.step == "start", "a stall must not advance the step")
+        }
+    }
+
+    /// Isolates the counter/budget arithmetic from `CommandGovernor`'s own
+    /// per-step dedup (a stubbed governor never defers), so a failure here
+    /// would name the executor rather than the governor as the cause.
+    @Test func budgetArithmeticAloneOverAStubbedGovernor() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { mission(step: "start") }.execute(db)
+        }
+        let dispatch = MissionAction.dispatch(
+            kind: .travel, deviceCode: "VES1", params: CommandParams(), nextStep: "travelling"
+        )
+        let core = DirectiveEngineCore(
+            machines: [ScriptedMachine([dispatch, dispatch, dispatch, dispatch])],
+            tick: .seconds(5)
+        )
+        let calls = LockIsolated(0)
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.commandGovernor.dispatchOwned = { kind, deviceCode, params, owner in
+                calls.withValue { $0 += 1 }
+                try? await database.write { db in
+                    try GameModels.Operation.insert {
+                        GameModels.Operation(
+                            id: "OP\(calls.value)", entityCode: deviceCode, kind: kind.rawValue,
+                            status: .failed, source: .optimistic,
+                            startedAt: Date(timeIntervalSince1970: 1_000), completesAt: nil,
+                            lastConfirmedAt: Date(timeIntervalSince1970: 1_000),
+                            detail: .object(["error": .string("503")]),
+                            directiveID: owner?.directiveID, step: owner?.step, paramsDigest: params.dedupKey
+                        )
+                    }.execute(db)
+                }
+                return .dispatched(.failed("503"))
+            }
+        } operation: {
+            for tick in 1...3 {
+                await core.evaluateOnce(directiveID: "D1")
+                let directive = try await database.read { db in
+                    try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+                }
+                #expect(directive?.status == .running, "tick \(tick) must still be running")
+            }
+            #expect(calls.value == 3)
+            let failedRows = try await database.read { db in
+                try GameModels.Operation.where { $0.status.eq(OperationStatus.failed) }.fetchCount(db)
+            }
+            #expect(failedRows == 3)
+
+            await core.evaluateOnce(directiveID: "D1")
+            let directive = try await database.read { db in
+                try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+            }
+            #expect(directive?.status == .needsAttention)
+            #expect(directive?.attentionReason == .commandFailed)
+        }
+    }
+
     /// `.stall` sets the typed reason and logs it.
     @Test func stallSetsTheReason() async throws {
         let database = try GameDatabase.bootstrap()

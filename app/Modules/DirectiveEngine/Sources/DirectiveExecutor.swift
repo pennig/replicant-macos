@@ -24,6 +24,10 @@ private let logger = Logger(subsystem: "name.pennig.replicould", category: "Dire
 /// The write half of the engine: every directive-row transition and every
 /// timeline entry the engine makes goes through here.
 enum DirectiveExecutor {
+    /// How many `.failed` dispatches a step tolerates before stalling
+    /// `.commandFailed` — a `.rejected` (4xx) never gets a retry.
+    static let failedDispatchBudget = 3
+
     /// Apply `action` to `directive`, using `machine` for the step vocabulary a
     /// target change needs. Returns whether the directive is still runnable — a
     /// stall or a completion retires its executor.
@@ -70,8 +74,19 @@ enum DirectiveExecutor {
                     ])
                     return true
 
-                case let .rejected(message), let .failed(message):
+                case let .rejected(message):
                     await stall(directive, reason: .commandRejected, detail: message)
+                    return false
+
+                case let .failed(message):
+                    // Counts THIS dispatch's own just-written row too, so `<=`
+                    // yields exactly `failedDispatchBudget` retries.
+                    let failures = await failedDispatches(for: directive)
+                    if failures <= Self.failedDispatchBudget {
+                        logger.notice("directive \(directive.id, privacy: .public): \(kind.rawValue, privacy: .public) failed (\(failures)/\(Self.failedDispatchBudget)) — \(message, privacy: .public) — will retry")
+                        return true
+                    }
+                    await stall(directive, reason: .commandFailed, detail: message)
                     return false
                 }
             }
@@ -364,6 +379,22 @@ enum DirectiveExecutor {
                      id: uuid().uuidString, at: date.now)]
             : []
         await commit(updated, entries)
+    }
+
+    /// Count of `.failed` `Operation` rows this step has already accrued —
+    /// `directive`'s own budget window, never one a re-stamp can slide.
+    private static func failedDispatches(for directive: Directive) async -> Int {
+        @Dependency(\.defaultDatabase) var database
+        return (try? await database.read { db in
+            try Operation
+                .where {
+                    $0.directiveID.eq(directive.id)
+                        && $0.step.eq(directive.step)
+                        && $0.status.eq(OperationStatus.failed)
+                        && $0.startedAt >= directive.stepStartedAt
+                }
+                .fetchCount(db)
+        }) ?? 0
     }
 
     /// Pause and surface: put `directive` into `.needsAttention` with typed
