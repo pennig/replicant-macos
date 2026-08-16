@@ -377,7 +377,7 @@ public struct HaulRun: MissionStepMachine {
         guard let controller = world.device(controllerCode) else {
             return .stall(.unreachableDevice)
         }
-        guard controller.updatedAt >= directive.stepStartedAt else {
+        guard world.isFresh(controller, since: directive.stepStartedAt) else {
             // Row read BEFORE the command went out, so it cannot say whether the
             // controller took it — and the pre-dispatch config is exactly what
             // `hasTakenSomeHaulConfig` would mistake for evidence.

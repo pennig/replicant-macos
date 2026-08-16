@@ -511,7 +511,7 @@ public struct EventRun: MissionStepMachine {
         var rows = [convoy.carrier]
         if let freighter = convoy.freighter { rows.append(freighter) }
         let placed = rows.allSatisfy {
-            $0.updatedAt >= directive.stepStartedAt && $0.location == event.location
+            world.isFresh($0, since: directive.stepStartedAt) && $0.location == event.location
         }
         if placed { return .advanceStep(nextStep: Step.staging) }
         if rows.contains(where: { world.openOperation(for: $0.deviceCode) != nil }) { return .wait }
@@ -781,7 +781,7 @@ public struct EventRun: MissionStepMachine {
         _ directive: Directive, _ convoy: Convoy, _ event: LocationEvent, _ world: WorldSnapshot
     ) -> MissionAction {
         guard let freighter = convoy.freighter else { return .done }
-        if freighter.updatedAt >= directive.stepStartedAt, freighter.cargoUsed == 0 {
+        if world.isFresh(freighter, since: directive.stepStartedAt), freighter.cargoUsed == 0 {
             return .advanceStep(nextStep: Step.depositing)
         }
         return MissionConfirm.ladder(

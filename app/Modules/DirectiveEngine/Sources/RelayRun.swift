@@ -655,7 +655,7 @@ public struct RelayRun: MissionStepMachine {
     private func carrierRetainsAuthority(
         _ directive: Directive, _ carrier: Device, _ world: WorldSnapshot
     ) -> MissionAction {
-        if carrier.updatedAt < directive.stepStartedAt
+        if !world.isFresh(carrier, since: directive.stepStartedAt)
             || world.now.timeIntervalSince(carrier.updatedAt) > Self.reclaimFreshness {
             return .refreshDevices(deviceCodes: [carrier.deviceCode], thenStall: .unreachableDevice)
         }
