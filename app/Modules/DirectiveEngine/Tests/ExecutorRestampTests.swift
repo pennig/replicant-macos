@@ -18,9 +18,8 @@ import UniverseModels
 @testable import GameServices
 
 /// A machine that returns a scripted sequence, one action per evaluation, then
-/// waits forever — the same shape `DirectiveEngineTests.ScriptedMachine` uses,
-/// duplicated locally so this file drives the executor with no dependency on
-/// another test file's private types.
+/// waits forever — duplicated locally so this file has no dependency on
+/// another test file's private `ScriptedMachine`.
 private struct ScriptedMachine: MissionStepMachine {
     let kind: DirectiveKind = .surveyRun
     let firstStep = "start"
