@@ -17,6 +17,8 @@ final class BodyPortraitRenderer: NSObject, MTKViewDelegate {
     private var bodyPipeline: MTLRenderPipelineState?
     private var ringPipeline: MTLRenderPipelineState?
     private var atmoPipeline: MTLRenderPipelineState?
+    private var starGlowPipeline: MTLRenderPipelineState?
+    private var starDiscPipeline: MTLRenderPipelineState?
     private var tonemapPipeline: MTLRenderPipelineState?
     private var bodyDepthState: MTLDepthStencilState?
     private var readDepthState: MTLDepthStencilState?
@@ -74,6 +76,8 @@ final class BodyPortraitRenderer: NSObject, MTKViewDelegate {
         bodyPipeline = pipeline("orrery_body_vertex", "orrery_body_fragment", alphaOver)
         ringPipeline = pipeline("orrery_ring_vertex", "orrery_ring_fragment", alphaOver)
         atmoPipeline = pipeline("orrery_atmosphere_vertex", "orrery_atmosphere_fragment", additive)
+        starGlowPipeline = pipeline("star_vertex", "star_fragment", additive)
+        starDiscPipeline = pipeline("star_vertex", "star_body_fragment", alphaOver)
 
         let tm = MTLRenderPipelineDescriptor()
         tm.vertexFunction = library.makeFunction(name: "fullscreen_vertex")
@@ -141,9 +145,45 @@ final class BodyPortraitRenderer: NSObject, MTKViewDelegate {
         case .moon(let m):
             encodeBody(OrreryMapping.appearance(moon: m, options: options),
                        designation: m.designation, into: enc, uniforms: &u)
-        case .star, .belt, .region, .none:
-            break   // Tasks 8 and 9
+        case .star(let s):
+            encodeStar(s, into: enc, uniforms: &u)
+        case .belt, .region, .none:
+            break   // Task 9
         }
+    }
+
+    /// A star's rendered colour comes from its spectral-class STRING, exactly as
+    /// `LiveStar` derives it. `SystemStar.temperatureK` is real but the map ignores it.
+    static func starInstance(for star: SystemStar, radius: Float) -> StarInstance {
+        let klass = StellarClass(spectralType: star.stellarClass ?? "G")
+        return StarInstance(
+            positionRadius: SIMD4(SIMD3<Float>.zero, radius),
+            color: SIMD4(Star.color(forTemperature: klass.representativeTemperature), 1))
+    }
+
+    private func encodeStar(_ star: SystemStar, into enc: MTLRenderCommandEncoder,
+                            uniforms u: inout Uniforms) {
+        guard let starGlowPipeline, let starDiscPipeline, let bodyDepthState else { return }
+
+        var instance = Self.starInstance(for: star, radius: bodyRadius)
+        var relevance: Float = 1                  // 1.0 = fully relevant
+        var relRange = SIMD2<Float>(0, 2)         // one draw, keep every fragment
+
+        enc.setRenderPipelineState(starGlowPipeline)
+        enc.setDepthStencilState(bodyDepthState)
+        enc.setVertexBytes(&instance, length: MemoryLayout<StarInstance>.stride, index: 0)
+        enc.setVertexBytes(&relevance, length: MemoryLayout<Float>.stride, index: 1)
+        enc.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 2)
+        enc.setFragmentBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 2)
+        enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6, instanceCount: 1)
+
+        enc.setRenderPipelineState(starDiscPipeline)
+        enc.setVertexBytes(&instance, length: MemoryLayout<StarInstance>.stride, index: 0)
+        enc.setVertexBytes(&relevance, length: MemoryLayout<Float>.stride, index: 1)
+        enc.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 2)
+        enc.setFragmentBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 2)
+        enc.setFragmentBytes(&relRange, length: MemoryLayout<SIMD2<Float>>.stride, index: 3)
+        enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6, instanceCount: 1)
     }
 
     private func encodeBody(_ appearance: BodyAppearance, designation: String,
@@ -211,6 +251,7 @@ final class BodyPortraitRenderer: NSObject, MTKViewDelegate {
     }
 
     private func cameraDistance() -> Float {
+        if case .star = subject { return bodyRadius * 2.3 }
         let fill: Float = 0.85
         return max(extent() * bodyRadius / (tan(fovy * 0.5) * fill), bodyRadius * 5.1)
     }
@@ -235,6 +276,18 @@ final class BodyPortraitRenderer: NSObject, MTKViewDelegate {
         // correctly and completely invisibly.
         u.orreryAlpha = 1
         u.exposure = exposure
+        if case .star = subject {
+            u.minAngularSize = 0.0015
+            u.maxAngularSize = 0.05
+            // Left at zero, `atmo` collapses to 0 and the star renders black.
+            u.atmoNear = 40; u.atmoFar = 420; u.atmoFloor = 1
+            u.lodStart = 0.004; u.lodFull = 0.018
+            u.fieldDim = 1
+            // Matching focusedStar to the instance with bodyReveal 0 lifts the angular
+            // ceiling from 0.05 to 1e9; otherwise no distance yields a full disc.
+            u.focusedStar = 0
+            u.bodyReveal = 0
+        }
         return u
     }
 }
