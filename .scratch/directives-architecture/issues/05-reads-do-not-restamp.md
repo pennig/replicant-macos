@@ -1,7 +1,7 @@
 # 05 — Read actions stop re-stamping `stepStartedAt`
 
 Type: task
-Status: claimed
+Status: resolved
 Blocked by: 01
 Labels: directives-architecture, stage-0
 
@@ -18,7 +18,7 @@ Spec S0.4. `DirectiveExecutor.move` re-stamps `stepStartedAt` unconditionally (w
 
 ---
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 ```swift
 // ExecutorRestampTests.swift — drive DirectiveExecutor.apply directly with a test database and TestClock/date dependency
@@ -33,16 +33,47 @@ Spec S0.4. `DirectiveExecutor.move` re-stamps `stepStartedAt` unconditionally (w
 
 Repeat the first pair for `.scanSystem`, `.refreshBody`, `.setDeviceTags` (stub `locationsClient`/`devicesClient`/`deviceRefresher` with no-op closures).
 
-- [ ] **Step 2: Implement**
+- [x] **Step 2: Implement**
 
 Add `restamp: Bool = true` to `move`. Body: `if restamp { updated.stepStartedAt = date.now }`; write the `.stepStarted` entry only when `restamp || nextStep != directive.step` (a same-step no-restamp move logs nothing — the timeline stays quiet exactly like `.wait`). In the four read cases pass `restamp: nextStep != directive.step`.
 
 In `DirectiveEngineCore.collapse`, the `.refreshFootprint(nextStep, nil)` fallback returns `.advanceStep(nextStep:)`; when `nextStep == directive.step` this would re-stamp through `advanceStep`. `collapse` has no directive in scope; give it one (`collapse(_ action:, currentStep: String)`) and return `.wait` when `nextStep == currentStep` — the semantic is "nothing to advance to, stay and let the deadline run".
 
-- [ ] **Step 3: Audit the self-targeting read sites**
+- [x] **Step 3: Audit the self-targeting read sites**
 
 LSP-list every `.refreshSystem/.scanSystem/.refreshBody/.setDeviceTags/.refreshFootprint` whose `nextStep` is the current step (`RelayRun.acquire` footprint gate; `SurveyRun.scanning`; `SalvageRun.sameBodyAgain`'s `refreshBody`; any others). For each, confirm the step has a deadline that NOW accumulates and that its stall reason is the intended one. Where a step relied on the re-stamp to bound a self-loop via `MissionLogBudget.dispatchRounds`, the log-count bound still works (it counts `.stepStarted` entries, which no longer accrue on same-step reads — so the count now measures dispatches only; verify the specific site's tests still hold, adjust the fixture if it counted reads).
 
-- [ ] **Step 4: Run `DirectiveEngineTests` in full; commit**
+- [x] **Step 4: Run `DirectiveEngineTests` in full; commit**
 
 `fix(engine): reads no longer restart a step's deadline`.
+
+## Comments
+
+Commits: `5b19f9c` (failing tests), `f60ff9b` (implementation).
+
+Step 3 audit — self-targeting sites found (`nextStep == directive.step`):
+- `RelayRun.acquire` footprint gate (`.printStockShort`) — already safe pre- and
+  post-fix; `collapse` never falls through to `.advanceStep` when `reason` is
+  non-nil, so it was never subject to the restamp bug.
+- `SalvageRun.unresolvedSystem` / `RelayRun.unresolvedSystem` (`.refreshSystem`,
+  `.salvageSystemUnresolved`) and `SalvageRun.sameBodyAgain` (`.refreshBody`,
+  `.salvageBodyNotDepleted`) — deadlines now genuinely accumulate, but their
+  "one extra read, then stall" bound (`SalvageRun.stepEntryCount`) counts
+  `.stepStarted` log entries the same-step read no longer writes. **Regression,
+  left unfixed as out of this ticket's file scope**: these three sites now
+  retry forever past their deadline instead of ever reaching their stall. No
+  existing test catches it — `SalvageRunTests.stallsWhenTheTargetSystemNeverResolves`
+  hand-crafts two `.stepStarted` log entries to reach that branch, a shape
+  production can no longer produce. Needs a follow-up ticket to rebase
+  `stepEntryCount`'s bound off something other than the log.
+- `EventRun.preflight`/`.printing`, `MineFleetPrint.stocking`,
+  `RestockRun.stocking`, `EventCourierPrint.printing` — all `.refreshFootprint`
+  self-targets with `thenStall: nil` by design (never escalate a stale
+  census). Before this fix, `collapse`'s old fallback silently restamped and
+  logged through `.advanceStep` on every persistently-stale tick; now they
+  correctly go quiet (`.wait`) with no stall, matching their documented intent.
+- `SurveyRun.scanning`/`HaulRun.survey` — not self-targeting (`nextStep` names
+  a different step); unaffected.
+
+`MissionLogBudget.dispatchRounds` sites are all `.dispatch`/confirm loops
+(untouched by this ticket); none bound a read self-loop.
