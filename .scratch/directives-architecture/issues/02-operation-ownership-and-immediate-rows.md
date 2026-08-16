@@ -155,6 +155,7 @@ Restructure the branch so each `case` sets `(status, message)` and falls through
 Status: resolved. Commits:
 - `fa25d8e` — `feat(ops): add directiveID/step/paramsDigest to operations` (steps 1–2: migration, struct, `SchemaManifestTests`, regenerated golden fixture)
 - `ab00d2c` — `feat(ops): every dispatch writes an owned Operation row` (steps 3–8)
+- `9a97a8f` — `fix(ops): trim comment budgets, strengthen dedupKey nil-omission test` (review round 1: two comment-line-count fixes `check-comments.sh` can't catch, plus a stronger `dedupKey` nil-omission assertion — see the fix report in `task-02-report.md`)
 
 All five targets green via the JSON event stream, testStarted == testEnded, zero failing issues, one `runEnded` per stream: DirectiveEngineTests 1567/1567, GameServicesTests 308/308, GameSyncTests 78/78, GameModelsTests 140/140, DirectivesFeatureTests 287/287 — 2380/2380 total (baseline 2376 + the 4 tests this ticket adds). `GameDatabaseTests` also run in full: 20/20.
 
