@@ -94,6 +94,9 @@ actor CommandGovernor {
                             && $0.kind.eq(kind.rawValue)
                             && $0.paramsDigest.eq(digest)
                             && $0.startedAt >= owner.since
+                            // A `.failed` attempt didn't land — it's ticket
+                            // 06's retry target, not a duplicate to refuse.
+                            && $0.status.neq(OperationStatus.failed)
                     }
                     .fetchOne(db)
             }) ?? nil

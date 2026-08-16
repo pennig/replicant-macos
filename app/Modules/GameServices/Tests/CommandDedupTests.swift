@@ -118,6 +118,57 @@ struct CommandDedupTests {
         #expect(called.value)
     }
 
+    /// The ticket 06 seam: a `.failed` row from a prior attempt in this step
+    /// entry does NOT suppress a retry, while a `.completed` row still does —
+    /// pinned side by side so the two can't silently drift apart again.
+    @Test func aFailedRowDoesNotSuppressARetryButACompletedRowStillDoes() async throws {
+        let database = try GameDatabase.bootstrap()
+        let digest = CommandParams().dedupKey
+        try await database.write { db in
+            try Operation.insert {
+                Operation(
+                    id: "FAILED", entityCode: "R1", kind: "activate",
+                    status: .failed, source: .optimistic,
+                    startedAt: Self.t0.addingTimeInterval(1), completesAt: nil,
+                    lastConfirmedAt: Self.t0.addingTimeInterval(1),
+                    detail: .object([:]), directiveID: "D1", step: "activating", paramsDigest: digest
+                )
+            }.execute(db)
+        }
+        let owner = CommandOwner(directiveID: "D1", step: "activating", since: Self.t0)
+        let called = LockIsolated(false)
+
+        let result = await withDependencies {
+            $0.defaultDatabase = database
+            $0.gameClient = budgetGameClient()
+            $0.commandClient.dispatchOwned = { _, _, _, _ in
+                called.setValue(true)
+                return .accepted(operationID: nil)
+            }
+        } operation: {
+            await CommandGovernor().dispatch(.simple("activate"), on: "R1", params: CommandParams(), owner: owner)
+        }
+        #expect(result == .dispatched(.accepted(operationID: nil)), "a failed attempt must not read as a duplicate")
+        #expect(called.value)
+
+        // The same row, `.completed` instead, still refuses the repeat.
+        try await database.write { db in
+            try Operation.where { $0.id.eq("FAILED") }
+                .update { $0.status = #bind(OperationStatus.completed) }
+                .execute(db)
+        }
+        let secondResult = await withDependencies {
+            $0.defaultDatabase = database
+            $0.gameClient = budgetGameClient()
+            $0.commandClient.dispatchOwned = unimplemented(
+                "commandClient.dispatchOwned", placeholder: .accepted(operationID: nil)
+            )
+        } operation: {
+            await CommandGovernor().dispatch(.simple("activate"), on: "R1", params: CommandParams(), owner: owner)
+        }
+        #expect(secondResult == .deferred(.duplicate), "a completed attempt must still read as a duplicate")
+    }
+
     /// A `nil` owner (a manually-issued command) is never de-duped — the query
     /// only runs when a directive owns the dispatch.
     @Test func unownedDispatchIsNeverDeduped() async throws {
