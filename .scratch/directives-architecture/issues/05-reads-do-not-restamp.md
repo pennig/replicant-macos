@@ -1,7 +1,7 @@
 # 05 — Read actions stop re-stamping `stepStartedAt`
 
 Type: task
-Status: open
+Status: claimed
 Blocked by: 01
 Labels: directives-architecture, stage-0
 
