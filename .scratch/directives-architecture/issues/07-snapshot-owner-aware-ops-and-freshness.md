@@ -1,7 +1,7 @@
 # 07 — `WorldSnapshot` owner-aware ops + `isFresh`; fix the two open co-tenant print guards
 
 Type: task
-Status: open
+Status: claimed
 Blocked by: 02
 Labels: directives-architecture, stage-0
 
