@@ -31,7 +31,7 @@ enum CommandAvailability {
     /// already control. Empty for a non-controller.
     static func adoptCandidates(device: Device, fleet: [Device]) -> [DeviceOption] {
         guard let feature = DeviceCommand.controllableFeature(for: device.deviceType) else { return [] }
-        let controlled = Set(device.controlledDeviceCodes)
+        let controlled = Set(DeviceAdoption.adopted(by: device, fleet: fleet).map(\.deviceCode))
         return fleet
             .filter { $0.features.contains(feature) && !controlled.contains($0.deviceCode) }
             .map { DeviceOption(id: $0.deviceCode, subtitle: adoptSubtitle($0)) }
@@ -44,10 +44,21 @@ enum CommandAvailability {
         return status
     }
 
-    /// The devices this controller already controls, for the release checkbox list.
-    static func releaseCandidates(device: Device) -> [DeviceOption] {
-        device.controlledDevices.map {
-            DeviceOption(id: $0.deviceCode, subtitle: controlledSubtitle($0))
+    /// The devices this controller already controls, for the release checkbox
+    /// list. Read from both ends of the link, so a list-synced controller — whose
+    /// `controlled_devices` tail is gone — still offers Release.
+    static func releaseCandidates(device: Device, fleet: [Device]) -> [DeviceOption] {
+        let tail = Dictionary(
+            device.controlledDevices.map { ($0.deviceCode, $0) },
+            uniquingKeysWith: { first, _ in first })
+        return DeviceAdoption.adopted(by: device, fleet: fleet).map { link in
+            if let known = link.device {
+                return DeviceOption(id: link.deviceCode, subtitle: adoptSubtitle(known))
+            }
+            if let entry = tail[link.deviceCode] {
+                return DeviceOption(id: link.deviceCode, subtitle: controlledSubtitle(entry))
+            }
+            return DeviceOption(id: link.deviceCode, subtitle: "Controlled")
         }
     }
 
@@ -146,7 +157,7 @@ enum CommandAvailability {
         channels: [String]
     ) -> [DeviceCommand] {
         let adopt = adoptCandidates(device: device, fleet: fleet)
-        let release = releaseCandidates(device: device)
+        let release = releaseCandidates(device: device, fleet: fleet)
         let attach = attachCandidates(device: device, fleet: fleet)
         let detach = detachCandidates(device: device, fleet: fleet)
         let owners = ownerCandidates(device: device, replicants: replicants)
