@@ -48,16 +48,20 @@ public struct MineFleetPrint: MissionStepMachine {
         }
     }
 
-    /// The hub to print with: the row's own while it still accepts jobs, else the
-    /// lowest-coded able hub at the same depot. A hub keeps advertising
+    /// The hub to print with: the row's own while it still accepts jobs, else a
+    /// free able hub at the same depot, lowest code first. A hub keeps advertising
     /// `enqueue_print` while packed or under way, so only status separates them.
     static func printer(for directive: Directive, in world: WorldSnapshot) -> Device? {
         let pinned = world.device(directive.deviceCode)
         guard let depot = directive.theatreDepot ?? pinned?.location else { return nil }
         if let pinned, pinned.acceptsPrintJobs, pinned.location == depot { return pinned }
-        return world.devices.values
+        let able = world.devices.values
             .filter { $0.acceptsPrintJobs && $0.location == depot && !$0.isCarrierHull }
+        // Substituting opens a queue either way, so a bench standing free beats one
+        // already serving another run. Lowest code breaks both ties.
+        return able.filter { world.openOperation(for: $0.deviceCode) == nil }
             .min { $0.deviceCode < $1.deviceCode }
+            ?? able.min { $0.deviceCode < $1.deviceCode }
     }
 
     // MARK: - Deciding
@@ -148,7 +152,8 @@ public struct MineFleetPrint: MissionStepMachine {
         if Self.remaining(at: location, in: world).isEmpty {
             return .advanceStep(nextStep: Step.stocking)
         }
-        if world.openOperation(for: hub.deviceCode) != nil { return .wait }
+        // A bench is shared and `openOperation` is keyed by device alone, so gating
+        // the deadline on one lets a co-tenant's print park this run past it.
         if world.now.timeIntervalSince(directive.stepStartedAt) <= RestockRun.printDeadline {
             return .wait
         }

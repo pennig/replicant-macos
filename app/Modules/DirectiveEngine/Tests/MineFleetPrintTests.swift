@@ -270,6 +270,23 @@ struct MineFleetPrintTests {
                 == .advanceStep(nextStep: MineFleetPrint.Step.stocking))
     }
 
+    /// A bench is shared, and `openOperation` is keyed by device alone, so a
+    /// co-tenant's print must not hold this run past its own deadline.
+    @Test("the deadline still fires while an op holds the bench")
+    func printingRedecidesPastTheDeadlineWithTheBenchBusy() {
+        let directive = printRun(
+            step: MineFleetPrint.Step.printing,
+            stepStartedAt: now.addingTimeInterval(-(RestockRun.printDeadline + 60))
+        )
+        let snapshot = world(
+            devices: printedFleet(omitting: "mining_drone") + [hub(), carrier()],
+            openOperations: openPrint(on: "AF1")
+        )
+
+        #expect(MineFleetPrint().nextAction(directive: directive, world: snapshot)
+                == .advanceStep(nextStep: MineFleetPrint.Step.stocking))
+    }
+
     /// The carrier slot is filled by the TAGGED carrier the launcher flies and
     /// `MineRecipe.idleCarrier` finds — nothing tags a spare, so an untagged
     /// hull retiring this row `.done` would leave the goal carrier-less forever.

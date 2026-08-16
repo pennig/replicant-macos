@@ -56,3 +56,38 @@ its original `deviceCode` in the list while printing elsewhere. Deliberate — a
 new `MissionAction` to rewrite `deviceCode` would need an engine resolver, and
 `reservedDevices` closing over the column makes rewriting it a wider change than
 this repair warrants.
+
+**AMENDED 2026-08-16 — the substitute must also be FREE, and the deadline must
+not hang on the bench.** The same row starved a second time, and the report was
+"three autofactories sitting idle": the substitution branch took the
+lowest-coded able hub unconditionally, so with the pinned hub off-depot every
+tick chose the one bench the `relayRun` and a `restockRun` were also queueing
+on, while three idle hubs stood beside it. `operations` carries a unique index
+on `entityCode` for open statuses, so a bench is ONE serial queue and three runs
+sharing it interleave — the live op history alternated mine-fleet drones with
+`ftl_relay` prints, each run waiting out the other.
+
+The `isBusy` warning above still stands and is NOT reversed. It governs the
+PINNED branch, where skipping a busy-but-able hub really would open a needless
+second queue. Substitution is the opposite case: it is choosing a new bench
+anyway, so a free one strictly dominates. `printer(for:in:)` now prefers an able
+hub with no open operation, lowest code breaking the tie, and falls back to the
+lowest-coded able hub when every bench is queued.
+
+**A deadline gated on `openOperation` cannot fire on a shared bench.**
+`MineFleetPrint.printing` tested `world.openOperation(for: hub.deviceCode) !=
+nil → .wait` ABOVE the `printDeadline` test, and `openOperation` is keyed by
+device code with no notion of which run owns the op — so a co-tenant's print
+read as this run's own and the 30-minute deadline was unreachable for as long as
+anyone else kept the hub busy. Same defect and same fix as `1994d07` in
+`EventRun`, where the elapsed-vs-deadline test sat inside the free-printer
+guard's `else`. The guard is now gone rather than reordered: both of its
+branches returned `.wait`, so once the deadline is consulted first it is dead
+code. This does NOT weaken the over-print protection — that is
+`fleetEvidenceIsStale` in `stocking`, not the op check.
+
+`RestockRun` (`stocking`, `printing`) and `EventCourierPrint` (`printing`) still
+read a co-tenant's op as their own and wait on it. Neither can park the way this
+did — `RestockRun.printing` advances unconditionally once the op closes, so its
+`printDeadline` is log-only — but both queue behind a shared bench rather than
+taking a free one.

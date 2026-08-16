@@ -54,10 +54,20 @@ private func shortFleet() -> [Device] {
     return out
 }
 
-private func world(_ devices: [Device]) -> WorldSnapshot {
+/// An open print op on `entity`, so a test can stand a bench in a queue.
+private func openPrint(on entity: String) -> [String: GameModels.Operation] {
+    [entity: GameModels.Operation(
+        id: "OP-\(entity)", entityCode: entity, kind: OperationKind.print.rawValue, status: .active,
+        source: .poll, startedAt: now, completesAt: nil, lastConfirmedAt: now, detail: .object([:])
+    )]
+}
+
+private func world(
+    _ devices: [Device], busy: [String: GameModels.Operation] = [:]
+) -> WorldSnapshot {
     WorldSnapshot(
         devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
-        openOperations: [:], log: [], dispatchedOperations: [:], systems: [:], siteAssays: [:],
+        openOperations: busy, log: [], dispatchedOperations: [:], systems: [:], siteAssays: [:],
         footprints: [depot: LocationFootprint(
             location: depot, devices: 1, resources: BrainCeiling.aggregateSpendFloor * 2,
             resourceSites: 0, locationEvents: 0, replicants: 0, fetchedAt: now
@@ -136,6 +146,40 @@ struct MineFleetPrintSubstituteTests {
         ])
 
         #expect(target(of: MineFleetPrint().nextAction(directive: run(hub: "AF1"), world: snapshot)) == "AF1")
+    }
+
+    /// A substitution picks a new bench either way, so queueing behind another
+    /// run's print when a hub stands free beside it buys nothing.
+    @Test("a substitute prefers a free hub to a queued one")
+    func substitutePrefersAFreeHub() {
+        let snapshot = world(
+            shortFleet() + [
+                bench("AF1", status: "idle", location: awayLocation),
+                bench("AF2", status: "printing (ftl_relay)"), bench("AF7", status: "idle"),
+            ],
+            busy: openPrint(on: "AF2")
+        )
+
+        #expect(target(of: MineFleetPrint().nextAction(directive: run(hub: "AF1"), world: snapshot)) == "AF7")
+    }
+
+    /// With every bench queued there is no free one to prefer, so the lowest code
+    /// still decides and two ticks cannot alternate between them. Asserted on the
+    /// selector, since `stocking` waits out a queued hub rather than dispatching.
+    @Test("with every hub queued the lowest-coded one is still chosen")
+    func allHubsQueuedFallsBackToLowestCode() {
+        var busy = openPrint(on: "AF2")
+        busy.merge(openPrint(on: "AF7")) { _, last in last }
+        let snapshot = world(
+            shortFleet() + [
+                bench("AF1", status: "idle", location: awayLocation),
+                bench("AF2", status: "printing (ftl_relay)"),
+                bench("AF7", status: "printing (mining_drone)"),
+            ],
+            busy: busy
+        )
+
+        #expect(MineFleetPrint.printer(for: run(hub: "AF1"), in: snapshot)?.deviceCode == "AF2")
     }
 
     /// With the bench empty of anything able there is nothing to substitute, and
