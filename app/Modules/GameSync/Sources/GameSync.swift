@@ -309,9 +309,15 @@ extension GameSync {
         EventRoute(id: "device.event", match: .all) { event in
             @Dependency(\.deviceRefresher) var deviceRefresher
             @Dependency(\.deviceStaleness) var deviceStaleness
-            // Completion events are truth for the action they close (§4.4): fold
-            // the result into the device's open operation first (cheap, no read).
-            let completedOp = await reconciler.applyOperationEvent(event)
+            @Dependency(\.date) var date
+            guard let code = event.deviceCode, !code.isEmpty else { return }
+            // Op close and the location/stow patch are ONE transaction — no
+            // reader sees "closed, old location" (memory: arrival-single-transaction.md).
+            let completedOp = await reconciler.applyDeviceEvent(
+                deviceCode: code, event: event,
+                location: event.location, stow: stowChange(for: event),
+                eventTime: event.date ?? date.now
+            )
             // A finished print job spawns a brand-new device (the printed clone)
             // whose code isn't in the local fleet yet — a single-device confirm-read
             // of the printer can't surface it. The event payload names it
@@ -334,29 +340,6 @@ extension GameSync {
                !newCode.isEmpty {
                 _ = await deviceRefresher.refresh(newCode, .high)
             }
-            guard let code = event.deviceCode, !code.isEmpty else { return }
-            // Payload-complete field application (V3.5 row 2), for EVERY device
-            // event: the envelope itself names the device's location after this
-            // event — the arrival's destination, null while in transit or
-            // stowed — so fold it in under the event-time guard and travel
-            // legs / deploy/stow moves render immediately at zero read cost.
-            // Applied on the op-closing path too: if its `.high` read fails,
-            // the row at least holds the arrival's location. (Blindspot worth
-            // knowing: the decoder can't tell `location: null` from an omitted
-            // field, so a future device event that merely omits it would wipe
-            // the row to "in transit" until the mark's read repairs it.)
-            //
-            // The two stowage events carry the containment link the same way, so
-            // `stowed_in_device_code` settles here too rather than waiting on a
-            // `.low` read the budget floor can defer indefinitely — the exact
-            // gap that let a Survey Run stall on a controller it had already
-            // been told was re-stowed.
-            await reconciler.applyEventFields(
-                deviceCode: code,
-                location: event.location,
-                stow: stowChange(for: event),
-                eventTime: event.date
-            )
             if completedOp, event.provenance == .stream {
                 // A live event just closed an operation: the device's finished
                 // activity block (e.g. an arrived `travel` block) must clear from
