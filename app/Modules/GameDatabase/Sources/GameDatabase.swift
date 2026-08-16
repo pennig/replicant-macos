@@ -89,6 +89,7 @@ public enum GameDatabase {
         Directive.addFreighterCode,
         LocationEvent.addChosenOption,
         Blueprint.addComponents,
+        GameModels.Operation.addOwnerColumns,
     ]
 
     /// Builds a migrator from `entries`. The parameter exists so tests can
