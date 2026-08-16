@@ -8,7 +8,6 @@
 //  looked at. An urgent mark (a closed live op, or a print's brand-new clone
 //  code) jumps ahead of those tiers at `.high` priority, capped per pass so a
 //  burst can't spike the read budget.
-//
 
 import Dependencies
 import Foundation
@@ -106,8 +105,8 @@ public actor StalenessTracker {
     }
 
     /// Mark `deviceCode` urgent: ahead of the ordinary tiers, capped at
-    /// `urgentPerPass`, drained at `.high` priority. Promotes an existing
-    /// ordinary mark in place; never downgrades an already-urgent one.
+    /// `urgentPerPass`, drained at `.high` priority — promptly if visible,
+    /// otherwise on the next periodic pass. Promotes an existing mark.
     public func markUrgent(_ deviceCode: String, _ reason: String) {
         @Dependency(\.date) var date
         let now = date.now
@@ -120,6 +119,9 @@ public actor StalenessTracker {
             stale[deviceCode] = Mark(firstMarkedAt: now, markedAt: now, lastAgedAttemptAt: nil, reason: reason, tier: .urgent)
         }
         logger.debug("marked \(deviceCode, privacy: .public) urgent (\(reason, privacy: .public))")
+        if visible.contains(deviceCode) {
+            drainSoon()
+        }
     }
 
     /// Mark `deviceCode` urgent for a code with no local `Device` row (a

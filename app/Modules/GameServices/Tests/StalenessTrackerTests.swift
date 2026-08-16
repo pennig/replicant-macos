@@ -309,6 +309,34 @@ private typealias Operation = GameModels.Operation
         }
     }
 
+    /// `markUrgent` on a device already in `visible` self-triggers a drain —
+    /// no explicit `drainPass()` call needed, matching `markStale`'s own
+    /// visible-tier promptness.
+    @Test func urgentMarkOnAVisibleDeviceSelfTriggersADrain() async throws {
+        let database = try GameDatabase.bootstrap()
+        let refreshed = LockIsolated<[(code: String, priority: RefreshPriority)]>([])
+        let tracker = StalenessTracker()
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.deviceRefresher = DeviceRefreshClient { code, priority in
+                refreshed.withValue { $0.append((code, priority)) }
+                return nil
+            }
+        } operation: {
+            await tracker.setVisible(["V1"])
+            await tracker.markUrgent("V1", "travel.arrived")   // no explicit drainPass()
+
+            for _ in 0..<200 where refreshed.value.isEmpty {
+                await Task.yield()
+            }
+
+            #expect(refreshed.value.map(\.code) == ["V1"])
+            #expect(refreshed.value.first?.priority == .high)
+        }
+    }
+
     /// `markNew` marks a code with NO local `Device` row (the print clone) —
     /// the drain still issues the read, through the same urgent tier.
     @Test func markNewDrainsACodeWithNoLocalRow() async throws {
