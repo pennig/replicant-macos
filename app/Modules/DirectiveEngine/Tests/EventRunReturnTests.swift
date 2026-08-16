@@ -123,7 +123,7 @@ struct EventRunReturnTests {
         ))
     }
 
-    @Test("both hulls home finishes the run")
+    @Test("both hulls home hands the hold to the depositing step")
     func finishes() {
         let devices = [
             EventRunFixtures.device("CARRIER", type: "surge_carrier"),
@@ -137,7 +137,109 @@ struct EventRunReturnTests {
         let action = EventRun().nextAction(
             directive: EventRunFixtures.directive(step: EventRun.Step.returning, now: now), world: world
         )
+        #expect(action == .advanceStep(nextStep: EventRun.Step.depositing))
+    }
+
+    /// The convoy home at the depot, the reward still in the freighter's hold.
+    private func homeConvoy(cargoUsed: Int) -> [Device] {
+        [
+            EventRunFixtures.device("CARRIER", type: "surge_carrier"),
+            EventRunFixtures.device(
+                "FREIGHT", type: "cargo_freighter", cargoUsed: cargoUsed, cargoCapacity: 500
+            ),
+            EventRunFixtures.courier(attachedTo: "CARRIER"),
+        ]
+    }
+
+    @Test("a loaded hold is emptied at the depot rather than parked full")
+    func depositsTheReward() {
+        // The executor has already stamped this step's own entry by the time the
+        // machine is asked, which is what any dispatch budget here must survive.
+        let world = EventRunFixtures.world(
+            devices: homeConvoy(cargoUsed: 350),
+            event: EventRunFixtures.event(resources: [:], devices: []), now: now,
+            log: [
+                EventRunFixtures.entered(EventRun.Step.returning, at: now.addingTimeInterval(-60)),
+                EventRunFixtures.entered(EventRun.Step.depositing, at: now),
+            ]
+        )
+        let action = EventRun().nextAction(
+            directive: EventRunFixtures.directive(step: EventRun.Step.depositing, now: now), world: world
+        )
+        #expect(action == .dispatch(
+            kind: .depositResources, deviceCode: "FREIGHT",
+            params: CommandParams(), nextStep: EventRun.Step.confirmingDeposit
+        ))
+    }
+
+    @Test("an empty hold finishes the run")
+    func emptyHoldFinishes() {
+        let world = EventRunFixtures.world(
+            devices: homeConvoy(cargoUsed: 0),
+            event: EventRunFixtures.event(resources: [:], devices: []), now: now
+        )
+        let action = EventRun().nextAction(
+            directive: EventRunFixtures.directive(step: EventRun.Step.depositing, now: now), world: world
+        )
         #expect(action == .done)
+    }
+
+    @Test("the unload is ordered once per visit, never re-sent")
+    func depositsOnlyOnce() {
+        let entered = now.addingTimeInterval(-30)
+        let world = EventRunFixtures.world(
+            devices: homeConvoy(cargoUsed: 350),
+            event: EventRunFixtures.event(resources: [:], devices: []), now: now,
+            log: [
+                EventRunFixtures.entered(EventRun.Step.depositing, at: entered),
+                EventRunFixtures.dispatched(
+                    .depositResources, to: "FREIGHT",
+                    step: EventRun.Step.confirmingDeposit, at: entered
+                ),
+                EventRunFixtures.entered(EventRun.Step.confirmingDeposit, at: entered),
+                EventRunFixtures.entered(EventRun.Step.depositing, at: now),
+            ]
+        )
+        let action = EventRun().nextAction(
+            directive: EventRunFixtures.directive(step: EventRun.Step.depositing, now: now), world: world
+        )
+        #expect(action == .done)
+    }
+
+    @Test("a hold read as emptied hands back and finishes")
+    func confirmedDepositHandsBack() {
+        var freight = EventRunFixtures.device(
+            "FREIGHT", type: "cargo_freighter", cargoUsed: 0, cargoCapacity: 500
+        )
+        freight.updatedAt = now
+        let devices = [
+            EventRunFixtures.device("CARRIER", type: "surge_carrier"),
+            freight,
+            EventRunFixtures.courier(attachedTo: "CARRIER"),
+        ]
+        let world = EventRunFixtures.world(
+            devices: devices,
+            event: EventRunFixtures.event(resources: [:], devices: []), now: now
+        )
+        let action = EventRun().nextAction(
+            directive: EventRunFixtures.directive(step: EventRun.Step.confirmingDeposit, now: now),
+            world: world
+        )
+        #expect(action == .advanceStep(nextStep: EventRun.Step.depositing))
+    }
+
+    @Test("a hold that will not empty stalls instead of looping")
+    func unemptiableHoldStalls() {
+        let world = EventRunFixtures.world(
+            devices: homeConvoy(cargoUsed: 350),
+            event: EventRunFixtures.event(resources: [:], devices: []), now: now
+        )
+        let entered = now.addingTimeInterval(-EventRun.depositConfirmDeadline - 1)
+        let action = EventRun().nextAction(
+            directive: EventRunFixtures.directive(step: EventRun.Step.confirmingDeposit, now: entered),
+            world: world
+        )
+        #expect(action == .refreshDevices(deviceCodes: ["FREIGHT"], thenStall: .commandRejected))
     }
 
     @Test("EventRun is registered")

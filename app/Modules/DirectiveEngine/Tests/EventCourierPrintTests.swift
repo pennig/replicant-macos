@@ -139,6 +139,24 @@ struct EventCourierPrintTests {
         #expect(!EventCourierPrint.courierStands(at: "HUB-1", in: mixed))
     }
 
+    @Test("a courier aboard a carrier at the depot stands, however stale its own row")
+    func standsThroughItsHost() {
+        var carrier = EventRunFixtures.device("CARRIER", type: "surge_carrier", updatedAt: now)
+        carrier.features = ["cradle", "surge"]
+        let riding = EventRunFixtures.courier(attachedTo: "CARRIER", location: "FAR-3")
+        #expect(EventCourierPrint.courierStands(at: "HUB-1", in: world([carrier, riding], hosts: ["COURIER"])))
+    }
+
+    @Test("a courier aboard a carrier that is away does not stand")
+    func doesNotStandAboardAnAbsentCarrier() {
+        var carrier = EventRunFixtures.device(
+            "CARRIER", type: "surge_carrier", location: "FAR-3", updatedAt: now
+        )
+        carrier.features = ["cradle", "surge"]
+        let riding = EventRunFixtures.courier(attachedTo: "CARRIER", location: "HUB-1")
+        #expect(!EventCourierPrint.courierStands(at: "HUB-1", in: world([carrier, riding], hosts: ["COURIER"])))
+    }
+
     @Test("it prints its own container rather than claiming an untagged one")
     func printsPastAnotherAutomationsContainer() {
         let fleet = [

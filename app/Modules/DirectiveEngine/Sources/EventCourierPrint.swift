@@ -30,9 +30,11 @@ public struct EventCourierPrint: MissionStepMachine {
 
     /// A courier of ours standing at `depot`, by the one predicate `EventRun`
     /// also selects on — so what this reports ready is what a convoy can fly.
+    /// Resolved through its host: a courier home aboard a carrier is home.
     public static func courierStands(at depot: String, in world: WorldSnapshot) -> Bool {
         world.devices.values.contains {
-            EventRun.isCourier($0, in: world) && $0.location == depot
+            EventRun.isCourier($0, in: world)
+                && EventRun.standingLocation(of: $0, in: world) == depot
         }
     }
 

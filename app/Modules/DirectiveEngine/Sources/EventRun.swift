@@ -39,6 +39,8 @@ public struct EventRun: MissionStepMachine {
         public static let recovering = "recovering"
         public static let confirmingRecovery = "confirmingRecovery"
         public static let returning = "returning"
+        public static let depositing = "depositing"
+        public static let confirmingDeposit = "confirmingDeposit"
     }
 
     public var firstStep: String { Step.preflight }
@@ -58,6 +60,7 @@ public struct EventRun: MissionStepMachine {
     public static let arrivalConfirmDeadline: TimeInterval = 5 * 60
     public static let stageConfirmDeadline: TimeInterval = 5 * 60
     public static let recoveryConfirmDeadline: TimeInterval = 5 * 60
+    public static let depositConfirmDeadline: TimeInterval = 5 * 60
     /// Generous: `progress` moves on the server's own schedule after a deposit.
     public static let progressDeadline: TimeInterval = 15 * 60
 
@@ -88,6 +91,21 @@ public struct EventRun: MissionStepMachine {
     /// Untagged it is not ours to fly; unhosted it cannot resolve the commit.
     public static func isCourier(_ device: Device, in world: WorldSnapshot) -> Bool {
         isCourierHull(device) && world.replicantHostDevices.contains(device.deviceCode)
+    }
+
+    /// Where `device` physically stands: its host's location while it rides one,
+    /// its own otherwise. A carried row lags the hull carrying it, and the hull
+    /// is the authority on where both of them are.
+    static func standingLocation(of device: Device, in world: WorldSnapshot) -> String? {
+        var current = device
+        var seen: Set<String> = [device.deviceCode]
+        while let hostCode = current.attachedToDeviceCode ?? current.stowedInDeviceCode,
+              seen.insert(hostCode).inserted,
+              let host = world.device(hostCode)
+        {
+            current = host
+        }
+        return current.location
     }
 
     /// A container aboard ANOTHER carrier is that run's courier, not this one's.
@@ -128,6 +146,8 @@ public struct EventRun: MissionStepMachine {
         case Step.recovering: return recovering(directive, convoy, event, world)
         case Step.confirmingRecovery: return confirmRecovery(directive, convoy, event, world)
         case Step.returning: return returning(directive, convoy, event, world)
+        case Step.depositing: return depositing(directive, convoy, event, world)
+        case Step.confirmingDeposit: return confirmDeposit(directive, convoy, event, world)
         default: return preflight(directive, convoy, event, world)
         }
     }
@@ -729,7 +749,45 @@ public struct EventRun: MissionStepMachine {
                 params: CommandParams(destination: depot), nextStep: Step.returning
             )
         }
-        return .done
+        return .advanceStep(nextStep: Step.depositing)
+    }
+
+    // MARK: - Unloading
+
+    private static func depositRounds(_ world: WorldSnapshot) -> Int {
+        MissionLogBudget.dispatchRounds(
+            world, dispatch: Step.depositing, confirm: Step.confirmingDeposit,
+            kind: .depositResources
+        )
+    }
+
+    /// Empty the hold at the depot. Nil resources unload it whole, which is this
+    /// hull's own sweep and nothing else: the launch gate leased it empty.
+    private func depositing(
+        _ directive: Directive, _ convoy: Convoy, _ event: LocationEvent, _ world: WorldSnapshot
+    ) -> MissionAction {
+        guard let freighter = convoy.freighter, freighter.cargoUsed > 0 else { return .done }
+        if world.openOperation(for: freighter.deviceCode) != nil { return .wait }
+        guard Self.depositRounds(world) < 1 else { return .done }
+        return .dispatch(
+            kind: .depositResources, deviceCode: freighter.deviceCode,
+            params: CommandParams(), nextStep: Step.confirmingDeposit
+        )
+    }
+
+    /// Judge the unload on the freighter's own row. A hold left full parks the
+    /// hull outside the next convoy's empty-hold gate, so it is worth a stall.
+    private func confirmDeposit(
+        _ directive: Directive, _ convoy: Convoy, _ event: LocationEvent, _ world: WorldSnapshot
+    ) -> MissionAction {
+        guard let freighter = convoy.freighter else { return .done }
+        if freighter.updatedAt >= directive.stepStartedAt, freighter.cargoUsed == 0 {
+            return .advanceStep(nextStep: Step.depositing)
+        }
+        return MissionConfirm.ladder(
+            [freighter], directive, world,
+            deadline: Self.depositConfirmDeadline, thenStall: .commandRejected
+        )
     }
 
     /// The run never roams.
