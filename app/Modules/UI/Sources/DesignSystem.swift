@@ -293,12 +293,13 @@ public enum BarThickness {
     public static let readout: CGFloat = 3
 }
 
-/// Square dimensions for the icon/glyph tiles used in list rows (small) and
-/// detail headers (large). Owned here so the two recurring magic numbers live in
-/// one place; consumed by `RCGlyphTile`.
+/// Square dimensions for the icon/glyph tiles used in list rows (small), detail
+/// headers (large), and the body rendering in a location header (portrait). Owned
+/// here so the recurring magic numbers live in one place.
 public enum TileSize {
     public static let small: CGFloat = 30
     public static let large: CGFloat = 52
+    public static let portrait: CGFloat = 128
 }
 
 /// Standard control dimensions. `height` pins non-text buttons to one consistent

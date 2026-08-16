@@ -146,18 +146,12 @@ private struct SystemInspector: View {
     let assayTotals: [String: [String: Double]]
 
     var body: some View {
-        InspectorScroll(title: system.name ?? system.designation, code: system.designation,
-                        recon: system.recon, accessory: accessory) {
-            if let star = system.star {
-                RCReadoutCard("Star") {
-                    Readout("Class", star.stellarClass ?? "—")
-                    Readout("Color", star.color?.capitalized ?? "—")
-                    if let age = star.ageMy { Readout("Age", String(format: "%.0f My", age)) }
-                    if let bonus = star.miningBonusPct, bonus != 0 { Readout("Mining bonus", "+\(Int(bonus))%") }
-                    if let d = star.distanceFromSol { Readout("From Sol", String(format: "%.1f ly", d)) }
-                }
-            }
-
+        InspectorScroll(
+            title: system.name ?? system.designation, code: system.designation,
+            recon: system.recon, accessory: accessory,
+            portrait: system.star.map { _ in AnyView(PortraitFrame { Color.clear }) },
+            facts: system.star.map { BodyFacts.rows(star: $0) } ?? []
+        ) {
             RCReadoutCard("System") {
                 if let s = system.planetsScanned, let t = system.planetsTotal {
                     Readout("Planets", "\(s)/\(t) scanned")
@@ -239,15 +233,12 @@ private struct PlanetInspector: View {
     let accessory: AnyView?
     let assayTotals: [String: [String: Double]]
     var body: some View {
-        InspectorScroll(title: planet.name ?? planet.designation, code: planet.designation,
-                        recon: planet.recon, accessory: accessory) {
-            RCReadoutCard("Planet") {
-                Readout("Type", (planet.type ?? "—") + (planet.typeEstimated ? " (est.)" : ""))
-                if let au = planet.orbitalDistanceAu { Readout("Orbit", String(format: "%.2f AU", au)) }
-                Readout("Habitable zone", planet.inHabitableZone ? "Yes" : "No")
-                if let life = planet.lifeStage, life != "none" { Readout("Life", life.capitalized) }
-                if let n = planet.moonCount { Readout("Moons", "\(n)") }
-            }
+        InspectorScroll(
+            title: planet.name ?? planet.designation, code: planet.designation,
+            recon: planet.recon, accessory: accessory,
+            portrait: AnyView(PortraitFrame { Color.clear }),
+            facts: BodyFacts.rows(planet: planet)
+        ) {
             if let phys = planet.physical { PhysicalCard(phys) }
             SiteSalvageSections(sites: planet.sites, salvage: planet.remainingSalvage, assayTotals: assayTotals)
             // Roll up the planet's own stock plus any held on its moons, attributed
@@ -267,12 +258,13 @@ private struct MoonInspector: View {
     let accessory: AnyView?
     let assayTotals: [String: [String: Double]]
     var body: some View {
-        InspectorScroll(title: moon.name ?? moon.designation, code: moon.designation,
-                        recon: moon.recon, accessory: accessory) {
-            RCReadoutCard("Moon") {
-                Readout("Type", moon.type ?? "—")
-            }
-            if let phys = moon.physical { PhysicalCard(phys) }
+        InspectorScroll(
+            title: moon.name ?? moon.designation, code: moon.designation,
+            recon: moon.recon, accessory: accessory,
+            portrait: AnyView(PortraitFrame { Color.clear }),
+            facts: BodyFacts.rows(moon: moon)
+        ) {
+            if let phys = moon.physical { PhysicalCard(phys, promoted: true) }
             SiteSalvageSections(sites: moon.sites, salvage: moon.remainingSalvage, assayTotals: assayTotals)
             InventoryCard(moon.inventory)
         }
@@ -284,14 +276,12 @@ private struct BeltInspector: View {
     let accessory: AnyView?
     let assayTotals: [String: [String: Double]]
     var body: some View {
-        InspectorScroll(title: belt.designation, code: belt.designation,
-                        recon: .scanned, accessory: accessory) {
-            RCReadoutCard("Belt") {
-                if let d = belt.density { Readout("Density", d.capitalized) }
-                if let inner = belt.innerRadiusAu, let outer = belt.outerRadiusAu {
-                    Readout("Radius", String(format: "%.1f–%.1f AU", inner, outer))
-                }
-            }
+        InspectorScroll(
+            title: belt.designation, code: belt.designation,
+            recon: .scanned, accessory: accessory,
+            portrait: AnyView(PortraitFrame { Color.clear }),
+            facts: BodyFacts.rows(belt: belt)
+        ) {
             if !belt.richness.isEmpty {
                 RCReadoutCard("Richness") {
                     ForEach(belt.richness.sorted(by: { $0.key < $1.key }), id: \.key) { name, level in
@@ -321,16 +311,12 @@ private struct ObjectInspector: View {
     let site: SpecialSite
     let accessory: AnyView?
     var body: some View {
-        InspectorScroll(title: site.title ?? site.name ?? site.designation, code: site.designation,
-                        recon: .scanned, accessory: accessory) {
-            RCReadoutCard(site.kind.label) {
-                Readout("Type", (site.objectType ?? site.kind.rawValue)
-                    .replacingOccurrences(of: "_", with: " ").capitalized)
-                if let status = site.status { Readout("Status", status.capitalized) }
-                if let stage = site.stage { Readout("Stage", stage.capitalized) }
-                if let au = site.orbitalDistanceAu { Readout("Orbit", String(format: "%.2f AU", au)) }
-                if let deadline = site.deadline { Readout("Deadline", deadline, mono: true) }
-            }
+        InspectorScroll(
+            title: site.title ?? site.name ?? site.designation, code: site.designation,
+            recon: .scanned, accessory: accessory,
+            portrait: AnyView(PortraitFrame { Color.clear }),
+            facts: BodyFacts.rows(site: site)
+        ) {
             if let p = site.progressPercentage {
                 RCReadoutCard("Construction") {
                     ProgressView(value: min(max(p / 100, 0), 1)).tint(.rcAccent)
@@ -360,16 +346,12 @@ private struct LagrangeInspector: View {
     let site: SpecialSite?
     let accessory: AnyView?
     var body: some View {
-        InspectorScroll(title: "L\(point)", code: designation,
-                        recon: site != nil ? .scanned : .aware, accessory: accessory) {
-            RCReadoutCard("Lagrange Point") {
-                Readout("Point", "L\(point)")
-                Readout("Stability", (point == 4 || point == 5) ? "Stable" : "Unstable")
-                Readout("Parent", planet.designation, mono: true)
-                if let au = site?.orbitalDistanceAu ?? planet.orbitalDistanceAu {
-                    Readout("Orbit", String(format: "%.2f AU", au))
-                }
-            }
+        InspectorScroll(
+            title: "L\(point)", code: designation,
+            recon: site != nil ? .scanned : .aware, accessory: accessory,
+            portrait: AnyView(PortraitFrame { Color.clear }),
+            facts: BodyFacts.rows(lagrangePoint: point, parent: planet, site: site)
+        ) {
             InventoryCard(site?.inventory ?? [])
         }
     }
@@ -453,18 +435,40 @@ private struct SiteSalvageSections: View {
 
 private struct PhysicalCard: View {
     let phys: BodyPhysical
-    init(_ phys: BodyPhysical) { self.phys = phys }
+    /// Radius, gravity, surface temp and atmosphere already sit in the header.
+    let promoted: Bool
+    init(_ phys: BodyPhysical, promoted: Bool = false) {
+        self.phys = phys; self.promoted = promoted
+    }
     var body: some View {
         RCReadoutCard("Physical") {
             if let m = phys.massEarth { Readout("Mass", String(format: "%.2f M⊕", m)) }
-            if let r = phys.radiusEarth { Readout("Radius", String(format: "%.2f R⊕", r)) }
-            if let g = phys.surfaceGravity { Readout("Gravity", String(format: "%.2f g", g)) }
-            if let t = phys.surfaceTempC { Readout("Surface", String(format: "%.0f °C", t)) }
-            if let a = phys.atmosphere { Readout("Atmosphere", a.capitalized) }
+            if !promoted, let r = phys.radiusEarth { Readout("Radius", String(format: "%.2f R⊕", r)) }
+            if let d = phys.densityGcc { Readout("Density", String(format: "%.2f g/cc", d)) }
+            if !promoted, let g = phys.surfaceGravity { Readout("Gravity", String(format: "%.2f g", g)) }
+            if !promoted, let t = phys.surfaceTempC { Readout("Surface", String(format: "%.0f °C", t)) }
+            if !promoted, let a = phys.atmosphere { Readout("Atmosphere", a.capitalized) }
             if phys.tidallyLocked == true { Readout("Tidally locked", "Yes") }
             if phys.hasSubsurfaceOcean == true { Readout("Subsurface ocean", "Yes") }
             if !phys.tags.isEmpty { Readout("Tags", phys.tags.joined(separator: ", ")) }
         }
+    }
+}
+
+/// The house chrome every 128pt header square shares: raised surface, hairline
+/// border, card radius. Wraps whatever the location's rendering turns out to be.
+private struct PortraitFrame<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        content
+            .frame(width: TileSize.portrait, height: TileSize.portrait)
+            .background(.rcSurfaceRaised, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                    .strokeBorder(.rcSeparator, lineWidth: Hairline.thin)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
     }
 }
 
@@ -473,18 +477,31 @@ private struct InspectorScroll<Content: View>: View {
     let code: String
     let recon: Recon
     var accessory: AnyView? = nil
+    /// The 128pt body rendering shown leading the header, when the location has one.
+    var portrait: AnyView? = nil
+    /// Key facts promoted beside the portrait to fill the header's height.
+    var facts: [BodyFact] = []
     @ViewBuilder let content: Content
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Space.l) {
                 HStack(alignment: .top, spacing: Space.m) {
-                    VStack(alignment: .leading, spacing: Space.xs) {
-                        Text(title).font(.rcTitleMono).foregroundStyle(.rcTextPrimary)
-                        HStack(spacing: Space.s) {
-                            Text(code).font(.rcMono).foregroundStyle(.rcTextTertiary)
-                            ReconDot(recon: recon)
-                            Text(recon.label).font(.rcCaption).foregroundStyle(.rcTextTertiary)
+                    if let portrait {
+                        portrait
+                            .frame(width: TileSize.portrait, height: TileSize.portrait)
+                    }
+                    VStack(alignment: .leading, spacing: Space.s) {
+                        VStack(alignment: .leading, spacing: Space.xs) {
+                            Text(title).font(.rcTitleMono).foregroundStyle(.rcTextPrimary)
+                            HStack(spacing: Space.s) {
+                                Text(code).font(.rcMono).foregroundStyle(.rcTextTertiary)
+                                ReconDot(recon: recon)
+                                Text(recon.label).font(.rcCaption).foregroundStyle(.rcTextTertiary)
+                            }
+                        }
+                        ForEach(facts, id: \.label) { fact in
+                            Readout(fact.label, fact.value, mono: fact.mono)
                         }
                     }
                     if let accessory {
@@ -492,6 +509,7 @@ private struct InspectorScroll<Content: View>: View {
                         accessory
                     }
                 }
+                .frame(height: portrait == nil ? nil : TileSize.portrait, alignment: .top)
                 content
             }
             .frame(maxWidth: .infinity, alignment: .leading)
