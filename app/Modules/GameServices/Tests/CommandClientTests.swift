@@ -52,6 +52,7 @@ private typealias Operation = GameModels.Operation
         #expect(a.dedupKey == b.dedupKey)
         var c = CommandParams(); c.destination = "SOL"
         #expect(a.dedupKey != c.dedupKey)
+        #expect(!c.dedupKey.contains("quantity"), "an unset field must be absent, not null")
     }
 
     /// An immediate verb dispatched with an owner writes one terminal row
@@ -371,10 +372,9 @@ private typealias Operation = GameModels.Operation
         #expect(stored?.kind == OperationKind.retarget.rawValue)
     }
 
-    /// `set_directive` is a synchronous controller config change — its valid
-    /// `directive` builds the body and it dispatches as immediate: a terminal
-    /// row lands (no tracked op), and the post-command read refreshes the
-    /// controller's `ami_directive`.
+    /// `set_directive` is a synchronous controller config change — it
+    /// dispatches as immediate (a terminal row, no tracked op), and the
+    /// post-command read refreshes the controller's `ami_directive`.
     @Test func setDirectiveIsImmediateWithDirective() async throws {
         let database = try GameDatabase.bootstrap()
         let readCount = LockIsolated(0)

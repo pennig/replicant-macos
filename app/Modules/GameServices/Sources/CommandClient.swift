@@ -113,13 +113,8 @@ extension CommandClient: DependencyKey {
                 return .failed(reason)
             }
 
-            // Immediate commands (scan/census reads + status-only lifecycle) are
-            // not long-running, so they never supersede a device's running action
-            // and confirm/reject in one POST — but they still write one terminal
-            // `Operation` row, so every dispatch leaves a row an owner can be
-            // read off. A terminating command (recall/deactivate/decommission)
-            // also closes the device's open op, since it stops whatever was
-            // running.
+            // Immediate commands POST once and write one terminal `Operation`
+            // row; a terminating command also closes any open op it stops.
             if completion(for: kind) == .immediate {
                 let status: OperationStatus
                 let message: String?
