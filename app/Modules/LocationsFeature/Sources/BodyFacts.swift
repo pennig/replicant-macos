@@ -19,7 +19,7 @@ public struct BodyFact: Equatable, Sendable {
 public enum BodyFacts {
     public static func rows(star: SystemStar) -> [BodyFact] {
         var out = [BodyFact(label: "Class", value: star.stellarClass ?? "—")]
-        if let colour = star.color { out.append(BodyFact(label: "Color", value: colour.capitalized)) }
+        out.append(BodyFact(label: "Color", value: star.color?.capitalized ?? "—"))
         if let age = star.ageMy { out.append(BodyFact(label: "Age", value: String(format: "%.0f My", age))) }
         if let bonus = star.miningBonusPct, bonus != 0 {
             out.append(BodyFact(label: "Mining bonus", value: "+\(Int(bonus))%"))

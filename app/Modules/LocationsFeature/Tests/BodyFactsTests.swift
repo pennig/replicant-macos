@@ -88,6 +88,12 @@ struct BodyFactsTests {
         #expect(!BodyFacts.rows(star: star).contains { $0.label == "Mining bonus" })
     }
 
+    @Test("a missing colour still yields a Color row, dashed")
+    func starMissingColor() {
+        let star = SystemStar(designation: "VEGA", stellarClass: "A0V")
+        #expect(BodyFacts.rows(star: star).first { $0.label == "Color" }?.value == "—")
+    }
+
     @Test("a belt promotes density and radius")
     func beltRows() {
         let belt = Belt(designation: "SOL-BELT-1", innerRadiusAu: 2.1,
