@@ -41,7 +41,7 @@ into the source.
 
 **The budget is hard, not advisory:**
 
-    file header            ≤ 6 lines
+    file header            ≤ 10 lines
     declaration doc (///)  ≤ 3 lines
     inline //              ≤ 2 lines
 
