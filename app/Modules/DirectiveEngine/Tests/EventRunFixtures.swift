@@ -13,10 +13,13 @@ import Utils
 @testable import DirectiveEngine
 
 enum EventRunFixtures {
+    /// `commands` defaults to what the live server reports for the type: an
+    /// autofactory always advertises `enqueue_print`, packed and under way
+    /// included, so only its status ever rules it out as a printer.
     static func device(
         _ code: String, type: String, attachedTo: String? = nil,
         location: String? = "HUB-1", tags: [String] = [], updatedAt: Date = .distantPast,
-        cargoUsed: Int? = nil, cargoCapacity: Int? = nil
+        cargoUsed: Int? = nil, cargoCapacity: Int? = nil, commands: [String]? = nil
     ) -> Device {
         var hold: [String: JSONValue] = [:]
         if let cargoUsed { hold["cargo_used"] = .number(Double(cargoUsed)) }
@@ -25,7 +28,9 @@ enum EventRunFixtures {
             deviceCode: code, deviceType: type, replicantCode: "R-1", status: "idle",
             location: location, locationName: nil, operationalCapacity: 1, queueSize: 0,
             stowedInDeviceCode: nil, controllerDeviceCode: nil, attachedToDeviceCode: attachedTo,
-            createdAt: .distantPast, availableCommands: [], features: [], tags: tags,
+            createdAt: .distantPast,
+            availableCommands: commands ?? (type == "autofactory" ? ["enqueue_print"] : []),
+            features: [], tags: tags,
             detail: .object(hold),
             updatedAt: updatedAt, firstSeenAt: .distantPast
         )

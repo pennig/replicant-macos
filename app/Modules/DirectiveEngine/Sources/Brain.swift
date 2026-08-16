@@ -611,7 +611,7 @@ struct Brain: Sendable {
     /// carrier would reserve that vessel out of the fleet permanently.
     static func restockHost(in view: WorldView, theatre: Theatre) -> Device? {
         view.devices.values
-            .filter { $0.isPrintHub && $0.location == theatre.depot && !$0.isCarrierHull }
+            .filter { $0.acceptsPrintJobs && $0.location == theatre.depot && !$0.isCarrierHull }
             .min { $0.deviceCode < $1.deviceCode }
     }
 

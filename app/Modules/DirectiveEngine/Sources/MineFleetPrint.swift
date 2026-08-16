@@ -35,17 +35,29 @@ public struct MineFleetPrint: MissionStepMachine {
 
     public var firstStep: String { Step.stocking }
 
-    /// Route `directive`'s current step against `world`. Stalls when the hub row
-    /// `directive.deviceCode` names has left the fleet — substituting another
-    /// printer would be a fabrication.
+    /// Route `directive`'s current step against `world`. Stalls when no printer at
+    /// the run's depot can take a job — printing somewhere else would be a
+    /// fabrication, but printing at the same bench with a free hub is not.
     public func nextAction(directive: Directive, world: WorldSnapshot) -> MissionAction {
-        guard let hub = world.device(directive.deviceCode) else {
+        guard let hub = Self.printer(for: directive, in: world) else {
             return .stall(.unreachableDevice)
         }
         switch directive.step {
         case Step.printing: return printing(directive, hub, world)
         default: return stocking(directive, hub, world)
         }
+    }
+
+    /// The hub to print with: the row's own while it still accepts jobs, else the
+    /// lowest-coded able hub at the same depot. A hub keeps advertising
+    /// `enqueue_print` while packed or under way, so only status separates them.
+    static func printer(for directive: Directive, in world: WorldSnapshot) -> Device? {
+        let pinned = world.device(directive.deviceCode)
+        guard let depot = directive.theatreDepot ?? pinned?.location else { return nil }
+        if let pinned, pinned.acceptsPrintJobs, pinned.location == depot { return pinned }
+        return world.devices.values
+            .filter { $0.acceptsPrintJobs && $0.location == depot && !$0.isCarrierHull }
+            .min { $0.deviceCode < $1.deviceCode }
     }
 
     // MARK: - Deciding

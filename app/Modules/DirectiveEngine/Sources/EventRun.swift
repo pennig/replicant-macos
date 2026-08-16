@@ -329,7 +329,7 @@ public struct EventRun: MissionStepMachine {
 
         // Sorted before `first`: two printers at one depot must not alternate.
         let printers = world.devices.values
-            .filter { $0.location == depot && $0.deviceType == "autofactory" }
+            .filter { $0.location == depot && $0.deviceType == "autofactory" && !$0.refusesPrintJobs }
             .sorted { $0.deviceCode < $1.deviceCode }
         guard !printers.isEmpty else { return .stall(.unreachableDevice) }
 

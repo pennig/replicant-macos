@@ -153,7 +153,7 @@ public struct RelayRun: MissionStepMachine {
     static func hub(near carrier: Device, in world: WorldSnapshot) -> Device? {
         guard let location = carrier.location else { return nil }
         let printers = world.devices.values
-            .filter { $0.isPrintHub && $0.location == location }
+            .filter { $0.acceptsPrintJobs && $0.location == location }
         return printers
             .filter { $0.deviceCode != carrier.deviceCode }
             .min { $0.deviceCode < $1.deviceCode }

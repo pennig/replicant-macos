@@ -346,28 +346,24 @@ public struct DirectivesFeature {
                 let uuid = self.uuid
                 let date = self.date
                 return .run { send in
-                    let devices = (try? await database.read { db in try Device.all.fetchAll(db) }) ?? []
-                    guard let host = devices
-                        .filter({
-                            $0.isPrintHub && $0.deviceType != "heaven_vessel"
-                                && $0.deviceType != "racing_vessel" && $0.location != nil
-                        })
-                        .min(by: { $0.deviceCode < $1.deviceCode })
-                    else {
+                    guard let site = await Self.mineFleetSite(database: database, now: date.now) else {
                         await send(.printMineFleetHostMissing)
                         return
                     }
                     let directive = Directive(
                         id: uuid().uuidString, kind: .mineFleetPrint, status: .running,
-                        deviceCode: host.deviceCode, controllerCode: nil, roamCentre: nil,
+                        deviceCode: site.host, controllerCode: nil, roamCentre: nil,
                         fleetTag: MineRecipe.fleetTag, sourceRelayCode: nil,
                         targets: [], targetIndex: 0,
                         step: MineFleetPrint().firstStep, stepStartedAt: date.now,
                         returnToOrigin: false, originDesignation: nil,
-                        attentionReason: nil, createdAt: date.now, updatedAt: date.now
+                        attentionReason: nil, createdAt: date.now, updatedAt: date.now,
+                        // The bench the run prints at. Without it a hub that leaves
+                        // takes the run's idea of where it is printing with it.
+                        theatreDepot: site.depot
                     )
                     try? await database.write { db in try Directive.insert { directive }.execute(db) }
-                    logger.info("printing mine fleet \(directive.id, privacy: .public) at \(host.deviceCode, privacy: .public)")
+                    logger.info("printing mine fleet \(directive.id, privacy: .public) at \(site.depot, privacy: .public) on \(site.host, privacy: .public)")
                     await send(.printMineFleetLaunched(directive))
                 }
 
@@ -598,11 +594,33 @@ public struct DirectivesFeature {
     }
 
     /// The depot's OWN printer, lowest-coded and never a carrier hull — hosting
-    /// a print on a hull would reserve that vessel out of the fleet.
+    /// a print on a hull would reserve that vessel out of the fleet. A hub that
+    /// cannot presently take a job is no use as a launch pin.
     private static func depotPrinter(at depot: String, in view: WorldView) -> Device? {
         view.devices.values
-            .filter { $0.isPrintHub && $0.location == depot && !$0.isCarrierHull }
+            .filter { $0.acceptsPrintJobs && $0.location == depot && !$0.isCarrierHull }
             .min { $0.deviceCode < $1.deviceCode }
+    }
+
+    /// Where a mine fleet should be printed: the first operational theatre whose
+    /// depot has a hub free to take the job, depot order breaking the tie.
+    private static func mineFleetSite(
+        database: any DatabaseWriter, now: Date
+    ) async -> (depot: String, host: String)? {
+        do {
+            return try await database.read { db -> (depot: String, host: String)? in
+                let view = try WorldView.read(from: db, now: now)
+                for theatre in view.theatres.filter(\.isOperational).sorted(by: { $0.depot < $1.depot }) {
+                    guard let host = depotPrinter(at: theatre.depot, in: view) else { continue }
+                    return (theatre.depot, host.deviceCode)
+                }
+                logger.notice("mine fleet launch: no theatre has a hub free to print")
+                return nil
+            }
+        } catch {
+            logger.error("mine fleet launch: world read failed: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
     }
 
     /// One `WorldView` read plus the CPU-bound rank, run only from this

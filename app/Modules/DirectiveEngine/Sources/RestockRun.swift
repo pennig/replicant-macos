@@ -65,11 +65,11 @@ public struct RestockRun: MissionStepMachine {
 
     /// Route `directive`'s current step against `world`.
     ///
-    /// Stalls when the hub row `directive.deviceCode` names has left the fleet:
-    /// substituting another printer would be a fabrication, since the row names
-    /// the one hub this run owns.
+    /// Stalls when no hub at the run's depot can take a job: printing somewhere
+    /// else would be a fabrication, while handing the job to the bench's own free
+    /// hub is the same run carrying on.
     public func nextAction(directive: Directive, world: WorldSnapshot) -> MissionAction {
-        guard let hub = world.device(directive.deviceCode) else {
+        guard let hub = MineFleetPrint.printer(for: directive, in: world) else {
             return .stall(.unreachableDevice)
         }
         switch directive.step {

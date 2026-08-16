@@ -70,7 +70,9 @@ public struct EventCourierPrint: MissionStepMachine {
         if container(at: depot, in: world) != nil {
             return .advanceStep(nextStep: Step.replicating)
         }
-        guard let printer = world.device(directive.deviceCode) else { return .stall(.unreachableDevice) }
+        guard let printer = MineFleetPrint.printer(for: directive, in: world) else {
+            return .stall(.unreachableDevice)
+        }
         if world.openOperation(for: printer.deviceCode) != nil { return .wait }
         let rail = RelayRun(reserveFloor: reserveFloor)
         if rail.footprintCensusIsStale(world) {

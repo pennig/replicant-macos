@@ -184,6 +184,16 @@ public extension Device {
     /// between systems. Capability, not a deviceType match — every vessel class
     /// with both features qualifies.
     var isCarrierHull: Bool { features.contains("cradle") && features.contains("surge") }
+
+    /// Whether the device's status presently refuses a print job. Separate from
+    /// `acceptsPrintJobs` for callers that already know the device is a printer
+    /// and only need the liveness half.
+    var refusesPrintJobs: Bool { Self.printRefusingStatuses.contains(statusBase) }
+
+    /// A print hub the server will presently accept `enqueue_print` for. A hub
+    /// keeps advertising the command while packed or in flight, so `isPrintHub`
+    /// alone never rules one out — only its status does.
+    var acceptsPrintJobs: Bool { isPrintHub && !refusesPrintJobs }
 }
 
 // MARK: - Tags
@@ -215,6 +225,13 @@ extension Device {
     /// Whether the device is mid-activity. Drives "wait for its current task to
     /// finish" messaging, so a resting device must never report `true`.
     public var isBusy: Bool { !Self.restingStatuses.contains(statusBase) }
+
+    /// The statuses in which a print hub refuses a job: packed for carriage, under
+    /// way, riding inside another hull, or beyond command range. A hub that is
+    /// merely `printing` is absent — jobs queue behind the one running.
+    static let printRefusingStatuses: Set<String> = [
+        "compacted", "travelling", "cruising", "surging", "stowed", "out_of_range",
+    ]
 
     /// Whether this device can act as the *source* of a replication. The backend
     /// gates `replicate` on the `matrix` feature, which an `empty_replicant_matrix`
