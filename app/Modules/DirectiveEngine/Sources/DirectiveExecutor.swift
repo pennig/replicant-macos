@@ -28,6 +28,12 @@ enum DirectiveExecutor {
     /// `.commandFailed` — a `.rejected` (4xx) never gets a retry.
     static let failedDispatchBudget = 3
 
+    /// Verbs where a repeat is not idempotent (queues/dequeues by position,
+    /// or moves a fixed quantity) — stall on the first `.failed`, no retry.
+    static let nonRetryableKinds: Set<OperationKind> = [
+        .print, .dequeuePrint, .collectResources, .depositResources,
+    ]
+
     /// Apply `action` to `directive`, using `machine` for the step vocabulary a
     /// target change needs. Returns whether the directive is still runnable — a
     /// stall or a completion retires its executor.
@@ -79,6 +85,10 @@ enum DirectiveExecutor {
                     return false
 
                 case let .failed(message):
+                    guard !Self.nonRetryableKinds.contains(kind) else {
+                        await stall(directive, reason: .commandFailed, detail: message)
+                        return false
+                    }
                     // Counts THIS dispatch's own just-written row too, so `<=`
                     // yields exactly `failedDispatchBudget` retries.
                     let failures = await failedDispatches(for: directive)

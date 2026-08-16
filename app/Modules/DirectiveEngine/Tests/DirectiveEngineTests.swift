@@ -440,6 +440,48 @@ struct DirectiveEngineTests {
         }
     }
 
+    /// A non-idempotent verb (`print`) gets no retry budget: the first
+    /// `.failed` stalls `.commandFailed` immediately, one dispatch only.
+    @Test func nonRetryableVerbStallsOnFirstFailureNoRetry() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { mission(step: "printing") }.execute(db)
+        }
+        let core = DirectiveEngineCore(
+            machines: [ScriptedMachine([
+                .dispatch(kind: .print, deviceCode: "HUB1", params: CommandParams(), nextStep: "printing"),
+            ])],
+            tick: .seconds(5)
+        )
+        let governor = CommandGovernor()
+        let calls = LockIsolated(0)
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.gameClient = GameClient(
+                make: { ReplicantSpace.client(apiKey: "") },
+                budget: { _ in RateLimitGovernor.Snapshot(limit: 60, remaining: 40, resetAt: nil) }
+            )
+            $0.commandClient.dispatchOwned = { _, _, _, _ in
+                calls.withValue { $0 += 1 }
+                return .failed("503")
+            }
+            $0.commandGovernor.dispatchOwned = { kind, deviceCode, params, owner in
+                await governor.dispatch(kind, on: deviceCode, params: params, owner: owner)
+            }
+        } operation: {
+            await core.evaluateOnce(directiveID: "D1")
+            let directive = try await database.read { db in
+                try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+            }
+            #expect(directive?.status == .needsAttention, "no retry budget for a non-idempotent verb")
+            #expect(directive?.attentionReason == .commandFailed)
+            #expect(calls.value == 1, "must dispatch exactly once, never retry")
+        }
+    }
+
     /// Isolates the counter/budget arithmetic from `CommandGovernor`'s own
     /// per-step dedup (a stubbed governor never defers), so a failure here
     /// would name the executor rather than the governor as the cause.
