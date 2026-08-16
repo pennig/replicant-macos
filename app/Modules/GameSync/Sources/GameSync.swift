@@ -294,20 +294,10 @@ actor GameSyncEngine {
 
 extension GameSync {
     /// Every game event naming a device is treated as an invalidation signal.
-    /// Matches `.all` (it parses no device fields out of the event, so it's
-    /// robust to evolving payloads); message/bobnet events simply carry no
-    /// device code and no-op here.
-    ///
-    /// Mark-mostly (V3.5): only a *live* op-closing event pays an immediate
-    /// read. Everything else — thin/unknown events, and the entire catch-up
-    /// replay — just marks the device stale in the `StalenessTracker`, where
-    /// the mark is spent later (promptly for a visible device, on the slow
-    /// drain loop for an op-holding one, on selection for the rest). An event
-    /// burst therefore costs O(1) marks instead of O(events) reads, and a
-    /// launch replay costs zero immediate reads (V3.4-B9).
+    /// Marks the device stale (or urgent, for a closing live event or a fresh
+    /// print clone) rather than reading — the tracker's drain spends the mark.
     static func deviceRoute(reconciler: Reconciler) -> EventRoute {
         EventRoute(id: "device.event", match: .all) { event in
-            @Dependency(\.deviceRefresher) var deviceRefresher
             @Dependency(\.deviceStaleness) var deviceStaleness
             guard let code = event.deviceCode, !code.isEmpty else { return }
             // Op close and the location/stow patch are ONE transaction — no
@@ -324,35 +314,17 @@ extension GameSync {
                 // the op only, matching the pre-ticket no-op on the row.
                 completedOp = await reconciler.applyOperationEvent(event)
             }
-            // A finished print job spawns a brand-new device (the printed clone)
-            // whose code isn't in the local fleet yet — a single-device confirm-read
-            // of the printer can't surface it. The event payload names it
-            // (`new_device_code`), so read *just that device* — one coalesced,
-            // high-priority read through the coordinator — rather than re-walking
-            // the whole account list: at hundreds-to-1000+ devices a full paged
-            // walk per print completion is the rate-limit shape §5.5 forbids (and
-            // it bypassed the coordinator's coalescing/budget entirely). Pruning
-            // stays with the explicit cold-load walk in the Devices feature — the
-            // one place that knows the account's complete set (see `pruneDevices`).
-            // This read is deliberately NOT gated on provenance: a mark can't
-            // surface a device the fleet has never seen, so a replayed print
-            // completion still costs its one clone read — the only way the clone
-            // enters the fleet short of a full walk.
-            // `new_device_code` was verified against the native stream on
-            // 2026-07-28 (four real completions, three device types, both print
-            // modes), so it is treated like any other payload key from here on.
+            // print.completed spawns a device code the local fleet has never
+            // seen; mark it urgent so the drain pulls it in, not gated on provenance.
             if event.event == "print.completed",
                let newCode = event.payload?["new_device_code"]?.stringValue,
                !newCode.isEmpty {
-                _ = await deviceRefresher.refresh(newCode, .high)
+                await deviceStaleness.markNew(newCode)
             }
             if completedOp, event.provenance == .stream {
-                // A live event just closed an operation: the device's finished
-                // activity block (e.g. an arrived `travel` block) must clear from
-                // its snapshot promptly, or the UI keeps rendering the completed
-                // activity — a mark could be deferred past that. One authoritative
-                // high-priority read.
-                _ = await deviceRefresher.refresh(code, .high)
+                // A closed live op needs its finished activity to clear from the
+                // UI promptly, so mark it urgent rather than the plain stale mark below.
+                await deviceStaleness.markUrgent(code, event.event)
             } else {
                 // Remember, don't read: thin/unknown live events and all
                 // catch-up replay. Catch-up especially — it can replay hundreds

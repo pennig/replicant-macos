@@ -267,6 +267,79 @@ private typealias Operation = GameModels.Operation
         }
     }
 
+    /// `markUrgent` drains ahead of visible/op-holding marks, at `.high`
+    /// priority, capped at `urgentPerPass` per pass — a leftover urgent mark
+    /// waits for the next pass rather than blowing through the cap.
+    @Test func urgentMarksDrainAheadOfOrdinaryOnesWithinTheCap() async throws {
+        let database = try GameDatabase.bootstrap()
+        let refreshed = LockIsolated<[(code: String, priority: RefreshPriority)]>([])
+        let tracker = StalenessTracker(maxPerPass: 3, urgentPerPass: 2)
+        let now = LockIsolated(Date(timeIntervalSince1970: 1_000))
+
+        try await withDependencies { [self] in
+            $0.defaultDatabase = database
+            $0.date = DateGenerator { now.value }
+            $0.deviceRefresher = DeviceRefreshClient { code, priority in
+                refreshed.withValue { $0.append((code, priority)) }
+                await tracker.markSatisfied(code, asOf: now.value)
+                return self.makeDevice(code)
+            }
+        } operation: {
+            // OPDEV is an ordinary op-holding mark — op-holding drains without
+            // the visible tier's own `drainSoon`, keeping this pass explicit.
+            try await seedOp(database, device: "OPDEV")
+
+            await tracker.markUrgent("U1", "printer.jammed")
+            now.setValue(now.value.addingTimeInterval(1))
+            await tracker.markUrgent("U2", "printer.jammed")
+            now.setValue(now.value.addingTimeInterval(1))
+            await tracker.markUrgent("U3", "printer.jammed")
+            now.setValue(now.value.addingTimeInterval(1))
+            await tracker.markStale("OPDEV", reason: "mining.tick")
+
+            await tracker.drainPass()   // urgentPerPass caps urgent at 2; OPDEV fills the 3rd slot
+            #expect(refreshed.value.map(\.code) == ["U1", "U2", "OPDEV"])
+            #expect(refreshed.value[0].priority == .high)
+            #expect(refreshed.value[1].priority == .high)
+            #expect(refreshed.value[2].priority == .low)
+
+            await tracker.drainPass()   // U3 carried over, drains next pass
+            #expect(refreshed.value.map(\.code) == ["U1", "U2", "OPDEV", "U3"])
+            #expect(refreshed.value[3].priority == .high)
+        }
+    }
+
+    /// `markNew` marks a code with NO local `Device` row (the print clone) —
+    /// the drain still issues the read, through the same urgent tier.
+    @Test func markNewDrainsACodeWithNoLocalRow() async throws {
+        let database = try GameDatabase.bootstrap()
+        let refreshed = LockIsolated<[(code: String, priority: RefreshPriority)]>([])
+        let tracker = StalenessTracker()
+
+        try await withDependencies { [self] in
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.deviceRefresher = DeviceRefreshClient { code, priority in
+                @Dependency(\.date) var date
+                refreshed.withValue { $0.append((code, priority)) }
+                await tracker.markSatisfied(code, asOf: date.now)
+                return self.makeDevice(code)
+            }
+        } operation: {
+            let codes = try await database.read { db in try Device.fetchAll(db) }
+            #expect(codes.isEmpty, "CLONE has no local row before the drain reads it in")
+
+            await tracker.markNew("CLONE")
+            await tracker.drainPass()
+
+            #expect(refreshed.value.map(\.code) == ["CLONE"])
+            #expect(refreshed.value[0].priority == .high)
+
+            await tracker.drainPass()   // mark satisfied → no second read
+            #expect(refreshed.value.count == 1)
+        }
+    }
+
     /// `stopDraining` forgets every mark (logout) — a later pass reads nothing.
     @Test func stopForgetsMarks() async throws {
         let database = try GameDatabase.bootstrap()
