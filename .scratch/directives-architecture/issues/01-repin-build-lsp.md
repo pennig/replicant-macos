@@ -53,7 +53,15 @@ Set `Status: resolved`. ~~No commit (nothing changed).~~ **Controller ruling ove
 
 **LSP tool availability — deviation note.** This session had no Swift-LSP tool bound (checked via `ToolSearch` for goToDefinition/references/hover/symbol-search — none present; likely this subagent context wasn't launched with the LSP plugin active). Since every anchor's file path is already named explicitly in Step 3 (not something to be discovered by search), anchors were re-pinned by reading each named file directly (`Read`, with `grep -n` used only as an in-file line-locator on a file already known to be the right one, never as a cross-codebase search) and confirming the surrounding code matches the anchor's description. This is a narrower operation than the "cold index / silent empty result" trap the ticket warns about — that risk applies to codebase-wide reference/definition queries, not to reading one already-identified file. The build + link-index-store steps were still run in full, so the index is warm for ticket 02's executor, who should have LSP tools bound.
 
-**Baseline suites (Step 2).** Ran each target as its own `--test-product` (per the `swift-test-event-stream` skill's multi-target-truncation guidance) with `--event-stream-version "6.3"`, one event-stream file per target under `app/Modules/.build/task01-events/`. Each stream showed exactly one module, one `runEnded`, and no started-but-unterminated tests (no crashes).
+**LSP status in this worktree.** Verified from the controller session, where an LSP tool IS bound — it does not currently work against this worktree:
+- `findReferences` on `WorldSnapshot.openOperation` at `app/Modules/DirectiveEngine/Sources/WorldSnapshot.swift:175` returned "No references found", twice, although `RestockRun.swift:101` demonstrably calls it.
+- SourceKit reported a diagnostic on that same file: `No such module 'GameModels'` at line 12 — the server cannot resolve the package's own modules.
+- Meanwhile the index store is populated: `.build/index-store` → `out` symlink is live and `.build/index-store/v5/units` holds 2287 units, 2 of them for `WorldSnapshot`.
+- **Hypothesis, not confirmed**: the harness most likely starts sourcekit-lsp at the session's working directory (the worktree root) rather than at `app/Modules/`, which the plan's binding constraint explicitly names as the LSP root. Not yet root-caused.
+
+**Operational consequence for tickets 02–19**: until this is fixed, treat LSP `findReferences`/`goToDefinition` as unreliable in this worktree — verification of record is full-file `Read` plus `swift build --build-tests`, and an empty `findReferences` result must never be read as "no callers".
+
+**Baseline suites (Step 2).** Ran each target as its own `--test-product` (per the `swift-test-event-stream` skill's multi-target-truncation guidance) with `--event-stream-version "6.3"`, one event-stream file per target under `app/Modules/.build/task01-events/`. Each stream showed exactly one module, one `runEnded`, and no started-but-unterminated tests (no crashes). Raw evidence: `app/Modules/.build/task01-events/*.jsonl` (one file per target). `.build/` is gitignored and disappears on a clean — this is evidence for now, not an archive.
 
 | Target | Total | Passed | Failed | Skipped | Crashed |
 |---|---|---|---|---|---|
