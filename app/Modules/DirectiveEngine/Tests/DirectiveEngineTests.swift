@@ -7,17 +7,19 @@
 //  evaluation, the right row writes for each, and a timeline entry to match.
 //
 
+import API
 import ConcurrencyExtras
 import Dependencies
 import Foundation
 import GameDatabase
 import GameModels
-import GameServices
+import GameSession
 import SQLiteData
 import Testing
 import UniverseModels
 import Utils
 @testable import DirectiveEngine
+@testable import GameServices
 
 /// A machine that returns a scripted sequence, one action per evaluation, then
 /// waits forever.
@@ -40,6 +42,19 @@ private struct ScriptedMachine: MissionStepMachine {
     /// Scripted actions can't express a plan, so borrow the survey roam's — the
     /// tests that script an `.extendQueue` are about the resolver's wiring (the
     /// append surviving the action applied after it), not about the ranking.
+    func plan(_ context: RoamContext) -> RoamPlan { SurveyRun().plan(context) }
+}
+
+/// Dispatches the same immediate verb into its own step every tick — the
+/// `ab36b7d` shape a same-step dispatch must not double-issue.
+private struct SameStepDispatchMachine: MissionStepMachine {
+    let kind: DirectiveKind = .surveyRun
+    let firstStep = "activating"
+
+    func nextAction(directive: Directive, world: WorldSnapshot) -> MissionAction {
+        .dispatch(kind: .simple("activate"), deviceCode: "VES1", params: CommandParams(), nextStep: "activating")
+    }
+
     func plan(_ context: RoamContext) -> RoamPlan { SurveyRun().plan(context) }
 }
 
@@ -209,6 +224,59 @@ struct DirectiveEngineTests {
             let entries = try await database.read { db in try DirectiveLogEntry.all.fetchAll(db) }
             #expect(entries.isEmpty)
         }
+    }
+
+    /// The `ab36b7d` end-to-end proof, over the REAL governor (only the network
+    /// client is stubbed): only the first tick reaches it, ticks 2 and 3 are
+    /// refused as duplicates, and `stepStartedAt` stops moving after tick 1.
+    @Test func sameStepDispatchReachesTheClientOnceOverTheRealGovernor() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { mission(step: "activating") }.execute(db)
+        }
+        let core = DirectiveEngineCore(machines: [SameStepDispatchMachine()], tick: .seconds(5))
+        let governor = CommandGovernor()
+        let calls = LockIsolated(0)
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.gameClient = GameClient(
+                make: { ReplicantSpace.client(apiKey: "") },
+                budget: { _ in RateLimitGovernor.Snapshot(limit: 60, remaining: 40, resetAt: nil) }
+            )
+            $0.commandClient.dispatchOwned = { kind, deviceCode, params, owner in
+                calls.withValue { $0 += 1 }
+                try? await database.write { db in
+                    try GameModels.Operation.insert {
+                        GameModels.Operation(
+                            id: "OP\(calls.value)", entityCode: deviceCode, kind: kind.rawValue,
+                            status: .completed, source: .optimistic,
+                            startedAt: Date(timeIntervalSince1970: 1_000), completesAt: nil,
+                            lastConfirmedAt: Date(timeIntervalSince1970: 1_000), detail: .object([:]),
+                            directiveID: owner?.directiveID, step: owner?.step, paramsDigest: params.dedupKey
+                        )
+                    }.execute(db)
+                }
+                return .accepted(operationID: nil)
+            }
+            $0.commandGovernor.dispatchOwned = { kind, deviceCode, params, owner in
+                await governor.dispatch(kind, on: deviceCode, params: params, owner: owner)
+            }
+        } operation: {
+            await core.evaluateOnce(directiveID: "D1")
+            await core.evaluateOnce(directiveID: "D1")
+            await core.evaluateOnce(directiveID: "D1")
+        }
+
+        #expect(calls.value == 1, "the real governor must refuse ticks 2 and 3 as duplicates")
+        let directive = try await database.read { db in
+            try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+        }
+        #expect(directive?.step == "activating")
+        #expect(directive?.stepStartedAt == Date(timeIntervalSince1970: 1_000),
+                 "the accepted first tick stamps it once; deferred ticks must not re-stamp")
     }
 
     /// A REJECTED command stalls the mission with `commandRejected` — the
