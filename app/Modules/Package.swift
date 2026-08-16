@@ -488,6 +488,7 @@ let package = Package(
             dependencies: [
                 "GameModels",
                 "GameServices",
+                "NewStarMapFeature",
                 "TravelUI",
                 "UI",
                 "UniverseModels",

@@ -11,6 +11,7 @@
 import ComposableArchitecture
 import GameModels
 import GameServices
+import NewStarMapFeature
 import SQLiteData
 import SwiftUI
 import TravelUI
@@ -149,7 +150,7 @@ private struct SystemInspector: View {
         InspectorScroll(
             title: system.name ?? system.designation, code: system.designation,
             recon: system.recon, accessory: accessory,
-            portrait: system.star.map { _ in AnyView(PortraitFrame { Color.clear }) },
+            portrait: system.star.map { star in AnyView(PortraitFrame { BodyPortraitView(.star(star)) }) },
             facts: system.star.map { BodyFacts.rows(star: $0) } ?? []
         ) {
             RCReadoutCard("System") {
@@ -236,7 +237,7 @@ private struct PlanetInspector: View {
         InspectorScroll(
             title: planet.name ?? planet.designation, code: planet.designation,
             recon: planet.recon, accessory: accessory,
-            portrait: AnyView(PortraitFrame { Color.clear }),
+            portrait: AnyView(PortraitFrame { BodyPortraitView(.planet(planet)) }),
             facts: BodyFacts.rows(planet: planet)
         ) {
             if let phys = planet.physical { PhysicalCard(phys) }
@@ -261,7 +262,7 @@ private struct MoonInspector: View {
         InspectorScroll(
             title: moon.name ?? moon.designation, code: moon.designation,
             recon: moon.recon, accessory: accessory,
-            portrait: AnyView(PortraitFrame { Color.clear }),
+            portrait: AnyView(PortraitFrame { BodyPortraitView(.moon(moon)) }),
             facts: BodyFacts.rows(moon: moon)
         ) {
             if let phys = moon.physical { PhysicalCard(phys, promoted: true) }
@@ -279,7 +280,7 @@ private struct BeltInspector: View {
         InspectorScroll(
             title: belt.designation, code: belt.designation,
             recon: .scanned, accessory: accessory,
-            portrait: AnyView(PortraitFrame { Color.clear }),
+            portrait: AnyView(PortraitFrame { BodyPortraitView(.belt(belt)) }),
             facts: BodyFacts.rows(belt: belt)
         ) {
             if !belt.richness.isEmpty {
@@ -310,11 +311,21 @@ private struct BeltInspector: View {
 private struct ObjectInspector: View {
     let site: SpecialSite
     let accessory: AnyView?
+
+    private var portrait: AnyView {
+        switch site.kind {
+        case .kuiper, .oort:
+            AnyView(PortraitFrame { BodyPortraitView(.region(site)) })
+        case .megastructure, .object, .lagrange:
+            AnyView(PortraitFrame { SiteGlyphPortrait(site: site) })
+        }
+    }
+
     var body: some View {
         InspectorScroll(
             title: site.title ?? site.name ?? site.designation, code: site.designation,
             recon: .scanned, accessory: accessory,
-            portrait: AnyView(PortraitFrame { SiteGlyphPortrait(site: site) }),
+            portrait: portrait,
             facts: BodyFacts.rows(site: site)
         ) {
             if let p = site.progressPercentage {
