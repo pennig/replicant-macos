@@ -1,7 +1,7 @@
 # 06 — `.failed` is not `.rejected`: bounded transient retry
 
 Type: task
-Status: claimed
+Status: resolved
 Blocked by: 02
 Labels: directives-architecture, stage-0
 
@@ -19,7 +19,7 @@ Spec S0.5. `DirectiveExecutor` stalls `.commandRejected` on both `.rejected(mess
 
 ---
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 `DirectiveVocabularyTests`: `.commandFailed` has a display name, guidance, and `brainDisposition == .retry`; `CaseIterable` count incremented.
 
@@ -34,7 +34,7 @@ Spec S0.5. `DirectiveExecutor` stalls `.commandRejected` on both `.rejected(mess
 ```
 (The `.failed` op rows are written by `CommandClient` in production; in this test the governor is stubbed, so seed them by making the stub ALSO insert the row, or drive through the real governor over a stubbed `CommandClient` that returns `.failed` and inserts — prefer the latter, it is the shape ticket 02 built.)
 
-- [ ] **Step 2: Implement**
+- [x] **Step 2: Implement**
 
 In the `.dispatch` case split the outcome:
 ```swift
@@ -50,22 +50,26 @@ case let .failed(message):
 ```
 `failedDispatches(for:)` is one `database.read` over `Operation`.
 
-- [ ] **Step 3: Brain**
+- [x] **Step 3: Brain**
 
 `Brain`'s stall response already keys off `brainDisposition`; `.retry` classification means the brain's bounded auto-retry (`Brain.retryBudget = 3`) applies. No brain code change; add the reason to any test that enumerates the retry set.
 
-- [ ] **Step 4: Run targets; commit**
+- [x] **Step 4: Run targets; commit**
 
 `feat(engine): retry transient command failures before stalling`.
 
 ## Comments
 
-Status: BLOCKED (not resolved, not committed). Vocabulary (`DirectiveAttentionReason.commandFailed`, its three switches) and the executor's split `.dispatch` outcome + `failedDispatchBudget`/`failedDispatches(for:)` are implemented and correct in isolation — proven by `budgetArithmeticAloneOverAStubbedGovernor` (stubbed `commandGovernor`, bypasses the real actor): exactly 3 retries, 3 `.failed` rows, 4th tick stalls `.commandFailed`. That test also caught a real off-by-one in the ticket's own step-2 sketch — `CommandClient` writes each attempt's `.failed` row *before* returning, so `failedDispatches` always counts the current attempt's own row; the literal `<` from the sketch stalls on tick 3 (only 2 retries), not tick 4. Fixed to `<=`.
+Status: resolved. Vocabulary (`DirectiveAttentionReason.commandFailed`, its three switches) and the executor's split `.dispatch` outcome + `failedDispatchBudget`/`failedDispatches(for:)` are implemented, verified in isolation by `budgetArithmeticAloneOverAStubbedGovernor` (stubbed `commandGovernor`, bypasses the real actor): exactly 3 retries, 3 `.failed` rows, 4th tick stalls `.commandFailed`. That test also caught a real off-by-one in the ticket's own step-2 sketch — `CommandClient` writes each attempt's `.failed` row *before* returning, so `failedDispatches` always counts the current attempt's own row; the literal `<` from the sketch stalls on tick 3 (only 2 retries), not tick 4. Fixed to `<=`.
 
-**The REQUIRED shape — driving through the real `CommandGovernor` (ambiguity 1) — is RED and stays red**: `transientFailureWaitsThenStallsAtBudget` shows `calls.value == 1`, not 3. Root cause: `CommandGovernor.dispatch`'s per-step dedup (ticket 03, `CommandGovernor.swift:85-104`) matches on `directiveID + step + entityCode + kind + paramsDigest + startedAt >= owner.since` with **no status filter** — a `.failed` (terminal, unsuccessful) row satisfies it exactly as a `.completed` one would. Ticket 05 requires `owner.since` (= `directive.stepStartedAt`) to stay fixed across a same-step retry so the budget window can't slide; that same fixed `since` is what makes every retry attempt after the first match the first attempt's now-`.failed` row and get deferred `.duplicate` — forever. `CommandGovernorTests.releasesTheClaimAfterARejection` didn't catch this because it dispatches with `owner: nil`, which skips the dedup block entirely.
+**Interim block, now resolved.** The required shape — driving through the real `CommandGovernor` (ambiguity 1) — first came back RED: `transientFailureWaitsThenStallsAtBudget` showed `calls.value == 1`, not 3. Root cause: `CommandGovernor.dispatch`'s per-step dedup (ticket 03, `CommandGovernor.swift:85-104`) matched on `directiveID + step + entityCode + kind + paramsDigest + startedAt >= owner.since` with **no status filter** — a `.failed` (terminal, unsuccessful) row satisfied it exactly as a `.completed` one would, and ticket 05's fixed `owner.since` meant every retry after the first matched the first attempt's now-`.failed` row and got deferred `.duplicate` forever. Coordinator ruling: exclude `.failed` from the dedup match (`CommandGovernor.swift`, `&& $0.status.neq(OperationStatus.failed)`) — the dedup exists to refuse a repeat that already succeeded or is in flight, and a `.failed` row is neither. Fixed, verified against all of ticket 03's own tests (`CommandDedupTests`'s 4 pre-existing cases + `sameStepDispatchReachesTheClientOnceOverTheRealGovernor` + all 6 `CommandGovernorTests`) — **none of them encoded the bug**: every seeded/stubbed row in that suite used `.completed`, so nothing needed correcting, only extending. Added `CommandDedupTests.aFailedRowDoesNotSuppressARetryButACompletedRowStillDoes`, which pins a `.failed` row NOT suppressing a retry side-by-side with the same row updated to `.completed` still suppressing one — confirmed non-vacuous by reverting the fix and watching it fail for the right reason (`called.value == false`, the stub never reached).
 
-Net effect if shipped as-is: the FIRST transient failure permanently wedges the directive `.running` (a `.deferred` outcome is a no-op, so nothing ever re-checks the budget) — worse than pre-ticket behaviour, which at least stalled and surfaced to an operator. This is a real ticket-03/ticket-06 conflict, not a test artifact: any production mission whose step logic re-issues the same dispatch after a terminal-but-failed op (the shape ticket 06 exists to retry) hits it. The fix I'd propose — scope `CommandGovernor`'s dedup match to `OperationStatus.liveCases` (or explicitly exclude `.failed`) so a closed-but-unsuccessful row no longer counts as "already went out this step" — touches `CommandGovernor.swift`, which is shared account-wide infrastructure outside this ticket's file list and outside my authority to change unilaterally. Left for the controller to rule on (ticket 05 precedent: "per coordinator ruling" for an out-of-list fix).
+**Double-execution risk (asked for explicitly):** a transport failure is ambiguous — the command may have landed and only the response was lost — so a retry can double-execute. Surveyed every `OperationKind` this retry path can reach: state-target verbs (`travel`, `mine`, `adopt`/`release`/`attach`/`detach`, `stow`, `set_directive`, `configure`, `repair`, `recall`, activation/deactivation) converge to the same state or get rejected by the server as already-there on a repeat — safe either way. Two verbs are genuinely NOT idempotent and would actually hurt: **`print`** (a queue accepts a second enqueue with nothing to reject it — a double-execution prints a second device and burns its blueprint cost twice) and **`collect_resources`/`deposit_resources`** (the body carries a fixed `resources` quantity map, not "move everything" — a repeat genuinely double-moves that quantity between hold and site). Both already flow through `DirectiveExecutor`'s generic `.dispatch`/retry path today (Relay Run's print step, Salvage/Haul Run's cargo steps) — this is a real, live-reachable residual, not a hypothetical, and the plan's own S0.5 decision to accept the risk for transient failures already covers it; it is not new here, just now enumerated by verb.
 
-Files touched: `Directive.swift`, `DirectiveExecutor.swift`, `DirectiveVocabularyTests.swift`, `DirectiveEngineTests.swift` (all per the ticket's list), plus `BrainDispositionTests.swift` (`GameModels/Tests`) — added `.commandFailed` to its hard-coded `retry` array per ambiguity 2 ("add the new reason to any test that enumerates the retry set"); the two `allCases`-sweep tests in `BrainStallResponseTests.swift` and `DirectiveVocabularyTests`/`DirectiveSchemaTests` needed no edit, they cover the new case automatically. No `CaseIterable`-count assertion exists anywhere in the codebase to increment (ambiguity 3 describes a mechanism this repo doesn't have); the sweep tests are the completeness net instead.
+Files touched: `Directive.swift`, `DirectiveExecutor.swift`, `DirectiveVocabularyTests.swift`, `DirectiveEngineTests.swift` (ticket's list); `BrainDispositionTests.swift` (`GameModels/Tests`, ambiguity 2's hard-coded retry array); `CommandGovernor.swift` + `CommandDedupTests.swift` (ticket 03's files, under the coordinator's explicit ruling — see above).
 
-Full suite via the JSON event stream: DirectiveEngineTests 1398/1398 attempted, 1 failing (`transientFailureWaitsThenStallsAtBudget`, the documented red above) — all others pass, including the 2 new passing tests. GameServicesTests 279/279, GameSyncTests 65/65, DirectivesFeatureTests 260/260, GameModelsTests 119/119 — all green, confirming the vocabulary change is otherwise inert to the other four targets. Nothing committed; working tree left as-is for the controller.
+**Combined worst case** (now live, not moot): `.commandFailed`'s `brainDisposition == .retry` means `Brain`'s existing bounded auto-retry (`Brain.retryBudget = 3`) applies with no brain code change. A mission hitting a persistent 503: `failedDispatchBudget` (3 in-step retries) exhausts → stall `.commandFailed` → the brain retries the stall up to `Brain.retryBudget` (3) times, each re-entering the step and re-arming the in-step counter (the same retry-re-arms-the-counter shape recorded in `brain-salvage-build.md`). **3 brain retries × 3 in-step dispatch retries = up to 12 dispatch attempts** before the brain's own budget exhausts and the stall escalates to an operator.
+
+Full suite via the JSON event stream, final state: DirectiveEngineTests 1398/1398, GameServicesTests 280/280, GameSyncTests 65/65, DirectivesFeatureTests 260/260, GameModelsTests 119/119 — all green (baseline 2117 + 5 new tests across the run = 2122).
+
+Commits: `e40bbe1` (WIP checkpoint — vocabulary + retry counter, before the governor fix), `037852c` (`fix(governor): exclude .failed ops from the per-step de-dup`), plus this bookkeeping commit (`docs(directives): ticket 06 — resolved, governor seam fixed, worst case recorded`).
