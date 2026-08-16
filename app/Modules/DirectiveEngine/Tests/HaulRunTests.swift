@@ -596,9 +596,8 @@ struct HaulRunTests {
         #expect(action == .stall(.commandRejected))
     }
 
-    /// A Retry (`.resolved`) re-arms the budget exactly like
-    /// `SalvageRun.stepEntryCount` — an operator's Retry must buy a genuinely
-    /// new attempt, not replay an exhausted one.
+    /// A Retry (`.resolved`) re-arms this log-scoped budget — an operator's
+    /// Retry must buy a genuinely new attempt, not replay an exhausted one.
     @Test func dispatchingRetryReArmsTheBudget() {
         var log: [DirectiveLogEntry] = []
         var when = fixtureNow.addingTimeInterval(-120)

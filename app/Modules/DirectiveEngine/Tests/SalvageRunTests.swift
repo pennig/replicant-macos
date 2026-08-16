@@ -133,24 +133,12 @@ private func world(
     )
 }
 
-/// A `.stepStarted` timeline entry — the row `DirectiveExecutor.move` writes on
-/// every step transition, and the one `SalvageRun.stepEntryCount` counts to
-/// decide whether a re-entering step has already spent its read.
+/// A `.stepStarted` timeline entry — the row `DirectiveExecutor.move` writes
+/// on every step transition.
 private func stepStarted(_ step: String, at occurredAt: Date) -> DirectiveLogEntry {
     DirectiveLogEntry(
         id: "S-\(step)-\(occurredAt.timeIntervalSince1970)", directiveID: "D1",
         deviceCode: nil, kind: .stepStarted, summary: "Step: \(step)", step: step,
-        operationID: nil, eventID: nil, occurredAt: occurredAt
-    )
-}
-
-/// The entry `DirectiveResolutionClient` writes when the operator resolves a
-/// stall. It re-arms the read budget: a Retry has to be able to buy a genuinely
-/// new look, or it is a no-op over an unchanged snapshot.
-private func resolvedEntry(_ step: String, at occurredAt: Date) -> DirectiveLogEntry {
-    DirectiveLogEntry(
-        id: "R-\(occurredAt.timeIntervalSince1970)", directiveID: "D1",
-        deviceCode: nil, kind: .resolved, summary: "Retried \(step)", step: step,
         operationID: nil, eventID: nil, occurredAt: occurredAt
     )
 }
@@ -888,18 +876,10 @@ struct SalvageRunMiningTests {
         #expect(SalvageRun().nextAction(directive: running(step: "configuring"), world: world) == .wait)
     }
 
-    /// The bound on that wait: `.wait` is the only `MissionAction` that never
-    /// re-stamps `stepStartedAt` (`DirectiveExecutor.apply`'s `.wait` case is
-    /// a pure no-op — every other case, including `.refreshSystem`, commits
-    /// through `move()`), so it's the only way this backstop can genuinely
-    /// accumulate. Past `systemResolutionDeadline` the run spends ONE
-    /// authoritative read — the fix for an Important review finding: the stall
-    /// this used to raise told the operator to "retry to fetch it again", but
-    /// nothing on this path ever fetched anything and `retry` only re-stamps the
-    /// clock, so Retry re-ran a pure function over the identical snapshot and
-    /// re-stalled forever. The only real exit was Skip, which permanently
-    /// forfeits a system that may hold real salvage.
-    @Test func readsTheSystemOnceBeforeGivingUpOnIt() {
+    /// The bound on that wait: `.wait` never re-stamps `stepStartedAt`, so this
+    /// deadline genuinely accumulates now. Past it, the run reads while
+    /// `systemUnresolvedRetryWindow` still allows it.
+    @Test func readsTheSystemWhileTheRetryWindowAllowsIt() {
         let directive = running(
             step: "configuring",
             stepStartedAt: now.addingTimeInterval(-SalvageRun.systemResolutionDeadline - 1)
@@ -909,41 +889,33 @@ struct SalvageRunMiningTests {
             == .refreshSystem(designation: "TOSLIT", nextStep: "configuring"))
     }
 
-    /// Once that read has been spent — the step has been entered twice with no
-    /// resolution in between — the run surfaces rather than refreshing forever.
+    /// Past `systemUnresolvedRetryWindow` too, the run surfaces rather than
+    /// reading forever. `stepStartedAt` alone governs — no log fixture needed —
+    /// since a same-step `.refreshSystem` leaves it untouched.
     @Test func stallsWhenTheTargetSystemNeverResolves() {
         let directive = running(
             step: "configuring",
-            stepStartedAt: now.addingTimeInterval(-SalvageRun.systemResolutionDeadline - 1)
+            stepStartedAt: now.addingTimeInterval(
+                -(SalvageRun.systemResolutionDeadline + SalvageRun.systemUnresolvedRetryWindow + 1)
+            )
         )
-        let world = world(
-            devices: [atSystem, controller, drone],
-            log: [stepStarted("configuring", at: now.addingTimeInterval(-1_200)),
-                  stepStarted("configuring", at: now.addingTimeInterval(-601))],
-            now: now
-        )
+        let world = world(devices: [atSystem, controller, drone], now: now) // still no "TOSLIT" entry
         #expect(SalvageRun().nextAction(directive: directive, world: world)
             == .stall(.salvageSystemUnresolved))
     }
 
-    /// And the operator's Retry re-arms it. This is what makes the stall's
-    /// guidance true: `DirectiveResolutionClient.retry` writes a `.resolved`
-    /// entry, which ends the budget walk, so the very next deadline buys a fresh
-    /// authoritative read rather than replaying the stale snapshot.
-    @Test func aRetryBuysAnotherReadRatherThanReplayingTheStall() {
-        let directive = running(
-            step: "configuring",
-            stepStartedAt: now.addingTimeInterval(-SalvageRun.systemResolutionDeadline - 1)
-        )
+    /// And the operator's Retry re-arms it — `DirectiveResolutionClient.retry`
+    /// stamps `stepStartedAt = now` directly. Old `.stepStarted` log history
+    /// (nothing clears it) must not count against the reset deadline.
+    @Test func aRetryStartsTheDeadlineOverRatherThanReplayingTheStall() {
+        let directive = running(step: "configuring", stepStartedAt: now)
         let world = world(
             devices: [atSystem, controller, drone],
-            log: [stepStarted("configuring", at: now.addingTimeInterval(-1_200)),
-                  stepStarted("configuring", at: now.addingTimeInterval(-900)),
-                  resolvedEntry("configuring", at: now.addingTimeInterval(-601))],
+            log: [stepStarted("configuring", at: now.addingTimeInterval(-3_600)),
+                  stepStarted("configuring", at: now.addingTimeInterval(-1_800))],
             now: now
         )
-        #expect(SalvageRun().nextAction(directive: directive, world: world)
-            == .refreshSystem(designation: "TOSLIT", nextStep: "configuring"))
+        #expect(SalvageRun().nextAction(directive: directive, world: world) == .wait)
     }
 }
 
@@ -1064,18 +1036,15 @@ struct SalvageRunVerificationTests {
         #expect(SalvageRun().nextAction(directive: running(step: "verifying"), world: world) == .wait)
     }
 
-    /// The bound on that wait, same shape, deadline and one-read budget as
-    /// `configure`'s.
+    /// The bound on that wait, same shape and deadline as `configure`'s.
     @Test func stallsWhenTheSystemNeverResolves() {
         let directive = running(
             step: "verifying",
-            stepStartedAt: fixtureNow.addingTimeInterval(-SalvageRun.systemResolutionDeadline - 1)
+            stepStartedAt: fixtureNow.addingTimeInterval(
+                -(SalvageRun.systemResolutionDeadline + SalvageRun.systemUnresolvedRetryWindow + 1)
+            )
         )
-        let world = world(
-            devices: [atSystem, controller, drone], // still no "TOSLIT" entry
-            log: [stepStarted("verifying", at: fixtureNow.addingTimeInterval(-1_200)),
-                  stepStarted("verifying", at: fixtureNow.addingTimeInterval(-601))]
-        )
+        let world = world(devices: [atSystem, controller, drone]) // still no "TOSLIT" entry
         #expect(SalvageRun().nextAction(directive: directive, world: world)
             == .stall(.salvageSystemUnresolved))
     }
@@ -1131,18 +1100,18 @@ struct SalvageRunLoopProgressTests {
             == .refreshBody(system: "TOSLIT", body: "TOSLIT-6-5", nextStep: "verifying"))
     }
 
-    /// Once that read has been spent and the body is STILL on offer, the run
-    /// surfaces instead of looping — naming the body, so the operator can tell
-    /// WHICH site the run means without touring the system by hand.
+    /// Past `bodyUnresolvedRetryWindow` too, and the body is STILL on offer,
+    /// the run surfaces instead of looping — naming the body, so the operator
+    /// can tell WHICH site the run means without touring the system by hand.
     @Test func stallsWhenAWorkedBodyNeverDrains() {
         let directive = running(
             step: "verifying",
-            stepStartedAt: fixtureNow.addingTimeInterval(-SalvageRun.depletionPropagationGrace - 1)
+            stepStartedAt: fixtureNow.addingTimeInterval(
+                -(SalvageRun.depletionPropagationGrace + SalvageRun.bodyUnresolvedRetryWindow + 1)
+            )
         )
         let world = world(
             devices: [atSystem, worked("TOSLIT-6-5"), drone],
-            log: [stepStarted("verifying", at: fixtureNow.addingTimeInterval(-120)),
-                  stepStarted("verifying", at: fixtureNow.addingTimeInterval(-60))],
             systems: ["TOSLIT": miningToslit], siteAssays: miningToslitAssays
         )
         #expect(SalvageRun().nextAction(directive: directive, world: world)

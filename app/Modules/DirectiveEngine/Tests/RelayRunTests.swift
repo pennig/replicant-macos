@@ -1232,9 +1232,9 @@ struct RelayRunEmplaceTests {
         #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.emplacing), world: snapshot) == .wait)
     }
 
-    /// Past the deadline the backstop spends ONE authoritative catalogue read
-    /// before giving up, so the stall's own guidance ("Retry to fetch it again")
-    /// is true rather than a dead end over an unchanged snapshot.
+    /// Past the deadline the backstop reads the catalogue while
+    /// `systemUnresolvedRetryWindow` still allows it, so the stall's own
+    /// guidance ("Retry to fetch it again") is true rather than a dead end.
     @Test func readsTheCatalogueOnceTheResolutionDeadlinePasses() {
         let snapshot = world(devices: [carrier(location: "VEGA"), relay(stowedIn: "V1")])
         let overdue = running(
@@ -1243,6 +1243,20 @@ struct RelayRunEmplaceTests {
         )
         #expect(RelayRun().nextAction(directive: overdue, world: snapshot)
                 == .refreshSystem(designation: "VEGA", nextStep: RelayRun.Step.emplacing))
+    }
+
+    /// Past `systemUnresolvedRetryWindow` too, the run surfaces rather than
+    /// reading forever — `stepStartedAt` alone bounds it, since a same-step
+    /// `.refreshSystem` leaves it untouched every tick.
+    @Test func stallsWhenTheTargetSystemNeverResolves() {
+        let snapshot = world(devices: [carrier(location: "VEGA"), relay(stowedIn: "V1")])
+        let overdue = running(
+            step: RelayRun.Step.emplacing,
+            stepStartedAt: fixtureNow.addingTimeInterval(
+                -(SalvageRun.systemResolutionDeadline + SalvageRun.systemUnresolvedRetryWindow + 1)
+            )
+        )
+        #expect(RelayRun().nextAction(directive: overdue, world: snapshot) == .stall(.salvageSystemUnresolved))
     }
 }
 
