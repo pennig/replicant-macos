@@ -67,3 +67,18 @@ occupied. Ticket 04's review judged a nil `deviceCode` on a
 deliberately; moving the mark outside the guard would silently reopen
 that deferred question as a side effect of this ticket, which isn't
 mine to decide. If it needs revisiting, that's its own ticket.
+
+**Review round 2, fixed in `dd772fd`:** two findings. (1) The file
+header was 11 `//`-prefixed lines, not 10 — trimmed by dropping the
+trailing blank separator line. (2) `markUrgent` never self-triggered a
+drain for a visible device, so a device open in the inspector whose
+live op closed waited up to `drainInterval` for its read — slower than
+the ordinary tier, and the opposite of what `deviceRoute`'s own comment
+claims. Confirmed `drainSoon()` only schedules an earlier `drainPass()`
+call, which still enforces `maxPerPass`/`urgentPerPass` — no cap
+bypass — so `markUrgent` now calls `drainSoon()` when `visible.contains`,
+mirroring `markStale` exactly; `markNew` still rides the periodic loop
+only (the burst risk it guards against is real, per the original
+report). Covered by a new test exercising the previously-untested
+visible+urgent combination. `GameServicesTests` (283) and `GameSyncTests`
+(66) re-ran green through the JSON event stream.
