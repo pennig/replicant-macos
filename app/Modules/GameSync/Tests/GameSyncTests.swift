@@ -468,6 +468,96 @@ private final class SharedCursorStore: EventCursorStore, @unchecked Sendable {
             #expect(closed == 2)   // both completions folded in from the payload
         }
     }
+
+    /// The bug this ticket fixed lived here, not just in `Reconciler`: an
+    /// arrival driven through `deviceRoute` must close the op AND patch the
+    /// location the caller actually reads.
+    @Test func arrivalThroughDeviceRouteClosesOpAndPatchesLocation() async throws {
+        let database = try GameDatabase.bootstrap()
+        let now = Date(timeIntervalSince1970: 10_000)
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.uuid = .incrementing
+            $0.date = .constant(now)
+            $0.deviceRefresher = DeviceRefreshClient { _, _ in nil }
+            $0.deviceStaleness.markStale = { _, _ in }
+        } operation: {
+            await Reconciler().ingest(device("V1", at: now.addingTimeInterval(-60)))
+            try await database.write { db in
+                try Operation.insert {
+                    Operation(
+                        id: "op-arrival", entityCode: "V1", kind: OperationKind.travel.rawValue,
+                        status: .active, source: OperationSource.poll,
+                        startedAt: now.addingTimeInterval(-60), completesAt: now,
+                        lastConfirmedAt: now.addingTimeInterval(-60), detail: .object([:])
+                    )
+                }.execute(db)
+            }
+
+            await GameSync.deviceRoute(reconciler: Reconciler()).apply(GameEventEnvelope(
+                id: "1-0", category: "travel", event: "travel.arrived",
+                deviceCode: "V1", location: "TAU-2",
+                createdAt: "2026-07-20T01:01:00Z"
+            ))
+
+            let op = try await database.read { db in
+                try Operation.where { $0.id.eq("op-arrival") }.fetchOne(db)
+            }
+            let stored = try await database.read { db in
+                try Device.where { $0.deviceCode.eq("V1") }.fetchOne(db)
+            }
+            #expect(op?.status == OperationStatus.completed)
+            #expect(stored?.location == "TAU-2")
+        }
+    }
+
+    /// A malformed `createdAt` (`event.date == nil`) still closes the op —
+    /// unconditionally, exactly like the pre-ticket path — but attempts no
+    /// field patch: no location write, no `updatedAt` stamp.
+    @Test func nilEventTimeClosesOpButLeavesTheDeviceRowAlone() async throws {
+        let database = try GameDatabase.bootstrap()
+        let now = Date(timeIntervalSince1970: 10_000)
+        let seededUpdatedAt = now.addingTimeInterval(-5)
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.uuid = .incrementing
+            $0.date = .constant(now)
+            $0.deviceRefresher = DeviceRefreshClient { _, _ in nil }
+            $0.deviceStaleness.markStale = { _, _ in }
+        } operation: {
+            var seeded = device("V1", at: seededUpdatedAt)
+            seeded.location = "SOL-1"
+            await Reconciler().ingest(seeded)
+
+            try await database.write { db in
+                try Operation.insert {
+                    Operation(
+                        id: "op-nil-time", entityCode: "V1", kind: OperationKind.travel.rawValue,
+                        status: .active, source: OperationSource.poll,
+                        startedAt: now.addingTimeInterval(-60), completesAt: now,
+                        lastConfirmedAt: now.addingTimeInterval(-60), detail: .object([:])
+                    )
+                }.execute(db)
+            }
+
+            await GameSync.deviceRoute(reconciler: Reconciler()).apply(GameEventEnvelope(
+                id: "1-0", category: "travel", event: "travel.arrived",
+                deviceCode: "V1", location: "TAU-2", createdAt: nil
+            ))
+
+            let op = try await database.read { db in
+                try Operation.where { $0.id.eq("op-nil-time") }.fetchOne(db)
+            }
+            let stored = try await database.read { db in
+                try Device.where { $0.deviceCode.eq("V1") }.fetchOne(db)
+            }
+            #expect(op?.status == OperationStatus.completed, "the op still closes unconditionally")
+            #expect(stored?.location == "SOL-1", "no field patch without a real eventTime")
+            #expect(stored?.updatedAt == seededUpdatedAt, "the watermark is untouched")
+        }
+    }
 }
 
 // MARK: - Bobnet decoding

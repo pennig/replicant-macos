@@ -309,15 +309,21 @@ extension GameSync {
         EventRoute(id: "device.event", match: .all) { event in
             @Dependency(\.deviceRefresher) var deviceRefresher
             @Dependency(\.deviceStaleness) var deviceStaleness
-            @Dependency(\.date) var date
             guard let code = event.deviceCode, !code.isEmpty else { return }
             // Op close and the location/stow patch are ONE transaction — no
             // reader sees "closed, old location" (memory: arrival-single-transaction.md).
-            let completedOp = await reconciler.applyDeviceEvent(
-                deviceCode: code, event: event,
-                location: event.location, stow: stowChange(for: event),
-                eventTime: event.date ?? date.now
-            )
+            let completedOp: Bool
+            if let eventTime = event.date {
+                completedOp = await reconciler.applyDeviceEvent(
+                    deviceCode: code, event: event,
+                    location: event.location, stow: stowChange(for: event),
+                    eventTime: eventTime
+                )
+            } else {
+                // A malformed `createdAt` can't vouch for a field patch — close
+                // the op only, matching the pre-ticket no-op on the row.
+                completedOp = await reconciler.applyOperationEvent(event)
+            }
             // A finished print job spawns a brand-new device (the printed clone)
             // whose code isn't in the local fleet yet — a single-device confirm-read
             // of the printer can't surface it. The event payload names it
