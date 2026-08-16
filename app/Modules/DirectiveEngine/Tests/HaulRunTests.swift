@@ -1383,6 +1383,98 @@ struct HaulRunTheatreScopingTests {
         }
         #expect(deviceCode == "CTRL-A")
     }
+
+    /// An explicit per-theatre tag is the operator's statement of ownership and
+    /// outranks where the controller happens to stand.
+    @Test func anExplicitPerTheatreTagOutranksTheControllersLocation() {
+        let ctrlA = controller("CTRL-A", tags: ["auto:haul"], location: "AINALRAM-BELT-1")
+        let away = controller(
+            "CTRL-B", tags: ["auto:haul", "auto:haul:denebed-belt-1"], location: "AINALRAM-BELT-1"
+        )
+        let world = twoTheatreWorld(ctrlA, away)
+
+        let forDenebed = HaulRun.controllers(
+            in: world, tag: "auto:haul:DENEBED-BELT-1", theatreDepot: denebed.depot
+        )
+
+        #expect(forDenebed.map(\.deviceCode) == ["CTRL-B"])
+    }
+
+    /// The bare tag is a migration fallback for a device that named no theatre.
+    /// One that names another theatre has migrated, and must not be claimed back.
+    @Test func theBareTagFallbackSkipsAControllerTaggedForAnotherTheatre() {
+        let migrated = controller(
+            "CTRL-B", tags: ["auto:haul", "auto:haul:denebed-belt-1"], location: "AINALRAM-BELT-1"
+        )
+        let world = twoTheatreWorld(controller("CTRL-A", tags: ["auto:haul"], location: "AINALRAM-BELT-1"), migrated)
+
+        let forAinalram = HaulRun.controllers(
+            in: world, tag: "auto:haul:AINALRAM-BELT-1", theatreDepot: ainalram.depot
+        )
+
+        #expect(forAinalram.map(\.deviceCode) == ["CTRL-A"])
+    }
+}
+
+// MARK: - Depots are sinks
+
+/// A depot holds a theatre's own working stock. Another theatre's drainer must
+/// never rank it as a pile — see `haul-depots-are-sinks.md`.
+@Suite("HaulRun — a depot is never a source")
+struct HaulDepotSinkTests {
+    private let ainalram = Theatre(
+        depot: "AINALRAM-BELT-1", system: "AINALRAM", origin: .derived, readiness: .operational, stock: 0
+    )
+    private let sagarmadha = Theatre(
+        depot: "SAGARMADHA-2-L4", system: "SAGARMADHA", origin: .pinned, readiness: .operational, stock: 0
+    )
+
+    @Test func anotherTheatresDepotIsNotACandidatePile() {
+        let assignments = HaulTargetPlanner.assignments(
+            controllers: [controller("CTRL-A", location: "AINALRAM-BELT-1")],
+            footprints: ["SAGARMADHA-2-L4": 90_000, "SAGARMADHA-3-1": 400],
+            components: ["AINALRAM": "MESH", "SAGARMADHA": "MESH"],
+            positions: [
+                "AINALRAM": Position(x: 0, y: 0, z: 0), "SAGARMADHA": Position(x: 18, y: 0, z: 0),
+            ],
+            delivery: "AINALRAM-BELT-1",
+            depots: ["AINALRAM-BELT-1", "SAGARMADHA-2-L4"]
+        )
+
+        #expect(assignments.map(\.location) == ["SAGARMADHA-3-1"])
+    }
+
+    /// The end-to-end shape: the run reads the depot set off its own world, so
+    /// a planner handed the right piles is not evidence on its own.
+    @Test func dispatchingNeverPointsAControllerAtASiblingDepot() {
+        let ctrl = controller("CTRL-A", location: "AINALRAM-BELT-1")
+        let world = WorldSnapshot(
+            devices: [ctrl.deviceCode: ctrl],
+            openOperations: [:],
+            footprints: [
+                "SAGARMADHA-2-L4": footprint("SAGARMADHA-2-L4", 90_000),
+                "GRAZ-9": footprint("GRAZ-9", 400),
+            ],
+            starPositions: [
+                "AINALRAM": Position(x: 0, y: 0, z: 0), "SAGARMADHA": Position(x: 18, y: 0, z: 0),
+                "GRAZ": Position(x: 3, y: 0, z: 0),
+            ],
+            components: ["AINALRAM": "MESH", "SAGARMADHA": "MESH", "GRAZ": "MESH"],
+            theatres: [ainalram, sagarmadha],
+            now: fixtureNow
+        )
+        let directive = run(
+            step: HaulRun.Step.dispatching, fleetTag: "auto:haul:AINALRAM-BELT-1",
+            controllerCode: "CTRL-A", theatreDepot: ainalram.depot
+        )
+
+        guard case let .dispatch(_, _, params, _) = HaulRun().nextAction(directive: directive, world: world)
+        else {
+            Issue.record("expected dispatching to issue a set_directive")
+            return
+        }
+        #expect(params.configuration?["collect"]?.stringValue == "GRAZ-9")
+    }
 }
 
 // MARK: - Pinned source

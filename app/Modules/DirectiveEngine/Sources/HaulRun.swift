@@ -105,24 +105,41 @@ public struct HaulRun: MissionStepMachine {
             .sorted { $0.deviceCode < $1.deviceCode }
     }
 
-    /// `theatreDepot`, when given, scopes the result to controllers
-    /// `world.owningTheatre(of:)` places in THAT theatre (see
+    /// `theatreDepot`, when given, scopes the result through `belongs` (see
     /// `haul-run-theatre-scoped-controllers.md`); nil preserves the old read.
     public static func controllers(in world: WorldSnapshot, tag: String, theatreDepot: String? = nil) -> [Device] {
         let matched = controllers(in: world.devices.values, tag: tag)
         guard let theatreDepot else { return matched }
-        return matched.filter { world.owningTheatre(of: $0)?.depot == theatreDepot }
+        return matched.filter {
+            belongs($0, tag: tag, theatreDepot: theatreDepot) { world.owningTheatre(of: $0)?.depot }
+        }
+    }
+
+    /// Whether `device` is `theatreDepot`'s: it wears `tag` itself, or the bare
+    /// fallback claimed it and `owningDepot` places it there. An explicit tag is
+    /// the operator's handover, so it outranks wherever the device stands.
+    public static func belongs(
+        _ device: Device, tag: String, theatreDepot: String, owningDepot: (Device) -> String?
+    ) -> Bool {
+        device.hasTag(tag) || owningDepot(device) == theatreDepot
     }
 
     /// The tag `Brain.ensureHaul` stamps for a theatre at `depot`.
     public static func fleetTag(forTheatre depot: String) -> String { "\(defaultFleetTag):\(depot)" }
 
     /// Whether `device` matches `tag`, or — only when `tag` is a per-theatre
-    /// derivation of the default (`auto:haul:<depot>`), never an arbitrary
-    /// custom tag — the bare default it falls back from.
+    /// derivation of the default and `device` names no theatre of its own —
+    /// the bare default it falls back from.
     static func isFleetTagged(_ device: Device, tag: String) -> Bool {
         let normalized = Device.normalizedTag(tag)
-        return device.hasTag(normalized) || (normalized.hasPrefix("\(defaultFleetTag):") && device.hasTag(defaultFleetTag))
+        if device.hasTag(normalized) { return true }
+        guard normalized.hasPrefix("\(defaultFleetTag):"), device.hasTag(defaultFleetTag) else { return false }
+        return !namesATheatre(device)
+    }
+
+    /// A device naming its own theatre has migrated; the bare fallback retires.
+    private static func namesATheatre(_ device: Device) -> Bool {
+        device.tags.contains { Device.normalizedTag($0).hasPrefix("\(defaultFleetTag):") }
     }
 
     private static func fleetTag(of directive: Directive) -> String {
@@ -160,7 +177,8 @@ public struct HaulRun: MissionStepMachine {
             footprints: world.footprints.mapValues(\.resources),
             components: world.components,
             positions: world.starPositions,
-            delivery: deliverySink(in: world, for: directive)
+            delivery: deliverySink(in: world, for: directive),
+            depots: Set(world.theatres.map(\.depot))
         )
     }
 

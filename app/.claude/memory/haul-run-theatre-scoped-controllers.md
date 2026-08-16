@@ -21,3 +21,11 @@ scoped through a new `WorldSnapshot.owningTheatre(of:)` (mirrors
 `starPositions`/`components`/`theatres`, since a mission never holds a
 `WorldView`). `theatreDepot: nil` (the default) preserves the old unscoped
 read for every other caller and every pre-existing test.
+
+**AMENDED 2026-08-16 — the location filter must apply to BARE matches only.**
+Applied to every matched controller it also overruled an EXPLICIT
+`auto:haul:<depot>` tag, so re-tagging could never move a controller between
+theatres — see [[haul-retag-is-the-handover]]. Both this call site and
+`Brain.haulReadiness` now read `HaulRun.belongs`, which admits an exact tag match
+wherever the device stands. The un-migrated case this note describes is
+unchanged: with no tag of its own, location is still the only discriminator.

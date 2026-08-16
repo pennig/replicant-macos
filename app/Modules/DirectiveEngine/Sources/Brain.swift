@@ -111,6 +111,7 @@ struct Brain: Sendable {
         }
 
         snapshot = await adoptTheatreStamps(snapshot, database: database)
+        snapshot = await rehomeHaulRuns(snapshot, database: database)
 
         // Read before `ensureSurvey` acts, mirroring `ranked`/`theatres`:
         // the report states the tick's SNAPSHOT, not its write. A verdict of
@@ -224,6 +225,50 @@ struct Brain: Sendable {
             if let depot = byID[directives[index].id] {
                 directives[index].theatreDepot = depot
             }
+        }
+        return Snapshot(
+            view: snapshot.view, directives: directives,
+            log: snapshot.log, hubFootprints: snapshot.hubFootprints
+        )
+    }
+
+    /// Re-home general drainers whose `deviceCode` left their fleet, so the
+    /// reservation it carries follows the retag instead of pinning the
+    /// controller to the theatre it was launched in.
+    private func rehomeHaulRuns(_ snapshot: Snapshot, database: any DatabaseWriter) async -> Snapshot {
+        guard !Task.isCancelled else { return snapshot }
+        let moves = Self.rehomedHaulRuns(directives: snapshot.directives, view: snapshot.view)
+        guard !moves.isEmpty else { return snapshot }
+
+        do {
+            try await database.write { db in
+                for move in moves {
+                    guard var row = try Directive.where({ $0.id.eq(move.id) }).fetchOne(db),
+                          Self.owningStatuses.contains(row.status)
+                    else { continue }
+                    if let code = move.deviceCode { row.deviceCode = code }
+                    if move.clearsController { row.controllerCode = nil }
+                    row.updatedAt = self.now
+                    try Directive.upsert { row }.execute(db)
+                    logger.info(
+                        """
+                        haul \(move.id, privacy: .public) re-homed onto \
+                        \(move.deviceCode ?? row.deviceCode, privacy: .public)
+                        """
+                    )
+                }
+            }
+        } catch {
+            logger.error("haul re-home failed: \(error)")
+            return snapshot
+        }
+
+        let byID = Dictionary(uniqueKeysWithValues: moves.map { ($0.id, $0) })
+        var directives = snapshot.directives
+        for index in directives.indices {
+            guard let move = byID[directives[index].id] else { continue }
+            if let code = move.deviceCode { directives[index].deviceCode = code }
+            if move.clearsController { directives[index].controllerCode = nil }
         }
         return Snapshot(
             view: snapshot.view, directives: directives,
@@ -781,6 +826,47 @@ struct Brain: Sendable {
             }
             guard operational.count == 1 else { return nil }
             return (row.id, operational[0].depot)
+        }
+    }
+
+    /// `HaulRun.belongs`, resolved through this view's own theatre rule.
+    private static func haulFleet(
+        _ device: Device, tag: String, depot: String, view: WorldView
+    ) -> Bool {
+        HaulRun.belongs(device, tag: tag, theatreDepot: depot) {
+            owningTheatre(of: $0, view: view)?.depot
+        }
+    }
+
+    /// One general drainer's stale device references. Both columns reserve a
+    /// device account-wide, so either outliving the fleet locks a controller
+    /// out of the theatre its tag now names.
+    struct HaulRehome: Equatable, Sendable {
+        let id: String
+        /// The fleet member to re-home onto, or nil to leave `deviceCode` alone.
+        let deviceCode: String?
+        /// Whether `controllerCode` names a device outside the fleet.
+        let clearsController: Bool
+    }
+
+    /// General drainers holding a device that left their fleet. Pure — the
+    /// caller writes. An empty fleet yields nothing: the row stalls on its own
+    /// `noHaulControllerTagged` path, and blanking it would strand the run.
+    static func rehomedHaulRuns(directives: [Directive], view: WorldView) -> [HaulRehome] {
+        directives.compactMap { row in
+            guard row.kind == .haulRun, owningStatuses.contains(row.status),
+                  isGeneralHaul(row), HaulRun.pinnedSource(of: row) == nil,
+                  let depot = row.theatreDepot
+            else { return nil }
+            let tag = row.fleetTag ?? HaulRun.defaultFleetTag
+            let fleet = HaulRun.controllers(in: view.devices.values, tag: tag)
+                .filter { haulFleet($0, tag: tag, depot: depot, view: view) }
+                .map(\.deviceCode)
+            guard !fleet.isEmpty else { return nil }
+            let member = fleet.contains(row.deviceCode) ? nil : fleet.first
+            let clears = row.controllerCode.map { !fleet.contains($0) } ?? false
+            guard member != nil || clears else { return nil }
+            return HaulRehome(id: row.id, deviceCode: member, clearsController: clears)
         }
     }
 
@@ -1486,7 +1572,7 @@ struct Brain: Sendable {
         let reserved = reservedDevices(directives: directives, devices: view.devices)
         let theatreTag = HaulRun.fleetTag(forTheatre: theatre.depot)
         let candidates = HaulRun.controllers(in: view.devices.values, tag: theatreTag)
-            .filter { owningTheatre(of: $0, view: view)?.depot == theatre.depot }
+            .filter { haulFleet($0, tag: theatreTag, depot: theatre.depot, view: view) }
         guard let controller = candidates.first(where: { !reserved.contains($0.deviceCode) }) else {
             let base = "no free \(HaulRun.defaultFleetTag) controller offering ferry"
             guard let unmigrated = unmigratedHold(

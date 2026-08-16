@@ -1040,6 +1040,126 @@ struct BrainHaulReadinessTests {
         #expect(Brain.isGeneralHaul(untagged) == true, "a nil tag falls back to the default")
         #expect(Brain.isGeneralHaul(drifted) == true, "case drift must not read as a per-site tag")
     }
+
+    /// Retagging is the operator's handover, so the tag decides which theatre
+    /// owns a controller — not the depot it happens to be parked nearest.
+    @Test("a controller tagged for another theatre belongs to that theatre wherever it stands")
+    func anExplicitTagMovesAControllerBetweenTheatres() {
+        let (view, sol, vega) = twoTheatreHaulView(
+            solControllers: [
+                haulController("T1", tags: [HaulRun.defaultFleetTag], location: "SOL-1"),
+                haulController("T2", tags: [HaulRun.defaultFleetTag, "auto:haul:vega-3"], location: "SOL-1"),
+            ],
+            vegaControllers: []
+        )
+
+        #expect(Brain.haulReadiness(view: view, directives: [], theatre: vega) == .launch(controller: "T2"))
+        #expect(Brain.haulReadiness(view: view, directives: [], theatre: sol) == .launch(controller: "T1"))
+    }
+}
+
+// MARK: - Re-homing a general drainer
+
+/// A general drainer's `deviceCode` reserves a controller account-wide, so a
+/// row still naming one that left its fleet locks it out of its new theatre.
+@Suite("Brain — re-homing a general haul run")
+struct BrainHaulRehomeTests {
+    @Test("a row naming a controller that left its fleet is re-homed onto a member")
+    func aRowNamingADepartedControllerIsRehomed() {
+        let (view, sol, _) = twoTheatreHaulView(
+            solControllers: [
+                haulController("T1", tags: [HaulRun.defaultFleetTag, "auto:haul:sol-3"], location: "SOL-1"),
+                haulController("T2", tags: [HaulRun.defaultFleetTag, "auto:haul:vega-3"], location: "SOL-1"),
+            ],
+            vegaControllers: []
+        )
+        let row = directiveFixture(
+            id: "H1", kind: .haulRun, deviceCode: "T2",
+            fleetTag: "auto:haul:SOL-3", theatreDepot: sol.depot
+        )
+
+        let rehomed = Brain.rehomedHaulRuns(directives: [row], view: view)
+
+        #expect(rehomed.map(\.id) == ["H1"])
+        #expect(rehomed.map(\.deviceCode) == ["T1"])
+    }
+
+    /// `controllerCode` reserves too, and `assigning` only re-stamps it on a
+    /// repoint — so a settled run would hold the departed controller for good.
+    @Test("a pinned controller that left the fleet is released even when deviceCode is sound")
+    func aDepartedPinnedControllerIsReleased() {
+        let (view, sol, _) = twoTheatreHaulView(
+            solControllers: [
+                haulController("T1", tags: [HaulRun.defaultFleetTag, "auto:haul:sol-3"], location: "SOL-1"),
+                haulController("T2", tags: [HaulRun.defaultFleetTag, "auto:haul:vega-3"], location: "SOL-1"),
+            ],
+            vegaControllers: []
+        )
+        let row = directiveFixture(
+            id: "H1", kind: .haulRun, deviceCode: "T1", controllerCode: "T2",
+            fleetTag: "auto:haul:SOL-3", theatreDepot: sol.depot
+        )
+
+        let rehomed = Brain.rehomedHaulRuns(directives: [row], view: view)
+
+        #expect(rehomed == [Brain.HaulRehome(id: "H1", deviceCode: nil, clearsController: true)])
+    }
+
+    @Test("a run whose two columns both name fleet members is left alone")
+    func aSoundRowIsLeftAlone() {
+        let view = haulView(devices: [
+            haulController("T1", tags: [HaulRun.defaultFleetTag], location: "SOL-1"),
+        ])
+        let row = directiveFixture(
+            id: "H1", kind: .haulRun, deviceCode: "T1", controllerCode: "T1",
+            fleetTag: "auto:haul:SOL-3", theatreDepot: solTheatre.depot
+        )
+
+        #expect(Brain.rehomedHaulRuns(directives: [row], view: view).isEmpty)
+    }
+
+    @Test("a row whose controller is still in its fleet is left alone")
+    func aRowStillNamingItsOwnControllerIsLeftAlone() {
+        let view = haulView(devices: [
+            haulController("T1", tags: [HaulRun.defaultFleetTag], location: "SOL-1"),
+        ])
+        let row = directiveFixture(
+            id: "H1", kind: .haulRun, deviceCode: "T1",
+            fleetTag: "auto:haul:SOL-3", theatreDepot: solTheatre.depot
+        )
+
+        #expect(Brain.rehomedHaulRuns(directives: [row], view: view).isEmpty)
+    }
+
+    /// With nothing left to name, the row keeps its stale code and stalls on its
+    /// own `noHaulControllerTagged` path — blanking it would strand the reservation.
+    @Test("an empty fleet leaves the row untouched rather than blanking it")
+    func anEmptyFleetLeavesTheRowUntouched() {
+        let view = haulView(devices: [
+            haulController("T2", tags: [HaulRun.defaultFleetTag, "auto:haul:vega-3"], location: "SOL-1"),
+        ])
+        let row = directiveFixture(
+            id: "H1", kind: .haulRun, deviceCode: "T2",
+            fleetTag: "auto:haul:SOL-3", theatreDepot: solTheatre.depot
+        )
+
+        #expect(Brain.rehomedHaulRuns(directives: [row], view: view).isEmpty)
+    }
+
+    /// A pinned mine ferry drives exactly its own `deviceCode`; re-homing one
+    /// would point the row at a controller that is not its belt's.
+    @Test("a per-site ferry row is never re-homed")
+    func aPerSiteFerryRowIsNeverRehomed() {
+        let view = haulView(devices: [
+            haulController("T1", tags: [HaulRun.defaultFleetTag], location: "SOL-1"),
+        ])
+        let row = directiveFixture(
+            id: "PS", kind: .haulRun, deviceCode: "T9",
+            fleetTag: "auto:mine:ALPAHARD", theatreDepot: solTheatre.depot
+        )
+
+        #expect(Brain.rehomedHaulRuns(directives: [row], view: view).isEmpty)
+    }
 }
 
 // MARK: - `Brain.haulStatus` — the why-view's verdict

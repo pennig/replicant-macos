@@ -55,14 +55,15 @@ public enum HaulTargetPlanner {
     public static let secondsPerLy: Double = 30
 
     /// One distinct pile per controller, richest-per-round-trip first, filtered to
-    /// `delivery`'s mesh component. Recompute `footprints` fresh each cycle, never
-    /// cache — and leave surplus controllers unassigned rather than sharing a pile.
+    /// `delivery`'s mesh component. `depots` are sinks, never piles. Recompute
+    /// `footprints` fresh each cycle, and leave surplus controllers unassigned.
     public static func assignments(
         controllers: [Device],
         footprints: [String: Int],
         components: [String: String],
         positions: [String: Position],
         delivery: String,
+        depots: Set<String> = [],
         secondsPerLy: Double = HaulTargetPlanner.secondsPerLy
     ) -> [Assignment] {
         let deliverySystem = SiteAssay.system(of: delivery)
@@ -82,7 +83,7 @@ public enum HaulTargetPlanner {
 
         let candidates = footprints
             .filter { location, units in
-                guard units > 0, location != delivery else { return false }
+                guard units > 0, location != delivery, !depots.contains(location) else { return false }
                 let system = SiteAssay.system(of: location)
                 // Same system is always `shuttle` (nothing crosses a star);
                 // cross-system `ferry` needs both ends in the SAME component.
