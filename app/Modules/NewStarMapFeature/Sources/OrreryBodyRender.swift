@@ -10,10 +10,8 @@ import CStarMapShaderTypes
 import UniverseModels
 import simd
 
-/// A body positioned for this frame — the shared placement (world center + scene
-/// radius, plus the light source) and the material inputs, so the opaque body pass
-/// and the atmosphere-halo pass draw at exactly the same spot without recomputing
-/// the orbit math twice.
+/// A body's placement and material inputs for one frame, shared by the body,
+/// ring, and atmosphere-halo passes so all three draw at exactly the same spot.
 struct PlacedBody {
     var isCentral: Bool           // the drilled planet (opaque + size-morphing), not a moon/planet
     var center: SIMD3<Float>
@@ -27,10 +25,9 @@ struct PlacedBody {
     var surfaceTempC: Double?
     var atmosphere: Atmosphere
     var appearanceSeed: Float
-    /// Spin phase in radians at t = 0. For a free-rotating body this is its stable
-    /// per-body offset (so two planets of a type aren't rotated identically); for a
-    /// TIDALLY LOCKED body it is the body's orbit angle, which — paired with
-    /// `spinRate == 0` — keeps its near face toward its parent as it goes round.
+    /// Spin phase in radians at t = 0. For a TIDALLY LOCKED body this is its orbit
+    /// angle, which — paired with `spinRate == 0` — keeps its near face toward its
+    /// parent as it goes round.
     var spinPhase: Float
     /// The body's north pole (unit, world space) — the frame it is textured in.
     var spinAxis: SIMD3<Float>
@@ -44,19 +41,17 @@ struct PlacedBody {
     var rings: RingSystem?
 }
 
-/// Pack a placed body's resolved `PlanetMaterial` surface into the GPU uniform — base +
-/// terrain albedos, the procedural style index, biosphere strength, and the
-/// estimated flag — plus a deterministic per-body spin seed so each planet's
-/// texture is rotated differently (and stably across launches).
+/// Pack a placed body's resolved `PlanetMaterial` surface into the GPU uniform:
+/// albedos, procedural style, biosphere strength, the estimated flag, and a
+/// deterministic per-body spin seed for stable, distinct planet rotation.
 func bodyUniform(_ p: PlacedBody) -> OrreryBodyUniform {
     let s = PlanetMaterial.surface(for: p.type, lifeStage: p.lifeStage, estimated: p.estimated,
                                    tags: p.tags, surfaceTempC: p.surfaceTempC,
                                    atmosphere: p.atmosphere,
                                    inHabitableZone: p.inHabitableZone,
                                    hasSubsurfaceOcean: p.ocean > 0)
-    // Only the MID and SHORT semi-axes travel to the GPU: the axes are normalised to
-    // unit product, so the shader recovers the long one as 1/(mid·short) and two
-    // floats carry the whole shape. A regular body sends zeroes and never reads them.
+    // Only the MID and SHORT semi-axes travel to the GPU, unit-product-normalised —
+    // the shader recovers the long axis as 1/(mid·short).
     let axes = p.irregularity > 0
         ? PlanetMaterial.irregularAxes(seed: p.appearanceSeed)
         : SIMD3<Float>(1, 0, 0)
