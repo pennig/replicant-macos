@@ -1978,40 +1978,6 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
         }
     }
 
-    /// A body positioned for this frame — the shared placement (world center + scene
-    /// radius, plus the light source) and the material inputs, so the opaque body pass
-    /// and the atmosphere-halo pass draw at exactly the same spot without recomputing
-    /// the orbit math twice.
-    private struct PlacedBody {
-        var isCentral: Bool           // the drilled planet (opaque + size-morphing), not a moon/planet
-        var center: SIMD3<Float>
-        var radius: Float
-        var sun: SIMD3<Float>         // light source (world), so both draws share it
-        var type: PlanetType
-        var lifeStage: String?
-        var estimated: Bool
-        var tags: [String]
-        var inHabitableZone: Bool
-        var surfaceTempC: Double?
-        var atmosphere: Atmosphere
-        var appearanceSeed: Float
-        /// Spin phase in radians at t = 0. For a free-rotating body this is its stable
-        /// per-body offset (so two planets of a type aren't rotated identically); for a
-        /// TIDALLY LOCKED body it is the body's orbit angle, which — paired with
-        /// `spinRate == 0` — keeps its near face toward its parent as it goes round.
-        var spinPhase: Float
-        /// The body's north pole (unit, world space) — the frame it is textured in.
-        var spinAxis: SIMD3<Float>
-        /// Signed spin rate (rad/s); negative is retrograde, 0 is tidally locked.
-        var spinRate: Float
-        /// Subsurface-ocean cryo-fracture amount (0…1).
-        var ocean: Float
-        /// Silhouette irregularity (0 = smooth sphere). See `PlanetMaterial.irregularity`.
-        var irregularity: Float
-        /// The body's ring system, if it has one — drives the ring pass.
-        var rings: RingSystem?
-    }
-
     /// Place every body of one orrery layer for this frame: the drilled central body
     /// (body level), each orbiting planet/moon at its animated angle, and — since the
     /// swarm is drawn as real impostors, not points — every swarm member too. Explicitly
@@ -2117,57 +2083,6 @@ final class StarFieldRenderer: NSObject, MTKViewDelegate {
                 rings: nil))
         }
         return placed
-    }
-
-    /// Pack a placed body's resolved `PlanetMaterial` surface into the GPU uniform — base +
-    /// terrain albedos, the procedural style index, biosphere strength, and the
-    /// estimated flag — plus a deterministic per-body spin seed so each planet's
-    /// texture is rotated differently (and stably across launches).
-    private func bodyUniform(_ p: PlacedBody) -> OrreryBodyUniform {
-        let s = PlanetMaterial.surface(for: p.type, lifeStage: p.lifeStage, estimated: p.estimated,
-                                       tags: p.tags, surfaceTempC: p.surfaceTempC,
-                                       atmosphere: p.atmosphere,
-                                       inHabitableZone: p.inHabitableZone,
-                                       hasSubsurfaceOcean: p.ocean > 0)
-        // Only the MID and SHORT semi-axes travel to the GPU: the axes are normalised to
-        // unit product, so the shader recovers the long one as 1/(mid·short) and two
-        // floats carry the whole shape. A regular body sends zeroes and never reads them.
-        let axes = p.irregularity > 0
-            ? PlanetMaterial.irregularAxes(seed: p.appearanceSeed)
-            : SIMD3<Float>(1, 0, 0)
-        return OrreryBodyUniform(
-            centerRadius: SIMD4(p.center, p.radius),
-            color: SIMD4(s.base, s.polarIce),
-            sunEmissive: SIMD4(p.sun, s.greenVibrancy),
-            detailColor: SIMD4(s.detail, Float(s.style.rawValue)),
-            surfaceParams: SIMD4(s.estimated ? 1 : 0, s.life, p.spinPhase, p.appearanceSeed),
-            surfaceMods: SIMD4(s.mods.craters, s.mods.atmosphere, s.mods.lava, s.mods.frost),
-            spinAxis: SIMD4(p.spinAxis, p.spinRate),
-            surfaceExtras: SIMD4(p.ocean, p.irregularity, axes.y, axes.z))
-    }
-
-    /// The ring uniform for a placed body, or `nil` if it has no rings. Same
-    /// centre/radius/sun as the body draw so the annulus registers exactly with the
-    /// limb, and the same pole so it lies in the body's true equatorial plane.
-    private func ringUniform(_ p: PlacedBody) -> OrreryRingUniform? {
-        guard let r = p.rings else { return nil }
-        return OrreryRingUniform(
-            centerRadius: SIMD4(p.center, p.radius),
-            poleInner: SIMD4(p.spinAxis, r.innerFrac),
-            sunOuter: SIMD4(p.sun, r.outerFrac),
-            tintSeed: SIMD4(r.tint, r.seed))
-    }
-
-    /// The atmosphere-halo uniform for a placed body, or `nil` if it gets no shell (a
-    /// giant, or an airless/unscanned reading). Same center/radius as the body draw so
-    /// the halo registers exactly with the limb; lit by the same orrery sun.
-    private func atmosphereUniform(_ p: PlacedBody) -> OrreryAtmosphereUniform? {
-        guard let shell = PlanetMaterial.atmosphereShell(for: p.type, atmosphere: p.atmosphere,
-                                                         tags: p.tags) else { return nil }
-        return OrreryAtmosphereUniform(
-            centerRadius: SIMD4(p.center, p.radius),
-            sunExtent: SIMD4(p.sun, shell.extent),
-            tintDensity: SIMD4(shell.tint, shell.density))
     }
 
     /// The per-frame annotation pips: a centred row of indicator dots above each
