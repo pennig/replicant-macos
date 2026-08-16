@@ -579,9 +579,8 @@ struct RestockRunTests {
                 == .advanceStep(nextStep: RestockRun.Step.stocking))
     }
 
-    /// **The co-tenant fix.** `openOperation` used to read ANY op at the hub as
-    /// this run's own, so a print another directive queued there blocked the
-    /// enqueue outright — the defect `75ca544` already fixed in `MineFleetPrint`.
+    /// Owner-scoped: a co-tenant's print at the hub is invisible to this
+    /// guard, so it must never block starting this run's own.
     @Test("a co-tenant's print at the hub does not block starting our own")
     func coTenantPrintDoesNotBlockDispatch() {
         let directive = restockRun(targets: ["VEGA", "ALTAIR"])

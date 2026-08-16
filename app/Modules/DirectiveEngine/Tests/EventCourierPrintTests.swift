@@ -187,8 +187,8 @@ struct EventCourierPrintTests {
         #expect(action == .advanceStep(nextStep: EventCourierPrint.Step.replicating))
     }
 
-    /// **The co-tenant fix**, mirroring `RestockRun`'s: a print another
-    /// directive queued at the printer must not block starting this run's own.
+    /// Owner-scoped, mirroring `RestockRun`'s guard: a print another directive
+    /// queued at the printer must not block starting this run's own.
     @Test("a co-tenant's print at the printer does not block starting our own")
     func coTenantPrintDoesNotBlockDispatch() {
         let openOperations = ["PRINTER": GameModels.Operation(

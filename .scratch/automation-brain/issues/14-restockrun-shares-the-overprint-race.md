@@ -102,3 +102,19 @@ device sweep.
 
 Filed 2026-08-10 while implementing ticket 13, which the operator deliberately
 scoped to `MineFleetPrint` alone.
+
+Directives-architecture ticket 07 (2026-08-16,
+`.scratch/directives-architecture/issues/07-snapshot-owner-aware-ops-and-freshness.md`)
+touched `RestockRun.printing` next to this ticket's own quoted snippet, but
+fixed a DIFFERENT defect: the open-op guard read any device's op as this run's
+own, so a co-tenant's print at the shared bench blocked the deadline from ever
+firing. That guard is now owner-scoped and the deadline check moved above it.
+
+**This ticket's race is still open.** `printing`'s unconditional
+`.advanceStep(nextStep: .stocking)` the moment no *own* op is open — before the
+printed clone's device row has landed — is unchanged; ticket 07 did not port a
+`fleetEvidenceIsStale`-shaped gate into `RestockRun.stocking`. Left at
+`needs-triage` rather than marked resolved, since the fix this ticket asks for
+was not implemented. `WorldSnapshot.isFresh(_:since:)`, added by ticket 07, is
+available for whoever picks this up — the watermark work here is now a
+one-line call rather than a hand-rolled compare.
