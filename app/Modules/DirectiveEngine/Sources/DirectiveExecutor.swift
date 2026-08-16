@@ -106,7 +106,10 @@ enum DirectiveExecutor {
             // would strand a mission that is fine.
             @Dependency(\.locationsClient) var locationsClient
             try? await locationsClient.hydrateSystem(designation: designation)
-            await move(directive, to: nextStep, controllerCode: directive.controllerCode)
+            await move(
+                directive, to: nextStep, controllerCode: directive.controllerCode,
+                restamp: nextStep != directive.step
+            )
             return true
 
         case let .scanSystem(designation, nextStep):
@@ -123,14 +126,20 @@ enum DirectiveExecutor {
             } else {
                 logger.notice("directive \(directive.id, privacy: .public): no replicant in \(designation, privacy: .public) to scan with")
             }
-            await move(directive, to: nextStep, controllerCode: directive.controllerCode)
+            await move(
+                directive, to: nextStep, controllerCode: directive.controllerCode,
+                restamp: nextStep != directive.step
+            )
             return true
 
         case let .refreshBody(system, body, nextStep):
             // Best-effort by contract, same reasoning as `.refreshSystem` above.
             @Dependency(\.locationsClient) var locationsClient
             try? await locationsClient.hydrateBody(systemDesignation: system, bodyDesignation: body)
-            await move(directive, to: nextStep, controllerCode: directive.controllerCode)
+            await move(
+                directive, to: nextStep, controllerCode: directive.controllerCode,
+                restamp: nextStep != directive.step
+            )
             return true
 
         case let .setDeviceTags(deviceCode, tags, nextStep):
@@ -154,7 +163,10 @@ enum DirectiveExecutor {
             } catch {
                 logger.notice("directive \(directive.id, privacy: .public): tag update for \(deviceCode, privacy: .public) failed: \(error) — advancing anyway")
             }
-            await move(directive, to: nextStep, controllerCode: directive.controllerCode)
+            await move(
+                directive, to: nextStep, controllerCode: directive.controllerCode,
+                restamp: nextStep != directive.step
+            )
             return true
 
         case let .refreshDevices(_, thenStall), let .refreshDevicesInSystem(_, thenStall),
@@ -319,9 +331,9 @@ enum DirectiveExecutor {
     /// Move `directive` to `nextStep`, setting its controller to
     /// `controllerCode`, with the matching timeline entry.
     ///
-    /// `stepStartedAt` is re-stamped UNCONDITIONALLY, with no same-step
-    /// exception, so a step that dispatches with `nextStep` equal to its own
-    /// step restarts its own deadline every tick and can never time out.
+    /// `restamp` defaults to true; a same-step read passes false, leaving
+    /// `stepStartedAt` alone so the deadline keeps accumulating — and (per
+    /// `restamp || nextStep != directive.step`) logging nothing, like `.wait`.
     ///
     /// `deviceCode` defaults to nil and is separate from `controllerCode`
     /// (which every caller sets, usually to `directive.controllerCode`
@@ -333,7 +345,8 @@ enum DirectiveExecutor {
         to nextStep: String,
         controllerCode: String?,
         deviceCode: String? = nil,
-        claimedRelayCode: String? = nil
+        claimedRelayCode: String? = nil,
+        restamp: Bool = true
     ) async {
         @Dependency(\.date) var date
         @Dependency(\.uuid) var uuid
@@ -343,13 +356,14 @@ enum DirectiveExecutor {
         // Nil leaves an existing claim standing: every other transition passes
         // nil, and none of them means "the run has let go of its relay".
         if let claimedRelayCode { updated.claimedRelayCode = claimedRelayCode }
-        updated.stepStartedAt = date.now
+        if restamp { updated.stepStartedAt = date.now }
         updated.updatedAt = date.now
-        await commit(updated, [
-            entry(directive, .stepStarted, "Step: \(nextStep)",
-                  step: nextStep, operationID: nil, deviceCode: deviceCode,
-                  id: uuid().uuidString, at: date.now),
-        ])
+        let entries = restamp || nextStep != directive.step
+            ? [entry(directive, .stepStarted, "Step: \(nextStep)",
+                     step: nextStep, operationID: nil, deviceCode: deviceCode,
+                     id: uuid().uuidString, at: date.now)]
+            : []
+        await commit(updated, entries)
     }
 
     /// Pause and surface: put `directive` into `.needsAttention` with typed

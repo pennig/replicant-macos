@@ -738,7 +738,7 @@ actor DirectiveEngineCore {
     /// ITSELF and never off an earlier hop — collapsing onto the reason belonging
     /// to the refresh already performed blames the wrong thing, stalling
     /// `.unreachableDevice` on a perfectly reachable device.
-    private static func collapse(_ action: MissionAction) -> MissionAction {
+    private static func collapse(_ action: MissionAction, currentStep: String) -> MissionAction {
         switch action {
         case let .refreshDevices(_, reason), let .refreshDevicesInSystem(_, reason),
              let .refreshFleet(_, reason), let .refreshEvents(reason):
@@ -748,7 +748,10 @@ actor DirectiveEngineCore {
         case let .refreshFootprint(nextStep, reason):
             // `HaulRun.survey`'s contract: a transient miss costs one cycle rather
             // than stranding a continuous run.
-            return reason.map { MissionAction.stall($0) } ?? .advanceStep(nextStep: nextStep)
+            if let reason { return .stall(reason) }
+            // Same-step: nothing to advance to, so `.wait` rather than
+            // `.advanceStep`, which would restamp this step's own deadline.
+            return nextStep == currentStep ? .wait : .advanceStep(nextStep: nextStep)
         default:
             return action
         }
@@ -783,7 +786,7 @@ actor DirectiveEngineCore {
         guard let kind = RefreshKind(action) else { return action }
 
         guard !paid.contains(kind) else {
-            let collapsed = Self.collapse(action)
+            let collapsed = Self.collapse(action, currentStep: directive.step)
             if case let .stall(confirmed, _) = collapsed {
                 logger.notice("directive \(directive.id, privacy: .public): fresh reads confirm \(confirmed.rawValue, privacy: .public)")
             } else {
