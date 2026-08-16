@@ -81,7 +81,7 @@ Using LSP, list every `.dispatch(` whose `nextStep` equals the current step (the
 
 ## Comments
 
-Status: resolved. Commit: `feat(governor): defer identical dispatches inside one step entry` (implementation + tests + this bookkeeping, one commit — see repo log for the sha).
+Status: resolved. Commit: `3b1aec7` — `feat(governor): defer identical dispatches inside one step entry` (implementation + tests + this bookkeeping, one commit).
 
 **Step 3 verified, no code change**: `DirectiveExecutor.apply`'s `.dispatch` → `.deferred(reason)` branch already logged `reason.rawValue` and returned `true` with zero state change (`DirectiveExecutor.swift:50-54`), so `duplicate` surfaces in OSLog for free and `CommandDeferral.duplicate` needed no executor change. Proved by the new end-to-end test (`DirectiveEngineTests.sameStepDispatchReachesTheClientOnceOverTheRealGovernor`): a fixture machine dispatching `.simple("activate")` into its own step, ticked three times through the REAL `CommandGovernor` (only `gameClient`/`commandClient` stubbed), calls the client exactly once and leaves `stepStartedAt` fixed after tick 1. Confirmed non-vacuous by temporarily disabling the dedup block (`if let owner, false {`) and re-running: `calls.value` came back `3`, not `1`.
 
