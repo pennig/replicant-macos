@@ -126,13 +126,8 @@ enum OrreryMapping {
         // Ring systems are resolved BEFORE spacing, because a ringed planet occupies
         // space out to its ring's outer edge — not just its own limb — and the spacing
         // pass has to know that or a neighbour's orbit cuts straight through the rings.
-        let ringSystems = s.planets.map { p in
-            PlanetMaterial.ringSystem(
-                hasRings: p.physical?.rings ?? false,
-                type: PlanetType(apiType: p.type),
-                seed: appearanceSeed(designation: p.designation,
-                                     rotationPeriodHours: p.physical?.rotationPeriodHours))
-        }
+        let appearances = s.planets.map { appearance(planet: $0, options: options) }
+        let ringSystems = appearances.map(\.rings)
         let clearances = zip(radii, ringSystems).map(clearanceRadius)
         let rawBeltInner = s.belts.map { sceneRadius(au: $0.innerRadiusAu ?? 0) }
         let rawBeltOuter = s.belts.map { sceneRadius(au: $0.outerRadiusAu ?? 0) }
@@ -147,6 +142,7 @@ enum OrreryMapping {
 
         let planets = s.planets.indices.map { i -> OrreryPlanet in
             let p = s.planets[i]
+            let a = appearances[i]
             let au = p.orbitalDistanceAu ?? 0.1
             var indicators: BodyIndicators = []
             if !p.devices.isEmpty { indicators.insert(.device) }
@@ -166,12 +162,11 @@ enum OrreryMapping {
 
             return OrreryPlanet(
                 designation: p.designation, name: p.name, type: p.type,
-                planetType: PlanetType(apiType: p.type), estimated: p.typeEstimated,
-                tags: p.physical?.tags ?? [],
-                surfaceTempC: p.physical?.surfaceTempC,
-                atmosphere: Atmosphere(apiValue: p.physical?.atmosphere),
-                appearanceSeed: appearanceSeed(designation: p.designation,
-                                               rotationPeriodHours: p.physical?.rotationPeriodHours),
+                planetType: a.planetType, estimated: a.estimated,
+                tags: a.tags,
+                surfaceTempC: a.surfaceTempC,
+                atmosphere: a.atmosphere,
+                appearanceSeed: a.appearanceSeed,
                 orbitalDistanceAu: au, inHabitableZone: p.inHabitableZone,
                 scanned: p.recon == .scanned, moonCount: p.moonCount ?? p.moons.count,
                 lifeStage: p.lifeStage, inventory: p.inventory,
@@ -180,10 +175,7 @@ enum OrreryMapping {
                 phase0Deg: phaseDeg(p.designation),
                 displayRadius: radii[i],
                 rings: ringSystems[i],
-                spin: BodySpin(tiltDeg: p.physical?.axialTiltDeg,
-                               rotationHours: p.physical?.rotationPeriodHours,
-                               tidallyLocked: p.physical?.tidallyLocked ?? false,
-                               tiltCapDeg: options.tiltCapDeg),
+                spin: a.spin,
                 // A planet reports its year in DAYS (a moon reports hours). Kept apart
                 // from `periodDays` above, which falls back to Kepler off the AU.
                 reportedPeriodDays: p.physical?.orbitalPeriodDays,
@@ -523,21 +515,14 @@ enum OrreryMapping {
     /// planet (shown before the `hydrateBody` roster lands, like the star-only system
     /// fallback).
     static func bodyModel(planet: Planet, options: OrreryPlaneOptions = .default) -> SystemModel {
-        let centralRings = PlanetMaterial.ringSystem(
-            hasRings: planet.physical?.rings ?? false,
-            type: PlanetType(apiType: planet.type),
-            seed: appearanceSeed(designation: planet.designation,
-                                 rotationPeriodHours: planet.physical?.rotationPeriodHours))
+        let ca = appearance(planet: planet, options: options)
+        let centralRings = ca.rings
         // A ringed planet occupies space out to its ring's outer edge, so its moons must
         // clear THAT, not merely its limb — otherwise the innermost moons orbit straight
         // through the rings.
         let centralClearance = clearanceRadius(centralScene, centralRings)
-        let centralSpin = BodySpin(tiltDeg: planet.physical?.axialTiltDeg,
-                                   rotationHours: planet.physical?.rotationPeriodHours,
-                                   tidallyLocked: planet.physical?.tidallyLocked ?? false,
-                                   tiltCapDeg: options.tiltCapDeg)
-        let centralSeed = appearanceSeed(designation: planet.designation,
-                                        rotationPeriodHours: planet.physical?.rotationPeriodHours)
+        let centralSpin = ca.spin
+        let centralSeed = ca.appearanceSeed
         let central = CentralBody(
             displayRadius: centralScene,
             rings: centralRings,
@@ -545,12 +530,12 @@ enum OrreryMapping {
             // One pole for rings, surface, and moon orbits — unless the escape hatch
             // says keep the moons planar.
             orbitPole: options.decoupleMoonPlane ? nil : centralSpin.pole(seed: centralSeed),
-            planetType: PlanetType(apiType: planet.type),
-            lifeStage: planet.lifeStage, estimated: planet.typeEstimated,
-            tags: planet.physical?.tags ?? [],
-            inHabitableZone: planet.inHabitableZone,
-            surfaceTempC: planet.physical?.surfaceTempC,
-            atmosphere: Atmosphere(apiValue: planet.physical?.atmosphere),
+            planetType: ca.planetType,
+            lifeStage: ca.lifeStage, estimated: ca.estimated,
+            tags: ca.tags,
+            inHabitableZone: ca.inHabitableZone,
+            surfaceTempC: ca.surfaceTempC,
+            atmosphere: ca.atmosphere,
             appearanceSeed: centralSeed,
             // The drilled planet's own orbit — the body-level card's Orbit / Year facts.
             // Year is the scan-reported value only (never the Kepler fallback), so an
@@ -588,6 +573,7 @@ enum OrreryMapping {
             planetOrbits: rawMoonOrbits, planetRadii: moonRadii,
             beltInner: [], beltOuter: [], sunScene: centralClearance).orbits
         let moons: [OrreryPlanet] = ordered.enumerated().map { i, m in
+            let ma = appearance(moon: m, options: options)
             var indicators: BodyIndicators = []
             if !m.devices.isEmpty { indicators.insert(.device) }
             if m.salvage.contains(where: { !$0.depleted }) { indicators.insert(.salvage) }
@@ -596,12 +582,11 @@ enum OrreryMapping {
             if hasDetectedLife(m.lifeStage) { indicators.insert(.life) }
             return OrreryPlanet(
                 designation: m.designation, name: m.name, type: m.type,
-                planetType: PlanetType(apiType: m.type), estimated: m.recon != .scanned,
-                tags: m.physical?.tags ?? [],
-                surfaceTempC: m.physical?.surfaceTempC,
-                atmosphere: moonAtmosphere(m),
-                appearanceSeed: appearanceSeed(designation: m.designation,
-                                               rotationPeriodHours: m.physical?.rotationPeriodHours),
+                planetType: ma.planetType, estimated: ma.estimated,
+                tags: ma.tags,
+                surfaceTempC: ma.surfaceTempC,
+                atmosphere: ma.atmosphere,
+                appearanceSeed: ma.appearanceSeed,
                 orbitalDistanceAu: 0, inHabitableZone: false,
                 scanned: m.recon == .scanned, moonCount: 0, lifeStage: m.lifeStage,
                 inventory: m.inventory,
@@ -614,10 +599,7 @@ enum OrreryMapping {
                 phase0Deg: phaseDeg(m.designation),
                 displayRadius: centralScene * moonSizeFraction(m),
                 rings: nil,
-                spin: BodySpin(tiltDeg: m.physical?.axialTiltDeg,
-                               rotationHours: m.physical?.rotationPeriodHours,
-                               tidallyLocked: m.physical?.tidallyLocked ?? false,
-                               tiltCapDeg: options.tiltCapDeg),
+                spin: ma.spin,
                 hasSubsurfaceOcean: m.physical?.hasSubsurfaceOcean ?? false,
                 orbitalDistanceKm: m.physical?.orbitalDistanceKm,
                 reportedPeriodDays: reportedMoonPeriodDays(m),
