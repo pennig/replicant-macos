@@ -49,7 +49,7 @@ struct CommandGrid: View {
     }
 
     private var releaseCandidates: [DeviceOption] {
-        CommandAvailability.releaseCandidates(device: device)
+        CommandAvailability.releaseCandidates(device: device, fleet: fleet)
     }
 
     private var attachCandidates: [DeviceOption] {

@@ -67,6 +67,14 @@ public struct DeviceDetailView: View {
                         if device.features.contains("transport") {
                             CargoSection(device: device)
                         }
+                        // Both gated here rather than inside, so neither section's
+                        // whole-fleet query exists for a device it can't describe.
+                        if device.controllerDeviceCode?.isEmpty == false {
+                            AdoptedBySection(device: device, store: store)
+                        }
+                        if DeviceAdoption.canAdopt(device) {
+                            AdoptedDevicesSection(device: device, store: store)
+                        }
                         CommandGrid(device: device, store: store)
                     }
                     .padding(Space.xl)
