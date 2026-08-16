@@ -2191,6 +2191,15 @@
           "created_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "short_description": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "owner": {
+            "$ref": "#/components/schemas/app_schemas_accounts_ReplicantBriefSchema"
           }
         },
         "additionalProperties": false
