@@ -216,9 +216,9 @@ struct WorldSnapshotTests {
         #expect(world.isFresh(fresh, since: watermark) == true)
     }
 
-    /// `dispatchedOperations` reads `operations.directiveID` (02) first, union
-    /// the legacy log join — a pre-02 row is found only through its own
-    /// `.commandDispatched` entry.
+    /// `dispatchedOperations` reads `operations.directiveID` first, union the
+    /// legacy log join — a row from before that column existed is found only
+    /// through its own `.commandDispatched` entry.
     @Test func dispatchedOperationsReadsTheOwnerColumn() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in

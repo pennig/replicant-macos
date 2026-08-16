@@ -175,7 +175,7 @@ public struct WorldSnapshot: Equatable, Sendable {
     public func openOperation(for code: String) -> GameModels.Operation? { openOperations[code] }
     /// The device's live op only when it belongs to `owner`; a nil `owner`
     /// keeps `openOperation(for:)`'s meaning, and an op with no owner of its
-    /// own (written before ticket 02) is never filtered out either way.
+    /// own is never filtered out either way.
     public func openOperation(for code: String, owner directiveID: String?) -> GameModels.Operation? {
         guard let op = openOperations[code], let directiveID, let opOwner = op.directiveID else {
             return openOperations[code]
@@ -283,7 +283,7 @@ public struct WorldSnapshot: Equatable, Sendable {
             let dispatchedIDs = Array(Set(auditLog.compactMap { entry in
                 entry.kind == .commandDispatched ? entry.operationID : nil
             }))
-            // The owner column (02) is the source of truth; the log join is a
+            // The owner column is the source of truth; the log join is a
             // fallback for rows written before it existed.
             let ownedDispatched = try GameModels.Operation
                 .where { $0.directiveID.eq(directiveID) }
