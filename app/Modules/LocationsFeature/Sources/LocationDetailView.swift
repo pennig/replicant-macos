@@ -349,7 +349,7 @@ private struct LagrangeInspector: View {
         InspectorScroll(
             title: "L\(point)", code: designation,
             recon: site != nil ? .scanned : .aware, accessory: accessory,
-            portrait: AnyView(PortraitFrame { Color.clear }),
+            portrait: AnyView(PortraitFrame { LagrangeDiagram(selected: point) }),
             facts: BodyFacts.rows(lagrangePoint: point, parent: planet, site: site)
         ) {
             InventoryCard(site?.inventory ?? [])
