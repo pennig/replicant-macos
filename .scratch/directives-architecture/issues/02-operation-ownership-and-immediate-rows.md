@@ -1,7 +1,7 @@
 # 02 — `operations` ownership columns + a row for every immediate verb
 
 Type: task
-Status: open
+Status: resolved
 Blocked by: 01
 Labels: directives-architecture, stage-0
 
@@ -43,7 +43,7 @@ Spec S0.1. Today an `Operation` row has no owner and ~25 immediate verbs (`stow`
 
 ---
 
-- [ ] **Step 1: Migration + struct**
+- [x] **Step 1: Migration + struct**
 
 In `Operation.swift`, add the three optional properties after `detail`, add them to `init` with default `nil` (keep the existing parameter order; append `directiveID: String? = nil, step: String? = nil, paramsDigest: String? = nil` at the end), and append:
 
@@ -61,11 +61,11 @@ extension Operation {
 
 Append `GameModels.Operation.addOwnerColumns` as the LAST entry of `GameDatabase.manifest`.
 
-- [ ] **Step 2: Freeze the schema change**
+- [x] **Step 2: Freeze the schema change**
 
 Run `SchemaManifestTests` (expect the identifier-list assertion to fail), update its expected list, then regenerate the golden schema with `RC_REGENERATE_SCHEMA_FIXTURE=1 swift test --filter GoldenSchemaTests` and inspect the diff: exactly three columns and one index added to `operations`. Commit: `feat(ops): add directiveID/step/paramsDigest to operations`.
 
-- [ ] **Step 3: `CommandOwner` + `dedupKey` with tests**
+- [x] **Step 3: `CommandOwner` + `dedupKey` with tests**
 
 Create `CommandOwner.swift` as in Interfaces. In `CommandParams.swift` add:
 
@@ -93,13 +93,13 @@ extension CommandParams {
 }
 ```
 
-- [ ] **Step 4: Thread the owner through client and governor**
+- [x] **Step 4: Thread the owner through client and governor**
 
 `CommandClient`: rename the existing closure body to `dispatchOwned` taking `owner: CommandOwner?`; define `dispatch` as `{ kind, code, params in await Self.liveValue.dispatchOwned(kind, code, params, nil) }` is NOT acceptable (recursion through the static); instead build the closure once in a `private static func makeDispatchOwned() -> ...` and set both properties from it in `liveValue`. `testValue`: `dispatchOwned: unimplemented("CommandClient.dispatchOwned", placeholder: .failed("unimplemented"))`. `previewValue`: mirrors `dispatch`.
 
 `CommandGovernor.dispatch(_:on:params:owner:)` takes `owner: CommandOwner?` and passes it to `commandClient.dispatchOwned`. `CommandGovernorClient` gains `dispatchOwned` (same test/preview treatment); `dispatch` calls it with `nil`.
 
-- [ ] **Step 5: Owner on the optimistic insert; a row for immediate verbs**
+- [x] **Step 5: Owner on the optimistic insert; a row for immediate verbs**
 
 In the tracked path, the optimistic `Operation(` gains `directiveID: owner?.directiveID, step: owner?.step, paramsDigest: params.dedupKey`.
 
@@ -120,11 +120,11 @@ try? await database.write { db in try Operation.insert { record }.execute(db) }
 
 Restructure the branch so each `case` sets `(status, message)` and falls through to one insert + one return; keep the terminating-command `completeOpenOperation` call and the confirm-read exactly where they are (they run before the insert for `.ok`).
 
-- [ ] **Step 6: Executor passes the owner**
+- [x] **Step 6: Executor passes the owner**
 
 `DirectiveExecutor.apply` `.dispatch` case: `commandGovernor.dispatchOwned(kind, deviceCode, params, CommandOwner(directiveID: directive.id, step: directive.step, since: directive.stepStartedAt))`.
 
-- [ ] **Step 7: Tests**
+- [x] **Step 7: Tests**
 
 `CommandClientTests.swift` — using the existing test harness for the client (it stubs `gameClient`; follow the pattern in the file's travel tests):
 
@@ -146,6 +146,20 @@ Restructure the branch so each `case` sets `(status, message)` and falls through
 
 `DirectiveEngineTests.swift`: extend the existing "dispatch writes commandDispatched" test to assert the governor stub received a non-nil owner whose `since == directive.stepStartedAt`.
 
-- [ ] **Step 8: Run all five targets; commit**
+- [x] **Step 8: Run all five targets; commit**
 
 `feat(ops): every dispatch writes an owned Operation row`. Then check that the Operations Log (`ActivityView`, DevicesFeature) renders the new rows without a crash: it fetches unfiltered, so a `stow` row appears — this is intended. If the row's summary formatter switches on kind exhaustively, add a default line `"<kind> — completed"`.
+
+## Comments
+
+Status: resolved. Commits:
+- `fa25d8e` — `feat(ops): add directiveID/step/paramsDigest to operations` (steps 1–2: migration, struct, `SchemaManifestTests`, regenerated golden fixture)
+- `ab00d2c` — `feat(ops): every dispatch writes an owned Operation row` (steps 3–8)
+
+All five targets green via the JSON event stream, testStarted == testEnded, zero failing issues, one `runEnded` per stream: DirectiveEngineTests 1567/1567, GameServicesTests 308/308, GameSyncTests 78/78, GameModelsTests 140/140, DirectivesFeatureTests 287/287 — 2380/2380 total (baseline 2376 + the 4 tests this ticket adds). `GameDatabaseTests` also run in full: 20/20.
+
+`ActivityView`/`ActivityRow` (DevicesFeature) needed no change: `ActivityRow`'s summary is `operation.kind.capitalized` — it doesn't switch exhaustively on kind, so ambiguity 5's default-line clause doesn't apply. A `stow` row renders fine.
+
+Answer to brief item 4 (ticket 06 depends on this): a TRACKED dispatch that fails **does** write an `Operation` row — the optimistic insert always lands before the POST, and every failure path (4xx via `finish(...,as: .rejected,...)`, or a network/unexpected-response error via `finish(...,as: .failed,...)`) updates that same row rather than leaving it `.optimistic`. So ticket 06 can query `Operation` for `.failed` (and `.rejected`) rows without a gap on the tracked path; today's behaviour was unchanged by this ticket.
+
+Discipline note: touching `DirectiveEngine/Tests/{BrainDegradationTests,BrainGrowLifecycleE2ETests,RelayReturnAndRestockTests,EventRunEngineTests,HaulRunTests,MineFleetPrintTests,MineRunTests,BrainSalvageSeamTests}.swift` and `GameServices/Tests/CommandGovernorTests.swift` was not in the ticket's file list; it was mechanical fallout of `dispatch` → `dispatchOwned` (production code now calls the owned path) and was required to keep the whole-target runs green, not a design choice. `check-comments.sh` is red on `CommandClientTests.swift`, `DirectiveEngineTests.swift`, `HaulRunTests.swift`, `BrainDegradationTests.swift`, `BrainGrowLifecycleE2ETests.swift`, `RelayReturnAndRestockTests.swift` — verified (via `git stash`) that every flagged line pre-dates this ticket; zero new violations introduced.
