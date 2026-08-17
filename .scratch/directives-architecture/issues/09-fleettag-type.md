@@ -1,7 +1,7 @@
 # 09 — `FleetTag` value type + `Device.fleetTags` / `carries`
 
 Type: task
-Status: open
+Status: resolved
 Blocked by: 01
 Labels: directives-architecture, stage-1
 
@@ -50,7 +50,7 @@ Spec S1.1. The grammar `auto:<goal>[:<depot|belt>]` exists only in comments; six
 
 ---
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 ```swift
 @Test func parsesUnscopedAndScoped() {
@@ -73,6 +73,27 @@ Spec S1.1. The grammar `auto:<goal>[:<depot|belt>]` exists only in comments; six
 @Test func roundTripsThroughDeviceTags() { /* Device.normalizedTag(tag.string) == tag.string */ }
 ```
 
-- [ ] **Step 2: Implement; run `GameModelsTests`; commit**
+- [x] **Step 2: Implement; run `GameModelsTests`; commit**
 
 `feat(models): FleetTag — one grammar for auto:<goal>[:<scope>]`.
+
+## Comments
+
+Resolved in `02207fa` (implementation) and `0846dbe` (review fixes).
+
+All five targets green at `02207fa`: GameModelsTests 148/148, DirectiveEngineTests 1602/1602,
+GameServicesTests 324/324, GameSyncTests 81/81, DirectivesFeatureTests 287/287.
+
+**Controller ruling R2 — `FleetTag` equality ignores the scope case.** `Scope.theatre(depot:)` and
+`Scope.belt(designation:)` render the same canonical string, and `init?(parsing:)` picks the case from
+the goal. `MineRecipe.fleetTag(forTheatre:)` (live at `Brain.swift:551`) constructs goal `.mine` with a
+`.theatre(depot:)` scope, which parses back as `.belt` — a synthesised `Hashable` would have made the
+constructed and parsed tags unequal, and ticket 11's `Ownership.resolve` would have silently failed to
+match a mineRun row's tag. `Equatable`/`Hashable` are therefore hand-written over `(goal,
+scope?.designation)` on both `FleetTag` and `FleetTag.Scope`, covered by `scopeCaseDoesNotAffectEquality`.
+
+Review found two things, both fixed in `0846dbe`: the file header shipped at 11 lines against the ≤ 6
+budget, and a test comment pointed at an ephemeral SDD report file instead of the spec.
+
+**Note for later tickets:** `check-comments.sh` has no line-count logic, so it cannot enforce the header
+and `///` budgets — those need a manual count in review.
