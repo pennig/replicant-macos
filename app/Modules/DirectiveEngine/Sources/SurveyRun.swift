@@ -26,44 +26,44 @@ private let logger = Logger(subsystem: "name.pennig.replicould", category: "Dire
 
 public struct SurveyRun: MissionStepMachine {
     public let kind: DirectiveKind = .surveyRun
-    public var firstStep: String { Step.preflight }
+    public var firstStep: String { Step.preflight.rawValue }
 
     public init() {}
 
-    /// This mission's step vocabulary, as the bare strings `Directive.step` holds.
-    public enum Step {
+    /// This mission's step vocabulary, as `Directive.step` holds it (D6).
+    public enum Step: String, CaseIterable, Sendable {
         /// Prove the staging aboard the vessel before committing to a target.
-        public static let preflight = "preflight"
+        case preflight
         /// Fly the vessel to the current target system.
-        public static let travelling = "travelling"
+        case travelling
         /// Put the service bots into the system so they can repair as it works.
-        public static let deployingBots = "deployingBots"
+        case deployingBots
         /// Read whether the ordered deploy landed before ordering the next.
-        public static let confirmingBotDeploy = "confirmingBotDeploy"
+        case confirmingBotDeploy
         /// Ensure each deployed bot carries an ACTIVE `service` directive.
-        public static let armingBots = "armingBots"
+        case armingBots
         /// Read whether an ordered arm landed before ordering the next.
-        public static let confirmingBotArm = "confirmingBotArm"
+        case confirmingBotArm
         /// Put `surveyConfig` in force on the stowed controller.
-        public static let configuring = "configuring"
+        case configuring
         /// Launch the controller, which deploys its adopted drones.
-        public static let launching = "launching"
+        case launching
         /// Wait out the survey itself.
-        public static let awaiting = "awaiting"
+        case awaiting
         /// Check the target's scan counts against the claimed completion.
-        public static let confirming = "confirming"
+        case confirming
         /// Scan the system itself, which is what puts counts in the payload.
-        public static let scanning = "scanning"
+        case scanning
         /// Hold the vessel until every recalled drone is back aboard.
-        public static let recovering = "recovering"
+        case recovering
         /// Hold the vessel while the service bots finish what they are repairing.
-        public static let repairing = "repairing"
+        case repairing
         /// Recall the deployed service bots before the vessel departs.
-        public static let stowingBots = "stowingBots"
+        case stowingBots
         /// Read whether the ordered recall landed before ordering the next.
-        public static let confirmingBotStow = "confirmingBotStow"
+        case confirmingBotStow
         /// Fly the vessel back to the run's origin.
-        public static let returning = "returning"
+        case returning
     }
 
     /// The tag a row falls back to when it carries none of its own.
@@ -137,26 +137,27 @@ public struct SurveyRun: MissionStepMachine {
         guard let vessel = world.device(directive.deviceCode) else {
             return .stall(.unreachableDevice)
         }
-        switch directive.step {
-        case Step.preflight: return preflight(directive, vessel, world)
-        case Step.travelling: return travel(directive, vessel, world)
-        case Step.deployingBots: return deployBots(directive, vessel, world)
-        case Step.confirmingBotDeploy: return confirmBotDeploy(directive, vessel, world)
-        case Step.armingBots: return armBots(directive, vessel, world)
-        case Step.confirmingBotArm: return confirmBotArm(directive, vessel, world)
-        case Step.configuring: return configure(directive, vessel, world)
-        case Step.launching: return launch(directive, vessel, world)
-        case Step.awaiting: return awaitCompletion(directive, vessel, world)
-        case Step.confirming: return confirm(directive, vessel, world)
-        case Step.scanning: return scanSystem(directive)
-        case Step.recovering: return recover(directive, vessel, world)
-        case Step.repairing: return awaitRepair(directive, vessel, world)
-        case Step.stowingBots: return stowBots(directive, vessel, world)
-        case Step.confirmingBotStow: return confirmBotStow(directive, vessel, world)
-        case Step.returning: return returnHome(directive, vessel, world)
-        default:
-            logger.notice("survey run \(directive.id, privacy: .public): unknown step \(directive.step, privacy: .public) — waiting")
+        guard let step = Step(rawValue: directive.step) else {
+            logger.notice("\(kind.rawValue) \(directive.id): unknown step \(directive.step) — waiting")
             return .wait
+        }
+        switch step {
+        case .preflight: return preflight(directive, vessel, world)
+        case .travelling: return travel(directive, vessel, world)
+        case .deployingBots: return deployBots(directive, vessel, world)
+        case .confirmingBotDeploy: return confirmBotDeploy(directive, vessel, world)
+        case .armingBots: return armBots(directive, vessel, world)
+        case .confirmingBotArm: return confirmBotArm(directive, vessel, world)
+        case .configuring: return configure(directive, vessel, world)
+        case .launching: return launch(directive, vessel, world)
+        case .awaiting: return awaitCompletion(directive, vessel, world)
+        case .confirming: return confirm(directive, vessel, world)
+        case .scanning: return scanSystem(directive)
+        case .recovering: return recover(directive, vessel, world)
+        case .repairing: return awaitRepair(directive, vessel, world)
+        case .stowingBots: return stowBots(directive, vessel, world)
+        case .confirmingBotStow: return confirmBotStow(directive, vessel, world)
+        case .returning: return returnHome(directive, vessel, world)
         }
     }
 
@@ -308,7 +309,7 @@ public struct SurveyRun: MissionStepMachine {
                   let origin = directive.originDesignation,
                   Self.system(of: vessel) != origin
             else { return .done }
-            return .advanceStep(nextStep: Step.returning)
+            return .advanceStep(nextStep: Step.returning.rawValue)
         }
         guard let controller = Self.controller(aboard: vessel, in: world) else {
             return .refreshDevices(
@@ -345,7 +346,7 @@ public struct SurveyRun: MissionStepMachine {
                 thenStall: .unreachableDevice
             )
         }
-        return .assignController(deviceCode: controller.deviceCode, nextStep: Step.travelling)
+        return .assignController(deviceCode: controller.deviceCode, nextStep: Step.travelling.rawValue)
     }
 
     /// Wait out `directive`'s survey against `world`. The completion entry the
@@ -353,10 +354,10 @@ public struct SurveyRun: MissionStepMachine {
     /// re-stowed aboard `vessel` is the lost-event backstop. Counts never decide.
     private func awaitCompletion(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
         guard let target = directive.currentTarget else {
-            return .advanceStep(nextStep: Step.preflight)
+            return .advanceStep(nextStep: Step.preflight.rawValue)
         }
         if Self.completionSeen(directive, world) {
-            return .refreshSystem(designation: target, nextStep: Step.confirming)
+            return .refreshSystem(designation: target, nextStep: Step.confirming.rawValue)
         }
         // The controller told us this launch deployed nothing. No drones are
         // out, so no completion is coming and the backstop would poll an empty
@@ -370,7 +371,7 @@ public struct SurveyRun: MissionStepMachine {
         if controller.stowedInDeviceCode == vessel.deviceCode,
            controller.updatedAt >= directive.stepStartedAt
                .addingTimeInterval(-Self.eventTimeSkewTolerance) {
-            return .refreshSystem(designation: target, nextStep: Step.confirming)
+            return .refreshSystem(designation: target, nextStep: Step.confirming.rawValue)
         }
         // One controller read per backstop interval — a survey runs for hours.
         if world.now.timeIntervalSince(controller.updatedAt) < Self.backstopInterval {
@@ -383,13 +384,13 @@ public struct SurveyRun: MissionStepMachine {
     /// counts: done, contradicted, or still running.
     private func confirm(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
         guard let target = directive.currentTarget else {
-            return .advanceStep(nextStep: Step.preflight)
+            return .advanceStep(nextStep: Step.preflight.rawValue)
         }
         // Confirmed done, but NOT free to leave. `recall: true` means the AMI is
         // only now flying its drones home, so departing on this evidence strands
         // them (see `recover`).
         if Self.isFullyScanned(world.system(target)) {
-            return .advanceStep(nextStep: Step.recovering)
+            return .advanceStep(nextStep: Step.recovering.rawValue)
         }
         // The server said it finished — event or re-stowed controller — and the
         // counts disagree; surface that rather than advancing over a half-survey.
@@ -400,27 +401,27 @@ public struct SurveyRun: MissionStepMachine {
             // the payload carries them only once the system has been scanned, and
             // the drones scan bodies, never the system. Buy the scan first.
             if world.system(target)?.planetsTotal == nil, scanRoundsSpent(world) < Self.scanRounds {
-                return .advanceStep(nextStep: Step.scanning)
+                return .advanceStep(nextStep: Step.scanning.rawValue)
             }
             return .stall(.surveyIncomplete)
         }
         // A backstop poll that found it unfinished: nothing ever claimed
         // completion, so there is nothing to disbelieve. Keep waiting.
-        return .advanceStep(nextStep: Step.awaiting)
+        return .advanceStep(nextStep: Step.awaiting.rawValue)
     }
 
     /// Ask the engine to scan `directive`'s current target.
     private func scanSystem(_ directive: Directive) -> MissionAction {
         guard let target = directive.currentTarget else {
-            return .advanceStep(nextStep: Step.preflight)
+            return .advanceStep(nextStep: Step.preflight.rawValue)
         }
-        return .scanSystem(designation: target, nextStep: Step.confirming)
+        return .scanSystem(designation: target, nextStep: Step.confirming.rawValue)
     }
 
     /// Scans already spent in this unbroken run of the `scanning`/`confirming`
     /// loop. Off the log because `stepStartedAt` re-stamps on every hop.
     private func scanRoundsSpent(_ world: WorldSnapshot) -> Int {
-        MissionLogBudget.dispatchRounds(world, dispatch: Step.scanning, confirm: Step.confirming)
+        MissionLogBudget.dispatchRounds(world, dispatch: Step.scanning.rawValue, confirm: Step.confirming.rawValue)
     }
 
     /// Hold `vessel` until `world` shows the AMI's recall has landed every drone
@@ -438,11 +439,11 @@ public struct SurveyRun: MissionStepMachine {
             // Nothing to recall, and a vanished controller is preflight's
             // diagnosis to make — holding the run here would stall on a reason
             // that doesn't name the real problem.
-            return .advanceStep(nextStep: Step.repairing)
+            return .advanceStep(nextStep: Step.repairing.rawValue)
         }
         let adopted = Self.adoptedDrones(of: controller, in: world)
         let stranded = adopted.filter { $0.stowedInDeviceCode != vessel.deviceCode }
-        if stranded.isEmpty { return .advanceStep(nextStep: Step.repairing) }
+        if stranded.isEmpty { return .advanceStep(nextStep: Step.repairing.rawValue) }
 
         let elapsed = world.now.timeIntervalSince(directive.stepStartedAt)
         // The recall was ordered moments ago; nothing can have changed yet.
@@ -498,7 +499,7 @@ public struct SurveyRun: MissionStepMachine {
         if let unconfirmed = SalvageRun.travelPositionUnconfirmed(vessel, world) { return unconfirmed }
         return .dispatch(
             kind: .travel, deviceCode: vessel.deviceCode,
-            params: CommandParams(destination: origin), nextStep: Step.returning
+            params: CommandParams(destination: origin), nextStep: Step.returning.rawValue
         )
     }
 
@@ -521,12 +522,12 @@ public struct SurveyRun: MissionStepMachine {
         }
         if controller.currentDirective == "survey_system",
            Self.configMatches(controller.currentDirectiveConfig) {
-            return .advanceStep(nextStep: Step.launching)
+            return .advanceStep(nextStep: Step.launching.rawValue)
         }
         return .dispatch(
             kind: .setDirective, deviceCode: controller.deviceCode,
             params: CommandParams(directive: "survey_system", configuration: Self.surveyConfig),
-            nextStep: Step.launching
+            nextStep: Step.launching.rawValue
         )
     }
 
@@ -538,7 +539,7 @@ public struct SurveyRun: MissionStepMachine {
         }
         return .dispatch(
             kind: OperationKind.simple("launch"), deviceCode: controller.deviceCode,
-            params: CommandParams(), nextStep: Step.awaiting
+            params: CommandParams(), nextStep: Step.awaiting.rawValue
         )
     }
 
@@ -557,15 +558,15 @@ public struct SurveyRun: MissionStepMachine {
     /// already places it there.
     private func travel(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
         guard let target = directive.currentTarget else {
-            return .advanceStep(nextStep: Step.preflight)
+            return .advanceStep(nextStep: Step.preflight.rawValue)
         }
-        if Self.system(of: vessel) == target { return .advanceStep(nextStep: Step.deployingBots) }
+        if Self.system(of: vessel) == target { return .advanceStep(nextStep: Step.deployingBots.rawValue) }
         if world.openOperation(for: vessel.deviceCode) != nil { return .wait }
         // The equality check above misreads a row still lagging the arrival.
         if let unconfirmed = SalvageRun.travelPositionUnconfirmed(vessel, world) { return unconfirmed }
         return .dispatch(
             kind: .travel, deviceCode: vessel.deviceCode,
-            params: CommandParams(destination: target), nextStep: Step.travelling
+            params: CommandParams(destination: target), nextStep: Step.travelling.rawValue
         )
     }
 
@@ -598,17 +599,17 @@ public struct SurveyRun: MissionStepMachine {
     /// system already has them all.
     private func deployBots(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
         let aboard = RepairFleet.bots(aboard: vessel, in: world, owner: Self.fleetTag(directive))
-        guard let next = aboard.first else { return .advanceStep(nextStep: Step.configuring) }
+        guard let next = aboard.first else { return .advanceStep(nextStep: Step.configuring.rawValue) }
         // `deploy` is untracked and the confirm step re-stamps `stepStartedAt`, so
         // the log is the only bound on this loop that re-entry cannot rewind.
-        if MissionLogBudget.dispatchRounds(world, dispatch: Step.deployingBots, confirm: Step.confirmingBotDeploy)
+        if MissionLogBudget.dispatchRounds(world, dispatch: Step.deployingBots.rawValue, confirm: Step.confirmingBotDeploy.rawValue)
             > Self.botDispatchRounds {
             logger.notice("survey run \(directive.id, privacy: .public): \(next.deviceCode, privacy: .public) will not deploy — surveying unrepaired")
-            return .advanceStep(nextStep: Step.armingBots)
+            return .advanceStep(nextStep: Step.armingBots.rawValue)
         }
         return .dispatch(
             kind: .simple("deploy"), deviceCode: next.deviceCode,
-            params: CommandParams(), nextStep: Step.confirmingBotDeploy
+            params: CommandParams(), nextStep: Step.confirmingBotDeploy.rawValue
         )
     }
 
@@ -631,19 +632,19 @@ public struct SurveyRun: MissionStepMachine {
         if elapsed < Self.botProbeDelay { return .wait }
         if elapsed > Self.botConfirmDeadline {
             logger.notice("survey run \(directive.id, privacy: .public): bot deploy unconfirmed — surveying unrepaired")
-            return .advanceStep(nextStep: Step.armingBots)
+            return .advanceStep(nextStep: Step.armingBots.rawValue)
         }
         let aboard = RepairFleet.bots(aboard: vessel, in: world, owner: owner)
         guard aboard.isEmpty else {
             // A row that has not been read since the deploy was ordered cannot
             // yet show it landing; buy the read rather than a stale claim.
             return Self.probe(aboard, directive, world)
-                ?? .advanceStep(nextStep: Step.deployingBots)
+                ?? .advanceStep(nextStep: Step.deployingBots.rawValue)
         }
         // `armingBots` judges the DEPLOYED rows, and nothing has read them since
         // the deploy was ordered — a stale one reads armed and skips repair.
         let deployed = RepairFleet.bots(deployedNear: vessel.location, in: world, owner: owner)
-        return Self.probe(deployed, directive, world) ?? .advanceStep(nextStep: Step.armingBots)
+        return Self.probe(deployed, directive, world) ?? .advanceStep(nextStep: Step.armingBots.rawValue)
     }
 
     /// Ensure the next mis-armed deployed bot carries an ACTIVE `service`
@@ -654,11 +655,11 @@ public struct SurveyRun: MissionStepMachine {
             deployedNear: vessel.location, in: world, owner: Self.fleetTag(directive)
         )
         guard let next = deployed.first(where: { !RepairFleet.isArmed($0) }) else {
-            return .advanceStep(nextStep: Step.configuring)
+            return .advanceStep(nextStep: Step.configuring.rawValue)
         }
         // Both dispatches below are untracked and the confirm step re-stamps
         // `stepStartedAt`, so the log is the only bound re-entry cannot rewind.
-        if MissionLogBudget.dispatchRounds(world, dispatch: Step.armingBots, confirm: Step.confirmingBotArm)
+        if MissionLogBudget.dispatchRounds(world, dispatch: Step.armingBots.rawValue, confirm: Step.confirmingBotArm.rawValue)
             > Self.botDispatchRounds {
             logger.notice("survey run \(directive.id, privacy: .public): \(next.deviceCode, privacy: .public) will not arm")
             return .stall(.serviceBotNotArmed)
@@ -666,12 +667,12 @@ public struct SurveyRun: MissionStepMachine {
         guard next.currentDirective == "service" else {
             return .dispatch(
                 kind: .setDirective, deviceCode: next.deviceCode,
-                params: CommandParams(directive: "service"), nextStep: Step.confirmingBotArm
+                params: CommandParams(directive: "service"), nextStep: Step.confirmingBotArm.rawValue
             )
         }
         return .dispatch(
             kind: OperationKind.simple("activate"), deviceCode: next.deviceCode,
-            params: CommandParams(), nextStep: Step.confirmingBotArm
+            params: CommandParams(), nextStep: Step.confirmingBotArm.rawValue
         )
     }
 
@@ -687,9 +688,9 @@ public struct SurveyRun: MissionStepMachine {
         // it needs the same proof the mis-armed one does.
         if let probe = Self.probe(deployed, directive, world) { return probe }
         guard deployed.contains(where: { !RepairFleet.isArmed($0) }) else {
-            return .advanceStep(nextStep: Step.configuring)
+            return .advanceStep(nextStep: Step.configuring.rawValue)
         }
-        return .advanceStep(nextStep: Step.armingBots)
+        return .advanceStep(nextStep: Step.armingBots.rawValue)
     }
 
     /// Hold `vessel` while any deployed service bot is still repairing.
@@ -701,7 +702,7 @@ public struct SurveyRun: MissionStepMachine {
         // uncertainty — but only where a bot is actually out there to lose.
         guard let location = vessel.location else {
             guard RepairFleet.anyBotDeployed(in: world, system: directive.currentTarget, owner: owner) else {
-                return .advanceStep(nextStep: Step.stowingBots)
+                return .advanceStep(nextStep: Step.stowingBots.rawValue)
             }
             let elapsed = world.now.timeIntervalSince(directive.stepStartedAt)
             if elapsed > Self.repairDeadline { return .stall(.repairUnfinished) }
@@ -709,11 +710,11 @@ public struct SurveyRun: MissionStepMachine {
             return .refreshDevices(deviceCodes: [vessel.deviceCode], thenStall: nil)
         }
         let bots = RepairFleet.bots(deployedNear: location, in: world, owner: owner)
-        if bots.isEmpty { return .advanceStep(nextStep: Step.stowingBots) }
+        if bots.isEmpty { return .advanceStep(nextStep: Step.stowingBots.rawValue) }
         // A fleet nothing is worn enough to hold for leaves without paying the
         // probe delay or a single read.
         if !RepairFleet.needsRepair(RepairFleet.fleet(of: vessel, in: world, owner: owner)) {
-            return .advanceStep(nextStep: Step.stowingBots)
+            return .advanceStep(nextStep: Step.stowingBots.rawValue)
         }
 
         let elapsed = world.now.timeIntervalSince(directive.stepStartedAt)
@@ -723,7 +724,7 @@ public struct SurveyRun: MissionStepMachine {
         // report idle, so treat it as still working until a read says otherwise.
         let stale = bots.contains { !world.isFresh($0, since: directive.stepStartedAt) }
         if !stale, !bots.contains(where: RepairFleet.isRepairing) {
-            return .advanceStep(nextStep: Step.stowingBots)
+            return .advanceStep(nextStep: Step.stowingBots.rawValue)
         }
         let lastLook = bots.map(\.updatedAt).min() ?? .distantPast
         if world.now.timeIntervalSince(lastLook) < Self.botProbeInterval { return .wait }
@@ -747,7 +748,7 @@ public struct SurveyRun: MissionStepMachine {
         }
         let out = RepairFleet.botsOut(near: location, in: world, owner: owner)
         guard let next = out.first else { return .advanceTarget }
-        if MissionLogBudget.dispatchRounds(world, dispatch: Step.stowingBots, confirm: Step.confirmingBotStow)
+        if MissionLogBudget.dispatchRounds(world, dispatch: Step.stowingBots.rawValue, confirm: Step.confirmingBotStow.rawValue)
             > Self.botDispatchRounds {
             return .stall(.serviceBotNotRecovered)
         }
@@ -759,7 +760,7 @@ public struct SurveyRun: MissionStepMachine {
         }
         return .dispatch(
             kind: .simple("recall"), deviceCode: next.deviceCode,
-            params: CommandParams(), nextStep: Step.confirmingBotStow
+            params: CommandParams(), nextStep: Step.confirmingBotStow.rawValue
         )
     }
 
@@ -786,6 +787,6 @@ public struct SurveyRun: MissionStepMachine {
             if world.now.timeIntervalSince(lastLook) < Self.botProbeInterval { return .wait }
             return .refreshDevices(deviceCodes: out.map(\.deviceCode), thenStall: nil)
         }
-        return .advanceStep(nextStep: Step.stowingBots)
+        return .advanceStep(nextStep: Step.stowingBots.rawValue)
     }
 }

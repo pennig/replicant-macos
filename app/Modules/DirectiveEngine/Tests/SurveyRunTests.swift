@@ -164,7 +164,7 @@ private func world(
 }
 
 private func run(
-    step: String = SurveyRun.Step.preflight,
+    step: String = SurveyRun.Step.preflight.rawValue,
     targets: [String] = ["TAU"],
     targetIndex: Int = 0,
     controllerCode: String? = nil,
@@ -338,7 +338,7 @@ struct SurveyRunStagingFreshnessTests {
     /// paid once per target at most, not on every evaluation.
     @Test func freshStagingRowsAreTrustedWithoutARead() {
         #expect(SurveyRun().nextAction(directive: run(), world: world(stagedFleet()))
-                == .assignController(deviceCode: "AMI1", nextStep: SurveyRun.Step.travelling))
+                == .assignController(deviceCode: "AMI1", nextStep: SurveyRun.Step.travelling.rawValue))
     }
 
     /// A target that is being SKIPPED never departs, so its staging doesn't
@@ -360,14 +360,14 @@ struct SurveyRunStagingFreshnessTests {
     /// costs nothing.
     @Test func stagedVesselSpendsNoReads() {
         #expect(SurveyRun().nextAction(directive: run(), world: world(stagedFleet()))
-                == .assignController(deviceCode: "AMI1", nextStep: SurveyRun.Step.travelling))
+                == .assignController(deviceCode: "AMI1", nextStep: SurveyRun.Step.travelling.rawValue))
     }
 
     /// Same for the list-synced shape, where adoption survives only on the
     /// drone's column — it is staged, so no read is demanded.
     @Test func listSyncedStagedVesselSpendsNoReads() {
         #expect(SurveyRun().nextAction(directive: run(), world: world(listSyncedFleet()))
-                == .assignController(deviceCode: "AMI1", nextStep: SurveyRun.Step.travelling))
+                == .assignController(deviceCode: "AMI1", nextStep: SurveyRun.Step.travelling.rawValue))
     }
 }
 
@@ -378,7 +378,7 @@ struct SurveyRunPreflightTests {
     /// A staged fleet claims its controller and moves to travel.
     @Test func preflightClaimsTheController() {
         #expect(SurveyRun().nextAction(directive: run(), world: world(stagedFleet()))
-                == .assignController(deviceCode: "AMI1", nextStep: SurveyRun.Step.travelling))
+                == .assignController(deviceCode: "AMI1", nextStep: SurveyRun.Step.travelling.rawValue))
     }
 
     /// The same staging, read back from the fleet-wide sync rather than a
@@ -388,7 +388,7 @@ struct SurveyRunPreflightTests {
     /// because nobody happened to open the controller's inspector.
     @Test func preflightAcceptsAdoptionRecordedOnlyOnTheDrone() {
         #expect(SurveyRun().nextAction(directive: run(), world: world(listSyncedFleet()))
-                == .assignController(deviceCode: "AMI1", nextStep: SurveyRun.Step.travelling))
+                == .assignController(deviceCode: "AMI1", nextStep: SurveyRun.Step.travelling.rawValue))
     }
 
     /// A target the cache already shows fully scanned is SKIPPED, not surveyed
@@ -410,14 +410,14 @@ struct SurveyRunPreflightTests {
             moonsScanned: 2, moonsTotal: 7
         )
         #expect(SurveyRun().nextAction(directive: run(), world: world(stagedFleet(), systems: ["TAU": partial]))
-                == .assignController(deviceCode: "AMI1", nextStep: SurveyRun.Step.travelling))
+                == .assignController(deviceCode: "AMI1", nextStep: SurveyRun.Step.travelling.rawValue))
     }
 
     /// Partial planet progress is not a skip either.
     @Test func doesNotSkipAPartiallyScannedTarget() {
         let partial = StarSystem(designation: "TAU", planetsScanned: 2, planetsTotal: 4)
         #expect(SurveyRun().nextAction(directive: run(), world: world(stagedFleet(), systems: ["TAU": partial]))
-                == .assignController(deviceCode: "AMI1", nextStep: SurveyRun.Step.travelling))
+                == .assignController(deviceCode: "AMI1", nextStep: SurveyRun.Step.travelling.rawValue))
     }
 
     /// Unknown counts never count as scanned. Surveying an already-done system
@@ -430,24 +430,24 @@ struct SurveyRunPreflightTests {
 
     /// Travel is dispatched at the vessel, toward the target system.
     @Test func travelDispatchesTowardTheTarget() {
-        let directive = run(step: SurveyRun.Step.travelling, controllerCode: "AMI1")
+        let directive = run(step: SurveyRun.Step.travelling.rawValue, controllerCode: "AMI1")
         #expect(SurveyRun().nextAction(directive: directive, world: world(stagedFleet()))
                 == .dispatch(kind: .travel, deviceCode: "VES1",
                              params: CommandParams(destination: "TAU"),
-                             nextStep: SurveyRun.Step.travelling))
+                             nextStep: SurveyRun.Step.travelling.rawValue))
     }
 
     /// Already in the target system: no travel command at all.
     @Test func skipsTravelWhenAlreadyThere() {
-        let directive = run(step: SurveyRun.Step.travelling, controllerCode: "AMI1")
+        let directive = run(step: SurveyRun.Step.travelling.rawValue, controllerCode: "AMI1")
         #expect(SurveyRun().nextAction(directive: directive, world: world(stagedFleet(vesselAt: "TAU-2")))
-                == .advanceStep(nextStep: SurveyRun.Step.deployingBots))
+                == .advanceStep(nextStep: SurveyRun.Step.deployingBots.rawValue))
     }
 
     /// Mid-travel is a WAIT, never a stall (spec §4) — and never a second travel
     /// command stacked on the one already in flight.
     @Test func waitsWhileTravelling() {
-        let directive = run(step: SurveyRun.Step.travelling, controllerCode: "AMI1")
+        let directive = run(step: SurveyRun.Step.travelling.rawValue, controllerCode: "AMI1")
         #expect(SurveyRun().nextAction(directive: directive, world: world(stagedFleet(), travelling: true))
                 == .wait)
     }
@@ -459,12 +459,12 @@ struct SurveyRunPreflightTests {
 struct SurveyRunConfigureTests {
     /// A controller with no directive in force gets the full-survey config.
     @Test func setsTheSurveyDirective() {
-        let directive = run(step: SurveyRun.Step.configuring, controllerCode: "AMI1")
+        let directive = run(step: SurveyRun.Step.configuring.rawValue, controllerCode: "AMI1")
         #expect(SurveyRun().nextAction(directive: directive, world: world(stagedFleet(vesselAt: "TAU-2")))
                 == .dispatch(
                     kind: .setDirective, deviceCode: "AMI1",
                     params: CommandParams(directive: "survey_system", configuration: SurveyRun.surveyConfig),
-                    nextStep: SurveyRun.Step.launching
+                    nextStep: SurveyRun.Step.launching.rawValue
                 ))
     }
 
@@ -475,9 +475,9 @@ struct SurveyRunConfigureTests {
         fleet[1] = withDirective(fleet[1], name: "survey_system", config: [
             "planets": .string("all"), "moons": .string("all"), "recall": .bool(true),
         ])
-        let directive = run(step: SurveyRun.Step.configuring, controllerCode: "AMI1")
+        let directive = run(step: SurveyRun.Step.configuring.rawValue, controllerCode: "AMI1")
         #expect(SurveyRun().nextAction(directive: directive, world: world(fleet))
-                == .advanceStep(nextStep: SurveyRun.Step.launching))
+                == .advanceStep(nextStep: SurveyRun.Step.launching.rawValue))
     }
 
     /// A MISMATCHED config is re-issued — `moons: none` left over from manual
@@ -487,7 +487,7 @@ struct SurveyRunConfigureTests {
         fleet[1] = withDirective(fleet[1], name: "survey_system", config: [
             "planets": .string("all"), "moons": .string("none"), "recall": .bool(true),
         ])
-        let directive = run(step: SurveyRun.Step.configuring, controllerCode: "AMI1")
+        let directive = run(step: SurveyRun.Step.configuring.rawValue, controllerCode: "AMI1")
         guard case let .dispatch(kind, _, _, _) =
                 SurveyRun().nextAction(directive: directive, world: world(fleet))
         else {
@@ -504,7 +504,7 @@ struct SurveyRunConfigureTests {
         fleet[1] = withDirective(fleet[1], name: "survey_system", config: [
             "planets": .string("all"), "moons": .string("all"), "recall": .bool(false),
         ])
-        let directive = run(step: SurveyRun.Step.configuring, controllerCode: "AMI1")
+        let directive = run(step: SurveyRun.Step.configuring.rawValue, controllerCode: "AMI1")
         guard case let .dispatch(kind, _, _, _) =
                 SurveyRun().nextAction(directive: directive, world: world(fleet))
         else {
@@ -518,7 +518,7 @@ struct SurveyRunConfigureTests {
     @Test func replacesADifferentDirective() {
         var fleet = stagedFleet(vesselAt: "TAU-2")
         fleet[1] = withDirective(fleet[1], name: "belt_search", config: [:])
-        let directive = run(step: SurveyRun.Step.configuring, controllerCode: "AMI1")
+        let directive = run(step: SurveyRun.Step.configuring.rawValue, controllerCode: "AMI1")
         guard case let .dispatch(kind, _, _, _) =
                 SurveyRun().nextAction(directive: directive, world: world(fleet))
         else {
@@ -531,16 +531,16 @@ struct SurveyRunConfigureTests {
     /// Launch goes to the CONTROLLER, not the vessel — it is what deploys the
     /// adopted stowed drones (spec §3).
     @Test func launchesTheController() {
-        let directive = run(step: SurveyRun.Step.launching, controllerCode: "AMI1")
+        let directive = run(step: SurveyRun.Step.launching.rawValue, controllerCode: "AMI1")
         #expect(SurveyRun().nextAction(directive: directive, world: world(stagedFleet(vesselAt: "TAU-2")))
                 == .dispatch(kind: OperationKind.simple("launch"), deviceCode: "AMI1",
-                             params: CommandParams(), nextStep: SurveyRun.Step.awaiting))
+                             params: CommandParams(), nextStep: SurveyRun.Step.awaiting.rawValue))
     }
 
     /// The controller vanishing mid-run (released, decommissioned) stalls rather
     /// than dispatching at a device that is no longer there.
     @Test func stallsWhenTheClaimedControllerIsGone() {
-        let directive = run(step: SurveyRun.Step.launching, controllerCode: "AMI1")
+        let directive = run(step: SurveyRun.Step.launching.rawValue, controllerCode: "AMI1")
         let fleet = [device("VES1", type: "transport_hauler", location: "TAU-2")]
         #expect(SurveyRun().nextAction(directive: directive, world: world(fleet))
                 == .stall(.noSurveyControllerAboard))
@@ -584,7 +584,7 @@ struct SurveyRunCompletionTests {
     /// No completion yet, inside the backstop window: just wait. Cheap, and the
     /// common case for most of a survey's duration.
     @Test func waitsForCompletion() {
-        let directive = run(step: SurveyRun.Step.awaiting, controllerCode: "AMI1",
+        let directive = run(step: SurveyRun.Step.awaiting.rawValue, controllerCode: "AMI1",
                             stepStartedAt: Date(timeIntervalSince1970: 900))
         #expect(SurveyRun().nextAction(
             directive: directive,
@@ -594,7 +594,7 @@ struct SurveyRunCompletionTests {
 
     /// A completion entry triggers the confirming read (spec §5 fast path).
     @Test func completionEventTriggersTheConfirmingRead() {
-        let directive = run(step: SurveyRun.Step.awaiting, controllerCode: "AMI1",
+        let directive = run(step: SurveyRun.Step.awaiting.rawValue, controllerCode: "AMI1",
                             stepStartedAt: Date(timeIntervalSince1970: 900))
         let snapshot = world(
             stagedFleet(vesselAt: "TAU-2"),
@@ -602,13 +602,13 @@ struct SurveyRunCompletionTests {
             now: Date(timeIntervalSince1970: 1_000)
         )
         #expect(SurveyRun().nextAction(directive: directive, world: snapshot)
-                == .refreshSystem(designation: "TAU", nextStep: SurveyRun.Step.confirming))
+                == .refreshSystem(designation: "TAU", nextStep: SurveyRun.Step.confirming.rawValue))
     }
 
     /// A completion stamped BEFORE this step began is a replay — it must not end
     /// a survey that only just started. Issue-time relative, not wall-clock.
     @Test func ignoresAReplayedPreStepCompletion() {
-        let directive = run(step: SurveyRun.Step.awaiting, controllerCode: "AMI1",
+        let directive = run(step: SurveyRun.Step.awaiting.rawValue, controllerCode: "AMI1",
                             stepStartedAt: Date(timeIntervalSince1970: 900))
         let snapshot = world(
             stagedFleet(vesselAt: "TAU-2"),
@@ -621,7 +621,7 @@ struct SurveyRunCompletionTests {
     /// Within the 5s skew tolerance a marginally older entry still counts —
     /// client and server clocks are not identical.
     @Test func toleratesClockSkewOnTheCompletionGuard() {
-        let directive = run(step: SurveyRun.Step.awaiting, controllerCode: "AMI1",
+        let directive = run(step: SurveyRun.Step.awaiting.rawValue, controllerCode: "AMI1",
                             stepStartedAt: Date(timeIntervalSince1970: 900))
         let snapshot = world(
             stagedFleet(vesselAt: "TAU-2"),
@@ -629,13 +629,13 @@ struct SurveyRunCompletionTests {
             now: Date(timeIntervalSince1970: 1_000)
         )
         #expect(SurveyRun().nextAction(directive: directive, world: snapshot)
-                == .refreshSystem(designation: "TAU", nextStep: SurveyRun.Step.confirming))
+                == .refreshSystem(designation: "TAU", nextStep: SurveyRun.Step.confirming.rawValue))
     }
 
     /// A non-completion entry (a step marker) never triggers confirmation —
     /// the timeline is full of those.
     @Test func ignoresNonCompletionLogEntries() {
-        let directive = run(step: SurveyRun.Step.awaiting, controllerCode: "AMI1",
+        let directive = run(step: SurveyRun.Step.awaiting.rawValue, controllerCode: "AMI1",
                             stepStartedAt: Date(timeIntervalSince1970: 900))
         let stepEntry = DirectiveLogEntry(
             id: "L2", directiveID: "D1", deviceCode: nil, kind: .stepStarted,
@@ -654,7 +654,7 @@ struct SurveyRunCompletionTests {
     /// behind, `launch` reported `devices_deployed: 0` and the run sat in
     /// awaiting/confirming for ten hours because nothing read that number.
     @Test func stallsWhenTheLaunchDeployedNothing() {
-        let directive = run(step: SurveyRun.Step.awaiting, controllerCode: "AMI1",
+        let directive = run(step: SurveyRun.Step.awaiting.rawValue, controllerCode: "AMI1",
                             stepStartedAt: Date(timeIntervalSince1970: 900))
         let snapshot = world(
             stagedFleet(vesselAt: "TAU-2"),
@@ -668,7 +668,7 @@ struct SurveyRunCompletionTests {
     /// An empty launch belonging to an EARLIER step is not this step's evidence
     /// — a Retry must not re-stall on the launch it was retrying.
     @Test func ignoresAnEmptyLaunchFromAnEarlierStep() {
-        let directive = run(step: SurveyRun.Step.awaiting, controllerCode: "AMI1",
+        let directive = run(step: SurveyRun.Step.awaiting.rawValue, controllerCode: "AMI1",
                             stepStartedAt: Date(timeIntervalSince1970: 900))
         let snapshot = world(
             stagedFleet(vesselAt: "TAU-2"),
@@ -682,20 +682,20 @@ struct SurveyRunCompletionTests {
     /// the controller's own row — re-stowed aboard the vessel after the launch
     /// means the survey is over, and the counts cross-check in `confirming`.
     @Test func backstopAdvancesOnceTheControllerHasReStowed() {
-        let directive = run(step: SurveyRun.Step.awaiting, controllerCode: "AMI1",
+        let directive = run(step: SurveyRun.Step.awaiting.rawValue, controllerCode: "AMI1",
                             stepStartedAt: Date(timeIntervalSince1970: 900))
         let late = Date(timeIntervalSince1970: 900 + SurveyRun.backstopInterval + 1)
         #expect(SurveyRun().nextAction(
             directive: directive,
             world: world(stagedFleet(vesselAt: "TAU-2"), now: late)
-        ) == .refreshSystem(designation: "TAU", nextStep: SurveyRun.Step.confirming))
+        ) == .refreshSystem(designation: "TAU", nextStep: SurveyRun.Step.confirming.rawValue))
     }
 
     /// Scan counts never end the wait on their own: past the backstop with the
     /// snapshot reading fully scanned but the controller demonstrably still out
     /// surveying, the run keeps waiting on the controller's row.
     @Test func backstopIgnoresScanCountsWhileTheControllerIsStillOut() {
-        let directive = run(step: SurveyRun.Step.awaiting, controllerCode: "AMI1",
+        let directive = run(step: SurveyRun.Step.awaiting.rawValue, controllerCode: "AMI1",
                             stepStartedAt: Date(timeIntervalSince1970: 900))
         let late = Date(timeIntervalSince1970: 900 + SurveyRun.backstopInterval + 1)
         let scanned = StarSystem(
@@ -713,7 +713,7 @@ struct SurveyRunCompletionTests {
     /// interval earns one read — its row is the only evidence that can end the
     /// wait, so it must not be judged from a reading that predates the wait.
     @Test func backstopBuysAControllerReadOnceItsRowIsStale() {
-        let directive = run(step: SurveyRun.Step.awaiting, controllerCode: "AMI1",
+        let directive = run(step: SurveyRun.Step.awaiting.rawValue, controllerCode: "AMI1",
                             stepStartedAt: Date(timeIntervalSince1970: 900))
         let late = Date(timeIntervalSince1970: 900 + SurveyRun.backstopInterval + 1)
         let stale = late.addingTimeInterval(-SurveyRun.backstopInterval - 1)
@@ -726,7 +726,7 @@ struct SurveyRunCompletionTests {
     /// The throttle on that read: one controller read per backstop interval — a
     /// survey runs for hours, so a fresher row waits.
     @Test func backstopThrottlesControllerReadsToTheInterval() {
-        let directive = run(step: SurveyRun.Step.awaiting, controllerCode: "AMI1",
+        let directive = run(step: SurveyRun.Step.awaiting.rawValue, controllerCode: "AMI1",
                             stepStartedAt: Date(timeIntervalSince1970: 900))
         let late = Date(timeIntervalSince1970: 900 + SurveyRun.backstopInterval + 1)
         let recent = late.addingTimeInterval(-SurveyRun.backstopInterval + 1)
@@ -740,7 +740,7 @@ struct SurveyRunCompletionTests {
     /// state, not evidence the survey ended — it earns a read, never the
     /// re-stowed fast path.
     @Test func backstopDoesNotTrustAPreLaunchStowedRow() {
-        let directive = run(step: SurveyRun.Step.awaiting, controllerCode: "AMI1",
+        let directive = run(step: SurveyRun.Step.awaiting.rawValue, controllerCode: "AMI1",
                             stepStartedAt: Date(timeIntervalSince1970: 900))
         let late = Date(timeIntervalSince1970: 900 + SurveyRun.backstopInterval + 1)
         let preLaunch = Date(timeIntervalSince1970: 800)
@@ -754,21 +754,21 @@ struct SurveyRunCompletionTests {
     /// first, never straight to the next target. See `SurveyRunRecoveryTests`.
     @Test func confirmingHandsOffToRecoveryWhenFullyScanned() {
         let scanned = StarSystem(designation: "TAU", planetsScanned: 4, planetsTotal: 4)
-        let directive = run(step: SurveyRun.Step.confirming, controllerCode: "AMI1")
+        let directive = run(step: SurveyRun.Step.confirming.rawValue, controllerCode: "AMI1")
         let snapshot = world(
             stagedFleet(vesselAt: "TAU-2"),
             log: [completionEntry(at: Date(timeIntervalSince1970: 950))],
             systems: ["TAU": scanned], now: Date(timeIntervalSince1970: 1_000)
         )
         #expect(SurveyRun().nextAction(directive: directive, world: snapshot)
-                == .advanceStep(nextStep: SurveyRun.Step.recovering))
+                == .advanceStep(nextStep: SurveyRun.Step.recovering.rawValue))
     }
 
     /// A completion event whose counts DISAGREE stalls `surveyIncomplete` rather
     /// than silently advancing over a half-surveyed system (spec §5).
     @Test func confirmingStallsWhenTheEventDisagrees() {
         let partial = StarSystem(designation: "TAU", planetsScanned: 2, planetsTotal: 4)
-        let directive = run(step: SurveyRun.Step.confirming, controllerCode: "AMI1")
+        let directive = run(step: SurveyRun.Step.confirming.rawValue, controllerCode: "AMI1")
         let snapshot = world(
             stagedFleet(vesselAt: "TAU-2"),
             log: [completionEntry(at: Date(timeIntervalSince1970: 950))],
@@ -783,11 +783,11 @@ struct SurveyRunCompletionTests {
     /// nothing to disbelieve.
     @Test func backstopDisagreementReturnsToWaiting() {
         let partial = StarSystem(designation: "TAU", planetsScanned: 2, planetsTotal: 4)
-        let directive = run(step: SurveyRun.Step.confirming, controllerCode: "AMI1")
+        let directive = run(step: SurveyRun.Step.confirming.rawValue, controllerCode: "AMI1")
         let snapshot = world(surveyingFleet(), systems: ["TAU": partial],
                              now: Date(timeIntervalSince1970: 1_000))
         #expect(SurveyRun().nextAction(directive: directive, world: snapshot)
-                == .advanceStep(nextStep: SurveyRun.Step.awaiting))
+                == .advanceStep(nextStep: SurveyRun.Step.awaiting.rawValue))
     }
 
     /// A controller home with incomplete counts is the same contradiction as a
@@ -795,7 +795,7 @@ struct SurveyRunCompletionTests {
     /// run stalls rather than waiting on a survey nothing is flying.
     @Test func confirmingStallsWhenTheControllerIsHomeButCountsDisagree() {
         let partial = StarSystem(designation: "TAU", planetsScanned: 2, planetsTotal: 4)
-        let directive = run(step: SurveyRun.Step.confirming, controllerCode: "AMI1")
+        let directive = run(step: SurveyRun.Step.confirming.rawValue, controllerCode: "AMI1")
         let snapshot = world(stagedFleet(vesselAt: "TAU-2"), systems: ["TAU": partial],
                              now: Date(timeIntervalSince1970: 1_000))
         #expect(SurveyRun().nextAction(directive: directive, world: snapshot)
@@ -815,46 +815,46 @@ struct SurveyRunSystemScanTests {
     /// counts at all, so the run goes and scans instead of stalling.
     @Test func confirmingScansWhenTheCountsAreAbsent() {
         let unscanned = StarSystem(designation: "TAU")
-        let directive = run(step: SurveyRun.Step.confirming, controllerCode: "AMI1")
+        let directive = run(step: SurveyRun.Step.confirming.rawValue, controllerCode: "AMI1")
         let snapshot = world(
             stagedFleet(vesselAt: "TAU-2"),
             log: [completionEntry(at: Date(timeIntervalSince1970: 950))],
             systems: ["TAU": unscanned], now: Date(timeIntervalSince1970: 1_000)
         )
         #expect(SurveyRun().nextAction(directive: directive, world: snapshot)
-                == .advanceStep(nextStep: SurveyRun.Step.scanning))
+                == .advanceStep(nextStep: SurveyRun.Step.scanning.rawValue))
     }
 
     /// A system the catalogue holds nothing at all for is the same question.
     @Test func confirmingScansWhenTheSystemIsUnknown() {
-        let directive = run(step: SurveyRun.Step.confirming, controllerCode: "AMI1")
+        let directive = run(step: SurveyRun.Step.confirming.rawValue, controllerCode: "AMI1")
         let snapshot = world(
             stagedFleet(vesselAt: "TAU-2"),
             log: [completionEntry(at: Date(timeIntervalSince1970: 950))],
             now: Date(timeIntervalSince1970: 1_000)
         )
         #expect(SurveyRun().nextAction(directive: directive, world: snapshot)
-                == .advanceStep(nextStep: SurveyRun.Step.scanning))
+                == .advanceStep(nextStep: SurveyRun.Step.scanning.rawValue))
     }
 
     /// The scanning step itself asks the engine for the replicant scan.
     @Test func scanningIssuesTheReplicantScan() {
-        let directive = run(step: SurveyRun.Step.scanning, controllerCode: "AMI1")
+        let directive = run(step: SurveyRun.Step.scanning.rawValue, controllerCode: "AMI1")
         let snapshot = world(stagedFleet(vesselAt: "TAU-2"),
                              now: Date(timeIntervalSince1970: 1_000))
         #expect(SurveyRun().nextAction(directive: directive, world: snapshot)
-                == .scanSystem(designation: "TAU", nextStep: SurveyRun.Step.confirming))
+                == .scanSystem(designation: "TAU", nextStep: SurveyRun.Step.confirming.rawValue))
     }
 
     /// A scan that keeps failing must not buy a POST every tick forever: once the
     /// loop has spent its rounds, the run surfaces the incomplete survey.
     @Test func confirmingStallsOnceTheScanBudgetIsSpent() {
         let unscanned = StarSystem(designation: "TAU")
-        let directive = run(step: SurveyRun.Step.confirming, controllerCode: "AMI1")
+        let directive = run(step: SurveyRun.Step.confirming.rawValue, controllerCode: "AMI1")
         var entries = [completionEntry(at: Date(timeIntervalSince1970: 950))]
         for round in 0..<SurveyRun.scanRounds {
-            entries.append(scanLoopEntry(SurveyRun.Step.scanning, at: .init(timeIntervalSince1970: 960 + Double(round) * 2)))
-            entries.append(scanLoopEntry(SurveyRun.Step.confirming, at: .init(timeIntervalSince1970: 961 + Double(round) * 2)))
+            entries.append(scanLoopEntry(SurveyRun.Step.scanning.rawValue, at: .init(timeIntervalSince1970: 960 + Double(round) * 2)))
+            entries.append(scanLoopEntry(SurveyRun.Step.confirming.rawValue, at: .init(timeIntervalSince1970: 961 + Double(round) * 2)))
         }
         let snapshot = world(
             stagedFleet(vesselAt: "TAU-2"), log: entries,
@@ -869,15 +869,15 @@ struct SurveyRunSystemScanTests {
     /// spot, which is what the old `confirming` could never do.
     @Test func retryReArmsTheScan() {
         let unscanned = StarSystem(designation: "TAU")
-        let directive = run(step: SurveyRun.Step.confirming, controllerCode: "AMI1")
+        let directive = run(step: SurveyRun.Step.confirming.rawValue, controllerCode: "AMI1")
         var entries = [completionEntry(at: Date(timeIntervalSince1970: 950))]
         for round in 0..<SurveyRun.scanRounds {
-            entries.append(scanLoopEntry(SurveyRun.Step.scanning, at: .init(timeIntervalSince1970: 960 + Double(round) * 2)))
-            entries.append(scanLoopEntry(SurveyRun.Step.confirming, at: .init(timeIntervalSince1970: 961 + Double(round) * 2)))
+            entries.append(scanLoopEntry(SurveyRun.Step.scanning.rawValue, at: .init(timeIntervalSince1970: 960 + Double(round) * 2)))
+            entries.append(scanLoopEntry(SurveyRun.Step.confirming.rawValue, at: .init(timeIntervalSince1970: 961 + Double(round) * 2)))
         }
         entries.append(DirectiveLogEntry(
             id: "LR", directiveID: "D1", deviceCode: nil, kind: .resolved,
-            summary: "Retried confirming", step: SurveyRun.Step.confirming,
+            summary: "Retried confirming", step: SurveyRun.Step.confirming.rawValue,
             operationID: nil, eventID: nil, occurredAt: Date(timeIntervalSince1970: 990)
         ))
         let snapshot = world(
@@ -885,7 +885,7 @@ struct SurveyRunSystemScanTests {
             systems: ["TAU": unscanned], now: Date(timeIntervalSince1970: 1_000)
         )
         #expect(SurveyRun().nextAction(directive: directive, world: snapshot)
-                == .advanceStep(nextStep: SurveyRun.Step.scanning))
+                == .advanceStep(nextStep: SurveyRun.Step.scanning.rawValue))
     }
 
     /// A system that HAS been scanned and is genuinely half-surveyed keeps the old
@@ -894,7 +894,7 @@ struct SurveyRunSystemScanTests {
     @Test func aScannedButPartialSystemStillStalls() {
         let partial = StarSystem(
             designation: "TAU", systemScanned: true, planetsScanned: 2, planetsTotal: 4)
-        let directive = run(step: SurveyRun.Step.confirming, controllerCode: "AMI1")
+        let directive = run(step: SurveyRun.Step.confirming.rawValue, controllerCode: "AMI1")
         let snapshot = world(
             stagedFleet(vesselAt: "TAU-2"),
             log: [completionEntry(at: Date(timeIntervalSince1970: 950))],
@@ -930,28 +930,28 @@ struct SurveyRunRecoveryTests {
     /// `recovering` and lets the recall finish first.
     @Test func confirmingEntersRecoveryRatherThanDepartingImmediately() {
         let scanned = StarSystem(designation: "TAU", planetsScanned: 4, planetsTotal: 4)
-        let directive = run(step: SurveyRun.Step.confirming, controllerCode: "AMI1")
+        let directive = run(step: SurveyRun.Step.confirming.rawValue, controllerCode: "AMI1")
         let snapshot = world(
             recallingFleet(aboard: 0),
             log: [completionEntry(at: Date(timeIntervalSince1970: 950))],
             systems: ["TAU": scanned], now: Date(timeIntervalSince1970: 1_000)
         )
         #expect(SurveyRun().nextAction(directive: directive, world: snapshot)
-                == .advanceStep(nextStep: SurveyRun.Step.recovering))
+                == .advanceStep(nextStep: SurveyRun.Step.recovering.rawValue))
     }
 
     /// Every adopted drone back aboard: the vessel is free to move on.
     @Test func advancesOnceEveryDroneIsAboard() {
-        let directive = run(step: SurveyRun.Step.recovering, controllerCode: "AMI1")
+        let directive = run(step: SurveyRun.Step.recovering.rawValue, controllerCode: "AMI1")
         #expect(SurveyRun().nextAction(directive: directive, world: world(recallingFleet(aboard: 3)))
-                == .advanceStep(nextStep: SurveyRun.Step.repairing))
+                == .advanceStep(nextStep: SurveyRun.Step.repairing.rawValue))
     }
 
     /// The recall has only just been ordered — give it a beat before spending a
     /// read on drones that cannot possibly be home yet.
     @Test func waitsBrieflyBeforeTheFirstProbe() {
         let start = Date(timeIntervalSince1970: 900)
-        let directive = run(step: SurveyRun.Step.recovering, controllerCode: "AMI1",
+        let directive = run(step: SurveyRun.Step.recovering.rawValue, controllerCode: "AMI1",
                             stepStartedAt: start)
         let justAfter = start.addingTimeInterval(SurveyRun.recallProbeDelay - 1)
         #expect(SurveyRun().nextAction(
@@ -981,7 +981,7 @@ struct SurveyRunRecoveryTests {
     /// staging check already names its drones for exactly this reason.
     @Test func probeNamesTheStrandedDronesRatherThanTheirSystem() {
         let start = Date(timeIntervalSince1970: 900)
-        let directive = run(step: SurveyRun.Step.recovering, controllerCode: "AMI1",
+        let directive = run(step: SurveyRun.Step.recovering.rawValue, controllerCode: "AMI1",
                             stepStartedAt: start)
         let due = start.addingTimeInterval(SurveyRun.recallProbeDelay + 1)
         // Rows last read before the probe interval, so the "don't re-read fresh
@@ -998,7 +998,7 @@ struct SurveyRunRecoveryTests {
     /// doing exactly what was asked of them. Waiting is the correct fallback.
     @Test func aProbeThatFindsThemStillFlyingWaitsRatherThanStalls() {
         let start = Date(timeIntervalSince1970: 900)
-        let directive = run(step: SurveyRun.Step.recovering, controllerCode: "AMI1",
+        let directive = run(step: SurveyRun.Step.recovering.rawValue, controllerCode: "AMI1",
                             stepStartedAt: start)
         let due = start.addingTimeInterval(SurveyRun.recallProbeDelay + 1)
         let lastSync = due.addingTimeInterval(-SurveyRun.recallProbeInterval - 1)
@@ -1016,7 +1016,7 @@ struct SurveyRunRecoveryTests {
     /// time rather than a hardcoded guess. Planets are not equidistant.
     @Test func waitsForTheFarthestTravellersArrival() {
         let now = Date(timeIntervalSince1970: 1_000)
-        let directive = run(step: SurveyRun.Step.recovering, controllerCode: "AMI1",
+        let directive = run(step: SurveyRun.Step.recovering.rawValue, controllerCode: "AMI1",
                             stepStartedAt: Date(timeIntervalSince1970: 900))
         let near = now.addingTimeInterval(30)
         let far = now.addingTimeInterval(12 * 60)
@@ -1033,7 +1033,7 @@ struct SurveyRunRecoveryTests {
     /// probe while the drones are demonstrably still on their way.
     @Test func doesNotReprobeWhileAKnownArrivalIsStillAhead() {
         let now = Date(timeIntervalSince1970: 1_000)
-        let directive = run(step: SurveyRun.Step.recovering, controllerCode: "AMI1",
+        let directive = run(step: SurveyRun.Step.recovering.rawValue, controllerCode: "AMI1",
                             stepStartedAt: Date(timeIntervalSince1970: 900))
         let ahead = now.addingTimeInterval(5)
         // Rows are ancient, so only the live ETA can be what suppresses the probe.
@@ -1051,7 +1051,7 @@ struct SurveyRunRecoveryTests {
     /// answer can actually have changed.
     @Test func reprobesOnceTheFarthestArrivalHasPassed() {
         let now = Date(timeIntervalSince1970: 1_000)
-        let directive = run(step: SurveyRun.Step.recovering, controllerCode: "AMI1",
+        let directive = run(step: SurveyRun.Step.recovering.rawValue, controllerCode: "AMI1",
                             stepStartedAt: Date(timeIntervalSince1970: 900))
         let passed = now.addingTimeInterval(-1)
         let stale = now.addingTimeInterval(-SurveyRun.recallProbeInterval - 1)
@@ -1069,7 +1069,7 @@ struct SurveyRunRecoveryTests {
     /// the "when did we last look" clock that prevents it.
     @Test func doesNotProbeMoreOftenThanTheProbeInterval() {
         let now = Date(timeIntervalSince1970: 1_000)
-        let directive = run(step: SurveyRun.Step.recovering, controllerCode: "AMI1",
+        let directive = run(step: SurveyRun.Step.recovering.rawValue, controllerCode: "AMI1",
                             stepStartedAt: Date(timeIntervalSince1970: 900))
         let justLooked = now.addingTimeInterval(-SurveyRun.recallProbeInterval + 1)
         #expect(SurveyRun().nextAction(
@@ -1082,7 +1082,7 @@ struct SurveyRunRecoveryTests {
     /// from the step's start, which `.wait` and a probe both leave untouched.
     @Test func stallsOnceTheRecallDeadlinePasses() {
         let start = Date(timeIntervalSince1970: 900)
-        let directive = run(step: SurveyRun.Step.recovering, controllerCode: "AMI1",
+        let directive = run(step: SurveyRun.Step.recovering.rawValue, controllerCode: "AMI1",
                             stepStartedAt: start)
         let tooLate = start.addingTimeInterval(SurveyRun.recallDeadline + 1)
         #expect(SurveyRun().nextAction(
@@ -1095,7 +1095,7 @@ struct SurveyRunRecoveryTests {
     /// failure this step exists to prevent.
     @Test func doesNotAdvanceWhenOnlySomeDronesAreAboard() {
         let now = Date(timeIntervalSince1970: 1_000)
-        let directive = run(step: SurveyRun.Step.recovering, controllerCode: "AMI1",
+        let directive = run(step: SurveyRun.Step.recovering.rawValue, controllerCode: "AMI1",
                             stepStartedAt: Date(timeIntervalSince1970: 900))
         let ahead = now.addingTimeInterval(60)
         let action = SurveyRun().nextAction(
@@ -1111,26 +1111,26 @@ struct SurveyRunRecoveryTests {
     /// A controller that adopted nothing has nothing to wait for — don't hold a
     /// run for a recall that will never report.
     @Test func advancesImmediatelyWhenNothingWasAdopted() {
-        let directive = run(step: SurveyRun.Step.recovering, controllerCode: "AMI1")
+        let directive = run(step: SurveyRun.Step.recovering.rawValue, controllerCode: "AMI1")
         #expect(SurveyRun().nextAction(directive: directive,
                                        world: world(recallingFleet(aboard: 0, adopted: 0)))
-                == .advanceStep(nextStep: SurveyRun.Step.repairing))
+                == .advanceStep(nextStep: SurveyRun.Step.repairing.rawValue))
     }
 
     /// A drone adopted by a DIFFERENT controller is not this run's to wait for.
     @Test func ignoresDronesAdoptedElsewhere() {
         var fleet = recallingFleet(aboard: 0, adopted: 0)
         fleet.append(device("OTHER", type: "survey_drone", location: "TAU-9", controlledBy: "AMI9"))
-        let directive = run(step: SurveyRun.Step.recovering, controllerCode: "AMI1")
+        let directive = run(step: SurveyRun.Step.recovering.rawValue, controllerCode: "AMI1")
         #expect(SurveyRun().nextAction(directive: directive, world: world(fleet))
-                == .advanceStep(nextStep: SurveyRun.Step.repairing))
+                == .advanceStep(nextStep: SurveyRun.Step.repairing.rawValue))
     }
 
     /// The recovery gate covers the LAST target too — the leg home is where the
     /// drones were actually lost, and preflight's staging checks never run on it.
     @Test func recoveryGatesTheFinalTargetBeforeTheLegHome() {
         let scanned = StarSystem(designation: "TAU", planetsScanned: 4, planetsTotal: 4)
-        let directive = run(step: SurveyRun.Step.confirming, targets: ["TAU"], targetIndex: 0,
+        let directive = run(step: SurveyRun.Step.confirming.rawValue, targets: ["TAU"], targetIndex: 0,
                             controllerCode: "AMI1", returnToOrigin: true, origin: "SOL")
         let snapshot = world(
             recallingFleet(aboard: 0),
@@ -1138,7 +1138,7 @@ struct SurveyRunRecoveryTests {
             systems: ["TAU": scanned], now: Date(timeIntervalSince1970: 1_000)
         )
         #expect(SurveyRun().nextAction(directive: directive, world: snapshot)
-                == .advanceStep(nextStep: SurveyRun.Step.recovering))
+                == .advanceStep(nextStep: SurveyRun.Step.recovering.rawValue))
     }
 }
 
@@ -1158,7 +1158,7 @@ struct SurveyRunFinishTests {
     @Test func returnsToOriginWhenAsked() {
         let directive = run(targets: ["TAU"], targetIndex: 1, returnToOrigin: true, origin: "SOL")
         #expect(SurveyRun().nextAction(directive: directive, world: world(stagedFleet(vesselAt: "TAU-2")))
-                == .advanceStep(nextStep: SurveyRun.Step.returning))
+                == .advanceStep(nextStep: SurveyRun.Step.returning.rawValue))
     }
 
     /// Already home: done, no pointless leg.
@@ -1170,19 +1170,19 @@ struct SurveyRunFinishTests {
 
     /// The return leg dispatches travel home, then completes on arrival.
     @Test func returningTravelsHomeThenCompletes() {
-        let directive = run(step: SurveyRun.Step.returning, targets: ["TAU"], targetIndex: 1,
+        let directive = run(step: SurveyRun.Step.returning.rawValue, targets: ["TAU"], targetIndex: 1,
                             returnToOrigin: true, origin: "SOL")
         #expect(SurveyRun().nextAction(directive: directive, world: world(stagedFleet(vesselAt: "TAU-2")))
                 == .dispatch(kind: .travel, deviceCode: "VES1",
                              params: CommandParams(destination: "SOL"),
-                             nextStep: SurveyRun.Step.returning))
+                             nextStep: SurveyRun.Step.returning.rawValue))
         #expect(SurveyRun().nextAction(directive: directive, world: world(stagedFleet(vesselAt: "SOL-3")))
                 == .done)
     }
 
     /// The return leg waits while in transit rather than re-dispatching.
     @Test func returningWaitsWhileTravelling() {
-        let directive = run(step: SurveyRun.Step.returning, targets: ["TAU"], targetIndex: 1,
+        let directive = run(step: SurveyRun.Step.returning.rawValue, targets: ["TAU"], targetIndex: 1,
                             returnToOrigin: true, origin: "SOL")
         #expect(SurveyRun().nextAction(directive: directive,
                                        world: world(stagedFleet(vesselAt: "TAU-2"), travelling: true))
@@ -1226,7 +1226,7 @@ struct SurveyRunRoamTests {
             ),
             world: world(stagedFleet(vesselAt: "TAU-1"))
         )
-        #expect(action == .advanceStep(nextStep: SurveyRun.Step.returning))
+        #expect(action == .advanceStep(nextStep: SurveyRun.Step.returning.rawValue))
     }
 
     /// The roam branch is checked BEFORE the return leg, so a run carrying both
@@ -1295,7 +1295,7 @@ struct SurveyRunArrivalFreshnessTests {
     // MARK: Site 1 — travel (destination = the target system)
 
     @Test func travelWaitsWhenTheVesselRowStillLagsTheArrival() {
-        let directive = run(step: SurveyRun.Step.travelling, controllerCode: "AMI1")
+        let directive = run(step: SurveyRun.Step.travelling.rawValue, controllerCode: "AMI1")
         let snapshot = world(stagedFleet(vesselAt: "SOL-3", updatedAt: rowLaggingArrival),
                              dispatchedOperations: afterArrival())
         #expect(SurveyRun().nextAction(directive: directive, world: snapshot) == .wait)
@@ -1304,13 +1304,13 @@ struct SurveyRunArrivalFreshnessTests {
     /// The no-regression half: a row written AT the arrival still departs. If
     /// this fails the gate has become a brake on every legitimate travel.
     @Test func travelStillDispatchesWhenTheRowPostDatesTheArrival() {
-        let directive = run(step: SurveyRun.Step.travelling, controllerCode: "AMI1")
+        let directive = run(step: SurveyRun.Step.travelling.rawValue, controllerCode: "AMI1")
         let snapshot = world(stagedFleet(vesselAt: "SOL-3", updatedAt: arrivalClosedAt),
                              dispatchedOperations: afterArrival())
         #expect(SurveyRun().nextAction(directive: directive, world: snapshot)
                 == .dispatch(kind: .travel, deviceCode: "VES1",
                              params: CommandParams(destination: "TAU"),
-                             nextStep: SurveyRun.Step.travelling))
+                             nextStep: SurveyRun.Step.travelling.rawValue))
     }
 
     /// Where the gate may sit, not just whether it fires. Every other stale
@@ -1318,17 +1318,17 @@ struct SurveyRunArrivalFreshnessTests {
     /// a gate hoisted above the equality check; this one is just as stale but
     /// already names the target — the benign direction, which must advance.
     @Test func travelAdvancesOnAStaleRowThatAlreadyNamesTheTarget() {
-        let directive = run(step: SurveyRun.Step.travelling, controllerCode: "AMI1")
+        let directive = run(step: SurveyRun.Step.travelling.rawValue, controllerCode: "AMI1")
         let snapshot = world(stagedFleet(vesselAt: "TAU-2", updatedAt: rowLaggingArrival),
                              dispatchedOperations: afterArrival())
         #expect(SurveyRun().nextAction(directive: directive, world: snapshot)
-                == .advanceStep(nextStep: SurveyRun.Step.deployingBots))
+                == .advanceStep(nextStep: SurveyRun.Step.deployingBots.rawValue))
     }
 
     // MARK: Site 2 — returnHome (destination = the run's origin)
 
     @Test func returnWaitsWhenTheVesselRowStillLagsTheArrival() {
-        let directive = run(step: SurveyRun.Step.returning, targets: ["TAU"], targetIndex: 1,
+        let directive = run(step: SurveyRun.Step.returning.rawValue, targets: ["TAU"], targetIndex: 1,
                             returnToOrigin: true, origin: "SOL")
         let snapshot = world(stagedFleet(vesselAt: "TAU-2", updatedAt: rowLaggingArrival),
                              dispatchedOperations: afterArrival())
@@ -1336,20 +1336,20 @@ struct SurveyRunArrivalFreshnessTests {
     }
 
     @Test func returnStillDispatchesWhenTheRowPostDatesTheArrival() {
-        let directive = run(step: SurveyRun.Step.returning, targets: ["TAU"], targetIndex: 1,
+        let directive = run(step: SurveyRun.Step.returning.rawValue, targets: ["TAU"], targetIndex: 1,
                             returnToOrigin: true, origin: "SOL")
         let snapshot = world(stagedFleet(vesselAt: "TAU-2", updatedAt: arrivalClosedAt),
                              dispatchedOperations: afterArrival())
         #expect(SurveyRun().nextAction(directive: directive, world: snapshot)
                 == .dispatch(kind: .travel, deviceCode: "VES1",
                              params: CommandParams(destination: "SOL"),
-                             nextStep: SurveyRun.Step.returning))
+                             nextStep: SurveyRun.Step.returning.rawValue))
     }
 
     /// Gate placement for site 2: a stale row already home must finish the run,
     /// never wait. Hoisting the gate turns every arrival home into a stall.
     @Test func returnCompletesOnAStaleRowThatAlreadyNamesTheOrigin() {
-        let directive = run(step: SurveyRun.Step.returning, targets: ["TAU"], targetIndex: 1,
+        let directive = run(step: SurveyRun.Step.returning.rawValue, targets: ["TAU"], targetIndex: 1,
                             returnToOrigin: true, origin: "SOL")
         let snapshot = world(stagedFleet(vesselAt: "SOL-3", updatedAt: rowLaggingArrival),
                              dispatchedOperations: afterArrival())
@@ -1362,27 +1362,27 @@ struct SurveyRunArrivalFreshnessTests {
     /// evaluation departs at once. This is why the watermark is the ARRIVAL and
     /// not `stepStartedAt`, which would delay every first travel by a deadline.
     @Test func dispatchesImmediatelyOnAColdRunWithNoCompletedTravel() {
-        let directive = run(step: SurveyRun.Step.travelling, controllerCode: "AMI1")
+        let directive = run(step: SurveyRun.Step.travelling.rawValue, controllerCode: "AMI1")
         let fleet = stagedFleet(vesselAt: "SOL-3", updatedAt: rowLaggingArrival)
         let snapshot = world(fleet)
         #expect(SalvageRun.lastTravelCompletion(for: fleet[0], snapshot) == nil)
         #expect(SurveyRun().nextAction(directive: directive, world: snapshot)
                 == .dispatch(kind: .travel, deviceCode: "VES1",
                              params: CommandParams(destination: "TAU"),
-                             nextStep: SurveyRun.Step.travelling))
+                             nextStep: SurveyRun.Step.travelling.rawValue))
     }
 
     /// A `.superseded` op stamps `lastConfirmedAt` on a travel that never
     /// arrived, so it must not install itself as the watermark and gate a real
     /// dispatch behind an arrival that did not happen.
     @Test func aSupersededTravelIsNotAnArrival() {
-        let directive = run(step: SurveyRun.Step.travelling, controllerCode: "AMI1")
+        let directive = run(step: SurveyRun.Step.travelling.rawValue, controllerCode: "AMI1")
         let snapshot = world(stagedFleet(vesselAt: "SOL-3", updatedAt: rowLaggingArrival),
                              dispatchedOperations: afterArrival(status: .superseded))
         #expect(SurveyRun().nextAction(directive: directive, world: snapshot)
                 == .dispatch(kind: .travel, deviceCode: "VES1",
                              params: CommandParams(destination: "TAU"),
-                             nextStep: SurveyRun.Step.travelling))
+                             nextStep: SurveyRun.Step.travelling.rawValue))
     }
 
     // MARK: The escalation ladder
@@ -1391,7 +1391,7 @@ struct SurveyRunArrivalFreshnessTests {
     /// never land never reaches its deadline and buys a `.high` read every tick.
     @Test func surfacesVesselPositionUnconfirmedOnceTheArrivalDeadlinePasses() {
         let longAgo = fixtureNow.addingTimeInterval(-SalvageRun.arrivalConfirmDeadline)
-        let directive = run(step: SurveyRun.Step.travelling, controllerCode: "AMI1")
+        let directive = run(step: SurveyRun.Step.travelling.rawValue, controllerCode: "AMI1")
         let snapshot = world(
             stagedFleet(vesselAt: "SOL-3", updatedAt: longAgo.addingTimeInterval(-5)),
             dispatchedOperations: afterArrival(completedAt: longAgo)
@@ -1403,11 +1403,22 @@ struct SurveyRunArrivalFreshnessTests {
     /// Past the read throttle but inside the deadline: buy one read, carrying no
     /// stall reason so an unresolved probe waits rather than halting the run.
     @Test func buysOneThrottledReadOnceTheRowIsOldEnough() {
-        let directive = run(step: SurveyRun.Step.travelling, controllerCode: "AMI1")
+        let directive = run(step: SurveyRun.Step.travelling.rawValue, controllerCode: "AMI1")
         let stale = arrivalClosedAt.addingTimeInterval(-SalvageRun.arrivalReadInterval - 1)
         let snapshot = world(stagedFleet(vesselAt: "SOL-3", updatedAt: stale),
                              dispatchedOperations: afterArrival())
         #expect(SurveyRun().nextAction(directive: directive, world: snapshot)
                 == .refreshDevices(deviceCodes: ["VES1"], thenStall: nil))
+    }
+}
+
+@Suite("Survey Run — step vocabulary")
+struct SurveyRunStepVocabularyTests {
+    @Test func stepVocabularyIsFrozen() {
+        #expect(SurveyRun.Step.allCases.map(\.rawValue) == [
+            "preflight", "travelling", "deployingBots", "confirmingBotDeploy", "armingBots",
+            "confirmingBotArm", "configuring", "launching", "awaiting", "confirming", "scanning",
+            "recovering", "repairing", "stowingBots", "confirmingBotStow", "returning",
+        ])
     }
 }

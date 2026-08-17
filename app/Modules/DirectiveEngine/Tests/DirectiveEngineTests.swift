@@ -1861,7 +1861,7 @@ struct DirectiveEngineRoamTests {
             // Preflight's verdict once the rows are worth trusting: claim the
             // controller and set off.
             #expect(updated?.controllerCode == "AMI1")
-            #expect(updated?.step == SurveyRun.Step.travelling)
+            #expect(updated?.step == SurveyRun.Step.travelling.rawValue)
         }
         #expect(reads.value.sorted() == ["AMI1", "DRONE1", "VES1"])
     }

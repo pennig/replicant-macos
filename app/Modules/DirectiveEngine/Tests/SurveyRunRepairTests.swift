@@ -17,8 +17,8 @@ import Utils
     @Test func arrivalWithNoBotAboardSkipsStraightToConfiguring() {
         let vessel = repairDevice("VESSEL", type: "heaven_vessel", location: "SOL-3")
         let w = repairWorld(devices: [vessel])
-        let d = repairDirective(step: SurveyRun.Step.deployingBots, deviceCode: "VESSEL")
-        #expect(SurveyRun().nextAction(directive: d, world: w) == .advanceStep(nextStep: SurveyRun.Step.configuring))
+        let d = repairDirective(step: SurveyRun.Step.deployingBots.rawValue, deviceCode: "VESSEL")
+        #expect(SurveyRun().nextAction(directive: d, world: w) == .advanceStep(nextStep: SurveyRun.Step.configuring.rawValue))
     }
 
     @Test func arrivalDeploysTheFirstBotStillAboard() {
@@ -26,11 +26,11 @@ import Utils
         let a = repairDevice("BOT1", type: "service_bot", location: nil, stowedIn: "VESSEL", directives: ["service"])
         let b = repairDevice("BOT2", type: "service_bot", location: nil, stowedIn: "VESSEL", directives: ["service"])
         let w = repairWorld(devices: [vessel, a, b])
-        let d = repairDirective(step: SurveyRun.Step.deployingBots, deviceCode: "VESSEL")
+        let d = repairDirective(step: SurveyRun.Step.deployingBots.rawValue, deviceCode: "VESSEL")
         #expect(SurveyRun().nextAction(directive: d, world: w) == .dispatch(
             kind: .simple("deploy"), deviceCode: "BOT1",
             params: CommandParams(),
-            nextStep: SurveyRun.Step.confirmingBotDeploy
+            nextStep: SurveyRun.Step.confirmingBotDeploy.rawValue
         ))
     }
 
@@ -40,10 +40,10 @@ import Utils
         let aboard = repairDevice("BOT2", type: "service_bot", location: nil, stowedIn: "VESSEL", directives: ["service"])
         let w = repairWorld(devices: [vessel, out, aboard])
         let d = repairDirective(
-            step: SurveyRun.Step.confirmingBotDeploy, deviceCode: "VESSEL",
+            step: SurveyRun.Step.confirmingBotDeploy.rawValue, deviceCode: "VESSEL",
             stepStartedAt: repairFixtureNow.addingTimeInterval(-60)
         )
-        #expect(SurveyRun().nextAction(directive: d, world: w) == .advanceStep(nextStep: SurveyRun.Step.deployingBots))
+        #expect(SurveyRun().nextAction(directive: d, world: w) == .advanceStep(nextStep: SurveyRun.Step.deployingBots.rawValue))
     }
 
     @Test func everyBotDeployedAdvancesToArming() {
@@ -52,17 +52,17 @@ import Utils
         let b = repairDevice("BOT2", type: "service_bot", location: "SOL-3", directives: ["service"])
         let w = repairWorld(devices: [vessel, a, b])
         let d = repairDirective(
-            step: SurveyRun.Step.confirmingBotDeploy, deviceCode: "VESSEL",
+            step: SurveyRun.Step.confirmingBotDeploy.rawValue, deviceCode: "VESSEL",
             stepStartedAt: repairFixtureNow.addingTimeInterval(-60)
         )
-        #expect(SurveyRun().nextAction(directive: d, world: w) == .advanceStep(nextStep: SurveyRun.Step.armingBots))
+        #expect(SurveyRun().nextAction(directive: d, world: w) == .advanceStep(nextStep: SurveyRun.Step.armingBots.rawValue))
     }
 
     @Test func aFreshlyOrderedDeployIsNotJudgedYet() {
         let vessel = repairDevice("VESSEL", type: "heaven_vessel", location: "SOL-3")
         let aboard = repairDevice("BOT1", type: "service_bot", location: nil, stowedIn: "VESSEL", directives: ["service"])
         let w = repairWorld(devices: [vessel, aboard])
-        let d = repairDirective(step: SurveyRun.Step.confirmingBotDeploy, deviceCode: "VESSEL", stepStartedAt: repairFixtureNow)
+        let d = repairDirective(step: SurveyRun.Step.confirmingBotDeploy.rawValue, deviceCode: "VESSEL", stepStartedAt: repairFixtureNow)
         #expect(SurveyRun().nextAction(directive: d, world: w) == .wait)
     }
 
@@ -71,8 +71,8 @@ import Utils
         let bot = repairDevice("BOT1", type: "service_bot", location: "SOL-3", directives: ["service"])
         let drone = repairDevice("DRONE1", type: "survey_drone", location: nil, stowedIn: "VESSEL", capacity: 100)
         let w = repairWorld(devices: [vessel, bot, drone])
-        let d = repairDirective(step: SurveyRun.Step.repairing, deviceCode: "VESSEL", stepStartedAt: repairFixtureNow.addingTimeInterval(-60))
-        #expect(SurveyRun().nextAction(directive: d, world: w) == .advanceStep(nextStep: SurveyRun.Step.stowingBots))
+        let d = repairDirective(step: SurveyRun.Step.repairing.rawValue, deviceCode: "VESSEL", stepStartedAt: repairFixtureNow.addingTimeInterval(-60))
+        #expect(SurveyRun().nextAction(directive: d, world: w) == .advanceStep(nextStep: SurveyRun.Step.stowingBots.rawValue))
     }
 
     @Test func aWorkingBotHoldsTheVessel() {
@@ -80,7 +80,7 @@ import Utils
         let bot = repairDevice("BOT1", type: "service_bot", location: "SOL-3", directives: ["service"], repairingTarget: "DRONE1")
         let drone = repairDevice("DRONE1", type: "survey_drone", location: nil, stowedIn: "VESSEL", capacity: 30)
         let w = repairWorld(devices: [vessel, bot, drone])
-        let d = repairDirective(step: SurveyRun.Step.repairing, deviceCode: "VESSEL", stepStartedAt: repairFixtureNow.addingTimeInterval(-60))
+        let d = repairDirective(step: SurveyRun.Step.repairing.rawValue, deviceCode: "VESSEL", stepStartedAt: repairFixtureNow.addingTimeInterval(-60))
         #expect(SurveyRun().nextAction(directive: d, world: w) == .wait)
     }
 
@@ -89,16 +89,16 @@ import Utils
         let bot = repairDevice("BOT1", type: "service_bot", location: "SOL-3", directives: ["service"])
         let drone = repairDevice("DRONE1", type: "survey_drone", location: nil, stowedIn: "VESSEL", capacity: 30)
         let w = repairWorld(devices: [vessel, bot, drone])
-        let d = repairDirective(step: SurveyRun.Step.repairing, deviceCode: "VESSEL", stepStartedAt: repairFixtureNow.addingTimeInterval(-60))
-        #expect(SurveyRun().nextAction(directive: d, world: w) == .advanceStep(nextStep: SurveyRun.Step.stowingBots))
+        let d = repairDirective(step: SurveyRun.Step.repairing.rawValue, deviceCode: "VESSEL", stepStartedAt: repairFixtureNow.addingTimeInterval(-60))
+        #expect(SurveyRun().nextAction(directive: d, world: w) == .advanceStep(nextStep: SurveyRun.Step.stowingBots.rawValue))
     }
 
     @Test func noBotDeployedSkipsTheGate() {
         let vessel = repairDevice("VESSEL", type: "heaven_vessel", location: "SOL-3")
         let drone = repairDevice("DRONE1", type: "survey_drone", location: nil, stowedIn: "VESSEL", capacity: 30)
         let w = repairWorld(devices: [vessel, drone])
-        let d = repairDirective(step: SurveyRun.Step.repairing, deviceCode: "VESSEL", stepStartedAt: repairFixtureNow.addingTimeInterval(-60))
-        #expect(SurveyRun().nextAction(directive: d, world: w) == .advanceStep(nextStep: SurveyRun.Step.stowingBots))
+        let d = repairDirective(step: SurveyRun.Step.repairing.rawValue, deviceCode: "VESSEL", stepStartedAt: repairFixtureNow.addingTimeInterval(-60))
+        #expect(SurveyRun().nextAction(directive: d, world: w) == .advanceStep(nextStep: SurveyRun.Step.stowingBots.rawValue))
     }
 
     @Test func aBotStillWorkingAtTheDeadlineEscalates() {
@@ -107,7 +107,7 @@ import Utils
         let drone = repairDevice("DRONE1", type: "survey_drone", location: nil, stowedIn: "VESSEL", capacity: 30)
         let w = repairWorld(devices: [vessel, bot, drone])
         let past = repairFixtureNow.addingTimeInterval(-(SurveyRun.repairDeadline + 1))
-        let d = repairDirective(step: SurveyRun.Step.repairing, deviceCode: "VESSEL", stepStartedAt: past)
+        let d = repairDirective(step: SurveyRun.Step.repairing.rawValue, deviceCode: "VESSEL", stepStartedAt: past)
         #expect(SurveyRun().nextAction(directive: d, world: w) == .stall(.repairUnfinished))
     }
 
@@ -119,7 +119,7 @@ import Utils
         )
         let drone = repairDevice("DRONE1", type: "survey_drone", location: nil, stowedIn: "VESSEL", capacity: 30)
         let w = repairWorld(devices: [vessel, bot, drone])
-        let d = repairDirective(step: SurveyRun.Step.repairing, deviceCode: "VESSEL", stepStartedAt: repairFixtureNow.addingTimeInterval(-60))
+        let d = repairDirective(step: SurveyRun.Step.repairing.rawValue, deviceCode: "VESSEL", stepStartedAt: repairFixtureNow.addingTimeInterval(-60))
         #expect(SurveyRun().nextAction(directive: d, world: w) == .refreshDevices(deviceCodes: ["BOT1"], thenStall: nil))
     }
 
@@ -127,11 +127,11 @@ import Utils
         let vessel = repairDevice("VESSEL", type: "heaven_vessel", location: "SOL-3")
         let bot = repairDevice("BOT1", type: "service_bot", location: "SOL-3", directives: ["service"])
         let w = repairWorld(devices: [vessel, bot])
-        let d = repairDirective(step: SurveyRun.Step.stowingBots, deviceCode: "VESSEL")
+        let d = repairDirective(step: SurveyRun.Step.stowingBots.rawValue, deviceCode: "VESSEL")
         #expect(SurveyRun().nextAction(directive: d, world: w) == .dispatch(
             kind: .simple("recall"), deviceCode: "BOT1",
             params: CommandParams(),
-            nextStep: SurveyRun.Step.confirmingBotStow
+            nextStep: SurveyRun.Step.confirmingBotStow.rawValue
         ))
     }
 
@@ -140,7 +140,7 @@ import Utils
         let bot = repairDevice("BOT1", type: "service_bot", location: nil, stowedIn: "VESSEL", directives: ["service"])
         let w = repairWorld(devices: [vessel, bot])
         let d = repairDirective(
-            step: SurveyRun.Step.confirmingBotStow, deviceCode: "VESSEL",
+            step: SurveyRun.Step.confirmingBotStow.rawValue, deviceCode: "VESSEL",
             stepStartedAt: repairFixtureNow.addingTimeInterval(-60)
         )
         #expect(SurveyRun().nextAction(directive: d, world: w) == .advanceTarget)
@@ -151,7 +151,7 @@ import Utils
         let bot = repairDevice("BOT1", type: "service_bot", location: "SOL-3", directives: ["service"], updatedAt: repairFixtureNow)
         let w = repairWorld(devices: [vessel, bot])
         let past = repairFixtureNow.addingTimeInterval(-(SurveyRun.recallDeadline + 1))
-        let d = repairDirective(step: SurveyRun.Step.confirmingBotStow, deviceCode: "VESSEL", stepStartedAt: past)
+        let d = repairDirective(step: SurveyRun.Step.confirmingBotStow.rawValue, deviceCode: "VESSEL", stepStartedAt: past)
         #expect(SurveyRun().nextAction(directive: d, world: w) == .stall(.serviceBotNotRecovered))
     }
 
@@ -162,7 +162,7 @@ import Utils
         )
         let bot = repairDevice("BOT1", type: "service_bot", location: "SOL-3", directives: ["service"])
         let w = repairWorld(devices: [vessel, bot])
-        let d = repairDirective(step: SurveyRun.Step.repairing, deviceCode: "VESSEL", stepStartedAt: repairFixtureNow)
+        let d = repairDirective(step: SurveyRun.Step.repairing.rawValue, deviceCode: "VESSEL", stepStartedAt: repairFixtureNow)
         #expect(SurveyRun().nextAction(directive: d, world: w) == .refreshDevices(deviceCodes: ["VESSEL"], thenStall: nil))
     }
 
@@ -173,7 +173,7 @@ import Utils
         )
         let bot = repairDevice("BOT1", type: "service_bot", location: "SOL-3", directives: ["service"])
         let w = repairWorld(devices: [vessel, bot])
-        let d = repairDirective(step: SurveyRun.Step.stowingBots, deviceCode: "VESSEL")
+        let d = repairDirective(step: SurveyRun.Step.stowingBots.rawValue, deviceCode: "VESSEL")
         #expect(SurveyRun().nextAction(directive: d, world: w) == .refreshDevices(deviceCodes: ["VESSEL"], thenStall: nil))
     }
 
@@ -185,7 +185,7 @@ import Utils
         let bot = repairDevice("BOT1", type: "service_bot", location: "SOL-3", directives: ["service"])
         let w = repairWorld(devices: [vessel, bot])
         let d = repairDirective(
-            step: SurveyRun.Step.confirmingBotStow, deviceCode: "VESSEL",
+            step: SurveyRun.Step.confirmingBotStow.rawValue, deviceCode: "VESSEL",
             stepStartedAt: repairFixtureNow.addingTimeInterval(-60)
         )
         #expect(SurveyRun().nextAction(directive: d, world: w) == .refreshDevices(deviceCodes: ["VESSEL"], thenStall: nil))
@@ -200,7 +200,7 @@ import Utils
         let drone = repairDevice("DRONE1", type: "survey_drone", location: nil, stowedIn: "VESSEL", capacity: 30)
         let w = repairWorld(devices: [vessel, bot, drone])
         let d = repairDirective(
-            step: SurveyRun.Step.repairing, deviceCode: "VESSEL", targets: ["TAU"],
+            step: SurveyRun.Step.repairing.rawValue, deviceCode: "VESSEL", targets: ["TAU"],
             stepStartedAt: repairFixtureNow.addingTimeInterval(-60)
         )
         #expect(SurveyRun().nextAction(directive: d, world: w) == .wait)
@@ -210,11 +210,11 @@ import Utils
         let vessel = repairDevice("VESSEL", type: "heaven_vessel", location: "TAU-2")
         let bot = repairDevice("BOT1", type: "service_bot", location: "TAU-9", directives: ["service"])
         let w = repairWorld(devices: [vessel, bot])
-        let d = repairDirective(step: SurveyRun.Step.stowingBots, deviceCode: "VESSEL", targets: ["TAU"])
+        let d = repairDirective(step: SurveyRun.Step.stowingBots.rawValue, deviceCode: "VESSEL", targets: ["TAU"])
         #expect(SurveyRun().nextAction(directive: d, world: w) == .dispatch(
             kind: .simple("recall"), deviceCode: "BOT1",
             params: CommandParams(),
-            nextStep: SurveyRun.Step.confirmingBotStow
+            nextStep: SurveyRun.Step.confirmingBotStow.rawValue
         ))
     }
 
@@ -223,10 +223,10 @@ import Utils
         let bot = repairDevice("BOT1", type: "service_bot", location: "TAU-9", directives: ["service"])
         let w = repairWorld(devices: [vessel, bot])
         let d = repairDirective(
-            step: SurveyRun.Step.confirmingBotStow, deviceCode: "VESSEL", targets: ["TAU"],
+            step: SurveyRun.Step.confirmingBotStow.rawValue, deviceCode: "VESSEL", targets: ["TAU"],
             stepStartedAt: repairFixtureNow.addingTimeInterval(-60)
         )
-        #expect(SurveyRun().nextAction(directive: d, world: w) == .advanceStep(nextStep: SurveyRun.Step.stowingBots))
+        #expect(SurveyRun().nextAction(directive: d, world: w) == .advanceStep(nextStep: SurveyRun.Step.stowingBots.rawValue))
     }
 
     @Test func aRecallStillCruisingIsWaitedOutOnItsOwnArrivalTime() {
@@ -237,7 +237,7 @@ import Utils
         )
         let w = repairWorld(devices: [vessel, bot])
         let d = repairDirective(
-            step: SurveyRun.Step.confirmingBotStow, deviceCode: "VESSEL", targets: ["TAU"],
+            step: SurveyRun.Step.confirmingBotStow.rawValue, deviceCode: "VESSEL", targets: ["TAU"],
             stepStartedAt: repairFixtureNow.addingTimeInterval(-60)
         )
         #expect(SurveyRun().nextAction(directive: d, world: w) == .wait)
@@ -257,7 +257,7 @@ import Utils
         )
         let w = repairWorld(devices: [vessel, bot], openOperations: ["BOT1": open])
         let d = repairDirective(
-            step: SurveyRun.Step.confirmingBotStow, deviceCode: "VESSEL", targets: ["TAU"],
+            step: SurveyRun.Step.confirmingBotStow.rawValue, deviceCode: "VESSEL", targets: ["TAU"],
             stepStartedAt: repairFixtureNow.addingTimeInterval(-60)
         )
         #expect(SurveyRun().nextAction(directive: d, world: w) == .wait)
@@ -274,7 +274,7 @@ import Utils
             completesAt: repairFixtureNow.addingTimeInterval(120)
         )
         let w = repairWorld(devices: [vessel, bot], openOperations: ["BOT1": open])
-        let d = repairDirective(step: SurveyRun.Step.stowingBots, deviceCode: "VESSEL", targets: ["TAU"])
+        let d = repairDirective(step: SurveyRun.Step.stowingBots.rawValue, deviceCode: "VESSEL", targets: ["TAU"])
         #expect(SurveyRun().nextAction(directive: d, world: w) == .wait)
     }
 
@@ -291,7 +291,7 @@ import Utils
             completesAt: repairFixtureNow.addingTimeInterval(120)
         )
         let w = repairWorld(devices: [vessel, bot], openOperations: ["BOT1": open])
-        let d = repairDirective(step: SurveyRun.Step.stowingBots, deviceCode: "VESSEL", targets: ["TAU"])
+        let d = repairDirective(step: SurveyRun.Step.stowingBots.rawValue, deviceCode: "VESSEL", targets: ["TAU"])
         #expect(SurveyRun().nextAction(directive: d, world: w) == .wait)
     }
 
@@ -306,7 +306,7 @@ import Utils
             completesAt: repairFixtureNow.addingTimeInterval(120)
         )
         let w = repairWorld(devices: [vessel, bot], openOperations: ["BOT1": open])
-        let d = repairDirective(step: SurveyRun.Step.stowingBots, deviceCode: "VESSEL", targets: ["TAU"])
+        let d = repairDirective(step: SurveyRun.Step.stowingBots.rawValue, deviceCode: "VESSEL", targets: ["TAU"])
         #expect(SurveyRun().nextAction(directive: d, world: w) == .advanceTarget)
     }
 
@@ -318,7 +318,7 @@ import Utils
             completesAt: repairFixtureNow.addingTimeInterval(120)
         )
         let w = repairWorld(devices: [vessel, bot], openOperations: ["BOT1": open])
-        let d = repairDirective(step: SurveyRun.Step.stowingBots, deviceCode: "VESSEL", targets: ["TAU"])
+        let d = repairDirective(step: SurveyRun.Step.stowingBots.rawValue, deviceCode: "VESSEL", targets: ["TAU"])
         #expect(SurveyRun().nextAction(directive: d, world: w) == .wait)
     }
 
@@ -331,7 +331,7 @@ import Utils
         )
         let w = repairWorld(devices: [vessel, bot], openOperations: ["BOT1": open])
         let past = repairFixtureNow.addingTimeInterval(-(SurveyRun.recallDeadline + 1))
-        let d = repairDirective(step: SurveyRun.Step.stowingBots, deviceCode: "VESSEL", targets: ["TAU"], stepStartedAt: past)
+        let d = repairDirective(step: SurveyRun.Step.stowingBots.rawValue, deviceCode: "VESSEL", targets: ["TAU"], stepStartedAt: past)
         #expect(SurveyRun().nextAction(directive: d, world: w) == .stall(.serviceBotNotRecovered))
     }
 
@@ -344,11 +344,11 @@ import Utils
         let bot = repairDevice("BOT1", type: "service_bot", location: "SOL-3", directives: ["service"])
         let stuck = STUCKOP_operation(entityCode: "BOT1", kind: "recall", completesAt: nil)
         let w = repairWorld(devices: [vessel, bot], openOperations: ["BOT1": stuck])
-        let d = repairDirective(step: SurveyRun.Step.stowingBots, deviceCode: "VESSEL")
+        let d = repairDirective(step: SurveyRun.Step.stowingBots.rawValue, deviceCode: "VESSEL")
         #expect(SurveyRun().nextAction(directive: d, world: w) == .dispatch(
             kind: .simple("recall"), deviceCode: "BOT1",
             params: CommandParams(),
-            nextStep: SurveyRun.Step.confirmingBotStow
+            nextStep: SurveyRun.Step.confirmingBotStow.rawValue
         ))
     }
 
@@ -356,8 +356,8 @@ import Utils
         let vessel = repairDevice("VESSEL", type: "heaven_vessel", location: "SOL-3")
         let bot = repairDevice("BOT1", type: "service_bot", location: nil, stowedIn: "VESSEL", directives: ["service"])
         let run = SurveyRun()
-        var steps = [SurveyRun.Step.travelling]
-        var step = SurveyRun.Step.deployingBots
+        var steps = [SurveyRun.Step.travelling.rawValue]
+        var step = SurveyRun.Step.deployingBots.rawValue
         var action = MissionAction.wait
         for _ in 0..<(4 * SurveyRun.botDispatchRounds) {
             steps.append(step)
@@ -368,17 +368,17 @@ import Utils
             )
             action = run.nextAction(directive: d, world: w)
             step = Self.nextStep(after: action) ?? step
-            if step == SurveyRun.Step.configuring { break }
+            if step == SurveyRun.Step.configuring.rawValue { break }
         }
-        #expect(action == .advanceStep(nextStep: SurveyRun.Step.configuring))
+        #expect(action == .advanceStep(nextStep: SurveyRun.Step.configuring.rawValue))
     }
 
     @Test func theRecallLoopGivesUpAndEscalates() {
         let vessel = repairDevice("VESSEL", type: "heaven_vessel", location: "SOL-3")
         let bot = repairDevice("BOT1", type: "service_bot", location: "SOL-3", directives: ["service"])
         let run = SurveyRun()
-        var steps = [SurveyRun.Step.repairing]
-        var step = SurveyRun.Step.stowingBots
+        var steps = [SurveyRun.Step.repairing.rawValue]
+        var step = SurveyRun.Step.stowingBots.rawValue
         var action = MissionAction.wait
         for _ in 0..<(4 * SurveyRun.botDispatchRounds) {
             steps.append(step)
@@ -399,12 +399,12 @@ import Utils
         let drone = repairDevice("DRONE1", type: "survey_drone", location: nil, stowedIn: "VESSEL", capacity: 30)
         let w = repairWorld(devices: [vessel, drone])
         let run = SurveyRun()
-        let repair = repairDirective(step: SurveyRun.Step.repairing, deviceCode: "VESSEL", targets: ["TAU"])
-        #expect(run.nextAction(directive: repair, world: w) == .advanceStep(nextStep: SurveyRun.Step.stowingBots))
-        let stow = repairDirective(step: SurveyRun.Step.stowingBots, deviceCode: "VESSEL", targets: ["TAU"])
+        let repair = repairDirective(step: SurveyRun.Step.repairing.rawValue, deviceCode: "VESSEL", targets: ["TAU"])
+        #expect(run.nextAction(directive: repair, world: w) == .advanceStep(nextStep: SurveyRun.Step.stowingBots.rawValue))
+        let stow = repairDirective(step: SurveyRun.Step.stowingBots.rawValue, deviceCode: "VESSEL", targets: ["TAU"])
         #expect(run.nextAction(directive: stow, world: w) == .advanceTarget)
         let confirm = repairDirective(
-            step: SurveyRun.Step.confirmingBotStow, deviceCode: "VESSEL", targets: ["TAU"],
+            step: SurveyRun.Step.confirmingBotStow.rawValue, deviceCode: "VESSEL", targets: ["TAU"],
             stepStartedAt: repairFixtureNow.addingTimeInterval(-60)
         )
         #expect(run.nextAction(directive: confirm, world: w) == .advanceTarget)
@@ -427,11 +427,11 @@ import Utils
             directives: ["service"], tags: ["auto:survey"]
         )
         let w = repairWorld(devices: [vessel, bot])
-        let d = repairDirective(step: SurveyRun.Step.deployingBots, deviceCode: "VESSEL")
+        let d = repairDirective(step: SurveyRun.Step.deployingBots.rawValue, deviceCode: "VESSEL")
         #expect(SurveyRun().nextAction(directive: d, world: w) == .dispatch(
             kind: .simple("deploy"), deviceCode: "BOT1",
             params: CommandParams(),
-            nextStep: SurveyRun.Step.confirmingBotDeploy
+            nextStep: SurveyRun.Step.confirmingBotDeploy.rawValue
         ))
     }
 
@@ -444,7 +444,7 @@ import Utils
         let drone = repairDevice("DRONE1", type: "survey_drone", location: nil, stowedIn: "VESSEL", capacity: 30)
         let w = repairWorld(devices: [vessel, bot, drone])
         let d = repairDirective(
-            step: SurveyRun.Step.repairing, deviceCode: "VESSEL",
+            step: SurveyRun.Step.repairing.rawValue, deviceCode: "VESSEL",
             stepStartedAt: repairFixtureNow.addingTimeInterval(-60)
         )
         #expect(SurveyRun().nextAction(directive: d, world: w) == .wait)
@@ -466,13 +466,13 @@ import Utils
         let owner = FleetTag(goal: .survey, scope: .theatre(depot: "DENEBED-9"))
         #expect(RepairFleet.bots(aboard: vessel, in: w, owner: owner).map(\.deviceCode) == ["BOT2"])
         let d = repairDirective(
-            step: SurveyRun.Step.deployingBots, deviceCode: "VESSEL",
+            step: SurveyRun.Step.deployingBots.rawValue, deviceCode: "VESSEL",
             fleetTag: "auto:survey:DENEBED-9"
         )
         #expect(SurveyRun().nextAction(directive: d, world: w) == .dispatch(
             kind: .simple("deploy"), deviceCode: "BOT2",
             params: CommandParams(),
-            nextStep: SurveyRun.Step.confirmingBotDeploy
+            nextStep: SurveyRun.Step.confirmingBotDeploy.rawValue
         ))
     }
 
@@ -480,14 +480,14 @@ import Utils
         let vessel = repairDevice("VESSEL", type: "heaven_vessel", location: "SOL-3")
         let w = repairWorld(devices: [vessel])
         let run = SurveyRun()
-        let deploy = repairDirective(step: SurveyRun.Step.deployingBots, deviceCode: "VESSEL")
-        #expect(run.nextAction(directive: deploy, world: w) == .advanceStep(nextStep: SurveyRun.Step.configuring))
+        let deploy = repairDirective(step: SurveyRun.Step.deployingBots.rawValue, deviceCode: "VESSEL")
+        #expect(run.nextAction(directive: deploy, world: w) == .advanceStep(nextStep: SurveyRun.Step.configuring.rawValue))
         let repair = repairDirective(
-            step: SurveyRun.Step.repairing, deviceCode: "VESSEL",
+            step: SurveyRun.Step.repairing.rawValue, deviceCode: "VESSEL",
             stepStartedAt: repairFixtureNow.addingTimeInterval(-60)
         )
-        #expect(run.nextAction(directive: repair, world: w) == .advanceStep(nextStep: SurveyRun.Step.stowingBots))
-        let stow = repairDirective(step: SurveyRun.Step.stowingBots, deviceCode: "VESSEL")
+        #expect(run.nextAction(directive: repair, world: w) == .advanceStep(nextStep: SurveyRun.Step.stowingBots.rawValue))
+        let stow = repairDirective(step: SurveyRun.Step.stowingBots.rawValue, deviceCode: "VESSEL")
         #expect(run.nextAction(directive: stow, world: w) == .advanceTarget)
     }
 }

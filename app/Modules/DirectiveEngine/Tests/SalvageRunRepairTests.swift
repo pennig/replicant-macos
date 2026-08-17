@@ -618,7 +618,7 @@ private let long = repairFixtureNow.addingTimeInterval(-60)
         let salvageBot = bot("BOT1", location: "SOL-3", tags: [salvageTag])
         let w = repairWorld(devices: [surveyVessel, salvageBot])
         let d = repairDirective(
-            step: SurveyRun.Step.stowingBots, deviceCode: "VESSEL",
+            step: SurveyRun.Step.stowingBots.rawValue, deviceCode: "VESSEL",
             targets: ["SOL"], stepStartedAt: long
         )
         #expect(SurveyRun().nextAction(directive: d, world: w) == .advanceTarget)
@@ -630,12 +630,12 @@ private let long = repairFixtureNow.addingTimeInterval(-60)
         let untagged = bot("BOT1", location: "SOL-3", tags: [])
         let w = repairWorld(devices: [surveyVessel, untagged])
         let d = repairDirective(
-            step: SurveyRun.Step.stowingBots, deviceCode: "VESSEL",
+            step: SurveyRun.Step.stowingBots.rawValue, deviceCode: "VESSEL",
             targets: ["SOL"], stepStartedAt: long
         )
         #expect(SurveyRun().nextAction(directive: d, world: w) == .dispatch(
             kind: .simple("recall"), deviceCode: "BOT1",
-            params: CommandParams(), nextStep: SurveyRun.Step.confirmingBotStow
+            params: CommandParams(), nextStep: SurveyRun.Step.confirmingBotStow.rawValue
         ))
     }
 
