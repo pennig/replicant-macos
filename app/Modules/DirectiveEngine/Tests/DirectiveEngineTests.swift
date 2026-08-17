@@ -2159,7 +2159,7 @@ struct DirectiveEngineSalvageArrivalFreshnessTests {
             id: "D1", kind: .salvageRun, status: .running, deviceCode: "C7836770",
             controllerCode: nil, roamCentre: "ALZEPHINA", fleetTag: "auto:salvage",
             targets: ["ALZEPHINA"], targetIndex: 0,
-            step: SalvageRun.Step.positioning,
+            step: SalvageRun.Step.positioning.rawValue,
             stepStartedAt: Self.arrival.addingTimeInterval(-128),
             returnToOrigin: false, originDesignation: "ALZEPHINA", attentionReason: nil,
             createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0)
@@ -2194,7 +2194,7 @@ struct DirectiveEngineSalvageArrivalFreshnessTests {
                 DirectiveLogEntry(
                     id: "L-DISPATCH", directiveID: "D1", deviceCode: "C7836770",
                     kind: .commandDispatched, summary: "travel ALZEPHINA-7-4",
-                    step: SalvageRun.Step.positioning, operationID: "1F616245", eventID: nil,
+                    step: SalvageRun.Step.positioning.rawValue, operationID: "1F616245", eventID: nil,
                     occurredAt: Self.arrival.addingTimeInterval(-120)
                 )
             }.execute(db)
@@ -2235,7 +2235,7 @@ struct DirectiveEngineSalvageArrivalFreshnessTests {
             await core.evaluateOnce(directiveID: "D1")
 
             let updated = try await row(database)
-            #expect(updated?.step == SalvageRun.Step.positioning)
+            #expect(updated?.step == SalvageRun.Step.positioning.rawValue)
             #expect(updated?.status == .running, "a self-resolving race must not need a human")
             #expect(updated?.attentionReason == nil)
 

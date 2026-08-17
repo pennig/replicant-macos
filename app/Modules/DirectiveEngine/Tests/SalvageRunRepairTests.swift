@@ -79,9 +79,9 @@ private let long = repairFixtureNow.addingTimeInterval(-60)
 @Suite struct SalvageRunBotArrivalTests {
     @Test func arrivingAtAMeshedSystemDeploysBotsBeforeTouringIt() {
         let w = repairWorld(devices: [vessel, plantedRelay])
-        let d = salvageDirective(step: SalvageRun.Step.travelling, targets: ["TOSLIT"])
+        let d = salvageDirective(step: SalvageRun.Step.travelling.rawValue, targets: ["TOSLIT"])
         #expect(SalvageRun().nextAction(directive: d, world: w)
-            == .advanceStep(nextStep: SalvageRun.Step.deployingBots))
+            == .advanceStep(nextStep: SalvageRun.Step.deployingBots.rawValue))
     }
 
     /// Every retired relay step re-enters at `preflight` rather than freezing
@@ -93,7 +93,7 @@ private let long = repairFixtureNow.addingTimeInterval(-60)
         let w = repairWorld(devices: [vessel, plantedRelay])
         let d = salvageDirective(step: step, targets: ["TOSLIT"])
         #expect(SalvageRun().nextAction(directive: d, world: w)
-            == .advanceStep(nextStep: SalvageRun.Step.preflight))
+            == .advanceStep(nextStep: SalvageRun.Step.preflight.rawValue))
     }
 
     /// The case the single-fixture version could not see: a row remapped while
@@ -105,14 +105,14 @@ private let long = repairFixtureNow.addingTimeInterval(-60)
         let remapped = SalvageRun().nextAction(
             directive: salvageDirective(step: "restocking", targets: ["TOSLIT"]), world: w
         )
-        #expect(remapped == .advanceStep(nextStep: SalvageRun.Step.preflight))
+        #expect(remapped == .advanceStep(nextStep: SalvageRun.Step.preflight.rawValue))
 
         // And from travelling, a vessel away from the target flies rather than
         // handing to the bots.
         let travelling = SalvageRun().nextAction(
-            directive: salvageDirective(step: SalvageRun.Step.travelling, targets: ["TOSLIT"]), world: w
+            directive: salvageDirective(step: SalvageRun.Step.travelling.rawValue, targets: ["TOSLIT"]), world: w
         )
-        #expect(travelling != .advanceStep(nextStep: SalvageRun.Step.deployingBots))
+        #expect(travelling != .advanceStep(nextStep: SalvageRun.Step.deployingBots.rawValue))
     }
 
     /// An unknown step that is NOT a retired one still waits — the remap must
@@ -129,9 +129,9 @@ private let long = repairFixtureNow.addingTimeInterval(-60)
 @Suite struct SalvageRunBotDeployTests {
     @Test func noBotAboardSkipsStraightToArming() {
         let w = repairWorld(devices: [vessel])
-        let d = salvageDirective(step: SalvageRun.Step.deployingBots, targets: ["TOSLIT"])
+        let d = salvageDirective(step: SalvageRun.Step.deployingBots.rawValue, targets: ["TOSLIT"])
         #expect(SalvageRun().nextAction(directive: d, world: w)
-            == .advanceStep(nextStep: SalvageRun.Step.armingBots))
+            == .advanceStep(nextStep: SalvageRun.Step.armingBots.rawValue))
     }
 
     @Test func theFirstBotAboardIsDeployed() {
@@ -140,10 +140,10 @@ private let long = repairFixtureNow.addingTimeInterval(-60)
             bot("BOT1", location: nil, stowedIn: "VESSEL"),
             bot("BOT2", location: nil, stowedIn: "VESSEL"),
         ])
-        let d = salvageDirective(step: SalvageRun.Step.deployingBots, targets: ["TOSLIT"])
+        let d = salvageDirective(step: SalvageRun.Step.deployingBots.rawValue, targets: ["TOSLIT"])
         #expect(SalvageRun().nextAction(directive: d, world: w) == .dispatch(
             kind: .simple("deploy"), deviceCode: "BOT1",
-            params: CommandParams(), nextStep: SalvageRun.Step.confirmingBotDeploy
+            params: CommandParams(), nextStep: SalvageRun.Step.confirmingBotDeploy.rawValue
         ))
     }
 
@@ -154,9 +154,9 @@ private let long = repairFixtureNow.addingTimeInterval(-60)
             vessel,
             bot("BOT1", location: nil, stowedIn: "VESSEL", tags: ["auto:survey"]),
         ])
-        let d = salvageDirective(step: SalvageRun.Step.deployingBots, targets: ["TOSLIT"])
+        let d = salvageDirective(step: SalvageRun.Step.deployingBots.rawValue, targets: ["TOSLIT"])
         #expect(SalvageRun().nextAction(directive: d, world: w)
-            == .advanceStep(nextStep: SalvageRun.Step.armingBots))
+            == .advanceStep(nextStep: SalvageRun.Step.armingBots.rawValue))
     }
 
     @Test func anUntaggedBotAnswersToWhoeverAsks() {
@@ -164,31 +164,31 @@ private let long = repairFixtureNow.addingTimeInterval(-60)
             vessel,
             bot("BOT1", location: nil, stowedIn: "VESSEL", tags: []),
         ])
-        let d = salvageDirective(step: SalvageRun.Step.deployingBots, targets: ["TOSLIT"])
+        let d = salvageDirective(step: SalvageRun.Step.deployingBots.rawValue, targets: ["TOSLIT"])
         #expect(SalvageRun().nextAction(directive: d, world: w) == .dispatch(
             kind: .simple("deploy"), deviceCode: "BOT1",
-            params: CommandParams(), nextStep: SalvageRun.Step.confirmingBotDeploy
+            params: CommandParams(), nextStep: SalvageRun.Step.confirmingBotDeploy.rawValue
         ))
     }
 
     /// A bot that will not deploy costs the repair, never the salvage.
     @Test func aBotThatWillNotDeployLetsTheRunMineUnrepaired() {
         let rounds = Array(
-            repeating: [SalvageRun.Step.deployingBots, SalvageRun.Step.confirmingBotDeploy],
+            repeating: [SalvageRun.Step.deployingBots.rawValue, SalvageRun.Step.confirmingBotDeploy.rawValue],
             count: 7
         ).flatMap { $0 }
         let w = repairWorld(
             devices: [vessel, bot("BOT1", location: nil, stowedIn: "VESSEL")],
             log: repairStepLog(rounds)
         )
-        let d = salvageDirective(step: SalvageRun.Step.deployingBots, targets: ["TOSLIT"])
+        let d = salvageDirective(step: SalvageRun.Step.deployingBots.rawValue, targets: ["TOSLIT"])
         #expect(SalvageRun().nextAction(directive: d, world: w)
-            == .advanceStep(nextStep: SalvageRun.Step.armingBots))
+            == .advanceStep(nextStep: SalvageRun.Step.armingBots.rawValue))
     }
 
     @Test func aFreshlyOrderedDeployIsNotJudgedYet() {
         let w = repairWorld(devices: [vessel, bot("BOT1", location: nil, stowedIn: "VESSEL")])
-        let d = salvageDirective(step: SalvageRun.Step.confirmingBotDeploy, targets: ["TOSLIT"])
+        let d = salvageDirective(step: SalvageRun.Step.confirmingBotDeploy.rawValue, targets: ["TOSLIT"])
         #expect(SalvageRun().nextAction(directive: d, world: w) == .wait)
     }
 
@@ -197,19 +197,19 @@ private let long = repairFixtureNow.addingTimeInterval(-60)
             vessel, bot("BOT1"), bot("BOT2", location: nil, stowedIn: "VESSEL"),
         ])
         let d = salvageDirective(
-            step: SalvageRun.Step.confirmingBotDeploy, targets: ["TOSLIT"], stepStartedAt: long
+            step: SalvageRun.Step.confirmingBotDeploy.rawValue, targets: ["TOSLIT"], stepStartedAt: long
         )
         #expect(SalvageRun().nextAction(directive: d, world: w)
-            == .advanceStep(nextStep: SalvageRun.Step.deployingBots))
+            == .advanceStep(nextStep: SalvageRun.Step.deployingBots.rawValue))
     }
 
     @Test func everyBotDeployedAdvancesToArming() {
         let w = repairWorld(devices: [vessel, bot("BOT1"), bot("BOT2")])
         let d = salvageDirective(
-            step: SalvageRun.Step.confirmingBotDeploy, targets: ["TOSLIT"], stepStartedAt: long
+            step: SalvageRun.Step.confirmingBotDeploy.rawValue, targets: ["TOSLIT"], stepStartedAt: long
         )
         #expect(SalvageRun().nextAction(directive: d, world: w)
-            == .advanceStep(nextStep: SalvageRun.Step.armingBots))
+            == .advanceStep(nextStep: SalvageRun.Step.armingBots.rawValue))
     }
 
     @Test func anUnreadBotRowIsBoughtBeforeItIsBelieved() {
@@ -219,7 +219,7 @@ private let long = repairFixtureNow.addingTimeInterval(-60)
         )
         let w = repairWorld(devices: [vessel, stale])
         let d = salvageDirective(
-            step: SalvageRun.Step.confirmingBotDeploy, targets: ["TOSLIT"], stepStartedAt: long
+            step: SalvageRun.Step.confirmingBotDeploy.rawValue, targets: ["TOSLIT"], stepStartedAt: long
         )
         #expect(SalvageRun().nextAction(directive: d, world: w)
             == .refreshDevices(deviceCodes: ["BOT1"], thenStall: nil))
@@ -235,52 +235,52 @@ private let long = repairFixtureNow.addingTimeInterval(-60)
         let w = repairWorld(devices: [
             vessel, bot("BOT1", currentDirective: "patrol", currentDirectiveStatus: "active"),
         ])
-        let d = salvageDirective(step: SalvageRun.Step.armingBots, targets: ["TOSLIT"])
+        let d = salvageDirective(step: SalvageRun.Step.armingBots.rawValue, targets: ["TOSLIT"])
         #expect(SalvageRun().nextAction(directive: d, world: w) == .dispatch(
             kind: .setDirective, deviceCode: "BOT1",
             params: CommandParams(directive: "service"),
-            nextStep: SalvageRun.Step.confirmingBotArm
+            nextStep: SalvageRun.Step.confirmingBotArm.rawValue
         ))
     }
 
     @Test func aPausedServiceBotIsActivated() {
         let w = repairWorld(devices: [vessel, bot("BOT1", currentDirectiveStatus: "paused")])
-        let d = salvageDirective(step: SalvageRun.Step.armingBots, targets: ["TOSLIT"])
+        let d = salvageDirective(step: SalvageRun.Step.armingBots.rawValue, targets: ["TOSLIT"])
         #expect(SalvageRun().nextAction(directive: d, world: w) == .dispatch(
             kind: .simple("activate"), deviceCode: "BOT1",
-            params: CommandParams(), nextStep: SalvageRun.Step.confirmingBotArm
+            params: CommandParams(), nextStep: SalvageRun.Step.confirmingBotArm.rawValue
         ))
     }
 
     @Test func everyBotArmedTouringBegins() {
         let w = repairWorld(devices: [vessel, bot("BOT1"), bot("BOT2")])
-        let d = salvageDirective(step: SalvageRun.Step.armingBots, targets: ["TOSLIT"])
+        let d = salvageDirective(step: SalvageRun.Step.armingBots.rawValue, targets: ["TOSLIT"])
         #expect(SalvageRun().nextAction(directive: d, world: w)
-            == .advanceStep(nextStep: SalvageRun.Step.positioning))
+            == .advanceStep(nextStep: SalvageRun.Step.positioning.rawValue))
     }
 
     /// Unarmable is loud: a paused bot repairs nothing, and reading that as
     /// "nothing to repair" is the silent failure the arm pair exists to close.
     @Test func aBotThatWillNotArmStalls() {
         let rounds = Array(
-            repeating: [SalvageRun.Step.armingBots, SalvageRun.Step.confirmingBotArm],
+            repeating: [SalvageRun.Step.armingBots.rawValue, SalvageRun.Step.confirmingBotArm.rawValue],
             count: 7
         ).flatMap { $0 }
         let w = repairWorld(
             devices: [vessel, bot("BOT1", currentDirectiveStatus: "paused")],
             log: repairStepLog(rounds)
         )
-        let d = salvageDirective(step: SalvageRun.Step.armingBots, targets: ["TOSLIT"])
+        let d = salvageDirective(step: SalvageRun.Step.armingBots.rawValue, targets: ["TOSLIT"])
         #expect(SalvageRun().nextAction(directive: d, world: w) == .stall(.serviceBotNotArmed))
     }
 
     @Test func aLandedArmLoopsBackForTheNextBot() {
         let w = repairWorld(devices: [vessel, bot("BOT1"), bot("BOT2")])
         let d = salvageDirective(
-            step: SalvageRun.Step.confirmingBotArm, targets: ["TOSLIT"], stepStartedAt: long
+            step: SalvageRun.Step.confirmingBotArm.rawValue, targets: ["TOSLIT"], stepStartedAt: long
         )
         #expect(SalvageRun().nextAction(directive: d, world: w)
-            == .advanceStep(nextStep: SalvageRun.Step.positioning))
+            == .advanceStep(nextStep: SalvageRun.Step.positioning.rawValue))
     }
 }
 
@@ -290,10 +290,10 @@ private let long = repairFixtureNow.addingTimeInterval(-60)
     @Test func noBotDeployedLeavesAtOnce() {
         let w = repairWorld(devices: [vessel])
         let d = salvageDirective(
-            step: SalvageRun.Step.repairing, targets: ["TOSLIT"], stepStartedAt: long
+            step: SalvageRun.Step.repairing.rawValue, targets: ["TOSLIT"], stepStartedAt: long
         )
         #expect(SalvageRun().nextAction(directive: d, world: w)
-            == .advanceStep(nextStep: SalvageRun.Step.stowingBots))
+            == .advanceStep(nextStep: SalvageRun.Step.stowingBots.rawValue))
     }
 
     @Test func aFleetNothingIsWornEnoughToHoldForLeavesAtOnce() {
@@ -302,10 +302,10 @@ private let long = repairFixtureNow.addingTimeInterval(-60)
         )
         let w = repairWorld(devices: [vessel, bot("BOT1"), drone])
         let d = salvageDirective(
-            step: SalvageRun.Step.repairing, targets: ["TOSLIT"], stepStartedAt: long
+            step: SalvageRun.Step.repairing.rawValue, targets: ["TOSLIT"], stepStartedAt: long
         )
         #expect(SalvageRun().nextAction(directive: d, world: w)
-            == .advanceStep(nextStep: SalvageRun.Step.stowingBots))
+            == .advanceStep(nextStep: SalvageRun.Step.stowingBots.rawValue))
     }
 
     @Test func aWorkingBotHoldsTheVessel() {
@@ -316,7 +316,7 @@ private let long = repairFixtureNow.addingTimeInterval(-60)
             devices: [vessel, bot("BOT1", repairingTarget: "DRONE1"), drone]
         )
         let d = salvageDirective(
-            step: SalvageRun.Step.repairing, targets: ["TOSLIT"], stepStartedAt: long
+            step: SalvageRun.Step.repairing.rawValue, targets: ["TOSLIT"], stepStartedAt: long
         )
         #expect(SalvageRun().nextAction(directive: d, world: w) == .wait)
     }
@@ -329,10 +329,10 @@ private let long = repairFixtureNow.addingTimeInterval(-60)
         )
         let w = repairWorld(devices: [vessel, bot("BOT1"), drone])
         let d = salvageDirective(
-            step: SalvageRun.Step.repairing, targets: ["TOSLIT"], stepStartedAt: long
+            step: SalvageRun.Step.repairing.rawValue, targets: ["TOSLIT"], stepStartedAt: long
         )
         #expect(SalvageRun().nextAction(directive: d, world: w)
-            == .advanceStep(nextStep: SalvageRun.Step.stowingBots))
+            == .advanceStep(nextStep: SalvageRun.Step.stowingBots.rawValue))
     }
 
     @Test func repairThatWillNotConvergeEscalates() {
@@ -341,7 +341,7 @@ private let long = repairFixtureNow.addingTimeInterval(-60)
         )
         let w = repairWorld(devices: [vessel, bot("BOT1", repairingTarget: "DRONE1"), drone])
         let d = salvageDirective(
-            step: SalvageRun.Step.repairing, targets: ["TOSLIT"],
+            step: SalvageRun.Step.repairing.rawValue, targets: ["TOSLIT"],
             stepStartedAt: repairFixtureNow.addingTimeInterval(-(SalvageRun.repairDeadline + 60))
         )
         #expect(SalvageRun().nextAction(directive: d, world: w) == .stall(.repairUnfinished))
@@ -354,7 +354,7 @@ private let long = repairFixtureNow.addingTimeInterval(-60)
             vessel, bot("BOT1", capacity: 20, repairingTarget: "BOT1"), bot("BOT2"),
         ])
         let d = salvageDirective(
-            step: SalvageRun.Step.repairing, targets: ["TOSLIT"], stepStartedAt: long
+            step: SalvageRun.Step.repairing.rawValue, targets: ["TOSLIT"], stepStartedAt: long
         )
         #expect(SalvageRun().nextAction(directive: d, world: w) == .wait)
     }
@@ -366,11 +366,11 @@ private let long = repairFixtureNow.addingTimeInterval(-60)
     @Test func aDeployedBotIsRecalledBeforeTheVesselLeaves() {
         let w = repairWorld(devices: [vessel, bot("BOT1")])
         let d = salvageDirective(
-            step: SalvageRun.Step.stowingBots, targets: ["TOSLIT"], stepStartedAt: long
+            step: SalvageRun.Step.stowingBots.rawValue, targets: ["TOSLIT"], stepStartedAt: long
         )
         #expect(SalvageRun().nextAction(directive: d, world: w) == .dispatch(
             kind: .simple("recall"), deviceCode: "BOT1",
-            params: CommandParams(), nextStep: SalvageRun.Step.confirmingBotStow
+            params: CommandParams(), nextStep: SalvageRun.Step.confirmingBotStow.rawValue
         ))
     }
 
@@ -379,18 +379,18 @@ private let long = repairFixtureNow.addingTimeInterval(-60)
     @Test func aBotThatCruisedToAnotherSiteIsStillRecalled() {
         let w = repairWorld(devices: [vessel, bot("BOT1", location: "TOSLIT-9")])
         let d = salvageDirective(
-            step: SalvageRun.Step.stowingBots, targets: ["TOSLIT"], stepStartedAt: long
+            step: SalvageRun.Step.stowingBots.rawValue, targets: ["TOSLIT"], stepStartedAt: long
         )
         #expect(SalvageRun().nextAction(directive: d, world: w) == .dispatch(
             kind: .simple("recall"), deviceCode: "BOT1",
-            params: CommandParams(), nextStep: SalvageRun.Step.confirmingBotStow
+            params: CommandParams(), nextStep: SalvageRun.Step.confirmingBotStow.rawValue
         ))
     }
 
     @Test func everyBotHomeAdvancesTheTarget() {
         let w = repairWorld(devices: [vessel, bot("BOT1", location: nil, stowedIn: "VESSEL")])
         let d = salvageDirective(
-            step: SalvageRun.Step.stowingBots, targets: ["TOSLIT"], stepStartedAt: long
+            step: SalvageRun.Step.stowingBots.rawValue, targets: ["TOSLIT"], stepStartedAt: long
         )
         #expect(SalvageRun().nextAction(directive: d, world: w) == .advanceTarget)
     }
@@ -405,11 +405,11 @@ private let long = repairFixtureNow.addingTimeInterval(-60)
             )]
         )
         let d = salvageDirective(
-            step: SalvageRun.Step.stowingBots, targets: ["TOSLIT"], stepStartedAt: long
+            step: SalvageRun.Step.stowingBots.rawValue, targets: ["TOSLIT"], stepStartedAt: long
         )
         #expect(SalvageRun().nextAction(directive: d, world: w) == .dispatch(
             kind: .simple("recall"), deviceCode: "BOT1",
-            params: CommandParams(), nextStep: SalvageRun.Step.confirmingBotStow
+            params: CommandParams(), nextStep: SalvageRun.Step.confirmingBotStow.rawValue
         ))
     }
 
@@ -422,7 +422,7 @@ private let long = repairFixtureNow.addingTimeInterval(-60)
             )]
         )
         let d = salvageDirective(
-            step: SalvageRun.Step.stowingBots, targets: ["TOSLIT"], stepStartedAt: long
+            step: SalvageRun.Step.stowingBots.rawValue, targets: ["TOSLIT"], stepStartedAt: long
         )
         #expect(SalvageRun().nextAction(directive: d, world: w) == .wait)
     }
@@ -441,7 +441,7 @@ private let long = repairFixtureNow.addingTimeInterval(-60)
             )]
         )
         let d = salvageDirective(
-            step: SalvageRun.Step.confirmingBotStow, targets: ["TOSLIT"],
+            step: SalvageRun.Step.confirmingBotStow.rawValue, targets: ["TOSLIT"],
             stepStartedAt: repairFixtureNow.addingTimeInterval(-60)
         )
         #expect(SalvageRun().nextAction(directive: d, world: w) == .wait)
@@ -458,7 +458,7 @@ private let long = repairFixtureNow.addingTimeInterval(-60)
                 completesAt: repairFixtureNow.addingTimeInterval(120)
             )]
         )
-        let d = salvageDirective(step: SalvageRun.Step.stowingBots, targets: ["TOSLIT"])
+        let d = salvageDirective(step: SalvageRun.Step.stowingBots.rawValue, targets: ["TOSLIT"])
         #expect(SalvageRun().nextAction(directive: d, world: w) == .wait)
     }
 
@@ -476,7 +476,7 @@ private let long = repairFixtureNow.addingTimeInterval(-60)
                 completesAt: repairFixtureNow.addingTimeInterval(120)
             )]
         )
-        let d = salvageDirective(step: SalvageRun.Step.stowingBots, targets: ["TOSLIT"])
+        let d = salvageDirective(step: SalvageRun.Step.stowingBots.rawValue, targets: ["TOSLIT"])
         #expect(SalvageRun().nextAction(directive: d, world: w) == .wait)
     }
 
@@ -489,18 +489,18 @@ private let long = repairFixtureNow.addingTimeInterval(-60)
                 completesAt: repairFixtureNow.addingTimeInterval(120)
             )]
         )
-        let d = salvageDirective(step: SalvageRun.Step.stowingBots, targets: ["TOSLIT"])
+        let d = salvageDirective(step: SalvageRun.Step.stowingBots.rawValue, targets: ["TOSLIT"])
         #expect(SalvageRun().nextAction(directive: d, world: w) == .advanceTarget)
     }
 
     @Test func aBotThatWillNotComeHomeStalls() {
         let rounds = Array(
-            repeating: [SalvageRun.Step.stowingBots, SalvageRun.Step.confirmingBotStow],
+            repeating: [SalvageRun.Step.stowingBots.rawValue, SalvageRun.Step.confirmingBotStow.rawValue],
             count: 7
         ).flatMap { $0 }
         let w = repairWorld(devices: [vessel, bot("BOT1")], log: repairStepLog(rounds))
         let d = salvageDirective(
-            step: SalvageRun.Step.stowingBots, targets: ["TOSLIT"], stepStartedAt: long
+            step: SalvageRun.Step.stowingBots.rawValue, targets: ["TOSLIT"], stepStartedAt: long
         )
         #expect(SalvageRun().nextAction(directive: d, world: w)
             == .stall(.serviceBotNotRecovered))
@@ -509,7 +509,7 @@ private let long = repairFixtureNow.addingTimeInterval(-60)
     @Test func aRecallPastItsDeadlineStalls() {
         let w = repairWorld(devices: [vessel, bot("BOT1")])
         let d = salvageDirective(
-            step: SalvageRun.Step.confirmingBotStow, targets: ["TOSLIT"],
+            step: SalvageRun.Step.confirmingBotStow.rawValue, targets: ["TOSLIT"],
             stepStartedAt: repairFixtureNow.addingTimeInterval(-(SalvageRun.botRecallDeadline + 60))
         )
         #expect(SalvageRun().nextAction(directive: d, world: w)
@@ -519,16 +519,16 @@ private let long = repairFixtureNow.addingTimeInterval(-60)
     @Test func aLandedRecallLoopsBackForTheNextBot() {
         let w = repairWorld(devices: [vessel, bot("BOT1")])
         let d = salvageDirective(
-            step: SalvageRun.Step.confirmingBotStow, targets: ["TOSLIT"], stepStartedAt: long
+            step: SalvageRun.Step.confirmingBotStow.rawValue, targets: ["TOSLIT"], stepStartedAt: long
         )
         #expect(SalvageRun().nextAction(directive: d, world: w)
-            == .advanceStep(nextStep: SalvageRun.Step.stowingBots))
+            == .advanceStep(nextStep: SalvageRun.Step.stowingBots.rawValue))
     }
 
     @Test func confirmingWithNoBotOutAdvancesTheTarget() {
         let w = repairWorld(devices: [vessel])
         let d = salvageDirective(
-            step: SalvageRun.Step.confirmingBotStow, targets: ["TOSLIT"], stepStartedAt: long
+            step: SalvageRun.Step.confirmingBotStow.rawValue, targets: ["TOSLIT"], stepStartedAt: long
         )
         #expect(SalvageRun().nextAction(directive: d, world: w) == .advanceTarget)
     }
@@ -539,16 +539,16 @@ private let long = repairFixtureNow.addingTimeInterval(-60)
 @Suite struct SalvageRunBotExitTests {
     @Test func aDrainedSystemRecallsBeforeAdvancing() {
         let w = repairWorld(devices: [vessel], systems: ["TOSLIT": drainedToslit])
-        let d = salvageDirective(step: SalvageRun.Step.positioning, targets: ["TOSLIT"])
+        let d = salvageDirective(step: SalvageRun.Step.positioning.rawValue, targets: ["TOSLIT"])
         #expect(SalvageRun().nextAction(directive: d, world: w)
-            == .advanceStep(nextStep: SalvageRun.Step.repairing))
+            == .advanceStep(nextStep: SalvageRun.Step.repairing.rawValue))
     }
 
     @Test func configuringADrainedSystemRecallsBeforeAdvancing() {
         let w = repairWorld(devices: [vessel], systems: ["TOSLIT": drainedToslit])
-        let d = salvageDirective(step: SalvageRun.Step.configuring, targets: ["TOSLIT"])
+        let d = salvageDirective(step: SalvageRun.Step.configuring.rawValue, targets: ["TOSLIT"])
         #expect(SalvageRun().nextAction(directive: d, world: w)
-            == .advanceStep(nextStep: SalvageRun.Step.repairing))
+            == .advanceStep(nextStep: SalvageRun.Step.repairing.rawValue))
     }
 
     @Test func verifyingADrainedSystemRecallsBeforeAdvancing() {
@@ -558,19 +558,19 @@ private let long = repairFixtureNow.addingTimeInterval(-60)
         )
         let w = repairWorld(devices: [vessel, controller], systems: ["TOSLIT": drainedToslit])
         let d = salvageDirective(
-            step: SalvageRun.Step.verifying, targets: ["TOSLIT"], controllerCode: "CTRL"
+            step: SalvageRun.Step.verifying.rawValue, targets: ["TOSLIT"], controllerCode: "CTRL"
         )
         #expect(SalvageRun().nextAction(directive: d, world: w)
-            == .advanceStep(nextStep: SalvageRun.Step.repairing))
+            == .advanceStep(nextStep: SalvageRun.Step.repairing.rawValue))
     }
 
     @Test func aVanishedControllerRecallsBeforeAdvancing() {
         let w = repairWorld(devices: [vessel], systems: ["TOSLIT": liveToslit])
         let d = salvageDirective(
-            step: SalvageRun.Step.verifying, targets: ["TOSLIT"], controllerCode: "GONE"
+            step: SalvageRun.Step.verifying.rawValue, targets: ["TOSLIT"], controllerCode: "GONE"
         )
         #expect(SalvageRun().nextAction(directive: d, world: w)
-            == .advanceStep(nextStep: SalvageRun.Step.repairing))
+            == .advanceStep(nextStep: SalvageRun.Step.repairing.rawValue))
     }
 
     @Test func anExhaustedQueueRecallsBeforeAdvancing() {
@@ -579,9 +579,9 @@ private let long = repairFixtureNow.addingTimeInterval(-60)
             directives: ["gather_salvage"]
         )
         let w = repairWorld(devices: [vessel, controller])
-        let d = salvageDirective(step: SalvageRun.Step.verifying, controllerCode: "CTRL")
+        let d = salvageDirective(step: SalvageRun.Step.verifying.rawValue, controllerCode: "CTRL")
         #expect(SalvageRun().nextAction(directive: d, world: w)
-            == .advanceStep(nextStep: SalvageRun.Step.repairing))
+            == .advanceStep(nextStep: SalvageRun.Step.repairing.rawValue))
     }
 
     /// Bots are deployed once per SYSTEM, so moving to the next BODY must not
@@ -595,10 +595,10 @@ private let long = repairFixtureNow.addingTimeInterval(-60)
             devices: [vessel, controller, bot("BOT1")], systems: ["TOSLIT": liveToslit]
         )
         let d = salvageDirective(
-            step: SalvageRun.Step.verifying, targets: ["TOSLIT"], controllerCode: "CTRL"
+            step: SalvageRun.Step.verifying.rawValue, targets: ["TOSLIT"], controllerCode: "CTRL"
         )
         #expect(SalvageRun().nextAction(directive: d, world: w)
-            == .advanceStep(nextStep: SalvageRun.Step.positioning))
+            == .advanceStep(nextStep: SalvageRun.Step.positioning.rawValue))
     }
 }
 
@@ -608,7 +608,7 @@ private let long = repairFixtureNow.addingTimeInterval(-60)
     @Test func aSalvageRunDoesNotRecallASurveyFleetsBot() {
         let w = repairWorld(devices: [vessel, bot("BOT1", tags: ["auto:survey"])])
         let d = salvageDirective(
-            step: SalvageRun.Step.stowingBots, targets: ["TOSLIT"], stepStartedAt: long
+            step: SalvageRun.Step.stowingBots.rawValue, targets: ["TOSLIT"], stepStartedAt: long
         )
         #expect(SalvageRun().nextAction(directive: d, world: w) == .advanceTarget)
     }
@@ -649,12 +649,12 @@ private let long = repairFixtureNow.addingTimeInterval(-60)
         #expect(RepairFleet.botsOut(near: "TOSLIT-3", in: w, owner: owner)
             .map(\.deviceCode) == ["BOT2"])
         let d = salvageDirective(
-            step: SalvageRun.Step.stowingBots, targets: ["TOSLIT"],
+            step: SalvageRun.Step.stowingBots.rawValue, targets: ["TOSLIT"],
             stepStartedAt: long, fleetTag: "auto:salvage:DENEBED-9"
         )
         #expect(SalvageRun().nextAction(directive: d, world: w) == .dispatch(
             kind: .simple("recall"), deviceCode: "BOT2",
-            params: CommandParams(), nextStep: SalvageRun.Step.confirmingBotStow
+            params: CommandParams(), nextStep: SalvageRun.Step.confirmingBotStow.rawValue
         ))
     }
 }

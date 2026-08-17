@@ -144,7 +144,7 @@ private func stepStarted(_ step: String, at occurredAt: Date) -> DirectiveLogEnt
 }
 
 private func running(
-    step: String = SalvageRun.Step.preflight,
+    step: String = SalvageRun.Step.preflight.rawValue,
     targets: [String] = ["TOSLIT"],
     targetIndex: Int = 0,
     controllerCode: String? = nil,
@@ -171,7 +171,15 @@ struct SalvageRunRegistrationTests {
     /// the one-line edit that turns the whole run live.
     @Test func isRegisteredWithTheEngine() {
         #expect(MissionRegistry.machine(for: .salvageRun) is SalvageRun)
-        #expect(MissionRegistry.firstStep(for: .salvageRun) == SalvageRun.Step.preflight)
+        #expect(MissionRegistry.firstStep(for: .salvageRun) == SalvageRun.Step.preflight.rawValue)
+    }
+
+    @Test func stepVocabularyIsFrozen() {
+        #expect(SalvageRun.Step.allCases.map(\.rawValue) == [
+            "preflight", "travelling", "deployingBots", "confirmingBotDeploy", "armingBots",
+            "confirmingBotArm", "positioning", "configuring", "launching", "awaiting",
+            "verifying", "repairing", "stowingBots", "confirmingBotStow",
+        ])
     }
 }
 

@@ -75,7 +75,7 @@ private func anchorDirective(theatreDepot: String? = nil) -> Directive {
         id: "S1", kind: .salvageRun, status: .running, deviceCode: "V1",
         controllerCode: nil, roamCentre: nil, fleetTag: SalvageRun.defaultFleetTag.string,
         sourceRelayCode: nil, targets: [], targetIndex: 0,
-        step: SalvageRun.Step.preflight, stepStartedAt: anchorNow,
+        step: SalvageRun.Step.preflight.rawValue, stepStartedAt: anchorNow,
         returnToOrigin: false, originDesignation: nil, attentionReason: nil,
         createdAt: anchorNow, updatedAt: anchorNow, theatreDepot: theatreDepot
     )

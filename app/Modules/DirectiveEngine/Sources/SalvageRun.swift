@@ -21,37 +21,37 @@ private let logger = Logger(subsystem: "name.pennig.replicould", category: "Dire
 
 public struct SalvageRun: MissionStepMachine {
     public let kind: DirectiveKind = .salvageRun
-    public var firstStep: String { Step.preflight }
+    public var firstStep: String { Step.preflight.rawValue }
 
     public init() {}
 
-    /// This mission's step vocabulary, as the bare strings `Directive.step` holds.
-    public enum Step {
-        public static let preflight = "preflight"
-        public static let travelling = "travelling"
+    /// This mission's step vocabulary, as `Directive.step` holds it (D6).
+    public enum Step: String, CaseIterable, Sendable {
+        case preflight
+        case travelling
         /// Put the service bots into the system so they repair the drones while the
         /// vessel tours its bodies. Deployed once per SYSTEM, not once per body:
         /// `service` is system-scoped and the bot cruises to each damaged device.
-        public static let deployingBots = "deployingBots"
+        case deployingBots
         /// Read whether the ordered deploy landed before ordering the next.
-        public static let confirmingBotDeploy = "confirmingBotDeploy"
+        case confirmingBotDeploy
         /// Ensure each deployed bot carries an ACTIVE `service` directive.
-        public static let armingBots = "armingBots"
+        case armingBots
         /// Read whether an ordered arm landed before ordering the next.
-        public static let confirmingBotArm = "confirmingBotArm"
+        case confirmingBotArm
         /// Fly the VESSEL to the body it is about to work, so drones deploy locally
         /// rather than ferrying from a parked vessel. Runs BEFORE `configuring`.
-        public static let positioning = "positioning"
-        public static let configuring = "configuring"
-        public static let launching = "launching"
-        public static let awaiting = "awaiting"
-        public static let verifying = "verifying"
+        case positioning
+        case configuring
+        case launching
+        case awaiting
+        case verifying
         /// Hold the vessel while the service bots finish what they are repairing.
-        public static let repairing = "repairing"
+        case repairing
         /// Recall the deployed service bots before the vessel leaves the system.
-        public static let stowingBots = "stowingBots"
+        case stowingBots
         /// Read whether the ordered recall landed before ordering the next.
-        public static let confirmingBotStow = "confirmingBotStow"
+        case confirmingBotStow
     }
 
     /// Step names outside this machine's vocabulary that must ADVANCE rather
@@ -126,27 +126,29 @@ public struct SalvageRun: MissionStepMachine {
         guard let vessel = world.device(directive.deviceCode) else {
             return .stall(.unreachableDevice)
         }
-        switch directive.step {
-        case Step.preflight: return preflight(directive, vessel, world)
-        case Step.travelling: return travel(directive, vessel, world)
-        case Step.deployingBots: return deployBots(directive, vessel, world)
-        case Step.confirmingBotDeploy: return confirmBotDeploy(directive, vessel, world)
-        case Step.armingBots: return armBots(directive, vessel, world)
-        case Step.confirmingBotArm: return confirmBotArm(directive, vessel, world)
-        case Step.positioning: return position(directive, vessel, world)
-        case Step.configuring: return configure(directive, vessel, world)
-        case Step.launching: return launch(directive, vessel, world)
-        case Step.awaiting: return awaitCompletion(directive, vessel, world)
-        case Step.verifying: return verify(directive, vessel, world)
-        case Step.repairing: return awaitRepair(directive, vessel, world)
-        case Step.stowingBots: return stowBots(directive, vessel, world)
-        case Step.confirmingBotStow: return confirmBotStow(directive, vessel, world)
-        case let step where Self.retiredSteps.contains(step):
-            return .advanceStep(nextStep: Step.preflight)
-        default:
+        if Self.retiredSteps.contains(directive.step) {
+            return .advanceStep(nextStep: Step.preflight.rawValue)
+        }
+        guard let step = Step(rawValue: directive.step) else {
             // Waiting is inert and recoverable; guessing would command the fleet.
-            logger.notice("salvage run \(directive.id, privacy: .public): unknown step \(directive.step, privacy: .public) — waiting")
+            logger.notice("\(kind.rawValue) \(directive.id): unknown step \(directive.step) — waiting")
             return .wait
+        }
+        switch step {
+        case .preflight: return preflight(directive, vessel, world)
+        case .travelling: return travel(directive, vessel, world)
+        case .deployingBots: return deployBots(directive, vessel, world)
+        case .confirmingBotDeploy: return confirmBotDeploy(directive, vessel, world)
+        case .armingBots: return armBots(directive, vessel, world)
+        case .confirmingBotArm: return confirmBotArm(directive, vessel, world)
+        case .positioning: return position(directive, vessel, world)
+        case .configuring: return configure(directive, vessel, world)
+        case .launching: return launch(directive, vessel, world)
+        case .awaiting: return awaitCompletion(directive, vessel, world)
+        case .verifying: return verify(directive, vessel, world)
+        case .repairing: return awaitRepair(directive, vessel, world)
+        case .stowingBots: return stowBots(directive, vessel, world)
+        case .confirmingBotStow: return confirmBotStow(directive, vessel, world)
         }
     }
 
@@ -294,7 +296,7 @@ public struct SalvageRun: MissionStepMachine {
         if Self.stagingIsStale(stagingRows, world) {
             return .refreshFleet(tag: tag, thenStall: .unreachableDevice)
         }
-        return .assignController(deviceCode: controller.deviceCode, nextStep: Step.travelling)
+        return .assignController(deviceCode: controller.deviceCode, nextStep: Step.travelling.rawValue)
     }
 
     // MARK: - Arrival freshness
@@ -345,10 +347,10 @@ public struct SalvageRun: MissionStepMachine {
     /// bots out. The target is already meshed — the planner offers no other kind.
     private func travel(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
         guard let target = directive.currentTarget else {
-            return .advanceStep(nextStep: Step.preflight)
+            return .advanceStep(nextStep: Step.preflight.rawValue)
         }
         if Self.system(of: vessel) == target {
-            return .advanceStep(nextStep: Step.deployingBots)
+            return .advanceStep(nextStep: Step.deployingBots.rawValue)
         }
         // An open op means the trip is under way; waiting stops a second travel
         // landing on top of the first.
@@ -357,7 +359,7 @@ public struct SalvageRun: MissionStepMachine {
         if let unconfirmed = Self.travelPositionUnconfirmed(vessel, world) { return unconfirmed }
         return .dispatch(
             kind: .travel, deviceCode: vessel.deviceCode,
-            params: CommandParams(destination: target), nextStep: Step.travelling
+            params: CommandParams(destination: target), nextStep: Step.travelling.rawValue
         )
     }
 
@@ -482,14 +484,14 @@ public struct SalvageRun: MissionStepMachine {
     private func position(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
         switch Self.nextBody(in: directive, world: world) {
         case .finished:
-            return .advanceStep(nextStep: Step.repairing)
+            return .advanceStep(nextStep: Step.repairing.rawValue)
         case .unresolved:
             guard let target = directive.currentTarget else {
-                return .advanceStep(nextStep: Step.repairing)
+                return .advanceStep(nextStep: Step.repairing.rawValue)
             }
             return unresolvedSystem(directive, world, target: target)
         case let .body(body):
-            if vessel.location == body { return .advanceStep(nextStep: Step.configuring) }
+            if vessel.location == body { return .advanceStep(nextStep: Step.configuring.rawValue) }
             // `.travel` is tracked, so this guard actually fires and the same-step
             // re-dispatch is safe.
             if world.openOperation(for: vessel.deviceCode) != nil { return .wait }
@@ -498,7 +500,7 @@ public struct SalvageRun: MissionStepMachine {
             if let unconfirmed = Self.travelPositionUnconfirmed(vessel, world) { return unconfirmed }
             return .dispatch(
                 kind: .travel, deviceCode: vessel.deviceCode,
-                params: CommandParams(destination: body), nextStep: Step.positioning
+                params: CommandParams(destination: body), nextStep: Step.positioning.rawValue
             )
         }
     }
@@ -514,14 +516,14 @@ public struct SalvageRun: MissionStepMachine {
             // must advance regardless of whether the fleet is still staged for a
             // step it will never take. `verifying` routes a finished body back
             // here, so this is also what recognises "nothing left" on the return.
-            return .advanceStep(nextStep: Step.repairing)
+            return .advanceStep(nextStep: Step.repairing.rawValue)
 
         case .unresolved:
             // The catalogue blob hasn't landed, which must NEVER read as
             // "finished" (see `NextBodyResolution`). The vessel's arrival already
             // triggers a passive rescan, so waiting is the expected path.
             guard let target = directive.currentTarget else {
-                return .advanceStep(nextStep: Step.repairing)
+                return .advanceStep(nextStep: Step.repairing.rawValue)
             }
             return unresolvedSystem(directive, world, target: target)
 
@@ -535,7 +537,7 @@ public struct SalvageRun: MissionStepMachine {
                 return .dispatch(
                     kind: .setDirective, deviceCode: controller.deviceCode,
                     params: CommandParams(directive: "gather_salvage", configuration: Self.salvageConfig(body: body)),
-                    nextStep: Step.launching
+                    nextStep: Step.launching.rawValue
                 )
             }
             // Right directive, right body, but not running: `activate` is what
@@ -543,10 +545,10 @@ public struct SalvageRun: MissionStepMachine {
             guard Self.isMining(controller) else {
                 return .dispatch(
                     kind: OperationKind.simple("activate"), deviceCode: controller.deviceCode,
-                    params: CommandParams(), nextStep: Step.launching
+                    params: CommandParams(), nextStep: Step.launching.rawValue
                 )
             }
-            return .advanceStep(nextStep: Step.launching)
+            return .advanceStep(nextStep: Step.launching.rawValue)
         }
     }
 
@@ -561,7 +563,7 @@ public struct SalvageRun: MissionStepMachine {
         }
         return .dispatch(
             kind: OperationKind.simple("launch"), deviceCode: controller.deviceCode,
-            params: CommandParams(), nextStep: Step.awaiting
+            params: CommandParams(), nextStep: Step.awaiting.rawValue
         )
     }
 
@@ -620,7 +622,7 @@ public struct SalvageRun: MissionStepMachine {
     /// controller vouch for them and read a deployed fleet as recovered.
     private func awaitCompletion(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
         if Self.completionSeen(directive, world) {
-            return .advanceStep(nextStep: Step.verifying)
+            return .advanceStep(nextStep: Step.verifying.rawValue)
         }
         // The launch deployed nothing, so no completion is ever coming.
         if Self.emptyLaunchSeen(directive, world) { return .stall(.launchDeployedNothing) }
@@ -645,7 +647,7 @@ public struct SalvageRun: MissionStepMachine {
 
         let stranded = drones.filter { $0.stowedInDeviceCode != vessel.deviceCode }
         // A dropped completion frame: the drones are already home, nothing said so.
-        if stranded.isEmpty { return .advanceStep(nextStep: Step.verifying) }
+        if stranded.isEmpty { return .advanceStep(nextStep: Step.verifying.rawValue) }
         // Still mining — the drones are out by design. Reconcile on a cadence to
         // catch completion (or the controller going idle); never stall, however
         // long the cycle runs.
@@ -671,7 +673,7 @@ public struct SalvageRun: MissionStepMachine {
         // None travelling, none aboard, mining finished — they aren't coming on
         // their own. Hand to `verify`, which refreshes once and raises
         // `dronesNotRecovered` if the fresh rows agree.
-        return .advanceStep(nextStep: Step.verifying)
+        return .advanceStep(nextStep: Step.verifying.rawValue)
     }
 
     // MARK: - Service bots
@@ -681,18 +683,18 @@ public struct SalvageRun: MissionStepMachine {
     /// and not the salvage; a REJECTED deploy still stalls the run.
     private func deployBots(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
         let aboard = RepairFleet.bots(aboard: vessel, in: world, owner: Self.fleetTag(directive))
-        guard let next = aboard.first else { return .advanceStep(nextStep: Step.armingBots) }
+        guard let next = aboard.first else { return .advanceStep(nextStep: Step.armingBots.rawValue) }
         // `deploy` is untracked and the confirm step re-stamps `stepStartedAt`, so
         // the log is the only bound on this loop that re-entry cannot rewind.
         if MissionLogBudget.dispatchRounds(
-            world, dispatch: Step.deployingBots, confirm: Step.confirmingBotDeploy
+            world, dispatch: Step.deployingBots.rawValue, confirm: Step.confirmingBotDeploy.rawValue
         ) > Self.botDispatchRounds {
             logger.notice("salvage run \(directive.id, privacy: .public): \(next.deviceCode, privacy: .public) will not deploy — mining unrepaired")
-            return .advanceStep(nextStep: Step.armingBots)
+            return .advanceStep(nextStep: Step.armingBots.rawValue)
         }
         return .dispatch(
             kind: .simple("deploy"), deviceCode: next.deviceCode,
-            params: CommandParams(), nextStep: Step.confirmingBotDeploy
+            params: CommandParams(), nextStep: Step.confirmingBotDeploy.rawValue
         )
     }
 
@@ -715,19 +717,19 @@ public struct SalvageRun: MissionStepMachine {
         if elapsed < Self.botProbeDelay { return .wait }
         if elapsed > Self.botConfirmDeadline {
             logger.notice("salvage run \(directive.id, privacy: .public): bot deploy unconfirmed — mining unrepaired")
-            return .advanceStep(nextStep: Step.armingBots)
+            return .advanceStep(nextStep: Step.armingBots.rawValue)
         }
         let aboard = RepairFleet.bots(aboard: vessel, in: world, owner: owner)
         guard aboard.isEmpty else {
             // A row unread since the deploy was ordered cannot yet show it
             // landing; buy the read rather than believing a stale claim.
             return Self.probe(aboard, directive, world)
-                ?? .advanceStep(nextStep: Step.deployingBots)
+                ?? .advanceStep(nextStep: Step.deployingBots.rawValue)
         }
         // `armingBots` judges the DEPLOYED rows, and nothing has read them since
         // the deploy was ordered — a stale one reads armed and skips repair.
         let deployed = RepairFleet.bots(deployedNear: vessel.location, in: world, owner: owner)
-        return Self.probe(deployed, directive, world) ?? .advanceStep(nextStep: Step.armingBots)
+        return Self.probe(deployed, directive, world) ?? .advanceStep(nextStep: Step.armingBots.rawValue)
     }
 
     /// Ensure the next mis-armed deployed bot carries an ACTIVE `service`
@@ -738,12 +740,12 @@ public struct SalvageRun: MissionStepMachine {
             deployedNear: vessel.location, in: world, owner: Self.fleetTag(directive)
         )
         guard let next = deployed.first(where: { !RepairFleet.isArmed($0) }) else {
-            return .advanceStep(nextStep: Step.positioning)
+            return .advanceStep(nextStep: Step.positioning.rawValue)
         }
         // Both dispatches below are untracked and the confirm step re-stamps
         // `stepStartedAt`, so the log is the only bound re-entry cannot rewind.
         if MissionLogBudget.dispatchRounds(
-            world, dispatch: Step.armingBots, confirm: Step.confirmingBotArm
+            world, dispatch: Step.armingBots.rawValue, confirm: Step.confirmingBotArm.rawValue
         ) > Self.botDispatchRounds {
             logger.notice("salvage run \(directive.id, privacy: .public): \(next.deviceCode, privacy: .public) will not arm")
             return .stall(.serviceBotNotArmed)
@@ -751,12 +753,12 @@ public struct SalvageRun: MissionStepMachine {
         guard next.currentDirective == "service" else {
             return .dispatch(
                 kind: .setDirective, deviceCode: next.deviceCode,
-                params: CommandParams(directive: "service"), nextStep: Step.confirmingBotArm
+                params: CommandParams(directive: "service"), nextStep: Step.confirmingBotArm.rawValue
             )
         }
         return .dispatch(
             kind: OperationKind.simple("activate"), deviceCode: next.deviceCode,
-            params: CommandParams(), nextStep: Step.confirmingBotArm
+            params: CommandParams(), nextStep: Step.confirmingBotArm.rawValue
         )
     }
 
@@ -772,9 +774,9 @@ public struct SalvageRun: MissionStepMachine {
         // it needs the same proof the mis-armed one does.
         if let probe = Self.probe(deployed, directive, world) { return probe }
         guard deployed.contains(where: { !RepairFleet.isArmed($0) }) else {
-            return .advanceStep(nextStep: Step.positioning)
+            return .advanceStep(nextStep: Step.positioning.rawValue)
         }
-        return .advanceStep(nextStep: Step.armingBots)
+        return .advanceStep(nextStep: Step.armingBots.rawValue)
     }
 
     /// Hold `vessel` while any deployed service bot is still repairing. Gated on
@@ -788,7 +790,7 @@ public struct SalvageRun: MissionStepMachine {
             guard RepairFleet.anyBotDeployed(
                 in: world, system: directive.currentTarget, owner: owner
             ) else {
-                return .advanceStep(nextStep: Step.stowingBots)
+                return .advanceStep(nextStep: Step.stowingBots.rawValue)
             }
             let elapsed = world.now.timeIntervalSince(directive.stepStartedAt)
             if elapsed > Self.repairDeadline { return .stall(.repairUnfinished) }
@@ -796,11 +798,11 @@ public struct SalvageRun: MissionStepMachine {
             return .refreshDevices(deviceCodes: [vessel.deviceCode], thenStall: nil)
         }
         let bots = RepairFleet.bots(deployedNear: location, in: world, owner: owner)
-        if bots.isEmpty { return .advanceStep(nextStep: Step.stowingBots) }
+        if bots.isEmpty { return .advanceStep(nextStep: Step.stowingBots.rawValue) }
         // A fleet nothing is worn enough to hold for leaves without paying the
         // probe delay or a single read.
         if !RepairFleet.needsRepair(RepairFleet.fleet(of: vessel, in: world, owner: owner)) {
-            return .advanceStep(nextStep: Step.stowingBots)
+            return .advanceStep(nextStep: Step.stowingBots.rawValue)
         }
 
         let elapsed = world.now.timeIntervalSince(directive.stepStartedAt)
@@ -810,7 +812,7 @@ public struct SalvageRun: MissionStepMachine {
         // report idle, so treat it as still working until a read says otherwise.
         let stale = bots.contains { !world.isFresh($0, since: directive.stepStartedAt) }
         if !stale, !bots.contains(where: RepairFleet.isRepairing) {
-            return .advanceStep(nextStep: Step.stowingBots)
+            return .advanceStep(nextStep: Step.stowingBots.rawValue)
         }
         let lastLook = bots.map(\.updatedAt).min() ?? .distantPast
         if world.now.timeIntervalSince(lastLook) < Self.botProbeInterval { return .wait }
@@ -837,7 +839,7 @@ public struct SalvageRun: MissionStepMachine {
         let out = RepairFleet.botsOut(near: location, in: world, owner: owner)
         guard let next = out.first else { return .advanceTarget }
         if MissionLogBudget.dispatchRounds(
-            world, dispatch: Step.stowingBots, confirm: Step.confirmingBotStow
+            world, dispatch: Step.stowingBots.rawValue, confirm: Step.confirmingBotStow.rawValue
         ) > Self.botDispatchRounds {
             return .stall(.serviceBotNotRecovered)
         }
@@ -849,7 +851,7 @@ public struct SalvageRun: MissionStepMachine {
         }
         return .dispatch(
             kind: .simple("recall"), deviceCode: next.deviceCode,
-            params: CommandParams(), nextStep: Step.confirmingBotStow
+            params: CommandParams(), nextStep: Step.confirmingBotStow.rawValue
         )
     }
 
@@ -877,7 +879,7 @@ public struct SalvageRun: MissionStepMachine {
             if world.now.timeIntervalSince(lastLook) < Self.botProbeInterval { return .wait }
             return .refreshDevices(deviceCodes: out.map(\.deviceCode), thenStall: nil)
         }
-        return .advanceStep(nextStep: Step.stowingBots)
+        return .advanceStep(nextStep: Step.stowingBots.rawValue)
     }
 
     // MARK: - Verify & restock
@@ -917,7 +919,7 @@ public struct SalvageRun: MissionStepMachine {
         guard let controller = claimedController(directive, vessel, world) else {
             // A vanished controller is preflight's diagnosis to make; stalling here
             // would name the wrong problem.
-            return .advanceStep(nextStep: Step.repairing)
+            return .advanceStep(nextStep: Step.repairing.rawValue)
         }
         // The WIDE query, not the aboard-vessel one: "some drones are home" is
         // precisely the state that loses the others.
@@ -932,18 +934,18 @@ public struct SalvageRun: MissionStepMachine {
         // pauses whatever `set_directive` landed meanwhile.
         if let waiting = controllerNotAboard(controller, vessel, directive, world) { return waiting }
         guard let target = directive.currentTarget else {
-            return .advanceStep(nextStep: Step.repairing)
+            return .advanceStep(nextStep: Step.repairing.rawValue)
         }
         switch Self.nextBody(in: directive, world: world) {
         case .finished:
-            return .advanceStep(nextStep: Step.repairing)
+            return .advanceStep(nextStep: Step.repairing.rawValue)
         case let .body(body):
             // More bodies here — unless the next one is what the cycle that just
             // ended was already working.
             guard body != Self.workedBody(controller) else {
                 return sameBodyAgain(directive, world, target: target, body: body)
             }
-            return .advanceStep(nextStep: Step.positioning)
+            return .advanceStep(nextStep: Step.positioning.rawValue)
         case .unresolved:
             // Must NEVER read as `.finished`. Same backstop as `emplace`.
             return unresolvedSystem(directive, world, target: target)
@@ -996,7 +998,7 @@ public struct SalvageRun: MissionStepMachine {
             return .wait
         }
         if sinceGrace <= Self.unresolvedReadBand {
-            return .refreshBody(system: target, body: body, nextStep: Step.verifying)
+            return .refreshBody(system: target, body: body, nextStep: Step.verifying.rawValue)
         }
         if sinceGrace <= Self.bodyUnresolvedRetryWindow {
             return .wait

@@ -137,7 +137,7 @@ struct BrainSalvageSeamTests {
         let launched = try #require(row, "the brain launched no salvage run")
         #expect(launched.deviceCode == "SALV1")
         #expect(launched.targets == ["VEGA"], "the salvage planner chose the target, not the survey one")
-        #expect(steps.contains(SalvageRun.Step.travelling))
+        #expect(steps.contains(SalvageRun.Step.travelling.rawValue))
 
         #expect(commands.contains(SeamDispatch(verb: "travel", deviceCode: "SALV1")))
         #expect(
