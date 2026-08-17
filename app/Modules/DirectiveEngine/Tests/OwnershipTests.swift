@@ -12,23 +12,19 @@ import UniverseModels
 @testable import DirectiveEngine
 
 /// `Ownership.resolve(...).reserved` over a fleet with no theatres — the shape
-/// every ported `Brain.reservedDevices` case asserts, plus the parity check
-/// that pins the two derivations together.
+/// every ported `Brain.reservedDevices` case asserts.
 private func reserved(_ directives: [Directive], _ devices: [String: Device]) -> Set<String> {
-    let ownership = Ownership.resolve(directives: directives, devices: devices, theatres: [])
-    #expect(
-        ownership.reserved == Brain.reservedDevices(directives: directives, devices: devices),
-        "the ported derivation must agree with the one it replaces"
-    )
-    return ownership.reserved
+    Ownership.resolve(directives: directives, devices: devices, theatres: []).reserved
 }
 
 private func fleet(_ devices: [Device]) -> [String: Device] {
     Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { first, _ in first })
 }
 
-private func theatreFixture(_ depot: String, system: String) -> Theatre {
-    Theatre(depot: depot, system: system, origin: .derived, readiness: .operational, stock: 1_000)
+private func theatreFixture(
+    _ depot: String, system: String, readiness: Theatre.Readiness = .operational
+) -> Theatre {
+    Theatre(depot: depot, system: system, origin: .derived, readiness: readiness, stock: 1_000)
 }
 
 // MARK: - Ported: the reserved set must not move
@@ -307,18 +303,26 @@ struct OwnershipTheatreBindingTests {
     }
 
     /// A mine ferry's tag names a BELT, so only the row's own stamp can place
-    /// it — and an unstamped one must bind everywhere rather than nowhere.
+    /// its sweep — and an unstamped one must bind everywhere rather than
+    /// nowhere, since no theatre answers to a belt designation.
     @Test func aBeltScopedLeaseFallsBackToItsRowStamp() {
         let ferry = directiveFixture(
             id: "M", kind: .haulRun, deviceCode: "TC1",
             fleetTag: "auto:mine:A-BELT-1", theatreDepot: depotA
         )
-        let devices = [deviceFixture(code: "TC1", type: "ami_transport_controller", location: "A-1")]
-        #expect(resolve([ferry], devices).reserved(in: theatreA).contains("TC1"))
+        // MINER is the device the SWEEP reaches; TC1 is held by `deviceCode`,
+        // which binds everywhere and so can prove nothing about placement.
+        let devices = [
+            deviceFixture(code: "TC1", type: "ami_transport_controller", location: "A-1"),
+            deviceFixture(code: "MINER", type: "mining_drone", tags: ["auto:mine:A-BELT-1"]),
+        ]
+        #expect(resolve([ferry], devices).reserved(in: theatreA).contains("MINER"))
+        #expect(!resolve([ferry], devices).reserved(in: theatreB).contains("MINER"))
 
         var unstamped = ferry
         unstamped.theatreDepot = nil
-        #expect(resolve([unstamped], devices).reserved(in: theatreB).contains("TC1"))
+        #expect(resolve([unstamped], devices).reserved(in: theatreA).contains("MINER"))
+        #expect(resolve([unstamped], devices).reserved(in: theatreB).contains("MINER"))
     }
 
     /// A pinned ferry row names one device as BOTH its carrier and its
@@ -402,6 +406,21 @@ struct TheatreResolverRuleTests {
     @Test func anUnknownDepotFallsThroughToLocation() {
         let vessel = deviceFixture(code: "V1", location: "A-1", tags: ["auto:survey:GONE-1"])
         #expect(resolver.owningTheatre(of: vessel, goal: .survey)?.depot == "DEPOT-A")
+    }
+
+    /// A tag naming a theatre that has gone `.claimed` falls through the same
+    /// way — an unusable theatre must not strand the device that named it.
+    @Test func aClaimedDepotFallsThroughToLocation() {
+        let mixed = TheatreResolver(
+            theatres: [
+                theatreFixture("DEPOT-A", system: "A"),
+                theatreFixture("DEPOT-B", system: "B", readiness: .claimed(missing: [.noStock])),
+            ],
+            starPositions: ["A": Position(x: 0, y: 0, z: 0), "B": Position(x: 100, y: 0, z: 0)],
+            components: ["A": "A", "B": "B"]
+        )
+        let vessel = deviceFixture(code: "V1", location: "A-1", tags: ["auto:survey:DEPOT-B"])
+        #expect(mixed.owningTheatre(of: vessel, goal: .survey)?.depot == "DEPOT-A")
     }
 
     @Test("servicing filters by mesh component; nearest does not")

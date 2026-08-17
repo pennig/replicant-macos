@@ -179,6 +179,25 @@ import Utils
         expectNoDifference(DeviceListLayout.attentionFlags(for: untagged, directives: [directive]), [])
     }
 
+    /// The fourth join: an event convoy seeds its freighter as its own lease,
+    /// because no stow or attach edge reaches it from the carrier — so the
+    /// attention flag is the only way that hull can surface its run's stall.
+    @Test func directiveJoinsOnFreighterCode() {
+        let device = makeDevice("FREIGHT1")
+        let directive = makeDirective(
+            kind: .eventRun, deviceCode: "CARRIER1", freighterCode: "FREIGHT1",
+            reason: .commandRejected
+        )
+        expectNoDifference(
+            DeviceListLayout.attentionFlags(for: device, directives: [directive]),
+            [.directive(.commandRejected)]
+        )
+        expectNoDifference(
+            DeviceListLayout.attentionFlags(for: makeDevice("FREIGHT2"), directives: [directive]),
+            []
+        )
+    }
+
     @Test func directiveWithNoRecordedReasonStillFlags() {
         let device = makeDevice("A1")
         let directive = makeDirective(deviceCode: "A1", reason: nil)

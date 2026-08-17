@@ -230,6 +230,37 @@ struct BrainEventReadinessTests {
         #expect(candidate.option.name == "default")
     }
 
+    /// A SCOPED-tag lease binds only its own theatre, so a freighter another
+    /// theatre's row sweeps is still this one's to spend. `freeHull` applies no
+    /// tag filter at all here, so nothing else separates the two.
+    @Test("a freighter held by another theatre's scoped tag is still spendable here")
+    func aScopedLeaseElsewhereLeavesTheFreighterSpendable() {
+        var tagged = freighter("FREIGHT-A")
+        tagged.tags = ["auto:haul:FAR-1"]
+        let view = eventView(
+            devices: [courier("BOX"), carrier("CARRIER-A"), tagged],
+            events: [eventFixture("X-1-EVT-001", location: "X-1")]
+        )
+        let elsewhere = Directive(
+            id: "H1", kind: .haulRun, status: .running, deviceCode: "FAR-CONTROLLER",
+            controllerCode: nil, roamCentre: nil, fleetTag: "auto:haul:FAR-1",
+            sourceRelayCode: nil, targets: [], targetIndex: 0, step: "assigning",
+            stepStartedAt: .distantPast, returnToOrigin: false, originDesignation: nil,
+            attentionReason: nil, createdAt: .distantPast, updatedAt: .distantPast,
+            theatreDepot: "FAR-1"
+        )
+        #expect(
+            Brain.reservedDevices(directives: [elsewhere], devices: view.devices).contains("FREIGHT-A")
+        )
+        let readiness = Brain.eventReadiness(
+            view: view, directives: [elsewhere], theatre: eventTheatre
+        )
+        guard case .launch(_, let freighter, _) = readiness else {
+            Issue.record("expected .launch, got \(readiness)"); return
+        }
+        #expect(freighter == "FREIGHT-A")
+    }
+
     @Test("an untagged surge carrier is never spent")
     func untaggedCarrierIsNotSpent() {
         var devices = stagedConvoy()

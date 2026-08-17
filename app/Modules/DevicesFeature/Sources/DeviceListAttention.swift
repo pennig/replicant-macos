@@ -47,8 +47,8 @@ extension DeviceListLayout {
     /// Every reason `device` needs attention, in display order.
     ///
     /// `directives` must already be filtered to `DirectiveStatus.needsAttention`
-    /// — the caller's `@FetchAll` does that in SQL, and this function does not
-    /// re-check, so passing unfiltered directives over-flags.
+    /// — the caller's `@FetchAll` does that in SQL. A finished row flags nothing
+    /// (`covers` scopes to `openCases`); any other status over-flags.
     public static func attentionFlags(
         for device: Device,
         directives: [Directive]

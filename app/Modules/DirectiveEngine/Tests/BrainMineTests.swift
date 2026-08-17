@@ -241,6 +241,26 @@ struct BrainMineReadinessTests {
         )
     }
 
+    /// A SCOPED-tag lease binds only its own theatre, so a carrier another
+    /// theatre's row sweeps is still this one's to spend. `MineRecipe.idleCarrier`
+    /// narrows by location alone, so nothing else here separates the two.
+    @Test("a carrier held by another theatre's scoped tag is still spendable here")
+    func aScopedLeaseElsewhereLeavesTheCarrierSpendable() {
+        let carrier = mineCarrierDevice(tags: [MineRecipe.carrierTag.string, "auto:salvage:FAR-1"])
+        let view = mineWorldView(devices: minePrintedFleet() + [carrier])
+        let elsewhere = directiveFixture(
+            id: "S1", kind: .salvageRun, deviceCode: "FAR-VESSEL",
+            fleetTag: "auto:salvage:FAR-1", theatreDepot: "FAR-1"
+        )
+        #expect(
+            Brain.reservedDevices(directives: [elsewhere], devices: view.devices).contains(mineCarrier)
+        )
+        #expect(
+            Brain.mineReadiness(view: view, directives: [elsewhere], theatre: mineTheatre())
+                == .launch(carrier: mineCarrier, belt: mineBelt)
+        )
+    }
+
     @Test("no meshed belt left to site is idle")
     func noCandidateBeltIsIdle() {
         let view = mineWorldView(devices: minePrintedFleet() + [mineCarrierDevice()], belts: [:])
