@@ -142,11 +142,18 @@ struct DirectiveLaunchTests {
         #expect(row.fleetTag == SurveyRun.defaultFleetTag.string)
     }
 
-    @Test func everyKindResolvesAFirstStep() {
+    /// Literal steps, not `MissionRegistry.firstStep(for:)` — comparing against
+    /// the very expression the factory evaluates would compare a value to
+    /// itself. Sweeping `allCases` also proves no kind trips the precondition.
+    @Test func everyKindLaunchesOnItsOwnFirstStep() {
+        let expected: [DirectiveKind: String] = [
+            .surveyRun: "preflight", .salvageRun: "preflight", .haulRun: "preflight",
+            .mineRun: "preflight", .eventRun: "preflight", .relayRun: "acquire",
+            .restockRun: "stocking", .mineFleetPrint: "stocking", .eventCourierPrint: "printing",
+        ]
         for kind in DirectiveKind.allCases {
             let row = Directive.launch(.init(kind: kind, deviceCode: "D", theatre: theatre), id: "X", now: now)
-            #expect(row.step == MissionRegistry.firstStep(for: kind))
-            #expect(!row.step.isEmpty)
+            #expect(row.step == expected[kind], "\(kind.rawValue)")
         }
     }
 }

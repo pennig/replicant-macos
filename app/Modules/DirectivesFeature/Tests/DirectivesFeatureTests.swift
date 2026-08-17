@@ -712,6 +712,29 @@ struct PrintMineFleetTests {
         #expect(created.isEmpty)
     }
 
+    /// The offer and the confirm are two reads, so the bench can go between
+    /// them — a compacted hub, or one flown off the depot. Confirming then
+    /// reports rather than pinning the print on whatever else sorts first.
+    @Test func aDepotThatLosesItsBenchBetweenOfferAndConfirmReportsIt() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in try Self.seedTwoTheatres(db) }
+        let store = Self.launchStore(database)
+
+        await store.send(.printMineFleetTapped)
+        await store.receive(\.printMineFleetSitesLoaded)
+        try await database.write { db in
+            try Device.update { $0.status = "compacted" }
+                .where { $0.location.eq("AINALRAM-BELT-1") }.execute(db)
+        }
+
+        await store.send(.printMineFleetDialog(.presented(.confirm(depot: "AINALRAM-BELT-1"))))
+        await store.receive(\.printMineFleetHostMissing)
+
+        #expect(store.state.printMineFleetDialog?.title == TextState("No autofactory found at the hub."))
+        let created = try await database.read { db in try Directive.all.fetchAll(db) }
+        #expect(created.isEmpty)
+    }
+
     /// A print-capable device, eligible unless overridden to a vessel type.
     nonisolated static func theatreDevice(
         _ code: String, type: String, location: String?, commands: [String] = [],

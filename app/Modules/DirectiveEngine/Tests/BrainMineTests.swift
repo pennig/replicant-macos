@@ -1124,9 +1124,9 @@ struct BrainEnsureMineFerriesTests {
         #expect(hauls.first?.deviceCode == "TC1")
     }
 
-    /// Each mine drains through its OWN controller. A row whose fleet tag
-    /// reserved the whole `auto:mine` fleet would make the second row
-    /// impossible, so this is the assertion that pins the tag's scope.
+    /// Each mine drains through its OWN controller, under its OWN belt-scoped
+    /// tag: a fleet-wide `auto:mine` would reserve the second controller away,
+    /// and a `.haul` goal would read as the general drainer instead.
     @Test func twoInstalledMinesEachGetTheirOwnFerry() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in
@@ -1145,5 +1145,6 @@ struct BrainEnsureMineFerriesTests {
         #expect(hauls.count == 2)
         #expect(Set(hauls.flatMap(\.targets)) == [mineBelt, "SOL-BELT-2"])
         #expect(Set(hauls.map(\.deviceCode)) == ["TC1", "TC2"])
+        #expect(Set(hauls.compactMap(\.fleetTag)) == ["auto:mine:sol-belt-1", "auto:mine:sol-belt-2"])
     }
 }

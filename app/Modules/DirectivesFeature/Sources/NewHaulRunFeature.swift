@@ -110,7 +110,8 @@ public struct NewHaulRunFeature {
                 return .none
 
             case .launchTapped:
-                guard let anchor = state.anchorControllerCode else { return .none }
+                guard let controller = state.readyControllers.first else { return .none }
+                let anchor = controller.deviceCode
                 logger.info("launching haul run anchored on \(anchor, privacy: .public)")
                 // Bound to locals: referencing the property wrappers inside the
                 // @Sendable closure would capture the non-Sendable reducer.
@@ -118,6 +119,9 @@ public struct NewHaulRunFeature {
                 let dismiss = self.dismiss
                 let id = uuid().uuidString
                 let now = date.now
+                // Stamped even though the machine never reads it: without it
+                // `Brain.adoptTheatres` can never rescue an unstamped row.
+                let origin = controller.location.map { SiteAssay.system(of: $0) }
                 return .run { send in
                     let theatre = await LauncherTheatre.resolve(
                         for: anchor, goal: .haul, database: database, now: now
@@ -128,7 +132,8 @@ public struct NewHaulRunFeature {
                             // Anchor only — see this file's header. The machine
                             // resolves its controllers by tag every evaluation.
                             deviceCode: anchor,
-                            theatre: theatre
+                            theatre: theatre,
+                            originDesignation: origin
                         ),
                         id: id, now: now
                     )

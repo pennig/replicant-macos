@@ -203,6 +203,7 @@ struct NewSalvageRunFeatureTests {
         #expect(created[0].status == .running)
         #expect(created[0].deviceCode == "VES1")
         #expect(created[0].fleetTag == "auto:salvage")
+        #expect(created[0].theatreDepot == nil, "no theatre resolves, so the row goes out unstamped")
         // `bareVessel` sits at SOL-3, and a system designation is the part
         // before the first hyphen.
         #expect(created[0].roamCentre == "SOL")
@@ -260,6 +261,7 @@ struct NewSalvageRunFeatureTests {
 
         let row = try #require(try await database.read { db in try Directive.all.fetchAll(db) }.first)
         #expect(row.fleetTag == SalvageRun.fleetTag(forTheatre: "SOL-3").string)
+        #expect(row.theatreDepot == "SOL-3", "the stamp `ensureOne.owns` scopes on")
     }
 
     /// Launch is refused with no vessel chosen.

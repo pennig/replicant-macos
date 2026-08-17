@@ -104,6 +104,10 @@ struct NewHaulRunFeatureTests {
         #expect(!row.returnToOrigin)
         // The run drives EVERY tagged controller, so pinning one would misstate it.
         #expect(row.controllerCode == nil)
+        #expect(row.theatreDepot == nil, "nothing in this world makes ATIANFU-1-L4 a theatre")
+        // Without this an unstamped row is stranded: `Brain.adoptTheatres` can
+        // only rescue one through its origin, or a lone operational theatre.
+        #expect(row.originDesignation == "ATIANFU")
     }
 
     /// The operator-launched path must stamp the SAME per-theatre tag the
@@ -152,6 +156,8 @@ struct NewHaulRunFeatureTests {
 
         let row = try #require(try await database.read { db in try Directive.all.fetchAll(db) }.first)
         #expect(row.fleetTag == HaulRun.fleetTag(forTheatre: "GRAZ-3").string)
+        #expect(row.theatreDepot == "GRAZ-3", "the stamp `ensureOne.owns` scopes on")
+        #expect(row.originDesignation == "GRAZ")
     }
 
     /// Launch with no tagged controller must write nothing at all.

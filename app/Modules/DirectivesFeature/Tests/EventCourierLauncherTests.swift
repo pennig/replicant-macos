@@ -243,4 +243,27 @@ struct EventCourierLauncherTests {
         let created = try await database.read { db in try Directive.all.fetchAll(db) }
         #expect(created.isEmpty)
     }
+
+    /// The offer and the confirm are two reads, so the chosen depot's bench can
+    /// go between them. Confirming then reports rather than pinning the print
+    /// on some other theatre's printer.
+    @Test func aDepotThatLosesItsBenchBetweenOfferAndConfirmReportsIt() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in try Self.seedTwoTheatres(db) }
+        let store = Self.store(database)
+
+        await store.send(.eventCourierTapped)
+        await store.receive(\.eventCourierSitesLoaded)
+        try await database.write { db in
+            try Device.update { $0.status = "compacted" }
+                .where { $0.location.eq("AINALRAM-BELT-1") }.execute(db)
+        }
+
+        await store.send(.eventCourierDialog(.presented(.confirm(depot: "AINALRAM-BELT-1"))))
+        await store.receive(\.eventCourierSiteMissing)
+
+        #expect(store.state.eventCourierDialog?.title == TextState("No depot can print a courier."))
+        let created = try await database.read { db in try Directive.all.fetchAll(db) }
+        #expect(created.isEmpty)
+    }
 }
