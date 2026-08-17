@@ -39,6 +39,21 @@ Small things deliberately not fixed when they were found, kept here so they are 
   the operator must literally type, so this may be correct as-is — it is a UI consistency question, and
   no test asserts either form.
 
+- [ ] **`DeviceListAttention.covers` is correct only because its caller passes a one-device fleet.** It
+  routes through `Ownership.resolve` over a synthetic single-device fleet, deliberately truncating the
+  stow/attach closure. The doc says so, but a future "bug fix" passing the real fleet would silently
+  make every stowed drone inherit its carrier's run's attention flag. `DeviceListAttention.swift`.
+  A named seeds-only entry point on `Ownership` would be safer than a `resolve` over a synthetic fleet.
+- [ ] **`DirectiveGroup.missionKeys` still hand-writes the `.deviceCode` seed.** Stage 1 ticket 11 left
+  it alone deliberately: folding it into `Ownership` would change behaviour, because `missionKeys` is
+  first-wins in newest-first row order while `holders(of:)` is id-ordered. `DirectiveGroup.swift`.
+  The last hand-written lease seed in the tree.
+- [ ] **`covers` and `DirectiveRow.merge` now allocate per render.** `covers` builds several
+  dictionaries and runs a sort per (device × flagged directive) on a list-render path; `merge` went from
+  O(rows) to O(rows × devices). Almost certainly fine at current fleet sizes, and offset by
+  `holdingDirective` shedding an O(rows² × devices) loop — but both are UI paths that used to be
+  trivial. Measure before assuming.
+
 ## Constants and coupling
 
 - [ ] **`unresolvedReadBand` is tied to the engine tick by comment only.** The band (15 s) must exceed the worst observed tick period; the tick literal lives separately in `DirectiveEngine.swift`. Changing the tick silently breaks the pairing. Give them one shared constant, or a test that fails when they diverge.
@@ -50,6 +65,11 @@ Small things deliberately not fixed when they were found, kept here so they are 
 - [ ] **`RestockRunTests` lacks an "own print open, past the deadline" case.** The courier suite has the matching one. No functional gap — the deadline check runs unconditionally before the op guard — but only one of the two runs pins the ordering that Stage 0 fixed.
 - [ ] **The catch-up replay test's `processed` counter asserts nothing.** It is trivially true regardless of route behaviour; `markedOrdinary.value.count` carries the real proof. Drop it or make it mean something. `GameSyncTests.swift`.
 - [ ] **The arrival atomicity test reads the op and the device separately.** Atomicity is guaranteed structurally by the single `database.write`, so the test is weaker than the guarantee rather than wrong. `ReconcilerDeviceEventTests.swift`.
+
+- [ ] **`OwnershipTests.perTheatreTagsCannotCollide` asserts only the negative.** No positive companion,
+  so it proves a collision does not happen without proving the non-colliding case still matches.
+  Faithful to the `Brain.reservedDevices` test it was ported from, so not a regression — the weakest of
+  the fourteen ported cases.
 
 ## Cosmetic
 
