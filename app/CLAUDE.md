@@ -128,56 +128,10 @@ If references still come back empty: build first, confirm the symlink exists, an
 
 ## Adding a new SPM module
 
-When asked to add a new module, feature target, or library to this package, follow these steps exactly. The requested module name is referred to as NAME below — preserve the casing provided.
+Copy an existing target's `.library`/`.target`/`.testTarget` stanzas in `Modules/Package.swift`, create `NAME/Sources` and `NAME/Tests`, and check with `swift package resolve`. Preserve the casing of the requested name. What the manifest won't tell you:
 
-### 1. Create directory structure
-
-    mkdir -p "NAME/Sources"
-    mkdir -p "NAME/Tests"
-
-Create a minimal placeholder if needed to satisfy SPM's non-empty target requirement:
-
-    // NAME.swift (or NAMETests.swift)
-    // This file intentionally left minimal.
-
-### 2. Edit Package.swift (three edits)
-
-Append to the products array:
-
-    .library(
-        name: "NAME",
-        targets: ["NAME"]
-    ),
-
-Append the source target to the targets array:
-
-    .target(
-        name: "NAME",
-        dependencies: [
-            .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
-            "UI",
-        ],
-        path: "NAME/Sources"
-    ),
-
-Append the test target to the targets array:
-
-    .testTarget(
-        name: "NAMETests",
-        dependencies: ["NAME"],
-        path: "NAME/Tests"
-    ),
-
-Insert in alphabetical order (case-insensitive) and preserve existing formatting and trailing commas. Do not reorder unrelated targets.
-
-### 3. Verify the package resolves
-
-    swift package resolve
-
-If it errors, check that the path: values in Package.swift match the directories created in step 1, and that all dependency names exactly match existing targets.
-
-### Notes
-- `swift-composable-architecture` is already declared as a package dependency — do not add it again.
-- **TCA is for feature modules only, by manifest.** The template's `ComposableArchitecture` product is for feature targets; a non-feature module (a service, client, or models tier) declares `.product(name: "Dependencies", package: "swift-dependencies")` instead (plus `Sharing`/`SQLiteData` as needed) — see `GameSession`/`GameServices`/`GameSync`/`AccountManager`.
+- Insert new entries in **alphabetical order** (case-insensitive), preserving existing formatting and trailing commas. Do not reorder unrelated targets.
+- **TCA is for feature modules only, by manifest.** A feature target takes `.product(name: "ComposableArchitecture", package: "swift-composable-architecture")`; a non-feature module (a service, client, or models tier) declares `.product(name: "Dependencies", package: "swift-dependencies")` instead (plus `Sharing`/`SQLiteData` as needed) — see `GameSession`/`GameServices`/`GameSync`/`AccountManager`.
+- `swift-composable-architecture` is already a declared package dependency — do not add it again.
 - `UI` is an existing target in this package — reference it by string name only, not as a package product.
-- If NAME/Sources or NAME/Tests already exist, skip mkdir and go straight to the Package.swift edits.
+- SPM rejects an empty target, so a brand-new directory needs a placeholder source file before the manifest will resolve.
