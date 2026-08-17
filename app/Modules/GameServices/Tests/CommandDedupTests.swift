@@ -2,10 +2,10 @@
 //  CommandDedupTests.swift
 //  Replicould — GameServices
 //
-//  The `ab36b7d` class: a mission dispatching an immediate verb into its own
-//  step re-POSTs every tick forever. `CommandGovernor.dispatch` now refuses an
-//  identical repeat inside the same step entry — a deferral, not a failure, so
-//  no write and no re-stamp.
+//  A mission dispatching an immediate verb into its own step would re-POST
+//  every tick forever. `CommandGovernor.dispatch` refuses an identical repeat
+//  inside the same step entry — a deferral, not a failure, so no write and no
+//  re-stamp.
 //
 
 import API

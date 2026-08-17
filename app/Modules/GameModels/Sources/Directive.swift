@@ -246,7 +246,7 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
         case .commandRejected:
             "The server refused the last command. Check the device, then retry or skip this target."
         case .commandFailed:
-            "The server or the connection failed while sending the last command. It was retried three times. Retry once the service is reachable, or skip this target."
+            "The server or the connection failed while sending the last command, and the engine has stopped retrying it. Retry once the service is reachable, or skip this target."
         case .noMiningControllerAboard:
             "Stow an AMI mining controller aboard the vessel, then retry."
         case .noMiningDroneAboard:

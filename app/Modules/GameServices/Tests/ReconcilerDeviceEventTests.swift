@@ -3,7 +3,7 @@
 //  Replicould — GameServices
 //
 //  `applyDeviceEvent` closes the op the event completes (if any) and patches
-//  the device's location/stow in ONE transaction (S0.3), so no reader can
+//  the device's location/stow in ONE transaction, so no reader can
 //  observe "op closed, old location" between them. See memory:
 //  arrival-single-transaction.md.
 //

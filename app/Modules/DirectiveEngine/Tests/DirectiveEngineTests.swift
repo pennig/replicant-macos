@@ -45,8 +45,8 @@ private struct ScriptedMachine: MissionStepMachine {
     func plan(_ context: RoamContext) -> RoamPlan { SurveyRun().plan(context) }
 }
 
-/// Dispatches the same immediate verb into its own step every tick — the
-/// `ab36b7d` shape a same-step dispatch must not double-issue.
+/// Dispatches the same immediate verb into its own step every tick — the shape
+/// a same-step dispatch must not double-issue.
 private struct SameStepDispatchMachine: MissionStepMachine {
     let kind: DirectiveKind = .surveyRun
     let firstStep = "activating"

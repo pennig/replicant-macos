@@ -37,7 +37,7 @@ struct HaulRunVocabularyTests {
     @Test func commandFailedIsAnAutoRetriedTransient() {
         let reason = DirectiveAttentionReason.commandFailed
         #expect(reason.displayName == "Command failed")
-        #expect(reason.guidance == "The server or the connection failed while sending the last command. It was retried three times. Retry once the service is reachable, or skip this target.")
+        #expect(reason.guidance == "The server or the connection failed while sending the last command, and the engine has stopped retrying it. Retry once the service is reachable, or skip this target.")
         #expect(reason.brainDisposition == .retry)
     }
 }
