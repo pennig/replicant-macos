@@ -121,7 +121,7 @@ private func liveEventRun(
         id: id, kind: .eventRun, status: status, deviceCode: carrier,
         controllerCode: nil, roamCentre: nil,
         fleetTag: EventRun.fleetTag(forTheatre: eventDepot).string, sourceRelayCode: nil,
-        targets: [target], targetIndex: 0, step: EventRun.Step.departing,
+        targets: [target], targetIndex: 0, step: EventRun.Step.departing.rawValue,
         stepStartedAt: .distantPast, returnToOrigin: true, originDesignation: "HUB",
         attentionReason: nil, createdAt: .distantPast, updatedAt: .distantPast,
         theatreDepot: eventDepot, freighterCode: freighter

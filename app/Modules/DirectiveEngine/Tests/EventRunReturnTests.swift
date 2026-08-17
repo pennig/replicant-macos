@@ -20,12 +20,12 @@ struct EventRunReturnTests {
             event: EventRunFixtures.event(resources: [:], devices: []), now: now
         )
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.recovering, now: now), world: world
+            directive: EventRunFixtures.directive(step: EventRun.Step.recovering.rawValue, now: now), world: world
         )
         #expect(action == .dispatch(
             kind: .attach, deviceCode: "CARRIER",
             params: CommandParams(devices: ["COURIER"]),
-            nextStep: EventRun.Step.confirmingRecovery
+            nextStep: EventRun.Step.confirmingRecovery.rawValue
         ))
     }
 
@@ -41,7 +41,7 @@ struct EventRunReturnTests {
             event: EventRunFixtures.event(resources: [:], devices: []), now: now
         )
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.confirmingRecovery, now: now),
+            directive: EventRunFixtures.directive(step: EventRun.Step.confirmingRecovery.rawValue, now: now),
             world: world
         )
         #expect(action == .refreshDevices(deviceCodes: ["COURIER"], thenStall: nil))
@@ -60,7 +60,7 @@ struct EventRunReturnTests {
         )
         let entered = now.addingTimeInterval(-EventRun.recoveryConfirmDeadline - 1)
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.confirmingRecovery, now: entered),
+            directive: EventRunFixtures.directive(step: EventRun.Step.confirmingRecovery.rawValue, now: entered),
             world: world
         )
         #expect(action == .refreshDevices(deviceCodes: ["COURIER"], thenStall: .commandRejected))
@@ -78,10 +78,10 @@ struct EventRunReturnTests {
             event: EventRunFixtures.event(resources: [:], devices: []), now: now
         )
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.confirmingRecovery, now: now),
+            directive: EventRunFixtures.directive(step: EventRun.Step.confirmingRecovery.rawValue, now: now),
             world: world
         )
-        #expect(action == .advanceStep(nextStep: EventRun.Step.recovering))
+        #expect(action == .advanceStep(nextStep: EventRun.Step.recovering.rawValue))
     }
 
     @Test("a beacon left on site is never recovered")
@@ -97,9 +97,9 @@ struct EventRunReturnTests {
             event: EventRunFixtures.event(resources: [:], devices: []), now: now
         )
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.recovering, now: now), world: world
+            directive: EventRunFixtures.directive(step: EventRun.Step.recovering.rawValue, now: now), world: world
         )
-        #expect(action == .advanceStep(nextStep: EventRun.Step.returning))
+        #expect(action == .advanceStep(nextStep: EventRun.Step.returning.rawValue))
     }
 
     @Test("returning flies both hulls to the theatre depot")
@@ -114,12 +114,12 @@ struct EventRunReturnTests {
             event: EventRunFixtures.event(resources: [:], devices: []), now: now
         )
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.returning, now: now), world: world
+            directive: EventRunFixtures.directive(step: EventRun.Step.returning.rawValue, now: now), world: world
         )
         #expect(action == .dispatch(
             kind: .travel, deviceCode: "CARRIER",
             params: CommandParams(destination: "HUB-1"),
-            nextStep: EventRun.Step.returning
+            nextStep: EventRun.Step.returning.rawValue
         ))
     }
 
@@ -135,9 +135,9 @@ struct EventRunReturnTests {
             event: EventRunFixtures.event(resources: [:], devices: []), now: now
         )
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.returning, now: now), world: world
+            directive: EventRunFixtures.directive(step: EventRun.Step.returning.rawValue, now: now), world: world
         )
-        #expect(action == .advanceStep(nextStep: EventRun.Step.depositing))
+        #expect(action == .advanceStep(nextStep: EventRun.Step.depositing.rawValue))
     }
 
     /// The convoy home at the depot, the reward still in the freighter's hold.
@@ -159,16 +159,16 @@ struct EventRunReturnTests {
             devices: homeConvoy(cargoUsed: 350),
             event: EventRunFixtures.event(resources: [:], devices: []), now: now,
             log: [
-                EventRunFixtures.entered(EventRun.Step.returning, at: now.addingTimeInterval(-60)),
-                EventRunFixtures.entered(EventRun.Step.depositing, at: now),
+                EventRunFixtures.entered(EventRun.Step.returning.rawValue, at: now.addingTimeInterval(-60)),
+                EventRunFixtures.entered(EventRun.Step.depositing.rawValue, at: now),
             ]
         )
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.depositing, now: now), world: world
+            directive: EventRunFixtures.directive(step: EventRun.Step.depositing.rawValue, now: now), world: world
         )
         #expect(action == .dispatch(
             kind: .depositResources, deviceCode: "FREIGHT",
-            params: CommandParams(), nextStep: EventRun.Step.confirmingDeposit
+            params: CommandParams(), nextStep: EventRun.Step.confirmingDeposit.rawValue
         ))
     }
 
@@ -179,7 +179,7 @@ struct EventRunReturnTests {
             event: EventRunFixtures.event(resources: [:], devices: []), now: now
         )
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.depositing, now: now), world: world
+            directive: EventRunFixtures.directive(step: EventRun.Step.depositing.rawValue, now: now), world: world
         )
         #expect(action == .done)
     }
@@ -191,17 +191,17 @@ struct EventRunReturnTests {
             devices: homeConvoy(cargoUsed: 350),
             event: EventRunFixtures.event(resources: [:], devices: []), now: now,
             log: [
-                EventRunFixtures.entered(EventRun.Step.depositing, at: entered),
+                EventRunFixtures.entered(EventRun.Step.depositing.rawValue, at: entered),
                 EventRunFixtures.dispatched(
                     .depositResources, to: "FREIGHT",
-                    step: EventRun.Step.confirmingDeposit, at: entered
+                    step: EventRun.Step.confirmingDeposit.rawValue, at: entered
                 ),
-                EventRunFixtures.entered(EventRun.Step.confirmingDeposit, at: entered),
-                EventRunFixtures.entered(EventRun.Step.depositing, at: now),
+                EventRunFixtures.entered(EventRun.Step.confirmingDeposit.rawValue, at: entered),
+                EventRunFixtures.entered(EventRun.Step.depositing.rawValue, at: now),
             ]
         )
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.depositing, now: now), world: world
+            directive: EventRunFixtures.directive(step: EventRun.Step.depositing.rawValue, now: now), world: world
         )
         #expect(action == .done)
     }
@@ -222,10 +222,10 @@ struct EventRunReturnTests {
             event: EventRunFixtures.event(resources: [:], devices: []), now: now
         )
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.confirmingDeposit, now: now),
+            directive: EventRunFixtures.directive(step: EventRun.Step.confirmingDeposit.rawValue, now: now),
             world: world
         )
-        #expect(action == .advanceStep(nextStep: EventRun.Step.depositing))
+        #expect(action == .advanceStep(nextStep: EventRun.Step.depositing.rawValue))
     }
 
     @Test("a hold that will not empty stalls instead of looping")
@@ -236,7 +236,7 @@ struct EventRunReturnTests {
         )
         let entered = now.addingTimeInterval(-EventRun.depositConfirmDeadline - 1)
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.confirmingDeposit, now: entered),
+            directive: EventRunFixtures.directive(step: EventRun.Step.confirmingDeposit.rawValue, now: entered),
             world: world
         )
         #expect(action == .refreshDevices(deviceCodes: ["FREIGHT"], thenStall: .commandRejected))
@@ -245,6 +245,28 @@ struct EventRunReturnTests {
     @Test("EventRun is registered")
     func registered() {
         #expect(MissionRegistry.machine(for: .eventRun) != nil)
-        #expect(MissionRegistry.firstStep(for: .eventRun) == EventRun.Step.preflight)
+        #expect(MissionRegistry.firstStep(for: .eventRun) == EventRun.Step.preflight.rawValue)
+    }
+
+    @Test func stepVocabularyIsFrozen() {
+        #expect(EventRun.Step.allCases.map(\.rawValue) == [
+            "preflight", "printing", "loading", "confirmingLoad", "departing",
+            "confirmingArrival", "staging", "confirmingStage", "confirmingProgress",
+            "committing", "collecting", "recovering", "confirmingRecovery", "returning",
+            "depositing", "confirmingDeposit",
+        ])
+    }
+
+    @Test("an unknown step waits rather than restarting the run at preflight")
+    func unknownStepWaits() {
+        let world = EventRunFixtures.world(
+            devices: [EventRunFixtures.device("CARRIER", type: EventRun.carrierDeviceType)],
+            event: EventRunFixtures.event(resources: [:], devices: []), now: now
+        )
+        let action = EventRun().nextAction(
+            directive: EventRunFixtures.directive(step: "not-a-real-step", now: now),
+            world: world
+        )
+        #expect(action == .wait)
     }
 }

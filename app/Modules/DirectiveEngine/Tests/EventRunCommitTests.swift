@@ -69,10 +69,10 @@ struct EventRunCommitTests {
             devices: onSite(now), event: metEvent(met: true, replicant: true), now: now
         )
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.confirmingProgress, now: now),
+            directive: EventRunFixtures.directive(step: EventRun.Step.confirmingProgress.rawValue, now: now),
             world: world
         )
-        #expect(action == .advanceStep(nextStep: EventRun.Step.committing))
+        #expect(action == .advanceStep(nextStep: EventRun.Step.committing.rawValue))
     }
 
     @Test("unmet progress buys a fresh ledger read before the deadline")
@@ -81,7 +81,7 @@ struct EventRunCommitTests {
             devices: onSite(now), event: metEvent(met: false, replicant: true), now: now
         )
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.confirmingProgress, now: now),
+            directive: EventRunFixtures.directive(step: EventRun.Step.confirmingProgress.rawValue, now: now),
             world: world
         )
         #expect(action == .refreshEvents(thenStall: nil))
@@ -94,7 +94,7 @@ struct EventRunCommitTests {
             devices: onSite(late), event: metEvent(met: false, replicant: true), now: late
         )
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.confirmingProgress, now: now),
+            directive: EventRunFixtures.directive(step: EventRun.Step.confirmingProgress.rawValue, now: now),
             world: world
         )
         #expect(action == .stall(.eventCriteriaUnmet, detail: "X-1-EVT-001"))
@@ -107,7 +107,7 @@ struct EventRunCommitTests {
             devices: onSite(late), event: metEvent(met: true, replicant: false), now: late
         )
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.confirmingProgress, now: now),
+            directive: EventRunFixtures.directive(step: EventRun.Step.confirmingProgress.rawValue, now: now),
             world: world
         )
         #expect(action == .stall(.eventCriteriaUnmet, detail: "X-1-EVT-001"))
@@ -120,10 +120,10 @@ struct EventRunCommitTests {
             event: metEvent(met: true, replicant: true, status: "completed"), now: now
         )
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.confirmingProgress, now: now),
+            directive: EventRunFixtures.directive(step: EventRun.Step.confirmingProgress.rawValue, now: now),
             world: world
         )
-        #expect(action == .advanceStep(nextStep: EventRun.Step.recovering))
+        #expect(action == .advanceStep(nextStep: EventRun.Step.recovering.rawValue))
     }
 
     @Test("committing posts the empty POST")
@@ -132,11 +132,11 @@ struct EventRunCommitTests {
             devices: onSite(now), event: metEvent(met: true, replicant: true), now: now
         )
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.committing, now: now),
+            directive: EventRunFixtures.directive(step: EventRun.Step.committing.rawValue, now: now),
             world: world
         )
         #expect(action == .completeEvent(
-            location: "X-1", designation: "X-1-EVT-001", nextStep: EventRun.Step.collecting
+            location: "X-1", designation: "X-1-EVT-001", nextStep: EventRun.Step.collecting.rawValue
         ))
     }
 
@@ -146,7 +146,7 @@ struct EventRunCommitTests {
         let world = EventRunFixtures.world(
             devices: onSite(late), event: metEvent(met: true, replicant: true), now: late
         )
-        var directive = EventRunFixtures.directive(step: EventRun.Step.collecting, now: now)
+        var directive = EventRunFixtures.directive(step: EventRun.Step.collecting.rawValue, now: now)
         directive.targets = ["X-1-EVT-001"]
         let action = EventRun().nextAction(directive: directive, world: world)
         #expect(action == .stall(.eventCommitRejected, detail: "X-1-EVT-001"))
@@ -161,7 +161,7 @@ struct EventRunCommitTests {
             now: now
         )
         return EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.collecting, now: now),
+            directive: EventRunFixtures.directive(step: EventRun.Step.collecting.rawValue, now: now),
             world: world
         )
     }
@@ -179,7 +179,7 @@ struct EventRunCommitTests {
         #expect(sweep(rewards: ["rares": 400, "structural": 50], hold: 500) == .dispatch(
             kind: .collectResources, deviceCode: "FREIGHT",
             params: CommandParams(resources: ["rares": 400, "structural": 50]),
-            nextStep: EventRun.Step.recovering
+            nextStep: EventRun.Step.recovering.rawValue
         ))
     }
 
@@ -188,7 +188,7 @@ struct EventRunCommitTests {
         #expect(sweep(rewards: ["rares": 800, "structural": 500], hold: 500) == .dispatch(
             kind: .collectResources, deviceCode: "FREIGHT",
             params: CommandParams(resources: ["rares": 500]),
-            nextStep: EventRun.Step.recovering
+            nextStep: EventRun.Step.recovering.rawValue
         ))
     }
 
@@ -197,14 +197,14 @@ struct EventRunCommitTests {
         #expect(sweep(rewards: ["rares": 800, "structural": 500], hold: nil) == .dispatch(
             kind: .collectResources, deviceCode: "FREIGHT",
             params: CommandParams(resources: ["rares": 800, "structural": 500]),
-            nextStep: EventRun.Step.recovering
+            nextStep: EventRun.Step.recovering.rawValue
         ))
     }
 
     @Test("an empty reward manifest goes home without a dispatch")
     func nothingToSweep() {
         let action = sweep(rewards: [:], hold: 500)
-        #expect(action == .advanceStep(nextStep: EventRun.Step.recovering))
+        #expect(action == .advanceStep(nextStep: EventRun.Step.recovering.rawValue))
         if case .dispatch = action { Issue.record("an XP-only reward must not be collected") }
         #expect(verdict(rewards: [:], hold: 500) == .nothingPaid)
     }
@@ -212,7 +212,7 @@ struct EventRunCommitTests {
     @Test("a full hold goes home rather than stalling, reward still on the ground")
     func fullHoldAdvances() {
         #expect(sweep(rewards: ["rares": 400], hold: 500, used: 500)
-            == .advanceStep(nextStep: EventRun.Step.recovering))
+            == .advanceStep(nextStep: EventRun.Step.recovering.rawValue))
         #expect(verdict(rewards: ["rares": 400], hold: 500, used: 500)
             == .willNotFit(["rares": 400]))
     }

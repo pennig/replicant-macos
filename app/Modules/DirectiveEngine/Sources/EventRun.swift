@@ -23,27 +23,27 @@ public struct EventRun: MissionStepMachine {
         self.reserveFloor = reserveFloor
     }
 
-    /// This mission's step vocabulary, as the bare strings `Directive.step` holds.
-    public enum Step {
-        public static let preflight = "preflight"
-        public static let printing = "printing"
-        public static let loading = "loading"
-        public static let confirmingLoad = "confirmingLoad"
-        public static let departing = "departing"
-        public static let confirmingArrival = "confirmingArrival"
-        public static let staging = "staging"
-        public static let confirmingStage = "confirmingStage"
-        public static let confirmingProgress = "confirmingProgress"
-        public static let committing = "committing"
-        public static let collecting = "collecting"
-        public static let recovering = "recovering"
-        public static let confirmingRecovery = "confirmingRecovery"
-        public static let returning = "returning"
-        public static let depositing = "depositing"
-        public static let confirmingDeposit = "confirmingDeposit"
+    /// This mission's step vocabulary, as `Directive.step` holds it (D6).
+    public enum Step: String, CaseIterable, Sendable {
+        case preflight
+        case printing
+        case loading
+        case confirmingLoad
+        case departing
+        case confirmingArrival
+        case staging
+        case confirmingStage
+        case confirmingProgress
+        case committing
+        case collecting
+        case recovering
+        case confirmingRecovery
+        case returning
+        case depositing
+        case confirmingDeposit
     }
 
-    public var firstStep: String { Step.preflight }
+    public var firstStep: String { Step.preflight.rawValue }
 
     public static let carrierDeviceType = "surge_carrier"
     public static let freighterDeviceType = "cargo_freighter"
@@ -129,23 +129,27 @@ public struct EventRun: MissionStepMachine {
               let event = world.event(designation)
         else { return .refreshEvents(thenStall: .unreachableDevice) }
 
-        switch directive.step {
-        case Step.printing: return printing(directive, convoy, event, world)
-        case Step.loading: return loading(directive, convoy, event, world)
-        case Step.confirmingLoad: return confirmLoad(directive, convoy, event, world)
-        case Step.departing: return departing(directive, convoy, event, world)
-        case Step.confirmingArrival: return confirmArrival(directive, convoy, event, world)
-        case Step.staging: return staging(directive, convoy, event, world)
-        case Step.confirmingStage: return confirmStage(directive, convoy, event, world)
-        case Step.confirmingProgress: return confirmProgress(directive, convoy, event, world)
-        case Step.committing: return committing(directive, convoy, event, world)
-        case Step.collecting: return collecting(directive, convoy, event, world)
-        case Step.recovering: return recovering(directive, convoy, event, world)
-        case Step.confirmingRecovery: return confirmRecovery(directive, convoy, event, world)
-        case Step.returning: return returning(directive, convoy, event, world)
-        case Step.depositing: return depositing(directive, convoy, event, world)
-        case Step.confirmingDeposit: return confirmDeposit(directive, convoy, event, world)
-        default: return preflight(directive, convoy, event, world)
+        guard let step = Step(rawValue: directive.step) else {
+            logger.notice("\(kind.rawValue) \(directive.id): unknown step \(directive.step) — waiting")
+            return .wait
+        }
+        switch step {
+        case .preflight: return preflight(directive, convoy, event, world)
+        case .printing: return printing(directive, convoy, event, world)
+        case .loading: return loading(directive, convoy, event, world)
+        case .confirmingLoad: return confirmLoad(directive, convoy, event, world)
+        case .departing: return departing(directive, convoy, event, world)
+        case .confirmingArrival: return confirmArrival(directive, convoy, event, world)
+        case .staging: return staging(directive, convoy, event, world)
+        case .confirmingStage: return confirmStage(directive, convoy, event, world)
+        case .confirmingProgress: return confirmProgress(directive, convoy, event, world)
+        case .committing: return committing(directive, convoy, event, world)
+        case .collecting: return collecting(directive, convoy, event, world)
+        case .recovering: return recovering(directive, convoy, event, world)
+        case .confirmingRecovery: return confirmRecovery(directive, convoy, event, world)
+        case .returning: return returning(directive, convoy, event, world)
+        case .depositing: return depositing(directive, convoy, event, world)
+        case .confirmingDeposit: return confirmDeposit(directive, convoy, event, world)
         }
     }
 
@@ -156,7 +160,7 @@ public struct EventRun: MissionStepMachine {
     ) -> MissionAction {
         guard event.isActive else {
             logger.notice("event run \(directive.id, privacy: .public): \(event.designation, privacy: .public) already closed — recovering")
-            return .advanceStep(nextStep: Step.recovering)
+            return .advanceStep(nextStep: Step.recovering.rawValue)
         }
         guard let depot = world.theatreDepot(for: directive) else {
             if world.theatreWentClaimed(for: directive) { return .wait }
@@ -166,10 +170,10 @@ public struct EventRun: MissionStepMachine {
         // sits ahead of the first spend rather than only ahead of the prints.
         let rail = RelayRun(reserveFloor: reserveFloor)
         if rail.footprintCensusIsStale(world) {
-            return .refreshFootprint(nextStep: Step.preflight, thenStall: nil)
+            return .refreshFootprint(nextStep: Step.preflight.rawValue, thenStall: nil)
         }
         if rail.printStockIsShort(at: depot, world) { return .wait }
-        return .advanceStep(nextStep: Step.printing)
+        return .advanceStep(nextStep: Step.printing.rawValue)
     }
 
     // MARK: - Printing
@@ -335,12 +339,12 @@ public struct EventRun: MissionStepMachine {
             wanted[EventPlan.beaconDeviceType] = 1
             order.append(EventPlan.beaconDeviceType)
         }
-        if wanted.isEmpty { return .advanceStep(nextStep: Step.loading) }
+        if wanted.isEmpty { return .advanceStep(nextStep: Step.loading.rawValue) }
         let deadline = Self.printDeadline(for: wanted, in: world)
 
         let rail = RelayRun(reserveFloor: reserveFloor)
         if rail.footprintCensusIsStale(world) {
-            return .refreshFootprint(nextStep: Step.printing, thenStall: nil)
+            return .refreshFootprint(nextStep: Step.printing.rawValue, thenStall: nil)
         }
         if rail.printStockIsShort(at: depot, world) { return .wait }
         if MineFleetPrint.fleetEvidenceIsStale(directive, at: depot, in: world) {
@@ -376,7 +380,7 @@ public struct EventRun: MissionStepMachine {
         return .dispatch(
             kind: .print, deviceCode: free.deviceCode,
             params: CommandParams(deviceType: type, quantity: quantity, printTags: [tag.string]),
-            nextStep: Step.printing
+            nextStep: Step.printing.rawValue
         )
     }
 
@@ -426,17 +430,17 @@ public struct EventRun: MissionStepMachine {
             return .dispatch(
                 kind: .attach, deviceCode: carrier.deviceCode,
                 params: CommandParams(devices: [next.deviceCode]),
-                nextStep: Step.confirmingLoad
+                nextStep: Step.confirmingLoad.rawValue
             )
         }
 
-        if option.resources.isEmpty { return .advanceStep(nextStep: Step.departing) }
-        if freighter.cargoUsed > 0 { return .advanceStep(nextStep: Step.departing) }
+        if option.resources.isEmpty { return .advanceStep(nextStep: Step.departing.rawValue) }
+        if freighter.cargoUsed > 0 { return .advanceStep(nextStep: Step.departing.rawValue) }
         if world.openOperation(for: freighter.deviceCode) != nil { return .wait }
         return .dispatch(
             kind: .collectResources, deviceCode: freighter.deviceCode,
             params: CommandParams(resources: option.resources),
-            nextStep: Step.confirmingLoad
+            nextStep: Step.confirmingLoad.rawValue
         )
     }
 
@@ -452,9 +456,9 @@ public struct EventRun: MissionStepMachine {
             .count
         if let freighter = convoy.freighter, freighter.cargoUsed > 0 { landed += 1 }
         let rounds = MissionLogBudget.dispatchRounds(
-            world, dispatch: Step.loading, confirm: Step.confirmingLoad
+            world, dispatch: Step.loading.rawValue, confirm: Step.confirmingLoad.rawValue
         )
-        if landed >= rounds { return .advanceStep(nextStep: Step.loading) }
+        if landed >= rounds { return .advanceStep(nextStep: Step.loading.rawValue) }
 
         guard let depot = world.theatreDepot(for: directive), let courier = convoy.courier,
               case .decided(let option) = EventPlan.resolve(
@@ -468,7 +472,7 @@ public struct EventRun: MissionStepMachine {
         )
         let loose = payload.filter { $0.attachedToDeviceCode != carrier.deviceCode }
         guard let next = loose.first ?? convoy.freighter else {
-            return .advanceStep(nextStep: Step.loading)
+            return .advanceStep(nextStep: Step.loading.rawValue)
         }
         return MissionConfirm.ladder(
             [next], directive, world,
@@ -492,7 +496,7 @@ public struct EventRun: MissionStepMachine {
             }
             return .dispatch(
                 kind: .travel, deviceCode: convoy.carrier.deviceCode,
-                params: CommandParams(destination: destination), nextStep: Step.departing
+                params: CommandParams(destination: destination), nextStep: Step.departing.rawValue
             )
         }
         guard let freighter = convoy.freighter else {
@@ -505,10 +509,10 @@ public struct EventRun: MissionStepMachine {
             }
             return .dispatch(
                 kind: .travel, deviceCode: freighter.deviceCode,
-                params: CommandParams(destination: destination), nextStep: Step.confirmingArrival
+                params: CommandParams(destination: destination), nextStep: Step.confirmingArrival.rawValue
             )
         }
-        return .advanceStep(nextStep: Step.confirmingArrival)
+        return .advanceStep(nextStep: Step.confirmingArrival.rawValue)
     }
 
     /// Both hulls placed at the event, on rows read since the step began.
@@ -520,7 +524,7 @@ public struct EventRun: MissionStepMachine {
         let placed = rows.allSatisfy {
             world.isFresh($0, since: directive.stepStartedAt) && $0.location == event.location
         }
-        if placed { return .advanceStep(nextStep: Step.staging) }
+        if placed { return .advanceStep(nextStep: Step.staging.rawValue) }
         if rows.contains(where: { world.openOperation(for: $0.deviceCode) != nil }) { return .wait }
         return MissionConfirm.ladder(
             rows, directive, world,
@@ -541,7 +545,7 @@ public struct EventRun: MissionStepMachine {
 
     private static func stageRounds(_ world: WorldSnapshot, _ kind: OperationKind) -> Int {
         MissionLogBudget.dispatchRounds(
-            world, dispatch: Step.staging, confirm: Step.confirmingStage, kind: kind
+            world, dispatch: Step.staging.rawValue, confirm: Step.confirmingStage.rawValue, kind: kind
         )
     }
 
@@ -559,11 +563,11 @@ public struct EventRun: MissionStepMachine {
             return .dispatch(
                 kind: .detach, deviceCode: convoy.carrier.deviceCode,
                 params: CommandParams(devices: aboard.map(\.deviceCode)),
-                nextStep: Step.confirmingStage
+                nextStep: Step.confirmingStage.rawValue
             )
         }
 
-        guard !option.resources.isEmpty else { return .advanceStep(nextStep: Step.confirmingProgress) }
+        guard !option.resources.isEmpty else { return .advanceStep(nextStep: Step.confirmingProgress.rawValue) }
         guard let freighter = convoy.freighter else {
             return .refreshFleet(tag: Self.rootTag, thenStall: .unreachableDevice)
         }
@@ -571,10 +575,10 @@ public struct EventRun: MissionStepMachine {
             return .dispatch(
                 kind: .depositResources, deviceCode: freighter.deviceCode,
                 params: CommandParams(resources: option.resources),
-                nextStep: Step.confirmingStage
+                nextStep: Step.confirmingStage.rawValue
             )
         }
-        return .advanceStep(nextStep: Step.confirmingProgress)
+        return .advanceStep(nextStep: Step.confirmingProgress.rawValue)
     }
 
     /// Judge a detach on the rows it moved. A deposit leaves no local proof — a
@@ -583,12 +587,12 @@ public struct EventRun: MissionStepMachine {
         _ directive: Directive, _ convoy: Convoy, _ event: LocationEvent, _ world: WorldSnapshot
     ) -> MissionAction {
         guard case .dispatched(let kind, _) = MissionLogBudget.lastDispatch(
-            world, dispatch: Step.staging, confirm: Step.confirmingStage
+            world, dispatch: Step.staging.rawValue, confirm: Step.confirmingStage.rawValue
         ), kind == OperationKind.detach.rawValue else {
-            return .advanceStep(nextStep: Step.staging)
+            return .advanceStep(nextStep: Step.staging.rawValue)
         }
         let aboard = Self.staged(convoy, in: world)
-        if aboard.isEmpty { return .advanceStep(nextStep: Step.staging) }
+        if aboard.isEmpty { return .advanceStep(nextStep: Step.staging.rawValue) }
         return MissionConfirm.ladder(
             aboard, directive, world,
             deadline: Self.stageConfirmDeadline, thenStall: .commandRejected
@@ -603,10 +607,10 @@ public struct EventRun: MissionStepMachine {
     private func confirmProgress(
         _ directive: Directive, _ convoy: Convoy, _ event: LocationEvent, _ world: WorldSnapshot
     ) -> MissionAction {
-        guard event.isActive else { return .advanceStep(nextStep: Step.recovering) }
+        guard event.isActive else { return .advanceStep(nextStep: Step.recovering.rawValue) }
         let detail = LocationEventDetail(event.detail)
         if detail?.met == true, detail?.replicantPresent == true {
-            return .advanceStep(nextStep: Step.committing)
+            return .advanceStep(nextStep: Step.committing.rawValue)
         }
         if world.now.timeIntervalSince(directive.stepStartedAt) > Self.progressDeadline {
             return .stall(.eventCriteriaUnmet, detail: event.designation)
@@ -618,9 +622,9 @@ public struct EventRun: MissionStepMachine {
     private func committing(
         _ directive: Directive, _ convoy: Convoy, _ event: LocationEvent, _ world: WorldSnapshot
     ) -> MissionAction {
-        guard event.isActive else { return .advanceStep(nextStep: Step.collecting) }
+        guard event.isActive else { return .advanceStep(nextStep: Step.collecting.rawValue) }
         return .completeEvent(
-            location: event.location, designation: event.designation, nextStep: Step.collecting
+            location: event.location, designation: event.designation, nextStep: Step.collecting.rawValue
         )
     }
 
@@ -679,19 +683,19 @@ public struct EventRun: MissionStepMachine {
             }
             return .refreshEvents(thenStall: nil)
         }
-        guard let freighter = convoy.freighter else { return .advanceStep(nextStep: Step.recovering) }
+        guard let freighter = convoy.freighter else { return .advanceStep(nextStep: Step.recovering.rawValue) }
         if world.openOperation(for: freighter.deviceCode) != nil { return .wait }
         switch Self.sweep(event, into: freighter) {
         case .nothingPaid:
-            return .advanceStep(nextStep: Step.recovering)
+            return .advanceStep(nextStep: Step.recovering.rawValue)
         case .willNotFit(let pile):
             let unswept = pile.keys.sorted().map { "\($0) \(pile[$0] ?? 0)" }.joined(separator: ", ")
             logger.notice("event run \(directive.id, privacy: .public): hold full at \(event.location, privacy: .public) — reward left for a haul: \(unswept, privacy: .public)")
-            return .advanceStep(nextStep: Step.recovering)
+            return .advanceStep(nextStep: Step.recovering.rawValue)
         case .lift(let manifest):
             return .dispatch(
                 kind: .collectResources, deviceCode: freighter.deviceCode,
-                params: CommandParams(resources: manifest), nextStep: Step.recovering
+                params: CommandParams(resources: manifest), nextStep: Step.recovering.rawValue
             )
         }
     }
@@ -708,13 +712,13 @@ public struct EventRun: MissionStepMachine {
             return .refreshFleet(tag: Self.rootTag, thenStall: .unreachableDevice)
         }
         if courier.attachedToDeviceCode == convoy.carrier.deviceCode {
-            return .advanceStep(nextStep: Step.returning)
+            return .advanceStep(nextStep: Step.returning.rawValue)
         }
         if world.openOperation(for: convoy.carrier.deviceCode) != nil { return .wait }
         return .dispatch(
             kind: .attach, deviceCode: convoy.carrier.deviceCode,
             params: CommandParams(devices: [courier.deviceCode]),
-            nextStep: Step.confirmingRecovery
+            nextStep: Step.confirmingRecovery.rawValue
         )
     }
 
@@ -728,7 +732,7 @@ public struct EventRun: MissionStepMachine {
             return .refreshFleet(tag: Self.rootTag, thenStall: .unreachableDevice)
         }
         if courier.attachedToDeviceCode == convoy.carrier.deviceCode {
-            return .advanceStep(nextStep: Step.recovering)
+            return .advanceStep(nextStep: Step.recovering.rawValue)
         }
         return MissionConfirm.ladder(
             [courier], directive, world,
@@ -753,17 +757,17 @@ public struct EventRun: MissionStepMachine {
             if let unconfirmed = SalvageRun.travelPositionUnconfirmed(hull, world) { return unconfirmed }
             return .dispatch(
                 kind: .travel, deviceCode: hull.deviceCode,
-                params: CommandParams(destination: depot), nextStep: Step.returning
+                params: CommandParams(destination: depot), nextStep: Step.returning.rawValue
             )
         }
-        return .advanceStep(nextStep: Step.depositing)
+        return .advanceStep(nextStep: Step.depositing.rawValue)
     }
 
     // MARK: - Unloading
 
     private static func depositRounds(_ world: WorldSnapshot) -> Int {
         MissionLogBudget.dispatchRounds(
-            world, dispatch: Step.depositing, confirm: Step.confirmingDeposit,
+            world, dispatch: Step.depositing.rawValue, confirm: Step.confirmingDeposit.rawValue,
             kind: .depositResources
         )
     }
@@ -778,7 +782,7 @@ public struct EventRun: MissionStepMachine {
         guard Self.depositRounds(world) < 1 else { return .done }
         return .dispatch(
             kind: .depositResources, deviceCode: freighter.deviceCode,
-            params: CommandParams(), nextStep: Step.confirmingDeposit
+            params: CommandParams(), nextStep: Step.confirmingDeposit.rawValue
         )
     }
 
@@ -789,7 +793,7 @@ public struct EventRun: MissionStepMachine {
     ) -> MissionAction {
         guard let freighter = convoy.freighter else { return .done }
         if world.isFresh(freighter, since: directive.stepStartedAt), freighter.cargoUsed == 0 {
-            return .advanceStep(nextStep: Step.depositing)
+            return .advanceStep(nextStep: Step.depositing.rawValue)
         }
         return MissionConfirm.ladder(
             [freighter], directive, world,

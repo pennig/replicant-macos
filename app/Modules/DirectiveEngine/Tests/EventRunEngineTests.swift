@@ -148,7 +148,7 @@ struct EventRunEngineTests {
     func boundedUnmetProgress() async throws {
         let database = try GameDatabase.bootstrap()
         try await seed(
-            database, step: EventRun.Step.confirmingProgress,
+            database, step: EventRun.Step.confirmingProgress.rawValue,
             event: EventRunFixtures.progressEvent(met: false, replicant: true)
         )
         let refreshes = LockIsolated(0)
@@ -170,7 +170,7 @@ struct EventRunEngineTests {
         let row = try await row(database)
         #expect(row.status == .needsAttention)
         #expect(row.attentionReason == .eventCriteriaUnmet)
-        #expect(row.step == EventRun.Step.confirmingProgress)
+        #expect(row.step == EventRun.Step.confirmingProgress.rawValue)
         #expect(row.stepStartedAt == Self.now, "the poll must not re-stamp the deadline it is accruing")
     }
 
@@ -183,7 +183,7 @@ struct EventRunEngineTests {
     func componentTreePrintsThenLoads() async throws {
         let database = try GameDatabase.bootstrap()
         try await seed(
-            database, step: EventRun.Step.printing,
+            database, step: EventRun.Step.printing.rawValue,
             event: EventRunFixtures.event(devices: [(1, "atmospheric_regulator")]),
             blueprints: [
                 blueprint(
@@ -215,7 +215,7 @@ struct EventRunEngineTests {
             EventPlan.beaconDeviceType,
         ], "components before the device consuming them, beacon last, nothing twice")
         let row = try await row(database)
-        #expect(row.step == EventRun.Step.loading)
+        #expect(row.step == EventRun.Step.loading.rawValue)
         #expect(row.status == .running)
         #expect(row.attentionReason == nil)
     }
@@ -227,7 +227,7 @@ struct EventRunEngineTests {
     func busyPrintersStallThroughTheEngine() async throws {
         let database = try GameDatabase.bootstrap()
         try await seed(
-            database, step: EventRun.Step.printing,
+            database, step: EventRun.Step.printing.rawValue,
             event: EventRunFixtures.event(devices: [(1, "atmospheric_regulator")]),
             blueprints: [
                 blueprint(
@@ -266,7 +266,7 @@ struct EventRunEngineTests {
         let row = try await row(database)
         #expect(row.status == .needsAttention)
         #expect(row.attentionReason == .printBlockedOnComponents)
-        #expect(row.step == EventRun.Step.printing)
+        #expect(row.step == EventRun.Step.printing.rawValue)
     }
 
     /// A bench that really queues: an accepted print leaves an OPEN op owned by
@@ -296,7 +296,7 @@ struct EventRunEngineTests {
                             "device_type": .string(deviceType),
                             "quantity": .number(Double(quantity)),
                         ])]),
-                        directiveID: "d1", step: EventRun.Step.printing
+                        directiveID: "d1", step: EventRun.Step.printing.rawValue
                     )
                 }.execute(db)
             }
@@ -345,7 +345,7 @@ struct EventRunEngineTests {
     func aSequentialTreePrintsPastOneJobsBound() async throws {
         let database = try GameDatabase.bootstrap()
         try await seed(
-            database, step: EventRun.Step.printing,
+            database, step: EventRun.Step.printing.rawValue,
             event: EventRunFixtures.event(devices: [(1, "atmospheric_regulator")]),
             blueprints: [
                 blueprint(
@@ -390,7 +390,7 @@ struct EventRunEngineTests {
             EventPlan.beaconDeviceType,
         ], "one job per round, in tree order, and nothing ordered twice")
         let row = try await row(database)
-        #expect(row.step == EventRun.Step.loading)
+        #expect(row.step == EventRun.Step.loading.rawValue)
         #expect(row.status == .running)
         #expect(row.attentionReason == nil, "7,200s of real progress is not a blocked print")
     }
@@ -403,7 +403,7 @@ struct EventRunEngineTests {
     func commitsOnce() async throws {
         let database = try GameDatabase.bootstrap()
         try await seed(
-            database, step: EventRun.Step.committing,
+            database, step: EventRun.Step.committing.rawValue,
             event: EventRunFixtures.progressEvent(met: true, replicant: true)
         )
         let posts = LockIsolated<[String]>([])
@@ -431,7 +431,7 @@ struct EventRunEngineTests {
             // The step, not the ledger, is what stops a second POST: a row left
             // on `committing` re-posts the moment the close has not landed yet.
             let committed = try await row(database)
-            #expect(committed.step == EventRun.Step.collecting)
+            #expect(committed.step == EventRun.Step.collecting.rawValue)
             for _ in 0..<7 { await core.evaluateOnce(directiveID: "d1") }
         }
 
@@ -452,7 +452,7 @@ struct EventRunEngineTests {
     func aRefusedCommitPostsOnce() async throws {
         let database = try GameDatabase.bootstrap()
         try await seed(
-            database, step: EventRun.Step.committing,
+            database, step: EventRun.Step.committing.rawValue,
             event: EventRunFixtures.progressEvent(met: true, replicant: true)
         )
         let posts = LockIsolated(0)
@@ -495,7 +495,7 @@ struct EventRunEngineTests {
             location: "X-1", updatedAt: Self.now
         )
         try await seed(
-            database, step: EventRun.Step.staging,
+            database, step: EventRun.Step.staging.rawValue,
             event: EventRunFixtures.progressEvent(met: false, replicant: true),
             extraDevices: [beacon]
         )
@@ -517,7 +517,7 @@ struct EventRunEngineTests {
             OperationKind.detach.rawValue, OperationKind.depositResources.rawValue,
         ], "each leg is ordered once — the counter must survive the loop's own re-entries")
         let row = try await row(database)
-        #expect(row.step == EventRun.Step.confirmingProgress)
+        #expect(row.step == EventRun.Step.confirmingProgress.rawValue)
         #expect(row.status == .running)
         #expect(refreshes.value == 1, "the handoff into the progress gate buys one ledger walk")
     }
@@ -530,7 +530,7 @@ struct EventRunEngineTests {
     func alreadyClosedAbortsCleanly() async throws {
         let database = try GameDatabase.bootstrap()
         try await seed(
-            database, step: EventRun.Step.confirmingProgress,
+            database, step: EventRun.Step.confirmingProgress.rawValue,
             event: EventRunFixtures.progressEvent(met: true, replicant: true, status: "completed")
         )
         let dispatches = LockIsolated<[String]>([])

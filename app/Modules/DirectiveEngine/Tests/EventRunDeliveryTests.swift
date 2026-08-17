@@ -27,12 +27,12 @@ struct EventRunDeliveryTests {
             event: EventRunFixtures.event(resources: ["structural": 200], devices: []), now: now
         )
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.departing, now: now), world: world
+            directive: EventRunFixtures.directive(step: EventRun.Step.departing.rawValue, now: now), world: world
         )
         #expect(action == .dispatch(
             kind: .travel, deviceCode: "CARRIER",
             params: CommandParams(destination: "X-1"),
-            nextStep: EventRun.Step.departing
+            nextStep: EventRun.Step.departing.rawValue
         ))
     }
 
@@ -48,12 +48,12 @@ struct EventRunDeliveryTests {
             event: EventRunFixtures.event(resources: ["structural": 200], devices: []), now: now
         )
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.departing, now: now), world: world
+            directive: EventRunFixtures.directive(step: EventRun.Step.departing.rawValue, now: now), world: world
         )
         #expect(action == .dispatch(
             kind: .travel, deviceCode: "FREIGHT",
             params: CommandParams(destination: "X-1"),
-            nextStep: EventRun.Step.confirmingArrival
+            nextStep: EventRun.Step.confirmingArrival.rawValue
         ))
     }
 
@@ -69,10 +69,10 @@ struct EventRunDeliveryTests {
             event: EventRunFixtures.event(resources: ["structural": 200], devices: []), now: now
         )
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.confirmingArrival, now: now), world: world
+            directive: EventRunFixtures.directive(step: EventRun.Step.confirmingArrival.rawValue, now: now), world: world
         )
         // Rows predate the step, so the machine buys evidence rather than trusting them.
-        #expect(action != .advanceStep(nextStep: EventRun.Step.staging))
+        #expect(action != .advanceStep(nextStep: EventRun.Step.staging.rawValue))
     }
 
     @Test("both hulls confirmed on site advances to staging")
@@ -89,9 +89,9 @@ struct EventRunDeliveryTests {
             now: fresh
         )
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.confirmingArrival, now: now), world: world
+            directive: EventRunFixtures.directive(step: EventRun.Step.confirmingArrival.rawValue, now: now), world: world
         )
-        #expect(action == .advanceStep(nextStep: EventRun.Step.staging))
+        #expect(action == .advanceStep(nextStep: EventRun.Step.staging.rawValue))
     }
 
     @Test("staging detaches the whole load in one command, courier excluded")
@@ -108,12 +108,12 @@ struct EventRunDeliveryTests {
             event: EventRunFixtures.event(resources: [:], devices: [(1, "defence_grid")]), now: now
         )
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.staging, now: now), world: world
+            directive: EventRunFixtures.directive(step: EventRun.Step.staging.rawValue, now: now), world: world
         )
         #expect(action == .dispatch(
             kind: .detach, deviceCode: "CARRIER",
             params: CommandParams(devices: ["BEACON", "GRID"]),
-            nextStep: EventRun.Step.confirmingStage
+            nextStep: EventRun.Step.confirmingStage.rawValue
         ))
     }
 
@@ -130,12 +130,12 @@ struct EventRunDeliveryTests {
             event: EventRunFixtures.event(resources: ["structural": 200], devices: []), now: now
         )
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.staging, now: now), world: world
+            directive: EventRunFixtures.directive(step: EventRun.Step.staging.rawValue, now: now), world: world
         )
         #expect(action == .dispatch(
             kind: .depositResources, deviceCode: "FREIGHT",
             params: CommandParams(resources: ["structural": 200]),
-            nextStep: EventRun.Step.confirmingStage
+            nextStep: EventRun.Step.confirmingStage.rawValue
         ))
     }
 
@@ -152,17 +152,17 @@ struct EventRunDeliveryTests {
     }
 
     private func stagingLog(_ kinds: [OperationKind]) -> [DirectiveLogEntry] {
-        var log = [EventRunFixtures.entered(EventRun.Step.staging, at: now)]
+        var log = [EventRunFixtures.entered(EventRun.Step.staging.rawValue, at: now)]
         for (index, kind) in kinds.enumerated() {
             log.append(EventRunFixtures.dispatched(
-                kind, to: "CARRIER", step: EventRun.Step.confirmingStage,
+                kind, to: "CARRIER", step: EventRun.Step.confirmingStage.rawValue,
                 at: now.addingTimeInterval(Double(index) + 1)
             ))
             log.append(EventRunFixtures.entered(
-                EventRun.Step.confirmingStage, at: now.addingTimeInterval(Double(index) + 2)
+                EventRun.Step.confirmingStage.rawValue, at: now.addingTimeInterval(Double(index) + 2)
             ))
             log.append(EventRunFixtures.entered(
-                EventRun.Step.staging, at: now.addingTimeInterval(Double(index) + 3)
+                EventRun.Step.staging.rawValue, at: now.addingTimeInterval(Double(index) + 3)
             ))
         }
         return log
@@ -176,12 +176,12 @@ struct EventRunDeliveryTests {
             log: stagingLog([.detach])
         )
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.staging, now: now), world: world
+            directive: EventRunFixtures.directive(step: EventRun.Step.staging.rawValue, now: now), world: world
         )
         #expect(action == .dispatch(
             kind: .depositResources, deviceCode: "FREIGHT",
             params: CommandParams(resources: ["structural": 200]),
-            nextStep: EventRun.Step.confirmingStage
+            nextStep: EventRun.Step.confirmingStage.rawValue
         ))
     }
 
@@ -193,9 +193,9 @@ struct EventRunDeliveryTests {
             log: stagingLog([.detach, .depositResources])
         )
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.staging, now: now), world: world
+            directive: EventRunFixtures.directive(step: EventRun.Step.staging.rawValue, now: now), world: world
         )
-        #expect(action == .advanceStep(nextStep: EventRun.Step.confirmingProgress))
+        #expect(action == .advanceStep(nextStep: EventRun.Step.confirmingProgress.rawValue))
     }
 
     @Test("a detach still unreflected at the deadline stalls rather than looping")
@@ -207,7 +207,7 @@ struct EventRunDeliveryTests {
             log: stagingLog([.detach])
         )
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.confirmingStage, now: now),
+            directive: EventRunFixtures.directive(step: EventRun.Step.confirmingStage.rawValue, now: now),
             world: world
         )
         #expect(action == .refreshDevices(deviceCodes: ["BEACON"], thenStall: .commandRejected))
@@ -221,20 +221,20 @@ struct EventRunDeliveryTests {
             log: stagingLog([.detach, .depositResources])
         )
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.confirmingStage, now: now),
+            directive: EventRunFixtures.directive(step: EventRun.Step.confirmingStage.rawValue, now: now),
             world: world
         )
-        #expect(action == .advanceStep(nextStep: EventRun.Step.staging))
+        #expect(action == .advanceStep(nextStep: EventRun.Step.staging.rawValue))
     }
 
     private func loadingLog(at start: Date) -> [DirectiveLogEntry] {
         [
-            EventRunFixtures.entered(EventRun.Step.loading, at: start),
+            EventRunFixtures.entered(EventRun.Step.loading.rawValue, at: start),
             EventRunFixtures.dispatched(
-                .attach, to: "CARRIER", step: EventRun.Step.confirmingLoad,
+                .attach, to: "CARRIER", step: EventRun.Step.confirmingLoad.rawValue,
                 at: start.addingTimeInterval(1)
             ),
-            EventRunFixtures.entered(EventRun.Step.confirmingLoad, at: start.addingTimeInterval(2)),
+            EventRunFixtures.entered(EventRun.Step.confirmingLoad.rawValue, at: start.addingTimeInterval(2)),
         ]
     }
 
@@ -251,10 +251,10 @@ struct EventRunDeliveryTests {
             log: loadingLog(at: now)
         )
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.confirmingLoad, now: now),
+            directive: EventRunFixtures.directive(step: EventRun.Step.confirmingLoad.rawValue, now: now),
             world: world
         )
-        #expect(action != .advanceStep(nextStep: EventRun.Step.loading))
+        #expect(action != .advanceStep(nextStep: EventRun.Step.loading.rawValue))
         #expect(action == .refreshDevices(deviceCodes: ["COURIER"], thenStall: nil))
     }
 
@@ -272,7 +272,7 @@ struct EventRunDeliveryTests {
             log: loadingLog(at: now)
         )
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.confirmingLoad, now: now),
+            directive: EventRunFixtures.directive(step: EventRun.Step.confirmingLoad.rawValue, now: now),
             world: world
         )
         #expect(action == .refreshDevices(deviceCodes: ["COURIER"], thenStall: .commandRejected))
@@ -291,9 +291,9 @@ struct EventRunDeliveryTests {
             log: loadingLog(at: now)
         )
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.confirmingLoad, now: now),
+            directive: EventRunFixtures.directive(step: EventRun.Step.confirmingLoad.rawValue, now: now),
             world: world
         )
-        #expect(action == .advanceStep(nextStep: EventRun.Step.loading))
+        #expect(action == .advanceStep(nextStep: EventRun.Step.loading.rawValue))
     }
 }

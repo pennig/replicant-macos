@@ -29,9 +29,9 @@ struct EventRunLoadingTests {
             devices: devices, event: EventRunFixtures.event(resources: ["structural": 200], devices: []), now: now
         )
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.preflight, now: now), world: world
+            directive: EventRunFixtures.directive(step: EventRun.Step.preflight.rawValue, now: now), world: world
         )
-        #expect(action == .advanceStep(nextStep: EventRun.Step.printing))
+        #expect(action == .advanceStep(nextStep: EventRun.Step.printing.rawValue))
     }
 
     @Test("printing enqueues the beacon at the depot printer")
@@ -46,7 +46,7 @@ struct EventRunLoadingTests {
             devices: devices, event: EventRunFixtures.event(resources: ["structural": 200], devices: []), now: now
         )
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: now), world: world
+            directive: EventRunFixtures.directive(step: EventRun.Step.printing.rawValue, now: now), world: world
         )
         #expect(action == .dispatch(
             kind: .print, deviceCode: "PRINTER",
@@ -54,7 +54,7 @@ struct EventRunLoadingTests {
                 deviceType: "ftl_beacon", quantity: 1,
                 printTags: [EventRun.fleetTag(forTheatre: "HUB-1").string]
             ),
-            nextStep: EventRun.Step.printing
+            nextStep: EventRun.Step.printing.rawValue
         ))
     }
 
@@ -71,9 +71,9 @@ struct EventRunLoadingTests {
             devices: devices, event: EventRunFixtures.event(resources: ["structural": 200], devices: []), now: now
         )
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: now), world: world
+            directive: EventRunFixtures.directive(step: EventRun.Step.printing.rawValue, now: now), world: world
         )
-        #expect(action == .advanceStep(nextStep: EventRun.Step.loading))
+        #expect(action == .advanceStep(nextStep: EventRun.Step.loading.rawValue))
     }
 
     @Test("the reserve rail vetoes a print rather than spending")
@@ -89,7 +89,7 @@ struct EventRunLoadingTests {
             now: now, stock: 1
         )
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: now), world: world
+            directive: EventRunFixtures.directive(step: EventRun.Step.printing.rawValue, now: now), world: world
         )
         #expect(action == .wait)
     }
@@ -106,12 +106,12 @@ struct EventRunLoadingTests {
             devices: devices, event: EventRunFixtures.event(resources: ["structural": 200], devices: []), now: now
         )
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.loading, now: now), world: world
+            directive: EventRunFixtures.directive(step: EventRun.Step.loading.rawValue, now: now), world: world
         )
         #expect(action == .dispatch(
             kind: .attach, deviceCode: "CARRIER",
             params: CommandParams(devices: ["COURIER"]),
-            nextStep: EventRun.Step.confirmingLoad
+            nextStep: EventRun.Step.confirmingLoad.rawValue
         ))
     }
 
@@ -128,12 +128,12 @@ struct EventRunLoadingTests {
             devices: devices, event: EventRunFixtures.event(resources: ["structural": 200], devices: []), now: now
         )
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.loading, now: now), world: world
+            directive: EventRunFixtures.directive(step: EventRun.Step.loading.rawValue, now: now), world: world
         )
         #expect(action == .dispatch(
             kind: .collectResources, deviceCode: "FREIGHT",
             params: CommandParams(resources: ["structural": 200]),
-            nextStep: EventRun.Step.confirmingLoad
+            nextStep: EventRun.Step.confirmingLoad.rawValue
         ))
     }
 
@@ -147,7 +147,7 @@ struct EventRunLoadingTests {
             devices: devices, event: EventRunFixtures.event(resources: ["structural": 200], devices: []), now: now
         )
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.loading, now: now), world: world
+            directive: EventRunFixtures.directive(step: EventRun.Step.loading.rawValue, now: now), world: world
         )
         #expect(action == .refreshFleet(
             tag: EventRun.rootTag, thenStall: .unreachableDevice
@@ -166,7 +166,7 @@ struct EventRunLoadingTests {
             devices: devices, event: EventRunFixtures.event(resources: ["structural": 200], devices: []), now: now
         )
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: now), world: world
+            directive: EventRunFixtures.directive(step: EventRun.Step.printing.rawValue, now: now), world: world
         )
         #expect(action == .refreshDevicesInSystem(
             designation: "HUB-1", thenStall: .unreachableDevice
@@ -187,9 +187,9 @@ struct EventRunLoadingTests {
             devices: devices, event: EventRunFixtures.event(resources: ["structural": 200], devices: []), now: now
         )
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: now), world: world
+            directive: EventRunFixtures.directive(step: EventRun.Step.printing.rawValue, now: now), world: world
         )
-        #expect(action == .advanceStep(nextStep: EventRun.Step.loading))
+        #expect(action == .advanceStep(nextStep: EventRun.Step.loading.rawValue))
     }
 
     @Test("a print already in flight at the printer is not doubled")
@@ -205,7 +205,7 @@ struct EventRunLoadingTests {
             now: now, openOperations: EventRunFixtures.openPrint(on: "PRINTER", now: now)
         )
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: now), world: world
+            directive: EventRunFixtures.directive(step: EventRun.Step.printing.rawValue, now: now), world: world
         )
         #expect(action == .wait)
     }
@@ -222,7 +222,7 @@ struct EventRunLoadingTests {
             devices: devices, event: EventRunFixtures.event(resources: ["structural": 200], devices: []), now: now
         )
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.loading, now: now), world: world
+            directive: EventRunFixtures.directive(step: EventRun.Step.loading.rawValue, now: now), world: world
         )
         #expect(action == .refreshFleet(
             tag: EventRun.rootTag, thenStall: .unreachableDevice
@@ -242,9 +242,9 @@ struct EventRunLoadingTests {
             devices: devices, event: EventRunFixtures.event(resources: ["structural": 200], devices: []), now: now
         )
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.loading, now: now), world: world
+            directive: EventRunFixtures.directive(step: EventRun.Step.loading.rawValue, now: now), world: world
         )
-        #expect(action == .advanceStep(nextStep: EventRun.Step.departing))
+        #expect(action == .advanceStep(nextStep: EventRun.Step.departing.rawValue))
     }
 
     /// The two containers a depot really holds: one hosting another
@@ -266,7 +266,7 @@ struct EventRunLoadingTests {
             event: EventRunFixtures.event(resources: ["structural": 200], devices: []),
             now: now, hosts: ["ANCHOR"]
         )
-        let directive = EventRunFixtures.directive(step: EventRun.Step.loading, now: now)
+        let directive = EventRunFixtures.directive(step: EventRun.Step.loading.rawValue, now: now)
         #expect(EventRun.convoy(of: directive, in: world)?.courier == nil)
         #expect(EventRun().nextAction(directive: directive, world: world) == .refreshFleet(
             tag: EventRun.rootTag, thenStall: .unreachableDevice
@@ -280,12 +280,12 @@ struct EventRunLoadingTests {
             event: EventRunFixtures.event(resources: ["structural": 200], devices: []),
             now: now, hosts: ["ANCHOR", "PRINTED"]
         )
-        let directive = EventRunFixtures.directive(step: EventRun.Step.loading, now: now)
+        let directive = EventRunFixtures.directive(step: EventRun.Step.loading.rawValue, now: now)
         #expect(EventRun.convoy(of: directive, in: world)?.courier?.deviceCode == "PRINTED")
         #expect(EventRun().nextAction(directive: directive, world: world) == .dispatch(
             kind: .attach, deviceCode: "CARRIER",
             params: CommandParams(devices: ["PRINTED"]),
-            nextStep: EventRun.Step.confirmingLoad
+            nextStep: EventRun.Step.confirmingLoad.rawValue
         ))
     }
 
@@ -301,7 +301,7 @@ struct EventRunLoadingTests {
             now: now, stock: 1
         )
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.preflight, now: now), world: world
+            directive: EventRunFixtures.directive(step: EventRun.Step.preflight.rawValue, now: now), world: world
         )
         #expect(action == .wait)
     }
@@ -318,9 +318,9 @@ struct EventRunLoadingTests {
             now: now, footprintFresh: false
         )
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.preflight, now: now), world: world
+            directive: EventRunFixtures.directive(step: EventRun.Step.preflight.rawValue, now: now), world: world
         )
-        #expect(action == .refreshFootprint(nextStep: EventRun.Step.preflight, thenStall: nil))
+        #expect(action == .refreshFootprint(nextStep: EventRun.Step.preflight.rawValue, thenStall: nil))
     }
 
     @Test("a container attached to another carrier is not this run's courier")
@@ -335,7 +335,7 @@ struct EventRunLoadingTests {
             devices: devices, event: EventRunFixtures.event(resources: ["structural": 200], devices: []), now: now
         )
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.loading, now: now), world: world
+            directive: EventRunFixtures.directive(step: EventRun.Step.loading.rawValue, now: now), world: world
         )
         #expect(action == .refreshFleet(
             tag: EventRun.rootTag, thenStall: .unreachableDevice
@@ -439,14 +439,14 @@ struct EventRunComponentPrintTests {
         .dispatch(
             kind: .print, deviceCode: deviceCode,
             params: CommandParams(deviceType: deviceType, quantity: quantity, printTags: [tag.string]),
-            nextStep: EventRun.Step.printing
+            nextStep: EventRun.Step.printing.rawValue
         )
     }
 
     @Test("printing dispatches a component before the device that consumes it")
     func componentsPrintFirst() {
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: now),
+            directive: EventRunFixtures.directive(step: EventRun.Step.printing.rawValue, now: now),
             world: world([factory()], stepStartedAt: now)
         )
         #expect(action == print("atmo_processor", 2))
@@ -455,7 +455,7 @@ struct EventRunComponentPrintTests {
     @Test("a component already standing under the run's tag is not reprinted")
     func standingComponentIsNetted() {
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: now),
+            directive: EventRunFixtures.directive(step: EventRun.Step.printing.rawValue, now: now),
             world: world(
                 [
                     factory(),
@@ -471,7 +471,7 @@ struct EventRunComponentPrintTests {
     @Test("an untagged component of the standing fleet is never scavenged")
     func untaggedComponentIsNotNetted() {
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: now),
+            directive: EventRunFixtures.directive(step: EventRun.Step.printing.rawValue, now: now),
             world: world(
                 [
                     factory(),
@@ -487,7 +487,7 @@ struct EventRunComponentPrintTests {
     @Test("a standing parent suppresses the components it already consumed")
     func standingParentSuppressesItsComponents() {
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: now),
+            directive: EventRunFixtures.directive(step: EventRun.Step.printing.rawValue, now: now),
             world: world(
                 [
                     factory(),
@@ -498,7 +498,7 @@ struct EventRunComponentPrintTests {
             )
         )
         #expect(
-            action == .advanceStep(nextStep: EventRun.Step.loading),
+            action == .advanceStep(nextStep: EventRun.Step.loading.rawValue),
             "the regulator ate its own components — reprinting them buys nothing"
         )
     }
@@ -510,7 +510,7 @@ struct EventRunComponentPrintTests {
     func heldStockIsSpentOnlyOnce() {
         func action(held: Int) -> MissionAction {
             EventRun().nextAction(
-                directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: now),
+                directive: EventRunFixtures.directive(step: EventRun.Step.printing.rawValue, now: now),
                 world: world(
                     [factory()] + (0..<held).map {
                         EventRunFixtures.device("AP\($0)", type: "atmo_processor", tags: [tag.string])
@@ -535,13 +535,13 @@ struct EventRunComponentPrintTests {
     @Test("a second free printer never re-dispatches a job already in flight")
     func aSecondFreePrinterTakesOnlyNewWork() {
         let first = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: now),
+            directive: EventRunFixtures.directive(step: EventRun.Step.printing.rawValue, now: now),
             world: world([factory(), factory("SPARE")], stepStartedAt: now)
         )
         #expect(first == print("atmo_processor", 2))
 
         let second = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: now),
+            directive: EventRunFixtures.directive(step: EventRun.Step.printing.rawValue, now: now),
             world: world(
                 [factory(), factory("SPARE")], busy: ["FACTORY"],
                 ordering: ["FACTORY": ("atmo_processor", 2)], stepStartedAt: now
@@ -577,7 +577,7 @@ struct EventRunComponentPrintTests {
     private func nothingLeftToOrder(startedAgo: TimeInterval) -> MissionAction {
         let started = now.addingTimeInterval(-startedAgo)
         return EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: started),
+            directive: EventRunFixtures.directive(step: EventRun.Step.printing.rawValue, now: started),
             world: world(
                 [
                     factory(), factory("SPARE"),
@@ -596,7 +596,7 @@ struct EventRunComponentPrintTests {
     func threeFreePrintersWalkTheOrder() {
         func tick(_ inFlight: [String: (String, Int)]) -> MissionAction {
             EventRun().nextAction(
-                directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: now),
+                directive: EventRunFixtures.directive(step: EventRun.Step.printing.rawValue, now: now),
                 world: world(
                     [factory(), factory("SPARE"), factory("THIRD")],
                     busy: Array(inFlight.keys), ordering: inFlight, stepStartedAt: now
@@ -621,7 +621,7 @@ struct EventRunComponentPrintTests {
     @Test("a tree reaching a blueprint-less device stalls and dispatches nothing")
     func unprintableTreeStalls() {
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: now),
+            directive: EventRunFixtures.directive(step: EventRun.Step.printing.rawValue, now: now),
             world: world([factory()], wanting: [(1, "reclamation_rig")], stepStartedAt: now)
         )
         guard case .stall(let reason, let detail) = action else {
@@ -637,7 +637,7 @@ struct EventRunComponentPrintTests {
     @Test("a fully printable tree still dispatches")
     func printableTreeStillDispatches() {
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: now),
+            directive: EventRunFixtures.directive(step: EventRun.Step.printing.rawValue, now: now),
             world: world([factory()], wanting: [(1, "climate_processor")], stepStartedAt: now)
         )
         #expect(action == print("atmo_processor", 2))
@@ -651,7 +651,7 @@ struct EventRunComponentPrintTests {
     func aLongPrintOutlivesTheRelayShapedConstant() {
         let started = now.addingTimeInterval(-(EventRun.printSlack + 60))
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: started),
+            directive: EventRunFixtures.directive(step: EventRun.Step.printing.rawValue, now: started),
             world: world(
                 [blockedFactory(["atmo_processor": (0, 2)])],
                 busy: ["FACTORY"], stepStartedAt: started
@@ -666,7 +666,7 @@ struct EventRunComponentPrintTests {
     func aPermanentlyBlockedPrintStalls() {
         let started = now.addingTimeInterval(-(EventRun.printSlack + 3600 + 60))
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: started),
+            directive: EventRunFixtures.directive(step: EventRun.Step.printing.rawValue, now: started),
             world: world(
                 [blockedFactory(["atmo_processor": (0, 2)])],
                 busy: ["FACTORY"], stepStartedAt: started
@@ -683,7 +683,7 @@ struct EventRunComponentPrintTests {
     @Test("the server's own shortfall outranks the local expansion")
     func serverShortfallLeadsTheOrder() {
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: now),
+            directive: EventRunFixtures.directive(step: EventRun.Step.printing.rawValue, now: now),
             world: world(
                 [blockedFactory(["coolant_loop": (1, 3)]), factory("SPARE")],
                 busy: ["FACTORY"], stepStartedAt: now
@@ -698,7 +698,7 @@ struct EventRunComponentPrintTests {
     func theGreaterOfTheTwoCountsIsOrdered() {
         func action(serverShortfall: Int) -> MissionAction {
             EventRun().nextAction(
-                directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: now),
+                directive: EventRunFixtures.directive(step: EventRun.Step.printing.rawValue, now: now),
                 world: world(
                     [blockedFactory(["atmo_processor": (0, serverShortfall)]), factory("SPARE")],
                     busy: ["FACTORY"], stepStartedAt: now
@@ -717,7 +717,7 @@ struct EventRunComponentPrintTests {
     @Test("a blockage on a printer this run has no work on is ignored")
     func foreignBlockageDoesNotSteerTheOrder() {
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: now),
+            directive: EventRunFixtures.directive(step: EventRun.Step.printing.rawValue, now: now),
             world: world(
                 [blockedFactory(["coolant_loop": (1, 3)]), factory("SPARE")],
                 foreign: ["FACTORY"], stepStartedAt: now
@@ -730,7 +730,7 @@ struct EventRunComponentPrintTests {
     @Test("a server-named type with no blueprint is dropped from the order")
     func unbillableServerShortfallIsDropped() {
         let action = EventRun().nextAction(
-            directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: now),
+            directive: EventRunFixtures.directive(step: EventRun.Step.printing.rawValue, now: now),
             world: world(
                 [blockedFactory(["orbital_mirror": (0, 2)]), factory("SPARE")],
                 busy: ["FACTORY"], stepStartedAt: now
